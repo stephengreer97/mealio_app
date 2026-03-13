@@ -358,7 +358,7 @@ export default function KrogerCartReviewSheet({
   const titleMap: Record<Step, string> = {
     qty: 'Review Ingredients',
     searching: 'Finding Products…',
-    review: `Review Match (${reviewIdx + 1} of ${reviewQueue.length})`,
+    review: `Choose Product (${reviewIdx + 1} of ${reviewQueue.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
   };
@@ -478,7 +478,7 @@ export default function KrogerCartReviewSheet({
 
                 {/* Suggestions header */}
                 <Text style={styles.suggHeader}>
-                  {hasSuggestions ? 'Kroger suggests' : 'No match found'}
+                  {hasSuggestions ? 'Kroger suggests' : 'No exact match found'}
                 </Text>
 
                 {/* Suggestion list */}
