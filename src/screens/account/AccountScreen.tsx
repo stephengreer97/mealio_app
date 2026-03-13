@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors, Radius } from '../../constants/colors';
+import { STORES } from '../../constants/stores';
 import { useAuth } from '../../context/AuthContext';
 import { account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
 import { Creator, Meal } from '../../types';
@@ -37,10 +38,9 @@ export default function AccountScreen() {
 
   // Kroger
   const [krogerConnected, setKrogerConnected] = useState(false);
-  const [krogerLocationId, setKrogerLocationId] = useState<string | null>(null);
-  const [krogerLocationName, setKrogerLocationName] = useState<string | null>(null);
+  const [krogerLocations, setKrogerLocations] = useState<Record<string, { locationId: string; locationName: string }>>({});
   const [krogerZip, setKrogerZip] = useState('');
-  const [krogerLocations, setKrogerLocations] = useState<Array<{ locationId: string; name: string; chain?: string; address: string }>>([]);
+  const [krogerLocationsList, setKrogerLocationsList] = useState<Array<{ locationId: string; name: string; chain?: string; storeId: string; address: string }>>([]);
   const [krogerSearching, setKrogerSearching] = useState(false);
   const [krogerConnecting, setKrogerConnecting] = useState(false);
 
@@ -88,8 +88,7 @@ export default function AccountScreen() {
       const data = await krogerApi.status();
       if (data.connected) {
         setKrogerConnected(true);
-        setKrogerLocationId(data.locationId ?? null);
-        setKrogerLocationName(data.locationName ?? null);
+        setKrogerLocations(data.locations ?? {});
       }
     } catch {}
   }
@@ -208,9 +207,8 @@ export default function AccountScreen() {
           try {
             await krogerApi.disconnect();
             setKrogerConnected(false);
-            setKrogerLocationId(null);
-            setKrogerLocationName(null);
-            setKrogerLocations([]);
+            setKrogerLocations({});
+            setKrogerLocationsList([]);
           } catch (err: any) {
             Alert.alert('Error', err.message || 'Could not disconnect');
           }
@@ -222,10 +220,10 @@ export default function AccountScreen() {
   async function handleKrogerSearchStores() {
     if (!krogerZip.trim()) return;
     setKrogerSearching(true);
-    setKrogerLocations([]);
+    setKrogerLocationsList([]);
     try {
       const { locations } = await krogerApi.searchLocations(krogerZip);
-      setKrogerLocations(locations);
+      setKrogerLocationsList(locations);
       if (locations.length === 0) Alert.alert('No stores found', 'No Kroger stores found near that ZIP code.');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not search stores');
@@ -234,14 +232,13 @@ export default function AccountScreen() {
     }
   }
 
-  async function handleKrogerSaveLocation(loc: { locationId: string; name: string; address: string }) {
+  async function handleKrogerSaveLocation(loc: { locationId: string; name: string; storeId: string; address: string }) {
     try {
-      await krogerApi.setLocation(loc.locationId, loc.name);
-      setKrogerLocationId(loc.locationId);
-      setKrogerLocationName(loc.name);
-      setKrogerLocations([]);
+      await krogerApi.setLocation(loc.locationId, loc.name, loc.storeId);
+      setKrogerLocations(prev => ({ ...prev, [loc.storeId]: { locationId: loc.locationId, locationName: loc.name } }));
+      setKrogerLocationsList([]);
       setKrogerZip('');
-      Alert.alert('Store saved', `${loc.name} is now your preferred Kroger store.`);
+      Alert.alert('Store saved.', '');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not save store');
     }
@@ -338,14 +335,20 @@ export default function AccountScreen() {
             <View>
               <View style={styles.krogerConnectedBadge}>
                 <Text style={styles.krogerConnectedTitle}>Connected</Text>
-                <Text style={styles.krogerConnectedDesc}>
-                  {krogerLocationName ?? 'No store selected — search below to pick one.'}
-                </Text>
+                {Object.keys(krogerLocations).length === 0 ? (
+                  <Text style={styles.krogerConnectedDesc}>No stores selected — search below to add one.</Text>
+                ) : (
+                  Object.entries(krogerLocations).map(([sid, loc]) => (
+                    <Text key={sid} style={styles.krogerConnectedDesc}>
+                      {STORES.find(s => s.id === sid)?.name ?? sid}: {loc.locationName}
+                    </Text>
+                  ))
+                )}
               </View>
 
               {/* Store search */}
               <Text style={[styles.sectionSubLabel, { marginTop: 12 }]}>
-                {krogerLocationName ? 'Change store' : 'Select your store'}
+                Add or change store location
               </Text>
               <View style={styles.krogerSearchRow}>
                 <TextInput
@@ -368,17 +371,17 @@ export default function AccountScreen() {
                 </TouchableOpacity>
               </View>
 
-              {krogerLocations.map((loc) => (
+              {krogerLocationsList.map((loc) => (
                 <TouchableOpacity
                   key={loc.locationId}
-                  style={[styles.krogerLocRow, krogerLocationId === loc.locationId && styles.krogerLocRowActive]}
+                  style={[styles.krogerLocRow, krogerLocations[loc.storeId]?.locationId === loc.locationId && styles.krogerLocRowActive]}
                   onPress={() => handleKrogerSaveLocation(loc)}
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={styles.krogerLocName}>{loc.name}</Text>
                     <Text style={styles.krogerLocAddr} numberOfLines={1}>{loc.address}</Text>
                   </View>
-                  {krogerLocationId === loc.locationId && (
+                  {krogerLocations[loc.storeId]?.locationId === loc.locationId && (
                     <Text style={styles.krogerLocCheck}>✓</Text>
                   )}
                 </TouchableOpacity>

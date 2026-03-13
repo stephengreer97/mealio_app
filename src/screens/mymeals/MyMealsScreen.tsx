@@ -43,8 +43,7 @@ export default function MyMealsScreen() {
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
   const [krogerConnected, setKrogerConnected] = useState(false);
-  const [krogerLocationId, setKrogerLocationId] = useState<string | null>(null);
-  const [krogerLocationName, setKrogerLocationName] = useState<string | null>(null);
+  const [krogerLocations, setKrogerLocations] = useState<Record<string, { locationId: string; locationName: string }>>({});
 
   // Multi-select / Kroger cart
   const [selectedMealIds, setSelectedMealIds] = useState<Set<string>>(new Set());
@@ -53,7 +52,7 @@ export default function MyMealsScreen() {
   // Kroger store picker
   const [krogerPickerVisible, setKrogerPickerVisible] = useState(false);
   const [krogerZip, setKrogerZip] = useState('');
-  const [krogerLocations, setKrogerLocations] = useState<Array<{ locationId: string; name: string; address: string }>>([]);
+  const [krogerLocationsList, setKrogerLocationsList] = useState<Array<{ locationId: string; name: string; storeId: string; address: string }>>([]);
   const [krogerSearching, setKrogerSearching] = useState(false);
   const [krogerSaving, setKrogerSaving] = useState(false);
 
@@ -83,11 +82,9 @@ export default function MyMealsScreen() {
       krogerApi.status().then(d => {
         setKrogerConnected(d.connected);
         if (d.connected) {
-          setKrogerLocationId(d.locationId ?? null);
-          setKrogerLocationName(d.locationName ?? null);
+          setKrogerLocations(d.locations ?? {});
         } else {
-          setKrogerLocationId(null);
-          setKrogerLocationName(null);
+          setKrogerLocations({});
         }
       }).catch(() => {});
     }, [])
@@ -100,11 +97,10 @@ export default function MyMealsScreen() {
         krogerApi.status().then(d => {
           setKrogerConnected(d.connected);
           if (d.connected) {
-            setKrogerLocationId(d.locationId ?? null);
-            setKrogerLocationName(d.locationName ?? null);
-            if (!d.locationId) {
+            setKrogerLocations(d.locations ?? {});
+            if (!d.locations?.[selectedStore]) {
               setKrogerZip('');
-              setKrogerLocations([]);
+              setKrogerLocationsList([]);
               setKrogerPickerVisible(true);
             }
           }
@@ -136,9 +132,10 @@ export default function MyMealsScreen() {
       );
       return;
     }
-    if (!krogerLocationId) {
+    const currentLocationId = krogerLocations[selectedStore]?.locationId ?? null;
+    if (!currentLocationId) {
       setKrogerZip('');
-      setKrogerLocations([]);
+      setKrogerLocationsList([]);
       setKrogerPickerVisible(true);
       return;
     }
@@ -148,10 +145,10 @@ export default function MyMealsScreen() {
   async function handleKrogerSearchStores() {
     if (!krogerZip.trim()) return;
     setKrogerSearching(true);
-    setKrogerLocations([]);
+    setKrogerLocationsList([]);
     try {
       const { locations } = await krogerApi.searchLocations(krogerZip.trim());
-      setKrogerLocations(locations);
+      setKrogerLocationsList(locations);
       if (locations.length === 0) Alert.alert('No stores found', 'No Kroger-family stores found near that ZIP code.');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not search stores');
@@ -160,12 +157,11 @@ export default function MyMealsScreen() {
     }
   }
 
-  async function handleKrogerSaveLocation(loc: { locationId: string; name: string; address: string }) {
+  async function handleKrogerSaveLocation(loc: { locationId: string; name: string; storeId: string; address: string }) {
     setKrogerSaving(true);
     try {
-      await krogerApi.setLocation(loc.locationId, loc.name);
-      setKrogerLocationId(loc.locationId);
-      setKrogerLocationName(loc.name);
+      await krogerApi.setLocation(loc.locationId, loc.name, loc.storeId);
+      setKrogerLocations(prev => ({ ...prev, [loc.storeId]: { locationId: loc.locationId, locationName: loc.name } }));
       setKrogerPickerVisible(false);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not save store');
@@ -418,14 +414,14 @@ export default function MyMealsScreen() {
         mode="edit"
         onClose={() => setDetailVisible(false)}
         onSave={(updated) => { loadMeals(); if (updated) setSelectedMeal(updated); }}
-        krogerLocationId={krogerLocationId}
-        onNeedKrogerStore={() => { setKrogerZip(''); setKrogerLocations([]); setKrogerPickerVisible(true); }}
+        krogerLocationId={krogerLocations[selectedMeal?.storeId ?? '']?.locationId ?? null}
+        onNeedKrogerStore={() => { setKrogerZip(''); setKrogerLocationsList([]); setKrogerPickerVisible(true); }}
       />
 
       <KrogerCartReviewSheet
         visible={reviewVisible}
         meals={selectedMeals}
-        locationId={krogerLocationId ?? ''}
+        locationId={krogerLocations[selectedStore]?.locationId ?? ''}
         storeId={selectedStore}
         storeName={selectedStore_?.name ?? 'Kroger'}
         onClose={() => { setReviewVisible(false); setSelectedMealIds(new Set()); }}
@@ -465,10 +461,10 @@ export default function MyMealsScreen() {
                 <Text style={styles.krogerSearchBtnText}>{krogerSearching ? '…' : 'Search'}</Text>
               </TouchableOpacity>
             </View>
-            {krogerLocations.map((loc) => (
+            {krogerLocationsList.map((loc) => (
               <TouchableOpacity
                 key={loc.locationId}
-                style={[styles.krogerLocRow, krogerLocationId === loc.locationId && styles.krogerLocRowActive]}
+                style={[styles.krogerLocRow, krogerLocations[loc.storeId]?.locationId === loc.locationId && styles.krogerLocRowActive]}
                 onPress={() => handleKrogerSaveLocation(loc)}
                 disabled={krogerSaving}
               >
@@ -476,7 +472,7 @@ export default function MyMealsScreen() {
                   <Text style={styles.krogerLocName}>{loc.name}</Text>
                   <Text style={styles.krogerLocAddr} numberOfLines={1}>{loc.address}</Text>
                 </View>
-                {krogerLocationId === loc.locationId
+                {krogerLocations[loc.storeId]?.locationId === loc.locationId
                   ? <Ionicons name="checkmark" size={18} color={Colors.brand} />
                   : <Ionicons name="chevron-forward" size={16} color={Colors.text3} />
                 }

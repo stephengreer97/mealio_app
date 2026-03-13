@@ -409,7 +409,7 @@ export const payments = {
 // Kroger
 export const kroger = {
   status: () =>
-    request<{ connected: boolean; locationId?: string; locationName?: string; connectedAt?: string }>(
+    request<{ connected: boolean; locations: Record<string, { locationId: string; locationName: string | null }>; connectedAt?: string }>(
       '/api/kroger/status', { method: 'GET' }
     ),
 
@@ -423,14 +423,14 @@ export const kroger = {
     request<{ success: boolean }>('/api/kroger/disconnect', { method: 'POST' }),
 
   searchLocations: (term: string) =>
-    request<{ locations: Array<{ locationId: string; name: string; chain?: string; address: string }> }>(
+    request<{ locations: Array<{ locationId: string; name: string; chain?: string; storeId: string; address: string }> }>(
       `/api/kroger/locations?term=${encodeURIComponent(term)}`, { method: 'GET' }
     ),
 
-  setLocation: (locationId: string, locationName: string) =>
-    request<{ success: boolean; locationId: string; locationName: string }>('/api/kroger/set-location', {
+  setLocation: (locationId: string, locationName: string, storeId: string) =>
+    request<{ success: boolean; locationId: string; locationName: string; storeId: string }>('/api/kroger/set-location', {
       method: 'POST',
-      body: JSON.stringify({ locationId, locationName }),
+      body: JSON.stringify({ locationId, locationName, storeId }),
     }),
 
   addToCart: (ingredients: Array<{ productName: string; quantity?: number }>, locationId?: string) =>
