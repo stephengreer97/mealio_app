@@ -313,7 +313,7 @@ export default function AccountScreen() {
 
         {/* Kroger Cart */}
         <Card style={styles.card}>
-          <Text style={styles.cardTitle}>Kroger Cart</Text>
+          <Text style={styles.cardTitle}>Kroger Brands Integration</Text>
           {!krogerConnected ? (
             <View>
               <Text style={styles.krogerDesc}>
@@ -321,7 +321,7 @@ export default function AccountScreen() {
               </Text>
               <View style={styles.krogerBrandNote}>
                 <Text style={styles.krogerBrandNoteText}>
-                  Shop at King Soopers, Fred Meyer, Ralphs, or Harris Teeter? These stores use Kroger's login system — you'll see a Kroger sign-in screen, which is normal.
+                  Shop at King Soopers, Fred Meyer, Ralphs, or Harris Teeter? These stores use Kroger's login system — you may see a Kroger sign-in screen, which is normal.
                 </Text>
               </View>
               <Button
