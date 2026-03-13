@@ -160,6 +160,10 @@ export default function KrogerCartReviewSheet({
   const [selectedSuggIdx, setSelectedSuggIdx] = useState<number | 'custom'>(0);
   const [customText, setCustomText] = useState('');
   const [customSearching, setCustomSearching] = useState(false);
+  // Suggestions produced by a custom search (replaces currentReview.suggestions in-place)
+  const [customSuggestions, setCustomSuggestions] = useState<SearchResult['suggestions']>([]);
+  const [customSearchTerm, setCustomSearchTerm] = useState('');
+  const shouldShowSuggestionsRef = useRef(false);
 
   // Step done
   const [totalAdded, setTotalAdded] = useState(0);
@@ -185,6 +189,8 @@ export default function KrogerCartReviewSheet({
   useEffect(() => {
     setSelectedSuggIdx(0);
     setCustomText('');
+    setCustomSuggestions([]);
+    setCustomSearchTerm('');
   }, [reviewIdx]);
 
   const reviewQueue = searchResults.filter((r) => !r.exact);
@@ -232,6 +238,7 @@ export default function KrogerCartReviewSheet({
   };
 
   const resolveCurrentSelection = async (): Promise<{ upc: string | null; name: string } | null> => {
+    shouldShowSuggestionsRef.current = false;
     if (selectedSuggIdx === 'custom') {
       const term = customText.trim();
       if (!term) return null;
@@ -242,12 +249,22 @@ export default function KrogerCartReviewSheet({
           locationId,
         );
         const result = data.results?.[0];
-        return { upc: result?.upc ?? null, name: term };
+        if (result?.exact && result?.upc) {
+          return { upc: result.upc, name: term };
+        }
+        // Not an exact match — show new suggestions in-place so the user can pick
+        setCustomSuggestions(result?.suggestions ?? []);
+        setCustomSearchTerm(term);
+        setSelectedSuggIdx(0);
+        setCustomText('');
+        shouldShowSuggestionsRef.current = true;
+        return null;
       } finally {
         setCustomSearching(false);
       }
     }
-    const s = currentReview.suggestions[selectedSuggIdx as number];
+    const displaySuggestions = customSuggestions.length > 0 ? customSuggestions : currentReview.suggestions;
+    const s = displaySuggestions[selectedSuggIdx as number];
     return s ? { upc: s.upc, name: s.description } : null;
   };
 
@@ -256,6 +273,7 @@ export default function KrogerCartReviewSheet({
 
     if (action !== 'skip') {
       const resolved = await resolveCurrentSelection();
+      if (shouldShowSuggestionsRef.current) return; // custom search showed new suggestions — stay on this item
       if (resolved?.upc) {
         newPicked.push({ upc: resolved.upc, quantity: currentReview.quantity });
       }
@@ -432,7 +450,8 @@ export default function KrogerCartReviewSheet({
 
         {/* ── Step: review ──────────────────────────────────────────────── */}
         {step === 'review' && currentReview && (() => {
-          const hasSuggestions = currentReview.suggestions.length > 0;
+          const displaySuggestions = customSuggestions.length > 0 ? customSuggestions : currentReview.suggestions;
+          const hasSuggestions = displaySuggestions.length > 0;
           const canAdd = hasSuggestions
             ? selectedSuggIdx !== 'custom' || customText.trim().length > 0
             : selectedSuggIdx === 'custom' && customText.trim().length > 0;
@@ -447,6 +466,11 @@ export default function KrogerCartReviewSheet({
                   {currentReview.mealNames.length > 0 && (
                     <Text style={styles.searchedMeals}>from: {currentReview.mealNames.join(', ')}</Text>
                   )}
+                  {customSearchTerm ? (
+                    <Text style={[styles.searchedMeals, { color: storeColor, marginTop: 4 }]}>
+                      Showing results for: "{customSearchTerm}"
+                    </Text>
+                  ) : null}
                 </View>
 
                 {/* Suggestions header */}
@@ -455,7 +479,7 @@ export default function KrogerCartReviewSheet({
                 </Text>
 
                 {/* Suggestion list */}
-                {currentReview.suggestions.map((s, i) => {
+                {displaySuggestions.map((s, i) => {
                   const selected = selectedSuggIdx === i;
                   return (
                     <TouchableOpacity
@@ -501,7 +525,7 @@ export default function KrogerCartReviewSheet({
                       { color: selectedSuggIdx === 'custom' ? Colors.text1 : Colors.text3 },
                     ]}
                   >
-                    Other — type a product name…
+                    {customSuggestions.length > 0 ? 'Try a different search…' : 'Other — type a product name…'}
                   </Text>
                 </TouchableOpacity>
                 {selectedSuggIdx === 'custom' && (
@@ -512,6 +536,8 @@ export default function KrogerCartReviewSheet({
                     placeholder="e.g. Ground Beef 80/20"
                     placeholderTextColor={Colors.text3}
                     style={[styles.customInput, { borderColor: storeColor }]}
+                    onSubmitEditing={() => { if (customText.trim()) handleReviewDecision('add'); }}
+                    returnKeyType="search"
                   />
                 )}
               </ScrollView>
