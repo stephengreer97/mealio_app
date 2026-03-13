@@ -30,19 +30,29 @@ async function getRecentStores(): Promise<string[]> {
 async function recordRecentStore(storeId: string): Promise<void> {
   try {
     const recent = await getRecentStores();
-    const updated = [storeId, ...recent.filter((id) => id !== storeId)].slice(0, 10);
+    const updated = [storeId, ...recent.filter((id) => id !== storeId)].slice(0, 3);
     await SecureStore.setItemAsync(RECENT_STORES_KEY, JSON.stringify(updated));
   } catch {}
 }
 
-function sortedStores(recentIds: string[]) {
+type StoreItem = (typeof STORES)[number];
+type SectionHeader = { type: 'header'; label: string };
+type ListItem = StoreItem | SectionHeader;
+
+function buildListItems(recentIds: string[]): ListItem[] {
   const recent = recentIds
     .map((id) => STORES.find((s) => s.id === id))
-    .filter(Boolean) as typeof STORES;
+    .filter(Boolean) as StoreItem[];
   const rest = STORES.filter((s) => !recentIds.includes(s.id))
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name));
-  return [...recent, ...rest];
+  if (recent.length === 0) return rest;
+  return [
+    { type: 'header', label: 'Recent' },
+    ...recent,
+    { type: 'header', label: 'All Stores' },
+    ...rest,
+  ];
 }
 
 interface StoreSelectorSheetProps {
@@ -55,11 +65,11 @@ interface StoreSelectorSheetProps {
 export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: StoreSelectorSheetProps) {
   const [selectedStore, setSelectedStore] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [orderedStores, setOrderedStores] = useState(STORES);
+  const [listItems, setListItems] = useState<ListItem[]>(STORES);
 
   useEffect(() => {
     if (visible) {
-      getRecentStores().then((recent) => setOrderedStores(sortedStores(recent)));
+      getRecentStores().then((recent) => setListItems(buildListItems(recent)));
     }
   }, [visible]);
 
@@ -115,21 +125,26 @@ export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: 
         <Text style={styles.subtitle}>Which store do you shop at?</Text>
 
         <FlatList
-          data={orderedStores}
-          keyExtractor={(s) => s.id}
+          data={listItems}
+          keyExtractor={(item) => ('type' in item ? `header-${item.label}` : item.id)}
           contentContainerStyle={styles.list}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.storeBtn, selectedStore === item.id && styles.storeBtnSelected]}
-              onPress={() => setSelectedStore(item.id)}
-            >
-              <View style={[styles.dot, { backgroundColor: item.color }]} />
-              <Text style={[styles.storeName, selectedStore === item.id && styles.storeNameSelected]}>
-                {item.name}
-              </Text>
-              {selectedStore === item.id && <Text style={styles.check}>✓</Text>}
-            </TouchableOpacity>
-          )}
+          renderItem={({ item }) => {
+            if ('type' in item) {
+              return <Text style={styles.sectionHeader}>{item.label}</Text>;
+            }
+            return (
+              <TouchableOpacity
+                style={[styles.storeBtn, selectedStore === item.id && styles.storeBtnSelected]}
+                onPress={() => setSelectedStore(item.id)}
+              >
+                <View style={[styles.dot, { backgroundColor: item.color }]} />
+                <Text style={[styles.storeName, selectedStore === item.id && styles.storeNameSelected]}>
+                  {item.name}
+                </Text>
+                {selectedStore === item.id && <Text style={styles.check}>✓</Text>}
+              </TouchableOpacity>
+            );
+          }}
         />
 
         <View style={styles.footer}>
@@ -165,6 +180,15 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   list: { paddingHorizontal: 20 },
+  sectionHeader: {
+    fontSize: 12,
+    fontFamily: 'Inter_600SemiBold',
+    color: Colors.text3,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginTop: 12,
+    marginBottom: 6,
+  },
   storeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
