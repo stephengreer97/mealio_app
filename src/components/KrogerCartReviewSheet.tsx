@@ -154,7 +154,7 @@ export default function KrogerCartReviewSheet({
   // Step review
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [reviewIdx, setReviewIdx] = useState(0);
-  const [pickedItems, setPickedItems] = useState<{ upc: string; quantity: number }[]>([]);
+  const [pickedItems, setPickedItems] = useState<{ upc: string; quantity: number; description: string }[]>([]);
 
   // Per-review selection
   const [selectedSuggIdx, setSelectedSuggIdx] = useState<number | 'custom'>(0);
@@ -168,6 +168,7 @@ export default function KrogerCartReviewSheet({
   // Step done
   const [totalAdded, setTotalAdded] = useState(0);
   const [cartError, setCartError] = useState('');
+  const [addedItems, setAddedItems] = useState<{ description: string; quantity: number }[]>([]);
 
   // Re-initialize when sheet opens
   useEffect(() => {
@@ -182,6 +183,7 @@ export default function KrogerCartReviewSheet({
       setCustomText('');
       setTotalAdded(0);
       setCartError('');
+      setAddedItems([]);
     }
   }, [visible]);
 
@@ -273,7 +275,7 @@ export default function KrogerCartReviewSheet({
       const resolved = await resolveCurrentSelection();
       if (shouldShowSuggestionsRef.current) return; // custom search showed new suggestions — stay on this item
       if (resolved?.upc) {
-        newPicked.push({ upc: resolved.upc, quantity: currentReview.quantity });
+        newPicked.push({ upc: resolved.upc, quantity: currentReview.quantity, description: resolved.name });
       }
       if (action === 'update' && resolved?.name) {
         for (const mealId of currentReview.mealIds) {
@@ -298,15 +300,16 @@ export default function KrogerCartReviewSheet({
     } else {
       const exactItems = searchResults
         .filter((r) => r.exact && r.upc)
-        .map((r) => ({ upc: r.upc!, quantity: r.quantity }));
+        .map((r) => ({ upc: r.upc!, quantity: r.quantity, description: r.description ?? '' }));
       await doAddToCart([...exactItems, ...newPicked]);
     }
   };
 
-  const doAddToCart = async (cartItems: { upc: string; quantity: number }[]) => {
+  const doAddToCart = async (cartItems: { upc: string; quantity: number; description: string }[]) => {
     setStep('adding');
     if (cartItems.length === 0) {
       setTotalAdded(0);
+      setAddedItems([]);
       setCartError('');
       setStep('done');
       return;
@@ -314,9 +317,11 @@ export default function KrogerCartReviewSheet({
     try {
       await krogerApi.addToCartDirect(cartItems, locationId);
       setTotalAdded(cartItems.length);
+      setAddedItems(cartItems.map((i) => ({ description: i.description, quantity: i.quantity })));
       setCartError('');
     } catch (err: any) {
       setTotalAdded(0);
+      setAddedItems([]);
       setCartError(err.message || 'Failed to add to cart');
     }
     setStep('done');
@@ -584,7 +589,7 @@ export default function KrogerCartReviewSheet({
         {/* ── Step: done ────────────────────────────────────────────────── */}
         {step === 'done' && (
           <>
-            <View style={[styles.centered, { flex: 1, paddingHorizontal: 24 }]}>
+            <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 12 }}>
               {cartError ? (
                 <>
                   <Text style={styles.doneEmoji}>⚠️</Text>
@@ -601,9 +606,6 @@ export default function KrogerCartReviewSheet({
                   <Text style={styles.doneTitle}>
                     {totalAdded} item{totalAdded !== 1 ? 's' : ''} added to your {storeName} cart!
                   </Text>
-                  <Text style={styles.doneSub}>
-                    Open {storeUrl} to review and checkout.
-                  </Text>
                 </>
               ) : (
                 <>
@@ -615,6 +617,25 @@ export default function KrogerCartReviewSheet({
                 </>
               )}
             </View>
+            {addedItems.length > 0 && (
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+                {addedItems.map((item, i) => (
+                  <View
+                    key={i}
+                    style={{
+                      paddingVertical: 10,
+                      borderBottomWidth: i < addedItems.length - 1 ? 1 : 0,
+                      borderBottomColor: Colors.border,
+                    }}
+                  >
+                    <Text style={{ fontSize: 14, color: Colors.text1, fontFamily: 'Inter_400Regular' }}>
+                      {item.description}
+                    </Text>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+            {addedItems.length === 0 && <View style={{ flex: 1 }} />}
             <View style={[styles.footer, { gap: 8 }]}>
               {!cartError && totalAdded > 0 && (
                 <TouchableOpacity
