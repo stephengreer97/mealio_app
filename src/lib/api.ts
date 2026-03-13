@@ -406,4 +406,59 @@ export const payments = {
     request<{ portalUrl: string }>('/api/payments/portal', { method: 'GET' }),
 };
 
+// Kroger
+export const kroger = {
+  status: () =>
+    request<{ connected: boolean; locationId?: string; locationName?: string; connectedAt?: string }>(
+      '/api/kroger/status', { method: 'GET' }
+    ),
+
+  connect: () =>
+    request<{ redirectUrl: string }>('/api/kroger/connect', {
+      method: 'POST',
+      body: JSON.stringify({ mobile: true }),
+    }),
+
+  disconnect: () =>
+    request<{ success: boolean }>('/api/kroger/disconnect', { method: 'POST' }),
+
+  searchLocations: (term: string) =>
+    request<{ locations: Array<{ locationId: string; name: string; chain?: string; address: string }> }>(
+      `/api/kroger/locations?term=${encodeURIComponent(term)}`, { method: 'GET' }
+    ),
+
+  setLocation: (locationId: string, locationName: string) =>
+    request<{ success: boolean; locationId: string; locationName: string }>('/api/kroger/set-location', {
+      method: 'POST',
+      body: JSON.stringify({ locationId, locationName }),
+    }),
+
+  addToCart: (ingredients: Array<{ productName: string; quantity?: number }>, locationId?: string) =>
+    request<{ added: string[]; notFound: string[]; cartAdded: boolean }>('/api/kroger/add-to-cart', {
+      method: 'POST',
+      body: JSON.stringify({ ingredients, locationId }),
+    }),
+
+  addToCartDirect: (items: Array<{ upc: string; quantity: number }>, locationId?: string) =>
+    request<{ added: number; cartAdded: boolean }>('/api/kroger/add-to-cart', {
+      method: 'POST',
+      body: JSON.stringify({ items, locationId }),
+    }),
+
+  searchProducts: (ingredients: Array<{ productName: string; quantity?: number }>, locationId?: string) =>
+    request<{
+      results: Array<{
+        term: string;
+        quantity: number;
+        upc: string | null;
+        description: string | null;
+        exact: boolean;
+        suggestions: Array<{ upc: string; description: string; size: string; price: number | null; stockLevel?: string; imageUrl?: string }>;
+      }>;
+    }>('/api/kroger/search-products', {
+      method: 'POST',
+      body: JSON.stringify({ ingredients, locationId }),
+    }),
+};
+
 export { ApiError };

@@ -17,19 +17,32 @@ interface MealCardProps {
   onPress?: () => void;
   subtitle?: string;
   savedAt?: string[]; // store names where this meal is already saved
+  selected?: boolean; // shown in multi-select mode
+  onView?: () => void; // view button shown in multi-select mode
 }
 
-export default function MealCard({ meal, onPress, subtitle, savedAt }: MealCardProps) {
+export default function MealCard({ meal, onPress, subtitle, savedAt, selected, onView }: MealCardProps) {
   const photoUrl = 'photoUrl' in meal ? meal.photoUrl : undefined;
   const ingredientCount = meal.ingredients?.length ?? 0;
 
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.8}>
+    <TouchableOpacity
+      style={[styles.card, selected && styles.cardSelected]}
+      onPress={onPress}
+      activeOpacity={0.8}
+    >
       {photoUrl ? (
         <Image source={{ uri: photoUrl }} style={styles.image} contentFit="cover" />
       ) : (
         <View style={[styles.image, styles.imagePlaceholder]}>
           <Text style={styles.placeholderEmoji}>🍽️</Text>
+        </View>
+      )}
+      {onView !== undefined && (
+        <View style={styles.checkOverlay}>
+          <View style={[styles.checkCircle, selected && styles.checkCircleSelected]}>
+            {selected && <Text style={styles.checkMark}>✓</Text>}
+          </View>
         </View>
       )}
       <View style={styles.body}>
@@ -38,6 +51,11 @@ export default function MealCard({ meal, onPress, subtitle, savedAt }: MealCardP
           <Text style={styles.metaText} numberOfLines={1}>
             {subtitle ?? `${ingredientCount} items`}
           </Text>
+          {onView && (
+            <TouchableOpacity onPress={onView} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={styles.viewBtn}>View</Text>
+            </TouchableOpacity>
+          )}
         </View>
         {savedAt && savedAt.length > 0 && (
           <View style={styles.savedRow}>
@@ -63,6 +81,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 12,
   },
+  cardSelected: {
+    borderColor: Colors.brand,
+    backgroundColor: Colors.brandLight,
+  },
   image: {
     width: '100%',
     height: 140,
@@ -73,6 +95,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   placeholderEmoji: { fontSize: 40 },
+  checkOverlay: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+  },
+  checkCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: '#fff',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkCircleSelected: {
+    backgroundColor: Colors.brand,
+    borderColor: Colors.brand,
+  },
+  checkMark: { fontSize: 12, color: '#fff', fontFamily: 'Inter_700Bold' },
   body: { padding: 12 },
   name: {
     fontSize: 14,
@@ -81,11 +123,18 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     lineHeight: 20,
   },
-  meta: { flexDirection: 'row', justifyContent: 'space-between' },
+  meta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   metaText: {
     fontSize: 12,
     fontFamily: 'Inter_400Regular',
     color: Colors.text3,
+    flex: 1,
+  },
+  viewBtn: {
+    fontSize: 12,
+    fontFamily: 'Inter_600SemiBold',
+    color: Colors.brand,
+    marginLeft: 6,
   },
   savedRow: { marginTop: 5, gap: 2 },
   savedText: {

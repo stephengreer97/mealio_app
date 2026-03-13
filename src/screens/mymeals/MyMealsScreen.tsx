@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
@@ -19,12 +19,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../../constants/colors';
 import { Meal, Ingredient } from '../../types';
-import { meals as mealsApi, payments as paymentsApi } from '../../lib/api';
+import { meals as mealsApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
-import { STORES } from '../../constants/stores';
+import { STORES, isKrogerBrand } from '../../constants/stores';
 import { ALL_TAGS } from '../../constants/tags';
 import MealCard from '../../components/MealCard';
 import MealDetailSheet from '../../components/MealDetailSheet';
+import KrogerCartReviewSheet from '../../components/KrogerCartReviewSheet';
 import IngredientEditor from '../../components/IngredientEditor';
 import PhotoPicker from '../../components/PhotoPicker';
 import Button from '../../components/ui/Button';
@@ -41,6 +42,20 @@ export default function MyMealsScreen() {
   const [selectedStore, setSelectedStore] = useState<string>(STORES[0].id);
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
+  const [krogerConnected, setKrogerConnected] = useState(false);
+  const [krogerLocationId, setKrogerLocationId] = useState<string | null>(null);
+  const [krogerLocationName, setKrogerLocationName] = useState<string | null>(null);
+
+  // Multi-select / Kroger cart
+  const [selectedMealIds, setSelectedMealIds] = useState<Set<string>>(new Set());
+  const [reviewVisible, setReviewVisible] = useState(false);
+
+  // Kroger store picker
+  const [krogerPickerVisible, setKrogerPickerVisible] = useState(false);
+  const [krogerZip, setKrogerZip] = useState('');
+  const [krogerLocations, setKrogerLocations] = useState<Array<{ locationId: string; name: string; address: string }>>([]);
+  const [krogerSearching, setKrogerSearching] = useState(false);
+  const [krogerSaving, setKrogerSaving] = useState(false);
 
   // Create meal form
   const [formVisible, setFormVisible] = useState(false);
@@ -65,8 +80,99 @@ export default function MyMealsScreen() {
   useFocusEffect(
     useCallback(() => {
       loadMeals();
+      krogerApi.status().then(d => {
+        setKrogerConnected(d.connected);
+        if (d.connected) {
+          setKrogerLocationId(d.locationId ?? null);
+          setKrogerLocationName(d.locationName ?? null);
+        } else {
+          setKrogerLocationId(null);
+          setKrogerLocationName(null);
+        }
+      }).catch(() => {});
     }, [])
   );
+
+  // Refresh Kroger status when returning from OAuth in browser
+  useEffect(() => {
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      if (url === 'mealio://kroger/connected') {
+        krogerApi.status().then(d => {
+          setKrogerConnected(d.connected);
+          if (d.connected) {
+            setKrogerLocationId(d.locationId ?? null);
+            setKrogerLocationName(d.locationName ?? null);
+            if (!d.locationId) {
+              setKrogerZip('');
+              setKrogerLocations([]);
+              setKrogerPickerVisible(true);
+            }
+          }
+        }).catch(() => {});
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
+  async function handleKrogerConnect() {
+    try {
+      const { redirectUrl } = await krogerApi.connect();
+      await Linking.openURL(redirectUrl);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not connect to Kroger');
+    }
+  }
+
+  async function handleCartButtonPress() {
+    if (!krogerConnected) {
+      const storeName = selectedStore_?.name ?? 'This store';
+      Alert.alert(
+        `Connect ${storeName}`,
+        `${storeName} is part of the Kroger family of stores. To add meals to your cart, you'll need to connect your Kroger account.\n\nYou'll be taken to Kroger's sign-in page in your browser and returned to Mealio once connected.`,
+        [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Connect Account', onPress: handleKrogerConnect },
+        ]
+      );
+      return;
+    }
+    if (!krogerLocationId) {
+      setKrogerZip('');
+      setKrogerLocations([]);
+      setKrogerPickerVisible(true);
+      return;
+    }
+    setReviewVisible(true);
+  }
+
+  async function handleKrogerSearchStores() {
+    if (!krogerZip.trim()) return;
+    setKrogerSearching(true);
+    setKrogerLocations([]);
+    try {
+      const { locations } = await krogerApi.searchLocations(krogerZip.trim());
+      setKrogerLocations(locations);
+      if (locations.length === 0) Alert.alert('No stores found', 'No Kroger-family stores found near that ZIP code.');
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not search stores');
+    } finally {
+      setKrogerSearching(false);
+    }
+  }
+
+  async function handleKrogerSaveLocation(loc: { locationId: string; name: string; address: string }) {
+    setKrogerSaving(true);
+    try {
+      await krogerApi.setLocation(loc.locationId, loc.name);
+      setKrogerLocationId(loc.locationId);
+      setKrogerLocationName(loc.name);
+      setKrogerPickerVisible(false);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not save store');
+    } finally {
+      setKrogerSaving(false);
+    }
+  }
 
   async function loadMeals() {
     try {
@@ -177,12 +283,26 @@ export default function MyMealsScreen() {
   }
 
   const storeMeals = allMeals.filter((m) => m.storeId === selectedStore);
-  const storesWithMeals = STORES.filter((s) => allMeals.some((m) => m.storeId === s.id));
+  const storesWithMeals = STORES
+    .filter((s) => allMeals.some((m) => m.storeId === s.id))
+    .sort((a, b) => allMeals.filter((m) => m.storeId === b.id).length - allMeals.filter((m) => m.storeId === a.id).length);
   const displayStores = storesWithMeals.length > 0 ? storesWithMeals : STORES.slice(0, 5);
+  const isKroger = isKrogerBrand(selectedStore);
+  const selectedMeals = storeMeals.filter((m) => selectedMealIds.has(m.id));
+  const selectedStore_ = STORES.find((s) => s.id === selectedStore);
 
   function openMeal(meal: Meal) {
     setSelectedMeal(meal);
     setDetailVisible(true);
+  }
+
+  function toggleMealSelect(id: string) {
+    setSelectedMealIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   const renderMeal = useCallback(({ item, index }: { item: Meal; index: number }) => {
@@ -190,11 +310,27 @@ export default function MyMealsScreen() {
     const next = storeMeals[index + 1] ?? null;
     return (
       <View style={styles.mealRow}>
-        <MealCard meal={item} onPress={() => openMeal(item)} subtitle={item.author ?? undefined} />
-        {next ? <MealCard meal={next} onPress={() => openMeal(next)} subtitle={next.author ?? undefined} /> : <View style={{ flex: 1, marginHorizontal: 4 }} />}
+        <MealCard
+          meal={item}
+          onPress={isKroger ? () => toggleMealSelect(item.id) : () => openMeal(item)}
+          subtitle={item.author ?? undefined}
+          selected={isKroger ? selectedMealIds.has(item.id) : undefined}
+          onView={isKroger ? () => openMeal(item) : undefined}
+        />
+        {next ? (
+          <MealCard
+            meal={next}
+            onPress={isKroger ? () => toggleMealSelect(next.id) : () => openMeal(next)}
+            subtitle={next.author ?? undefined}
+            selected={isKroger ? selectedMealIds.has(next.id) : undefined}
+            onView={isKroger ? () => openMeal(next) : undefined}
+          />
+        ) : (
+          <View style={{ flex: 1, marginHorizontal: 4 }} />
+        )}
       </View>
     );
-  }, [storeMeals]);
+  }, [storeMeals, isKroger, selectedMealIds]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -216,7 +352,7 @@ export default function MyMealsScreen() {
           <TouchableOpacity
             key={store.id}
             style={[styles.storeTab, selectedStore === store.id && styles.storeTabActive]}
-            onPress={() => setSelectedStore(store.id)}
+            onPress={() => { setSelectedStore(store.id); setSelectedMealIds(new Set()); }}
           >
             <View style={[styles.storeDot, { backgroundColor: store.color }]} />
             <Text style={[styles.storeTabText, selectedStore === store.id && styles.storeTabTextActive]}>
@@ -251,6 +387,7 @@ export default function MyMealsScreen() {
         data={storeMeals}
         keyExtractor={(item) => item.id}
         renderItem={renderMeal}
+        extraData={selectedMealIds}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Colors.brand} />}
         ListEmptyComponent={
@@ -266,13 +403,88 @@ export default function MyMealsScreen() {
         }
       />
 
+      {isKroger && selectedMealIds.size > 0 && (
+        <TouchableOpacity style={[styles.floatingCart, { backgroundColor: selectedStore_?.color ?? Colors.brand }]} onPress={handleCartButtonPress} activeOpacity={0.88}>
+          <Ionicons name="cart" size={18} color="#fff" />
+          <Text style={styles.floatingCartText}>
+            Add {selectedMealIds.size} meal{selectedMealIds.size !== 1 ? 's' : ''} to {selectedStore_?.name ?? 'cart'}
+          </Text>
+        </TouchableOpacity>
+      )}
+
       <MealDetailSheet
         visible={detailVisible}
         meal={selectedMeal}
         mode="edit"
         onClose={() => setDetailVisible(false)}
         onSave={(updated) => { loadMeals(); if (updated) setSelectedMeal(updated); }}
+        krogerLocationId={krogerLocationId}
+        onNeedKrogerStore={() => { setKrogerZip(''); setKrogerLocations([]); setKrogerPickerVisible(true); }}
       />
+
+      <KrogerCartReviewSheet
+        visible={reviewVisible}
+        meals={selectedMeals}
+        locationId={krogerLocationId ?? ''}
+        storeId={selectedStore}
+        storeName={selectedStore_?.name ?? 'Kroger'}
+        onClose={() => { setReviewVisible(false); setSelectedMealIds(new Set()); }}
+        onMealUpdated={(updated) => {
+          setAllMeals((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+        }}
+      />
+
+      {/* Kroger store picker */}
+      <Modal visible={krogerPickerVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setKrogerPickerVisible(false)}>
+        <SafeAreaView style={styles.safe}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Select Your Store</Text>
+            <TouchableOpacity onPress={() => setKrogerPickerVisible(false)}>
+              <Text style={styles.modalClose}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={styles.modalScroll} keyboardShouldPersistTaps="handled">
+            <Text style={styles.sectionLabel}>Find a nearby {selectedStore_?.name ?? 'Kroger'} store</Text>
+            <View style={styles.krogerZipRow}>
+              <TextInput
+                style={styles.krogerZipInput}
+                placeholder="ZIP code"
+                placeholderTextColor={Colors.text3}
+                value={krogerZip}
+                onChangeText={setKrogerZip}
+                keyboardType="numeric"
+                maxLength={10}
+                returnKeyType="search"
+                onSubmitEditing={handleKrogerSearchStores}
+              />
+              <TouchableOpacity
+                style={[styles.krogerSearchBtn, (!krogerZip.trim() || krogerSearching) && { opacity: 0.5 }]}
+                onPress={handleKrogerSearchStores}
+                disabled={!krogerZip.trim() || krogerSearching}
+              >
+                <Text style={styles.krogerSearchBtnText}>{krogerSearching ? '…' : 'Search'}</Text>
+              </TouchableOpacity>
+            </View>
+            {krogerLocations.map((loc) => (
+              <TouchableOpacity
+                key={loc.locationId}
+                style={[styles.krogerLocRow, krogerLocationId === loc.locationId && styles.krogerLocRowActive]}
+                onPress={() => handleKrogerSaveLocation(loc)}
+                disabled={krogerSaving}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.krogerLocName}>{loc.name}</Text>
+                  <Text style={styles.krogerLocAddr} numberOfLines={1}>{loc.address}</Text>
+                </View>
+                {krogerLocationId === loc.locationId
+                  ? <Ionicons name="checkmark" size={18} color={Colors.brand} />
+                  : <Ionicons name="chevron-forward" size={16} color={Colors.text3} />
+                }
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
 
       {/* Create meal modal */}
       <Modal visible={formVisible} animationType="slide" presentationStyle="pageSheet">
@@ -536,6 +748,30 @@ const styles = StyleSheet.create({
   tierTextRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   tierLabel: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text2 },
   upgradeLink: { fontSize: 12, fontFamily: 'Inter_600SemiBold', color: Colors.brand },
+  floatingCart: {
+    position: 'absolute',
+    bottom: 16,
+    left: 16,
+    right: 16,
+    backgroundColor: Colors.brand,
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  floatingCartText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
+  },
   list: { paddingHorizontal: 12, paddingBottom: 20 },
   mealRow: { flexDirection: 'row', justifyContent: 'space-between' },
   empty: { alignItems: 'center', paddingTop: 80, paddingHorizontal: 40 },
@@ -637,6 +873,42 @@ const styles = StyleSheet.create({
   pickerRowActive: { backgroundColor: Colors.brandLight },
   pickerRowText: { flex: 1, fontSize: 15, fontFamily: 'Inter_400Regular', color: Colors.text1 },
   pickerRowTextActive: { fontFamily: 'Inter_600SemiBold', color: Colors.brand },
+  krogerZipRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  krogerZipInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.input,
+    backgroundColor: Colors.surfaceRaised,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text1,
+  },
+  krogerSearchBtn: {
+    backgroundColor: Colors.brand,
+    borderRadius: Radius.input,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    justifyContent: 'center',
+  },
+  krogerSearchBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#fff' },
+  krogerLocRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 8,
+    backgroundColor: Colors.surfaceRaised,
+    gap: 10,
+  },
+  krogerLocRowActive: { borderColor: Colors.brand, backgroundColor: Colors.brandLight },
+  krogerLocName: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1, marginBottom: 2 },
+  krogerLocAddr: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3 },
   diffRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
   diffBtn: {
     flex: 1,

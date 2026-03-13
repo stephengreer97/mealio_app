@@ -16,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Colors, Radius } from '../constants/colors';
 import { Meal, PresetMeal, Ingredient } from '../types';
-import { meals as mealsApi, images as imagesApi } from '../lib/api';
+import { meals as mealsApi, images as imagesApi, kroger as krogerApi } from '../lib/api';
 import Button from './ui/Button';
 import Input from './ui/Input';
 import IngredientEditor from './IngredientEditor';
@@ -31,6 +31,8 @@ interface MealDetailSheetProps {
   onClose: () => void;
   onSave?: (updated?: Meal) => void;
   onPressSave?: () => void;
+  krogerLocationId?: string | null;
+  onNeedKrogerStore?: () => void;
 }
 
 function DifficultyDots({ level }: { level: number }) {
@@ -57,10 +59,13 @@ export default function MealDetailSheet({
   onClose,
   onSave,
   onPressSave,
+  krogerLocationId,
+  onNeedKrogerStore,
 }: MealDetailSheetProps) {
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [krogerLoading, setKrogerLoading] = useState(false);
 
   // Edit form fields
   const [name, setName] = useState('');
@@ -172,6 +177,27 @@ export default function MealDetailSheet({
     }
   }
 
+  async function handleAddToKroger() {
+    if (!meal) return;
+    if (!krogerLocationId) {
+      onNeedKrogerStore?.();
+      return;
+    }
+    setKrogerLoading(true);
+    try {
+      const result = await krogerApi.addToCart(meal.ingredients, krogerLocationId);
+      const msg = result.added.length > 0
+        ? `${result.added.length} item${result.added.length !== 1 ? 's' : ''} added to your Kroger cart.`
+        : 'No items could be found at your Kroger store.';
+      const extra = result.notFound.length > 0 ? `\n\nNot found: ${result.notFound.join(', ')}` : '';
+      Alert.alert('Kroger Cart', msg + extra);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to add to Kroger cart');
+    } finally {
+      setKrogerLoading(false);
+    }
+  }
+
   const displayIngredients = meal?.ingredients ?? [];
   const m = meal as any;
   const authorName = m?.creatorSocial
@@ -195,6 +221,13 @@ export default function MealDetailSheet({
           </TouchableOpacity>
           {mode === 'edit' && !editing && (
             <View style={styles.headerActions}>
+              {krogerLocationId && (
+                <TouchableOpacity onPress={handleAddToKroger} style={styles.headerBtn} disabled={krogerLoading}>
+                  <Text style={[styles.headerBtnText, { color: '#0063a1' }, krogerLoading && { color: Colors.text3 }]}>
+                    {krogerLoading ? 'Adding…' : 'Kroger'}
+                  </Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity onPress={handleShare} style={styles.headerBtn} disabled={sharing}>
                 <Text style={[styles.headerBtnText, sharing && { color: Colors.text3 }]}>
                   {sharing ? 'Sharing…' : 'Share'}

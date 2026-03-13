@@ -4,6 +4,17 @@ export interface Store {
   color: string;
 }
 
+// All stores in the Kroger corporate family (supported via Kroger API OAuth)
+export const KROGER_BRAND_IDS = new Set([
+  'kroger', 'king_soopers', 'ralphs', 'fred_meyer', 'frys', 'qfc',
+  'harris_teeter', 'marianos', 'smiths', 'bakers', 'dillons', 'pay_less',
+  'pick_n_save', 'metro_market', 'carrs', 'city_market',
+]);
+
+export function isKrogerBrand(storeId: string): boolean {
+  return KROGER_BRAND_IDS.has(storeId);
+}
+
 export const STORES: Store[] = [
   { id: 'acme',           name: 'Acme Markets',        color: '#C8102E' },
   { id: 'aldi',           name: 'ALDI',                color: '#00529F' },

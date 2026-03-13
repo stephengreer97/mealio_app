@@ -15,7 +15,27 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "co.mealio.app",
-      "associatedDomains": ["applinks:mealio.co"]
+      "associatedDomains": ["applinks:mealio.co"],
+      "infoPlist": {
+        "LSApplicationQueriesSchemes": [
+          "kroger",
+          "harristeeter",
+          "kingsoopers",
+          "fredmeyer",
+          "ralphs",
+          "smithsfoodanddrug",
+          "frysfood",
+          "marianos",
+          "picknsave",
+          "dillons",
+          "bakersplus",
+          "citymarket",
+          "payless",
+          "metromarket",
+          "carrs",
+          "qfc"
+        ]
+      }
     },
     "android": {
       "package": "co.mealio.app",

@@ -7,6 +7,7 @@ import {
   Alert,
   FlatList,
   Linking,
+  TextInput,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,7 +15,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors, Radius } from '../../constants/colors';
 import { useAuth } from '../../context/AuthContext';
-import { account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi } from '../../lib/api';
+import { account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
 import { Creator, Meal } from '../../types';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
@@ -34,6 +35,15 @@ export default function AccountScreen() {
   // Subscription
   const [portalLoading, setPortalLoading] = useState(false);
 
+  // Kroger
+  const [krogerConnected, setKrogerConnected] = useState(false);
+  const [krogerLocationId, setKrogerLocationId] = useState<string | null>(null);
+  const [krogerLocationName, setKrogerLocationName] = useState<string | null>(null);
+  const [krogerZip, setKrogerZip] = useState('');
+  const [krogerLocations, setKrogerLocations] = useState<Array<{ locationId: string; name: string; chain?: string; address: string }>>([]);
+  const [krogerSearching, setKrogerSearching] = useState(false);
+  const [krogerConnecting, setKrogerConnecting] = useState(false);
+
   // Creator photo state
   const [uploading, setUploading] = useState(false);
   const [creatorProfile, setCreatorProfile] = useState<Creator | null>(null);
@@ -41,8 +51,23 @@ export default function AccountScreen() {
   useEffect(() => {
     loadFollowing();
     loadDeletedMeals();
+    loadKrogerStatus();
     if (isCreator) loadCreatorProfile();
   }, [isCreator]);
+
+  // Return-from-browser deep link: mealio://kroger/connected
+  useEffect(() => {
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      if (url === 'mealio://kroger/connected') {
+        loadKrogerStatus();
+      } else if (url === 'mealio://kroger/denied') {
+        Alert.alert('Kroger', 'Kroger connection was cancelled.');
+      } else if (url === 'mealio://kroger/error') {
+        Alert.alert('Kroger', 'Something went wrong connecting to Kroger. Please try again.');
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   async function loadFollowing() {
     try {
@@ -55,6 +80,17 @@ export default function AccountScreen() {
     try {
       const data = await mealsApi.listDeleted();
       setDeletedMeals(data);
+    } catch {}
+  }
+
+  async function loadKrogerStatus() {
+    try {
+      const data = await krogerApi.status();
+      if (data.connected) {
+        setKrogerConnected(true);
+        setKrogerLocationId(data.locationId ?? null);
+        setKrogerLocationName(data.locationName ?? null);
+      }
     } catch {}
   }
 
@@ -150,6 +186,67 @@ export default function AccountScreen() {
     ]);
   }
 
+  async function handleKrogerConnect() {
+    setKrogerConnecting(true);
+    try {
+      const { redirectUrl } = await krogerApi.connect();
+      await Linking.openURL(redirectUrl);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not connect to Kroger');
+    } finally {
+      setKrogerConnecting(false);
+    }
+  }
+
+  async function handleKrogerDisconnect() {
+    Alert.alert('Disconnect Kroger', 'Remove your Kroger connection?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Disconnect',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await krogerApi.disconnect();
+            setKrogerConnected(false);
+            setKrogerLocationId(null);
+            setKrogerLocationName(null);
+            setKrogerLocations([]);
+          } catch (err: any) {
+            Alert.alert('Error', err.message || 'Could not disconnect');
+          }
+        },
+      },
+    ]);
+  }
+
+  async function handleKrogerSearchStores() {
+    if (!krogerZip.trim()) return;
+    setKrogerSearching(true);
+    setKrogerLocations([]);
+    try {
+      const { locations } = await krogerApi.searchLocations(krogerZip);
+      setKrogerLocations(locations);
+      if (locations.length === 0) Alert.alert('No stores found', 'No Kroger stores found near that ZIP code.');
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not search stores');
+    } finally {
+      setKrogerSearching(false);
+    }
+  }
+
+  async function handleKrogerSaveLocation(loc: { locationId: string; name: string; address: string }) {
+    try {
+      await krogerApi.setLocation(loc.locationId, loc.name);
+      setKrogerLocationId(loc.locationId);
+      setKrogerLocationName(loc.name);
+      setKrogerLocations([]);
+      setKrogerZip('');
+      Alert.alert('Store saved', `${loc.name} is now your preferred Kroger store.`);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not save store');
+    }
+  }
+
   async function handleManageSubscription() {
     setPortalLoading(true);
     try {
@@ -215,6 +312,87 @@ export default function AccountScreen() {
             style={styles.manageBtn}
           />
           <Text style={styles.subHint}>Update payment method, view billing history, or cancel anytime.</Text>
+        </Card>
+
+        {/* Kroger Cart */}
+        <Card style={styles.card}>
+          <Text style={styles.cardTitle}>Kroger Cart</Text>
+          {!krogerConnected ? (
+            <View>
+              <Text style={styles.krogerDesc}>
+                Connect your Kroger account to add meal ingredients directly to your cart — no extension needed. Works with Kroger, Ralphs, Fred Meyer, King Soopers, Harris Teeter, and more.
+              </Text>
+              <View style={styles.krogerBrandNote}>
+                <Text style={styles.krogerBrandNoteText}>
+                  Shop at King Soopers, Fred Meyer, Ralphs, or Harris Teeter? These stores use Kroger's login system — you'll see a Kroger sign-in screen, which is normal.
+                </Text>
+              </View>
+              <Button
+                label={krogerConnecting ? 'Opening Kroger…' : 'Connect Kroger Account'}
+                variant="secondary"
+                onPress={handleKrogerConnect}
+                loading={krogerConnecting}
+              />
+            </View>
+          ) : (
+            <View>
+              <View style={styles.krogerConnectedBadge}>
+                <Text style={styles.krogerConnectedTitle}>Connected</Text>
+                <Text style={styles.krogerConnectedDesc}>
+                  {krogerLocationName ?? 'No store selected — search below to pick one.'}
+                </Text>
+              </View>
+
+              {/* Store search */}
+              <Text style={[styles.sectionSubLabel, { marginTop: 12 }]}>
+                {krogerLocationName ? 'Change store' : 'Select your store'}
+              </Text>
+              <View style={styles.krogerSearchRow}>
+                <TextInput
+                  style={styles.krogerZipInput}
+                  placeholder="ZIP code"
+                  placeholderTextColor={Colors.text3}
+                  value={krogerZip}
+                  onChangeText={setKrogerZip}
+                  keyboardType="numeric"
+                  maxLength={10}
+                  returnKeyType="search"
+                  onSubmitEditing={handleKrogerSearchStores}
+                />
+                <TouchableOpacity
+                  style={[styles.krogerSearchBtn, (!krogerZip.trim() || krogerSearching) && { opacity: 0.5 }]}
+                  onPress={handleKrogerSearchStores}
+                  disabled={!krogerZip.trim() || krogerSearching}
+                >
+                  <Text style={styles.krogerSearchBtnText}>{krogerSearching ? '…' : 'Search'}</Text>
+                </TouchableOpacity>
+              </View>
+
+              {krogerLocations.map((loc) => (
+                <TouchableOpacity
+                  key={loc.locationId}
+                  style={[styles.krogerLocRow, krogerLocationId === loc.locationId && styles.krogerLocRowActive]}
+                  onPress={() => handleKrogerSaveLocation(loc)}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.krogerLocName}>{loc.name}</Text>
+                    <Text style={styles.krogerLocAddr} numberOfLines={1}>{loc.address}</Text>
+                  </View>
+                  {krogerLocationId === loc.locationId && (
+                    <Text style={styles.krogerLocCheck}>✓</Text>
+                  )}
+                </TouchableOpacity>
+              ))}
+
+              <Button
+                label="Disconnect Kroger"
+                variant="ghost"
+                size="sm"
+                onPress={handleKrogerDisconnect}
+                style={{ marginTop: 12 }}
+              />
+            </View>
+          )}
         </Card>
 
         {/* Change Password */}
@@ -385,4 +563,66 @@ const styles = StyleSheet.create({
   deletedActions: { flexDirection: 'row', gap: 8 },
   actionBtn: { minWidth: 72 },
   signOutBtn: { marginTop: 8 },
+  krogerDesc: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2, marginBottom: 10, lineHeight: 19 },
+  krogerBrandNote: {
+    backgroundColor: Colors.surface,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  krogerBrandNoteText: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text2,
+    lineHeight: 18,
+  },
+  krogerConnectedBadge: {
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    marginBottom: 4,
+  },
+  krogerConnectedTitle: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#14532d', marginBottom: 2 },
+  krogerConnectedDesc: { fontSize: 13, fontFamily: 'Inter_400Regular', color: '#166534' },
+  sectionSubLabel: { fontSize: 12, fontFamily: 'Inter_600SemiBold', color: Colors.text2, marginBottom: 8 },
+  krogerSearchRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  krogerZipInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    backgroundColor: Colors.surfaceRaised,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text1,
+  },
+  krogerSearchBtn: {
+    backgroundColor: Colors.brand,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    justifyContent: 'center',
+  },
+  krogerSearchBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#fff' },
+  krogerLocRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 6,
+    backgroundColor: Colors.surfaceRaised,
+  },
+  krogerLocRowActive: { borderColor: Colors.brand, backgroundColor: Colors.brandLight },
+  krogerLocName: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1, marginBottom: 2 },
+  krogerLocAddr: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3 },
+  krogerLocCheck: { fontSize: 16, color: Colors.brand, marginLeft: 8 },
 });
