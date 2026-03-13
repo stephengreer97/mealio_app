@@ -112,7 +112,7 @@ export default function MyMealsScreen() {
 
   async function handleKrogerConnect() {
     try {
-      const { redirectUrl } = await krogerApi.connect();
+      const { redirectUrl } = await krogerApi.connect(selectedStore);
       await Linking.openURL(redirectUrl);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not connect to Kroger');

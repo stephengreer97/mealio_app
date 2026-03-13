@@ -413,10 +413,10 @@ export const kroger = {
       '/api/kroger/status', { method: 'GET' }
     ),
 
-  connect: () =>
+  connect: (storeId?: string) =>
     request<{ redirectUrl: string }>('/api/kroger/connect', {
       method: 'POST',
-      body: JSON.stringify({ mobile: true }),
+      body: JSON.stringify({ mobile: true, storeId }),
     }),
 
   disconnect: () =>
