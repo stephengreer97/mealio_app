@@ -432,7 +432,7 @@ export default function KrogerCartReviewSheet({
                 disabled={activeCount === 0}
                 style={[styles.primaryBtn, { backgroundColor: storeColor }, activeCount === 0 && { opacity: 0.4 }]}
               >
-                <Text style={styles.primaryBtnText}>Search {storeName} Products →</Text>
+                <Text style={styles.primaryBtnText}>Add Ingredients to {storeName} Cart →</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={onClose} style={styles.ghostBtn}>
                 <Text style={styles.ghostBtnText}>Cancel</Text>
@@ -566,13 +566,24 @@ export default function KrogerCartReviewSheet({
                 >
                   <Text style={[styles.secondaryBtnText, { color: storeColor }]}>Add to Cart Only</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => handleReviewDecision('skip')}
-                  disabled={customSearching}
-                  style={[styles.skipBtn, customSearching && { opacity: 0.4 }]}
-                >
-                  <Text style={styles.skipBtnText}>Skip this ingredient</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  {reviewIdx > 0 && (
+                    <TouchableOpacity
+                      onPress={() => { setReviewIdx(reviewIdx - 1); setPickedItems(prev => prev.slice(0, -1)); }}
+                      disabled={customSearching}
+                      style={[styles.skipBtn, { flex: 1, borderWidth: 1, borderColor: Colors.border, borderRadius: 12 }, customSearching && { opacity: 0.4 }]}
+                    >
+                      <Text style={styles.skipBtnText}>← Back</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    onPress={() => handleReviewDecision('skip')}
+                    disabled={customSearching}
+                    style={[styles.skipBtn, { flex: 1 }, customSearching && { opacity: 0.4 }]}
+                  >
+                    <Text style={styles.skipBtnText}>Skip this ingredient</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </>
           );
