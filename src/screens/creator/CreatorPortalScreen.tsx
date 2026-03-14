@@ -9,6 +9,7 @@ import {
   Modal,
   Alert,
   TextInput,
+  Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
@@ -144,6 +145,15 @@ export default function CreatorPortalScreen() {
     }
   }
 
+  async function handleShareMeal(meal: PresetMeal) {
+    const url = `https://mealio.co/meal/p/${meal.id}`;
+    try {
+      await Share.share({ message: url, url });
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not share meal');
+    }
+  }
+
   async function handleDeleteMeal(meal: PresetMeal) {
     Alert.alert('Delete Meal', `Delete "${meal.name}" from your creator meals?`, [
       { text: 'Cancel', style: 'cancel' },
@@ -219,6 +229,9 @@ export default function CreatorPortalScreen() {
                 {item.trendingScore !== undefined && ` · 🔥 ${item.trendingScore}`}
               </Text>
             </View>
+            <TouchableOpacity onPress={() => handleShareMeal(item)} style={styles.actionIcon}>
+              <Ionicons name="share-outline" size={20} color={Colors.text3} />
+            </TouchableOpacity>
             <TouchableOpacity onPress={() => openEdit(item)} style={styles.actionIcon}>
               <Ionicons name="pencil-outline" size={20} color={Colors.brand} />
             </TouchableOpacity>
