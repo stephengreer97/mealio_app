@@ -35,7 +35,7 @@ import Tag from '../../components/ui/Tag';
 const FREE_LIMIT = 3;
 
 export default function MyMealsScreen() {
-  const { user } = useAuth();
+  const { user, isCreator } = useAuth();
   const [allMeals, setAllMeals] = useState<Meal[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -443,6 +443,7 @@ export default function MyMealsScreen() {
         onSave={(updated) => { loadMeals(); if (updated) setSelectedMeal(updated); }}
         krogerLocationId={krogerLocations[selectedMeal?.storeId ?? '']?.locationId ?? null}
         onNeedKrogerStore={() => { setKrogerZip(''); setKrogerLocationsList([]); setKrogerPickerVisible(true); }}
+        hideShare={isCreator}
       />
 
       <KrogerCartReviewSheet

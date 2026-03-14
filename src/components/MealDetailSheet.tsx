@@ -34,6 +34,7 @@ interface MealDetailSheetProps {
   onPressSave?: () => void;
   krogerLocationId?: string | null;
   onNeedKrogerStore?: () => void;
+  hideShare?: boolean;
 }
 
 function DifficultyDots({ level }: { level: number }) {
@@ -62,6 +63,7 @@ export default function MealDetailSheet({
   onPressSave,
   krogerLocationId,
   onNeedKrogerStore,
+  hideShare = false,
 }: MealDetailSheetProps) {
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -227,11 +229,13 @@ export default function MealDetailSheet({
           {mode === 'edit' && !editing && (
             <View style={styles.headerActions}>
 
-              <TouchableOpacity onPress={handleShare} style={styles.headerBtn} disabled={sharing}>
-                <Text style={[styles.headerBtnText, sharing && { color: Colors.text3 }]}>
-                  {sharing ? 'Sharing…' : 'Share'}
-                </Text>
-              </TouchableOpacity>
+              {!hideShare && (
+                <TouchableOpacity onPress={handleShare} style={styles.headerBtn} disabled={sharing}>
+                  <Text style={[styles.headerBtnText, sharing && { color: Colors.text3 }]}>
+                    {sharing ? 'Sharing…' : 'Share'}
+                  </Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity onPress={startEdit} style={styles.headerBtn}>
                 <Text style={styles.headerBtnText}>Edit</Text>
               </TouchableOpacity>
