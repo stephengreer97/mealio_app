@@ -225,7 +225,7 @@ export default function CreatorPortalScreen() {
             <View style={styles.mealInfo}>
               <Text style={styles.mealName} numberOfLines={1}>{item.name}</Text>
               <Text style={styles.mealMeta}>
-                Trending Score - {item.trendingScore ?? 0}
+                Trending Score · {item.trendingScore ?? 0}
               </Text>
             </View>
             <TouchableOpacity onPress={() => handleShareMeal(item)} style={styles.actionIcon}>
