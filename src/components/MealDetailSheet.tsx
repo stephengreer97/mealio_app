@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Feather } from '@expo/vector-icons';
 import {
   View,
   Text,
@@ -404,7 +405,12 @@ export default function MealDetailSheet({
                   <View style={[styles.metaRow, { marginBottom: 12 }]}>
                     {viewDifficulty != null && <DifficultyDots level={viewDifficulty} />}
                     {viewDifficulty != null && (viewServes || sourceHost) && <Text style={styles.metaDot}>·</Text>}
-                    {viewServes && <Text style={styles.servesText}>{viewServes}</Text>}
+                    {viewServes && (
+                      <View style={styles.servesRow}>
+                        <Feather name="user" size={12} color={Colors.text3} />
+                        <Text style={styles.servesText}>{viewServes}</Text>
+                      </View>
+                    )}
                     {viewServes && sourceHost && <Text style={styles.metaDot}>·</Text>}
                     {sourceHost && (
                       <TouchableOpacity onPress={() => Linking.openURL(sourceStr!)}>
@@ -538,6 +544,7 @@ const styles = StyleSheet.create({
   dotFilled: { backgroundColor: Colors.brand },
   dotEmpty: { backgroundColor: Colors.border },
   diffLabel: { fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3 },
+  servesRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   servesText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text3 },
   diffLabelActive: { color: Colors.brand },
   tagSearchInput: {
