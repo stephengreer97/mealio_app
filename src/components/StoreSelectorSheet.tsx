@@ -91,6 +91,7 @@ export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: 
         ...(meal.source     ? { website:    meal.source }     : {}),
         ...(meal.recipe     ? { recipe:     meal.recipe }     : {}),
         ...(meal.creatorId  ? { creatorId:  meal.creatorId }  : {}),
+        ...(meal.serves     ? { serves:     meal.serves }     : {}),
       } as any);
 
       // Record analytics save (fire-and-forget)
