@@ -362,7 +362,7 @@ export default function MyMealsScreen() {
         <View style={styles.krogerNotice}>
           <Text style={styles.krogerNoticeText}>
             <Text style={styles.krogerNoticeBold}>{selectedStore_?.name ?? 'This store'}</Text>
-            {' '}does not support one-click add to cart. Use the Mealio desktop browser extension to use this feature.
+            {' '}does not support one-click add to cart. Use the Mealio desktop browser extension to use this feature. We're working with more retailers to bring it to the app.
           </Text>
         </View>
       )}
