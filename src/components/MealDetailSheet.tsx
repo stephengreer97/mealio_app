@@ -226,13 +226,7 @@ export default function MealDetailSheet({
           </TouchableOpacity>
           {mode === 'edit' && !editing && (
             <View style={styles.headerActions}>
-              {krogerLocationId && (
-                <TouchableOpacity onPress={handleAddToKroger} style={styles.headerBtn} disabled={krogerLoading}>
-                  <Text style={[styles.headerBtnText, { color: '#0063a1' }, krogerLoading && { color: Colors.text3 }]}>
-                    {krogerLoading ? 'Adding…' : 'Kroger'}
-                  </Text>
-                </TouchableOpacity>
-              )}
+
               <TouchableOpacity onPress={handleShare} style={styles.headerBtn} disabled={sharing}>
                 <Text style={[styles.headerBtnText, sharing && { color: Colors.text3 }]}>
                   {sharing ? 'Sharing…' : 'Share'}
