@@ -120,7 +120,25 @@ export default function MyMealsScreen() {
   }
 
   async function handleCartButtonPress() {
-    if (!krogerConnected) {
+    let connected = krogerConnected;
+    let locations = krogerLocations;
+
+    // If state says not connected, do a live check first — the async status
+    // fetch from useFocusEffect or the OAuth deep link handler may not have
+    // resolved yet (e.g. user taps quickly after returning from browser).
+    if (!connected) {
+      try {
+        const d = await krogerApi.status();
+        connected = d.connected;
+        locations = d.locations ?? {};
+        if (connected) {
+          setKrogerConnected(true);
+          setKrogerLocations(locations);
+        }
+      } catch {}
+    }
+
+    if (!connected) {
       const storeName = selectedStore_?.name ?? 'This store';
       Alert.alert(
         `Connect ${storeName}`,
@@ -132,7 +150,7 @@ export default function MyMealsScreen() {
       );
       return;
     }
-    const currentLocationId = krogerLocations[selectedStore]?.locationId ?? null;
+    const currentLocationId = locations[selectedStore]?.locationId ?? null;
     if (!currentLocationId) {
       setKrogerZip('');
       setKrogerLocationsList([]);
