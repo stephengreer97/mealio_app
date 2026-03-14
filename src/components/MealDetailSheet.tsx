@@ -394,20 +394,24 @@ export default function MealDetailSheet({
               <View style={styles.body}>
                 <Text style={styles.mealName}>{meal?.name}</Text>
 
-                {(authorName || viewDifficulty != null || viewServes) && (
+                {authorName && (
                   <View style={styles.metaRow}>
-                    {authorName && <Text style={styles.authorText}>by {authorName}</Text>}
-                    {authorName && (viewDifficulty != null || viewServes) && <Text style={styles.metaDot}>·</Text>}
-                    {viewServes && <Text style={styles.servesText}>Serves {viewServes}</Text>}
-                    {viewServes && viewDifficulty != null && <Text style={styles.metaDot}>·</Text>}
-                    {viewDifficulty != null && <DifficultyDots level={viewDifficulty} />}
+                    <Text style={styles.authorText}>by {authorName}</Text>
                   </View>
                 )}
 
-                {sourceHost && (
-                  <TouchableOpacity onPress={() => Linking.openURL(sourceStr!)} style={styles.sourceRow}>
-                    <Text style={styles.sourceText}>{sourceHost}</Text>
-                  </TouchableOpacity>
+                {(viewDifficulty != null || viewServes || sourceHost) && (
+                  <View style={[styles.metaRow, { marginBottom: 12 }]}>
+                    {viewDifficulty != null && <DifficultyDots level={viewDifficulty} />}
+                    {viewDifficulty != null && (viewServes || sourceHost) && <Text style={styles.metaDot}>·</Text>}
+                    {viewServes && <Text style={styles.servesText}>{viewServes}</Text>}
+                    {viewServes && sourceHost && <Text style={styles.metaDot}>·</Text>}
+                    {sourceHost && (
+                      <TouchableOpacity onPress={() => Linking.openURL(sourceStr!)}>
+                        <Text style={styles.sourceText}>{sourceHost}</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
                 )}
 
                 {viewStory && (
