@@ -75,6 +75,7 @@ export default function MealDetailSheet({
   const [recipe, setRecipe] = useState('');
   const [source, setSource] = useState('');
   const [difficulty, setDifficulty] = useState<number | null>(null);
+  const [serves, setServes] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagSearch, setTagSearch] = useState('');
   const [photoPreview, setPhotoPreview] = useState('');
@@ -92,6 +93,7 @@ export default function MealDetailSheet({
     setRecipe(m.recipe ?? '');
     setSource(m.source ?? m.website ?? '');
     setDifficulty(m.difficulty ?? null);
+    setServes(m.serves ?? '');
     setSelectedTags(m.tags ?? []);
     setTagSearch('');
     setPhotoPreview(meal.photoUrl ?? '');
@@ -133,6 +135,7 @@ export default function MealDetailSheet({
         recipe: recipe.trim() || null,
         website: source.trim() || null,
         difficulty,
+        serves: serves.trim() || null,
         tags: selectedTags,
       } as any);
       setEditing(false);
@@ -210,6 +213,7 @@ export default function MealDetailSheet({
   const viewStory: string | null = m?.story ?? null;
   const viewRecipe: string | null = m?.recipe ?? null;
   const viewDifficulty: number | null = m?.difficulty ?? null;
+  const viewServes: string | null = m?.serves ?? null;
   const viewTags: string[] = m?.tags ?? [];
 
   return (
@@ -277,6 +281,13 @@ export default function MealDetailSheet({
                 placeholder="e.g. Gordon Ramsay"
                 value={author}
                 onChangeText={setAuthor}
+              />
+
+              <Input
+                label="Serves (optional)"
+                placeholder="e.g. 4 or 2-4"
+                value={serves}
+                onChangeText={setServes}
               />
 
               <Input
@@ -383,10 +394,12 @@ export default function MealDetailSheet({
               <View style={styles.body}>
                 <Text style={styles.mealName}>{meal?.name}</Text>
 
-                {(authorName || viewDifficulty != null) && (
+                {(authorName || viewDifficulty != null || viewServes) && (
                   <View style={styles.metaRow}>
                     {authorName && <Text style={styles.authorText}>by {authorName}</Text>}
-                    {authorName && viewDifficulty != null && <Text style={styles.metaDot}>·</Text>}
+                    {authorName && (viewDifficulty != null || viewServes) && <Text style={styles.metaDot}>·</Text>}
+                    {viewServes && <Text style={styles.servesText}>Serves {viewServes}</Text>}
+                    {viewServes && viewDifficulty != null && <Text style={styles.metaDot}>·</Text>}
                     {viewDifficulty != null && <DifficultyDots level={viewDifficulty} />}
                   </View>
                 )}
@@ -521,6 +534,7 @@ const styles = StyleSheet.create({
   dotFilled: { backgroundColor: Colors.brand },
   dotEmpty: { backgroundColor: Colors.border },
   diffLabel: { fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3 },
+  servesText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text3 },
   diffLabelActive: { color: Colors.brand },
   tagSearchInput: {
     borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.input,

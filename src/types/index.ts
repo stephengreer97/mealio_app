@@ -31,6 +31,7 @@ export interface Meal {
   recipe?: string | null;
   website?: string | null;
   difficulty?: number | null;
+  serves?: string | null;
   tags?: string[];
 }
 
@@ -45,6 +46,7 @@ export interface PresetMeal {
   ingredients: Ingredient[];
   tags?: string[];
   difficulty?: number | null;
+  serves?: string | null;
   author?: string | null;
   creatorId?: string | null;
   creatorName?: string | null;

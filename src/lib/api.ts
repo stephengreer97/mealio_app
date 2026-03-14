@@ -38,6 +38,7 @@ function mapMeal(m: any): Meal {
     recipe: m.recipe ?? null,
     website: m.website ?? null,
     difficulty: m.difficulty ?? null,
+    serves: m.serves ?? null,
     tags: m.tags ?? [],
   };
 }
@@ -54,6 +55,7 @@ function mapPresetMeal(m: any): PresetMeal {
     ingredients: normalizeIngredients(m.ingredients),
     tags: m.tags ?? [],
     difficulty: m.difficulty ?? null,
+    serves: m.serves ?? null,
     author: m.author ?? null,
     creatorId: m.creator_id ?? m.creatorId ?? null,
     creatorName: m.creator_name ?? m.creatorName ?? null,
