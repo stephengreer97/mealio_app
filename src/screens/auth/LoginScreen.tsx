@@ -56,7 +56,7 @@ export default function LoginScreen({ navigation }: Props) {
       <KeyboardAwareScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" enableOnAndroid extraScrollHeight={24}>
           <View style={styles.header}>
             <Text style={styles.logo}>Mealio</Text>
-            <Text style={styles.tagline}>Grocery shopping, simplified.</Text>
+            <Text style={styles.tagline}>Shop meals, we'll fill the cart.</Text>
           </View>
 
           <View style={styles.form}>
