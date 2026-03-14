@@ -358,6 +358,15 @@ export default function MyMealsScreen() {
         ))}
       </ScrollView>
 
+      {isKroger && (
+        <View style={styles.krogerNotice}>
+          <Text style={styles.krogerNoticeText}>
+            <Text style={styles.krogerNoticeBold}>{selectedStore_?.name ?? 'This store'}</Text>
+            {' '}does not support one-click add to cart. Use the Mealio desktop browser extension to add ingredients directly from your computer.
+          </Text>
+        </View>
+      )}
+
       {user?.tier !== 'paid' && (
         <View style={styles.tierBanner}>
           <View style={styles.tierBarRow}>
@@ -718,6 +727,24 @@ const styles = StyleSheet.create({
   storeDot: { width: 8, height: 8, borderRadius: 4 },
   storeTabText: { fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text2 },
   storeTabTextActive: { color: Colors.brand },
+  krogerNotice: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    backgroundColor: '#fff8e1',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#ffe082',
+  },
+  krogerNoticeText: {
+    fontSize: 13,
+    color: '#7a5c00',
+    lineHeight: 19,
+  },
+  krogerNoticeBold: {
+    fontWeight: '600',
+  },
   tierBanner: {
     marginHorizontal: 16,
     marginBottom: 8,
