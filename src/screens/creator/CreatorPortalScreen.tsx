@@ -57,7 +57,7 @@ export default function CreatorPortalScreen() {
     try {
       const { creator: c, meals: mealData, stats: s } = await creatorsApi.getMe();
       setCreator(c);
-      setMeals(mealData ?? []);
+      setMeals((mealData ?? []).slice().sort((a, b) => (b.trendingScore ?? 0) - (a.trendingScore ?? 0)));
       setStats(s);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not load creator data');
