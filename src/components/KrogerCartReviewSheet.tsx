@@ -390,7 +390,7 @@ export default function KrogerCartReviewSheet({
         {step === 'qty' && (
           <>
             <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.listContent}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <TouchableOpacity onPress={toggleAll}>
                   <Text style={{ fontSize: 12, color: Colors.text3 }}>{allChecked ? 'Uncheck all' : 'Check all'}</Text>
                 </TouchableOpacity>
