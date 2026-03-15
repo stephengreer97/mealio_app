@@ -11,8 +11,10 @@ export interface User {
 
 export interface Ingredient {
   productName: string;
-  searchTerm?: string;
-  quantity?: number;
+  searchTerm?: string | null;
+  qty: number;
+  unit: string;
+  measure?: string | null;
 }
 
 export interface Meal {

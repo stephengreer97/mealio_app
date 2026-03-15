@@ -38,6 +38,11 @@ interface MealDetailSheetProps {
   hideShare?: boolean;
 }
 
+function fmtMeasurement(ing: Ingredient): string {
+  if (!ing.unit || ing.unit === 'qty') return `${ing.productName}, ${ing.qty ?? 1}`;
+  return `${ing.productName}, ${ing.measure ?? ''} ${ing.unit}`;
+}
+
 function DifficultyDots({ level }: { level: number }) {
   return (
     <View style={dotStyles.row}>
@@ -70,6 +75,8 @@ export default function MealDetailSheet({
   const [loading, setLoading] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [krogerLoading, setKrogerLoading] = useState(false);
+  const [productsExpanded, setProductsExpanded] = useState(false);
+  const [editProductsExpanded, setEditProductsExpanded] = useState(false);
 
   // Edit form fields
   const [name, setName] = useState('');
@@ -116,12 +123,19 @@ export default function MealDetailSheet({
     setEditing(false);
   }
 
+  function adjustIngredientQty(index: number, delta: number) {
+    setIngredients((prev) =>
+      prev.map((ing, i) =>
+        i === index ? { ...ing, qty: Math.max(1, (ing.qty ?? 1) + delta) } : ing
+      )
+    );
+  }
+
   async function handleSave() {
     if (!meal) return;
     if (!name.trim()) { Alert.alert('Error', 'Meal name is required'); return; }
     const validIngredients = ingredients.filter((i) => i.productName.trim());
     if (validIngredients.length === 0) { Alert.alert('Error', 'Add at least one ingredient'); return; }
-    if (validIngredients.some((i) => i.quantity === undefined)) { Alert.alert('Error', 'All ingredients need a quantity'); return; }
 
     setLoading(true);
     try {
@@ -358,6 +372,50 @@ export default function MealDetailSheet({
                 multiline
               />
 
+              <TouchableOpacity
+                style={[styles.collapsibleHeader, { marginTop: 8 }]}
+                onPress={() => setEditProductsExpanded((v) => !v)}
+              >
+                <Text style={styles.fieldLabel}>Products ({ingredients.filter((i) => i.productName.trim()).length})</Text>
+                <Feather
+                  name={editProductsExpanded ? 'chevron-up' : 'chevron-down'}
+                  size={16}
+                  color={Colors.text3}
+                />
+              </TouchableOpacity>
+              {editProductsExpanded && ingredients.filter((i) => i.productName.trim()).map((ing, i) => {
+                const autoTerm = ing.unit === 'qty'
+                  ? ing.productName
+                  : `${ing.productName}, ${ing.measure ?? ''}${ing.unit}`;
+                const label = ing.searchTerm ? ing.searchTerm : autoTerm;
+                const dimmed = !ing.searchTerm;
+                return (
+                  <View key={i} style={styles.productRow}>
+                    <Text
+                      style={[styles.productLabel, dimmed && styles.productLabelDimmed]}
+                      numberOfLines={1}
+                    >
+                      {label}
+                    </Text>
+                    <View style={styles.qtyCounter}>
+                      <TouchableOpacity
+                        style={styles.qtyBtn}
+                        onPress={() => adjustIngredientQty(i, -1)}
+                      >
+                        <Text style={styles.qtyBtnText}>−</Text>
+                      </TouchableOpacity>
+                      <Text style={styles.qtyValue}>{ing.qty ?? 1}</Text>
+                      <TouchableOpacity
+                        style={styles.qtyBtn}
+                        onPress={() => adjustIngredientQty(i, 1)}
+                      >
+                        <Text style={styles.qtyBtnText}>+</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })}
+
               <Text style={styles.fieldLabel}>Tags</Text>
               <TextInput
                 style={styles.tagSearchInput}
@@ -478,14 +536,11 @@ export default function MealDetailSheet({
                   <Text style={[styles.bodyText, styles.storyText]}>{viewStory}</Text>
                 )}
 
-                <Text style={styles.sectionLabel}>Ingredients ({displayIngredients.length})</Text>
+                <Text style={styles.sectionLabel}>Measurements ({displayIngredients.length})</Text>
                 {displayIngredients.map((ing, i) => (
                   <View key={i} style={styles.ingredientRow}>
                     <View style={styles.bullet} />
-                    <Text style={styles.ingredientText}>
-                      {ing.quantity ? `×${ing.quantity} ` : ''}
-                      {ing.productName}
-                    </Text>
+                    <Text style={styles.ingredientText}>{fmtMeasurement(ing)}</Text>
                   </View>
                 ))}
 
@@ -493,6 +548,54 @@ export default function MealDetailSheet({
                   <>
                     <Text style={styles.sectionLabel}>Recipe</Text>
                     <Text style={styles.bodyText}>{viewRecipe}</Text>
+                  </>
+                )}
+
+                {mode === 'edit' && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.collapsibleHeader}
+                      onPress={() => setProductsExpanded((v) => !v)}
+                    >
+                      <Text style={styles.sectionLabel}>Products ({displayIngredients.length})</Text>
+                      <Feather
+                        name={productsExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={16}
+                        color={Colors.text3}
+                      />
+                    </TouchableOpacity>
+                    {productsExpanded && displayIngredients.map((ing, i) => {
+                      const autoTerm = ing.unit === 'qty'
+                        ? ing.productName
+                        : `${ing.productName}, ${ing.measure ?? ''}${ing.unit}`;
+                      const label = ing.searchTerm ? ing.searchTerm : autoTerm;
+                      const dimmed = !ing.searchTerm;
+                      return (
+                        <View key={i} style={styles.productRow}>
+                          <Text
+                            style={[styles.productLabel, dimmed && styles.productLabelDimmed]}
+                            numberOfLines={1}
+                          >
+                            {label}
+                          </Text>
+                          <View style={styles.qtyCounter}>
+                            <TouchableOpacity
+                              style={styles.qtyBtn}
+                              disabled
+                            >
+                              <Text style={styles.qtyBtnText}>−</Text>
+                            </TouchableOpacity>
+                            <Text style={styles.qtyValue}>{ing.qty ?? 1}</Text>
+                            <TouchableOpacity
+                              style={styles.qtyBtn}
+                              disabled
+                            >
+                              <Text style={styles.qtyBtnText}>+</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
                   </>
                 )}
               </View>
@@ -635,4 +738,58 @@ const styles = StyleSheet.create({
   pickerRowActive: { backgroundColor: Colors.brandLight },
   pickerRowText: { flex: 1, fontSize: 15, fontFamily: 'Inter_400Regular', color: Colors.text1 },
   pickerRowTextActive: { fontFamily: 'Inter_600SemiBold', color: Colors.brand },
+  // Products section
+  collapsibleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    marginTop: 16,
+  },
+  productRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    gap: 8,
+  },
+  productLabel: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text1,
+  },
+  productLabelDimmed: {
+    color: Colors.text3,
+  },
+  qtyCounter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  qtyBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qtyBtnText: {
+    fontSize: 16,
+    fontFamily: 'Inter_500Medium',
+    color: Colors.text1,
+    lineHeight: 20,
+  },
+  qtyValue: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: Colors.text1,
+    minWidth: 20,
+    textAlign: 'center',
+  },
 });

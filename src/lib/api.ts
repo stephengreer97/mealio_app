@@ -10,15 +10,17 @@ const BASE_URL = 'https://mealio.co';
 function normalizeIngredients(raw: any): Ingredient[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((item) => {
-    if (typeof item === 'string') return { productName: item };
+    if (typeof item === 'string') return { productName: item, qty: 1, unit: 'qty', measure: null };
     if (item && typeof item === 'object') {
       return {
         productName: item.productName ?? item.product_name ?? item.name ?? '',
-        quantity: item.quantity ?? undefined,
-        searchTerm: item.searchTerm ?? item.search_term ?? undefined,
+        searchTerm: item.searchTerm ?? item.search_term ?? null,
+        qty: item.qty ?? item.quantity ?? 1,
+        unit: item.unit ?? 'qty',
+        measure: item.measure ?? null,
       };
     }
-    return { productName: String(item) };
+    return { productName: String(item), qty: 1, unit: 'qty', measure: null };
   }).filter((i) => i.productName);
 }
 
@@ -435,10 +437,10 @@ export const kroger = {
       body: JSON.stringify({ locationId, locationName, storeId }),
     }),
 
-  addToCart: (ingredients: Array<{ productName: string; quantity?: number }>, locationId?: string) =>
+  addToCart: (ingredients: Array<{ productName: string; qty?: number; quantity?: number }>, locationId?: string) =>
     request<{ added: string[]; notFound: string[]; cartAdded: boolean }>('/api/kroger/add-to-cart', {
       method: 'POST',
-      body: JSON.stringify({ ingredients, locationId }),
+      body: JSON.stringify({ ingredients: ingredients.map((i) => ({ productName: i.productName, quantity: i.qty ?? i.quantity ?? 1 })), locationId }),
     }),
 
   addToCartDirect: (items: Array<{ upc: string; quantity: number }>, locationId?: string) =>
@@ -447,7 +449,7 @@ export const kroger = {
       body: JSON.stringify({ items, locationId }),
     }),
 
-  searchProducts: (ingredients: Array<{ productName: string; quantity?: number }>, locationId?: string) =>
+  searchProducts: (ingredients: Array<{ productName: string; qty?: number; quantity?: number }>, locationId?: string) =>
     request<{
       results: Array<{
         term: string;
