@@ -24,6 +24,7 @@ import IngredientEditor from './IngredientEditor';
 import PhotoPicker from './PhotoPicker';
 import Tag from './ui/Tag';
 import { ALL_TAGS } from '../constants/tags';
+import { STORES } from '../constants/stores';
 
 interface MealDetailSheetProps {
   visible: boolean;
@@ -72,6 +73,9 @@ export default function MealDetailSheet({
 
   // Edit form fields
   const [name, setName] = useState('');
+  const [editStoreId, setEditStoreId] = useState('');
+  const [storePickerVisible, setStorePickerVisible] = useState(false);
+  const [storeSearch, setStoreSearch] = useState('');
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [author, setAuthor] = useState('');
   const [story, setStory] = useState('');
@@ -90,6 +94,8 @@ export default function MealDetailSheet({
     if (!meal) return;
     const m = meal as any;
     setName(meal.name);
+    setEditStoreId((m.storeId ?? m.store_id) ?? '');
+    setStoreSearch('');
     setIngredients([...meal.ingredients]);
     setAuthor(m.author ?? '');
     setStory(m.story ?? '');
@@ -131,6 +137,7 @@ export default function MealDetailSheet({
 
       const updatedMeal = await mealsApi.update(meal.id, {
         name: name.trim(),
+        storeId: editStoreId || undefined,
         ingredients: validIngredients,
         photoUrl: finalPhotoUrl,
         author: author.trim() || null,
@@ -253,6 +260,21 @@ export default function MealDetailSheet({
 
         {editing ? (
           <KeyboardAwareScrollView contentContainerStyle={styles.editScroll} keyboardShouldPersistTaps="handled" enableOnAndroid extraScrollHeight={24}>
+              <Text style={styles.fieldLabel}>Store</Text>
+              <TouchableOpacity
+                style={styles.dropdown}
+                onPress={() => { setStoreSearch(''); setStorePickerVisible(true); }}
+              >
+                {editStoreId ? (
+                  <View style={styles.dropdownSelected}>
+                    <View style={[styles.storeDot, { backgroundColor: STORES.find(s => s.id === editStoreId)?.color ?? Colors.border }]} />
+                    <Text style={styles.dropdownSelectedText}>{STORES.find(s => s.id === editStoreId)?.name ?? editStoreId}</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.dropdownPlaceholder}>Select a store…</Text>
+                )}
+              </TouchableOpacity>
+
               <Input
                 label="Meal Name"
                 placeholder="e.g. Lemon Herb Chicken"
@@ -367,6 +389,40 @@ export default function MealDetailSheet({
                 <Button label="Cancel" variant="secondary" onPress={cancelEdit} style={{ flex: 1, marginRight: 8 }} />
                 <Button label="Save Changes" onPress={handleSave} loading={loading} style={{ flex: 2 }} />
               </View>
+
+              {storePickerVisible && (
+                <View style={styles.pickerOverlay}>
+                  <TouchableOpacity style={styles.pickerBackdrop} onPress={() => setStorePickerVisible(false)} />
+                  <View style={styles.pickerSheet}>
+                    <View style={styles.pickerHeader}>
+                      <Text style={styles.pickerTitle}>Select Store</Text>
+                      <TouchableOpacity onPress={() => setStorePickerVisible(false)}>
+                        <Text style={{ fontSize: 20, color: Colors.text3 }}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <TextInput
+                      style={styles.pickerSearch}
+                      placeholder="Search stores…"
+                      placeholderTextColor={Colors.text3}
+                      value={storeSearch}
+                      onChangeText={setStoreSearch}
+                    />
+                    <ScrollView keyboardShouldPersistTaps="handled">
+                      {STORES.filter(s => !storeSearch.trim() || s.name.toLowerCase().includes(storeSearch.toLowerCase())).map(item => (
+                        <TouchableOpacity
+                          key={item.id}
+                          style={[styles.pickerRow, editStoreId === item.id && styles.pickerRowActive]}
+                          onPress={() => { setEditStoreId(item.id); setStorePickerVisible(false); }}
+                        >
+                          <View style={[styles.storeDot, { backgroundColor: item.color }]} />
+                          <Text style={[styles.pickerRowText, editStoreId === item.id && styles.pickerRowTextActive]}>{item.name}</Text>
+                          {editStoreId === item.id && <Text style={{ color: Colors.brand, fontSize: 16 }}>✓</Text>}
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                </View>
+              )}
             </KeyboardAwareScrollView>
         ) : (
           <>
@@ -555,4 +611,28 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surfaceRaised, paddingHorizontal: 8, paddingVertical: 6, marginBottom: 8,
   },
   tagsRow: { flexDirection: 'row', flexWrap: 'wrap' },
+  // Store picker
+  dropdown: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.input,
+    backgroundColor: Colors.surfaceRaised, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 16,
+  },
+  dropdownSelected: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  dropdownSelectedText: { fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text1 },
+  dropdownPlaceholder: { fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text3 },
+  storeDot: { width: 8, height: 8, borderRadius: 4 },
+  pickerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'flex-end', zIndex: 100 },
+  pickerBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
+  pickerSheet: { backgroundColor: Colors.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '70%', paddingBottom: 32 },
+  pickerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  pickerTitle: { fontSize: 17, fontFamily: 'Inter_600SemiBold', color: Colors.text1 },
+  pickerSearch: {
+    margin: 12, borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.input,
+    backgroundColor: Colors.surfaceRaised, paddingHorizontal: 12, paddingVertical: 8,
+    fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text1, letterSpacing: 0,
+  },
+  pickerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
+  pickerRowActive: { backgroundColor: Colors.brandLight },
+  pickerRowText: { flex: 1, fontSize: 15, fontFamily: 'Inter_400Regular', color: Colors.text1 },
+  pickerRowTextActive: { fontFamily: 'Inter_600SemiBold', color: Colors.brand },
 });

@@ -440,7 +440,7 @@ export default function MyMealsScreen() {
         meal={selectedMeal}
         mode="edit"
         onClose={() => setDetailVisible(false)}
-        onSave={(updated) => { loadMeals(); if (updated) setSelectedMeal(updated); }}
+        onSave={(updated) => { loadMeals(); if (updated) { setSelectedMeal(updated); if (updated.storeId) setSelectedStore(updated.storeId); } }}
         krogerLocationId={krogerLocations[selectedMeal?.storeId ?? '']?.locationId ?? null}
         onNeedKrogerStore={() => { setKrogerZip(''); setKrogerLocationsList([]); setKrogerPickerVisible(true); }}
         hideShare={isCreator}
