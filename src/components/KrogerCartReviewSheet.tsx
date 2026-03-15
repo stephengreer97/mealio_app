@@ -150,6 +150,7 @@ export default function KrogerCartReviewSheet({
 
   // Step qty
   const [items, setItems] = useState<ConsolidatedIngredient[]>([]);
+  const [checkedItems, setCheckedItems] = useState<boolean[]>([]);
 
   // Step review
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -173,7 +174,9 @@ export default function KrogerCartReviewSheet({
   // Re-initialize when sheet opens
   useEffect(() => {
     if (visible) {
-      setItems(consolidateIngredients(meals));
+      const consolidated = consolidateIngredients(meals);
+      setItems(consolidated);
+      setCheckedItems(consolidated.map(() => true));
       setStep('qty');
       setError('');
       setSearchResults([]);
@@ -201,7 +204,7 @@ export default function KrogerCartReviewSheet({
   // ── Step handlers ────────────────────────────────────────────────────────
 
   const handleStartSearch = async () => {
-    const active = items.filter((i) => i.quantity > 0);
+    const active = items.filter((it, i) => (checkedItems[i] ?? true) && it.quantity > 0);
     if (active.length === 0) return;
     setStep('searching');
     setError('');
@@ -363,7 +366,10 @@ export default function KrogerCartReviewSheet({
     done: 'Done!',
   };
 
-  const activeCount = items.filter((i) => i.quantity > 0).length;
+  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && it.quantity > 0).length;
+  const allChecked = checkedItems.length === 0 || checkedItems.every((c) => c);
+  const toggleAll = () => setCheckedItems((prev) => prev.map(() => !allChecked));
+  const toggleChecked = (i: number) => setCheckedItems((prev) => prev.map((c, idx) => idx === i ? !c : c));
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -384,42 +390,47 @@ export default function KrogerCartReviewSheet({
         {step === 'qty' && (
           <>
             <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.listContent}>
-              <Text style={styles.subheading}>
-                {meals.length} meal{meals.length !== 1 ? 's' : ''} · {items.length} ingredient{items.length !== 1 ? 's' : ''}
-              </Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <Text style={styles.subheading}>
+                  {meals.length} meal{meals.length !== 1 ? 's' : ''} · {items.length} ingredient{items.length !== 1 ? 's' : ''}
+                </Text>
+                <TouchableOpacity onPress={toggleAll}>
+                  <Text style={{ fontSize: 12, color: Colors.text3 }}>{allChecked ? 'Uncheck all' : 'Check all'}</Text>
+                </TouchableOpacity>
+              </View>
               {items.map((it, i) => {
-                const zeroed = it.quantity === 0;
+                const checked = checkedItems[i] ?? true;
+                const excluded = !checked;
                 return (
                   <View
                     key={i}
-                    style={[styles.qtyRow, zeroed && styles.qtyRowZeroed]}
+                    style={[styles.qtyRow, excluded && styles.qtyRowZeroed]}
                   >
+                    <TouchableOpacity onPress={() => toggleChecked(i)} style={styles.checkbox}>
+                      {checked && <View style={[styles.checkboxInner, { backgroundColor: storeColor }]} />}
+                    </TouchableOpacity>
                     <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text
-                        style={[styles.ingName, zeroed && styles.ingNameZeroed]}
-                        numberOfLines={1}
-                      >
+                      <Text style={[styles.ingName, excluded && styles.ingNameZeroed]}>
                         {it.productName}
                       </Text>
-                      <Text style={styles.mealNames} numberOfLines={1}>
+                      <Text style={styles.mealNames}>
                         {it.mealNames.join(', ')}
                       </Text>
                     </View>
                     <TouchableOpacity
                       onPress={() => updateQty(i, -1)}
-                      disabled={zeroed}
-                      style={[styles.qtyBtn, zeroed && { opacity: 0.3 }]}
+                      disabled={it.quantity === 0 || excluded}
+                      style={[styles.qtyBtn, (it.quantity === 0 || excluded) && { opacity: 0.3 }]}
                     >
                       <Text style={styles.qtyBtnText}>−</Text>
                     </TouchableOpacity>
                     <Text style={styles.qtyNum}>{it.quantity}</Text>
-                    <TouchableOpacity onPress={() => updateQty(i, 1)} style={styles.qtyBtn}>
+                    <TouchableOpacity
+                      onPress={() => updateQty(i, 1)}
+                      disabled={excluded}
+                      style={[styles.qtyBtn, excluded && { opacity: 0.3 }]}
+                    >
                       <Text style={styles.qtyBtnText}>+</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => toggleRemove(i)} style={styles.removeBtn}>
-                      <Text style={[styles.removeBtnText, zeroed && { color: storeColor }]}>
-                        {zeroed ? '↩' : '✕'}
-                      </Text>
                     </TouchableOpacity>
                   </View>
                 );
@@ -694,7 +705,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: 'Inter_400Regular',
     color: Colors.text3,
-    marginBottom: 12,
   },
 
   // Qty step
@@ -735,8 +745,22 @@ const styles = StyleSheet.create({
     color: Colors.text2,
     flexShrink: 0,
   },
-  removeBtn: { paddingHorizontal: 4, flexShrink: 0 },
-  removeBtnText: { fontSize: 13, color: Colors.text3 },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  checkboxInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 2,
+  },
 
   // Review step
   searchedBox: {
