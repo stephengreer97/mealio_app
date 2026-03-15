@@ -390,13 +390,13 @@ export default function KrogerCartReviewSheet({
         {step === 'qty' && (
           <>
             <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.listContent}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <Text style={styles.subheading}>
-                  {meals.length} meal{meals.length !== 1 ? 's' : ''} · {items.length} ingredient{items.length !== 1 ? 's' : ''}
-                </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 }}>
                 <TouchableOpacity onPress={toggleAll}>
                   <Text style={{ fontSize: 12, color: Colors.text3 }}>{allChecked ? 'Uncheck all' : 'Check all'}</Text>
                 </TouchableOpacity>
+                <Text style={styles.subheading}>
+                  {meals.length} meal{meals.length !== 1 ? 's' : ''} · {items.length} ingredient{items.length !== 1 ? 's' : ''}
+                </Text>
               </View>
               {items.map((it, i) => {
                 const checked = checkedItems[i] ?? true;
