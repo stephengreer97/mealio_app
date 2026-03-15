@@ -260,33 +260,11 @@ export default function MealDetailSheet({
                 onChangeText={setName}
               />
 
-              <Text style={styles.fieldLabel}>Photo (optional)</Text>
-              <PhotoPicker
-                mealName={name}
-                previewUri={photoPreview}
-                onPhotoReady={(uri, isUrl, base64) => {
-                  setPhotoPreview(uri);
-                  setPhotoIsUrl(isUrl);
-                  if (isUrl) { setPhotoUrl(uri); setPendingPhotoBase64(null); }
-                  else { setPendingPhotoBase64(base64 ?? null); setPhotoUrl(''); }
-                }}
-                onClear={() => { setPhotoPreview(''); setPhotoUrl(''); setPendingPhotoBase64(null); setPhotoIsUrl(false); }}
-              />
-
-              <IngredientEditor ingredients={ingredients} onChange={setIngredients} />
-
               <Input
                 label="Author (optional)"
                 placeholder="e.g. Gordon Ramsay"
                 value={author}
                 onChangeText={setAuthor}
-              />
-
-              <Input
-                label="Serves (optional)"
-                placeholder="e.g. 4 or 2-4"
-                value={serves}
-                onChangeText={setServes}
               />
 
               <Input
@@ -298,24 +276,17 @@ export default function MealDetailSheet({
                 autoCapitalize="none"
               />
 
-              <Text style={styles.fieldLabel}>Story (optional)</Text>
-              <TextInput
-                style={styles.textArea}
-                value={story}
-                onChangeText={setStory}
-                placeholder="e.g. Perfect for a summer BBQ…"
-                placeholderTextColor={Colors.text3}
-                multiline
-              />
-
-              <Text style={styles.fieldLabel}>Recipe Instructions (optional)</Text>
-              <TextInput
-                style={[styles.textArea, { minHeight: 120 }]}
-                value={recipe}
-                onChangeText={setRecipe}
-                placeholder={'1. Boil 4 cups of water…\n2. Add pasta…'}
-                placeholderTextColor={Colors.text3}
-                multiline
+              <Text style={styles.fieldLabel}>Photo (optional)</Text>
+              <PhotoPicker
+                mealName={name}
+                previewUri={photoPreview}
+                onPhotoReady={(uri, isUrl, base64) => {
+                  setPhotoPreview(uri);
+                  setPhotoIsUrl(isUrl);
+                  if (isUrl) { setPhotoUrl(uri); setPendingPhotoBase64(null); }
+                  else { setPendingPhotoBase64(base64 ?? null); setPhotoUrl(''); }
+                }}
+                onClear={() => { setPhotoPreview(''); setPhotoUrl(''); setPendingPhotoBase64(null); setPhotoIsUrl(false); }}
               />
 
               <Text style={styles.fieldLabel}>Difficulty</Text>
@@ -335,6 +306,35 @@ export default function MealDetailSheet({
                   </TouchableOpacity>
                 ))}
               </View>
+
+              <Input
+                label="Serves (optional)"
+                placeholder="e.g. 4 or 2-4"
+                value={serves}
+                onChangeText={setServes}
+              />
+
+              <Text style={styles.fieldLabel}>Story (optional)</Text>
+              <TextInput
+                style={styles.textArea}
+                value={story}
+                onChangeText={setStory}
+                placeholder="e.g. Perfect for a summer BBQ…"
+                placeholderTextColor={Colors.text3}
+                multiline
+              />
+
+              <IngredientEditor ingredients={ingredients} onChange={setIngredients} />
+
+              <Text style={styles.fieldLabel}>Recipe Instructions (optional)</Text>
+              <TextInput
+                style={[styles.textArea, { minHeight: 120 }]}
+                value={recipe}
+                onChangeText={setRecipe}
+                placeholder={'1. Boil 4 cups of water…\n2. Add pasta…'}
+                placeholderTextColor={Colors.text3}
+                multiline
+              />
 
               <Text style={styles.fieldLabel}>Tags</Text>
               <TextInput

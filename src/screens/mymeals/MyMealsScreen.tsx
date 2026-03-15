@@ -522,26 +522,6 @@ export default function MyMealsScreen() {
             </View>
 
             <ScrollView contentContainerStyle={styles.modalScroll} keyboardShouldPersistTaps="handled">
-              <Input
-                label="Meal Name"
-                placeholder="e.g. Lemon Herb Chicken"
-                value={mealName}
-                onChangeText={setMealName}
-              />
-
-              <Text style={styles.sectionLabel}>Photo (optional)</Text>
-              <PhotoPicker
-                mealName={mealName}
-                previewUri={photoPreview}
-                onPhotoReady={(uri, isUrl, base64) => {
-                  setPhotoPreview(uri);
-                  setPhotoIsUrl(isUrl);
-                  if (isUrl) { setPhotoUrl(uri); setPendingPhotoBase64(null); }
-                  else { setPendingPhotoBase64(base64 ?? null); setPhotoUrl(''); }
-                }}
-                onClear={() => { setPhotoPreview(''); setPhotoUrl(''); setPendingPhotoBase64(null); setPhotoIsUrl(false); }}
-              />
-
               {/* Store selector */}
               <Text style={styles.sectionLabel}>Store *</Text>
               <TouchableOpacity
@@ -559,7 +539,12 @@ export default function MyMealsScreen() {
                 <Ionicons name="chevron-down" size={18} color={Colors.text3} />
               </TouchableOpacity>
 
-              <IngredientEditor ingredients={ingredients} onChange={setIngredients} />
+              <Input
+                label="Meal Name"
+                placeholder="e.g. Lemon Herb Chicken"
+                value={mealName}
+                onChangeText={setMealName}
+              />
 
               <Input
                 label="Author (optional)"
@@ -577,24 +562,17 @@ export default function MyMealsScreen() {
                 autoCapitalize="none"
               />
 
-              <Text style={styles.sectionLabel}>Story (optional)</Text>
-              <TextInput
-                style={styles.textArea}
-                value={mealStory}
-                onChangeText={setMealStory}
-                placeholder="e.g. Perfect for a summer BBQ…"
-                placeholderTextColor={Colors.text3}
-                multiline
-              />
-
-              <Text style={styles.sectionLabel}>Recipe Instructions (optional)</Text>
-              <TextInput
-                style={[styles.textArea, { minHeight: 120 }]}
-                value={mealRecipe}
-                onChangeText={setMealRecipe}
-                placeholder={'1. Boil 4 cups of water…\n2. Add pasta…'}
-                placeholderTextColor={Colors.text3}
-                multiline
+              <Text style={styles.sectionLabel}>Photo (optional)</Text>
+              <PhotoPicker
+                mealName={mealName}
+                previewUri={photoPreview}
+                onPhotoReady={(uri, isUrl, base64) => {
+                  setPhotoPreview(uri);
+                  setPhotoIsUrl(isUrl);
+                  if (isUrl) { setPhotoUrl(uri); setPendingPhotoBase64(null); }
+                  else { setPendingPhotoBase64(base64 ?? null); setPhotoUrl(''); }
+                }}
+                onClear={() => { setPhotoPreview(''); setPhotoUrl(''); setPendingPhotoBase64(null); setPhotoIsUrl(false); }}
               />
 
               {/* Difficulty */}
@@ -615,6 +593,28 @@ export default function MyMealsScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
+
+              <Text style={styles.sectionLabel}>Story (optional)</Text>
+              <TextInput
+                style={styles.textArea}
+                value={mealStory}
+                onChangeText={setMealStory}
+                placeholder="e.g. Perfect for a summer BBQ…"
+                placeholderTextColor={Colors.text3}
+                multiline
+              />
+
+              <IngredientEditor ingredients={ingredients} onChange={setIngredients} />
+
+              <Text style={styles.sectionLabel}>Recipe Instructions (optional)</Text>
+              <TextInput
+                style={[styles.textArea, { minHeight: 120 }]}
+                value={mealRecipe}
+                onChangeText={setMealRecipe}
+                placeholder={'1. Boil 4 cups of water…\n2. Add pasta…'}
+                placeholderTextColor={Colors.text3}
+                multiline
+              />
 
               {/* Tags */}
               <Text style={styles.sectionLabel}>Tags</Text>
