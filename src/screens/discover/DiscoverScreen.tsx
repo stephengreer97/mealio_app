@@ -305,7 +305,7 @@ export default function DiscoverScreen() {
                           <Text style={styles.creatorInitial}>{creator.displayName?.[0]?.toUpperCase() ?? '?'}</Text>
                         </View>
                       )}
-                      <Text style={styles.creatorName} numberOfLines={1}>{creator.displayName}</Text>
+                      <Text style={styles.creatorName} numberOfLines={2}>{creator.displayName}</Text>
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
