@@ -39,6 +39,7 @@ export default function CreatorPortalScreen() {
   const [mealStory, setMealStory] = useState('');
   const [mealRecipe, setMealRecipe] = useState('');
   const [mealSource, setMealSource] = useState('');
+  const [mealServes, setMealServes] = useState('');
   const [mealIngredients, setMealIngredients] = useState<Ingredient[]>([]);
   const [mealTags, setMealTags] = useState<string[]>([]);
   const [mealDifficulty, setMealDifficulty] = useState<number | null>(null);
@@ -72,6 +73,7 @@ export default function CreatorPortalScreen() {
     setMealStory('');
     setMealRecipe('');
     setMealSource('');
+    setMealServes('');
     setMealIngredients([{ productName: '', quantity: 1 }]);
     setMealTags([]);
     setMealDifficulty(null);
@@ -88,6 +90,7 @@ export default function CreatorPortalScreen() {
     setMealStory(meal.story ?? '');
     setMealRecipe(meal.recipe ?? '');
     setMealSource(meal.source ?? '');
+    setMealServes((meal as any).serves ?? '');
     setMealIngredients(meal.ingredients.length ? [...meal.ingredients] : [{ productName: '', quantity: 1 }]);
     setMealTags([...(meal.tags ?? [])]);
     setMealDifficulty(meal.difficulty ?? null);
@@ -125,6 +128,7 @@ export default function CreatorPortalScreen() {
         story: mealStory.trim() || undefined,
         recipe: mealRecipe.trim() || undefined,
         source: mealSource.trim() || undefined,
+        serves: mealServes.trim() || undefined,
         ingredients: validIngredients,
         tags: mealTags,
         difficulty: mealDifficulty ?? undefined,
@@ -262,6 +266,16 @@ export default function CreatorPortalScreen() {
 
               <Input label="Meal Name *" placeholder="e.g. Lemon Herb Chicken" value={mealName} onChangeText={setMealName} />
 
+              {/* Source URL */}
+              <Input
+                label="Recipe URL (optional)"
+                placeholder="https://yourblog.com/recipe"
+                value={mealSource}
+                onChangeText={setMealSource}
+                keyboardType="url"
+                autoCapitalize="none"
+              />
+
               {/* Photo */}
               <Text style={styles.fieldLabel}>Photo <Text style={styles.optional}>(optional)</Text></Text>
               <PhotoPicker
@@ -274,54 +288,6 @@ export default function CreatorPortalScreen() {
                   else { setPendingPhotoBase64(base64 ?? null); setMealPhotoUrl(''); }
                 }}
                 onClear={() => { setMealPhotoPreview(''); setMealPhotoUrl(''); setPendingPhotoBase64(null); setPendingPhotoIsUrl(false); }}
-              />
-
-              {/* Ingredient naming hint */}
-              <View style={styles.ingredientHint}>
-                <Text style={styles.hintText}>
-                  Name each ingredient as it would appear in a grocery store search — specific enough to find the right product, but generic enough to work across stores.
-                </Text>
-                <Text style={styles.hintExamples}>
-                  <Text style={styles.hintGood}>✓ Good: </Text>
-                  <Text>"Chicken Stock, 32 oz" · "Garlic" · "Rotisserie Chicken"{'\n'}</Text>
-                  <Text style={styles.hintBad}>✗ Avoid: </Text>
-                  <Text>"Costco Bananas" · "Fresh Herbs"</Text>
-                </Text>
-              </View>
-
-              <IngredientEditor ingredients={mealIngredients} onChange={setMealIngredients} />
-
-              {/* Story */}
-              <Text style={styles.fieldLabel}>Story <Text style={styles.optional}>(optional)</Text></Text>
-              <TextInput
-                style={styles.textArea}
-                value={mealStory}
-                onChangeText={setMealStory}
-                placeholder="e.g. Perfect for a summer BBQ, or the story behind this meal…"
-                placeholderTextColor={Colors.text3}
-                multiline
-                numberOfLines={3}
-              />
-
-              {/* Recipe */}
-              <Text style={styles.fieldLabel}>Recipe Instructions <Text style={styles.optional}>(optional)</Text></Text>
-              <TextInput
-                style={[styles.textArea, { minHeight: 120 }]}
-                value={mealRecipe}
-                onChangeText={setMealRecipe}
-                placeholder={'1. Boil 4 cups of water…\n2. Add 200g of noodles…'}
-                placeholderTextColor={Colors.text3}
-                multiline
-              />
-
-              {/* Source URL */}
-              <Input
-                label="Recipe URL (optional)"
-                placeholder="https://yourblog.com/recipe"
-                value={mealSource}
-                onChangeText={setMealSource}
-                keyboardType="url"
-                autoCapitalize="none"
               />
 
               {/* Difficulty */}
@@ -342,6 +308,52 @@ export default function CreatorPortalScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
+
+              {/* Serves */}
+              <Input
+                label="Serves (optional)"
+                placeholder="e.g. 4 or 2-4"
+                value={mealServes}
+                onChangeText={setMealServes}
+              />
+
+              {/* Story */}
+              <Text style={styles.fieldLabel}>Story <Text style={styles.optional}>(optional)</Text></Text>
+              <TextInput
+                style={styles.textArea}
+                value={mealStory}
+                onChangeText={setMealStory}
+                placeholder="e.g. Perfect for a summer BBQ, or the story behind this meal…"
+                placeholderTextColor={Colors.text3}
+                multiline
+                numberOfLines={3}
+              />
+
+              {/* Ingredient naming hint */}
+              <View style={styles.ingredientHint}>
+                <Text style={styles.hintText}>
+                  Name each ingredient as it would appear in a grocery store search — specific enough to find the right product, but generic enough to work across stores.
+                </Text>
+                <Text style={styles.hintExamples}>
+                  <Text style={styles.hintGood}>✓ Good: </Text>
+                  <Text>"Chicken Stock, 32 oz" · "Garlic" · "Rotisserie Chicken"{'\n'}</Text>
+                  <Text style={styles.hintBad}>✗ Avoid: </Text>
+                  <Text>"Costco Bananas" · "Fresh Herbs"</Text>
+                </Text>
+              </View>
+
+              <IngredientEditor ingredients={mealIngredients} onChange={setMealIngredients} />
+
+              {/* Recipe */}
+              <Text style={styles.fieldLabel}>Recipe Instructions <Text style={styles.optional}>(optional)</Text></Text>
+              <TextInput
+                style={[styles.textArea, { minHeight: 120 }]}
+                value={mealRecipe}
+                onChangeText={setMealRecipe}
+                placeholder={'1. Boil 4 cups of water…\n2. Add 200g of noodles…'}
+                placeholderTextColor={Colors.text3}
+                multiline
+              />
 
               {/* Tags */}
               <Text style={styles.fieldLabel}>Tags</Text>
