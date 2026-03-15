@@ -540,7 +540,7 @@ export default function MealDetailSheet({
                 {displayIngredients.map((ing, i) => (
                   <View key={i} style={styles.ingredientRow}>
                     <View style={styles.bullet} />
-                    <Text style={styles.ingredientText}>{fmtMeasurement(ing)}</Text>
+                    <Text style={[styles.ingredientText, ing.searchTerm ? { color: '#3b82f6' } : null]}>{fmtMeasurement(ing)}</Text>
                   </View>
                 ))}
 
@@ -578,21 +578,6 @@ export default function MealDetailSheet({
                           >
                             {label}
                           </Text>
-                          <View style={styles.qtyCounter}>
-                            <TouchableOpacity
-                              style={styles.qtyBtn}
-                              disabled
-                            >
-                              <Text style={styles.qtyBtnText}>−</Text>
-                            </TouchableOpacity>
-                            <Text style={styles.qtyValue}>{ing.qty ?? 1}</Text>
-                            <TouchableOpacity
-                              style={styles.qtyBtn}
-                              disabled
-                            >
-                              <Text style={styles.qtyBtnText}>+</Text>
-                            </TouchableOpacity>
-                          </View>
                         </View>
                       );
                     })}
