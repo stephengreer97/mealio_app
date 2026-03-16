@@ -35,7 +35,8 @@ export default function ProductChooserSheet({
   const [error, setError] = useState('');
   const [results, setResults] = useState<Array<{ ingredientName: string; suggestions: Suggestion[] }>>([]);
   const [pickIdx, setPickIdx] = useState(0);
-  const [selections, setSelections] = useState<Map<string, string>>(new Map());
+  const [selections, setSelections] = useState<Map<string, { description: string; qty: number }>>(new Map());
+  const [productQty, setProductQty] = useState(1);
   const [customText, setCustomText] = useState('');
   const [customSearching, setCustomSearching] = useState(false);
   const [savedCount, setSavedCount] = useState(0);
@@ -51,6 +52,7 @@ export default function ProductChooserSheet({
       setResults([]);
       setPickIdx(0);
       setSelections(new Map());
+      setProductQty(1);
       setCustomText('');
       setSavedCount(0);
       doSearch();
@@ -59,6 +61,7 @@ export default function ProductChooserSheet({
 
   useEffect(() => {
     setCustomText('');
+    setProductQty(1);
   }, [pickIdx]);
 
   async function doSearch() {
@@ -106,7 +109,7 @@ export default function ProductChooserSheet({
 
   function handleNext(description: string | null) {
     const newSelections = new Map(selections);
-    if (description && current) newSelections.set(current.ingredientName, description);
+    if (description && current) newSelections.set(current.ingredientName, { description, qty: productQty });
     setSelections(newSelections);
     if (!isLast) {
       setPickIdx(pickIdx + 1);
@@ -115,11 +118,11 @@ export default function ProductChooserSheet({
     }
   }
 
-  async function doSave(selMap: Map<string, string>) {
+  async function doSave(selMap: Map<string, { description: string; qty: number }>) {
     setStep('saving');
     const updatedIngredients = meal.ingredients.map((ing) => {
       const chosen = selMap.get(ing.ingredientName);
-      return chosen !== undefined ? { ...ing, searchTerm: chosen } : ing;
+      return chosen !== undefined ? { ...ing, searchTerm: chosen.description, productQty: chosen.qty } : ing;
     });
     const count = selMap.size;
     try {
@@ -220,6 +223,29 @@ export default function ProductChooserSheet({
                 </TouchableOpacity>
               </View>
             </ScrollView>
+            <View style={styles.qtySection}>
+              <View style={styles.qtyRow}>
+                <Text style={styles.qtyLabel}>Qty to add to cart</Text>
+                <View style={styles.qtyControls}>
+                  <TouchableOpacity
+                    style={styles.qtyBtn}
+                    onPress={() => setProductQty((q) => Math.max(1, q - 1))}
+                    disabled={productQty <= 1}
+                  >
+                    <Text style={[styles.qtyBtnText, productQty <= 1 && { opacity: 0.3 }]}>−</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.qtyNum}>{productQty}</Text>
+                  <TouchableOpacity style={styles.qtyBtn} onPress={() => setProductQty((q) => q + 1)}>
+                    <Text style={styles.qtyBtnText}>+</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+              {productQty > 5 && (
+                <Text style={styles.qtyWarning}>
+                  ⚠ {productQty} is a lot for one item — does this come in a multipack or bulk size?
+                </Text>
+              )}
+            </View>
             <View style={styles.footer}>
               {pickIdx > 0 && (
                 <TouchableOpacity style={styles.skipBtn} onPress={() => setPickIdx(pickIdx - 1)}>
@@ -336,6 +362,33 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   btnDisabled: { opacity: 0.4 },
+  qtySection: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    gap: 6,
+  },
+  qtyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  qtyLabel: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text2 },
+  qtyControls: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  qtyBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qtyBtnText: { fontSize: 18, color: Colors.text2, lineHeight: 22 },
+  qtyNum: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1, minWidth: 20, textAlign: 'center' },
+  qtyWarning: { fontSize: 11, fontFamily: 'Inter_500Medium', color: '#b45309' },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
