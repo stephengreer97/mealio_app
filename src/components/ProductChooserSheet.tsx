@@ -16,7 +16,7 @@ import { Meal } from '../types';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
 
 type Step = 'searching' | 'picking' | 'saving' | 'done';
-type Suggestion = { upc: string; description: string; size?: string | null; price: number | null; stockLevel?: string };
+type Suggestion = { upc: string; description: string; size?: string | null; soldBy?: string | null; price: number | null; stockLevel?: string };
 
 interface Props {
   visible: boolean;
@@ -184,7 +184,13 @@ export default function ProductChooserSheet({
                 {current.suggestions.length > 0 ? `${storeName} products` : 'No products found'}
               </Text>
               {current.suggestions.map((s, i) => {
-                const displayName = s.size ? `${s.description}, ${s.size}` : s.description;
+                const isWeight = s.soldBy === 'WEIGHT';
+                const displayName = isWeight ? s.description : (s.size ? `${s.description}, ${s.size}` : s.description);
+                const priceLabel = s.price != null
+                  ? (isWeight && s.size
+                      ? `$${s.price.toFixed(2)} / ${s.size.replace(/(\d)([a-zA-Z])/, '$1 $2').toLowerCase()}`
+                      : `$${s.price.toFixed(2)}`)
+                  : null;
                 return (
                   <TouchableOpacity
                     key={i}
@@ -198,8 +204,8 @@ export default function ProductChooserSheet({
                         <Text style={styles.outOfStock}>⚠ Temporarily out of stock</Text>
                       )}
                     </View>
-                    {s.price != null && (
-                      <Text style={styles.suggPrice}>${s.price.toFixed(2)}</Text>
+                    {priceLabel != null && (
+                      <Text style={styles.suggPrice}>{priceLabel}</Text>
                     )}
                   </TouchableOpacity>
                 );
