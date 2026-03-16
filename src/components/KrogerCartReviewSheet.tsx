@@ -344,13 +344,14 @@ export default function KrogerCartReviewSheet({
         newPicked.push({ upc: resolved.upc, quantity: getReviewTotalQty(reviewIdx), description: resolved.name });
       }
       if (action === 'update' && resolved?.name) {
+        const updatedQty = getReviewTotalQty(reviewIdx);
         for (const mealId of currentReview.mealIds) {
           const meal = meals.find((m) => m.id === mealId);
           if (!meal) continue;
           const updatedIngredients: Ingredient[] = meal.ingredients.map((ing) => {
             const iName = normIngName(ing);
             return iName.toLowerCase().trim() === currentReview.term.toLowerCase().trim()
-              ? { ...ing, searchTerm: resolved.name }
+              ? { ...ing, searchTerm: resolved.name, productQty: updatedQty }
               : ing;
           });
           mealsApi
@@ -552,43 +553,6 @@ export default function KrogerCartReviewSheet({
                     </Text>
                   ) : null}
                 </View>
-
-                {/* Qty by recipe */}
-                {currentReview.mealIngredients.length > 0 && (
-                  <View style={styles.qtyByRecipeBox}>
-                    <Text style={styles.qtyByRecipeLabel}>Qty by recipe</Text>
-                    {currentReview.mealIngredients.map((m) => {
-                      const qty = mealQtys[m.mealId] ?? m.qty;
-                      return (
-                        <View key={m.mealId} style={styles.qtyByRecipeRow}>
-                          <Text style={styles.qtyByRecipeMeal} numberOfLines={1}>{m.mealName}</Text>
-                          {qty > 2 && (
-                            <Text style={styles.qtyByRecipeCaution}>⚠</Text>
-                          )}
-                          <TouchableOpacity
-                            onPress={() => adjustReviewMealQty(reviewIdx, m.mealId, -1)}
-                            style={styles.qtyBtn}
-                          >
-                            <Text style={styles.qtyBtnText}>−</Text>
-                          </TouchableOpacity>
-                          <Text style={styles.qtyNum}>{qty}</Text>
-                          <TouchableOpacity
-                            onPress={() => adjustReviewMealQty(reviewIdx, m.mealId, 1)}
-                            style={styles.qtyBtn}
-                          >
-                            <Text style={styles.qtyBtnText}>+</Text>
-                          </TouchableOpacity>
-                        </View>
-                      );
-                    })}
-                    {currentReview.mealIngredients.length > 1 && (
-                      <View style={styles.qtyByRecipeTotal}>
-                        <Text style={styles.qtyByRecipeTotalLabel}>Total</Text>
-                        <Text style={styles.qtyByRecipeTotalValue}>{totalQty}</Text>
-                      </View>
-                    )}
-                  </View>
-                )}
 
                 {/* Suggestions header */}
                 <Text style={styles.suggHeader}>

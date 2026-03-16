@@ -52,7 +52,7 @@ export default function ProductChooserSheet({
       setResults([]);
       setPickIdx(0);
       setSelections(new Map());
-      setProductQty(meal.ingredients[0]?.qty ?? 1);
+      setProductQty(meal.ingredients[0]?.productQty ?? meal.ingredients[0]?.qty ?? 1);
       setCustomText('');
       setSavedCount(0);
       doSearch();
@@ -61,7 +61,7 @@ export default function ProductChooserSheet({
 
   useEffect(() => {
     setCustomText('');
-    setProductQty(meal.ingredients[pickIdx]?.qty ?? 1);
+    setProductQty(meal.ingredients[pickIdx]?.productQty ?? meal.ingredients[pickIdx]?.qty ?? 1);
   }, [pickIdx]);
 
   async function doSearch() {
@@ -249,7 +249,7 @@ export default function ProductChooserSheet({
                   </TouchableOpacity>
                 </View>
               </View>
-              {productQty > 5 && (
+              {productQty > 2 && (
                 <Text style={styles.qtyWarning}>
                   ⚠ {productQty} is a lot for one item — does this come in a multipack or bulk size?
                 </Text>
