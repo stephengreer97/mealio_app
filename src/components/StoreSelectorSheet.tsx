@@ -43,15 +43,13 @@ function buildListItems(recentIds: string[]): ListItem[] {
   const recent = recentIds
     .map((id) => STORES.find((s) => s.id === id))
     .filter(Boolean) as StoreItem[];
-  const rest = STORES.filter((s) => !recentIds.includes(s.id))
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name));
-  if (recent.length === 0) return rest;
+  const all = STORES.slice().sort((a, b) => a.name.localeCompare(b.name));
+  if (recent.length === 0) return all;
   return [
     { type: 'header', label: 'Recent' },
     ...recent,
     { type: 'header', label: 'All Stores' },
-    ...rest,
+    ...all,
   ];
 }
 

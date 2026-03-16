@@ -297,7 +297,7 @@ export default function MealDetailSheet({
               />
 
               <Input
-                label="Author (optional)"
+                label="Creator (optional)"
                 placeholder="e.g. Gordon Ramsay"
                 value={author}
                 onChangeText={setAuthor}
@@ -355,7 +355,7 @@ export default function MealDetailSheet({
                 style={styles.textArea}
                 value={story}
                 onChangeText={setStory}
-                placeholder="e.g. Perfect for a summer BBQ…"
+                placeholder={"e.g. Perfect for a summer BBQ… · Great budget-friendly weeknight dinner · High protein, low carb – great for meal prep"}
                 placeholderTextColor={Colors.text3}
                 multiline
               />
@@ -372,49 +372,62 @@ export default function MealDetailSheet({
                 multiline
               />
 
-              <TouchableOpacity
-                style={[styles.collapsibleHeader, { marginTop: 8 }]}
-                onPress={() => setEditProductsExpanded((v) => !v)}
-              >
-                <Text style={styles.fieldLabel}>Products ({ingredients.filter((i) => i.ingredientName.trim()).length})</Text>
-                <Feather
-                  name={editProductsExpanded ? 'chevron-up' : 'chevron-down'}
-                  size={16}
-                  color={Colors.text3}
-                />
-              </TouchableOpacity>
-              {editProductsExpanded && ingredients.filter((i) => i.ingredientName.trim()).map((ing, i) => {
-                const autoTerm = ing.unit === 'qty'
-                  ? ing.ingredientName
-                  : `${ing.ingredientName}, ${ing.measure ?? ''}${ing.unit}`;
-                const label = ing.searchTerm ? ing.searchTerm : autoTerm;
-                const dimmed = !ing.searchTerm;
+              {(() => {
+                const namedIngredients = ingredients
+                  .map((ing, origIdx) => ({ ing, origIdx }))
+                  .filter(({ ing }) => ing.ingredientName.trim());
+                if (namedIngredients.length === 0) return null;
                 return (
-                  <View key={i} style={styles.productRow}>
-                    <Text
-                      style={[styles.productLabel, dimmed && styles.productLabelDimmed]}
-                      numberOfLines={1}
+                  <>
+                    <TouchableOpacity
+                      style={[styles.collapsibleHeader, { marginTop: 8 }]}
+                      onPress={() => setEditProductsExpanded((v) => !v)}
                     >
-                      {label}
-                    </Text>
-                    <View style={styles.qtyCounter}>
-                      <TouchableOpacity
-                        style={styles.qtyBtn}
-                        onPress={() => adjustIngredientQty(i, -1)}
-                      >
-                        <Text style={styles.qtyBtnText}>−</Text>
-                      </TouchableOpacity>
-                      <Text style={styles.qtyValue}>{ing.productQty ?? ing.qty ?? 1}</Text>
-                      <TouchableOpacity
-                        style={styles.qtyBtn}
-                        onPress={() => adjustIngredientQty(i, 1)}
-                      >
-                        <Text style={styles.qtyBtnText}>+</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
+                      <Text style={styles.fieldLabel}>Products ({namedIngredients.length})</Text>
+                      <Feather
+                        name={editProductsExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={16}
+                        color={Colors.text3}
+                      />
+                    </TouchableOpacity>
+                    {editProductsExpanded && namedIngredients.map(({ ing, origIdx }) => (
+                      <View key={origIdx} style={[styles.productRow, { flexDirection: 'column', alignItems: 'stretch', gap: 6 }]}>
+                        <Text style={styles.productLabel} numberOfLines={1}>{ing.ingredientName}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <TextInput
+                            style={[styles.productSearchTermInput, { flex: 1 }]}
+                            placeholder="e.g. Kroger Crushed Tomatoes, 14oz"
+                            placeholderTextColor={Colors.text3}
+                            value={ing.searchTerm ?? ''}
+                            onChangeText={(val) =>
+                              setIngredients((prev) =>
+                                prev.map((item, idx) =>
+                                  idx === origIdx ? { ...item, searchTerm: val || null } : item
+                                )
+                              )
+                            }
+                          />
+                          <View style={styles.qtyCounter}>
+                            <TouchableOpacity
+                              style={styles.qtyBtn}
+                              onPress={() => adjustIngredientQty(origIdx, -1)}
+                            >
+                              <Text style={styles.qtyBtnText}>−</Text>
+                            </TouchableOpacity>
+                            <Text style={styles.qtyValue}>{ing.productQty ?? ing.qty ?? 1}</Text>
+                            <TouchableOpacity
+                              style={styles.qtyBtn}
+                              onPress={() => adjustIngredientQty(origIdx, 1)}
+                            >
+                              <Text style={styles.qtyBtnText}>+</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </View>
+                    ))}
+                  </>
                 );
-              })}
+              })()}
 
               <Text style={styles.fieldLabel}>Tags</Text>
               <TextInput
@@ -551,38 +564,32 @@ export default function MealDetailSheet({
                   </>
                 )}
 
-                {mode === 'edit' && (
-                  <>
-                    <TouchableOpacity
-                      style={styles.collapsibleHeader}
-                      onPress={() => setProductsExpanded((v) => !v)}
-                    >
-                      <Text style={styles.sectionLabel}>Products ({displayIngredients.length})</Text>
-                      <Feather
-                        name={productsExpanded ? 'chevron-up' : 'chevron-down'}
-                        size={16}
-                        color={Colors.text3}
-                      />
-                    </TouchableOpacity>
-                    {productsExpanded && displayIngredients.map((ing, i) => {
-                      const autoTerm = ing.unit === 'qty'
-                        ? ing.ingredientName
-                        : `${ing.ingredientName}, ${ing.measure ?? ''}${ing.unit}`;
-                      const label = ing.searchTerm ? ing.searchTerm : autoTerm;
-                      const dimmed = !ing.searchTerm;
-                      return (
+                {mode === 'edit' && (() => {
+                  const productsWithTerm = displayIngredients.filter((i) => i.searchTerm);
+                  if (productsWithTerm.length === 0) return null;
+                  return (
+                    <>
+                      <TouchableOpacity
+                        style={styles.collapsibleHeader}
+                        onPress={() => setProductsExpanded((v) => !v)}
+                      >
+                        <Text style={styles.sectionLabel}>Products ({productsWithTerm.length})</Text>
+                        <Feather
+                          name={productsExpanded ? 'chevron-up' : 'chevron-down'}
+                          size={16}
+                          color={Colors.text3}
+                        />
+                      </TouchableOpacity>
+                      {productsExpanded && productsWithTerm.map((ing, i) => (
                         <View key={i} style={styles.productRow}>
-                          <Text
-                            style={[styles.productLabel, dimmed && styles.productLabelDimmed]}
-                            numberOfLines={1}
-                          >
-                            {label}
+                          <Text style={styles.productLabel} numberOfLines={1}>
+                            {ing.searchTerm}
                           </Text>
                         </View>
-                      );
-                    })}
-                  </>
-                )}
+                      ))}
+                    </>
+                  );
+                })()}
               </View>
             </ScrollView>
 
@@ -723,6 +730,18 @@ const styles = StyleSheet.create({
   pickerRowActive: { backgroundColor: Colors.brandLight },
   pickerRowText: { flex: 1, fontSize: 15, fontFamily: 'Inter_400Regular', color: Colors.text1 },
   pickerRowTextActive: { fontFamily: 'Inter_600SemiBold', color: Colors.brand },
+  productSearchTermInput: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.input,
+    backgroundColor: Colors.surfaceRaised,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text1,
+    letterSpacing: 0,
+  },
   // Products section
   collapsibleHeader: {
     flexDirection: 'row',

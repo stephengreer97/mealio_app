@@ -140,12 +140,12 @@ export default function FilterSheet({ visible, initial, authorSuggestions = [], 
             ))}
           </View>
 
-          {/* Author */}
-          <Text style={styles.sectionLabel}>Author</Text>
+          {/* Creator */}
+          <Text style={styles.sectionLabel}>Creator</Text>
           <View style={styles.inputRow}>
             <TextInput
               style={styles.textInput}
-              placeholder="Type author name…"
+              placeholder="Type creator name…"
               placeholderTextColor={Colors.text3}
               value={authorInput}
               onChangeText={(v) => { setAuthorInput(v); setShowAuthorSug(true); }}

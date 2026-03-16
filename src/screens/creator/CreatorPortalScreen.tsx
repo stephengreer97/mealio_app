@@ -14,11 +14,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { Image } from 'expo-image';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, Feather } from '@expo/vector-icons';
 import PhotoPicker from '../../components/PhotoPicker';
 import { Colors, Radius } from '../../constants/colors';
 import { Creator, PresetMeal, Ingredient } from '../../types';
 import { creators as creatorsApi } from '../../lib/api';
+import MealDetailSheet from '../../components/MealDetailSheet';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -31,6 +32,9 @@ export default function CreatorPortalScreen() {
   const [stats, setStats] = useState<any>(null);
   const [meals, setMeals] = useState<PresetMeal[]>([]);
   const [loading, setLoading] = useState(true);
+  const [earningsOpen, setEarningsOpen] = useState(false);
+  const [viewingMeal, setViewingMeal] = useState<PresetMeal | null>(null);
+  const [mealDetailVisible, setMealDetailVisible] = useState(false);
 
   // Form state
   const [formVisible, setFormVisible] = useState(false);
@@ -191,24 +195,58 @@ export default function CreatorPortalScreen() {
             <Text style={styles.pageTitle}>Creator Portal</Text>
 
             {creator && stats && (
-              <View style={styles.statsGrid}>
-                <Card style={styles.statCard}>
-                  <Text style={styles.statValue}>{stats.followers ?? 0}</Text>
-                  <Text style={styles.statLabel}>Followers</Text>
-                </Card>
-                <Card style={styles.statCard}>
-                  <Text style={styles.statValue}>{stats.savesQtr ?? 0}</Text>
-                  <Text style={styles.statLabel}>Quarterly Saves</Text>
-                </Card>
-                <Card style={styles.statCard}>
-                  <Text style={styles.statValue}>{stats.savesAll ?? 0}</Text>
-                  <Text style={styles.statLabel}>All-Time Saves</Text>
-                </Card>
-                <Card style={styles.statCard}>
-                  <Text style={styles.statValue}>{(stats.combinedSharePct ?? 0).toFixed(1)}%</Text>
-                  <Text style={styles.statLabel}>Revenue Share</Text>
-                </Card>
-              </View>
+              <>
+                <View style={styles.statsGrid}>
+                  <Card style={styles.statCard}>
+                    <Text style={styles.statValue}>{stats.followers ?? 0}</Text>
+                    <Text style={styles.statLabel}>Followers</Text>
+                  </Card>
+                  <Card style={styles.statCard}>
+                    <Text style={styles.statValue}>{stats.savesQtr ?? 0}</Text>
+                    <Text style={styles.statLabel}>Quarterly Saves</Text>
+                  </Card>
+                  <Card style={styles.statCard}>
+                    <Text style={styles.statValue}>{stats.savesAll ?? 0}</Text>
+                    <Text style={styles.statLabel}>All-Time Saves</Text>
+                  </Card>
+                </View>
+
+                {/* How earnings work */}
+                <TouchableOpacity
+                  style={styles.earningsRow}
+                  onPress={() => setEarningsOpen((v) => !v)}
+                  activeOpacity={0.8}
+                >
+                  <Feather name="dollar-sign" size={16} color={Colors.brand} style={{ marginRight: 6 }} />
+                  <Text style={styles.earningsRowLabel}>How earnings work</Text>
+                  <View style={styles.shareBadge}>
+                    <Text style={styles.shareBadgeText}>{(stats.combinedSharePct ?? 0).toFixed(1)}% share</Text>
+                  </View>
+                  <Feather name={earningsOpen ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.text3} />
+                </TouchableOpacity>
+                {earningsOpen && (
+                  <View style={styles.earningsBody}>
+                    <Text style={styles.earningsText}>
+                      Each quarter, 1/3 of subscription profit goes to the creator pool. Your share is split evenly between two factors:
+                    </Text>
+                    <View style={styles.earningsFactorRow}>
+                      <Feather name="trending-up" size={14} color={Colors.brand} />
+                      <Text style={styles.earningsFactorText}>
+                        Quarterly saves — {(stats.qtrPct ?? stats.combinedSharePct / 2 ?? 0).toFixed(1)}% × 50%
+                      </Text>
+                    </View>
+                    <View style={styles.earningsFactorRow}>
+                      <Feather name="archive" size={14} color={Colors.brand} />
+                      <Text style={styles.earningsFactorText}>
+                        All-time saves — {(stats.alltimePct ?? stats.combinedSharePct / 2 ?? 0).toFixed(1)}% × 50%
+                      </Text>
+                    </View>
+                    <Text style={[styles.earningsText, { marginTop: 8 }]}>
+                      Payouts above $25 are issued at quarter end via Tremendous.
+                    </Text>
+                  </View>
+                )}
+              </>
             )}
 
             <View style={styles.mealsHeader}>
@@ -218,12 +256,16 @@ export default function CreatorPortalScreen() {
           </>
         }
         renderItem={({ item }) => (
-          <View style={styles.mealRow}>
+          <TouchableOpacity
+            style={styles.mealRow}
+            onPress={() => { setViewingMeal(item); setMealDetailVisible(true); }}
+            activeOpacity={0.8}
+          >
             {item.photoUrl ? (
               <Image source={{ uri: item.photoUrl }} style={styles.mealThumb} contentFit="cover" />
             ) : (
               <View style={[styles.mealThumb, styles.mealThumbPlaceholder]}>
-                <Text style={{ fontSize: 18 }}>🍽️</Text>
+                <Feather name="image" size={20} color={Colors.text3} />
               </View>
             )}
             <View style={styles.mealInfo}>
@@ -241,7 +283,7 @@ export default function CreatorPortalScreen() {
             <TouchableOpacity onPress={() => handleDeleteMeal(item)} style={styles.actionIcon}>
               <Ionicons name="trash-outline" size={20} color={Colors.error} />
             </TouchableOpacity>
-          </View>
+          </TouchableOpacity>
         )}
         ListEmptyComponent={
           !loading ? (
@@ -250,6 +292,15 @@ export default function CreatorPortalScreen() {
             </View>
           ) : null
         }
+      />
+
+      {/* View meal detail */}
+      <MealDetailSheet
+        visible={mealDetailVisible}
+        meal={viewingMeal}
+        mode="view"
+        onClose={() => setMealDetailVisible(false)}
+        hideShare
       />
 
       {/* Meal form modal */}
@@ -414,6 +465,37 @@ const styles = StyleSheet.create({
   statCard: { flex: 1, minWidth: '45%', alignItems: 'center', padding: 16 },
   statValue: { fontSize: 28, fontFamily: 'Inter_700Bold', color: Colors.brand, marginBottom: 4 },
   statLabel: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, textAlign: 'center' },
+  earningsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 12,
+    marginBottom: 8,
+  },
+  earningsRowLabel: { flex: 1, fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1 },
+  shareBadge: {
+    backgroundColor: Colors.brandLight,
+    borderRadius: 20,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginRight: 8,
+  },
+  shareBadgeText: { fontSize: 12, fontFamily: 'Inter_600SemiBold', color: Colors.brand },
+  earningsBody: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 14,
+    marginBottom: 16,
+    gap: 8,
+  },
+  earningsText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2, lineHeight: 19 },
+  earningsFactorRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  earningsFactorText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text1 },
   mealsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   mealsTitle: { fontSize: 18, fontFamily: 'Inter_700Bold', color: Colors.text1 },
   mealRow: {

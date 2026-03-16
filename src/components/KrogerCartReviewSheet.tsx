@@ -19,11 +19,21 @@ import { STORES } from '../constants/stores';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+interface MealIngredientQty {
+  mealId: string;
+  mealName: string;
+  qty: number;
+}
+
 interface ConsolidatedIngredient {
-  productName: string;
-  quantity: number;
+  ingredientName: string;
+  productQty: number;
+  unit: string;
+  measure: string | null;
+  searchTerm: string | null;
   mealIds: string[];
   mealNames: string[];
+  mealIngredients: MealIngredientQty[];
 }
 
 interface SearchResult {
@@ -42,6 +52,7 @@ interface SearchResult {
   }>;
   mealIds: string[];
   mealNames: string[];
+  mealIngredients: MealIngredientQty[];
 }
 
 interface KrogerCartReviewSheetProps {
@@ -100,25 +111,43 @@ const STORE_URLS: Record<string, string> = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+function normIngName(ing: any): string {
+  return ing.ingredientName ?? ing.productName ?? ing.product_name ?? ing.name ?? '';
+}
+
+function normProductQty(ing: any): number {
+  return ing.productQty ?? ing.qty ?? ing.quantity ?? 1;
+}
+
 function consolidateIngredients(meals: Array<Pick<Meal, 'id' | 'name' | 'ingredients'>>): ConsolidatedIngredient[] {
   const map = new Map<string, ConsolidatedIngredient>();
   for (const meal of meals) {
-    for (const ing of meal.ingredients) {
-      const key = (ing.productName ?? '').toLowerCase().trim();
+    for (const ing of meal.ingredients as any[]) {
+      const name = normIngName(ing);
+      const key = name.toLowerCase().trim();
       if (!key) continue;
+      const qty = normProductQty(ing);
       if (map.has(key)) {
         const e = map.get(key)!;
-        e.quantity += ing.quantity ?? 1;
-        if (!e.mealIds.includes(meal.id)) {
+        e.productQty += qty;
+        const existing = e.mealIngredients.find((m) => m.mealId === meal.id);
+        if (existing) {
+          existing.qty += qty;
+        } else {
+          e.mealIngredients.push({ mealId: meal.id, mealName: meal.name, qty });
           e.mealIds.push(meal.id);
           e.mealNames.push(meal.name);
         }
       } else {
         map.set(key, {
-          productName: ing.productName,
-          quantity: ing.quantity ?? 1,
+          ingredientName: name,
+          productQty: qty,
+          unit: ing.unit ?? 'qty',
+          measure: ing.measure ?? null,
+          searchTerm: ing.searchTerm ?? null,
           mealIds: [meal.id],
           mealNames: [meal.name],
+          mealIngredients: [{ mealId: meal.id, mealName: meal.name, qty }],
         });
       }
     }
@@ -156,6 +185,7 @@ export default function KrogerCartReviewSheet({
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [reviewIdx, setReviewIdx] = useState(0);
   const [pickedItems, setPickedItems] = useState<{ upc: string; quantity: number; description: string }[]>([]);
+  const [reviewMealQtys, setReviewMealQtys] = useState<Record<number, Record<string, number>>>({});
 
   // Per-review selection
   const [selectedSuggIdx, setSelectedSuggIdx] = useState<number | 'custom'>(0);
@@ -182,6 +212,7 @@ export default function KrogerCartReviewSheet({
       setSearchResults([]);
       setReviewIdx(0);
       setPickedItems([]);
+      setReviewMealQtys({});
       setSelectedSuggIdx(0);
       setCustomText('');
       setTotalAdded(0);
@@ -201,27 +232,59 @@ export default function KrogerCartReviewSheet({
   const reviewQueue = searchResults.filter((r) => !r.exact);
   const currentReview = reviewQueue[reviewIdx];
 
+  // ── Per-recipe qty helpers ────────────────────────────────────────────────
+
+  const getReviewMealQtys = (idx: number): Record<string, number> => {
+    if (reviewMealQtys[idx]) return reviewMealQtys[idx];
+    const r = reviewQueue[idx];
+    if (!r) return {};
+    const map: Record<string, number> = {};
+    for (const m of r.mealIngredients) map[m.mealId] = m.qty;
+    return map;
+  };
+
+  const getReviewTotalQty = (idx: number): number => {
+    const qtys = getReviewMealQtys(idx);
+    const total = Object.values(qtys).reduce((a, b) => a + b, 0);
+    return total || 1;
+  };
+
+  const adjustReviewMealQty = (idx: number, mealId: string, delta: number) => {
+    setReviewMealQtys((prev) => {
+      const current = prev[idx] ?? getReviewMealQtys(idx);
+      const newQty = Math.max(1, (current[mealId] ?? 1) + delta);
+      return { ...prev, [idx]: { ...current, [mealId]: newQty } };
+    });
+  };
+
   // ── Step handlers ────────────────────────────────────────────────────────
 
   const handleStartSearch = async () => {
-    const active = items.filter((it, i) => (checkedItems[i] ?? true) && it.quantity > 0);
+    const active = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0);
     if (active.length === 0) return;
     setStep('searching');
     setError('');
     try {
       const data = await krogerApi.searchProducts(
-        active.map((i) => ({ productName: i.productName, quantity: i.quantity })),
+        active.map((i) => ({
+          productName: i.ingredientName,
+          searchTerm: i.searchTerm,
+          unit: i.unit,
+          measure: i.measure,
+          quantity: i.productQty,
+        })),
         locationId,
       );
       const results: SearchResult[] = data.results.map((r: any) => {
         const src = active.find(
-          (c) => c.productName.toLowerCase().trim() === r.term.toLowerCase().trim(),
+          (c) => c.ingredientName.toLowerCase().trim() === r.term.toLowerCase().trim(),
         );
         return {
           ...r,
           suggestions: r.suggestions ?? [],
           mealIds: src?.mealIds ?? [],
           mealNames: src?.mealNames ?? [],
+          mealIngredients: src?.mealIngredients ?? [],
         };
       });
       setSearchResults(results);
@@ -278,17 +341,18 @@ export default function KrogerCartReviewSheet({
       const resolved = await resolveCurrentSelection();
       if (shouldShowSuggestionsRef.current) return; // custom search showed new suggestions — stay on this item
       if (resolved?.upc) {
-        newPicked.push({ upc: resolved.upc, quantity: currentReview.quantity, description: resolved.name });
+        newPicked.push({ upc: resolved.upc, quantity: getReviewTotalQty(reviewIdx), description: resolved.name });
       }
       if (action === 'update' && resolved?.name) {
         for (const mealId of currentReview.mealIds) {
           const meal = meals.find((m) => m.id === mealId);
           if (!meal) continue;
-          const updatedIngredients: Ingredient[] = meal.ingredients.map((ing) =>
-            ing.productName.toLowerCase().trim() === currentReview.term.toLowerCase().trim()
-              ? { ...ing, productName: resolved.name, searchTerm: resolved.name }
-              : ing,
-          );
+          const updatedIngredients: Ingredient[] = meal.ingredients.map((ing) => {
+            const iName = normIngName(ing);
+            return iName.toLowerCase().trim() === currentReview.term.toLowerCase().trim()
+              ? { ...ing, searchTerm: resolved.name }
+              : ing;
+          });
           mealsApi
             .update(mealId, { ingredients: updatedIngredients })
             .then((updated) => onMealUpdated?.(updated))
@@ -308,7 +372,7 @@ export default function KrogerCartReviewSheet({
     }
   };
 
-  const doAddToCart = async (cartItems: { upc: string; quantity: number; description: string }[]) => {
+  const doAddToCart = async (cartItems: { upc: string; quantity: number; description?: string }[]) => {
     setStep('adding');
     if (cartItems.length === 0) {
       setTotalAdded(0);
@@ -320,7 +384,7 @@ export default function KrogerCartReviewSheet({
     try {
       await krogerApi.addToCartDirect(cartItems, locationId);
       setTotalAdded(cartItems.length);
-      setAddedItems(cartItems.map((i) => ({ description: i.description, quantity: i.quantity })));
+      setAddedItems(cartItems.map((i) => ({ description: i.description ?? '', quantity: i.quantity })));
       setCartError('');
     } catch (err: any) {
       setTotalAdded(0);
@@ -332,13 +396,13 @@ export default function KrogerCartReviewSheet({
 
   const updateQty = (i: number, delta: number) =>
     setItems((prev) =>
-      prev.map((it, idx) => (idx === i ? { ...it, quantity: Math.max(0, it.quantity + delta) } : it)),
+      prev.map((it, idx) => (idx === i ? { ...it, productQty: Math.max(0, it.productQty + delta) } : it)),
     );
 
   const toggleRemove = (i: number) =>
     setItems((prev) =>
       prev.map((it, idx) =>
-        idx === i ? { ...it, quantity: it.quantity === 0 ? 1 : 0 } : it,
+        idx === i ? { ...it, productQty: it.productQty === 0 ? 1 : 0 } : it,
       ),
     );
 
@@ -366,7 +430,7 @@ export default function KrogerCartReviewSheet({
     done: 'Done!',
   };
 
-  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && it.quantity > 0).length;
+  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0).length;
   const allChecked = checkedItems.length === 0 || checkedItems.every((c) => c);
   const toggleAll = () => setCheckedItems((prev) => prev.map(() => !allChecked));
   const toggleChecked = (i: number) => setCheckedItems((prev) => prev.map((c, idx) => idx === i ? !c : c));
@@ -411,7 +475,7 @@ export default function KrogerCartReviewSheet({
                     </TouchableOpacity>
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <Text style={[styles.ingName, excluded && styles.ingNameZeroed]}>
-                        {it.productName}
+                        {it.ingredientName}
                       </Text>
                       <Text style={styles.mealNames}>
                         {it.mealNames.join(', ')}
@@ -419,12 +483,12 @@ export default function KrogerCartReviewSheet({
                     </View>
                     <TouchableOpacity
                       onPress={() => updateQty(i, -1)}
-                      disabled={it.quantity === 0 || excluded}
-                      style={[styles.qtyBtn, (it.quantity === 0 || excluded) && { opacity: 0.3 }]}
+                      disabled={it.productQty === 0 || excluded}
+                      style={[styles.qtyBtn, (it.productQty === 0 || excluded) && { opacity: 0.3 }]}
                     >
                       <Text style={styles.qtyBtnText}>−</Text>
                     </TouchableOpacity>
-                    <Text style={styles.qtyNum}>{it.quantity}</Text>
+                    <Text style={styles.qtyNum}>{it.productQty}</Text>
                     <TouchableOpacity
                       onPress={() => updateQty(i, 1)}
                       disabled={excluded}
@@ -469,6 +533,8 @@ export default function KrogerCartReviewSheet({
           const canAdd = hasSuggestions
             ? selectedSuggIdx !== 'custom' || customText.trim().length > 0
             : selectedSuggIdx === 'custom' && customText.trim().length > 0;
+          const mealQtys = getReviewMealQtys(reviewIdx);
+          const totalQty = getReviewTotalQty(reviewIdx);
 
           return (
             <>
@@ -486,6 +552,43 @@ export default function KrogerCartReviewSheet({
                     </Text>
                   ) : null}
                 </View>
+
+                {/* Qty by recipe */}
+                {currentReview.mealIngredients.length > 0 && (
+                  <View style={styles.qtyByRecipeBox}>
+                    <Text style={styles.qtyByRecipeLabel}>Qty by recipe</Text>
+                    {currentReview.mealIngredients.map((m) => {
+                      const qty = mealQtys[m.mealId] ?? m.qty;
+                      return (
+                        <View key={m.mealId} style={styles.qtyByRecipeRow}>
+                          <Text style={styles.qtyByRecipeMeal} numberOfLines={1}>{m.mealName}</Text>
+                          {qty > 2 && (
+                            <Text style={styles.qtyByRecipeCaution}>⚠</Text>
+                          )}
+                          <TouchableOpacity
+                            onPress={() => adjustReviewMealQty(reviewIdx, m.mealId, -1)}
+                            style={styles.qtyBtn}
+                          >
+                            <Text style={styles.qtyBtnText}>−</Text>
+                          </TouchableOpacity>
+                          <Text style={styles.qtyNum}>{qty}</Text>
+                          <TouchableOpacity
+                            onPress={() => adjustReviewMealQty(reviewIdx, m.mealId, 1)}
+                            style={styles.qtyBtn}
+                          >
+                            <Text style={styles.qtyBtnText}>+</Text>
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
+                    {currentReview.mealIngredients.length > 1 && (
+                      <View style={styles.qtyByRecipeTotal}>
+                        <Text style={styles.qtyByRecipeTotalLabel}>Total</Text>
+                        <Text style={styles.qtyByRecipeTotalValue}>{totalQty}</Text>
+                      </View>
+                    )}
+                  </View>
+                )}
 
                 {/* Suggestions header */}
                 <Text style={styles.suggHeader}>
@@ -760,6 +863,60 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 2,
+  },
+
+  // Qty by recipe (review step)
+  qtyByRecipeBox: {
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 16,
+  },
+  qtyByRecipeLabel: {
+    fontSize: 11,
+    fontFamily: 'Inter_600SemiBold',
+    color: Colors.text3,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  qtyByRecipeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  qtyByRecipeMeal: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text1,
+  },
+  qtyByRecipeCaution: {
+    fontSize: 13,
+    color: '#b45309',
+  },
+  qtyByRecipeTotal: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  qtyByRecipeTotalLabel: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: Colors.text2,
+  },
+  qtyByRecipeTotalValue: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: Colors.text1,
   },
 
   // Review step

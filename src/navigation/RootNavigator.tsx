@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
 import * as Linking from 'expo-linking';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuth } from '../context/AuthContext';
 import { Colors } from '../constants/colors';
 import AuthStack from './AuthStack';
@@ -10,6 +11,9 @@ import MealDetailSheet from '../components/MealDetailSheet';
 import StoreSelectorSheet from '../components/StoreSelectorSheet';
 import { presetMeals as presetMealsApi } from '../lib/api';
 import { PresetMeal } from '../types';
+import DiscoverScreen from '../screens/discover/DiscoverScreen';
+
+const GuestStack = createNativeStackNavigator();
 
 type DeepLink =
   | { type: 'shared'; token: string }
@@ -36,6 +40,7 @@ function parseVerifiedToken(url: string): string | null {
 export default function RootNavigator() {
   const { user, isLoading, loginWithToken } = useAuth();
   const [deepLink, setDeepLink] = useState<DeepLink | null>(null);
+  const [showAuth, setShowAuth] = useState(false);
 
   // Preset meal deep link state
   const [presetMeal, setPresetMeal] = useState<PresetMeal | null>(null);
@@ -87,9 +92,37 @@ export default function RootNavigator() {
     );
   }
 
+  function renderMain() {
+    if (user) return <MainTabs />;
+    if (showAuth) return <AuthStack />;
+    return (
+      <GuestStack.Navigator
+        screenOptions={{
+          headerStyle: { backgroundColor: Colors.brand },
+          headerTintColor: '#fff',
+          headerTitleStyle: { fontFamily: 'Inter_700Bold', fontSize: 18 },
+        }}
+      >
+        <GuestStack.Screen
+          name="GuestDiscover"
+          component={DiscoverScreen}
+          initialParams={{ onSignIn: () => setShowAuth(true) }}
+          options={{
+            title: 'Discover',
+            headerRight: () => (
+              <TouchableOpacity onPress={() => setShowAuth(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={{ color: '#fff', fontSize: 15, fontFamily: 'Inter_600SemiBold' }}>Sign In</Text>
+              </TouchableOpacity>
+            ),
+          }}
+        />
+      </GuestStack.Navigator>
+    );
+  }
+
   return (
     <>
-      {user ? <MainTabs /> : <AuthStack />}
+      {renderMain()}
 
       {/* Shared user meal deep link */}
       <SharedMealScreen

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -28,8 +28,8 @@ import FilterSheet, { FilterValues, EMPTY_FILTERS } from '../../components/Filte
 
 const LIMIT = 20;
 
-const SEGMENTS = ['Trending', 'New', 'Following'] as const;
-type Segment = typeof SEGMENTS[number];
+const ALL_SEGMENTS = ['Trending', 'New', 'Following'] as const;
+type Segment = typeof ALL_SEGMENTS[number];
 
 const SEGMENT_SORT: Record<Segment, string> = {
   Trending: 'trending',
@@ -41,6 +41,10 @@ const FREE_LIMIT = 3;
 
 export default function DiscoverScreen() {
   const { user } = useAuth();
+  const navigation = useNavigation<any>();
+  const route = useRoute<any>();
+  const onSignIn: (() => void) | undefined = route.params?.onSignIn;
+  const SEGMENTS = user ? ALL_SEGMENTS : (['Trending', 'New'] as const);
   const [segment, setSegment] = useState<Segment>('Trending');
   const [meals, setMeals] = useState<PresetMeal[]>([]);
   const [featuredCreators, setFeaturedCreators] = useState<Creator[]>([]);
@@ -276,7 +280,7 @@ export default function DiscoverScreen() {
         ListHeaderComponent={
           <>
             {/* Upgrade nudge for free tier */}
-            {user?.tier !== 'paid' && (
+            {user && user?.tier !== 'paid' && (
               <TouchableOpacity style={styles.upgradeBanner} onPress={handleUpgrade} activeOpacity={0.8}>
                 <Text style={styles.upgradeBannerText}>
                   {totalMealCount >= FREE_LIMIT
@@ -337,6 +341,14 @@ export default function DiscoverScreen() {
         mode="view"
         onClose={() => setDetailVisible(false)}
         onPressSave={() => {
+          if (!user) {
+            setDetailVisible(false);
+            Alert.alert('Sign In Required', 'Create an account or sign in to save meals.', [
+              { text: 'Not now', style: 'cancel' },
+              { text: 'Sign In', onPress: () => onSignIn?.() },
+            ]);
+            return;
+          }
           setDetailVisible(false);
           setStoreSelectorVisible(true);
         }}
@@ -354,7 +366,24 @@ export default function DiscoverScreen() {
         creator={selectedCreator}
         onClose={() => setCreatorSheetVisible(false)}
         onFollowChange={() => loadData(0, true)}
-        onPressSaveMeal={(meal) => { setSelectedMeal(meal); setCreatorSheetVisible(false); setStoreSelectorVisible(true); }}
+        onPressSaveMeal={(meal) => {
+          setCreatorSheetVisible(false);
+          if (!user) {
+            Alert.alert('Sign In Required', 'Create an account or sign in to save meals.', [
+              { text: 'Not now', style: 'cancel' },
+              {
+                text: 'Sign In',
+                onPress: () => {
+                  const parent = navigation.getParent?.();
+                  if (parent?.navigate) parent.navigate('Auth');
+                },
+              },
+            ]);
+            return;
+          }
+          setSelectedMeal(meal);
+          setStoreSelectorVisible(true);
+        }}
       />
     </SafeAreaView>
   );

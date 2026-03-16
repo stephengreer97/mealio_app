@@ -16,7 +16,7 @@ import { Meal } from '../types';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
 
 type Step = 'searching' | 'picking' | 'saving' | 'done';
-type Suggestion = { upc: string; description: string; price: number | null; stockLevel?: string };
+type Suggestion = { upc: string; description: string; size?: string | null; price: number | null; stockLevel?: string };
 
 interface Props {
   visible: boolean;
@@ -52,7 +52,7 @@ export default function ProductChooserSheet({
       setResults([]);
       setPickIdx(0);
       setSelections(new Map());
-      setProductQty(1);
+      setProductQty(meal.ingredients[0]?.qty ?? 1);
       setCustomText('');
       setSavedCount(0);
       doSearch();
@@ -61,7 +61,7 @@ export default function ProductChooserSheet({
 
   useEffect(() => {
     setCustomText('');
-    setProductQty(1);
+    setProductQty(meal.ingredients[pickIdx]?.qty ?? 1);
   }, [pickIdx]);
 
   async function doSearch() {
@@ -183,24 +183,27 @@ export default function ProductChooserSheet({
               <Text style={styles.sectionLabel}>
                 {current.suggestions.length > 0 ? `${storeName} products` : 'No products found'}
               </Text>
-              {current.suggestions.map((s, i) => (
-                <TouchableOpacity
-                  key={i}
-                  style={styles.suggRow}
-                  onPress={() => handleNext(s.description)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.suggLeft}>
-                    <Text style={styles.suggName}>{s.description}</Text>
-                    {s.stockLevel === 'TEMPORARILY_OUT_OF_STOCK' && (
-                      <Text style={styles.outOfStock}>⚠ Temporarily out of stock</Text>
+              {current.suggestions.map((s, i) => {
+                const displayName = s.size ? `${s.description}, ${s.size}` : s.description;
+                return (
+                  <TouchableOpacity
+                    key={i}
+                    style={styles.suggRow}
+                    onPress={() => handleNext(displayName)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.suggLeft}>
+                      <Text style={styles.suggName}>{displayName}</Text>
+                      {s.stockLevel === 'TEMPORARILY_OUT_OF_STOCK' && (
+                        <Text style={styles.outOfStock}>⚠ Temporarily out of stock</Text>
+                      )}
+                    </View>
+                    {s.price != null && (
+                      <Text style={styles.suggPrice}>${s.price.toFixed(2)}</Text>
                     )}
-                  </View>
-                  {s.price != null && (
-                    <Text style={styles.suggPrice}>${s.price.toFixed(2)}</Text>
-                  )}
-                </TouchableOpacity>
-              ))}
+                  </TouchableOpacity>
+                );
+              })}
               <View style={styles.customRow}>
                 <TextInput
                   style={styles.customInput}
