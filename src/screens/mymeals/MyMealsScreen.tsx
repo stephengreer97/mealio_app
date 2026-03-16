@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
@@ -26,6 +26,7 @@ import { ALL_TAGS } from '../../constants/tags';
 import MealCard from '../../components/MealCard';
 import MealDetailSheet from '../../components/MealDetailSheet';
 import KrogerCartReviewSheet from '../../components/KrogerCartReviewSheet';
+import ProductChooserSheet from '../../components/ProductChooserSheet';
 import IngredientEditor from '../../components/IngredientEditor';
 import PhotoPicker from '../../components/PhotoPicker';
 import Button from '../../components/ui/Button';
@@ -33,6 +34,13 @@ import Input from '../../components/ui/Input';
 import Tag from '../../components/ui/Tag';
 
 const FREE_LIMIT = 3;
+
+function hasUnchosenProducts(meal: Meal): boolean {
+  return meal.ingredients?.some((i: any) => {
+    const term = i.searchTerm ?? i.search_term ?? null;
+    return term === null || term === undefined;
+  }) ?? false;
+}
 
 export default function MyMealsScreen() {
   const { user, isCreator } = useAuth();
@@ -48,6 +56,11 @@ export default function MyMealsScreen() {
   // Multi-select / Kroger cart
   const [selectedMealIds, setSelectedMealIds] = useState<Set<string>>(new Set());
   const [reviewVisible, setReviewVisible] = useState(false);
+
+  // Choose products flow
+  const [choosingMeal, setChoosingMeal] = useState<Meal | null>(null);
+  const chooseQueueRef = useRef<string[]>([]);
+  const pendingChooseMealRef = useRef<Meal | null>(null);
 
   // Kroger store picker
   const [krogerPickerVisible, setKrogerPickerVisible] = useState(false);
@@ -160,6 +173,63 @@ export default function MyMealsScreen() {
     setReviewVisible(true);
   }
 
+  function advanceChooseQueue(currentMeals?: Meal[]) {
+    const meals = currentMeals ?? allMeals;
+    while (chooseQueueRef.current.length > 0) {
+      const nextId = chooseQueueRef.current.shift()!;
+      const nextMeal = meals.find((m) => m.id === nextId);
+      if (nextMeal && hasUnchosenProducts(nextMeal)) {
+        setChoosingMeal(nextMeal);
+        return;
+      }
+    }
+    setChoosingMeal(null);
+  }
+
+  async function handleChooseProducts(meal: Meal) {
+    let connected = krogerConnected;
+    let locations = krogerLocations;
+    if (!connected) {
+      try {
+        const d = await krogerApi.status();
+        connected = d.connected;
+        locations = d.locations ?? {};
+        if (connected) {
+          setKrogerConnected(true);
+          setKrogerLocations(locations);
+        }
+      } catch {}
+    }
+    if (!connected) {
+      const storeName = selectedStore_?.name ?? 'This store';
+      Alert.alert(
+        `Connect ${storeName}`,
+        `${storeName} is part of the Kroger family of stores. Connect your Kroger account to choose products.\n\nYou'll be taken to Kroger's sign-in page in your browser and returned to Mealio once connected.`,
+        [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Connect Account', onPress: handleKrogerConnect },
+        ]
+      );
+      return;
+    }
+    const currentLocationId = locations[selectedStore]?.locationId ?? null;
+    if (!currentLocationId) {
+      pendingChooseMealRef.current = meal;
+      setKrogerZip('');
+      setKrogerLocationsList([]);
+      setKrogerPickerVisible(true);
+      return;
+    }
+    setChoosingMeal(meal);
+  }
+
+  function handleFloatingChooseProducts() {
+    const mealsNeedingChoose = selectedMeals.filter(hasUnchosenProducts);
+    if (mealsNeedingChoose.length === 0) return;
+    chooseQueueRef.current = mealsNeedingChoose.slice(1).map((m) => m.id);
+    handleChooseProducts(mealsNeedingChoose[0]);
+  }
+
   async function handleKrogerSearchStores() {
     if (!krogerZip.trim()) return;
     setKrogerSearching(true);
@@ -181,6 +251,10 @@ export default function MyMealsScreen() {
       await krogerApi.setLocation(loc.locationId, loc.name, loc.storeId);
       setKrogerLocations(prev => ({ ...prev, [loc.storeId]: { locationId: loc.locationId, locationName: loc.name } }));
       setKrogerPickerVisible(false);
+      if (pendingChooseMealRef.current) {
+        setChoosingMeal(pendingChooseMealRef.current);
+        pendingChooseMealRef.current = null;
+      }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not save store');
     } finally {
@@ -330,6 +404,7 @@ export default function MyMealsScreen() {
           subtitle={item.author ?? undefined}
           selected={isKroger ? selectedMealIds.has(item.id) : undefined}
           onView={isKroger ? () => openMeal(item) : undefined}
+          warning={isKroger && hasUnchosenProducts(item) ? 'Cannot add to cart until products have been chosen' : undefined}
         />
         {next ? (
           <MealCard
@@ -338,6 +413,7 @@ export default function MyMealsScreen() {
             subtitle={next.author ?? undefined}
             selected={isKroger ? selectedMealIds.has(next.id) : undefined}
             onView={isKroger ? () => openMeal(next) : undefined}
+            warning={isKroger && hasUnchosenProducts(next) ? 'Cannot add to cart until products have been chosen' : undefined}
           />
         ) : (
           <View style={{ flex: 1, marginHorizontal: 4 }} />
@@ -426,14 +502,24 @@ export default function MyMealsScreen() {
         }
       />
 
-      {isKroger && selectedMealIds.size > 0 && (
-        <TouchableOpacity style={[styles.floatingCart, { backgroundColor: selectedStore_?.color ?? Colors.brand }]} onPress={handleCartButtonPress} activeOpacity={0.88}>
-          <Ionicons name="cart" size={18} color="#fff" />
-          <Text style={styles.floatingCartText}>
-            Add {selectedMealIds.size} meal{selectedMealIds.size !== 1 ? 's' : ''} to {selectedStore_?.name ?? 'cart'}
-          </Text>
-        </TouchableOpacity>
-      )}
+      {isKroger && selectedMealIds.size > 0 && (() => {
+        const needsChoose = selectedMeals.some(hasUnchosenProducts);
+        const unchosenCount = selectedMeals.filter(hasUnchosenProducts).length;
+        return (
+          <TouchableOpacity
+            style={[styles.floatingCart, { backgroundColor: selectedStore_?.color ?? Colors.brand }]}
+            onPress={needsChoose ? handleFloatingChooseProducts : handleCartButtonPress}
+            activeOpacity={0.88}
+          >
+            <Ionicons name={needsChoose ? 'search' : 'cart'} size={18} color="#fff" />
+            <Text style={styles.floatingCartText}>
+              {needsChoose
+                ? `Choose Products for ${unchosenCount} meal${unchosenCount !== 1 ? 's' : ''}`
+                : `Add ${selectedMealIds.size} meal${selectedMealIds.size !== 1 ? 's' : ''} to ${selectedStore_?.name ?? 'cart'}`}
+            </Text>
+          </TouchableOpacity>
+        );
+      })()}
 
       <MealDetailSheet
         visible={detailVisible}
@@ -457,6 +543,21 @@ export default function MyMealsScreen() {
           setAllMeals((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
         }}
       />
+
+      {choosingMeal && (
+        <ProductChooserSheet
+          key={choosingMeal.id}
+          visible={!!choosingMeal}
+          meal={choosingMeal}
+          locationId={krogerLocations[selectedStore]?.locationId ?? ''}
+          storeName={selectedStore_?.name ?? 'Kroger'}
+          storeColor={selectedStore_?.color ?? Colors.brand}
+          onClose={() => advanceChooseQueue()}
+          onMealUpdated={(updated) => {
+            setAllMeals((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+          }}
+        />
+      )}
 
       {/* Kroger store picker */}
       <Modal visible={krogerPickerVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setKrogerPickerVisible(false)}>

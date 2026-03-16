@@ -19,9 +19,10 @@ interface MealCardProps {
   savedAt?: string[]; // store names where this meal is already saved
   selected?: boolean; // shown in multi-select mode
   onView?: () => void; // view button shown in multi-select mode
+  warning?: string; // amber badge shown below meta row
 }
 
-export default function MealCard({ meal, onPress, subtitle, savedAt, selected, onView }: MealCardProps) {
+export default function MealCard({ meal, onPress, subtitle, savedAt, selected, onView, warning }: MealCardProps) {
   const photoUrl = 'photoUrl' in meal ? meal.photoUrl : undefined;
   const ingredientCount = meal.ingredients?.length ?? 0;
 
@@ -57,6 +58,11 @@ export default function MealCard({ meal, onPress, subtitle, savedAt, selected, o
             </TouchableOpacity>
           )}
         </View>
+        {warning && (
+          <View style={styles.warningBadge}>
+            <Text style={styles.warningText}>⚠ {warning}</Text>
+          </View>
+        )}
         {savedAt && savedAt.length > 0 && (
           <View style={styles.savedRow}>
             {savedAt.map((store) => (
@@ -135,6 +141,20 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     color: Colors.brand,
     marginLeft: 6,
+  },
+  warningBadge: {
+    marginTop: 5,
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  warningText: {
+    fontSize: 10,
+    fontFamily: 'Inter_500Medium',
+    color: '#92400e',
   },
   savedRow: { marginTop: 5, gap: 2 },
   savedText: {
