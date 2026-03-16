@@ -177,8 +177,12 @@ export default function ProductChooserSheet({
           <>
             <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
               <View style={styles.searchedBox}>
-                <Text style={styles.searchedLabel}>Searching for</Text>
-                <Text style={styles.searchedName}>{current.ingredientName}</Text>
+                <Text style={styles.searchedName}>{(() => {
+                  const ing = unchosenIngredients[pickIdx];
+                  if (!ing) return current.ingredientName;
+                  if (!ing.unit || ing.unit === 'qty') return `${ing.ingredientName}, ${ing.qty ?? 1}`;
+                  return `${ing.ingredientName}, ${ing.measure ?? ''} ${ing.unit}`.replace(/\s+/g, ' ').trim();
+                })()}</Text>
               </View>
               <Text style={styles.sectionLabel}>
                 {current.suggestions.length > 0 ? `${storeName} products` : 'No products found'}
