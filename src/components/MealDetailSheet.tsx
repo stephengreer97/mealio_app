@@ -583,7 +583,7 @@ export default function MealDetailSheet({
                       {productsExpanded && productsWithTerm.map((ing, i) => (
                         <View key={i} style={styles.productRow}>
                           <Text style={styles.productLabel} numberOfLines={1}>
-                            {ing.searchTerm}
+                            {`${ing.productQty ?? ing.qty ?? 1}x ${ing.searchTerm}`}
                           </Text>
                         </View>
                       ))}
