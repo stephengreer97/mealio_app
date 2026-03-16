@@ -6,22 +6,24 @@ const BASE_URL = 'https://mealio.co';
 // ── Mappers: convert snake_case DB rows → camelCase types ─────────────────────
 
 // Normalise ingredients regardless of how they're stored in the DB.
-// Handles: null/undefined → [], plain strings → [{ productName }], objects → as-is.
+// Handles: null/undefined → [], plain strings → [{ ingredientName }], objects → as-is.
 function normalizeIngredients(raw: any): Ingredient[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((item) => {
-    if (typeof item === 'string') return { productName: item, qty: 1, unit: 'qty', measure: null };
+    if (typeof item === 'string') return { ingredientName: item, qty: 1, productQty: 1, unit: 'qty', measure: null };
     if (item && typeof item === 'object') {
+      const qty = item.qty ?? item.quantity ?? 1;
       return {
-        productName: item.productName ?? item.product_name ?? item.name ?? '',
+        ingredientName: item.ingredientName ?? item.productName ?? item.product_name ?? String(item.name ?? item) ?? '',
         searchTerm: item.searchTerm ?? item.search_term ?? null,
-        qty: item.qty ?? item.quantity ?? 1,
+        qty,
+        productQty: item.productQty ?? qty,
         unit: item.unit ?? 'qty',
         measure: item.measure ?? null,
       };
     }
-    return { productName: String(item), qty: 1, unit: 'qty', measure: null };
-  }).filter((i) => i.productName);
+    return { ingredientName: String(item), qty: 1, productQty: 1, unit: 'qty', measure: null };
+  }).filter((i) => i.ingredientName);
 }
 
 function mapMeal(m: any): Meal {
@@ -437,10 +439,10 @@ export const kroger = {
       body: JSON.stringify({ locationId, locationName, storeId }),
     }),
 
-  addToCart: (ingredients: Array<{ productName: string; qty?: number; quantity?: number }>, locationId?: string) =>
+  addToCart: (ingredients: Array<{ ingredientName?: string; productName?: string; productQty?: number; qty?: number; quantity?: number }>, locationId?: string) =>
     request<{ added: string[]; notFound: string[]; cartAdded: boolean }>('/api/kroger/add-to-cart', {
       method: 'POST',
-      body: JSON.stringify({ ingredients: ingredients.map((i) => ({ productName: i.productName, quantity: i.qty ?? i.quantity ?? 1 })), locationId }),
+      body: JSON.stringify({ ingredients: ingredients.map((i) => ({ productName: i.ingredientName ?? i.productName, quantity: i.productQty ?? i.qty ?? i.quantity ?? 1 })), locationId }),
     }),
 
   addToCartDirect: (items: Array<{ upc: string; quantity: number }>, locationId?: string) =>
@@ -449,7 +451,7 @@ export const kroger = {
       body: JSON.stringify({ items, locationId }),
     }),
 
-  searchProducts: (ingredients: Array<{ productName: string; qty?: number; quantity?: number }>, locationId?: string) =>
+  searchProducts: (ingredients: Array<{ ingredientName?: string; productName?: string; productQty?: number; qty?: number; quantity?: number }>, locationId?: string) =>
     request<{
       results: Array<{
         term: string;

@@ -16,7 +16,7 @@ import { Ingredient } from '../types';
 const UNITS = ['Qty', 'cups', 'fl oz', 'g', 'kg', 'L', 'lb', 'mg', 'ml', 'oz', 'tbsp', 'tsp'];
 
 interface IngredientForm {
-  productName: string;
+  ingredientName: string;
   measure: string;
   unit: string;
   searchTerm: string | null;
@@ -25,7 +25,7 @@ interface IngredientForm {
 
 function toFormIng(ing: Ingredient): IngredientForm {
   return {
-    productName: ing.productName,
+    ingredientName: ing.ingredientName,
     measure: ing.unit === 'qty' ? String(ing.qty ?? 1) : (ing.measure ?? ''),
     unit: ing.unit === 'qty' ? 'Qty' : ing.unit,
     searchTerm: ing.searchTerm ?? null,
@@ -36,19 +36,21 @@ function toFormIng(ing: Ingredient): IngredientForm {
 function fromFormIng(form: IngredientForm): Ingredient {
   if (form.unit === 'Qty') {
     return {
-      productName: form.productName.trim(),
+      ingredientName: form.ingredientName.trim(),
       qty: parseInt(form.measure) || 1,
       unit: 'qty',
       measure: null,
       searchTerm: form.searchTerm ?? null,
+      productQty: parseInt(form.measure) || 1,
     };
   }
   return {
-    productName: form.productName.trim(),
-    qty: form.qty,
+    ingredientName: form.ingredientName.trim(),
+    qty: 1,
     unit: form.unit,
     measure: form.measure.trim() || null,
     searchTerm: form.searchTerm ?? null,
+    productQty: 1,
   };
 }
 
@@ -71,8 +73,8 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
     const updated = forms.map((f, i) => {
       if (i !== index) return f;
       const next = { ...f, [field]: value };
-      // When productName changes, clear searchTerm
-      if (field === 'productName') {
+      // When ingredientName changes, clear searchTerm
+      if (field === 'ingredientName') {
         next.searchTerm = null;
       }
       return next;
@@ -93,7 +95,7 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
 
   function addMeasurement() {
     const newForm: IngredientForm = {
-      productName: '',
+      ingredientName: '',
       measure: '1',
       unit: 'Qty',
       searchTerm: null,
@@ -113,8 +115,8 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
           <TextInput
             style={styles.nameInput}
             placeholder="Ingredient name"
-            value={form.productName}
-            onChangeText={(v) => updateField(index, 'productName', v)}
+            value={form.ingredientName}
+            onChangeText={(v) => updateField(index, 'ingredientName', v)}
             placeholderTextColor={Colors.text3}
           />
           <TextInput

@@ -39,8 +39,8 @@ interface MealDetailSheetProps {
 }
 
 function fmtMeasurement(ing: Ingredient): string {
-  if (!ing.unit || ing.unit === 'qty') return `${ing.productName}, ${ing.qty ?? 1}`;
-  return `${ing.productName}, ${ing.measure ?? ''} ${ing.unit}`;
+  if (!ing.unit || ing.unit === 'qty') return `${ing.ingredientName}, ${ing.qty ?? 1}`;
+  return `${ing.ingredientName}, ${ing.measure ?? ''} ${ing.unit}`;
 }
 
 function DifficultyDots({ level }: { level: number }) {
@@ -126,7 +126,7 @@ export default function MealDetailSheet({
   function adjustIngredientQty(index: number, delta: number) {
     setIngredients((prev) =>
       prev.map((ing, i) =>
-        i === index ? { ...ing, qty: Math.max(1, (ing.qty ?? 1) + delta) } : ing
+        i === index ? { ...ing, productQty: Math.max(1, (ing.productQty ?? ing.qty ?? 1) + delta) } : ing
       )
     );
   }
@@ -134,7 +134,7 @@ export default function MealDetailSheet({
   async function handleSave() {
     if (!meal) return;
     if (!name.trim()) { Alert.alert('Error', 'Meal name is required'); return; }
-    const validIngredients = ingredients.filter((i) => i.productName.trim());
+    const validIngredients = ingredients.filter((i) => i.ingredientName.trim());
     if (validIngredients.length === 0) { Alert.alert('Error', 'Add at least one ingredient'); return; }
 
     setLoading(true);
@@ -376,17 +376,17 @@ export default function MealDetailSheet({
                 style={[styles.collapsibleHeader, { marginTop: 8 }]}
                 onPress={() => setEditProductsExpanded((v) => !v)}
               >
-                <Text style={styles.fieldLabel}>Products ({ingredients.filter((i) => i.productName.trim()).length})</Text>
+                <Text style={styles.fieldLabel}>Products ({ingredients.filter((i) => i.ingredientName.trim()).length})</Text>
                 <Feather
                   name={editProductsExpanded ? 'chevron-up' : 'chevron-down'}
                   size={16}
                   color={Colors.text3}
                 />
               </TouchableOpacity>
-              {editProductsExpanded && ingredients.filter((i) => i.productName.trim()).map((ing, i) => {
+              {editProductsExpanded && ingredients.filter((i) => i.ingredientName.trim()).map((ing, i) => {
                 const autoTerm = ing.unit === 'qty'
-                  ? ing.productName
-                  : `${ing.productName}, ${ing.measure ?? ''}${ing.unit}`;
+                  ? ing.ingredientName
+                  : `${ing.ingredientName}, ${ing.measure ?? ''}${ing.unit}`;
                 const label = ing.searchTerm ? ing.searchTerm : autoTerm;
                 const dimmed = !ing.searchTerm;
                 return (
@@ -404,7 +404,7 @@ export default function MealDetailSheet({
                       >
                         <Text style={styles.qtyBtnText}>−</Text>
                       </TouchableOpacity>
-                      <Text style={styles.qtyValue}>{ing.qty ?? 1}</Text>
+                      <Text style={styles.qtyValue}>{ing.productQty ?? ing.qty ?? 1}</Text>
                       <TouchableOpacity
                         style={styles.qtyBtn}
                         onPress={() => adjustIngredientQty(i, 1)}
@@ -566,8 +566,8 @@ export default function MealDetailSheet({
                     </TouchableOpacity>
                     {productsExpanded && displayIngredients.map((ing, i) => {
                       const autoTerm = ing.unit === 'qty'
-                        ? ing.productName
-                        : `${ing.productName}, ${ing.measure ?? ''}${ing.unit}`;
+                        ? ing.ingredientName
+                        : `${ing.ingredientName}, ${ing.measure ?? ''}${ing.unit}`;
                       const label = ing.searchTerm ? ing.searchTerm : autoTerm;
                       const dimmed = !ing.searchTerm;
                       return (

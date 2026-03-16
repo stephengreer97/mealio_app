@@ -10,9 +10,10 @@ export interface User {
 }
 
 export interface Ingredient {
-  productName: string;
+  ingredientName: string;
   searchTerm?: string | null;
   qty: number;
+  productQty: number;
   unit: string;
   measure?: string | null;
 }
