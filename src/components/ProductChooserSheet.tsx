@@ -177,6 +177,7 @@ export default function ProductChooserSheet({
           <>
             <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
               <View style={styles.searchedBox}>
+                <Text style={styles.searchedLabel}>{meal.name} calls for</Text>
                 <Text style={styles.searchedName}>{(() => {
                   const ing = unchosenIngredients[pickIdx];
                   if (!ing) return current.ingredientName;
