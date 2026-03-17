@@ -391,9 +391,8 @@ export default function MealDetailSheet({
                       />
                     </TouchableOpacity>
                     {editProductsExpanded && namedIngredients.map(({ ing, origIdx }) => (
-                      <View key={origIdx} style={[styles.productRow, { flexDirection: 'column', alignItems: 'stretch', gap: 6 }]}>
-                        <Text style={styles.productLabel} numberOfLines={1}>{ing.ingredientName}</Text>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <View key={origIdx} style={styles.productRow}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
                           <TextInput
                             style={[styles.productSearchTermInput, { flex: 1 }]}
                             placeholder="e.g. Kroger Crushed Tomatoes, 14oz"
