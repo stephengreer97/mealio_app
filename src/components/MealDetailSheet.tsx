@@ -395,7 +395,7 @@ export default function MealDetailSheet({
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
                           <TextInput
                             style={[styles.productSearchTermInput, { flex: 1 }]}
-                            placeholder="e.g. Kroger Crushed Tomatoes, 14oz"
+                            placeholder=""
                             placeholderTextColor={Colors.text3}
                             value={ing.searchTerm ?? ''}
                             onChangeText={(val) =>
