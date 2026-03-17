@@ -37,6 +37,7 @@ export default function ProductChooserSheet({
   const [pickIdx, setPickIdx] = useState(0);
   const [selections, setSelections] = useState<Map<string, { description: string; qty: number }>>(new Map());
   const [productQty, setProductQty] = useState(1);
+  const [selectedDescription, setSelectedDescription] = useState<string | null>(null);
   const [customText, setCustomText] = useState('');
   const [customSearching, setCustomSearching] = useState(false);
   const [savedCount, setSavedCount] = useState(0);
@@ -53,6 +54,7 @@ export default function ProductChooserSheet({
       setPickIdx(0);
       setSelections(new Map());
       setProductQty(meal.ingredients[0]?.productQty ?? meal.ingredients[0]?.qty ?? 1);
+      setSelectedDescription(null);
       setCustomText('');
       setSavedCount(0);
       doSearch();
@@ -61,7 +63,6 @@ export default function ProductChooserSheet({
 
   useEffect(() => {
     setCustomText('');
-    setProductQty(meal.ingredients[pickIdx]?.productQty ?? meal.ingredients[pickIdx]?.qty ?? 1);
   }, [pickIdx]);
 
   async function doSearch() {
@@ -107,12 +108,37 @@ export default function ProductChooserSheet({
     setCustomSearching(false);
   }
 
-  function handleNext(description: string | null) {
+  function handleSelectProduct(displayName: string) {
+    setSelectedDescription((prev) => (prev === displayName ? null : displayName));
+  }
+
+  function handleBack() {
     const newSelections = new Map(selections);
-    if (description && current) newSelections.set(current.ingredientName, { description, qty: productQty });
+    if (selectedDescription && current) {
+      newSelections.set(current.ingredientName, { description: selectedDescription, qty: productQty });
+    } else if (current) {
+      newSelections.delete(current.ingredientName);
+    }
+    setSelections(newSelections);
+    const prevIdx = pickIdx - 1;
+    const prevSel = results[prevIdx] ? newSelections.get(results[prevIdx].ingredientName) : undefined;
+    setSelectedDescription(prevSel?.description ?? null);
+    setProductQty(prevSel?.qty ?? unchosenIngredients[prevIdx]?.productQty ?? unchosenIngredients[prevIdx]?.qty ?? 1);
+    setPickIdx(prevIdx);
+  }
+
+  function handleNextBtn() {
+    const newSelections = new Map(selections);
+    if (selectedDescription && current) {
+      newSelections.set(current.ingredientName, { description: selectedDescription, qty: productQty });
+    }
     setSelections(newSelections);
     if (!isLast) {
-      setPickIdx(pickIdx + 1);
+      const nextIdx = pickIdx + 1;
+      const nextSel = results[nextIdx] ? newSelections.get(results[nextIdx].ingredientName) : undefined;
+      setSelectedDescription(nextSel?.description ?? null);
+      setProductQty(nextSel?.qty ?? unchosenIngredients[nextIdx]?.productQty ?? unchosenIngredients[nextIdx]?.qty ?? 1);
+      setPickIdx(nextIdx);
     } else {
       doSave(newSelections);
     }
@@ -196,15 +222,16 @@ export default function ProductChooserSheet({
                       ? `$${s.price.toFixed(2)} / ${s.size.replace(/(\d)([a-zA-Z])/, '$1 $2').toLowerCase()}`
                       : `$${s.price.toFixed(2)}`)
                   : null;
+                const isSelected = selectedDescription === displayName;
                 return (
                   <TouchableOpacity
                     key={i}
-                    style={styles.suggRow}
-                    onPress={() => handleNext(displayName)}
+                    style={[styles.suggRow, isSelected && { borderColor: storeColor, backgroundColor: `${storeColor}18` }]}
+                    onPress={() => handleSelectProduct(displayName)}
                     activeOpacity={0.7}
                   >
                     <View style={styles.suggLeft}>
-                      <Text style={styles.suggName}>{displayName}</Text>
+                      <Text style={[styles.suggName, isSelected && { fontFamily: 'Inter_600SemiBold' }]}>{displayName}</Text>
                       {s.stockLevel === 'TEMPORARILY_OUT_OF_STOCK' && (
                         <Text style={styles.outOfStock}>⚠ Temporarily out of stock</Text>
                       )}
@@ -212,6 +239,7 @@ export default function ProductChooserSheet({
                     {priceLabel != null && (
                       <Text style={styles.suggPrice}>{priceLabel}</Text>
                     )}
+                    {isSelected && <Ionicons name="checkmark-circle" size={20} color={storeColor} />}
                   </TouchableOpacity>
                 );
               })}
@@ -261,13 +289,18 @@ export default function ProductChooserSheet({
               )}
             </View>
             <View style={styles.footer}>
-              {pickIdx > 0 && (
-                <TouchableOpacity style={styles.skipBtn} onPress={() => setPickIdx(pickIdx - 1)}>
-                  <Text style={styles.skipBtnText}>← Back</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity style={styles.skipBtn} onPress={() => handleNext(null)}>
-                <Text style={styles.skipBtnText}>{isLast ? 'Skip & Save' : 'Skip'}</Text>
+              <TouchableOpacity
+                style={[styles.navBtn, styles.navBtnSecondary, pickIdx === 0 && { opacity: 0.3 }]}
+                onPress={handleBack}
+                disabled={pickIdx === 0}
+              >
+                <Text style={styles.navBtnSecondaryText}>← Back</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.navBtn, { backgroundColor: storeColor }]}
+                onPress={handleNextBtn}
+              >
+                <Text style={styles.navBtnText}>{isLast ? 'Save' : 'Next →'}</Text>
               </TouchableOpacity>
             </View>
           </>
@@ -405,16 +438,26 @@ const styles = StyleSheet.create({
   qtyWarning: { fontSize: 11, fontFamily: 'Inter_500Medium', color: '#b45309' },
   footer: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
     gap: 12,
   },
-  skipBtn: { paddingHorizontal: 12, paddingVertical: 8 },
-  skipBtnText: { fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text3 },
+  navBtn: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: Radius.button,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navBtnSecondary: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surfaceRaised,
+  },
+  navBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#fff' },
+  navBtnSecondaryText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: Colors.text2 },
   doneContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 12 },
   doneIcon: { fontSize: 48 },
   doneTitle: { fontSize: 18, fontFamily: 'Inter_700Bold', color: Colors.text1, textAlign: 'center' },
