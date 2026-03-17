@@ -273,6 +273,7 @@ export default function MealDetailSheet({
         </View>
 
         {editing ? (
+          <View style={{ flex: 1 }}>
           <KeyboardAwareScrollView contentContainerStyle={styles.editScroll} keyboardShouldPersistTaps="handled" enableOnAndroid extraScrollHeight={24}>
               <Text style={styles.fieldLabel}>Store</Text>
               <TouchableOpacity
@@ -441,7 +442,7 @@ export default function MealDetailSheet({
                 <View style={styles.tagsRow}>
                   {(tagSearch.trim()
                     ? ALL_TAGS.filter((t) => t.toLowerCase().includes(tagSearch.toLowerCase()))
-                    : ALL_TAGS
+                    : [...selectedTags, ...ALL_TAGS.filter((t) => !selectedTags.includes(t))]
                   ).map((tag) => (
                     <Tag
                       key={tag}
@@ -456,11 +457,6 @@ export default function MealDetailSheet({
                   ))}
                 </View>
               </ScrollView>
-              <View style={styles.footer}>
-                <Button label="Cancel" variant="secondary" onPress={cancelEdit} style={{ flex: 1, marginRight: 8 }} />
-                <Button label="Save Changes" onPress={handleSave} loading={loading} style={{ flex: 2 }} />
-              </View>
-
               {storePickerVisible && (
                 <View style={styles.pickerOverlay}>
                   <TouchableOpacity style={styles.pickerBackdrop} onPress={() => setStorePickerVisible(false)} />
@@ -495,6 +491,11 @@ export default function MealDetailSheet({
                 </View>
               )}
             </KeyboardAwareScrollView>
+            <View style={styles.footer}>
+              <Button label="Cancel" variant="secondary" onPress={cancelEdit} style={{ flex: 1, marginRight: 8 }} />
+              <Button label="Save Changes" onPress={handleSave} loading={loading} style={{ flex: 2 }} />
+            </View>
+          </View>
         ) : (
           <>
             <ScrollView contentContainerStyle={styles.scroll}>
@@ -618,7 +619,7 @@ const styles = StyleSheet.create({
   headerBtn: { padding: 4 },
   headerBtnText: { fontSize: 16, fontFamily: 'Inter_500Medium', color: Colors.brand },
   scroll: { paddingBottom: 24 },
-  editScroll: { padding: 16, paddingBottom: 24 },
+  editScroll: { padding: 16, paddingBottom: 100 },
   image: { width: '100%', height: 220 },
   imagePlaceholder: { backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
   placeholderEmoji: { fontSize: 60 },
