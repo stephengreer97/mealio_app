@@ -45,12 +45,12 @@ function buildListItems(recentIds: string[]): ListItem[] {
     .filter(Boolean) as StoreItem[];
   const all = STORES.slice().sort((a, b) => a.name.localeCompare(b.name));
   if (recent.length === 0) return all;
-  const recentIds = new Set(recent.map((s) => s.id));
+  const recentIdSet = new Set(recent.map((s) => s.id));
   return [
     { type: 'header', label: 'Recent' },
     ...recent,
     { type: 'header', label: 'All Stores' },
-    ...all.filter((s) => !recentIds.has(s.id)),
+    ...all.filter((s) => !recentIdSet.has(s.id)),
   ];
 }
 

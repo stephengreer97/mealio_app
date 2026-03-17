@@ -29,6 +29,7 @@ interface PhotoPickerProps {
  */
 export default function PhotoPicker({ mealName, previewUri, onPhotoReady, onClear }: PhotoPickerProps) {
   const [generating, setGenerating] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [thumbs, setThumbs] = useState<string[]>([]);
   const [fulls, setFulls] = useState<string[]>([]);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
@@ -83,13 +84,34 @@ export default function PhotoPicker({ mealName, previewUri, onPhotoReady, onClea
     }
   }
 
-  function selectThumb(i: number) {
+  async function selectThumb(i: number) {
     if (selectedIdx === i) {
       setSelectedIdx(null);
       onClear();
-    } else {
-      setSelectedIdx(i);
-      onPhotoReady(fulls[i] ?? thumbs[i], true);
+      return;
+    }
+    setSelectedIdx(i);
+    const proxyUrl = fulls[i] ?? thumbs[i];
+    onPhotoReady(proxyUrl, true); // optimistic: use proxy URL immediately for preview
+    // Upload immediately while the Pixabay token is fresh
+    setUploading(true);
+    try {
+      const res = await fetch(proxyUrl);
+      if (res.ok) {
+        const blob = await res.blob();
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        const data = await imagesApi.upload(base64);
+        if (data.url) onPhotoReady(data.url, true); // replace with permanent storage URL
+      }
+    } catch {
+      // proxy URL remains as fallback
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -105,13 +127,13 @@ export default function PhotoPicker({ mealName, previewUri, onPhotoReady, onClea
           <Text style={styles.btnText}>{previewUri && !thumbs.length ? 'Change' : 'Choose Photo'}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.btn, styles.btnGenerate]} onPress={generatePhoto} disabled={generating}>
+        <TouchableOpacity style={[styles.btn, styles.btnGenerate]} onPress={generatePhoto} disabled={generating || uploading}>
           {generating ? (
             <ActivityIndicator size="small" color={Colors.brand} />
           ) : (
             <Ionicons name="sparkles-outline" size={16} color={Colors.brand} />
           )}
-          <Text style={styles.btnText}>{generating ? 'Generating…' : 'Generate Photo'}</Text>
+          <Text style={styles.btnText}>{generating ? 'Generating…' : uploading ? 'Uploading…' : 'Generate Photo'}</Text>
         </TouchableOpacity>
 
         {previewUri ? (
