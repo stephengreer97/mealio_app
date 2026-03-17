@@ -10,13 +10,14 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
 import { Meal } from '../types';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
 
 type Step = 'searching' | 'picking' | 'saving' | 'done';
-type Suggestion = { upc: string; description: string; size?: string | null; soldBy?: string | null; price: number | null; stockLevel?: string };
+type Suggestion = { upc: string; description: string; size?: string | null; soldBy?: string | null; price: number | null; stockLevel?: string; imageUrl?: string | null };
 
 interface Props {
   visible: boolean;
@@ -45,6 +46,14 @@ export default function ProductChooserSheet({
   const unchosenIngredients = meal.ingredients.filter((i) => !i.searchTerm);
   const current = results[pickIdx];
   const isLast = pickIdx === results.length - 1;
+
+  const selectedImageUrl: string | null = (selectedDescription && current)
+    ? current.suggestions.find((s) => {
+        const isWeight = s.soldBy === 'WEIGHT';
+        const name = isWeight ? s.description : (s.size ? `${s.description}, ${s.size}` : s.description);
+        return name === selectedDescription;
+      })?.imageUrl ?? null
+    : null;
 
   useEffect(() => {
     if (visible) {
@@ -200,6 +209,12 @@ export default function ProductChooserSheet({
         )}
 
         {step === 'picking' && current && (
+          <View style={{ flex: 1 }}>
+          {selectedImageUrl ? (
+            <View style={styles.floatingImageWrap} pointerEvents="none">
+              <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
+            </View>
+          ) : null}
           <>
             <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
               <View style={styles.searchedBox}>
@@ -304,6 +319,7 @@ export default function ProductChooserSheet({
               </TouchableOpacity>
             </View>
           </>
+          </View>
         )}
 
         {step === 'saving' && (
@@ -458,6 +474,23 @@ const styles = StyleSheet.create({
   },
   navBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#fff' },
   navBtnSecondaryText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: Colors.text2 },
+  floatingImageWrap: {
+    position: 'absolute',
+    top: 12,
+    right: 16,
+    width: 88,
+    height: 88,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 8,
+    zIndex: 10,
+    overflow: 'hidden',
+  },
+  floatingImage: { width: '100%', height: '100%' },
   doneContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 12 },
   doneIcon: { fontSize: 48 },
   doneTitle: { fontSize: 18, fontFamily: 'Inter_700Bold', color: Colors.text1, textAlign: 'center' },
