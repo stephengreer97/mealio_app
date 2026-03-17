@@ -28,6 +28,8 @@ interface CreatorProfileSheetProps {
   onClose: () => void;
   onFollowChange?: () => void;
   onPressSaveMeal?: (meal: PresetMeal) => void;
+  isLoggedIn?: boolean;
+  onSignIn?: () => void;
 }
 
 
@@ -37,6 +39,8 @@ export default function CreatorProfileSheet({
   onClose,
   onFollowChange,
   onPressSaveMeal,
+  isLoggedIn,
+  onSignIn,
 }: CreatorProfileSheetProps) {
   const [following, setFollowing] = useState(creator?.isFollowing ?? false);
   const [followLoading, setFollowLoading] = useState(false);
@@ -71,6 +75,14 @@ export default function CreatorProfileSheet({
 
   async function toggleFollow() {
     if (!creator) return;
+    if (!isLoggedIn) {
+      onClose();
+      Alert.alert('Sign In Required', 'Create an account or sign in to follow creators.', [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Sign In', onPress: () => onSignIn?.() },
+      ]);
+      return;
+    }
     setFollowLoading(true);
     try {
       if (following) {

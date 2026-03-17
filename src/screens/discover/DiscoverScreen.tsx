@@ -366,6 +366,8 @@ export default function DiscoverScreen() {
         creator={selectedCreator}
         onClose={() => setCreatorSheetVisible(false)}
         onFollowChange={() => loadData(0, true)}
+        isLoggedIn={!!user}
+        onSignIn={() => { const parent = navigation.getParent?.(); if (parent?.navigate) parent.navigate('Auth'); else onSignIn?.(); }}
         onPressSaveMeal={(meal) => {
           setCreatorSheetVisible(false);
           if (!user) {

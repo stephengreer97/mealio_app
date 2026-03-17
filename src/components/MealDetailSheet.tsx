@@ -587,26 +587,31 @@ export default function MealDetailSheet({
                 )}
 
                 {mode === 'edit' && (() => {
-                  const productsWithTerm = displayIngredients.filter((i) => i.searchTerm);
-                  if (productsWithTerm.length === 0) return null;
+                  const namedIngredients = displayIngredients.filter((i) => (i.ingredientName ?? i.productName ?? '').trim());
+                  if (namedIngredients.length === 0) return null;
                   return (
                     <>
                       <TouchableOpacity
                         style={styles.collapsibleHeader}
                         onPress={() => setProductsExpanded((v) => !v)}
                       >
-                        <Text style={styles.sectionLabel}>Products ({productsWithTerm.length})</Text>
+                        <Text style={styles.sectionLabel}>Products ({namedIngredients.length})</Text>
                         <Feather
                           name={productsExpanded ? 'chevron-up' : 'chevron-down'}
                           size={16}
                           color={Colors.text3}
                         />
                       </TouchableOpacity>
-                      {productsExpanded && productsWithTerm.map((ing, i) => (
+                      {productsExpanded && namedIngredients.map((ing, i) => (
                         <View key={i} style={styles.productRow}>
                           <Text style={styles.productLabel} numberOfLines={1}>
-                            {`${ing.productQty ?? ing.qty ?? 1}x ${ing.searchTerm}`}
+                            {ing.ingredientName ?? ing.productName ?? ''}
                           </Text>
+                          {ing.searchTerm ? (
+                            <Text style={styles.productLabel} numberOfLines={1}>
+                              {`${ing.productQty ?? ing.qty ?? 1}x ${ing.searchTerm}`}
+                            </Text>
+                          ) : null}
                         </View>
                       ))}
                     </>
