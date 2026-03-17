@@ -373,6 +373,34 @@ export default function MealDetailSheet({
                 multiline
               />
 
+              <Text style={styles.fieldLabel}>Tags</Text>
+              <TextInput
+                style={styles.tagSearchInput}
+                placeholder="Search tags…"
+                placeholderTextColor={Colors.text3}
+                value={tagSearch}
+                onChangeText={setTagSearch}
+              />
+              <ScrollView style={styles.tagScroll} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+                <View style={styles.tagsRow}>
+                  {(tagSearch.trim()
+                    ? ALL_TAGS.filter((t) => t.toLowerCase().includes(tagSearch.toLowerCase()))
+                    : [...selectedTags, ...ALL_TAGS.filter((t) => !selectedTags.includes(t))]
+                  ).map((tag) => (
+                    <Tag
+                      key={tag}
+                      label={tag}
+                      selected={selectedTags.includes(tag)}
+                      onPress={() =>
+                        setSelectedTags((prev) =>
+                          prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+                        )
+                      }
+                    />
+                  ))}
+                </View>
+              </ScrollView>
+
               {(() => {
                 const namedIngredients = ingredients
                   .map((ing, origIdx) => ({ ing, origIdx }))
@@ -430,33 +458,6 @@ export default function MealDetailSheet({
                 );
               })()}
 
-              <Text style={styles.fieldLabel}>Tags</Text>
-              <TextInput
-                style={styles.tagSearchInput}
-                placeholder="Search tags…"
-                placeholderTextColor={Colors.text3}
-                value={tagSearch}
-                onChangeText={setTagSearch}
-              />
-              <ScrollView style={styles.tagScroll} nestedScrollEnabled showsVerticalScrollIndicator={false}>
-                <View style={styles.tagsRow}>
-                  {(tagSearch.trim()
-                    ? ALL_TAGS.filter((t) => t.toLowerCase().includes(tagSearch.toLowerCase()))
-                    : [...selectedTags, ...ALL_TAGS.filter((t) => !selectedTags.includes(t))]
-                  ).map((tag) => (
-                    <Tag
-                      key={tag}
-                      label={tag}
-                      selected={selectedTags.includes(tag)}
-                      onPress={() =>
-                        setSelectedTags((prev) =>
-                          prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-                        )
-                      }
-                    />
-                  ))}
-                </View>
-              </ScrollView>
               {storePickerVisible && (
                 <View style={styles.pickerOverlay}>
                   <TouchableOpacity style={styles.pickerBackdrop} onPress={() => setStorePickerVisible(false)} />
