@@ -459,6 +459,18 @@ export default function MealDetailSheet({
                               <Text style={styles.qtyBtnText}>+</Text>
                             </TouchableOpacity>
                           </View>
+                          <TouchableOpacity
+                            onPress={() =>
+                              setIngredients((prev) =>
+                                prev.map((item, idx) =>
+                                  idx === origIdx ? { ...item, searchTerm: null, productQty: 1 } : item
+                                )
+                              )
+                            }
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Feather name="x" size={16} color={Colors.text3} />
+                          </TouchableOpacity>
                         </View>
                       </View>
                     ))}
