@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Feather } from '@expo/vector-icons';
 import {
   View,
@@ -78,6 +78,13 @@ export default function MealDetailSheet({
   const [productsExpanded, setProductsExpanded] = useState(false);
   const [editProductsExpanded, setEditProductsExpanded] = useState(false);
 
+  useEffect(() => {
+    if (!visible) {
+      setProductsExpanded(false);
+      setEditProductsExpanded(false);
+    }
+  }, [visible]);
+
   // Edit form fields
   const [name, setName] = useState('');
   const [editStoreId, setEditStoreId] = useState('');
@@ -116,6 +123,7 @@ export default function MealDetailSheet({
     setPhotoUrl(meal.photoUrl ?? '');
     setPendingPhotoBase64(null);
     setPhotoIsUrl(false);
+    setEditProductsExpanded(false);
     setEditing(true);
   }
 
