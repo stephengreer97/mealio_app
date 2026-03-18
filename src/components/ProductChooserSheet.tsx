@@ -20,9 +20,10 @@ type Step = 'searching' | 'picking' | 'saving' | 'done';
 type Suggestion = { upc: string; description: string; size?: string | null; soldBy?: string | null; averageWeightPerUnit?: string | null; price: number | null; stockLevel?: string; imageUrl?: string | null };
 
 function formatWeightName(description: string, averageWeightPerUnit: string | null | undefined, size: string | null | undefined): string {
-  if (!averageWeightPerUnit) return description;
+  const fallback = size ? `${description}, ${size}` : description;
+  if (!averageWeightPerUnit) return fallback;
   const numMatch = averageWeightPerUnit.match(/^([\d.]+)/);
-  if (!numMatch) return description;
+  if (!numMatch) return fallback;
   const unitMatch = size?.match(/[a-zA-Z]+/);
   const unit = unitMatch?.[0] ?? 'lb';
   const unitLabel = unit === 'lb' ? 'lbs' : unit;
