@@ -476,8 +476,11 @@ export default function KrogerCartReviewSheet({
                     </TouchableOpacity>
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <Text style={[styles.ingName, excluded && styles.ingNameZeroed]}>
-                        {it.ingredientName}
+                        {it.searchTerm ?? it.ingredientName}
                       </Text>
+                      {it.searchTerm && (
+                        <Text style={styles.mealNames}>{it.ingredientName}</Text>
+                      )}
                       <Text style={styles.mealNames}>
                         {it.mealNames.join(', ')}
                       </Text>
