@@ -603,8 +603,8 @@ export default function MealDetailSheet({
                         />
                       </TouchableOpacity>
                       {productsExpanded && namedIngredients.map((ing, i) => (
-                        <View key={i} style={styles.productRow}>
-                          <Text style={styles.productLabel} numberOfLines={1}>
+                        <View key={i} style={[styles.productRow, { flexDirection: 'column', alignItems: 'stretch', gap: 2 }]}>
+                          <Text style={styles.productRowLabel} numberOfLines={1}>
                             {ing.ingredientName ?? ing.productName ?? ''}
                           </Text>
                           {ing.searchTerm ? (
@@ -786,8 +786,14 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border,
     gap: 8,
   },
+  productRowLabel: {
+    fontSize: 11,
+    fontFamily: 'Inter_600SemiBold',
+    color: Colors.text3,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
   productLabel: {
-    flex: 1,
     fontSize: 14,
     fontFamily: 'Inter_400Regular',
     color: Colors.text1,
