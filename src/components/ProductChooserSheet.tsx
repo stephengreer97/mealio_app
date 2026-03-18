@@ -17,7 +17,17 @@ import { Meal } from '../types';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
 
 type Step = 'searching' | 'picking' | 'saving' | 'done';
-type Suggestion = { upc: string; description: string; size?: string | null; soldBy?: string | null; price: number | null; stockLevel?: string; imageUrl?: string | null };
+type Suggestion = { upc: string; description: string; size?: string | null; soldBy?: string | null; averageWeightPerUnit?: string | null; price: number | null; stockLevel?: string; imageUrl?: string | null };
+
+function formatWeightName(description: string, averageWeightPerUnit: string | null | undefined, size: string | null | undefined): string {
+  if (!averageWeightPerUnit) return description;
+  const numMatch = averageWeightPerUnit.match(/^([\d.]+)/);
+  if (!numMatch) return description;
+  const unitMatch = size?.match(/[a-zA-Z]+/);
+  const unit = unitMatch?.[0] ?? 'lb';
+  const unitLabel = unit === 'lb' ? 'lbs' : unit;
+  return `${description}, avg ${numMatch[1]} ${unitLabel}`;
+}
 
 interface Props {
   visible: boolean;
@@ -50,7 +60,7 @@ export default function ProductChooserSheet({
   const selectedImageUrl: string | null = (selectedDescription && current)
     ? current.suggestions.find((s) => {
         const isWeight = s.soldBy === 'WEIGHT';
-        const name = isWeight ? s.description : (s.size ? `${s.description}, ${s.size}` : s.description);
+        const name = isWeight ? formatWeightName(s.description, s.averageWeightPerUnit, s.size) : (s.size ? `${s.description}, ${s.size}` : s.description);
         return name === selectedDescription;
       })?.imageUrl ?? null
     : null;
@@ -231,7 +241,7 @@ export default function ProductChooserSheet({
               </Text>
               {current.suggestions.map((s, i) => {
                 const isWeight = s.soldBy === 'WEIGHT';
-                const displayName = isWeight ? s.description : (s.size ? `${s.description}, ${s.size}` : s.description);
+                const displayName = isWeight ? formatWeightName(s.description, s.averageWeightPerUnit, s.size) : (s.size ? `${s.description}, ${s.size}` : s.description);
                 const priceLabel = s.price != null
                   ? (isWeight && s.size
                       ? `$${s.price.toFixed(2)} / ${s.size.replace(/(\d)([a-zA-Z])/, '$1 $2').toLowerCase()}`
