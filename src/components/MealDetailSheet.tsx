@@ -364,7 +364,7 @@ export default function MealDetailSheet({
                 style={styles.textArea}
                 value={story}
                 onChangeText={setStory}
-                placeholder={"e.g. Perfect for a summer BBQ… · Great budget-friendly weeknight dinner · High protein, low carb – great for meal prep"}
+                placeholder={"The story behind the meal or a simple one liner. e.g.\nPerfect for a summer BBQ\nGreat budget-friendly weeknight dinner\nHigh protein, low carb – great for meal prep"}
                 placeholderTextColor={Colors.text3}
                 multiline
               />

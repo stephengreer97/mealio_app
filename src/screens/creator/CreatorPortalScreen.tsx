@@ -374,7 +374,7 @@ export default function CreatorPortalScreen() {
                 style={styles.textArea}
                 value={mealStory}
                 onChangeText={setMealStory}
-                placeholder="e.g. Perfect for a summer BBQ, or the story behind this meal…"
+                placeholder={"The story behind the meal or a simple one liner. e.g.\nPerfect for a summer BBQ\nGreat budget-friendly weeknight dinner\nHigh protein, low carb – great for meal prep"}
                 placeholderTextColor={Colors.text3}
                 multiline
                 numberOfLines={3}
