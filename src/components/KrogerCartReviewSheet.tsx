@@ -38,10 +38,13 @@ interface ConsolidatedIngredient {
 
 interface SearchResult {
   term: string;
+  searchTerm: string | null;
   quantity: number;
   upc: string | null;
   description: string | null;
   exact: boolean;
+  unit: string;
+  measure: string | null;
   suggestions: Array<{
     upc: string;
     description: string;
@@ -65,7 +68,7 @@ interface KrogerCartReviewSheetProps {
   onMealUpdated?: (updated: Meal) => void;
 }
 
-type Step = 'qty' | 'searching' | 'review' | 'adding' | 'done';
+type Step = 'qty' | 'searching' | 'searchResult' | 'review' | 'adding' | 'done';
 
 // ── Store URLs ────────────────────────────────────────────────────────────────
 
@@ -285,6 +288,9 @@ export default function KrogerCartReviewSheet({
           mealIds: src?.mealIds ?? [],
           mealNames: src?.mealNames ?? [],
           mealIngredients: src?.mealIngredients ?? [],
+          searchTerm: src?.searchTerm ?? null,
+          unit: src?.unit ?? 'qty',
+          measure: src?.measure ?? null,
         };
       });
       setSearchResults(results);
@@ -297,7 +303,7 @@ export default function KrogerCartReviewSheet({
       } else {
         setReviewIdx(0);
         setPickedItems([]);
-        setStep('review');
+        setStep('searchResult');
       }
     } catch (err: any) {
       setError(err.message || 'Search failed');
@@ -426,6 +432,7 @@ export default function KrogerCartReviewSheet({
   const titleMap: Record<Step, string> = {
     qty: 'Review Ingredients',
     searching: 'Finding Products…',
+    searchResult: 'Items Not Added',
     review: `Review Unmatched Ingredients (${reviewIdx + 1} of ${reviewQueue.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
@@ -530,6 +537,57 @@ export default function KrogerCartReviewSheet({
           </View>
         )}
 
+        {/* ── Step: searchResult ────────────────────────────────────────── */}
+        {step === 'searchResult' && (() => {
+          const needsReview = searchResults.filter((r) => !r.exact);
+          const autoAdded = searchResults.filter((r) => r.exact && r.upc);
+          return (
+            <>
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.listContent, { alignItems: 'center' }]}>
+                <Text style={{ fontSize: 44, marginBottom: 16 }}>⚠️</Text>
+                <Text style={[styles.doneTitle, { marginBottom: 8 }]}>
+                  {needsReview.length} item{needsReview.length !== 1 ? 's' : ''} could not be added to cart
+                </Text>
+                <Text style={[styles.doneSub, { marginBottom: 20 }]}>
+                  This may be because the item is out of stock or the store no longer carries it.
+                </Text>
+                {autoAdded.length > 0 && (
+                  <Text style={[styles.doneSub, { marginBottom: 20 }]}>
+                    {autoAdded.length} item{autoAdded.length !== 1 ? 's' : ''} matched and will be added automatically.
+                  </Text>
+                )}
+                <View style={{ width: '100%', borderRadius: 12, borderWidth: 1, borderColor: Colors.border, overflow: 'hidden' }}>
+                  {needsReview.map((r, i) => (
+                    <View
+                      key={i}
+                      style={{
+                        paddingHorizontal: 16,
+                        paddingVertical: 12,
+                        borderBottomWidth: i < needsReview.length - 1 ? 1 : 0,
+                        borderBottomColor: Colors.border,
+                      }}
+                    >
+                      <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text1 }}>
+                        {r.searchTerm ?? r.term}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </ScrollView>
+              <View style={styles.footer}>
+                <TouchableOpacity
+                  onPress={() => setStep('review')}
+                  style={[styles.primaryBtn, { backgroundColor: storeColor }]}
+                >
+                  <Text style={styles.primaryBtnText}>
+                    Review {needsReview.length} Item{needsReview.length !== 1 ? 's' : ''} →
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          );
+        })()}
+
         {/* ── Step: review ──────────────────────────────────────────────── */}
         {step === 'review' && currentReview && (() => {
           const displaySuggestions = customSuggestions.length > 0 ? customSuggestions : currentReview.suggestions;
@@ -546,10 +604,21 @@ export default function KrogerCartReviewSheet({
                 {/* What was searched */}
                 <View style={styles.searchedBox}>
                   <Text style={styles.searchedLabel}>You searched for</Text>
-                  <Text style={styles.searchedTerm}>{currentReview.term}</Text>
+                  <Text style={styles.searchedTerm}>{currentReview.searchTerm ?? currentReview.term}</Text>
                   {currentReview.mealNames.length > 0 && (
                     <Text style={styles.searchedMeals}>from: {currentReview.mealNames.join(', ')}</Text>
                   )}
+                  {(() => {
+                    const unit = currentReview.unit ?? 'qty';
+                    const measure = currentReview.measure;
+                    const ingredient = currentReview.term;
+                    const mealName = currentReview.mealNames[0] ?? 'Meal';
+                    const qty = currentReview.quantity;
+                    const hint = unit === 'qty'
+                      ? `${mealName} calls for ${qty} ${ingredient}`
+                      : `${mealName} calls for ${measure ?? qty} ${unit} of ${ingredient}`;
+                    return <Text style={styles.measurementHint}>{hint}</Text>;
+                  })()}
                   {customSearchTerm ? (
                     <Text style={[styles.searchedMeals, { color: storeColor, marginTop: 4 }]}>
                       Showing results for: "{customSearchTerm}"
@@ -908,6 +977,13 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     color: Colors.text3,
     marginTop: 2,
+  },
+  measurementHint: {
+    fontSize: 11,
+    fontFamily: 'Inter_400Regular',
+    color: '#b91c1c',
+    marginTop: 6,
+    opacity: 0.85,
   },
   suggHeader: {
     fontSize: 11,
