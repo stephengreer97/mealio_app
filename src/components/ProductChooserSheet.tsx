@@ -303,7 +303,7 @@ export default function ProductChooserSheet({
                     >
                       <Text style={[styles.qtyBtnText, productQty <= 0 && { opacity: 0.3 }]}>−</Text>
                     </TouchableOpacity>
-                    <Text style={styles.qtyNum}>{productQty}</Text>
+                    <Text style={[styles.qtyNum, productQty === 0 && { color: '#ef4444' }]}>{productQty}</Text>
                     <TouchableOpacity style={styles.qtyBtn} onPress={() => setProductQty((q) => q + 1)}>
                       <Text style={styles.qtyBtnText}>+</Text>
                     </TouchableOpacity>
@@ -323,8 +323,9 @@ export default function ProductChooserSheet({
                 <Text style={styles.navBtnSecondaryText}>← Back</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.navBtn, { backgroundColor: storeColor }]}
+                style={[styles.navBtn, { backgroundColor: storeColor }, productQty === 0 && { opacity: 0.4 }]}
                 onPress={handleNextBtn}
+                disabled={productQty === 0}
               >
                 <Text style={styles.navBtnText}>{isLast ? 'Save' : 'Next →'}</Text>
               </TouchableOpacity>
