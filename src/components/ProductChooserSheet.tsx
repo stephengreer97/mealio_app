@@ -20,7 +20,7 @@ type Step = 'searching' | 'picking' | 'saving' | 'done';
 type Suggestion = { upc: string; description: string; size?: string | null; soldBy?: string | null; averageWeightPerUnit?: string | null; price: number | null; stockLevel?: string; imageUrl?: string | null };
 
 function formatWeightName(description: string, averageWeightPerUnit: string | null | undefined, size: string | null | undefined): string {
-  const fallback = size ? `${description}, ${size}` : description;
+  const fallback = size && !description.includes(size) ? `${description}, ${size}` : description;
   if (!averageWeightPerUnit) return fallback;
   const numMatch = averageWeightPerUnit.match(/^([\d.]+)/);
   if (!numMatch) return fallback;
@@ -61,7 +61,7 @@ export default function ProductChooserSheet({
   const selectedImageUrl: string | null = (selectedDescription && current)
     ? current.suggestions.find((s) => {
         const isWeight = s.soldBy === 'WEIGHT';
-        const name = isWeight ? formatWeightName(s.description, s.averageWeightPerUnit, s.size) : (s.size ? `${s.description}, ${s.size}` : s.description);
+        const name = isWeight ? formatWeightName(s.description, s.averageWeightPerUnit, s.size) : (s.size && !s.description.includes(s.size) ? `${s.description}, ${s.size}` : s.description);
         return name === selectedDescription;
       })?.imageUrl ?? null
     : null;
@@ -242,7 +242,7 @@ export default function ProductChooserSheet({
               </Text>
               {current.suggestions.map((s, i) => {
                 const isWeight = s.soldBy === 'WEIGHT';
-                const displayName = isWeight ? formatWeightName(s.description, s.averageWeightPerUnit, s.size) : (s.size ? `${s.description}, ${s.size}` : s.description);
+                const displayName = isWeight ? formatWeightName(s.description, s.averageWeightPerUnit, s.size) : (s.size && !s.description.includes(s.size) ? `${s.description}, ${s.size}` : s.description);
                 const priceLabel = s.price != null
                   ? (isWeight && s.size
                       ? `$${s.price.toFixed(2)} / ${s.size.replace(/(\d)([a-zA-Z])/, '$1 $2').toLowerCase()}`
