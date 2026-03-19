@@ -315,20 +315,22 @@ export default function ProductChooserSheet({
                   </Text>
                 )}
               </View>
-              <TouchableOpacity
-                style={[styles.navBtn, styles.navBtnSecondary, pickIdx === 0 && { opacity: 0.3 }]}
-                onPress={handleBack}
-                disabled={pickIdx === 0}
-              >
-                <Text style={styles.navBtnSecondaryText}>← Back</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.navBtn, { backgroundColor: storeColor }, productQty === 0 && { opacity: 0.4 }]}
-                onPress={handleNextBtn}
-                disabled={productQty === 0}
-              >
-                <Text style={styles.navBtnText}>{isLast ? 'Save' : 'Next →'}</Text>
-              </TouchableOpacity>
+              <View style={styles.footerButtons}>
+                <TouchableOpacity
+                  style={[styles.navBtn, styles.navBtnSecondary, pickIdx === 0 && { opacity: 0.3 }]}
+                  onPress={handleBack}
+                  disabled={pickIdx === 0}
+                >
+                  <Text style={styles.navBtnSecondaryText}>← Back</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.navBtn, { backgroundColor: storeColor }, productQty === 0 && { opacity: 0.4 }]}
+                  onPress={handleNextBtn}
+                  disabled={productQty === 0}
+                >
+                  <Text style={styles.navBtnText}>{isLast ? 'Save' : 'Next →'}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </>
           </View>
@@ -465,11 +467,15 @@ const styles = StyleSheet.create({
   qtyNum: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1, minWidth: 20, textAlign: 'center' },
   qtyWarning: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#92400e', backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fbbf24', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, marginTop: 6 },
   footer: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
+    gap: 12,
+  },
+  footerButtons: {
+    flexDirection: 'row',
     gap: 12,
   },
   navBtn: {
