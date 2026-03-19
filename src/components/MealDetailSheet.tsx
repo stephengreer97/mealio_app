@@ -123,7 +123,7 @@ export default function MealDetailSheet({
     setPhotoUrl(meal.photoUrl ?? '');
     setPendingPhotoBase64(null);
     setPhotoIsUrl(false);
-    setEditProductsExpanded(false);
+    setEditProductsExpanded(true);
     setEditing(true);
   }
 
