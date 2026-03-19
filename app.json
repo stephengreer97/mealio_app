@@ -15,7 +15,9 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "co.mealio.app",
-      "associatedDomains": ["applinks:mealio.co"],
+      "associatedDomains": [
+        "applinks:mealio.co"
+      ],
       "infoPlist": {
         "LSApplicationQueriesSchemes": [
           "kroger",
@@ -50,9 +52,16 @@
           "action": "VIEW",
           "autoVerify": true,
           "data": [
-            { "scheme": "https", "host": "mealio.co", "pathPrefix": "/meal" }
+            {
+              "scheme": "https",
+              "host": "mealio.co",
+              "pathPrefix": "/meal"
+            }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ]
     },
@@ -60,9 +69,16 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      ["expo-image-picker", { "photosPermission": "Allow Mealio to access your photos." }],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Mealio to access your photos."
+        }
+      ],
       "expo-secure-store",
-      "expo-font"
+      "expo-font",
+      "expo-web-browser",
+      "expo-apple-authentication"
     ]
   }
 }

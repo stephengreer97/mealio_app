@@ -75,6 +75,7 @@ export default function MealDetailSheet({
   const [loading, setLoading] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [krogerLoading, setKrogerLoading] = useState(false);
+  const [krogerResult, setKrogerResult] = useState<{ added: string[]; notFound: string[] } | null>(null);
   const [productsExpanded, setProductsExpanded] = useState(false);
   const [editProductsExpanded, setEditProductsExpanded] = useState(true);
 
@@ -221,11 +222,7 @@ export default function MealDetailSheet({
     setKrogerLoading(true);
     try {
       const result = await krogerApi.addToCart(meal.ingredients, krogerLocationId);
-      const msg = result.added.length > 0
-        ? `${result.added.length} item${result.added.length !== 1 ? 's' : ''} added to your Kroger cart.`
-        : 'No items could be found at your Kroger store.';
-      const extra = result.notFound.length > 0 ? `\n\nNot found: ${result.notFound.join(', ')}` : '';
-      Alert.alert('Kroger Cart', msg + extra);
+      setKrogerResult({ added: result.added ?? [], notFound: result.notFound ?? [] });
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to add to Kroger cart');
     } finally {
@@ -251,6 +248,39 @@ export default function MealDetailSheet({
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.safe}>
+
+        {/* Kroger cart result screen */}
+        {krogerResult && (
+          <View style={resultStyles.overlay}>
+            <Text style={resultStyles.icon}>{krogerResult.notFound.length === 0 ? '✅' : '⚠️'}</Text>
+            <Text style={resultStyles.title}>
+              {krogerResult.notFound.length === 0
+                ? 'Added to cart!'
+                : `${krogerResult.added.length} of ${krogerResult.added.length + krogerResult.notFound.length} items added`}
+            </Text>
+            <Text style={resultStyles.body}>
+              {krogerResult.notFound.length === 0
+                ? `${krogerResult.added.length} item${krogerResult.added.length !== 1 ? 's' : ''} ${krogerResult.added.length === 1 ? 'was' : 'were'} successfully added to your Kroger cart.`
+                : `${krogerResult.notFound.length} item${krogerResult.notFound.length !== 1 ? 's' : ''} could not be added to cart. This may be because the item is out of stock or the store no longer carries it.`}
+            </Text>
+            {krogerResult.notFound.length > 0 && (
+              <View style={resultStyles.notFoundBox}>
+                {krogerResult.notFound.map((name, i) => (
+                  <Text
+                    key={i}
+                    style={[resultStyles.notFoundItem, i < krogerResult.notFound.length - 1 && resultStyles.notFoundItemBorder]}
+                  >
+                    {name}
+                  </Text>
+                ))}
+              </View>
+            )}
+            <TouchableOpacity style={resultStyles.okBtn} onPress={() => setKrogerResult(null)} activeOpacity={0.8}>
+              <Text style={resultStyles.okBtnText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <View style={styles.header}>
           <TouchableOpacity onPress={() => { setEditing(false); onClose(); }}>
             <Text style={styles.close}>✕</Text>
@@ -828,5 +858,67 @@ const styles = StyleSheet.create({
     color: Colors.text1,
     minWidth: 20,
     textAlign: 'center',
+  },
+});
+
+const resultStyles = StyleSheet.create({
+  overlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    zIndex: 10,
+    backgroundColor: Colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+  },
+  icon: {
+    fontSize: 48,
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 20,
+    fontFamily: 'Inter_700Bold',
+    color: Colors.text1,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  body: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text2,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  notFoundBox: {
+    width: '100%',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    marginBottom: 24,
+    paddingHorizontal: 12,
+  },
+  notFoundItem: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text2,
+    paddingVertical: 10,
+  },
+  notFoundItemBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  okBtn: {
+    width: '100%',
+    backgroundColor: Colors.brand,
+    borderRadius: Radius.button,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  okBtnText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: '#fff',
   },
 });

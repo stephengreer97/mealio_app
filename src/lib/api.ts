@@ -214,6 +214,18 @@ export const auth = {
       method: 'POST',
       body: JSON.stringify({ twoFactorToken }),
     }),
+
+  oauthGoogle: (idToken: string) =>
+    request<any>('/api/auth/oauth/google', {
+      method: 'POST',
+      body: JSON.stringify({ idToken }),
+    }),
+
+  oauthApple: (identityToken: string, user?: { name?: { firstName?: string; lastName?: string }; email?: string }) =>
+    request<any>('/api/auth/oauth/apple', {
+      method: 'POST',
+      body: JSON.stringify({ identityToken, user }),
+    }),
 };
 
 // Account
