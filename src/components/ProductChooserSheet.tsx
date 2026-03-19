@@ -48,7 +48,7 @@ export default function ProductChooserSheet({
   const [results, setResults] = useState<Array<{ ingredientName: string; suggestions: Suggestion[] }>>([]);
   const [pickIdx, setPickIdx] = useState(0);
   const [selections, setSelections] = useState<Map<string, { description: string; qty: number }>>(new Map());
-  const [productQty, setProductQty] = useState(1);
+  const [productQty, setProductQty] = useState(0);
   const [selectedDescription, setSelectedDescription] = useState<string | null>(null);
   const [customText, setCustomText] = useState('');
   const [customSearching, setCustomSearching] = useState(false);
@@ -73,7 +73,7 @@ export default function ProductChooserSheet({
       setResults([]);
       setPickIdx(0);
       setSelections(new Map());
-      setProductQty(meal.ingredients[0]?.productQty ?? meal.ingredients[0]?.qty ?? 1);
+      setProductQty(0);
       setSelectedDescription(null);
       setCustomText('');
       setSavedCount(0);
@@ -157,7 +157,7 @@ export default function ProductChooserSheet({
       const nextIdx = pickIdx + 1;
       const nextSel = results[nextIdx] ? newSelections.get(results[nextIdx].ingredientName) : undefined;
       setSelectedDescription(nextSel?.description ?? null);
-      setProductQty(nextSel?.qty ?? unchosenIngredients[nextIdx]?.productQty ?? unchosenIngredients[nextIdx]?.qty ?? 1);
+      setProductQty(nextSel?.qty ?? 0);
       setPickIdx(nextIdx);
     } else {
       doSave(newSelections);
@@ -291,30 +291,30 @@ export default function ProductChooserSheet({
                 </TouchableOpacity>
               </View>
             </ScrollView>
-            <View style={styles.qtySection}>
-              <View style={styles.qtyRow}>
-                <Text style={styles.qtyLabel}>Qty to add to cart</Text>
-                <View style={styles.qtyControls}>
-                  <TouchableOpacity
-                    style={styles.qtyBtn}
-                    onPress={() => setProductQty((q) => Math.max(1, q - 1))}
-                    disabled={productQty <= 1}
-                  >
-                    <Text style={[styles.qtyBtnText, productQty <= 1 && { opacity: 0.3 }]}>−</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.qtyNum}>{productQty}</Text>
-                  <TouchableOpacity style={styles.qtyBtn} onPress={() => setProductQty((q) => q + 1)}>
-                    <Text style={styles.qtyBtnText}>+</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-              {productQty > 2 && (
-                <Text style={styles.qtyWarning}>
-                  ⚠ {productQty} is a lot for one item — does this come in a multipack or bulk size?
-                </Text>
-              )}
-            </View>
             <View style={styles.footer}>
+              <View style={styles.qtySection}>
+                <View style={styles.qtyRow}>
+                  <Text style={styles.qtyLabel}>Qty to add to cart</Text>
+                  <View style={styles.qtyControls}>
+                    <TouchableOpacity
+                      style={styles.qtyBtn}
+                      onPress={() => setProductQty((q) => Math.max(0, q - 1))}
+                      disabled={productQty <= 0}
+                    >
+                      <Text style={[styles.qtyBtnText, productQty <= 0 && { opacity: 0.3 }]}>−</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.qtyNum}>{productQty}</Text>
+                    <TouchableOpacity style={styles.qtyBtn} onPress={() => setProductQty((q) => q + 1)}>
+                      <Text style={styles.qtyBtnText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                {productQty > 2 && (
+                  <Text style={styles.qtyWarning}>
+                    ⚠ {productQty} is a lot for one item — does this come in a multipack or bulk size?
+                  </Text>
+                )}
+              </View>
               <TouchableOpacity
                 style={[styles.navBtn, styles.navBtnSecondary, pickIdx === 0 && { opacity: 0.3 }]}
                 onPress={handleBack}
