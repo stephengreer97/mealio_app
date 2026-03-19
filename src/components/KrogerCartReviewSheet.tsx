@@ -12,10 +12,29 @@ import {
   Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Image } from 'expo-image';
 import { Colors, Radius } from '../constants/colors';
 import { Meal, Ingredient } from '../types';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
 import { STORES } from '../constants/stores';
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatWeightName(description: string, averageWeightPerUnit: string | null | undefined, size: string | null | undefined): string {
+  const fallback = size && !description.includes(size) ? `${description}, ${size}` : description;
+  if (!averageWeightPerUnit) return fallback;
+  const numMatch = averageWeightPerUnit.match(/^([\d.]+)/);
+  if (!numMatch) return fallback;
+  const unitMatch = size?.match(/[a-zA-Z]+/);
+  const unit = unitMatch?.[0] ?? 'lb';
+  const unitLabel = unit === 'lb' ? 'lbs' : unit;
+  return `${description}, avg ${numMatch[1]} ${unitLabel}`;
+}
+
+function formatSuggestionLabel(s: { description: string; size?: string | null; soldBy?: string | null; averageWeightPerUnit?: string | null }): string {
+  if (s.soldBy === 'WEIGHT') return formatWeightName(s.description, s.averageWeightPerUnit, s.size);
+  return s.size && !s.description.includes(s.size) ? `${s.description}, ${s.size}` : s.description;
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -48,10 +67,12 @@ interface SearchResult {
   suggestions: Array<{
     upc: string;
     description: string;
-    size: string;
+    size?: string | null;
+    soldBy?: string | null;
+    averageWeightPerUnit?: string | null;
     price: number | null;
-    stockLevel?: string;
-    imageUrl?: string;
+    stockLevel?: string | null;
+    imageUrl?: string | null;
   }>;
   mealIds: string[];
   mealNames: string[];
@@ -600,8 +621,17 @@ export default function KrogerCartReviewSheet({
           const mealQtys = getReviewMealQtys(reviewIdx);
           const totalQty = reviewQty;
 
+          const selectedImageUrl = typeof selectedSuggIdx === 'number'
+            ? (displaySuggestions[selectedSuggIdx]?.imageUrl ?? null)
+            : null;
+
           return (
             <>
+              {selectedImageUrl ? (
+                <View style={styles.floatingImageWrap} pointerEvents="none">
+                  <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
+                </View>
+              ) : null}
               <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.listContent}>
                 {/* What was searched */}
                 <View style={styles.searchedBox}>
@@ -636,6 +666,13 @@ export default function KrogerCartReviewSheet({
                 {/* Suggestion list */}
                 {displaySuggestions.map((s, i) => {
                   const selected = selectedSuggIdx === i;
+                  const label = formatSuggestionLabel(s);
+                  const isWeight = s.soldBy === 'WEIGHT';
+                  const priceLabel = s.price != null
+                    ? (isWeight && s.size
+                        ? `$${s.price.toFixed(2)} / ${s.size.replace(/(\d)([a-zA-Z])/, '$1 $2').toLowerCase()}`
+                        : `$${s.price.toFixed(2)}`)
+                    : null;
                   return (
                     <TouchableOpacity
                       key={i}
@@ -650,14 +687,11 @@ export default function KrogerCartReviewSheet({
                       activeOpacity={0.7}
                     >
                       <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                        <Text style={[styles.suggText, { flex: 1 }]}>{s.description}</Text>
-                        {s.price != null && (
-                          <Text style={styles.suggPrice}>${s.price.toFixed(2)}</Text>
+                        <Text style={[styles.suggText, { flex: 1 }]}>{label}</Text>
+                        {priceLabel != null && (
+                          <Text style={styles.suggPrice}>{priceLabel}</Text>
                         )}
                       </View>
-                      {s.stockLevel === 'TEMPORARILY_OUT_OF_STOCK' && (
-                        <Text style={styles.outOfStock}>⚠ Temporarily out of stock</Text>
-                      )}
                     </TouchableOpacity>
                   );
                 })}
@@ -1092,6 +1126,27 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     color: Colors.text3,
   },
+
+  // Floating image (review step)
+  floatingImageWrap: {
+    position: 'absolute',
+    top: 70,
+    right: 16,
+    width: 80,
+    height: 80,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 6,
+    zIndex: 10,
+    overflow: 'hidden',
+  },
+  floatingImage: { width: '100%', height: '100%' },
 
   // Centered (spinners / done)
   centered: {
