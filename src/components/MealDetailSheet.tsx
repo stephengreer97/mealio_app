@@ -265,14 +265,27 @@ export default function MealDetailSheet({
             </Text>
             {krogerResult.notFound.length > 0 && (
               <View style={resultStyles.notFoundBox}>
-                {krogerResult.notFound.map((name, i) => (
-                  <Text
-                    key={i}
-                    style={[resultStyles.notFoundItem, i < krogerResult.notFound.length - 1 && resultStyles.notFoundItemBorder]}
-                  >
-                    {name}
-                  </Text>
-                ))}
+                {krogerResult.notFound.map((name, i) => {
+                  const ing = meal?.ingredients.find(p => p.ingredientName === name);
+                  let hint = '';
+                  if (ing && meal) {
+                    if (!ing.unit || ing.unit === 'qty') {
+                      hint = `${meal.name} calls for ${ing.qty ?? 1} ${ing.ingredientName}`;
+                    } else {
+                      const parts = [ing.measure, ing.unit].filter(Boolean).join(' ');
+                      hint = `${meal.name} calls for ${parts} of ${ing.ingredientName}`;
+                    }
+                  }
+                  return (
+                    <View
+                      key={i}
+                      style={[resultStyles.notFoundItem, i < krogerResult.notFound.length - 1 && resultStyles.notFoundItemBorder]}
+                    >
+                      <Text style={resultStyles.notFoundName}>{name}</Text>
+                      {!!hint && <Text style={resultStyles.notFoundHint}>{hint}</Text>}
+                    </View>
+                  );
+                })}
               </View>
             )}
             <TouchableOpacity style={resultStyles.okBtn} onPress={() => setKrogerResult(null)} activeOpacity={0.8}>
@@ -605,7 +618,7 @@ export default function MealDetailSheet({
                 {displayIngredients.map((ing, i) => (
                   <View key={i} style={styles.ingredientRow}>
                     <View style={styles.bullet} />
-                    <Text style={[styles.ingredientText, ing.searchTerm ? { color: '#3b82f6' } : null]}>{fmtMeasurement(ing)}</Text>
+                    <Text style={styles.ingredientText}>{fmtMeasurement(ing)}</Text>
                   </View>
                 ))}
 
@@ -900,14 +913,22 @@ const resultStyles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   notFoundItem: {
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    color: Colors.text2,
     paddingVertical: 10,
   },
   notFoundItemBorder: {
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
+  },
+  notFoundName: {
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
+    color: Colors.text1,
+  },
+  notFoundHint: {
+    fontSize: 11,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text3,
+    marginTop: 2,
   },
   okBtn: {
     width: '100%',
