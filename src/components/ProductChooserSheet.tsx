@@ -462,7 +462,7 @@ const styles = StyleSheet.create({
   },
   qtyBtnText: { fontSize: 18, color: Colors.text2, lineHeight: 22 },
   qtyNum: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1, minWidth: 20, textAlign: 'center' },
-  qtyWarning: { fontSize: 11, fontFamily: 'Inter_500Medium', color: '#b45309' },
+  qtyWarning: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#92400e', backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fbbf24', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, marginTop: 6 },
   footer: {
     flexDirection: 'row',
     paddingHorizontal: 20,
