@@ -198,6 +198,7 @@ export default function KrogerCartReviewSheet({
   const [customSuggestions, setCustomSuggestions] = useState<SearchResult['suggestions']>([]);
   const [customSearchTerm, setCustomSearchTerm] = useState('');
   const shouldShowSuggestionsRef = useRef(false);
+  const [reviewQty, setReviewQty] = useState(1);
 
   // Step done
   const [totalAdded, setTotalAdded] = useState(0);
@@ -230,6 +231,7 @@ export default function KrogerCartReviewSheet({
     setCustomText('');
     setCustomSuggestions([]);
     setCustomSearchTerm('');
+    setReviewQty(searchResults.filter((r) => !r.exact)[reviewIdx]?.quantity ?? 1);
   }, [reviewIdx]);
 
   const reviewQueue = searchResults.filter((r) => !r.exact);
@@ -347,10 +349,10 @@ export default function KrogerCartReviewSheet({
       const resolved = await resolveCurrentSelection();
       if (shouldShowSuggestionsRef.current) return; // custom search showed new suggestions — stay on this item
       if (resolved?.upc) {
-        newPicked.push({ upc: resolved.upc, quantity: getReviewTotalQty(reviewIdx), description: resolved.name });
+        newPicked.push({ upc: resolved.upc, quantity: reviewQty, description: resolved.name });
       }
       if (action === 'update' && resolved?.name) {
-        const updatedQty = getReviewTotalQty(reviewIdx);
+        const updatedQty = reviewQty;
         for (const mealId of currentReview.mealIds) {
           const meal = meals.find((m) => m.id === mealId);
           if (!meal) continue;
@@ -596,7 +598,7 @@ export default function KrogerCartReviewSheet({
             ? selectedSuggIdx !== 'custom' || customText.trim().length > 0
             : selectedSuggIdx === 'custom' && customText.trim().length > 0;
           const mealQtys = getReviewMealQtys(reviewIdx);
-          const totalQty = getReviewTotalQty(reviewIdx);
+          const totalQty = reviewQty;
 
           return (
             <>
@@ -696,6 +698,25 @@ export default function KrogerCartReviewSheet({
               </ScrollView>
 
               <View style={[styles.footer, { gap: 8 }]}>
+                {/* Qty adjuster */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text2 }}>Quantity</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <TouchableOpacity
+                      onPress={() => setReviewQty(q => Math.max(1, q - 1))}
+                      style={styles.qtyBtn}
+                    >
+                      <Text style={styles.qtyBtnText}>−</Text>
+                    </TouchableOpacity>
+                    <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1, minWidth: 20, textAlign: 'center' }}>{reviewQty}</Text>
+                    <TouchableOpacity
+                      onPress={() => setReviewQty(q => q + 1)}
+                      style={styles.qtyBtn}
+                    >
+                      <Text style={styles.qtyBtnText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
                 <TouchableOpacity
                   onPress={() => handleReviewDecision('update')}
                   disabled={!canAdd || customSearching}
