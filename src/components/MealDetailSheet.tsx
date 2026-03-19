@@ -76,12 +76,12 @@ export default function MealDetailSheet({
   const [sharing, setSharing] = useState(false);
   const [krogerLoading, setKrogerLoading] = useState(false);
   const [productsExpanded, setProductsExpanded] = useState(false);
-  const [editProductsExpanded, setEditProductsExpanded] = useState(false);
+  const [editProductsExpanded, setEditProductsExpanded] = useState(true);
 
   useEffect(() => {
     if (!visible) {
       setProductsExpanded(false);
-      setEditProductsExpanded(false);
+      setEditProductsExpanded(true);
     }
   }, [visible]);
 
