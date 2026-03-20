@@ -508,12 +508,15 @@ export default function KrogerCartReviewSheet({
                       <Text style={[styles.ingName, excluded && styles.ingNameZeroed]}>
                         {it.searchTerm ?? it.ingredientName}
                       </Text>
-                      {it.searchTerm && (
-                        <Text style={styles.mealNames}>{it.ingredientName}</Text>
-                      )}
-                      <Text style={styles.mealNames}>
-                        {it.mealNames.join(', ')}
-                      </Text>
+                      {it.mealIngredients.map((mi, mIdx) => {
+                        const isQty = it.unit.toLowerCase() === 'qty';
+                        const measurement = isQty ? `${mi.qty} qty` : `${it.measure} ${it.unit}`;
+                        return (
+                          <Text key={mIdx} style={styles.mealNames}>
+                            {mi.mealName} • {measurement}
+                          </Text>
+                        );
+                      })}
                     </View>
                     <TouchableOpacity
                       onPress={() => updateQty(i, -1)}
