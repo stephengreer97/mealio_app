@@ -428,9 +428,15 @@ export default function KrogerCartReviewSheet({
     setStep('done');
   };
 
-  const updateQty = (i: number, delta: number) =>
+  const updateMealQty = (i: number, mIdx: number, delta: number) =>
     setItems((prev) =>
-      prev.map((it, idx) => (idx === i ? { ...it, productQty: Math.max(0, it.productQty + delta) } : it)),
+      prev.map((it, idx) => {
+        if (idx !== i) return it;
+        const newMealIngredients = it.mealIngredients.map((mi, midx) =>
+          midx === mIdx ? { ...mi, qty: Math.max(0, mi.qty + delta) } : mi,
+        );
+        return { ...it, mealIngredients: newMealIngredients, productQty: newMealIngredients.reduce((s, mi) => s + mi.qty, 0) };
+      }),
     );
 
   const toggleRemove = (i: number) =>
@@ -503,40 +509,41 @@ export default function KrogerCartReviewSheet({
                 return (
                   <View
                     key={i}
-                    style={[styles.qtyRow, excluded && styles.qtyRowZeroed]}
+                    style={[styles.qtyRow, excluded && styles.qtyRowZeroed, { flexDirection: 'column', alignItems: 'stretch', gap: 4 }]}
                   >
-                    <TouchableOpacity onPress={() => toggleChecked(i)} style={styles.checkbox}>
-                      {checked && <View style={[styles.checkboxInner, { backgroundColor: storeColor }]} />}
-                    </TouchableOpacity>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={[styles.ingName, excluded && styles.ingNameZeroed]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <TouchableOpacity onPress={() => toggleChecked(i)} style={styles.checkbox}>
+                        {checked && <View style={[styles.checkboxInner, { backgroundColor: storeColor }]} />}
+                      </TouchableOpacity>
+                      <Text style={[styles.ingName, excluded && styles.ingNameZeroed, { flex: 1, marginBottom: 0 }]}>
                         {it.searchTerm ?? it.ingredientName}
                       </Text>
-                      {it.mealIngredients.map((mi, mIdx) => {
-                        const isQty = it.unit.toLowerCase() === 'qty';
-                        const measurement = isQty ? `${mi.qty} qty` : `${it.measure} ${it.unit}`;
-                        return (
-                          <Text key={mIdx} style={styles.mealNames}>
-                            {mi.mealName} • {measurement}
-                          </Text>
-                        );
-                      })}
                     </View>
-                    <TouchableOpacity
-                      onPress={() => updateQty(i, -1)}
-                      disabled={it.productQty === 0 || excluded}
-                      style={[styles.qtyBtn, (it.productQty === 0 || excluded) && { opacity: 0.3 }]}
-                    >
-                      <Text style={styles.qtyBtnText}>−</Text>
-                    </TouchableOpacity>
-                    <Text style={styles.qtyNum}>{it.productQty}</Text>
-                    <TouchableOpacity
-                      onPress={() => updateQty(i, 1)}
-                      disabled={excluded}
-                      style={[styles.qtyBtn, excluded && { opacity: 0.3 }]}
-                    >
-                      <Text style={styles.qtyBtnText}>+</Text>
-                    </TouchableOpacity>
+                    {it.mealIngredients.map((mi, mIdx) => {
+                      const isQty = it.unit.toLowerCase() === 'qty';
+                      const measurement = isQty ? null : `${it.measure ?? ''} ${it.unit}`.trim();
+                      const label = measurement ? `${mi.mealName} • ${measurement}` : mi.mealName;
+                      return (
+                        <View key={mIdx} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 32 }}>
+                          <Text style={[styles.mealNames, { flex: 1 }]}>{label}</Text>
+                          <TouchableOpacity
+                            onPress={() => updateMealQty(i, mIdx, -1)}
+                            disabled={mi.qty === 0 || excluded}
+                            style={[styles.qtyBtn, (mi.qty === 0 || excluded) && { opacity: 0.3 }]}
+                          >
+                            <Text style={styles.qtyBtnText}>−</Text>
+                          </TouchableOpacity>
+                          <Text style={styles.qtyNum}>{mi.qty}</Text>
+                          <TouchableOpacity
+                            onPress={() => updateMealQty(i, mIdx, 1)}
+                            disabled={excluded}
+                            style={[styles.qtyBtn, excluded && { opacity: 0.3 }]}
+                          >
+                            <Text style={styles.qtyBtnText}>+</Text>
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
                   </View>
                 );
               })}
