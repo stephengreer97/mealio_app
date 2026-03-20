@@ -326,6 +326,7 @@ export default function KrogerCartReviewSheet({
         );
       } else {
         setReviewIdx(0);
+        setReviewQty(needsReview[0]?.quantity ?? 1);
         setPickedItems([]);
         setStep('searchResult');
       }
