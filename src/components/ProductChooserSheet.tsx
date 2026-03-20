@@ -294,7 +294,7 @@ export default function ProductChooserSheet({
             <View style={styles.footer}>
               <View style={styles.qtySection}>
                 <View style={styles.qtyRow}>
-                  <Text style={styles.qtyLabel}>Qty to add to cart</Text>
+                  <Text style={[styles.qtyLabel, productQty === 0 && { color: '#ef4444' }]}>Qty to add to cart</Text>
                   <View style={styles.qtyControls}>
                     <TouchableOpacity
                       style={styles.qtyBtn}
