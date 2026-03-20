@@ -62,6 +62,7 @@ interface SearchResult {
   upc: string | null;
   description: string | null;
   exact: boolean;
+  reason?: 'matched' | 'out_of_stock' | 'no_results' | 'low_confidence';
   unit: string;
   measure: string | null;
   suggestions: Array<{
@@ -638,6 +639,12 @@ export default function KrogerCartReviewSheet({
               <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.listContent}>
                 {/* What was searched */}
                 <View style={styles.searchedBox}>
+                  {currentReview.reason === 'out_of_stock' && (
+                    <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginBottom: 6 }}>⚠ This item is currently out of stock</Text>
+                  )}
+                  {currentReview.reason === 'no_results' && (
+                    <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3, marginBottom: 6 }}>No products found for this search</Text>
+                  )}
                   <Text style={styles.searchedLabel}>You searched for</Text>
                   <Text style={styles.searchedTerm}>{currentReview.searchTerm ?? currentReview.term}</Text>
                   {currentReview.mealNames.length > 0 && (
