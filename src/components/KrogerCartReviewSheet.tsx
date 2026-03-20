@@ -149,7 +149,7 @@ function consolidateIngredients(meals: Array<Pick<Meal, 'id' | 'name' | 'ingredi
   for (const meal of meals) {
     for (const ing of meal.ingredients as any[]) {
       const name = normIngName(ing);
-      const key = name.toLowerCase().trim();
+      const key = `${name.toLowerCase().trim()}::${(ing.searchTerm ?? '').toLowerCase().trim()}`;
       if (!key) continue;
       const qty = normProductQty(ing);
       if (map.has(key)) {
