@@ -266,7 +266,9 @@ export default function MyMealsScreen() {
     try {
       const data = await mealsApi.list();
       const seen = new Set<string>();
-      const active = data.filter((m) => !m.deletedAt && !seen.has(m.id) && seen.add(m.id));
+      const active = data
+        .filter((m) => !m.deletedAt && !seen.has(m.id) && seen.add(m.id))
+        .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
       setAllMeals(active);
       // Auto-select first store that has meals (if current selection has none)
       setSelectedStore((prev) => {
