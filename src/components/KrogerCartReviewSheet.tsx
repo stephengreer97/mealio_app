@@ -488,6 +488,11 @@ export default function KrogerCartReviewSheet({
         {step === 'qty' && (
           <>
             <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.listContent}>
+              <View style={{ backgroundColor: Colors.surface, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, padding: 10, marginBottom: 12 }}>
+                <Text style={{ fontSize: 12, color: Colors.text2, lineHeight: 17 }}>
+                  All items are checked by default. Uncheck any ingredients you already have at home.
+                </Text>
+              </View>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <TouchableOpacity onPress={toggleAll}>
                   <Text style={{ fontSize: 12, color: Colors.text3 }}>{allChecked ? 'Uncheck all' : 'Check all'}</Text>
