@@ -220,7 +220,6 @@ export default function KrogerCartReviewSheet({
   const [customSuggestions, setCustomSuggestions] = useState<SearchResult['suggestions']>([]);
   const [customSearchTerm, setCustomSearchTerm] = useState('');
   const shouldShowSuggestionsRef = useRef(false);
-  const [reviewQty, setReviewQty] = useState(1);
 
   // Step done
   const [totalAdded, setTotalAdded] = useState(0);
@@ -253,7 +252,6 @@ export default function KrogerCartReviewSheet({
     setCustomText('');
     setCustomSuggestions([]);
     setCustomSearchTerm('');
-    setReviewQty(searchResults.filter((r) => !r.exact)[reviewIdx]?.quantity ?? 1);
   }, [reviewIdx]);
 
   const reviewQueue = searchResults.filter((r) => !r.exact);
@@ -328,7 +326,6 @@ export default function KrogerCartReviewSheet({
         );
       } else {
         setReviewIdx(0);
-        setReviewQty(needsReview[0]?.quantity ?? 1);
         setPickedItems([]);
         setStep('searchResult');
       }
@@ -373,18 +370,20 @@ export default function KrogerCartReviewSheet({
     if (action !== 'skip') {
       const resolved = await resolveCurrentSelection();
       if (shouldShowSuggestionsRef.current) return; // custom search showed new suggestions — stay on this item
+      const mealQtys = getReviewMealQtys(reviewIdx);
+      const totalQty = getReviewTotalQty(reviewIdx);
       if (resolved?.upc) {
-        newPicked.push({ upc: resolved.upc, quantity: reviewQty, description: resolved.name });
+        newPicked.push({ upc: resolved.upc, quantity: totalQty, description: resolved.name });
       }
       if (action === 'update' && resolved?.name) {
-        const updatedQty = reviewQty;
         for (const mealId of currentReview.mealIds) {
           const meal = meals.find((m) => m.id === mealId);
           if (!meal) continue;
+          const mealQty = mealQtys[mealId] ?? currentReview.mealIngredients.find((mi) => mi.mealId === mealId)?.qty ?? 1;
           const updatedIngredients: Ingredient[] = meal.ingredients.map((ing) => {
             const iName = normIngName(ing);
             return iName.toLowerCase().trim() === currentReview.term.toLowerCase().trim()
-              ? { ...ing, searchTerm: resolved.name, productQty: updatedQty }
+              ? { ...ing, searchTerm: resolved.name, productQty: mealQty }
               : ing;
           });
           mealsApi
@@ -428,15 +427,9 @@ export default function KrogerCartReviewSheet({
     setStep('done');
   };
 
-  const updateMealQty = (i: number, mIdx: number, delta: number) =>
+  const updateQty = (i: number, delta: number) =>
     setItems((prev) =>
-      prev.map((it, idx) => {
-        if (idx !== i) return it;
-        const newMealIngredients = it.mealIngredients.map((mi, midx) =>
-          midx === mIdx ? { ...mi, qty: Math.max(0, mi.qty + delta) } : mi,
-        );
-        return { ...it, mealIngredients: newMealIngredients, productQty: newMealIngredients.reduce((s, mi) => s + mi.qty, 0) };
-      }),
+      prev.map((it, idx) => (idx === i ? { ...it, productQty: Math.max(0, it.productQty + delta) } : it)),
     );
 
   const toggleRemove = (i: number) =>
@@ -509,41 +502,40 @@ export default function KrogerCartReviewSheet({
                 return (
                   <View
                     key={i}
-                    style={[styles.qtyRow, excluded && styles.qtyRowZeroed, { flexDirection: 'column', alignItems: 'stretch', gap: 4 }]}
+                    style={[styles.qtyRow, excluded && styles.qtyRowZeroed]}
                   >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <TouchableOpacity onPress={() => toggleChecked(i)} style={styles.checkbox}>
-                        {checked && <View style={[styles.checkboxInner, { backgroundColor: storeColor }]} />}
-                      </TouchableOpacity>
-                      <Text style={[styles.ingName, excluded && styles.ingNameZeroed, { flex: 1, marginBottom: 0 }]}>
+                    <TouchableOpacity onPress={() => toggleChecked(i)} style={styles.checkbox}>
+                      {checked && <View style={[styles.checkboxInner, { backgroundColor: storeColor }]} />}
+                    </TouchableOpacity>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[styles.ingName, excluded && styles.ingNameZeroed]}>
                         {it.searchTerm ?? it.ingredientName}
                       </Text>
+                      {it.mealIngredients.map((mi, mIdx) => {
+                        const isQty = it.unit.toLowerCase() === 'qty';
+                        const measurement = isQty ? `${mi.qty} qty` : `${it.measure} ${it.unit}`;
+                        return (
+                          <Text key={mIdx} style={styles.mealNames}>
+                            {mi.mealName} • {measurement}
+                          </Text>
+                        );
+                      })}
                     </View>
-                    {it.mealIngredients.map((mi, mIdx) => {
-                      const isQty = it.unit.toLowerCase() === 'qty';
-                      const measurement = isQty ? null : `${it.measure ?? ''} ${it.unit}`.trim();
-                      const label = measurement ? `${mi.mealName} • ${measurement}` : mi.mealName;
-                      return (
-                        <View key={mIdx} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 32 }}>
-                          <Text style={[styles.mealNames, { flex: 1 }]}>{label}</Text>
-                          <TouchableOpacity
-                            onPress={() => updateMealQty(i, mIdx, -1)}
-                            disabled={mi.qty === 0 || excluded}
-                            style={[styles.qtyBtn, (mi.qty === 0 || excluded) && { opacity: 0.3 }]}
-                          >
-                            <Text style={styles.qtyBtnText}>−</Text>
-                          </TouchableOpacity>
-                          <Text style={styles.qtyNum}>{mi.qty}</Text>
-                          <TouchableOpacity
-                            onPress={() => updateMealQty(i, mIdx, 1)}
-                            disabled={excluded}
-                            style={[styles.qtyBtn, excluded && { opacity: 0.3 }]}
-                          >
-                            <Text style={styles.qtyBtnText}>+</Text>
-                          </TouchableOpacity>
-                        </View>
-                      );
-                    })}
+                    <TouchableOpacity
+                      onPress={() => updateQty(i, -1)}
+                      disabled={it.productQty === 0 || excluded}
+                      style={[styles.qtyBtn, (it.productQty === 0 || excluded) && { opacity: 0.3 }]}
+                    >
+                      <Text style={styles.qtyBtnText}>−</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.qtyNum}>{it.productQty}</Text>
+                    <TouchableOpacity
+                      onPress={() => updateQty(i, 1)}
+                      disabled={excluded}
+                      style={[styles.qtyBtn, excluded && { opacity: 0.3 }]}
+                    >
+                      <Text style={styles.qtyBtnText}>+</Text>
+                    </TouchableOpacity>
                   </View>
                 );
               })}
@@ -633,7 +625,7 @@ export default function KrogerCartReviewSheet({
             ? selectedSuggIdx !== 'custom' || customText.trim().length > 0
             : selectedSuggIdx === 'custom' && customText.trim().length > 0;
           const mealQtys = getReviewMealQtys(reviewIdx);
-          const totalQty = reviewQty;
+          const totalQty = getReviewTotalQty(reviewIdx);
 
           const selectedImageUrl = typeof selectedSuggIdx === 'number'
             ? (displaySuggestions[selectedSuggIdx]?.imageUrl ?? null)
@@ -748,25 +740,28 @@ export default function KrogerCartReviewSheet({
               </ScrollView>
 
               <View style={[styles.footer, { gap: 8 }]}>
-                {/* Qty adjuster */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text2 }}>Quantity</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                    <TouchableOpacity
-                      onPress={() => setReviewQty(q => Math.max(1, q - 1))}
-                      style={styles.qtyBtn}
-                    >
-                      <Text style={styles.qtyBtnText}>−</Text>
-                    </TouchableOpacity>
-                    <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1, minWidth: 20, textAlign: 'center' }}>{reviewQty}</Text>
-                    <TouchableOpacity
-                      onPress={() => setReviewQty(q => q + 1)}
-                      style={styles.qtyBtn}
-                    >
-                      <Text style={styles.qtyBtnText}>+</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
+                {/* Per-meal qty selectors */}
+                {currentReview.mealIngredients.map((mi) => {
+                  const mealQtys = getReviewMealQtys(reviewIdx);
+                  const qty = mealQtys[mi.mealId] ?? mi.qty;
+                  const isQtyUnit = !currentReview.unit || currentReview.unit === 'qty';
+                  const measurement = isQtyUnit ? null : `${currentReview.measure ?? ''} ${currentReview.unit}`.trim();
+                  const label = measurement ? `${mi.mealName} • ${measurement}` : mi.mealName;
+                  return (
+                    <View key={mi.mealId} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text2, flex: 1 }}>{label}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                        <TouchableOpacity onPress={() => adjustReviewMealQty(reviewIdx, mi.mealId, -1)} style={styles.qtyBtn}>
+                          <Text style={styles.qtyBtnText}>−</Text>
+                        </TouchableOpacity>
+                        <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1, minWidth: 20, textAlign: 'center' }}>{qty}</Text>
+                        <TouchableOpacity onPress={() => adjustReviewMealQty(reviewIdx, mi.mealId, 1)} style={styles.qtyBtn}>
+                          <Text style={styles.qtyBtnText}>+</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })}
                 <TouchableOpacity
                   onPress={() => handleReviewDecision('update')}
                   disabled={!canAdd || customSearching}
