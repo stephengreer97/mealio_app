@@ -301,6 +301,8 @@ export default function KrogerCartReviewSheet({
           quantity: i.productQty,
         })),
         locationId,
+        storeId,
+        [...new Set(active.flatMap((i) => i.mealNames))],
       );
       const results: SearchResult[] = data.results.map((r: any) => {
         const src = active.find(

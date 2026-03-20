@@ -153,6 +153,9 @@ async function request<T>(
       const body = await response.json();
       message = body.error || body.message || message;
     } catch {}
+    if (response.status >= 500) {
+      console.error(`[api] unexpected error: ${path} → ${response.status} ${message}`);
+    }
     throw new ApiError(response.status, message);
   }
 
@@ -463,7 +466,7 @@ export const kroger = {
       body: JSON.stringify({ items, locationId }),
     }),
 
-  searchProducts: (ingredients: Array<{ ingredientName?: string; productName?: string; productQty?: number; qty?: number; quantity?: number }>, locationId?: string) =>
+  searchProducts: (ingredients: Array<{ ingredientName?: string; productName?: string; productQty?: number; qty?: number; quantity?: number }>, locationId?: string, storeId?: string, mealNames?: string[]) =>
     request<{
       results: Array<{
         term: string;
@@ -475,7 +478,7 @@ export const kroger = {
       }>;
     }>('/api/kroger/search-products', {
       method: 'POST',
-      body: JSON.stringify({ ingredients, locationId }),
+      body: JSON.stringify({ ingredients, locationId, storeId, mealNames }),
     }),
 };
 
