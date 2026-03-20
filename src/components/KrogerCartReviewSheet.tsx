@@ -640,10 +640,13 @@ export default function KrogerCartReviewSheet({
                 {/* What was searched */}
                 <View style={styles.searchedBox}>
                   {currentReview.reason === 'out_of_stock' && (
-                    <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginBottom: 6 }}>⚠ This item is currently out of stock</Text>
+                    <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginBottom: 6 }}>⚠ Out of stock at this store</Text>
                   )}
                   {currentReview.reason === 'no_results' && (
                     <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3, marginBottom: 6 }}>No products found for this search</Text>
+                  )}
+                  {(!currentReview.reason || currentReview.reason === 'low_confidence') && (
+                    <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3, marginBottom: 6 }}>No exact match found</Text>
                   )}
                   <Text style={styles.searchedLabel}>You searched for</Text>
                   <Text style={styles.searchedTerm}>{currentReview.searchTerm ?? currentReview.term}</Text>
