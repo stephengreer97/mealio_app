@@ -16,6 +16,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "co.mealio.app",
       "associatedDomains": [
+        "applinks:mealio.co",
         "applinks:mealio.co"
       ],
       "infoPlist": {
@@ -35,8 +36,25 @@
           "payless",
           "metromarket",
           "carrs",
+          "qfc",
+          "kroger",
+          "harristeeter",
+          "kingsoopers",
+          "fredmeyer",
+          "ralphs",
+          "smithsfoodanddrug",
+          "frysfood",
+          "marianos",
+          "picknsave",
+          "dillons",
+          "bakersplus",
+          "citymarket",
+          "payless",
+          "metromarket",
+          "carrs",
           "qfc"
-        ]
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -63,6 +81,9 @@
             "DEFAULT"
           ]
         }
+      ],
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -78,7 +99,13 @@
       "expo-secure-store",
       "expo-font",
       "expo-web-browser",
-      "expo-apple-authentication"
-    ]
+      "expo-apple-authentication",
+      "react-native-purchases"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "de837933-902a-4e7b-ac42-6dafbdec0faa"
+      }
+    }
   }
 }

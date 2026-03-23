@@ -8,6 +8,7 @@ import {
   FlatList,
   Linking,
   TextInput,
+  Platform,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -17,6 +18,7 @@ import { Colors, Radius } from '../../constants/colors';
 import { STORES } from '../../constants/stores';
 import { useAuth } from '../../context/AuthContext';
 import { account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
+import { getOffering, purchasePackage, restorePurchases } from '../../lib/purchases';
 import { Creator, Meal } from '../../types';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
@@ -34,6 +36,8 @@ export default function AccountScreen() {
   const [pwError, setPwError] = useState('');
 
   // Subscription
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [restoreLoading, setRestoreLoading] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
 
   // Kroger
@@ -244,15 +248,63 @@ export default function AccountScreen() {
     }
   }
 
-  async function handleManageSubscription() {
-    setPortalLoading(true);
+  async function handleUpgrade() {
+    setUpgradeLoading(true);
     try {
-      const { portalUrl } = await paymentsApi.portal();
-      if (portalUrl) await Linking.openURL(portalUrl);
+      const pkg = await getOffering();
+      if (!pkg) {
+        Alert.alert('Unavailable', 'No subscription plans found. Please try again later.');
+        return;
+      }
+      const active = await purchasePackage(pkg);
+      if (active) {
+        await refreshUser();
+        Alert.alert('Welcome to Full Access!', 'Your subscription is now active.');
+      }
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not load billing portal');
+      // User cancelled — no alert needed
+      if (!err.userCancelled) {
+        Alert.alert('Purchase Failed', err.message || 'Something went wrong. Please try again.');
+      }
     } finally {
-      setPortalLoading(false);
+      setUpgradeLoading(false);
+    }
+  }
+
+  async function handleRestorePurchases() {
+    setRestoreLoading(true);
+    try {
+      const active = await restorePurchases();
+      if (active) {
+        await refreshUser();
+        Alert.alert('Restored', 'Your subscription has been restored.');
+      } else {
+        Alert.alert('Nothing to Restore', 'No active subscription found for this account.');
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not restore purchases.');
+    } finally {
+      setRestoreLoading(false);
+    }
+  }
+
+  async function handleManageSubscription() {
+    // For native subscribers, link to platform subscription management.
+    // For web (Stripe) subscribers, open the billing portal.
+    if (Platform.OS === 'ios') {
+      await Linking.openURL('https://apps.apple.com/account/subscriptions');
+    } else if (Platform.OS === 'android') {
+      await Linking.openURL('https://play.google.com/store/account/subscriptions?sku=mealio_full_access&package=co.mealio.app');
+    } else {
+      setPortalLoading(true);
+      try {
+        const { portalUrl } = await paymentsApi.portal();
+        if (portalUrl) await Linking.openURL(portalUrl);
+      } catch (err: any) {
+        Alert.alert('Error', err.message || 'Could not load billing portal');
+      } finally {
+        setPortalLoading(false);
+      }
     }
   }
 
@@ -291,24 +343,38 @@ export default function AccountScreen() {
         <Card style={styles.card}>
           <Text style={styles.cardTitle}>Subscription</Text>
           {user?.tier === 'paid' ? (
-            <View style={styles.subBadgePaid}>
-              <Text style={styles.subBadgeTitlePaid}>Full Access</Text>
-              <Text style={styles.subBadgeDesc}>Unlimited saved meals across all stores.</Text>
-            </View>
+            <>
+              <View style={styles.subBadgePaid}>
+                <Text style={styles.subBadgeTitlePaid}>Full Access</Text>
+                <Text style={styles.subBadgeDesc}>Unlimited saved meals across all stores.</Text>
+              </View>
+              <Button
+                label={portalLoading ? 'Loading…' : 'Manage Subscription'}
+                variant="secondary"
+                onPress={handleManageSubscription}
+                loading={portalLoading}
+                style={styles.manageBtn}
+              />
+              <Text style={styles.subHint}>Update payment method, view billing history, or cancel anytime.</Text>
+            </>
           ) : (
-            <View style={styles.subBadgeFree}>
-              <Text style={styles.subBadgeTitleFree}>Free Trial</Text>
-              <Text style={styles.subBadgeDesc}>Up to 3 saved meals. Upgrade to remove the limit.</Text>
-            </View>
+            <>
+              <View style={styles.subBadgeFree}>
+                <Text style={styles.subBadgeTitleFree}>Free Plan</Text>
+                <Text style={styles.subBadgeDesc}>Up to 3 saved meals. Upgrade for unlimited access.</Text>
+              </View>
+              <Button
+                label={upgradeLoading ? 'Loading…' : 'Upgrade to Full Access'}
+                variant="primary"
+                onPress={handleUpgrade}
+                loading={upgradeLoading}
+                style={styles.manageBtn}
+              />
+              <TouchableOpacity onPress={handleRestorePurchases} disabled={restoreLoading} style={styles.restoreLink}>
+                <Text style={styles.restoreLinkText}>{restoreLoading ? 'Restoring…' : 'Restore Purchases'}</Text>
+              </TouchableOpacity>
+            </>
           )}
-          <Button
-            label={portalLoading ? 'Loading…' : 'Manage Subscription'}
-            variant="secondary"
-            onPress={handleManageSubscription}
-            loading={portalLoading}
-            style={styles.manageBtn}
-          />
-          <Text style={styles.subHint}>Update payment method, view billing history, or cancel anytime.</Text>
         </Card>
 
         {/* Kroger Cart */}
@@ -542,6 +608,8 @@ const styles = StyleSheet.create({
   subBadgeDesc: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2 },
   manageBtn: { marginBottom: 8 },
   subHint: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3 },
+  restoreLink: { alignItems: 'center', paddingVertical: 8 },
+  restoreLinkText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text3 },
   creatorPhotoRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   creatorPhoto: { width: 72, height: 72, borderRadius: 36, backgroundColor: Colors.surface },
   creatorPhotoPlaceholder: { justifyContent: 'center', alignItems: 'center' },

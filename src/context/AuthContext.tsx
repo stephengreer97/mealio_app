@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { User } from '../types';
 import * as tokenStorage from '../lib/tokenStorage';
 import { auth, creators } from '../lib/api';
+import { initPurchases, identifyUser, resetUser } from '../lib/purchases';
 
 interface AuthContextValue {
   user: User | null;
@@ -23,6 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    initPurchases();
     initAuth();
   }, []);
 
@@ -43,7 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const { user: verifiedUser } = await auth.verify();
         setUser(verifiedUser);
-        await checkCreatorStatus();
+        await Promise.all([checkCreatorStatus(), identifyUser(verifiedUser.id)]);
       } catch {
         // Token expired — try renewing with the current access token
         try {
@@ -51,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (result.accessToken) {
             await tokenStorage.save(result.accessToken, null, result.user);
             setUser(result.user);
-            await checkCreatorStatus();
+            await Promise.all([checkCreatorStatus(), identifyUser(result.user.id)]);
           } else {
             await tokenStorage.clear();
           }
@@ -83,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (result.accessToken) {
       await tokenStorage.save(result.accessToken, null, result.user);
       setUser(result.user);
-      await checkCreatorStatus();
+      await Promise.all([checkCreatorStatus(), identifyUser(result.user.id)]);
     }
 
     return result;
@@ -95,7 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { user: verifiedUser } = await auth.verify();
     await tokenStorage.save(accessToken, null, verifiedUser);
     setUser(verifiedUser);
-    await checkCreatorStatus();
+    await Promise.all([checkCreatorStatus(), identifyUser(verifiedUser.id)]);
   }
 
   async function logout() {
@@ -103,6 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await auth.logout();
     } catch {}
     await tokenStorage.clear();
+    await resetUser();
     setUser(null);
     setIsCreator(false);
   }
