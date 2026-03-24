@@ -11,7 +11,8 @@ import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as WebBrowser from 'expo-web-browser';
-import Svg, { Path, G } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
+import { Ionicons } from '@expo/vector-icons';
 import * as Google from 'expo-auth-session/providers/google';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { AuthStackParamList } from '../../navigation/AuthStack';
@@ -250,11 +251,7 @@ function GoogleIcon() {
 }
 
 function AppleIcon() {
-  return (
-    <Svg width={20} height={20} viewBox="0 0 814 1000">
-      <Path fill="#fff" d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-37.5-165.4-124.7c-69.2-103.7-132.5-261.7-132.5-412.6 0-227.1 148.7-347 295-347 74.1 0 135.9 48.7 182 48.7 43.4 0 112.7-51.7 195.1-51.7 31.3 0 108.2 2.6 168.6 80.6zm-80.3-220.2c37.7-44.6 63.4-107 63.4-169.3 0-8.7-.6-17.4-2.1-24.8-60.4 2.2-132.5 40.2-175.8 90.4-34.9 40.2-65.3 102.6-65.3 163.7 0 9.3 1.6 18.6 2.1 21.7 3.7.6 9.8 1.6 15.9 1.6 54.3 0 121.2-36.2 161.8-83.3z"/>
-    </Svg>
-  );
+  return <Ionicons name="logo-apple" size={20} color="#fff" />;
 }
 
 const styles = StyleSheet.create({
