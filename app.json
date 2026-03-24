@@ -9,7 +9,7 @@
     "scheme": "mealio",
     "splash": {
       "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
+      "resizeMode": "cover",
       "backgroundColor": "#DD0031"
     },
     "ios": {
@@ -60,7 +60,7 @@
     "android": {
       "package": "co.mealio.app",
       "adaptiveIcon": {
-        "backgroundColor": "#FAFAF9",
+        "backgroundColor": "#DD0031",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png"
       },
