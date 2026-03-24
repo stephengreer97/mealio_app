@@ -454,7 +454,7 @@ export default function MyMealsScreen() {
         ))}
       </ScrollView>
 
-      {!isKroger && (
+      {!loading && !isKroger && (
         <View style={styles.krogerNotice}>
           <Text style={styles.krogerNoticeText}>
             <Text style={styles.krogerNoticeBold}>{selectedStore_?.name ?? 'This store'}</Text>
