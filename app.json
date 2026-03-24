@@ -13,7 +13,7 @@
       "backgroundColor": "#FAFAF9"
     },
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "co.mealio.app",
       "associatedDomains": [
         "applinks:mealio.co",
