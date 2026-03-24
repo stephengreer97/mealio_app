@@ -32,11 +32,17 @@ export default function LoginScreen({ navigation }: Props) {
   const [socialLoading, setSocialLoading] = useState<'google' | 'apple' | null>(null);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
 
-  const [googleRequest, googleResponse, googlePromptAsync] = Google.useAuthRequest({
-    clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB,
-    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS,
-    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID,
-  });
+  const androidClientId = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID;
+  const googleEnabled = Platform.OS !== 'android' || !!androidClientId;
+  const [googleRequest, googleResponse, googlePromptAsync] = Google.useAuthRequest(
+    googleEnabled
+      ? {
+          clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB,
+          iosClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS,
+          androidClientId,
+        }
+      : null as any
+  );
 
   useEffect(() => {
     if (googleResponse?.type === 'success') {
@@ -186,17 +192,19 @@ export default function LoginScreen({ navigation }: Props) {
               <View style={styles.dividerLine} />
             </View>
 
-            <TouchableOpacity
-              style={[styles.socialBtn, anyLoading && styles.socialBtnDisabled]}
-              onPress={handleGoogleSignIn}
-              disabled={anyLoading || !googleRequest}
-              activeOpacity={0.7}
-            >
-              <GoogleIcon />
-              <Text style={styles.socialBtnText}>
-                {socialLoading === 'google' ? 'Connecting…' : 'Continue with Google'}
-              </Text>
-            </TouchableOpacity>
+            {googleEnabled && (
+              <TouchableOpacity
+                style={[styles.socialBtn, anyLoading && styles.socialBtnDisabled]}
+                onPress={handleGoogleSignIn}
+                disabled={anyLoading || !googleRequest}
+                activeOpacity={0.7}
+              >
+                <GoogleIcon />
+                <Text style={styles.socialBtnText}>
+                  {socialLoading === 'google' ? 'Connecting…' : 'Continue with Google'}
+                </Text>
+              </TouchableOpacity>
+            )}
 
             {Platform.OS === 'ios' && (
               <TouchableOpacity
