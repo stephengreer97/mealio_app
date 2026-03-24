@@ -107,14 +107,7 @@ export default function RootNavigator() {
           name="GuestDiscover"
           component={DiscoverScreen}
           initialParams={{ onSignIn: () => setShowAuth(true) }}
-          options={{
-            title: 'Discover',
-            headerRight: () => (
-              <TouchableOpacity onPress={() => setShowAuth(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Text style={{ color: '#fff', fontSize: 15, fontFamily: 'Inter_600SemiBold' }}>Sign In</Text>
-              </TouchableOpacity>
-            ),
-          }}
+          options={{ headerShown: false }}
         />
       </GuestStack.Navigator>
     );

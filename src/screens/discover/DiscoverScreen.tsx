@@ -225,14 +225,21 @@ export default function DiscoverScreen() {
     <SafeAreaView style={styles.safe}>
       <View style={styles.titleRow}>
         <Text style={styles.logo}>Mealio</Text>
-        <TouchableOpacity style={styles.filterBtn} onPress={() => setFilterVisible(true)}>
-          <Ionicons name="options-outline" size={22} color={Colors.text1} />
-          {activeFilterCount > 0 && (
-            <View style={styles.filterBadge}>
-              <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
-            </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {onSignIn && (
+            <TouchableOpacity onPress={onSignIn} style={styles.signInBtn}>
+              <Text style={styles.signInBtnText}>Sign In</Text>
+            </TouchableOpacity>
           )}
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.filterBtn} onPress={() => setFilterVisible(true)}>
+            <Ionicons name="options-outline" size={22} color={Colors.text1} />
+            {activeFilterCount > 0 && (
+              <View style={styles.filterBadge}>
+                <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Segment control */}
@@ -403,6 +410,8 @@ const styles = StyleSheet.create({
   },
   logo: { fontSize: 28, fontFamily: 'Pacifico_400Regular', color: Colors.brand },
   filterBtn: { padding: 8, position: 'relative' },
+  signInBtn: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, backgroundColor: Colors.brand },
+  signInBtnText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#fff' },
   filterBadge: {
     position: 'absolute',
     top: 4,
