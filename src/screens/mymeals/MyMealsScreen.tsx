@@ -376,7 +376,7 @@ export default function MyMealsScreen() {
   const storesWithMeals = STORES
     .filter((s) => allMeals.some((m) => m.storeId === s.id))
     .sort((a, b) => allMeals.filter((m) => m.storeId === b.id).length - allMeals.filter((m) => m.storeId === a.id).length);
-  const displayStores = storesWithMeals.length > 0 ? storesWithMeals : STORES.slice(0, 5);
+  const displayStores = loading ? [] : storesWithMeals.length > 0 ? storesWithMeals : STORES.slice(0, 5);
   const isKroger = isKrogerBrand(selectedStore);
   const selectedMeals = storeMeals.filter((m) => selectedMealIds.has(m.id));
   const selectedStore_ = STORES.find((s) => s.id === selectedStore);
