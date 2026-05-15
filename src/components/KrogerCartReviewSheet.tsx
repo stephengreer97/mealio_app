@@ -141,7 +141,11 @@ function normIngName(ing: any): string {
 }
 
 function normProductQty(ing: any): number {
-  return ing.productQty ?? ing.qty ?? ing.quantity ?? 1;
+  // Clamp non-positive/invalid values to 1: saved meal data can leak qty=0
+  // from the chooser flow, which would otherwise disable the cart CTA.
+  const raw = ing.productQty ?? ing.qty ?? ing.quantity ?? 1;
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
 function consolidateIngredients(meals: Array<Pick<Meal, 'id' | 'name' | 'ingredients'>>): ConsolidatedIngredient[] {

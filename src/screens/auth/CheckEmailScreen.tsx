@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Alert, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -19,17 +19,34 @@ export default function CheckEmailScreen({ navigation, route }: Props) {
   const { email } = route.params;
   const [cooldown, setCooldown] = useState(COOLDOWN);
   const [loading, setLoading] = useState(false);
+  const endTimeRef = useRef(Date.now() + COOLDOWN * 1000);
 
+  // Tick the countdown based on real elapsed time so it keeps running in the background.
   useEffect(() => {
     if (cooldown <= 0) return;
-    const timer = setTimeout(() => setCooldown((c) => c - 1), 1000);
+    const timer = setTimeout(() => {
+      const remaining = Math.max(0, Math.round((endTimeRef.current - Date.now()) / 1000));
+      setCooldown(remaining);
+    }, 1000);
     return () => clearTimeout(timer);
   }, [cooldown]);
+
+  // Recalculate remaining time when the app comes back to the foreground.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        const remaining = Math.max(0, Math.round((endTimeRef.current - Date.now()) / 1000));
+        setCooldown(remaining);
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   async function handleResend() {
     setLoading(true);
     try {
       await auth.resendVerification(email);
+      endTimeRef.current = Date.now() + COOLDOWN * 1000;
       setCooldown(COOLDOWN);
       Alert.alert('Sent!', 'Check your inbox for the verification email.');
     } catch (err: any) {

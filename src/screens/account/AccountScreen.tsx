@@ -8,7 +8,6 @@ import {
   FlatList,
   Linking,
   TextInput,
-  Platform,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -18,7 +17,8 @@ import { Colors, Radius } from '../../constants/colors';
 import { STORES } from '../../constants/stores';
 import { useAuth } from '../../context/AuthContext';
 import { account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
-import { getOffering, purchasePackage, restorePurchases } from '../../lib/purchases';
+import { getAllOfferings, purchasePackage, restorePurchases, getActiveSubscriptionStore, ENTITLEMENT_ID } from '../../lib/purchases';
+import type { PurchasesPackage } from 'react-native-purchases';
 import { Creator, Meal } from '../../types';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
@@ -39,6 +39,11 @@ export default function AccountScreen() {
   const [upgradeLoading, setUpgradeLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
+  const [offerings, setOfferings] = useState<PurchasesPackage[]>([]);
+  const [billing, setBilling] = useState<'monthly' | 'annual'>('monthly');
+
+  // Account deletion
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Kroger
   const [krogerConnected, setKrogerConnected] = useState(false);
@@ -57,7 +62,13 @@ export default function AccountScreen() {
     loadDeletedMeals();
     loadKrogerStatus();
     if (isCreator) loadCreatorProfile();
+    if (user?.tier !== 'paid') loadOffering();
   }, [isCreator]);
+
+  async function loadOffering() {
+    const pkgs = await getAllOfferings();
+    setOfferings(pkgs);
+  }
 
   // Return-from-browser deep link: mealio://kroger/connected
   useEffect(() => {
@@ -251,7 +262,7 @@ export default function AccountScreen() {
   async function handleUpgrade() {
     setUpgradeLoading(true);
     try {
-      const pkg = await getOffering();
+      const pkg = selectedPkg;
       if (!pkg) {
         Alert.alert('Unavailable', 'No subscription plans found. Please try again later.');
         return;
@@ -262,13 +273,37 @@ export default function AccountScreen() {
         Alert.alert('Welcome to Full Access!', 'Your subscription is now active.');
       }
     } catch (err: any) {
-      // User cancelled — no alert needed
       if (!err.userCancelled) {
         Alert.alert('Purchase Failed', err.message || 'Something went wrong. Please try again.');
       }
     } finally {
       setUpgradeLoading(false);
     }
+  }
+
+  async function handleDeleteAccount() {
+    Alert.alert(
+      'Delete Account',
+      'This will permanently delete your account and all your saved meals. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete Account',
+          style: 'destructive',
+          onPress: async () => {
+            setDeleteLoading(true);
+            try {
+              await accountApi.deleteAccount();
+              await logout();
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Could not delete account. Please try again.');
+            } finally {
+              setDeleteLoading(false);
+            }
+          },
+        },
+      ]
+    );
   }
 
   async function handleRestorePurchases() {
@@ -289,22 +324,25 @@ export default function AccountScreen() {
   }
 
   async function handleManageSubscription() {
-    // For native subscribers, link to platform subscription management.
-    // For web (Stripe) subscribers, open the billing portal.
-    if (Platform.OS === 'ios') {
-      await Linking.openURL('https://apps.apple.com/account/subscriptions');
-    } else if (Platform.OS === 'android') {
-      await Linking.openURL('https://play.google.com/store/account/subscriptions?sku=mealio_full_access&package=co.mealio.app');
-    } else {
-      setPortalLoading(true);
-      try {
+    setPortalLoading(true);
+    try {
+      // Route based on WHERE the subscription was purchased, not what platform we're on.
+      // A user who subscribed on the web (Stripe) might be viewing this from the iOS app.
+      const store = await getActiveSubscriptionStore();
+
+      if (store === 'app_store') {
+        await Linking.openURL('https://apps.apple.com/account/subscriptions');
+      } else if (store === 'play_store') {
+        await Linking.openURL('https://play.google.com/store/account/subscriptions?sku=mealio_full_access&package=co.mealio.app');
+      } else {
+        // Stripe subscriber, or subscription not found in RevenueCat (e.g. web-only subscriber).
         const { portalUrl } = await paymentsApi.portal();
         if (portalUrl) await Linking.openURL(portalUrl);
-      } catch (err: any) {
-        Alert.alert('Error', err.message || 'Could not load billing portal');
-      } finally {
-        setPortalLoading(false);
       }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not load subscription management');
+    } finally {
+      setPortalLoading(false);
     }
   }
 
@@ -314,6 +352,10 @@ export default function AccountScreen() {
       { text: 'Sign Out', style: 'destructive', onPress: logout },
     ]);
   }
+
+  const selectedPkgType = billing === 'annual' ? 'ANNUAL' : 'MONTHLY';
+  const selectedPkg = offerings.find(p => p.packageType === selectedPkgType) ?? offerings[0] ?? null;
+  const fallbackPrice = billing === 'annual' ? '$39.99' : '$3.99';
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -345,7 +387,7 @@ export default function AccountScreen() {
           {user?.tier === 'paid' ? (
             <>
               <View style={styles.subBadgePaid}>
-                <Text style={styles.subBadgeTitlePaid}>Full Access</Text>
+                <Text style={styles.subBadgeTitlePaid}>Mealio Full Access</Text>
                 <Text style={styles.subBadgeDesc}>Unlimited saved meals across all stores.</Text>
               </View>
               <Button
@@ -363,6 +405,44 @@ export default function AccountScreen() {
                 <Text style={styles.subBadgeTitleFree}>Free Plan</Text>
                 <Text style={styles.subBadgeDesc}>Up to 3 saved meals. Upgrade for unlimited access.</Text>
               </View>
+
+              {/* Billing period toggle */}
+              <View style={styles.billingToggle}>
+                <TouchableOpacity
+                  style={[styles.billingToggleBtn, billing === 'monthly' && styles.billingToggleBtnActive]}
+                  onPress={() => setBilling('monthly')}
+                >
+                  <Text style={[styles.billingToggleBtnText, billing === 'monthly' && styles.billingToggleBtnTextActive]}>Monthly</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.billingToggleBtn, billing === 'annual' && styles.billingToggleBtnActive]}
+                  onPress={() => setBilling('annual')}
+                >
+                  <Text style={[styles.billingToggleBtnText, billing === 'annual' && styles.billingToggleBtnTextActive]}>Annual</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.subPriceBox}>
+                <Text style={styles.subPriceTitle}>Mealio Full Access</Text>
+                <Text style={styles.subPrice}>
+                  {selectedPkg?.product.priceString ?? fallbackPrice}
+                </Text>
+                <Text style={styles.subPricePeriod}>
+                  {billing === 'annual' ? 'billed annually' : 'billed monthly'} · auto-renews · cancel anytime
+                </Text>
+                {selectedPkg?.product.introductoryDiscount?.paymentMode === 'FREE_TRIAL' && (
+                  <Text style={styles.subTrial}>
+                    Includes a {selectedPkg.product.introductoryDiscount.periodNumberOfUnits}-
+                    {selectedPkg.product.introductoryDiscount.periodUnit?.toLowerCase()} free trial.
+                    After the trial, you will be automatically charged {selectedPkg.product.priceString}/
+                    {billing === 'annual' ? 'year' : 'month'}.
+                  </Text>
+                )}
+                <View style={styles.subFeatures}>
+                  <Text style={styles.subFeatureItem}>· Unlimited saved meals</Text>
+                </View>
+              </View>
+
               <Button
                 label={upgradeLoading ? 'Loading…' : 'Upgrade to Full Access'}
                 variant="primary"
@@ -370,6 +450,17 @@ export default function AccountScreen() {
                 loading={upgradeLoading}
                 style={styles.manageBtn}
               />
+
+              <View style={styles.subLinks}>
+                <TouchableOpacity onPress={() => Linking.openURL('https://mealio.co/terms')}>
+                  <Text style={styles.subLinkText}>Terms of Use</Text>
+                </TouchableOpacity>
+                <Text style={styles.subLinkSep}>·</Text>
+                <TouchableOpacity onPress={() => Linking.openURL('https://mealio.co/privacy')}>
+                  <Text style={styles.subLinkText}>Privacy Policy</Text>
+                </TouchableOpacity>
+              </View>
+
               <TouchableOpacity onPress={handleRestorePurchases} disabled={restoreLoading} style={styles.restoreLink}>
                 <Text style={styles.restoreLinkText}>{restoreLoading ? 'Restoring…' : 'Restore Purchases'}</Text>
               </TouchableOpacity>
@@ -573,6 +664,11 @@ export default function AccountScreen() {
           onPress={handleLogout}
           style={styles.signOutBtn}
         />
+
+        {/* Delete Account */}
+        <TouchableOpacity onPress={handleDeleteAccount} disabled={deleteLoading} style={styles.deleteAccountBtn}>
+          <Text style={styles.deleteAccountText}>{deleteLoading ? 'Deleting…' : 'Delete Account'}</Text>
+        </TouchableOpacity>
       </KeyboardAwareScrollView>
     </SafeAreaView>
   );
@@ -608,8 +704,53 @@ const styles = StyleSheet.create({
   subBadgeDesc: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2 },
   manageBtn: { marginBottom: 8 },
   subHint: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3 },
+  subPriceBox: {
+    borderRadius: 12,
+    padding: 14,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  subPriceTitle: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text2, marginBottom: 4 },
+  subPrice: { fontSize: 28, fontFamily: 'Inter_700Bold', color: Colors.text1, marginBottom: 2 },
+  subPricePeriod: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, textAlign: 'center' },
+  subTrial: { fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.brand, marginTop: 6, textAlign: 'center', lineHeight: 17 },
+  subFeatures: { marginTop: 10, alignSelf: 'flex-start', width: '100%' },
+  subFeatureItem: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2, marginBottom: 3 },
+  subLinks: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, marginBottom: 4 },
+  subLinkText: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, textDecorationLine: 'underline' },
+  subLinkSep: { fontSize: 12, color: Colors.text3 },
+  billingToggle: {
+    flexDirection: 'row',
+    backgroundColor: Colors.surface,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 12,
+    overflow: 'hidden',
+  },
+  billingToggleBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  billingToggleBtnActive: {
+    backgroundColor: Colors.brand,
+  },
+  billingToggleBtnText: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: Colors.text2,
+  },
+  billingToggleBtnTextActive: {
+    color: '#fff',
+  },
   restoreLink: { alignItems: 'center', paddingVertical: 8 },
   restoreLinkText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text3 },
+  deleteAccountBtn: { alignItems: 'center', paddingVertical: 12, marginTop: 4, marginBottom: 8 },
+  deleteAccountText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text3, textDecorationLine: 'underline' },
   creatorPhotoRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   creatorPhoto: { width: 72, height: 72, borderRadius: 36, backgroundColor: Colors.surface },
   creatorPhotoPlaceholder: { justifyContent: 'center', alignItems: 'center' },

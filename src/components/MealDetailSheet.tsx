@@ -40,7 +40,7 @@ interface MealDetailSheetProps {
 
 function fmtMeasurement(ing: Ingredient): string {
   if (!ing.unit || ing.unit === 'qty') return `${ing.ingredientName}, ${ing.qty ?? 1}`;
-  return `${ing.ingredientName}, ${ing.measure ?? ''} ${ing.unit}`;
+  return `${ing.ingredientName}, ${ing.measure ?? ing.qty ?? ''} ${ing.unit}`;
 }
 
 function DifficultyDots({ level }: { level: number }) {
@@ -145,6 +145,14 @@ export default function MealDetailSheet({
     if (!name.trim()) { Alert.alert('Error', 'Meal name is required'); return; }
     const validIngredients = ingredients.filter((i) => i.ingredientName.trim());
     if (validIngredients.length === 0) { Alert.alert('Error', 'Add at least one ingredient'); return; }
+    const seen = new Set<string>();
+    const hasDups = validIngredients.some((i) => {
+      const key = i.ingredientName.trim().toLowerCase();
+      if (seen.has(key)) return true;
+      seen.add(key);
+      return false;
+    });
+    if (hasDups) { Alert.alert('Error', 'Two or more ingredients have the same name. Please make each name unique.'); return; }
 
     setLoading(true);
     try {
@@ -295,7 +303,7 @@ export default function MealDetailSheet({
         )}
 
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => { setEditing(false); onClose(); }}>
+          <TouchableOpacity onPress={() => { setEditing(false); onClose(); }} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Text style={styles.close}>✕</Text>
           </TouchableOpacity>
           {mode === 'edit' && !editing && (
@@ -593,7 +601,12 @@ export default function MealDetailSheet({
 
                 {(viewDifficulty != null || viewServes || sourceHost) && (
                   <View style={[styles.metaRow, { marginBottom: 12 }]}>
-                    {viewDifficulty != null && <DifficultyDots level={viewDifficulty} />}
+                    {viewDifficulty != null && (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={styles.metaLabel}>Difficulty</Text>
+                        <DifficultyDots level={viewDifficulty} />
+                      </View>
+                    )}
                     {viewDifficulty != null && (viewServes || sourceHost) && <Text style={styles.metaDot}>·</Text>}
                     {viewServes && (
                       <View style={styles.servesRow}>
@@ -651,9 +664,16 @@ export default function MealDetailSheet({
                             {ing.ingredientName ?? ing.productName ?? ''}
                           </Text>
                           {ing.searchTerm ? (
-                            <Text style={styles.productLabel} numberOfLines={1}>
-                              {`${ing.productQty ?? ing.qty ?? 1}x ${ing.searchTerm}`}
-                            </Text>
+                            <>
+                              <Text style={styles.productLabel} numberOfLines={1}>
+                                {`${ing.productQty ?? ing.qty ?? 1}x ${ing.searchTerm}`}
+                              </Text>
+                              {(ing as any).dropdown?.selectedText ? (
+                                <Text style={[styles.productLabel, { fontSize: 11 }]} numberOfLines={1}>
+                                  {(ing as any).dropdown.selectedText}
+                                </Text>
+                              ) : null}
+                            </>
                           ) : null}
                         </View>
                       ))}
@@ -719,6 +739,7 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   authorText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.brand },
   metaDot: { fontSize: 13, color: Colors.text3 },
+  metaLabel: { fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3 },
   sourceRow: { marginBottom: 12 },
   sourceText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.brand, textDecorationLine: 'underline' },
   sectionLabel: {

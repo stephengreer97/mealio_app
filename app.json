@@ -9,7 +9,7 @@
     "scheme": "mealio",
     "splash": {
       "image": "./assets/splash-icon.png",
-      "resizeMode": "cover",
+      "resizeMode": "contain",
       "backgroundColor": "#DD0031"
     },
     "ios": {
@@ -21,22 +21,7 @@
       ],
       "infoPlist": {
         "LSApplicationQueriesSchemes": [
-          "kroger",
-          "harristeeter",
-          "kingsoopers",
-          "fredmeyer",
-          "ralphs",
-          "smithsfoodanddrug",
-          "frysfood",
-          "marianos",
-          "picknsave",
-          "dillons",
-          "bakersplus",
-          "citymarket",
-          "payless",
-          "metromarket",
-          "carrs",
-          "qfc",
+          "heb",
           "kroger",
           "harristeeter",
           "kingsoopers",
@@ -93,7 +78,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Mealio to access your photos."
+          "photosPermission": "Mealio uses your photo library so you can add a custom photo to your saved meals."
         }
       ],
       "expo-secure-store",

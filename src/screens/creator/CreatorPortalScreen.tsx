@@ -78,7 +78,7 @@ export default function CreatorPortalScreen() {
     setMealRecipe('');
     setMealSource('');
     setMealServes('');
-    setMealIngredients([{ productName: '', quantity: 1 }]);
+    setMealIngredients([{ ingredientName: '', qty: 1, productQty: 1, unit: 'qty', measure: null }]);
     setMealTags([]);
     setMealDifficulty(null);
     setMealPhotoUrl('');
@@ -117,9 +117,20 @@ export default function CreatorPortalScreen() {
       Alert.alert('Error', 'Meal name is required');
       return;
     }
-    const validIngredients = mealIngredients.filter((i) => i.productName.trim());
+    const validIngredients = mealIngredients.filter((i) => i.ingredientName.trim());
     if (validIngredients.length === 0) {
       Alert.alert('Error', 'At least one ingredient is required');
+      return;
+    }
+    const seenIng = new Set<string>();
+    const hasDupIngs = validIngredients.some((i) => {
+      const key = i.ingredientName.trim().toLowerCase();
+      if (seenIng.has(key)) return true;
+      seenIng.add(key);
+      return false;
+    });
+    if (hasDupIngs) {
+      Alert.alert('Error', 'Two or more ingredients have the same name. Please make each name unique.');
       return;
     }
 
@@ -389,7 +400,7 @@ export default function CreatorPortalScreen() {
                   <Text style={styles.hintGood}>✓ Good: </Text>
                   <Text>"Chicken Stock, 32 oz" · "Garlic" · "Rotisserie Chicken"{'\n'}</Text>
                   <Text style={styles.hintBad}>✗ Avoid: </Text>
-                  <Text>"Costco Bananas" · "Fresh Herbs"</Text>
+                  <Text>"Walmart Bananas" · "Fresh Herbs"</Text>
                 </Text>
               </View>
 

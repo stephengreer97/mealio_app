@@ -12,7 +12,6 @@ import {
 } from '@expo-google-fonts/inter';
 import { Pacifico_400Regular } from '@expo-google-fonts/pacifico';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
 import { AuthProvider } from './src/context/AuthContext';
 import RootNavigator from './src/navigation/RootNavigator';
 
@@ -28,12 +27,7 @@ export default function App() {
     Pacifico_400Regular,
   });
 
-  useEffect(() => {
-    if (fontsLoaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [fontsLoaded]);
-
+  // Don't hide splash here — RootNavigator handles it once content is ready
   if (!fontsLoaded) return null;
 
   return (

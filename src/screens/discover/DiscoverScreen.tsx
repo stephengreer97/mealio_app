@@ -10,14 +10,15 @@ import {
   RefreshControl,
   Alert,
   TextInput,
-  Linking,
+
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../../constants/colors';
 import { PresetMeal, Creator, Meal } from '../../types';
-import { presetMeals as presetMealsApi, creators as creatorsApi, meals as mealsApi, payments as paymentsApi } from '../../lib/api';
+import { presetMeals as presetMealsApi, creators as creatorsApi, meals as mealsApi } from '../../lib/api';
+import { getOffering, purchasePackage } from '../../lib/purchases';
 import { useAuth } from '../../context/AuthContext';
 import { STORES } from '../../constants/stores';
 import MealCard from '../../components/MealCard';
@@ -40,10 +41,12 @@ const SEGMENT_SORT: Record<Segment, string> = {
 const FREE_LIMIT = 3;
 
 export default function DiscoverScreen() {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const onSignIn: (() => void) | undefined = route.params?.onSignIn;
+  const onReady: (() => void) | undefined = route.params?.onReady;
+  const readyCalled = React.useRef(false);
   const SEGMENTS = user ? ALL_SEGMENTS : (['Trending', 'New'] as const);
   const [segment, setSegment] = useState<Segment>('Trending');
   const [meals, setMeals] = useState<PresetMeal[]>([]);
@@ -51,6 +54,7 @@ export default function DiscoverScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = React.useRef(false);
   const [hasMore, setHasMore] = useState(true);
 
   // Map of presetMealId → store names where user has already saved it
@@ -97,9 +101,21 @@ export default function DiscoverScreen() {
 
   async function handleUpgrade() {
     try {
-      const { portalUrl } = await paymentsApi.portal();
-      if (portalUrl) await Linking.openURL(portalUrl);
-    } catch {}
+      const pkg = await getOffering();
+      if (!pkg) {
+        Alert.alert('Unavailable', 'No subscription plans found. Please try again later.');
+        return;
+      }
+      const active = await purchasePackage(pkg);
+      if (active) {
+        await refreshUser();
+        Alert.alert('Welcome to Full Access!', 'Your subscription is now active.');
+      }
+    } catch (err: any) {
+      if (!err.userCancelled) {
+        Alert.alert('Purchase Failed', err.message || 'Something went wrong. Please try again.');
+      }
+    }
   }
 
   async function loadData(offset: number, reset: boolean) {
@@ -128,14 +144,20 @@ export default function DiscoverScreen() {
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not load meals');
     } finally {
+      loadingMoreRef.current = false;
       setLoading(false);
       setRefreshing(false);
       setLoadingMore(false);
+      if (onReady && !readyCalled.current) {
+        readyCalled.current = true;
+        onReady();
+      }
     }
   }
 
   async function loadMore() {
-    if (loadingMore || !hasMore) return;
+    if (loadingMoreRef.current || !hasMore) return;
+    loadingMoreRef.current = true;
     setLoadingMore(true);
     await loadData(meals.length, false);
   }
@@ -167,7 +189,7 @@ export default function DiscoverScreen() {
     filters.excludeIngredients.length > 0,
   ].filter(Boolean).length;
 
-  // Client-side filters then sort: unsaved first, saved last
+  // Client-side filters
   const filteredMeals = meals.filter((m) => {
     const q = searchQuery.trim().toLowerCase();
     if (q && !(m.name.toLowerCase().includes(q) || (m.creatorName ?? m.author ?? '').toLowerCase().includes(q))) return false;
@@ -178,19 +200,20 @@ export default function DiscoverScreen() {
       if (!filters.authors.some((a) => mAuthor.includes(a.toLowerCase()))) return false;
     }
     if (filters.ingredients.length > 0) {
-      const names = m.ingredients.map((i) => i.productName.toLowerCase());
+      const names = m.ingredients.map((i) => i.ingredientName.toLowerCase());
       if (!filters.ingredients.every((ing) => names.some((n) => n.includes(ing)))) return false;
     }
     if (filters.excludeIngredients.length > 0) {
-      const names = m.ingredients.map((i) => i.productName.toLowerCase());
+      const names = m.ingredients.map((i) => i.ingredientName.toLowerCase());
       if (filters.excludeIngredients.some((ex) => names.some((n) => n.includes(ex)))) return false;
     }
     return true;
-  }).sort((a, b) => {
-    const aSaved = savedMap[a.id] ? 1 : 0;
-    const bSaved = savedMap[b.id] ? 1 : 0;
-    return aSaved - bSaved;
   });
+
+  // Saved meals are held back until all pages are loaded so they always appear at the very end
+  const unsavedMeals = filteredMeals.filter((m) => !savedMap[m.id]);
+  const savedMeals = filteredMeals.filter((m) => !!savedMap[m.id]);
+  const displayMeals = hasMore ? unsavedMeals : [...unsavedMeals, ...savedMeals];
 
   const authorSuggestions = [...new Set(
     meals.flatMap((m) => [m.author, m.creatorName]).filter((a): a is string => Boolean(a))
@@ -198,7 +221,7 @@ export default function DiscoverScreen() {
 
   const renderMeal = useCallback(({ item, index }: { item: PresetMeal; index: number }) => {
     if (index % 2 !== 0) return null; // render pairs
-    const next = filteredMeals[index + 1] ?? null;
+    const next = displayMeals[index + 1] ?? null;
     return (
       <View style={styles.mealRow}>
         <MealCard
@@ -219,7 +242,7 @@ export default function DiscoverScreen() {
         )}
       </View>
     );
-  }, [filteredMeals, savedMap]);
+  }, [displayMeals, savedMap]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -277,7 +300,7 @@ export default function DiscoverScreen() {
       </View>
 
       <FlatList
-        data={filteredMeals}
+        data={displayMeals}
         keyExtractor={(item) => item.id}
         renderItem={renderMeal}
         contentContainerStyle={styles.list}
@@ -287,7 +310,7 @@ export default function DiscoverScreen() {
         ListHeaderComponent={
           <>
             {/* Upgrade nudge for free tier */}
-            {user && user?.tier !== 'paid' && (
+            {user && user?.tier !== 'paid' && totalMealCount >= FREE_LIMIT && (
               <TouchableOpacity style={styles.upgradeBanner} onPress={handleUpgrade} activeOpacity={0.8}>
                 <Text style={styles.upgradeBannerText}>
                   {totalMealCount >= FREE_LIMIT

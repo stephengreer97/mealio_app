@@ -59,6 +59,22 @@ interface IngredientEditorProps {
   onChange: (ingredients: Ingredient[]) => void;
 }
 
+function getDuplicateIndices(forms: IngredientForm[]): Set<number> {
+  const seen = new Map<string, number>();
+  const dups = new Set<number>();
+  forms.forEach((f, i) => {
+    const key = f.ingredientName.trim().toLowerCase();
+    if (!key) return;
+    if (seen.has(key)) {
+      dups.add(seen.get(key)!);
+      dups.add(i);
+    } else {
+      seen.set(key, i);
+    }
+  });
+  return dups;
+}
+
 export default function IngredientEditor({ ingredients, onChange }: IngredientEditorProps) {
   const insets = useSafeAreaInsets();
   const [forms, setForms] = useState<IngredientForm[]>(() => ingredients.map(toFormIng));
@@ -106,14 +122,18 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
   }
 
   const pickerForm = unitPickerIndex !== null ? forms[unitPickerIndex] : null;
+  const duplicateIndices = getDuplicateIndices(forms);
 
   return (
     <View>
       <Text style={styles.label}>Measurements</Text>
-      {forms.map((form, index) => (
-        <View key={index} style={styles.row}>
+      {forms.map((form, index) => {
+        const isDup = duplicateIndices.has(index);
+        return (
+        <View key={index}>
+          <View style={styles.row}>
           <TextInput
-            style={styles.nameInput}
+            style={[styles.nameInput, isDup && styles.nameInputError]}
             placeholder="Ingredient name"
             value={form.ingredientName}
             onChangeText={(v) => updateField(index, 'ingredientName', v)}
@@ -133,11 +153,16 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
           >
             <Text style={styles.unitBtnText} numberOfLines={1}>{form.unit}</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => remove(index)} style={styles.deleteBtn}>
+          <TouchableOpacity onPress={() => remove(index)} style={styles.deleteBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Ionicons name="trash-outline" size={18} color={Colors.error} />
           </TouchableOpacity>
+          </View>
+          {isDup && (
+            <Text style={styles.dupError}>Duplicate ingredient name</Text>
+          )}
         </View>
-      ))}
+        );
+      })}
 
       <TouchableOpacity style={styles.addBtn} onPress={addMeasurement}>
         <Ionicons name="add-circle-outline" size={20} color={Colors.brand} />
@@ -237,6 +262,17 @@ const styles = StyleSheet.create({
     color: Colors.text1,
   },
   deleteBtn: { padding: 4 },
+  nameInputError: {
+    borderColor: Colors.error,
+  },
+  dupError: {
+    fontSize: 11,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.error,
+    marginTop: -4,
+    marginBottom: 4,
+    marginLeft: 2,
+  },
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',

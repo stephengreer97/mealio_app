@@ -7,7 +7,7 @@ const BASE_URL = 'https://mealio.co';
 
 // Normalise ingredients regardless of how they're stored in the DB.
 // Handles: null/undefined → [], plain strings → [{ ingredientName }], objects → as-is.
-function normalizeIngredients(raw: any): Ingredient[] {
+export function normalizeIngredients(raw: any): Ingredient[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((item) => {
     if (typeof item === 'string') return { ingredientName: item, qty: 1, productQty: 1, unit: 'qty', measure: null };
@@ -20,6 +20,7 @@ function normalizeIngredients(raw: any): Ingredient[] {
         productQty: item.productQty ?? qty,
         unit: item.unit ?? 'qty',
         measure: item.measure ?? null,
+        dropdown: item.dropdown ?? null,
       };
     }
     return { ingredientName: String(item), qty: 1, productQty: 1, unit: 'qty', measure: null };
@@ -238,6 +239,8 @@ export const account = {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
+  deleteAccount: () =>
+    request<void>('/api/account/delete', { method: 'DELETE' }),
 };
 
 // Meals

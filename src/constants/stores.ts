@@ -8,11 +8,24 @@ export interface Store {
 export const KROGER_BRAND_IDS = new Set([
   'kroger', 'king_soopers', 'ralphs', 'fred_meyer', 'frys', 'qfc',
   'harris_teeter', 'marianos', 'smiths', 'bakers', 'dillons', 'pay_less',
-  'pick_n_save', 'metro_market', 'carrs', 'city_market',
+  'pick_n_save', 'metro_market', 'city_market',
 ]);
 
 export function isKrogerBrand(storeId: string): boolean {
   return KROGER_BRAND_IDS.has(storeId);
+}
+
+// Stores supported via in-app WebView cart automation
+export const WEBVIEW_STORE_IDS = new Set([
+  'heb', 'walmart', 'aldi', 'amazon', 'wegmans',
+  // Albertsons family — all use the same platform
+  'albertsons', 'safeway', 'vons', 'jewel_osco', 'shaws', 'acme',
+  'tom_thumb', 'randalls', 'pavilions', 'star_market', 'haggen',
+  'carrs', 'kings', 'balduccis', 'united',
+]);
+
+export function isWebViewStore(storeId: string): boolean {
+  return WEBVIEW_STORE_IDS.has(storeId);
 }
 
 export const STORES: Store[] = [
@@ -23,9 +36,7 @@ export const STORES: Store[] = [
   { id: 'bakers',         name: "Baker's",             color: '#EE3124' },
   { id: 'balduccis',      name: "Balducci's",          color: '#8D2B1E' },
   { id: 'carrs',          name: 'Carrs',               color: '#E5171D' },
-  { id: 'central_market', name: 'Central Market',      color: '#005732' },
   { id: 'city_market',    name: 'City Market',         color: '#EE3124' },
-  { id: 'costco',         name: 'Costco',              color: '#E31936' },
   { id: 'dillons',        name: 'Dillons',             color: '#CA2128' },
   { id: 'fred_meyer',     name: 'Fred Meyer',          color: '#D7282F' },
   { id: 'frys',           name: "Fry's Food",          color: '#E1251B' },
@@ -50,6 +61,7 @@ export const STORES: Store[] = [
   { id: 'star_market',    name: 'Star Market',         color: '#7AC142' },
   { id: 'tom_thumb',      name: 'Tom Thumb',           color: '#0435A6' },
   { id: 'vons',           name: 'Vons',                color: '#E41720' },
+  { id: 'united',         name: 'United Supermarkets', color: '#003087' },
   { id: 'walmart',        name: 'Walmart',             color: '#0053E2' },
   { id: 'wegmans',        name: 'Wegmans',             color: '#000000' },
 ];

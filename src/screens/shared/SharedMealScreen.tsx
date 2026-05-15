@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../../constants/colors';
-import { shared as sharedApi } from '../../lib/api';
+import { shared as sharedApi, normalizeIngredients } from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
 import { STORES } from '../../constants/stores';
 import { Ingredient } from '../../types';
@@ -96,7 +96,7 @@ export default function SharedMealScreen({ token, onClose }: Props) {
   async function fetchMeal(t: string) {
     try {
       const { meal: m } = await sharedApi.getMeal(t);
-      setMeal(m);
+      setMeal({ ...m, ingredients: normalizeIngredients(m.ingredients) });
     } catch (err: any) {
       setError(err.message || 'Could not load meal');
     } finally {
@@ -183,15 +183,18 @@ export default function SharedMealScreen({ token, onClose }: Props) {
 
                 {/* Ingredients */}
                 <Text style={styles.sectionTitle}>Ingredients</Text>
-                {meal.ingredients.map((ing, idx) => (
-                  <View key={idx} style={styles.ingredientRow}>
-                    <View style={styles.bullet} />
-                    <Text style={styles.ingredientText}>
-                      {ing.productName}
-                      {ing.quantity != null && ing.quantity > 1 ? ` × ${ing.quantity}` : ''}
-                    </Text>
-                  </View>
-                ))}
+                {meal.ingredients.map((ing, idx) => {
+                  const qty = ing.qty > 1 ? `${ing.qty} ` : '';
+                  const measure = ing.measure ? `${ing.measure} ` : '';
+                  return (
+                    <View key={idx} style={styles.ingredientRow}>
+                      <View style={styles.bullet} />
+                      <Text style={styles.ingredientText}>
+                        {qty}{measure}{ing.ingredientName}
+                      </Text>
+                    </View>
+                  );
+                })}
 
                 {/* Recipe instructions */}
                 {meal.recipe ? (

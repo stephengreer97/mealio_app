@@ -26,13 +26,14 @@ export async function getUser(): Promise<User | null> {
 }
 
 export async function save(accessToken: string, refreshToken: string | undefined | null, user: User): Promise<void> {
-  await Promise.all([
+  const ops: Promise<void>[] = [
     SecureStore.setItemAsync(KEYS.ACCESS_TOKEN, accessToken),
-    refreshToken
-      ? SecureStore.setItemAsync(KEYS.REFRESH_TOKEN, refreshToken)
-      : SecureStore.deleteItemAsync(KEYS.REFRESH_TOKEN),
     SecureStore.setItemAsync(KEYS.USER, JSON.stringify(user)),
-  ]);
+  ];
+  if (refreshToken) {
+    ops.push(SecureStore.setItemAsync(KEYS.REFRESH_TOKEN, refreshToken));
+  }
+  await Promise.all(ops);
 }
 
 export async function clear(): Promise<void> {

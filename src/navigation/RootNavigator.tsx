@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
 import * as Linking from 'expo-linking';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuth } from '../context/AuthContext';
@@ -41,10 +42,26 @@ export default function RootNavigator() {
   const { user, isLoading, loginWithToken } = useAuth();
   const [deepLink, setDeepLink] = useState<DeepLink | null>(null);
   const [showAuth, setShowAuth] = useState(false);
+  const splashHidden = useRef(false);
+
+  function hideSplash() {
+    if (!splashHidden.current) {
+      splashHidden.current = true;
+      SplashScreen.hideAsync();
+    }
+  }
+
+  // For logged-in users and auth stack: hide splash as soon as auth resolves
+  useEffect(() => {
+    if (!isLoading && (user || showAuth)) {
+      hideSplash();
+    }
+  }, [isLoading, user, showAuth]);
 
   // Preset meal deep link state
   const [presetMeal, setPresetMeal] = useState<PresetMeal | null>(null);
   const [presetDetailVisible, setPresetDetailVisible] = useState(false);
+  const presetDetailVisibleRef = useRef(false);
   const [storeSelectorVisible, setStoreSelectorVisible] = useState(false);
 
   useEffect(() => {
@@ -75,6 +92,14 @@ export default function RootNavigator() {
       try {
         const meal = await presetMealsApi.getById(link.id);
         setPresetMeal(meal);
+        // If a modal is already visible, close it first to avoid stacked Modals
+        // blocking touch events on iOS. Use a ref to avoid stale closure.
+        if (presetDetailVisibleRef.current) {
+          setPresetDetailVisible(false);
+          presetDetailVisibleRef.current = false;
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        presetDetailVisibleRef.current = true;
         setPresetDetailVisible(true);
       } catch {
         // Silently ignore — bad/expired link
@@ -84,15 +109,8 @@ export default function RootNavigator() {
     }
   }
 
-  if (isLoading) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.bg }}>
-        <ActivityIndicator size="large" color={Colors.brand} />
-      </View>
-    );
-  }
-
   function renderMain() {
+    if (isLoading) return null;
     if (user) return <MainTabs />;
     if (showAuth) return <AuthStack />;
     return (
@@ -106,7 +124,7 @@ export default function RootNavigator() {
         <GuestStack.Screen
           name="GuestDiscover"
           component={DiscoverScreen}
-          initialParams={{ onSignIn: () => setShowAuth(true) }}
+          initialParams={{ onSignIn: () => setShowAuth(true), onReady: hideSplash }}
           options={{ headerShown: false }}
         />
       </GuestStack.Navigator>
@@ -128,7 +146,7 @@ export default function RootNavigator() {
         visible={presetDetailVisible}
         meal={presetMeal}
         mode="view"
-        onClose={() => setPresetDetailVisible(false)}
+        onClose={() => { presetDetailVisibleRef.current = false; setPresetDetailVisible(false); }}
         onPressSave={() => {
           setPresetDetailVisible(false);
           setStoreSelectorVisible(true);

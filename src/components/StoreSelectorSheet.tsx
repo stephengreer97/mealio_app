@@ -117,7 +117,7 @@ export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: 
       <SafeAreaView style={styles.safe}>
         <View style={styles.header}>
           <Text style={styles.title}>Save to My Meals</Text>
-          <TouchableOpacity onPress={onClose}>
+          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Text style={styles.close}>✕</Text>
           </TouchableOpacity>
         </View>

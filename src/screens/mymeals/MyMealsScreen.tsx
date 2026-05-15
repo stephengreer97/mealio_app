@@ -21,11 +21,12 @@ import { Colors, Radius } from '../../constants/colors';
 import { Meal, Ingredient } from '../../types';
 import { meals as mealsApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
-import { STORES, isKrogerBrand } from '../../constants/stores';
+import { STORES, isKrogerBrand, isWebViewStore } from '../../constants/stores';
 import { ALL_TAGS } from '../../constants/tags';
 import MealCard from '../../components/MealCard';
 import MealDetailSheet from '../../components/MealDetailSheet';
 import KrogerCartReviewSheet from '../../components/KrogerCartReviewSheet';
+import WebViewCartSheet from '../../components/WebViewCartSheet';
 import ProductChooserSheet from '../../components/ProductChooserSheet';
 import IngredientEditor from '../../components/IngredientEditor';
 import PhotoPicker from '../../components/PhotoPicker';
@@ -56,6 +57,7 @@ export default function MyMealsScreen() {
   // Multi-select / Kroger cart
   const [selectedMealIds, setSelectedMealIds] = useState<Set<string>>(new Set());
   const [reviewVisible, setReviewVisible] = useState(false);
+  const [webViewCartVisible, setWebViewCartVisible] = useState(false);
 
   // Choose products flow
   const [choosingMeal, setChoosingMeal] = useState<Meal | null>(null);
@@ -262,6 +264,29 @@ export default function MyMealsScreen() {
     }
   }
 
+  async function handleIngredientChosen(ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null) {
+    await Promise.all(
+      mealIds.map(async (mealId) => {
+        const meal = allMeals.find((m) => m.id === mealId);
+        if (!meal) return;
+        const updatedIngredients = (meal.ingredients as any[]).map((ing) => {
+          const name = ing.ingredientName ?? ing.productName ?? ing.product_name ?? ing.name ?? '';
+          const term = ing.searchTerm ?? ing.search_term ?? name;
+          if (name !== ingredientName && term !== ingredientName) return ing;
+          const updates: Record<string, any> = { searchTerm: productName };
+          if (mealQtys && mealQtys[mealId] != null) updates.productQty = mealQtys[mealId];
+          if (dropdown) updates.dropdown = dropdown;
+          else if ('dropdown' in ing) updates.dropdown = null; // clear stale preference if none selected
+          return { ...ing, ...updates };
+        });
+        try {
+          const updated = await mealsApi.update(mealId, { ingredients: updatedIngredients } as any);
+          setAllMeals((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+        } catch {}
+      }),
+    );
+  }
+
   async function loadMeals() {
     try {
       const data = await mealsApi.list();
@@ -270,12 +295,17 @@ export default function MyMealsScreen() {
         .filter((m) => !m.deletedAt && !seen.has(m.id) && seen.add(m.id))
         .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
       setAllMeals(active);
-      // Auto-select first store that has meals (if current selection has none)
+      // Auto-select the store with the most meals (if current selection has none)
       setSelectedStore((prev) => {
         const hasMealsAtCurrent = active.some((m) => m.storeId === prev);
         if (hasMealsAtCurrent) return prev;
-        const firstWithMeals = STORES.find((s) => active.some((m) => m.storeId === s.id));
-        return firstWithMeals ? firstWithMeals.id : prev;
+        const counts: Record<string, number> = {};
+        for (const m of active) if (m.storeId) counts[m.storeId] = (counts[m.storeId] ?? 0) + 1;
+        const topStore = STORES.reduce<{ id: string; count: number } | null>((best, s) => {
+          const c = counts[s.id] ?? 0;
+          return c > 0 && (!best || c > best.count) ? { id: s.id, count: c } : best;
+        }, null);
+        return topStore ? topStore.id : prev;
       });
     } catch (err: any) {
       if (err.status !== 401) {
@@ -302,7 +332,7 @@ export default function MyMealsScreen() {
   function openCreate() {
     setMealName('');
     setFormStore('');
-    setIngredients([{ productName: '', quantity: 1 }]);
+    setIngredients([{ ingredientName: '', qty: 1, productQty: 1, unit: 'qty', measure: null }]);
     setSelectedTags([]);
     setDifficulty(null);
     setMealAuthor('');
@@ -327,13 +357,9 @@ export default function MyMealsScreen() {
       Alert.alert('Error', 'Please select a store.');
       return;
     }
-    const validIngredients = ingredients.filter((i) => i.productName.trim());
+    const validIngredients = ingredients.filter((i) => i.ingredientName.trim());
     if (validIngredients.length === 0) {
       Alert.alert('Error', 'Add at least one ingredient.');
-      return;
-    }
-    if (validIngredients.some((i) => i.quantity === undefined)) {
-      Alert.alert('Error', 'All ingredients need a quantity.');
       return;
     }
     setSaving(true);
@@ -376,8 +402,10 @@ export default function MyMealsScreen() {
   const storesWithMeals = STORES
     .filter((s) => allMeals.some((m) => m.storeId === s.id))
     .sort((a, b) => allMeals.filter((m) => m.storeId === b.id).length - allMeals.filter((m) => m.storeId === a.id).length);
-  const displayStores = loading ? [] : storesWithMeals.length > 0 ? storesWithMeals : STORES.slice(0, 5);
+  const displayStores = loading ? [] : storesWithMeals;
   const isKroger = isKrogerBrand(selectedStore);
+  const isWebView = isWebViewStore(selectedStore);
+  const isCartEnabled = isKroger || isWebView;
   const selectedMeals = storeMeals.filter((m) => selectedMealIds.has(m.id));
   const selectedStore_ = STORES.find((s) => s.id === selectedStore);
 
@@ -402,33 +430,33 @@ export default function MyMealsScreen() {
       <View style={styles.mealRow}>
         <MealCard
           meal={item}
-          onPress={isKroger ? () => toggleMealSelect(item.id) : () => openMeal(item)}
+          onPress={isCartEnabled ? () => toggleMealSelect(item.id) : () => openMeal(item)}
           subtitle={item.author ?? undefined}
-          selected={isKroger ? selectedMealIds.has(item.id) : undefined}
-          onView={isKroger ? () => openMeal(item) : undefined}
-          warning={isKroger && hasUnchosenProducts(item) ? 'Cannot add to cart until products have been chosen' : undefined}
+          selected={isCartEnabled ? selectedMealIds.has(item.id) : undefined}
+          onView={isCartEnabled ? () => openMeal(item) : undefined}
+          warning={(isKroger || isWebView) && hasUnchosenProducts(item) ? 'Cannot add to cart until products have been chosen' : undefined}
         />
         {next ? (
           <MealCard
             meal={next}
-            onPress={isKroger ? () => toggleMealSelect(next.id) : () => openMeal(next)}
+            onPress={isCartEnabled ? () => toggleMealSelect(next.id) : () => openMeal(next)}
             subtitle={next.author ?? undefined}
-            selected={isKroger ? selectedMealIds.has(next.id) : undefined}
-            onView={isKroger ? () => openMeal(next) : undefined}
-            warning={isKroger && hasUnchosenProducts(next) ? 'Cannot add to cart until products have been chosen' : undefined}
+            selected={isCartEnabled ? selectedMealIds.has(next.id) : undefined}
+            onView={isCartEnabled ? () => openMeal(next) : undefined}
+            warning={(isKroger || isWebView) && hasUnchosenProducts(next) ? 'Cannot add to cart until products have been chosen' : undefined}
           />
         ) : (
           <View style={{ flex: 1, marginHorizontal: 4 }} />
         )}
       </View>
     );
-  }, [storeMeals, isKroger, selectedMealIds]);
+  }, [storeMeals, isCartEnabled, isKroger, selectedMealIds]);
 
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
         <Text style={styles.title}>My Meals</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
+        <TouchableOpacity style={styles.addBtn} onPress={openCreate} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <Ionicons name="add" size={24} color={Colors.brand} />
         </TouchableOpacity>
       </View>
@@ -454,7 +482,7 @@ export default function MyMealsScreen() {
         ))}
       </ScrollView>
 
-      {!loading && !isKroger && (
+      {!loading && !isCartEnabled && allMeals.length > 0 && (
         <View style={styles.krogerNotice}>
           <Text style={styles.krogerNoticeText}>
             <Text style={styles.krogerNoticeBold}>{selectedStore_?.name ?? 'This store'}</Text>
@@ -463,7 +491,7 @@ export default function MyMealsScreen() {
         </View>
       )}
 
-      {user?.tier !== 'paid' && (
+      {user?.tier !== 'paid' && allMeals.length >= FREE_LIMIT && (
         <View style={styles.tierBanner}>
           <View style={styles.tierBarRow}>
             <View style={styles.tierBarOuter}>
@@ -504,19 +532,38 @@ export default function MyMealsScreen() {
         }
       />
 
-      {isKroger && selectedMealIds.size > 0 && (() => {
-        const needsChoose = selectedMeals.some(hasUnchosenProducts);
-        const unchosenCount = selectedMeals.filter(hasUnchosenProducts).length;
+      {isCartEnabled && selectedMealIds.size > 0 && (() => {
+        if (isKroger) {
+          const needsChoose = selectedMeals.some(hasUnchosenProducts);
+          const unchosenCount = selectedMeals.filter(hasUnchosenProducts).length;
+          return (
+            <TouchableOpacity
+              style={[styles.floatingCart, { backgroundColor: selectedStore_?.color ?? Colors.brand }]}
+              onPress={needsChoose ? handleFloatingChooseProducts : handleCartButtonPress}
+              activeOpacity={0.88}
+            >
+              <Ionicons name={needsChoose ? 'search' : 'cart'} size={18} color="#fff" />
+              <Text style={styles.floatingCartText}>
+                {needsChoose
+                  ? `Choose Products for ${unchosenCount} meal${unchosenCount !== 1 ? 's' : ''}`
+                  : `Add ${selectedMealIds.size} meal${selectedMealIds.size !== 1 ? 's' : ''} to ${selectedStore_?.name ?? 'cart'}`}
+              </Text>
+            </TouchableOpacity>
+          );
+        }
+        // WebView store (e.g. H-E-B) — WebViewCartSheet handles both choose + add
+        const webViewNeedsChoose = selectedMeals.some(hasUnchosenProducts);
+        const webViewUnchosenCount = selectedMeals.filter(hasUnchosenProducts).length;
         return (
           <TouchableOpacity
             style={[styles.floatingCart, { backgroundColor: selectedStore_?.color ?? Colors.brand }]}
-            onPress={needsChoose ? handleFloatingChooseProducts : handleCartButtonPress}
+            onPress={() => setWebViewCartVisible(true)}
             activeOpacity={0.88}
           >
-            <Ionicons name={needsChoose ? 'search' : 'cart'} size={18} color="#fff" />
+            <Ionicons name={webViewNeedsChoose ? 'search' : 'cart'} size={18} color="#fff" />
             <Text style={styles.floatingCartText}>
-              {needsChoose
-                ? `Choose Products for ${unchosenCount} meal${unchosenCount !== 1 ? 's' : ''}`
+              {webViewNeedsChoose
+                ? `Choose Products for ${webViewUnchosenCount} meal${webViewUnchosenCount !== 1 ? 's' : ''}`
                 : `Add ${selectedMealIds.size} meal${selectedMealIds.size !== 1 ? 's' : ''} to ${selectedStore_?.name ?? 'cart'}`}
             </Text>
           </TouchableOpacity>
@@ -546,6 +593,15 @@ export default function MyMealsScreen() {
         }}
       />
 
+      <WebViewCartSheet
+        visible={webViewCartVisible}
+        meals={selectedMeals}
+        storeId={selectedStore}
+        storeName={selectedStore_?.name ?? 'Store'}
+        onClose={() => { setWebViewCartVisible(false); setSelectedMealIds(new Set()); }}
+        onIngredientChosen={handleIngredientChosen}
+      />
+
       {choosingMeal && (
         <ProductChooserSheet
           key={choosingMeal.id}
@@ -566,7 +622,7 @@ export default function MyMealsScreen() {
         <SafeAreaView style={styles.safe}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Select Your Store</Text>
-            <TouchableOpacity onPress={() => setKrogerPickerVisible(false)}>
+            <TouchableOpacity onPress={() => setKrogerPickerVisible(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Text style={styles.modalClose}>✕</Text>
             </TouchableOpacity>
           </View>
@@ -619,7 +675,7 @@ export default function MyMealsScreen() {
           <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>New Meal</Text>
-              <TouchableOpacity onPress={() => setFormVisible(false)}>
+              <TouchableOpacity onPress={() => setFormVisible(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <Text style={styles.modalClose}>✕</Text>
               </TouchableOpacity>
             </View>
@@ -770,7 +826,7 @@ export default function MyMealsScreen() {
                 <View style={styles.pickerSheet}>
                   <View style={styles.pickerHeader}>
                     <Text style={styles.pickerTitle}>Select Store</Text>
-                    <TouchableOpacity onPress={() => setStorePickerVisible(false)}>
+                    <TouchableOpacity onPress={() => setStorePickerVisible(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                       <Ionicons name="close" size={22} color={Colors.text2} />
                     </TouchableOpacity>
                   </View>

@@ -16,6 +16,7 @@ export interface Ingredient {
   productQty: number;
   unit: string;
   measure?: string | null;
+  dropdown?: { type: string; selectedText: string; selectedValue: string } | null;
 }
 
 export interface Meal {
