@@ -3,7 +3,7 @@
 //
 // ALDI now runs on the Instacart platform. DOM reference:
 //   Store URL:          https://www.aldi.us/store/aldi/storefront
-//   Search URL:         https://www.aldi.us/store/aldi/search?q={term}
+//   Search URL:         https://www.aldi.us/store/aldi/s?k={term} (Instacart pattern; /search was retired)
 //   Add to cart button: button[aria-label^="Add 1 "] (name in aria-label)
 //   Product card link:  a[href*="/store/aldi/products/"]
 //   Increment button:   button[aria-label^="Increment quantity"]
@@ -294,7 +294,7 @@ function buildSearchScript(term: string): string {
 
   if (!searchInput) {
     // Last resort: URL navigation.
-    window.location.href = 'https://www.aldi.us/store/aldi/search?q=' + encodeURIComponent(term);
+    window.location.href = 'https://www.aldi.us/store/aldi/s?k=' + encodeURIComponent(term);
     return;
   }
 
@@ -419,7 +419,7 @@ function buildSearchAndAddScript(
       }));
     });
   } else {
-    window.location.href = 'https://www.aldi.us/store/aldi/search?q=' + encodeURIComponent(SEARCH_TERM);
+    window.location.href = 'https://www.aldi.us/store/aldi/s?k=' + encodeURIComponent(SEARCH_TERM);
   }
 
   // Wait for fresh search results (stale detection via card links, up to 10s).
@@ -445,10 +445,20 @@ function buildSearchAndAddScript(
     'salted','unsalted','sodium','boneless','skinless','lean','ground']);
   var COMMON = new Set(['the','and','or','of','a','an','in','on','at','to','for','with']);
 
-  function normalize(s) { return s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim(); }
+  // Dual normalization to handle stores that mangle ñ/é/etc. inconsistently
+  // across renderings (Walmart strips ñ entirely on certain queries; others
+  // may NFD-decompose). Score both ways and take the better.
+  function normDiacritic(s) {
+    return s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
+      .replace(/[^a-z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim();
+  }
+  function normStrip(s) {
+    return s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
+      .replace(/[^\\x00-\\x7f]/g, '').replace(/[^a-z0-9 ]/g, ' ')
+      .replace(/\\s+/g, ' ').trim();
+  }
 
-  function scoreMatch(found, target) {
-    var nf = normalize(found), nt = normalize(target);
+  function scoreOne(nf, nt) {
     if (nf === nt) return 100;
     var wt = nt.split(' ').filter(Boolean), wf = new Set(nf.split(' ').filter(Boolean));
     var critTarget = wt.filter(function(w) { return CRITICAL.has(w); });
@@ -472,6 +482,12 @@ function buildSearchAndAddScript(
     });
     var score = Math.round(pct * 100) - (extra.length * 5) - critPenalty;
     return Math.max(0, score);
+  }
+
+  function scoreMatch(found, target) {
+    var s1 = scoreOne(normDiacritic(found), normDiacritic(target));
+    var s2 = scoreOne(normStrip(found), normStrip(target));
+    return Math.max(s1, s2);
   }
 
   function findCard(btn) {

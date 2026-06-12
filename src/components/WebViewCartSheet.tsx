@@ -9,16 +9,26 @@ import {
   ActivityIndicator,
   TextInput,
   Linking,
-  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { Image } from 'expo-image';
 import WebView, { WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Meal } from '../types';
 import { STORES } from '../constants/stores';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
+import { STORE_WEBVIEW_UA } from '../lib/webview-user-agent';
+import {
+  ConsolidatedIngredient,
+  consolidateIngredients,
+} from '../lib/consolidateIngredients';
+import { useParallelSearchPool } from '../lib/useParallelSearchPool';
+import {
+  buildWegmansWorkerScript,
+  getWegmansSearchUrl,
+} from '../lib/webview-scripts/wegmans';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,18 +36,6 @@ interface MealIngredientQty {
   mealId: string;
   mealName: string;
   qty: number;
-}
-
-interface ConsolidatedIngredient {
-  ingredientName: string;
-  productQty: number;
-  unit: string;
-  measure: string | null;
-  searchTerm: string | null;
-  dropdown: { type: string; selectedText: string; selectedValue: string } | null;
-  mealIds: string[];
-  mealNames: string[];
-  mealIngredients: MealIngredientQty[];
 }
 
 interface Candidate {
@@ -66,7 +64,7 @@ interface PickedItem {
   qty: number;
 }
 
-type Step = 'qty' | 'login_check' | 'login' | 'searching' | 'searchResult' | 'review' | 'adding' | 'done';
+type Step = 'qty' | 'login_check' | 'login' | 'searching' | 'searchResult' | 'review' | 'adding' | 'done' | 'robot_challenge';
 
 export interface WebViewCartSheetProps {
   visible: boolean;
@@ -106,18 +104,6 @@ function scoreProductMatch(searchTerm: string, productName: string): number {
   return Math.min(99, Math.round(matchPct * 100));
 }
 
-function normIngName(ing: any): string {
-  return ing.ingredientName ?? ing.productName ?? ing.product_name ?? ing.name ?? '';
-}
-
-function normProductQty(ing: any): number {
-  // Clamp non-positive/invalid values to 1: saved meal data can leak qty=0
-  // from the chooser flow, which would otherwise disable the cart CTA.
-  const raw = ing.productQty ?? ing.qty ?? ing.quantity ?? 1;
-  const n = typeof raw === 'number' ? raw : Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : 1;
-}
-
 // HEB Deli / Fish Market items are sold by weight: 1 qty = 0.25 lb.
 function isWeightBased(name: string): boolean {
   return /H-E-B (Deli|Fish Market)/i.test(name);
@@ -125,50 +111,6 @@ function isWeightBased(name: string): boolean {
 
 function fmtWeight(qty: number): string {
   return `${(qty * 0.25).toFixed(2)} lb`;
-}
-
-function consolidateIngredients(
-  meals: Array<Pick<Meal, 'id' | 'name' | 'ingredients'>>,
-): ConsolidatedIngredient[] {
-  const map = new Map<string, ConsolidatedIngredient>();
-  for (const meal of meals) {
-    for (const ing of meal.ingredients as any[]) {
-      const name = normIngName(ing);
-      const dropdownKey = ing.dropdown?.selectedValue ? `|${ing.dropdown.selectedValue}` : '';
-      // Unchosen ingredients (no searchTerm) must never be consolidated across meals — each meal
-      // picks its own product independently. Only consolidate when a searchTerm is already set.
-      const key = ing.searchTerm
-        ? ing.searchTerm.toLowerCase().trim() + dropdownKey
-        : `__unchosen__|${meal.id}|${name.toLowerCase().trim()}`;
-      if (!key) continue;
-      const qty = normProductQty(ing);
-      if (map.has(key)) {
-        const e = map.get(key)!;
-        e.productQty += qty;
-        const existing = e.mealIngredients.find((m) => m.mealId === meal.id);
-        if (existing) {
-          existing.qty += qty;
-        } else {
-          e.mealIngredients.push({ mealId: meal.id, mealName: meal.name, qty });
-          e.mealIds.push(meal.id);
-          e.mealNames.push(meal.name);
-        }
-      } else {
-        map.set(key, {
-          ingredientName: name,
-          productQty: qty,
-          unit: ing.unit ?? 'qty',
-          measure: ing.measure ?? null,
-          searchTerm: ing.searchTerm ?? null,
-          dropdown: ing.dropdown ?? null,
-          mealIds: [meal.id],
-          mealNames: [meal.name],
-          mealIngredients: [{ mealId: meal.id, mealName: meal.name, qty }],
-        });
-      }
-    }
-  }
-  return [...map.values()];
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────────
@@ -228,6 +170,28 @@ export default function WebViewCartSheet({
   // True once the WebView has landed on a store search page — lets subsequent items
   // skip the homepage round-trip and inject buildSearchScript directly.
   const onSearchPageRef = useRef(false);
+  // When a store's buildSearchScript is about to navigate (window.location.href = …),
+  // it posts NAV_INTENT with the target URL. onLoadEnd events whose URL doesn't
+  // match this target are stale duplicates from the prior page and must NOT pop
+  // the queue, otherwise the new search's extract would run on the old DOM
+  // (the "chicken breast for every search" bug).
+  const expectedNavUrlRef = useRef<string>('');
+  // Bound how long we'll wait for an ADD_RESULT for the current item before
+  // marking it failed and advancing. Without this, a stuck store script (e.g.
+  // selectors broke, page never loaded, the search returned nothing addable)
+  // leaves the user staring at the spinner forever.
+  const addTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ADD_TIMEOUT_MS = 10_000;
+  // Same safety net for navigateToSearchItem — the search+add (combined) and
+  // choose-product flows both go through it, and if buildSearchScript hangs
+  // (bad selectors, SPA submit fails AND fallback nav fails, …) we'd otherwise
+  // never advance. Cleared when SEARCH_RESULT or SEARCH_AND_ADD_RESULT arrives.
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const SEARCH_TIMEOUT_MS = 15_000;
+  // Tracks which search idx to resume from after a robot/captcha challenge
+  // (Walmart redirects to /blocked when it suspects automation; user has to
+  // press-and-hold to verify). -1 when no challenge in progress.
+  const robotChallengeResumeIdxRef = useRef<number>(-1);
   // Tracks which step we were in before a login redirect, so we can resume after login.
   const stepBeforeLoginRef = useRef<Step>('searching');
   const loginCheckActiveRef = useRef(false);
@@ -247,6 +211,92 @@ export default function WebViewCartSheet({
   // to navigate to once the enrichment SEARCH_RESULT arrives.
   const prefFetchResultIdxRef = useRef<number>(-1);
   const pendingNavIdxRef = useRef<number>(-1);
+
+  // Last script popped from the queue and injected. Re-injected if onLoadEnd
+  // fires AGAIN for the same URL during the `searching` step before a result
+  // arrives — this handles SSO/MSAL bootstrap reloads (e.g. Wegmans's first
+  // navigation) that kill the just-injected script. Cleared on SEARCH_RESULT
+  // or SEARCH_AND_ADD_RESULT, and when the next script is popped from queue.
+  const inflightScriptRef = useRef<string | null>(null);
+
+  // ── Wegmans parallel search pool (storeId === 'wegmans' choose-flow only) ──
+  // Worker WebViews are mounted only AFTER login completes and parallel search
+  // starts — to avoid spawning 5 hidden WebViews during login_check, which can
+  // overwhelm iOS WebView init and cause a silent crash. The queue/dispatch/
+  // timeout state machine lives in useParallelSearchPool; this component owns
+  // only the start trigger, the per-worker WebView render, and the "all done →
+  // build SearchResult list → go to review" finalization.
+  const WEGMANS_WORKER_COUNT = 5;
+  const WEGMANS_WORKER_TIMEOUT_MS = 20_000;
+  const isWegmansStore = storeId === 'wegmans';
+
+  const wegmansPool = useParallelSearchPool<ConsolidatedIngredient, Candidate[]>({
+    workerCount: WEGMANS_WORKER_COUNT,
+    workerTimeoutMs: WEGMANS_WORKER_TIMEOUT_MS,
+    getUrl: (item) => getWegmansSearchUrl(item.ingredientName),
+    emptyResult: () => [],
+  });
+
+  const workerScripts = useMemo(
+    () => new Array(WEGMANS_WORKER_COUNT).fill(0).map((_, i) => buildWegmansWorkerScript(i)),
+    [],
+  );
+  const workerSources = useMemo(
+    () => wegmansPool.workerUris.map((uri) => ({ uri: uri || 'about:blank' })),
+    [wegmansPool.workerUris],
+  );
+
+  const finishWegmansParallel = useCallback((resultsByIdx: Map<number, Candidate[]>) => {
+    const active = activeItemsRef.current;
+    const results: SearchResult[] = [];
+    for (let idx = 0; idx < active.length; idx++) {
+      const item = active[idx];
+      const candidates = resultsByIdx.get(idx) ?? [];
+      results.push({
+        term: item.ingredientName,
+        candidates,
+        mealIngredients: item.mealIngredients,
+        unit: item.unit,
+        measure: item.measure,
+        reason: candidates.length === 0 ? 'no_results' : 'low_confidence',
+        isChoose: true,
+      });
+    }
+    const summary = results.map((r) => ({ term: r.term, count: r.candidates.length, first: r.candidates[0]?.productName }));
+    console.log(`[Cart ${ts()}]`, 'wegmans parallel: finishing → review', JSON.stringify(summary));
+    searchResultsRef.current = results;
+    setSearchResults(results);
+    setStep('review');
+    setReviewIdx(0);
+  }, []);
+
+  const startWegmansParallel = useCallback(() => {
+    const active = activeItemsRef.current;
+    if (active.length === 0) {
+      console.log(`[Cart ${ts()}]`, 'wegmans parallel: no active items, skipping');
+      return;
+    }
+    console.log(`[Cart ${ts()}]`, 'wegmans parallel: dispatching', active.length, 'across', WEGMANS_WORKER_COUNT, 'workers');
+    setSearchingLabel(`Searching ${active.length} ingredients…`);
+    wegmansPool.start(active, finishWegmansParallel);
+  }, [wegmansPool, finishWegmansParallel]);
+
+  const onWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
+    try {
+      const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type === 'WORKER_DEBUG') {
+        console.log(`[Cart ${ts()}]`, 'WORKER_DEBUG w', workerId, JSON.stringify(msg));
+        return;
+      }
+      if (msg.type === 'WORKER_RESULT') {
+        console.log(`[Cart ${ts()}]`, 'WORKER_RESULT w', workerId, 'candidates=', (msg.candidates || []).length);
+        wegmansPool.reportResult(workerId, msg.candidates || []);
+        return;
+      }
+    } catch (e) {
+      console.log(`[Cart ${ts()}]`, 'onWorkerMessage parse error w', workerId, e);
+    }
+  }, [wegmansPool]);
 
   // ── Reset on open ────────────────────────────────────────────────────────
 
@@ -273,6 +323,11 @@ export default function WebViewCartSheet({
       setWebviewUri(scriptsRef.current!.storeUrl);
       loadQueueRef.current = [];
       lastLoadEndUrlRef.current = '';
+      expectedNavUrlRef.current = '';
+      inflightScriptRef.current = null;
+      if (addTimeoutRef.current) { clearTimeout(addTimeoutRef.current); addTimeoutRef.current = null; }
+      if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
+      robotChallengeResumeIdxRef.current = -1;
       onSearchPageRef.current = false;
       loginCheckActiveRef.current = false;
       searchIdxRef.current = 0;
@@ -281,6 +336,11 @@ export default function WebViewCartSheet({
       autoPickedItemsRef.current = [];
       searchResultsRef.current = [];
       isCustomSearchRef.current = false;
+
+      // Reset Wegmans parallel worker state. The hook clears its queue,
+      // active flag, timers, and worker URIs in one call — workers unmount
+      // because isActive flips to false.
+      wegmansPool.reset();
 
       // If any ingredient has no chosen product yet, skip the qty step and
       // auto-start the search/choose flow immediately.
@@ -343,6 +403,12 @@ export default function WebViewCartSheet({
   // ── Navigation to next search item ──────────────────────────────────────
 
   const navigateToSearchItem = useCallback((idx: number) => {
+    // Clear any prior search timer — even on the all-done branch — so a late
+    // firing can't synthesize a phantom failure on the next session.
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = null;
+    }
     const active = activeItemsRef.current;
     if (idx >= active.length) {
       if (searchResultsRef.current.length === 0) {
@@ -409,9 +475,60 @@ export default function WebViewCartSheet({
         setWebviewUri(scriptsRef.current!.storeUrl + '?_t=' + Date.now());
       }
     }
+    // Arm a safety timeout. If neither SEARCH_RESULT nor SEARCH_AND_ADD_RESULT
+    // arrives within the window, mark this item as failed (where applicable)
+    // and advance. Without this a hung buildSearchScript spins forever.
+    searchTimeoutRef.current = setTimeout(() => {
+      searchTimeoutRef.current = null;
+      inflightScriptRef.current = null;
+      console.log(`[Cart ${ts()}]`, 'SEARCH timeout for', term, '— treating as failed and advancing');
+      if (item.searchTerm) {
+        // Auto-add flow: also push a SearchResult with empty candidates so
+        // the failed item appears in the review/searchResult screen — same
+        // shape as the SEARCH_AND_ADD_RESULT failure path.
+        const newResult: SearchResult = {
+          term: item.searchTerm,
+          candidates: [],
+          mealIngredients: item.mealIngredients,
+          unit: item.unit,
+          measure: item.measure,
+          reason: 'no_results',
+          isChoose: false,
+        };
+        searchResultsRef.current = [...searchResultsRef.current, newResult];
+        setSearchResults(searchResultsRef.current);
+        addResultsRef.current.push({ name: item.searchTerm, success: false });
+      } else {
+        // Choose-product flow: push an empty-candidates SearchResult so the
+        // review screen still renders an entry for this ingredient.
+        const newResult: SearchResult = {
+          term: item.ingredientName,
+          candidates: [],
+          mealIngredients: item.mealIngredients,
+          unit: item.unit,
+          measure: item.measure,
+          reason: 'no_results',
+          isChoose: true,
+        };
+        searchResultsRef.current = [...searchResultsRef.current, newResult];
+        setSearchResults(searchResultsRef.current);
+      }
+      // Clear any in-flight load state so the next nav can run cleanly.
+      loadQueueRef.current = [];
+      expectedNavUrlRef.current = '';
+      const nextIdx = idx + 1;
+      searchIdxRef.current = nextIdx;
+      navigateToSearchItem(nextIdx);
+    }, SEARCH_TIMEOUT_MS);
   }, []);
 
   const navigateToAddItem = useCallback((idx: number, itemsToAdd: PickedItem[]) => {
+    // Always clear any timer from the previous item — even on the "all done"
+    // branch, otherwise a late firing could synthesize a phantom result.
+    if (addTimeoutRef.current) {
+      clearTimeout(addTimeoutRef.current);
+      addTimeoutRef.current = null;
+    }
     if (idx >= itemsToAdd.length) {
       // All done — navigate to cart
       const added = addResultsRef.current.filter((r) => r.success).length;
@@ -433,6 +550,18 @@ export default function WebViewCartSheet({
       loadQueueRef.current = [scriptsRef.current!.buildSearchScript(item.searchTerm), scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty)];
       setWebviewUri(scriptsRef.current!.storeUrl + '?_t=' + Date.now());
     }
+    // Arm the per-item timeout. On fire: synthesize a failure ADD_RESULT,
+    // wipe any pending queue/nav-intent, and advance.
+    addTimeoutRef.current = setTimeout(() => {
+      addTimeoutRef.current = null;
+      console.log(`[Cart ${ts()}]`, 'ADD timeout for', item.productName, '— treating as failed and advancing');
+      addResultsRef.current.push({ name: item.productName, success: false });
+      loadQueueRef.current = [];
+      expectedNavUrlRef.current = '';
+      const nextIdx = idx + 1;
+      addingIdxRef.current = nextIdx;
+      navigateToAddItem(nextIdx, itemsToAdd);
+    }, ADD_TIMEOUT_MS);
   }, []);
 
   // ── WebView events ───────────────────────────────────────────────────────
@@ -444,9 +573,44 @@ export default function WebViewCartSheet({
   const onLoadEnd = useCallback((e: any) => {
     const url = e?.nativeEvent?.url ?? '';
     const s = scriptsRef.current;
-    console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'queue=', loadQueueRef.current.length, 'domain=', s?.domain);
     // Only process pages for this store — ignore about:blank and other internal loads.
-    if (!s || !url.includes(s.domain)) return;
+    if (!s || !url.includes(s.domain)) {
+      console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'skipped: not store domain');
+      return;
+    }
+    // Walmart anti-bot redirect: /blocked?url=<encoded original>. We surface
+    // this to the user as a 'robot_challenge' step so they can complete the
+    // press-and-hold verification. Once they're past it the page navigates
+    // back away from /blocked, and we resume the current search idx.
+    const onBlockedPage = /\/blocked(\?|$)/.test(url);
+    console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url,
+      'queue=', loadQueueRef.current.length,
+      'step=', stepRef.current,
+      'onBlockedPage=', onBlockedPage);
+    if (onBlockedPage && stepRef.current !== 'robot_challenge') {
+      console.log(`[Cart ${ts()}]`, 'onLoadEnd detected anti-bot block — showing webview for user');
+      if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
+      if (addTimeoutRef.current) { clearTimeout(addTimeoutRef.current); addTimeoutRef.current = null; }
+      loadQueueRef.current = [];
+      expectedNavUrlRef.current = '';
+      lastLoadEndUrlRef.current = url;
+      robotChallengeResumeIdxRef.current = searchIdxRef.current;
+      setStep('robot_challenge');
+      return;
+    }
+    // Already in the challenge: if URL is back to a normal walmart page,
+    // resume from the saved idx.
+    if (stepRef.current === 'robot_challenge') {
+      if (!onBlockedPage) {
+        const resumeIdx = robotChallengeResumeIdxRef.current >= 0 ? robotChallengeResumeIdxRef.current : 0;
+        robotChallengeResumeIdxRef.current = -1;
+        console.log(`[Cart ${ts()}]`, 'onLoadEnd robot challenge cleared — resuming at idx', resumeIdx);
+        setStep('searching');
+        lastLoadEndUrlRef.current = '';
+        navigateToSearchItem(resumeIdx);
+      }
+      return;
+    }
     // Skip intermediate auth/SSO redirect pages — scripts injected here get killed
     // when the page redirects to the final destination.
     if (/\/sso\/|\/authorize[?/]|\/oidc\/|\/oauth[?/]|\/callback[?/]|\/authcallback\/|\/secur\/|\/frontdoor|\/RemoteAccessAuth|\/CIAM_/.test(url)) {
@@ -455,17 +619,57 @@ export default function WebViewCartSheet({
       lastLoadEndUrlRef.current = '';
       return;
     }
-    // Deduplicate: react-native-webview fires onLoadEnd multiple times per navigation.
-    // Skip dedup during login step — the page may reload to the same URL after
-    // the user logs in, and we need to re-inject the check script to detect it.
-    if (url === lastLoadEndUrlRef.current && stepRef.current !== 'login') return;
-    lastLoadEndUrlRef.current = url;
+    // If a store's buildSearchScript declared a NAV_INTENT, only the matching
+    // URL is allowed to consume the queue. Late onLoadEnd events for the
+    // PREVIOUS page (which react-native-webview sometimes fires after we've
+    // already triggered window.location.href = …) get dropped.
+    //
+    // Compare URLs after decoding because the WebView may percent-encode
+    // characters that encodeURIComponent leaves alone (apostrophe → %27,
+    // parens, *, !, ~). Without this, search terms like "Ben's Original"
+    // never match and the spinner hangs forever.
+    if (expectedNavUrlRef.current) {
+      const norm = (u: string) => { try { return decodeURIComponent(u); } catch { return u; } };
+      if (norm(url) !== norm(expectedNavUrlRef.current)) {
+        console.log(`[Cart ${ts()}]`, 'onLoadEnd ignored — does not match NAV_INTENT', expectedNavUrlRef.current);
+        return;
+      }
+      expectedNavUrlRef.current = '';
+      lastLoadEndUrlRef.current = url;
+    } else {
+      // Deduplicate: react-native-webview fires onLoadEnd multiple times per navigation.
+      // Skip dedup during login + login_check — pages with SSO/MSAL bootstraps
+      // (e.g. Wegmans) bounce the URL multiple times during init, and we need
+      // every onLoadEnd to be a chance to re-inject the check script even if
+      // the URL matches a recently-seen one. Per-store check scripts use a
+      // gate (sessionStorage / window.__loginPosted) to avoid double-posting.
+      //
+      // Also: during `searching` if we have an inflight script (a script we
+      // just injected but haven't received its result for yet), a same-URL
+      // onLoadEnd means the page reloaded mid-script (e.g. SSO bootstrap on
+      // first navigation). Re-inject so the work can complete on the freshly-
+      // loaded page. The store's script uses a window-level guard to no-op
+      // duplicate runs within the same JS context.
+      const sameUrl = url === lastLoadEndUrlRef.current;
+      const allowRecheck =
+        stepRef.current === 'login' ||
+        stepRef.current === 'login_check' ||
+        (stepRef.current === 'searching' && !!inflightScriptRef.current);
+      if (sameUrl && !allowRecheck) return;
+      lastLoadEndUrlRef.current = url;
+      if (sameUrl && stepRef.current === 'searching' && inflightScriptRef.current) {
+        console.log(`[Cart ${ts()}]`, 'onLoadEnd same-URL during searching — re-injecting inflight script');
+        webviewRef.current?.injectJavaScript(inflightScriptRef.current);
+        return;
+      }
+    }
     // Track whether we're on a search results page so subsequent items skip homepage reload.
     onSearchPageRef.current = s.isSearchUrl(url);
     if (loadQueueRef.current.length > 0) {
       const script = loadQueueRef.current.shift()!;
       const label = script.slice(0, 60).replace(/\n/g, ' ');
       console.log(`[Cart ${ts()}]`, 'onLoadEnd injecting script:', label);
+      inflightScriptRef.current = script;
       webviewRef.current?.injectJavaScript(script);
     } else if (stepRef.current === 'login_check' && s.checkLoginScript) {
       // Queue was consumed by a redirect (e.g. /fresh → /alm/storefront).
@@ -513,12 +717,48 @@ export default function WebViewCartSheet({
         const msg = JSON.parse(event.nativeEvent.data);
         console.log(`[Cart ${ts()}]`, 'onMessage type=', msg.type, msg);
 
+        // A store's buildSearchScript is about to do window.location.href = target.
+        // Record the target so onLoadEnd can ignore late/stale events for the
+        // previous URL.
+        if (msg.type === 'NAV_INTENT') {
+          expectedNavUrlRef.current = msg.target || '';
+          return;
+        }
+
+        // For SPA-style search (no full reload → no onLoadEnd), buildSearchScript
+        // signals when the new search results are rendered. We pop the next
+        // queued script (extract / search+add) and inject it directly. If
+        // onLoadEnd ALSO fires later, the queue is already empty so nothing
+        // is injected twice.
+        if (msg.type === 'EXTRACT_NOW') {
+          if (loadQueueRef.current.length > 0) {
+            const next = loadQueueRef.current.shift()!;
+            expectedNavUrlRef.current = '';
+            console.log(`[Cart ${ts()}]`, 'EXTRACT_NOW — injecting queued script');
+            webviewRef.current?.injectJavaScript(next);
+          } else {
+            console.log(`[Cart ${ts()}]`, 'EXTRACT_NOW — queue empty (onLoadEnd already consumed it)');
+          }
+          return;
+        }
+
         if (msg.type === 'LOGIN_STATUS') {
           loginCheckActiveRef.current = false;
           if (msg.isLoggedIn) {
             setBrowserShown(false);
             setStep('searching');
-            navigateToSearchItem(0);
+            // Wegmans parallel path: if all active ingredients are choose-flow
+            // (no saved searchTerm) AND the store is Wegmans, dispatch them
+            // across 5 hidden worker WebViews. Otherwise fall back to the
+            // existing sequential single-WebView flow.
+            const active = activeItemsRef.current;
+            const allChoose = active.length > 0 && active.every((it) => !it.searchTerm);
+            console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', storeId, 'isWegmansStore=', isWegmansStore, 'allChoose=', allChoose, 'activeLen=', active.length);
+            if (isWegmansStore && allChoose) {
+              startWegmansParallel();
+            } else {
+              navigateToSearchItem(0);
+            }
           } else if (stepRef.current !== 'login') {
             // First transition to login — show the webview for the user to log in.
             // Only navigate if the webview isn't already on the store's domain.
@@ -566,6 +806,11 @@ export default function WebViewCartSheet({
         }
 
         if (msg.type === 'SEARCH_AND_ADD_RESULT') {
+          if (searchTimeoutRef.current) {
+            clearTimeout(searchTimeoutRef.current);
+            searchTimeoutRef.current = null;
+          }
+          inflightScriptRef.current = null;
           const idx = searchIdxRef.current;
           const active = activeItemsRef.current;
           const item = active[idx];
@@ -595,11 +840,20 @@ export default function WebViewCartSheet({
               return;
             }
           }
-          navigateToSearchItem(nextIdx);
+          // Buffer before navigating to the next ingredient — gives Wegmans's
+          // cart API enough time to fully commit this item before the page
+          // reloads. Without this, the page navigation can race-cancel the
+          // in-flight POST cart request, visually reverting qty to 0.
+          setTimeout(() => navigateToSearchItem(nextIdx), 400);
           return;
         }
 
         if (msg.type === 'SEARCH_RESULT') {
+          if (searchTimeoutRef.current) {
+            clearTimeout(searchTimeoutRef.current);
+            searchTimeoutRef.current = null;
+          }
+          inflightScriptRef.current = null;
           // Preference-fetch pass: enrich a failed SEARCH_AND_ADD_RESULT's candidates with
           // preference data from extractProductsScript, then resume navigation.
           if (prefFetchResultIdxRef.current >= 0) {
@@ -692,6 +946,10 @@ export default function WebViewCartSheet({
         }
 
         if (msg.type === 'ADD_RESULT') {
+          if (addTimeoutRef.current) {
+            clearTimeout(addTimeoutRef.current);
+            addTimeoutRef.current = null;
+          }
           const idx = addingIdxRef.current;
           const itemsToAdd = addingItemsRef.current;
           const item = itemsToAdd[idx];
@@ -864,11 +1122,12 @@ export default function WebViewCartSheet({
       : `Review Ingredients (${reviewIdx + 1} of ${searchResults.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
+    robot_challenge: `${storeName} verification`,
   };
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
-  const webviewVisible = step === 'login' || browserShown;
+  const webviewVisible = step === 'login' || step === 'robot_challenge' || browserShown;
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -898,11 +1157,16 @@ export default function WebViewCartSheet({
         {step !== 'qty' && (
         <View style={[
           webviewVisible ? styles.webviewVisible : styles.webviewHidden,
-          webviewVisible && step !== 'login' && { borderWidth: 2, borderColor: '#ef4444' },
+          webviewVisible && step !== 'login' && step !== 'robot_challenge' && { borderWidth: 2, borderColor: '#ef4444' },
         ]} pointerEvents={webviewVisible ? 'auto' : 'none'}>
           {step === 'login' && (
             <Text style={styles.loginBanner}>
               Log in to your {storeName} account, then Mealio will add your ingredients automatically.
+            </Text>
+          )}
+          {step === 'robot_challenge' && (
+            <Text style={styles.loginBanner}>
+              {storeName} asked us to verify you're a human — complete the press-and-hold below and Mealio will pick up where it left off.
             </Text>
           )}
           <WebView
@@ -928,11 +1192,7 @@ export default function WebViewCartSheet({
             thirdPartyCookiesEnabled
             allowsInlineMediaPlayback
             mediaPlaybackRequiresUserAction={false}
-            userAgent={
-              Platform.OS === 'ios'
-                ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
-                : 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
-            }
+            userAgent={STORE_WEBVIEW_UA}
             injectedJavaScript={`
               // Hide app download banners (Albertsons, etc.)
               (function() {
@@ -955,6 +1215,46 @@ export default function WebViewCartSheet({
             `}
           />
         </View>
+        )}
+
+        {/* ── Hidden Wegmans parallel worker pool ───────────────────────────
+            5 WebViews mounted offscreen ONLY while parallel search is running.
+            Mounted by startWegmansParallel() with their initial dispatch URIs,
+            unmounted by finishWegmansParallel() to free resources before the
+            review/ATC phase. Avoids overwhelming iOS WebView init during the
+            (single-WebView) login_check phase. */}
+        {isWegmansStore && wegmansPool.isActive && (
+          <View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              width: 1,
+              height: 1,
+              opacity: 0,
+              left: -9999,
+              top: -9999,
+            }}
+          >
+            {wegmansPool.workerUris.map((uri, i) => uri ? (
+              <WebView
+                key={'wegmans-worker-' + i}
+                source={workerSources[i]}
+                style={{ width: 1, height: 1 }}
+                onMessage={(e) => onWorkerMessage(i, e)}
+                onShouldStartLoadWithRequest={(request) => (
+                  request.url.startsWith('http://') ||
+                  request.url.startsWith('https://') ||
+                  request.url.startsWith('about:')
+                )}
+                javaScriptEnabled
+                domStorageEnabled
+                sharedCookiesEnabled
+                thirdPartyCookiesEnabled
+                userAgent={STORE_WEBVIEW_UA}
+                injectedJavaScript={workerScripts[i]}
+              />
+            ) : null)}
+          </View>
         )}
 
 
@@ -1061,7 +1361,9 @@ export default function WebViewCartSheet({
           return (
             <>
               <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.listContent, { alignItems: 'center' }]}>
-                <Text style={{ fontSize: 44, marginBottom: 16 }}>⚠️</Text>
+                <View style={{ marginBottom: 16 }}>
+                  <Ionicons name="alert-circle" size={48} color="#f59e0b" />
+                </View>
                 <Text style={[styles.doneTitle, { marginBottom: 8 }]}>
                   {searchResults.length} item{searchResults.length !== 1 ? 's' : ''} could not be added to cart
                 </Text>
@@ -1406,7 +1708,9 @@ export default function WebViewCartSheet({
               <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 32, paddingBottom: 16 }}>
                 {wasChooseFlow ? (
                   <>
-                    <Text style={styles.doneEmoji}>✅</Text>
+                    <View style={styles.doneIconWrap}>
+                      <Ionicons name="checkmark-circle" size={56} color="#22c55e" />
+                    </View>
                     <Text style={styles.doneTitle}>Products chosen!</Text>
                     <Text style={styles.doneSub}>
                       Your selections have been saved. Next time you add to cart, they'll be added automatically.
@@ -1414,7 +1718,12 @@ export default function WebViewCartSheet({
                   </>
                 ) : totalAdded > 0 ? (
                   <>
-                    <Text style={styles.doneEmoji}>🛒</Text>
+                    {/* TODO: drop a Lottie celebration animation here (e.g. confetti
+                        or a checkmark draw-in). The cart icon is the static
+                        placeholder until a designer-approved animation lands. */}
+                    <View style={styles.doneIconWrap}>
+                      <Ionicons name="cart" size={56} color={storeColor} />
+                    </View>
                     <Text style={styles.doneTitle}>
                       {totalAdded} item{totalAdded !== 1 ? 's' : ''} added to your {storeName} cart!
                     </Text>
@@ -1426,7 +1735,9 @@ export default function WebViewCartSheet({
                   </>
                 ) : (
                   <>
-                    <Text style={styles.doneEmoji}>😔</Text>
+                    <View style={styles.doneIconWrap}>
+                      <Ionicons name="information-circle-outline" size={56} color="#6b7280" />
+                    </View>
                     <Text style={styles.doneTitle}>No items were added.</Text>
                     <Text style={styles.doneSub}>
                       No products were selected or all were skipped.
@@ -1664,6 +1975,7 @@ const styles = StyleSheet.create({
 
   // Done step
   doneEmoji: { fontSize: 48, marginBottom: 16 },
+  doneIconWrap: { marginBottom: 16 },
   doneTitle: { fontSize: 17, fontFamily: 'Inter_700Bold', color: Colors.text1, textAlign: 'center', marginBottom: 8 },
   doneSub: { fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text2, textAlign: 'center', lineHeight: 20 },
 });

@@ -8,19 +8,21 @@ import MyMealsScreen from '../screens/mymeals/MyMealsScreen';
 import AccountScreen from '../screens/account/AccountScreen';
 import CreatorPortalScreen from '../screens/creator/CreatorPortalScreen';
 import HelpScreen from '../screens/help/HelpScreen';
+import AdminScreen from '../screens/admin/AdminScreen';
 
 export type MainTabsParamList = {
   Discover: undefined;
   MyMeals: undefined;
   Account: undefined;
   Creator: undefined;
+  Admin: undefined;
   Help: undefined;
 };
 
 const Tab = createBottomTabNavigator<MainTabsParamList>();
 
 export default function MainTabs() {
-  const { isCreator } = useAuth();
+  const { isCreator, isAdmin } = useAuth();
 
   return (
     <Tab.Navigator
@@ -38,6 +40,7 @@ export default function MainTabs() {
           else if (route.name === 'MyMeals') iconName = focused ? 'restaurant' : 'restaurant-outline';
           else if (route.name === 'Account') iconName = focused ? 'person' : 'person-outline';
           else if (route.name === 'Creator') iconName = focused ? 'star' : 'star-outline';
+          else if (route.name === 'Admin') iconName = focused ? 'construct' : 'construct-outline';
           else if (route.name === 'Help') iconName = focused ? 'help-circle' : 'help-circle-outline';
           return <Ionicons name={iconName} size={size} color={color} />;
         },
@@ -51,6 +54,13 @@ export default function MainTabs() {
           name="Creator"
           component={CreatorPortalScreen}
           options={{ tabBarLabel: 'Creator' }}
+        />
+      )}
+      {isAdmin && (
+        <Tab.Screen
+          name="Admin"
+          component={AdminScreen}
+          options={{ tabBarLabel: 'Admin' }}
         />
       )}
       <Tab.Screen

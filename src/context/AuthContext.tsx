@@ -9,6 +9,7 @@ interface AuthContextValue {
   user: User | null;
   isLoading: boolean;
   isCreator: boolean;
+  isAdmin: boolean;
   login: (email: string, password: string) => Promise<any>;
   loginWithToken: (accessToken: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -133,8 +134,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {}
   }
 
+  const isAdmin = !!user?.isAdmin;
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, isCreator, login, loginWithToken, logout, verify2FA, refreshUser }}>
+    <AuthContext.Provider value={{ user, isLoading, isCreator, isAdmin, login, loginWithToken, logout, verify2FA, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

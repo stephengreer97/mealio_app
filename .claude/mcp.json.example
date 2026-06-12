@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"]
+    },
+    "maestro": {
+      "command": "npx",
+      "args": ["maestro-mcp@latest"]
+    }
+  }
+}

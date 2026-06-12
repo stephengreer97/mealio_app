@@ -20,9 +20,10 @@ interface MealCardProps {
   selected?: boolean; // shown in multi-select mode
   onView?: () => void; // view button shown in multi-select mode
   warning?: string; // amber badge shown below meta row
+  testID?: string; // stable handle for Maestro flows (meal titles are live data)
 }
 
-export default function MealCard({ meal, onPress, subtitle, savedAt, selected, onView, warning }: MealCardProps) {
+export default function MealCard({ meal, onPress, subtitle, savedAt, selected, onView, warning, testID }: MealCardProps) {
   const photoUrl = 'photoUrl' in meal ? meal.photoUrl : undefined;
   const ingredientCount = meal.ingredients?.length ?? 0;
 
@@ -31,6 +32,7 @@ export default function MealCard({ meal, onPress, subtitle, savedAt, selected, o
       style={[styles.card, selected && styles.cardSelected]}
       onPress={onPress}
       activeOpacity={0.8}
+      testID={testID}
     >
       {photoUrl ? (
         <Image source={{ uri: photoUrl }} style={styles.image} contentFit="cover" />

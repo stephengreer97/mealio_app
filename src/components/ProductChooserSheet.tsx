@@ -345,7 +345,13 @@ export default function ProductChooserSheet({
 
         {step === 'done' && (
           <View style={styles.doneContainer}>
-            <Text style={styles.doneIcon}>{error ? '⚠️' : savedCount > 0 ? '✅' : '👋'}</Text>
+            <View style={{ marginBottom: 12 }}>
+              <Ionicons
+                name={error ? 'alert-circle' : savedCount > 0 ? 'checkmark-circle' : 'hand-left-outline'}
+                size={56}
+                color={error ? '#f59e0b' : savedCount > 0 ? '#22c55e' : '#6b7280'}
+              />
+            </View>
             <Text style={styles.doneTitle}>
               {error ? 'Failed to save' : savedCount > 0 ? 'Products chosen!' : 'No products chosen'}
             </Text>

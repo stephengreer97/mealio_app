@@ -229,6 +229,7 @@ export default function DiscoverScreen() {
           onPress={() => openMealDetail(item)}
           subtitle={item.author ?? item.creatorName ?? undefined}
           savedAt={savedMap[item.id]}
+          testID={`meal-card-${index}`}
         />
         {next ? (
           <MealCard
@@ -236,6 +237,7 @@ export default function DiscoverScreen() {
             onPress={() => openMealDetail(next)}
             subtitle={next.author ?? next.creatorName ?? undefined}
             savedAt={savedMap[next.id]}
+            testID={`meal-card-${index + 1}`}
           />
         ) : (
           <View style={{ flex: 1, marginHorizontal: 4 }} />
@@ -254,7 +256,7 @@ export default function DiscoverScreen() {
               <Text style={styles.signInBtnText}>Sign In</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.filterBtn} onPress={() => setFilterVisible(true)}>
+          <TouchableOpacity style={styles.filterBtn} onPress={() => setFilterVisible(true)} testID="filter-btn">
             <Ionicons name="options-outline" size={22} color={Colors.text1} />
             {activeFilterCount > 0 && (
               <View style={styles.filterBadge}>
@@ -312,10 +314,16 @@ export default function DiscoverScreen() {
             {/* Upgrade nudge for free tier */}
             {user && user?.tier !== 'paid' && totalMealCount >= FREE_LIMIT && (
               <TouchableOpacity style={styles.upgradeBanner} onPress={handleUpgrade} activeOpacity={0.8}>
+                <Ionicons
+                  name={totalMealCount >= FREE_LIMIT ? 'lock-closed' : 'sparkles'}
+                  size={13}
+                  color={Colors.brand}
+                  style={{ marginRight: 4 }}
+                />
                 <Text style={styles.upgradeBannerText}>
                   {totalMealCount >= FREE_LIMIT
-                    ? '🔒 Meal limit reached — upgrade for unlimited saves'
-                    : `✨ ${totalMealCount} of ${FREE_LIMIT} free meals saved — upgrade for unlimited`}
+                    ? 'Meal limit reached. Upgrade for unlimited saves'
+                    : `${totalMealCount} of ${FREE_LIMIT} free meals saved. Upgrade for unlimited`}
                 </Text>
                 <Ionicons name="arrow-forward" size={13} color={Colors.brand} />
               </TouchableOpacity>

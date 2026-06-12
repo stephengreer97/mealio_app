@@ -35,7 +35,14 @@ export default function LoginScreen({ navigation }: Props) {
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
 
   const androidClientId = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID;
-  const googleEnabled = Platform.OS !== 'android' || !!androidClientId;
+  const iosClientId = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS;
+  const webClientId = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB;
+  // Require a client id for THIS platform before configuring the hook —
+  // useAuthRequest throws during render when given undefined ids, which in
+  // a Release build is an instant crash with no red screen. (Caught by the
+  // Maestro CI lane when a sim build went out without env vars.)
+  const googleEnabled =
+    Platform.OS === 'android' ? !!androidClientId : !!(iosClientId || webClientId);
   const [googleRequest, googleResponse, googlePromptAsync] = Google.useAuthRequest(
     googleEnabled
       ? {

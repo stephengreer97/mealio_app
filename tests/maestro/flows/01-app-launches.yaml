@@ -1,0 +1,19 @@
+# Smoke test: app boots, splash clears, Discover screen renders with live
+# trending meals.
+#
+# The app launches into Discover in guest mode (login is NOT the first
+# screen — there's a Sign In button in the header). If this flow fails,
+# the build is fundamentally broken: splash never cleared, JS bundle
+# didn't load, or the Discover screen crashed on first render.
+
+appId: co.mealio.app
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+    stopApp: true
+
+# Discover screen markers (guest mode).
+- assertVisible: "Trending"
+- assertVisible: "Sign In"
+- assertVisible: "Trending Meals"

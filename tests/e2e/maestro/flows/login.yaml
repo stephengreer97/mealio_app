@@ -1,0 +1,41 @@
+# Mealio: email + password login flow
+#
+# Pre-reqs:
+#   - app installed on the device/simulator
+#   - MEALIO_TEST_EMAIL and MEALIO_TEST_PASSWORD env vars set
+#
+# Verifies: from a fresh app launch (logged-out), we reach the Discover
+# tab successfully.
+
+appId: host.exp.Exponent  # Expo Go bundle id; replace with the prod bundle when building standalone
+env:
+  EMAIL: ${MEALIO_TEST_EMAIL}
+  PASSWORD: ${MEALIO_TEST_PASSWORD}
+---
+# Launch fresh.
+- launchApp:
+    clearState: true
+
+# Login screen: tap email field, type email.
+- tapOn: "Email"
+- inputText: ${EMAIL}
+
+# Password field.
+- tapOn: "Password"
+- inputText: ${PASSWORD}
+
+# Submit. Mealio's primary CTA on the login screen reads "Sign In".
+- tapOn: "Sign In"
+
+# If the account has 2FA enabled, an OTP screen pops up. Pause and let
+# the runner enter the code manually (Maestro Studio shows the device).
+# In CI, ensure the test account doesn't have 2FA.
+- runFlow:
+    when:
+      visible: "Enter the code"
+    commands:
+      - input: 60000  # 60s for manual OTP entry
+      - tapOn: "Verify"
+
+# Verify we landed on Discover (the post-login tab).
+- assertVisible: "Discover"

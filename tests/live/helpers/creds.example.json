@@ -1,0 +1,40 @@
+{
+  "_note": "Copy this to creds.json, fill in real credentials, then gpg-encrypt to creds.json.gpg. NEVER commit unencrypted creds.json.",
+  "wegmans": {
+    "email": "test-account@example.com",
+    "password": "PLACEHOLDER",
+    "cartUrl": "https://www.wegmans.com/cart"
+  },
+  "heb": {
+    "email": "test-account@example.com",
+    "password": "PLACEHOLDER",
+    "cartUrl": "https://www.heb.com/cart"
+  },
+  "walmart": {
+    "email": "test-account@example.com",
+    "password": "PLACEHOLDER",
+    "cartUrl": "https://www.walmart.com/cart"
+  },
+  "albertsons": {
+    "email": "test-account@example.com",
+    "password": "PLACEHOLDER",
+    "cartUrl": "https://www.acmemarkets.com/shop/cart.html",
+    "_note": "Albertsons family — uses ACME login by default. To test other family members, set 'storeId' here."
+  },
+  "aldi": {
+    "email": "test-account@example.com",
+    "password": "PLACEHOLDER",
+    "cartUrl": "https://www.aldi.us/cart"
+  },
+  "amazon": {
+    "email": "test-account@example.com",
+    "password": "PLACEHOLDER",
+    "cartUrl": "https://www.amazon.com/cart",
+    "_note": "2FA: if you have OTP-via-email or SMS enabled, the test will pause and prompt you in the terminal."
+  },
+  "kroger": {
+    "email": "test-account@example.com",
+    "password": "PLACEHOLDER",
+    "_note": "Kroger uses OAuth (not username/password). The live test triggers a one-time OAuth flow and stores the refresh token in this file. Run `npm run test:live:kroger-bootstrap` once to set up."
+  }
+}

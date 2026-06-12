@@ -1,0 +1,29 @@
+# Verify the login screen is reachable from Discover and the form is wired.
+#
+# Catches regressions where the Sign In navigation breaks, the email or
+# password TextInputs disappear, or the CTA gets renamed. Does not actually
+# submit credentials — that requires a known test account and bypassing
+# email-OTP 2FA.
+
+appId: co.mealio.app
+---
+- launchApp:
+    clearState: true
+    stopApp: true
+
+# App opens in guest Discover; navigate to login.
+- assertVisible: "Trending Meals"
+- tapOn: "Sign In"
+
+# Login screen markers (from LoginScreen.tsx).
+- assertVisible: "Welcome back"
+- assertVisible: "Sign in to your account"
+
+# Email field — placeholder text matches the source.
+- tapOn:
+    text: "you@example.com"
+- inputText: "test@example.com"
+
+# Form chrome.
+- assertVisible: "Forgot password?"
+- assertVisible: "or continue with"

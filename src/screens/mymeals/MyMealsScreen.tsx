@@ -522,7 +522,9 @@ export default function MyMealsScreen() {
         ListEmptyComponent={
           !loading ? (
             <View style={styles.empty}>
-              <Text style={styles.emptyIcon}>🛒</Text>
+              <View style={{ marginBottom: 12 }}>
+                <Ionicons name="restaurant-outline" size={56} color="#9ca3af" />
+              </View>
               <Text style={styles.emptyTitle}>No meals yet</Text>
               <Text style={styles.emptyBody}>
                 Save meals from Discover or tap + to create your own.

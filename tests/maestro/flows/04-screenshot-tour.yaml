@@ -1,0 +1,53 @@
+# Screenshot tour — the PM acceptance surface.
+#
+# Walks the main guest-reachable screens and saves a PNG at each stop. The
+# workflow uploads tour-*.png as the `screenshot-tour` artifact on every run,
+# so the current state of the UI can be reviewed from the PR page without
+# installing a build. Add a stop here whenever a feature adds a screen.
+#
+# Screenshots land in the working directory maestro is invoked from.
+
+appId: co.mealio.app
+---
+- launchApp:
+    clearState: true
+    stopApp: true
+
+- assertVisible: "Trending Meals"
+- extendedWaitUntil:
+    visible:
+      id: "meal-card-0"
+    timeout: 15000
+- takeScreenshot: tour-01-discover-trending
+
+# "New" sort segment (guest sees Trending + New only).
+- tapOn: "New"
+- assertVisible: "New Meals"
+- takeScreenshot: tour-02-discover-new
+- tapOn: "Trending"
+
+# Filter & Sort sheet.
+- tapOn:
+    id: "filter-btn"
+- assertVisible: "Filter & Sort"
+- takeScreenshot: tour-03-filter-sheet
+- tapOn: "✕"
+
+# Meal detail (view mode).
+- extendedWaitUntil:
+    visible:
+      id: "meal-card-0"
+    timeout: 15000
+- tapOn:
+    id: "meal-card-0"
+- assertVisible: "Save to My Meals"
+- takeScreenshot: tour-04-meal-detail
+- tapOn: "✕"
+
+# Auth screens.
+- tapOn: "Sign In"
+- assertVisible: "Welcome back"
+- takeScreenshot: tour-05-login
+- tapOn: "Create an account"
+- assertVisible: "Create account"
+- takeScreenshot: tour-06-signup

@@ -1,0 +1,34 @@
+# Browse → open a meal → guest save gate.
+#
+# Catches regressions in: trending list rendering live data, the meal detail
+# sheet (view mode), and the guest gating that funnels saves into sign-in.
+# Meal titles are live data, so cards are addressed by testID, not text.
+
+appId: co.mealio.app
+---
+- launchApp:
+    clearState: true
+    stopApp: true
+
+- assertVisible: "Trending Meals"
+
+# Trending meals come from the live API; give the list time to populate.
+- extendedWaitUntil:
+    visible:
+      id: "meal-card-0"
+    timeout: 15000
+
+- tapOn:
+    id: "meal-card-0"
+
+# Meal detail sheet, view mode.
+- assertVisible: 'Measurements \(\d+\)'
+- assertVisible: "Save to My Meals"
+
+# Guest save: the sheet closes itself, then a native alert gates on sign-in.
+- tapOn: "Save to My Meals"
+- assertVisible: "Sign In Required"
+- tapOn: "Not now"
+
+# Back on Discover.
+- assertVisible: "Trending Meals"
