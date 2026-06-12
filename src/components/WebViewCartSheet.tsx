@@ -33,6 +33,7 @@ import {
   buildAldiWorkerScript,
   getAldiSearchUrl,
 } from '../lib/webview-scripts/aldi';
+import { buildCartCountScript } from '../lib/webview-scripts/cart-count';
 
 // ── Parallel search config ───────────────────────────────────────────────────
 //
@@ -178,6 +179,12 @@ export default function WebViewCartSheet({
   // Step: done
   const [totalAdded, setTotalAdded] = useState(0);
   const [totalFailed, setTotalFailed] = useState(0);
+  // Cart snapshot validation (silent-miss detection): badge count captured
+  // right after login confirms, compared against the badge after the run.
+  // null anywhere means "couldn't read the badge" → validation is skipped.
+  const cartCountBeforeRef = useRef<number | null>(null);
+  const cartCountPendingRef = useRef<'before' | 'after' | null>(null);
+  const [cartDeltaWarning, setCartDeltaWarning] = useState<string | null>(null);
   const [addedNames, setAddedNames] = useState<string[]>([]);
 
   // WebView refs
@@ -367,6 +374,9 @@ export default function WebViewCartSheet({
       autoPickedItemsRef.current = [];
       searchResultsRef.current = [];
       isCustomSearchRef.current = false;
+      cartCountBeforeRef.current = null;
+      cartCountPendingRef.current = null;
+      setCartDeltaWarning(null);
 
       // Reset Wegmans parallel worker state. The hook clears its queue,
       // active flag, timers, and worker URIs in one call — workers unmount
@@ -418,6 +428,18 @@ export default function WebViewCartSheet({
   const allChecked = checkedItems.length === 0 || checkedItems.every((c) => c);
   const toggleAll = () => setCheckedItems((prev) => prev.map(() => !allChecked));
   const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0).length;
+
+  // Cart snapshot AFTER the run: the webview is still on the last search
+  // page (it stays mounted through 'done'), whose header badge reflects the
+  // adds. Only fires when the before-snapshot succeeded and something was
+  // reported added.
+  useEffect(() => {
+    if (step !== 'done' || totalAdded === 0 || cartCountBeforeRef.current == null) return;
+    const countScript = buildCartCountScript(storeId);
+    if (!countScript) return;
+    cartCountPendingRef.current = 'after';
+    webviewRef.current?.injectJavaScript(countScript);
+  }, [step, totalAdded, storeId]);
 
   // ── Start flow ──────────────────────────────────────────────────────────
 
@@ -800,6 +822,14 @@ export default function WebViewCartSheet({
           if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
           if (msg.isLoggedIn) {
             setBrowserShown(false);
+            // Snapshot the cart badge BEFORE any adds. Fire-and-forget: if the
+            // message loses the race against the first search navigation, the
+            // before-count stays null and validation is skipped.
+            const countScript = buildCartCountScript(storeId);
+            if (countScript) {
+              cartCountPendingRef.current = 'before';
+              webviewRef.current?.injectJavaScript(countScript);
+            }
             setStep('searching');
             // Wegmans parallel path: if all active ingredients are choose-flow
             // (no saved searchTerm) AND the store is Wegmans, dispatch them
@@ -828,6 +858,28 @@ export default function WebViewCartSheet({
           }
           // If already on login step and got false again (e.g. re-injection on
           // login page), do nothing — user is still logging in.
+          return;
+        }
+
+        if (msg.type === 'CART_COUNT') {
+          const phase = cartCountPendingRef.current;
+          cartCountPendingRef.current = null;
+          const count = typeof msg.count === 'number' ? msg.count : null;
+          console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count);
+          if (phase === 'before') {
+            cartCountBeforeRef.current = count;
+          } else if (phase === 'after') {
+            const before = cartCountBeforeRef.current;
+            const expected = addResultsRef.current.filter((r) => r.success).length;
+            // Badge counts units, expected counts product lines; units ≥ lines
+            // when everything landed, so delta < lines is a real shortfall.
+            if (before != null && count != null && expected > 0 && count - before < expected) {
+              const delta = Math.max(count - before, 0);
+              setCartDeltaWarning(
+                `Cart check: ${storeName} shows ${delta} new item${delta === 1 ? '' : 's'} in the cart, but ${expected} ${expected === 1 ? 'was' : 'were'} reported added. Please double-check your cart.`
+              );
+            }
+          }
           return;
         }
 
@@ -1797,6 +1849,12 @@ export default function WebViewCartSheet({
                         {totalFailed} item{totalFailed !== 1 ? 's' : ''} could not be added.
                       </Text>
                     )}
+                    {cartDeltaWarning && (
+                      <View style={styles.cartCheckBanner} testID="cart-check-warning">
+                        <Ionicons name="alert-circle" size={18} color="#b45309" />
+                        <Text style={styles.cartCheckBannerText}>{cartDeltaWarning}</Text>
+                      </View>
+                    )}
                   </>
                 ) : (
                   <>
@@ -1941,6 +1999,24 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   progressFill: { height: '100%', borderRadius: 3 },
+  cartCheckBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 12,
+  },
+  cartCheckBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
+    color: '#92400e',
+    lineHeight: 18,
+  },
 
   // Review step
   searchedBox: {
