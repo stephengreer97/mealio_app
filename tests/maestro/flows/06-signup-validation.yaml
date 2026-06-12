@@ -1,0 +1,27 @@
+# Signup form validation: submitting an empty form surfaces field errors
+# instead of firing a network request. Catches regressions in the client-side
+# validate() and the error display wiring on Input.
+
+appId: co.mealio.app
+---
+- launchApp:
+    clearState: true
+    stopApp: true
+
+- assertVisible: "Trending Meals"
+- tapOn: "Sign In"
+- assertVisible: "Welcome back"
+- tapOn: "Create an account"
+- assertVisible: "Create account"
+
+# Submit empty → validation errors render under their fields.
+- tapOn: "Create Account"
+- assertVisible: "First name is required"
+- assertVisible: "Email is required"
+- assertVisible: "Password is required"
+
+# Invalid email specifically.
+- tapOn: "you@example.com"
+- inputText: "not-an-email"
+- tapOn: "Create Account"
+- assertVisible: "Invalid email"
