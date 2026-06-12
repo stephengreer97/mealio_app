@@ -15,7 +15,11 @@ appId: co.mealio.app
 - assertVisible: "Create account"
 
 # Submit empty → validation errors render under their fields.
-- tapOn: "Create Account"
+# Tap by id: Maestro text matching is case-insensitive, so "Create Account"
+# (the button) also matches "Create account" (the screen title) and the
+# title wins hierarchy order — that tap is a no-op.
+- tapOn:
+    id: "signup-submit"
 - assertVisible: "First name is required"
 - assertVisible: "Email is required"
 - assertVisible: "Password is required"
@@ -23,5 +27,7 @@ appId: co.mealio.app
 # Invalid email specifically.
 - tapOn: "you@example.com"
 - inputText: "not-an-email"
-- tapOn: "Create Account"
+- hideKeyboard
+- tapOn:
+    id: "signup-submit"
 - assertVisible: "Invalid email"

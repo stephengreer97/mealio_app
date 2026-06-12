@@ -135,7 +135,7 @@ export default function SignupScreen({ navigation }: Props) {
             </View>
           )}
 
-          <Button label="Create Account" onPress={handleSignup} loading={loading} style={styles.submitBtn} />
+          <Button label="Create Account" onPress={handleSignup} loading={loading} style={styles.submitBtn} testID="signup-submit" />
       </KeyboardAwareScrollView>
     </SafeAreaView>
   );
