@@ -53,6 +53,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+
+      # eas-cli evaluates app.json config plugins (expo-image-picker, …),
+      # which requires the project's node_modules even for read-only
+      # commands like build:list.
+      - name: Install npm dependencies
+        run: npm ci
 
       - name: Download latest EAS simulator build
         run: |
