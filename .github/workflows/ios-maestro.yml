@@ -23,7 +23,9 @@ concurrency:
 jobs:
   ios-maestro:
     name: iOS Simulator + Maestro flows
-    runs-on: macos-14
+    # macos-15 ships Xcode 16.x — React Native requires >= 16.1.
+    # (macos-14's default 15.4 fails pod install.)
+    runs-on: macos-15
     timeout-minutes: 35
     env:
       EXPO_NO_TELEMETRY: 1
@@ -72,10 +74,10 @@ jobs:
 
       - name: Boot iOS Simulator
         run: |
-          DEVICE_ID=$(xcrun simctl create "Mealio Test iPhone" \
-            "com.apple.CoreSimulator.SimDeviceType.iPhone-15" \
-            "com.apple.CoreSimulator.SimRuntime.iOS-17-4" 2>/dev/null \
-            || xcrun simctl list devices | grep -E "iPhone 15 " | head -1 | grep -oE "[A-F0-9-]{36}")
+          # Don't hardcode device/runtime versions — pick the first available
+          # iPhone simulator on whatever Xcode this runner image ships.
+          DEVICE_ID=$(xcrun simctl list devices available --json \
+            | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(dev['udid'] for devs in d.values() for dev in devs if 'iPhone' in dev['name']))")
           echo "Simulator UDID: $DEVICE_ID"
           echo "SIM_UDID=$DEVICE_ID" >> "$GITHUB_ENV"
           xcrun simctl boot "$DEVICE_ID"
