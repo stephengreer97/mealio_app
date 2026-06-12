@@ -1,21 +1,31 @@
 name: iOS Maestro
 
-# Runs Maestro UI flows against an iOS Simulator on a free GitHub-hosted
-# macOS runner. Triggered on PRs into main and on direct pushes to main.
+# Runs Maestro UI flows against an iOS Simulator using a PREBUILT app from
+# EAS Build — GitHub never compiles the app. This keeps billed macOS time
+# to ~10 min/run instead of ~45.
 #
-# Cost note: macos-latest minutes are billed at 10x the standard rate on
-# private GitHub Actions plans (~30 min run = ~300 effective minutes).
-# Free tier on private repos is 2000 min/month, so this fits ~6-7 runs.
-# Public repos are free — no quota concern.
+# Pipeline:
+#   1. Somebody (usually Claude, per the standing workflow) runs
+#      `eas build --platform ios --profile ios-simulator --no-wait`
+#      whenever app code changes. That build happens on EAS's Macs.
+#   2. This workflow downloads the LATEST FINISHED ios-simulator build via
+#      `eas build:list`, installs it on a simulator, runs the Maestro flows.
+#
+# Runs on every PR (owner's call). Caveat: the tested binary is the latest
+# finished EAS sim build, which can lag the triggering commit if no fresh
+# build was kicked. Treat this lane as a smoke check on the assembled app,
+# not commit-exact validation (the Jest suite in test.yml is the
+# commit-exact gatekeeper).
+#
+# Requires the EXPO_TOKEN repo secret (expo.dev → Account settings →
+# Access tokens). Without it the job fails fast with a clear message.
 
 on:
+  workflow_dispatch:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
-  workflow_dispatch: # allow manual run
 
-# Cancel an in-flight run if a new commit lands on the same branch.
 concurrency:
   group: ios-maestro-${{ github.ref }}
   cancel-in-progress: true
@@ -23,61 +33,60 @@ concurrency:
 jobs:
   ios-maestro:
     name: iOS Simulator + Maestro flows
-    # macos-15 ships Xcode 16.x — React Native requires >= 16.1.
-    # (macos-14's default 15.4 fails pod install.)
     runs-on: macos-15
-    # Release xcodebuild of an RN app takes 25-35 min cold on these runners;
-    # pods + deps consume ~10 more. 35 min was hit mid-build.
-    timeout-minutes: 60
+    timeout-minutes: 25
     env:
-      EXPO_NO_TELEMETRY: 1
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Guard — EXPO_TOKEN present
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::EXPO_TOKEN secret is not set. Create an access token at https://expo.dev/accounts/mealio/settings/access-tokens and add it as a repo secret named EXPO_TOKEN."
+            exit 1
+          fi
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
-      - name: Setup Ruby (for CocoaPods)
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: 3.2
-          bundler-cache: false
-
-      - name: Install npm dependencies
-        run: npm ci
+      - name: Download latest EAS simulator build
+        run: |
+          BUILD_JSON=$(npx eas-cli@latest build:list \
+            --platform ios \
+            --build-profile ios-simulator \
+            --status finished \
+            --limit 1 \
+            --json --non-interactive)
+          BUILD_URL=$(echo "$BUILD_JSON" | jq -r '.[0].artifacts.buildUrl // empty')
+          BUILD_DATE=$(echo "$BUILD_JSON" | jq -r '.[0].completedAt // "unknown"')
+          if [ -z "$BUILD_URL" ]; then
+            echo "::error::No finished ios-simulator build found on EAS. Run: eas build --platform ios --profile ios-simulator"
+            exit 1
+          fi
+          echo "Using EAS build completed at: $BUILD_DATE"
+          curl -fsSL "$BUILD_URL" -o /tmp/mealio-sim.tar.gz
+          mkdir -p /tmp/mealio-app
+          tar xzf /tmp/mealio-sim.tar.gz -C /tmp/mealio-app
+          APP_PATH=$(find /tmp/mealio-app -maxdepth 2 -name "*.app" | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app found inside the EAS artifact."
+            find /tmp/mealio-app -maxdepth 3 | head -20
+            exit 1
+          fi
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
 
       - name: Install Maestro CLI
         run: |
           curl -fsSL https://get.maestro.mobile.dev | bash
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
 
-      # Generates the ios/ folder from the Expo managed config.
-      - name: Expo prebuild (iOS)
-        run: npx expo prebuild --platform ios --clean --no-install
-
-      # Cache CocoaPods derived deps so subsequent runs skip the slow install.
-      - name: Cache CocoaPods
-        uses: actions/cache@v4
-        with:
-          path: |
-            ios/Pods
-            ~/Library/Caches/CocoaPods
-          key: pods-${{ runner.os }}-${{ hashFiles('ios/Podfile.lock') }}
-          restore-keys: pods-${{ runner.os }}-
-
-      - name: Install CocoaPods
-        working-directory: ios
-        run: pod install --repo-update
-
       - name: Boot iOS Simulator
         run: |
-          # Don't hardcode device/runtime versions — pick the first available
-          # iPhone simulator on whatever Xcode this runner image ships.
           DEVICE_ID=$(xcrun simctl list devices available --json \
             | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(dev['udid'] for devs in d.values() for dev in devs if 'iPhone' in dev['name']))")
           echo "Simulator UDID: $DEVICE_ID"
@@ -85,30 +94,9 @@ jobs:
           xcrun simctl boot "$DEVICE_ID"
           xcrun simctl bootstatus "$DEVICE_ID" -b
 
-      - name: Build for iOS Simulator
-        run: |
-          # Workspace name is derived from the name in app.json ("Mealio").
-          # Single invocation, -quiet to keep the log readable. (An earlier
-          # `| xcpretty || (xcodebuild …)` fallback pattern caused a full
-          # SECOND build when xcpretty was missing — never do that.)
-          set -o pipefail
-          xcodebuild \
-            -workspace ios/Mealio.xcworkspace \
-            -scheme Mealio \
-            -configuration Release \
-            -sdk iphonesimulator \
-            -destination "platform=iOS Simulator,id=$SIM_UDID" \
-            -derivedDataPath build \
-            -quiet \
-            CODE_SIGNING_ALLOWED=NO
-
       - name: Install app on simulator
-        run: |
-          APP_PATH=$(find build/Build/Products/Release-iphonesimulator -maxdepth 2 -name "*.app" | head -1)
-          echo "App: $APP_PATH"
-          xcrun simctl install "$SIM_UDID" "$APP_PATH"
+        run: xcrun simctl install "$SIM_UDID" "$APP_PATH"
 
-      # Maestro discovers and runs every .yaml in the flows folder.
       - name: Run Maestro flows
         run: maestro test tests/maestro/flows --format junit --output maestro-report.xml
 
@@ -121,10 +109,9 @@ jobs:
             maestro-report.xml
             ~/.maestro/tests/
 
-      - name: Upload simulator screenshot on failure
+      - name: Screenshot on failure
         if: failure()
-        run: |
-          xcrun simctl io booted screenshot failure-screenshot.png || true
+        run: xcrun simctl io booted screenshot failure-screenshot.png || true
         continue-on-error: true
 
       - name: Upload screenshot artifact
