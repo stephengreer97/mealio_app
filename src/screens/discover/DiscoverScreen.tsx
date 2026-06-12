@@ -229,6 +229,7 @@ export default function DiscoverScreen() {
           onPress={() => openMealDetail(item)}
           subtitle={item.author ?? item.creatorName ?? undefined}
           savedAt={savedMap[item.id]}
+          testID={`meal-card-${index}`}
         />
         {next ? (
           <MealCard
@@ -236,6 +237,7 @@ export default function DiscoverScreen() {
             onPress={() => openMealDetail(next)}
             subtitle={next.author ?? next.creatorName ?? undefined}
             savedAt={savedMap[next.id]}
+            testID={`meal-card-${index + 1}`}
           />
         ) : (
           <View style={{ flex: 1, marginHorizontal: 4 }} />
@@ -254,7 +256,7 @@ export default function DiscoverScreen() {
               <Text style={styles.signInBtnText}>Sign In</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.filterBtn} onPress={() => setFilterVisible(true)}>
+          <TouchableOpacity style={styles.filterBtn} onPress={() => setFilterVisible(true)} testID="filter-btn">
             <Ionicons name="options-outline" size={22} color={Colors.text1} />
             {activeFilterCount > 0 && (
               <View style={styles.filterBadge}>

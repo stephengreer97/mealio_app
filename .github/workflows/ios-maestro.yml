@@ -155,6 +155,16 @@ jobs:
             maestro-report.xml
             ~/.maestro/tests/
 
+      # PM acceptance surface: PNGs saved by 04-screenshot-tour.yaml. Review
+      # the app's current screens straight from the PR's artifacts.
+      - name: Upload screenshot tour
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-tour
+          path: tour-*.png
+          if-no-files-found: ignore
+
       - name: Screenshot on failure
         if: failure()
         run: xcrun simctl io booted screenshot failure-screenshot.png || true
