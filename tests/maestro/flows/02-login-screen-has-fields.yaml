@@ -1,0 +1,31 @@
+# Verify the login form is wired up correctly.
+#
+# Catches regressions where the email/password TextInputs disappear or the
+# Sign In CTA gets renamed. Does not actually submit credentials — that
+# requires a known test account and bypassing 2FA.
+
+appId: co.mealio.app
+---
+- launchApp:
+    clearState: true
+    stopApp: true
+- assertVisible: "Welcome back"
+
+# Email field — placeholder text matches the LoginScreen.tsx source.
+- tapOn:
+    text: "you@example.com"
+- inputText: "test@example.com"
+
+# Password field. Maestro can't see the masked dots literally; tap by
+# index since it's the second TextInput on the screen.
+- tapOn:
+    index: 1
+    text: ".*"
+- inputText: "wrongpassword"
+
+# CTA is present (we are NOT actually submitting — just verifying it renders).
+- assertVisible: "Sign In"
+- assertVisible: "Forgot password?"
+
+# Social auth options still render.
+- assertVisible: "or continue with"

@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
 import { Meal, Ingredient } from '../types';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
@@ -582,7 +583,9 @@ export default function KrogerCartReviewSheet({
           return (
             <>
               <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.listContent, { alignItems: 'center' }]}>
-                <Text style={{ fontSize: 44, marginBottom: 16 }}>⚠️</Text>
+                <View style={{ marginBottom: 16 }}>
+                  <Ionicons name="alert-circle" size={48} color="#f59e0b" />
+                </View>
                 <Text style={[styles.doneTitle, { marginBottom: 8 }]}>
                   {needsReview.length} item{needsReview.length !== 1 ? 's' : ''} could not be added to cart
                 </Text>
@@ -828,7 +831,9 @@ export default function KrogerCartReviewSheet({
             <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 12 }}>
               {cartError ? (
                 <>
-                  <Text style={styles.doneEmoji}>⚠️</Text>
+                  <View style={styles.doneIconWrap}>
+                    <Ionicons name="alert-circle" size={56} color={Colors.error} />
+                  </View>
                   <Text style={[styles.doneTitle, { color: Colors.error }]}>
                     Failed to add items to cart.
                   </Text>
@@ -838,14 +843,21 @@ export default function KrogerCartReviewSheet({
                 </>
               ) : totalAdded > 0 ? (
                 <>
-                  <Text style={styles.doneEmoji}>🛒</Text>
+                  {/* TODO: drop a Lottie celebration animation here. The
+                      cart icon is the static placeholder until the
+                      designer-approved animation lands. */}
+                  <View style={styles.doneIconWrap}>
+                    <Ionicons name="cart" size={56} color={Colors.brand} />
+                  </View>
                   <Text style={styles.doneTitle}>
                     {totalAdded} item{totalAdded !== 1 ? 's' : ''} added to your {storeName} cart!
                   </Text>
                 </>
               ) : (
                 <>
-                  <Text style={styles.doneEmoji}>😔</Text>
+                  <View style={styles.doneIconWrap}>
+                    <Ionicons name="information-circle-outline" size={56} color="#6b7280" />
+                  </View>
                   <Text style={styles.doneTitle}>No items were added.</Text>
                   <Text style={styles.doneSub}>
                     No matching products were found or all were skipped.
@@ -1185,6 +1197,7 @@ const styles = StyleSheet.create({
 
   // Done step
   doneEmoji: { fontSize: 44, marginBottom: 8 },
+  doneIconWrap: { marginBottom: 16 },
   doneTitle: {
     fontSize: 18,
     fontFamily: 'Inter_700Bold',

@@ -312,10 +312,16 @@ export default function DiscoverScreen() {
             {/* Upgrade nudge for free tier */}
             {user && user?.tier !== 'paid' && totalMealCount >= FREE_LIMIT && (
               <TouchableOpacity style={styles.upgradeBanner} onPress={handleUpgrade} activeOpacity={0.8}>
+                <Ionicons
+                  name={totalMealCount >= FREE_LIMIT ? 'lock-closed' : 'sparkles'}
+                  size={13}
+                  color={Colors.brand}
+                  style={{ marginRight: 4 }}
+                />
                 <Text style={styles.upgradeBannerText}>
                   {totalMealCount >= FREE_LIMIT
-                    ? '🔒 Meal limit reached — upgrade for unlimited saves'
-                    : `✨ ${totalMealCount} of ${FREE_LIMIT} free meals saved — upgrade for unlimited`}
+                    ? 'Meal limit reached. Upgrade for unlimited saves'
+                    : `${totalMealCount} of ${FREE_LIMIT} free meals saved. Upgrade for unlimited`}
                 </Text>
                 <Ionicons name="arrow-forward" size={13} color={Colors.brand} />
               </TouchableOpacity>

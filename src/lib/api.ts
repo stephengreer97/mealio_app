@@ -1,92 +1,11 @@
 import { getAccessToken, getRefreshToken, save, clear } from './tokenStorage';
 import { Meal, PresetMeal, Creator, User, Ingredient } from '../types';
+import { normalizeIngredients } from './normalizeIngredients';
+import { mapMeal, mapPresetMeal, mapCreator } from './api-mappers';
+
+export { normalizeIngredients };
 
 const BASE_URL = 'https://mealio.co';
-
-// ── Mappers: convert snake_case DB rows → camelCase types ─────────────────────
-
-// Normalise ingredients regardless of how they're stored in the DB.
-// Handles: null/undefined → [], plain strings → [{ ingredientName }], objects → as-is.
-export function normalizeIngredients(raw: any): Ingredient[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.map((item) => {
-    if (typeof item === 'string') return { ingredientName: item, qty: 1, productQty: 1, unit: 'qty', measure: null };
-    if (item && typeof item === 'object') {
-      const qty = item.qty ?? item.quantity ?? 1;
-      return {
-        ingredientName: item.ingredientName ?? item.productName ?? item.product_name ?? String(item.name ?? item) ?? '',
-        searchTerm: item.searchTerm ?? item.search_term ?? null,
-        qty,
-        productQty: item.productQty ?? qty,
-        unit: item.unit ?? 'qty',
-        measure: item.measure ?? null,
-        dropdown: item.dropdown ?? null,
-      };
-    }
-    return { ingredientName: String(item), qty: 1, productQty: 1, unit: 'qty', measure: null };
-  }).filter((i) => i.ingredientName);
-}
-
-function mapMeal(m: any): Meal {
-  return {
-    id: m.id,
-    name: m.name,
-    storeId: m.store_id ?? m.storeId ?? '',
-    ingredients: normalizeIngredients(m.ingredients),
-    photoUrl: m.photo_url ?? m.photoUrl ?? null,
-    deletedAt: m.deleted_at ?? m.deletedAt ?? null,
-    createdAt: m.created_at ?? m.createdAt,
-    updatedAt: m.updated_at ?? m.updatedAt,
-    presetMealId: m.preset_meal_id ?? m.presetMealId ?? null,
-    author: m.author ?? null,
-    story: m.story ?? null,
-    recipe: m.recipe ?? null,
-    website: m.website ?? null,
-    difficulty: m.difficulty ?? null,
-    serves: m.serves ?? null,
-    tags: m.tags ?? [],
-  };
-}
-
-function mapPresetMeal(m: any): PresetMeal {
-  return {
-    id: m.id,
-    name: m.name,
-    description: m.description ?? null,
-    story: m.story ?? null,
-    recipe: m.recipe ?? null,
-    source: m.source ?? null,
-    photoUrl: m.photo_url ?? m.photoUrl ?? null,
-    ingredients: normalizeIngredients(m.ingredients),
-    tags: m.tags ?? [],
-    difficulty: m.difficulty ?? null,
-    serves: m.serves ?? null,
-    author: m.author ?? null,
-    creatorId: m.creator_id ?? m.creatorId ?? null,
-    creatorName: m.creator_name ?? m.creatorName ?? null,
-    creatorSocial: m.creator_social ?? m.creatorSocial ?? null,
-    saves: m.saves_all ?? m.saves ?? 0,
-    trendingScore: m.trending_score ?? m.trendingScore ?? 0,
-    createdAt: m.created_at ?? m.createdAt,
-  };
-}
-
-function mapCreator(c: any): Creator {
-  return {
-    id: c.id,
-    userId: c.user_id ?? c.userId ?? '',
-    displayName: c.display_name ?? c.displayName ?? '',
-    bio: c.bio ?? null,
-    photoUrl: c.photo_url ?? c.photoUrl ?? null,
-    socialHandle: c.social_handle ?? c.socialHandle ?? null,
-    followers: c.followers ?? 0,
-    isFollowing: c.is_following ?? c.isFollowing ?? false,
-    quarterlySaves: c.quarterlySaves ?? 0,
-    allTimeSaves: c.allTimeSaves ?? 0,
-    sharePercent: c.sharePercent ?? 0,
-    createdAt: c.created_at ?? c.createdAt,
-  };
-}
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {

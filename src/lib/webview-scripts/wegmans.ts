@@ -32,53 +32,107 @@ const SEARCH_INPUT_SEL = 'input[type="search"], input[placeholder*="earch" i]';
 
 // ── Login check ────────────────────────────────────────────────────────────
 
-const CHECK_LOGIN_SCRIPT = `(async function() {
-  if (window.__wegmansLoginCheckActive) return;
-  window.__wegmansLoginCheckActive = true;
+// MutationObserver-based so it survives Wegmans's MSAL bootstrap that bounces
+// the URL multiple times during page load. The script returns synchronously
+// after wiring the observer + setTimeout — if a navigation kills it, the next
+// re-injection sets up a new observer with no progress lost.
+//
+// sessionStorage caches a positive ('in') detection across page bounces so a
+// late-killed observer doesn't lose its answer. 'out' is NEVER cached so that
+// post-login re-injections after the user signs in always re-check fresh.
+const CHECK_LOGIN_SCRIPT = `(function() {
+  if (window.__wegmansLoginPosted) return;
+  if (window.__wegmansLoginObserver) {
+    try { window.__wegmansLoginObserver.disconnect(); } catch(_) {}
+    window.__wegmansLoginObserver = null;
+  }
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'start', url: window.location.href }));
+
+  // sessionStorage fast-path: if a previous injection within this session
+  // already determined logged-in, surface it immediately and skip the rest.
   try {
-    function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'start', url: window.location.href }));
-    var isLoggedIn = false;
-
-    // Desktop: look for greeting button with "Hello, Name".
-    for (var i = 0; i < 20; i++) {
-      var greetingBtn = document.querySelector(
-        'button.component--site-header-desktop-sign-in-greeting-button'
-      );
-      if (greetingBtn) {
-        var spans = greetingBtn.querySelectorAll('span');
-        for (var si = 0; si < spans.length; si++) {
-          if (spans[si].textContent.trim().indexOf('Hello,') === 0) {
-            isLoggedIn = true;
-            break;
-          }
-        }
-        if (isLoggedIn) break;
-      }
-      var navSpans = document.querySelectorAll('nav span');
-      for (var ni = 0; ni < navSpans.length; ni++) {
-        if (navSpans[ni].textContent.trim().indexOf('Hello,') === 0) {
-          isLoggedIn = true;
-          break;
-        }
-      }
-      if (isLoggedIn) break;
-      await wait(100);
+    var cached = sessionStorage.getItem('mealio_wegmans_login_state');
+    if (cached === 'in') {
+      window.__wegmansLoginPosted = true;
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'scan_result', isLoggedIn: true, state: 'in', via: 'sessionStorage' }));
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }));
+      return;
     }
+  } catch(_) {}
 
-    // Log header elements for mobile debugging.
+  // The greeting button covers both states:
+  //   Logged out: button text === "Sign In"
+  //   Logged in:  button text starts with "Hello,"
+  function readState() {
+    var btn = document.querySelector(
+      'button.component--site-header-desktop-sign-in-greeting-button, ' +
+      'button[class*="sign-in-greeting-button"], ' +
+      'button[aria-label="Account"]'
+    );
+    if (btn) {
+      var text = (btn.textContent || '').trim();
+      if (text.indexOf('Hello,') === 0) return { state: 'in', via: 'btn_hello', text: text };
+      if (text === 'Sign In') return { state: 'out', via: 'btn_signin', text: text };
+      return { state: 'unknown', via: 'btn_other', text: text };
+    }
+    // Fallback: any header/nav span starting with "Hello," (covers re-skinned mobile).
+    var spans = document.querySelectorAll('header span, nav span');
+    for (var i = 0; i < spans.length; i++) {
+      if (spans[i].textContent.trim().indexOf('Hello,') === 0) {
+        return { state: 'in', via: 'fallback_span' };
+      }
+    }
+    return { state: 'unknown', via: 'no_btn' };
+  }
+
+  function post(result) {
+    if (window.__wegmansLoginPosted) return;
+    window.__wegmansLoginPosted = true;
+    if (window.__wegmansLoginObserver) {
+      try { window.__wegmansLoginObserver.disconnect(); } catch(_) {}
+      window.__wegmansLoginObserver = null;
+    }
+    var isLoggedIn = result.state === 'in';
+    // Cache positive detection BEFORE postMessage so that even if a navigation
+    // kills this script before RN receives the message, the next injection's
+    // fast-path picks up the answer. Never cache 'out' (would block correct
+    // detection after user signs in).
+    if (isLoggedIn) {
+      try { sessionStorage.setItem('mealio_wegmans_login_state', 'in'); } catch(_) {}
+    }
     var headerButtons = Array.from(document.querySelectorAll('header button, header a, nav button, nav a, [class*="header" i] button, [class*="header" i] a'));
     var btnDebug = headerButtons.slice(0, 15).map(function(b) {
       return { tag: b.tagName, aria: b.getAttribute('aria-label'), href: b.getAttribute('href'), cls: (b.className || '').slice(0, 60), text: b.textContent.trim().slice(0, 40) };
     });
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'scan_result', isLoggedIn: isLoggedIn, greetingFound: !!document.querySelector('button.component--site-header-desktop-sign-in-greeting-button'), headerButtons: btnDebug }));
-
-    window.__wegmansLoginCheckActive = false;
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'LOGIN_DEBUG',
+      step: 'scan_result',
+      isLoggedIn: isLoggedIn,
+      state: result.state,
+      via: result.via,
+      btnText: result.text || null,
+      headerButtons: btnDebug,
+    }));
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: isLoggedIn }));
-  } catch(e) {
-    window.__wegmansLoginCheckActive = false;
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false, error: String(e) }));
   }
+
+  // Fast path: button may already be rendered.
+  var r0 = readState();
+  if (r0.state !== 'unknown') { post(r0); return; }
+
+  // Observer path: fire as soon as React renders the button.
+  var observer = new MutationObserver(function() {
+    var r = readState();
+    if (r.state !== 'unknown') post(r);
+  });
+  window.__wegmansLoginObserver = observer;
+  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+
+  // Watchdog: after 8 seconds, post whatever we have (treat unknown as logged-out).
+  setTimeout(function() {
+    if (window.__wegmansLoginPosted) return;
+    post(readState());
+  }, 8000);
 })();true;`;
 
 // ── Product extraction ─────────────────────────────────────────────────────
@@ -96,17 +150,37 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
   var TILE_SEL = 'div.component--product-tile';
   var NAME_SEL = 'h3[data-testid="-baseHeading"]';
 
-  // Poll for product tiles instead of fixed wait
-  var tiles = [];
-  for (var poll = 0; poll < 20; poll++) {
-    tiles = Array.from(document.querySelectorAll(TILE_SEL)).slice(0, 20);
-    if (tiles.length > 0) break;
-    await wait(300);
+  function getFirstTileName() {
+    var el = document.querySelector(TILE_SEL + ' ' + NAME_SEL);
+    return el ? (el.textContent || '').trim().replace(/\\s+/g, ' ') : '';
   }
+
+  // Wait for tiles to (a) exist AND (b) differ from the previous search's
+  // first-tile name. onLoadEnd fires the moment Wegmans pushes the new URL,
+  // but the SPA needs another ~500ms+ to fetch results and re-render tiles.
+  var stale = window.__wegmansStaleTitle || '';
+  var tiles = [];
+  var tilesChanged = false;
+  var waitedMs = 0;
+  for (var poll = 0; poll < 40; poll++) {
+    tiles = Array.from(document.querySelectorAll(TILE_SEL)).slice(0, 20);
+    var firstName = getFirstTileName();
+    var present = tiles.length > 0;
+    var differs = !stale || (firstName && firstName !== stale);
+    if (present && differs) { tilesChanged = true; break; }
+    await wait(200);
+    waitedMs += 200;
+  }
+  // Clear so the next search starts with a fresh capture.
+  window.__wegmansStaleTitle = '';
 
   window.ReactNativeWebView.postMessage(JSON.stringify({
     type: 'EXTRACT_DEBUG',
     tilesFound: tiles.length,
+    tilesChanged: tilesChanged,
+    waitedMs: waitedMs,
+    staleTitle: stale,
+    firstTileName: getFirstTileName(),
     url: window.location.href,
     bodyTextSample: document.body.innerText.slice(0, 300)
   }));
@@ -234,22 +308,47 @@ function buildAddToCartScript(
     });
   }
 
-  // Helper: click an add-button N times
-  function clickIncN(btn, n) {
-    return new Promise(function(resolve) {
-      var i = 0;
-      function next() {
-        if (i >= n) return resolve();
-        wait(300).then(function() {
-          btn.click();
-          return wait(500);
-        }).then(function() {
-          i++;
-          next();
-        });
-      }
-      next();
-    });
+  // Scroll an element into the *visible* viewport, accounting for Wegmans's
+  // sticky header. See buildSearchAndAddScript for rationale.
+  async function scrollIntoCenter(el) {
+    el.scrollIntoView({ behavior: 'instant', block: 'center' });
+    await wait(300);
+    var srect = el.getBoundingClientRect();
+    var STICKY_HEADER_PX = 100;
+    if (srect.top < STICKY_HEADER_PX) {
+      window.scrollBy(0, srect.top - STICKY_HEADER_PX - 20);
+      await wait(200);
+    }
+  }
+
+  // Robust click — see buildSearchAndAddScript for rationale. The native
+  // btn.click() is only a fallback for when synthetic events throw, NOT an
+  // unconditional double-fire (that caused the qty+1 regression).
+  function robustClick(btn) {
+    try {
+      var rect = btn.getBoundingClientRect();
+      var x = rect.left + rect.width / 2;
+      var y = rect.top + rect.height / 2;
+      var pOpts = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, view: window, pointerType: 'touch' };
+      var mOpts = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, view: window };
+      btn.dispatchEvent(new PointerEvent('pointerdown', pOpts));
+      btn.dispatchEvent(new MouseEvent('mousedown', mOpts));
+      btn.dispatchEvent(new PointerEvent('pointerup', pOpts));
+      btn.dispatchEvent(new MouseEvent('mouseup', mOpts));
+      btn.dispatchEvent(new MouseEvent('click', mOpts));
+    } catch(_) {
+      try { btn.click(); } catch(__) {}
+    }
+  }
+
+  // Helper: click an add-button N times, scrolling into view before each click
+  async function clickIncN(btn, n) {
+    for (var i = 0; i < n; i++) {
+      await scrollIntoCenter(btn);
+      await wait(200);
+      robustClick(btn);
+      await wait(500);
+    }
   }
 
   // State 3: stepper already open — increment button already visible
@@ -270,8 +369,9 @@ function buildAddToCartScript(
 
   // Distinguish "fresh" (SVG only) from "bubble" (shows a cart qty number)
   var isBubble = /\\d/.test(defaultBtn.textContent);
+  await scrollIntoCenter(defaultBtn);
   await wait(200);
-  defaultBtn.click();
+  robustClick(defaultBtn);
 
   // State 1: fresh add — first click already added 1 unit
   if (!isBubble) {
@@ -308,71 +408,26 @@ function buildAddToCartScript(
 // ── Search navigation ──────────────────────────────────────────────────────
 
 /**
- * Builds a script that types a search term into the Wegmans search bar and
- * submits it, navigating to search results. Wegmans is SPA-style so
- * this uses the in-page search input rather than a URL navigation.
+ * Builds a script that navigates the WebView to Wegmans's search results page
+ * via direct URL navigation. The SPA detached-overlay approach was unreliable:
+ * sometimes the form submit succeeded and the SPA navigated, sometimes it
+ * silently failed and killed the script context. Direct URL nav is slower
+ * (full page reload + MSAL bootstrap) but always works.
+ *
+ * Posts NAV_INTENT so onLoadEnd's queue consumption only happens for the new
+ * URL (filtering out spurious events for the page we're leaving).
  */
 function buildSearchScript(term: string): string {
   const escaped = JSON.stringify(term);
-  return `(async function() {
-  function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
-
-  function __noKbd(e) {
-    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
-      e.target.setAttribute('inputmode', 'none');
-    }
-  }
-  document.querySelectorAll('input, textarea').forEach(function(el) { el.setAttribute('inputmode', 'none'); });
-  document.addEventListener('focusin', __noKbd, true);
-
-  var term = ${escaped};
-  var SEARCH_INPUT_SEL = 'input[type="search"], input[placeholder*="earch" i]';
-
-  // Poll for the search input — the SPA may still be hydrating
-  var searchInput = null;
-  for (var elapsed = 0; elapsed < 10000; elapsed += 200) {
-    searchInput = document.querySelector(SEARCH_INPUT_SEL);
-    if (searchInput) break;
-    await wait(200);
-  }
-  if (!searchInput) {
-    document.removeEventListener('focusin', __noKbd, true);
-    return;
-  }
-
-  // Set value via native setter so React bindings fire
-  var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
-  var nativeSetter = setter ? setter.set : null;
-  if (nativeSetter) {
-    nativeSetter.call(searchInput, '');
-    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-    await wait(50);
-    nativeSetter.call(searchInput, term);
-  } else {
-    searchInput.value = term;
-  }
-  searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-  searchInput.dispatchEvent(new Event('change', { bubbles: true }));
-
-  await wait(50);
-
-  // Submit — requestSubmit() is most reliable for React/Next.js forms
-  var form = searchInput.closest('form');
-  if (form) {
-    try {
-      form.requestSubmit();
-    } catch(_) {
-      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    }
-  } else {
-    ['keydown', 'keypress', 'keyup'].forEach(function(type) {
-      searchInput.dispatchEvent(new KeyboardEvent(type, {
-        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
-      }));
-    });
-  }
-
-  document.removeEventListener('focusin', __noKbd, true);
+  return `(function() {
+  // Wegmans's SPA lowercases the query value in the canonical URL — match
+  // that so WebViewCartSheet's NAV_INTENT comparison succeeds.
+  var expectedUrl = 'https://www.wegmans.com/shop/search?query=' + encodeURIComponent(${escaped}.toLowerCase());
+  try {
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'NAV_INTENT', target: expectedUrl }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_DEBUG', step: 'url_nav', url: expectedUrl }));
+  } catch(_) {}
+  window.location.href = expectedUrl;
 })();true;`;
 }
 
@@ -391,6 +446,17 @@ function buildSearchAndAddScript(
 ): string {
   const escapedTerm = JSON.stringify(searchTerm);
   return `(async function() {
+  // Idempotency guard: WebViewCartSheet may re-inject this script when an
+  // onLoadEnd fires for the same URL while we're still in-flight (e.g.
+  // Wegmans MSAL bootstrap reloads the page mid-script). If we're still
+  // running in the same JS context, no-op the duplicate. A real page reload
+  // wipes window state, so the new context proceeds normally.
+  if (window.__wegmansAddInflight) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'duplicate_injection_skipped' })); } catch(_) {}
+    return;
+  }
+  window.__wegmansAddInflight = true;
+
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function __noKbd(e) {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'))
@@ -418,9 +484,19 @@ function buildSearchAndAddScript(
   var CRITICAL = new Set(['organic','grass','fed','free','range','cage','large','small','jumbo',
     'medium','extra','spicy','mild','hot','sweet','whole','skim','nonfat','lowfat',
     'salted','unsalted','sodium','boneless','skinless','lean','ground']);
-  function scoreMatch(a, b) {
-    function n(s) { return s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim(); }
-    var na = n(a), nb = n(b);
+  // Dual normalization to handle stores that mangle ñ/é/etc. inconsistently
+  // across renderings (Walmart strips ñ entirely on certain queries; others
+  // may NFD-decompose). Score both ways and take the better.
+  function normDiacritic(s) {
+    return s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
+      .replace(/[^a-z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim();
+  }
+  function normStrip(s) {
+    return s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
+      .replace(/[^\\x00-\\x7f]/g, '').replace(/[^a-z0-9 ]/g, ' ')
+      .replace(/\\s+/g, ' ').trim();
+  }
+  function scoreOne(na, nb) {
     if (na === nb) return 100;
     var wa = na.split(' ').filter(Boolean), sb = new Set(nb.split(' ').filter(Boolean));
     for (var i = 0; i < wa.length; i++) { if (CRITICAL.has(wa[i]) && !sb.has(wa[i])) return 0; }
@@ -429,61 +505,39 @@ function buildSearchAndAddScript(
     if (p < 0.7) return 0;
     return Math.min(99, Math.round(p * 100));
   }
-
-  // ── Search using the search bar (SPA style) ───────────────────────────
-  var staleTitle = getNameFromTile(document.querySelector(TILE_SEL) || document.createElement('div'));
-
-  var searchInput = null;
-  for (var elapsed = 0; elapsed < 10000; elapsed += 200) {
-    searchInput = document.querySelector(SEARCH_INPUT_SEL);
-    if (searchInput) break;
-    await wait(200);
-  }
-  if (!searchInput) {
-    document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: [] }));
-    return;
+  function scoreMatch(a, b) {
+    var s1 = scoreOne(normDiacritic(a), normDiacritic(b));
+    var s2 = scoreOne(normStrip(a), normStrip(b));
+    return Math.max(s1, s2);
   }
 
-  var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
-  var nativeSetter = setter ? setter.set : null;
-  if (nativeSetter) {
-    nativeSetter.call(searchInput, SEARCH_TERM);
-  } else {
-    searchInput.value = SEARCH_TERM;
-  }
-  searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-  searchInput.dispatchEvent(new Event('change', { bubbles: true }));
-  await wait(50);
-
-  var form = searchInput.closest('form');
-  if (form) {
-    try { form.requestSubmit(); } catch(_) { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); }
-  } else {
-    ['keydown', 'keypress', 'keyup'].forEach(function(type) {
-      searchInput.dispatchEvent(new KeyboardEvent(type, {
-        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
-      }));
-    });
+  // ── Tile pickup ────────────────────────────────────────────────────────
+  // buildSearchScript already navigated to /shop/search?query=<term> and the
+  // page has just finished loading (this script runs from onLoadEnd). All we
+  // need to do here is wait for product tiles, find the best match for
+  // SEARCH_TERM, and add it to cart.
+  function dbg(payload) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({ type: 'ADD_DEBUG' }, payload))); } catch(_) {}
   }
 
-  // Wait for fresh products to replace stale results
-  var POLL = 50;
-  for (var we = 0; we < 8000; we += POLL) {
-    var firstTile = document.querySelector(TILE_SEL);
-    if (firstTile) {
-      var currentTitle = getNameFromTile(firstTile);
-      if (!staleTitle || currentTitle !== staleTitle) break;
-    }
-    await wait(POLL);
-  }
-
-  // Poll for product tiles after search results load
   var tiles = [];
-  for (var poll = 0; poll < 20; poll++) {
+  var waitedMs = 0;
+  for (var poll = 0; poll < 40; poll++) {
     tiles = Array.from(document.querySelectorAll(TILE_SEL)).slice(0, 8);
     if (tiles.length > 0) break;
-    await wait(300);
+    await wait(200);
+    waitedMs += 200;
+  }
+  dbg({ step: 'tiles_found', count: tiles.length, waitedMs: waitedMs, url: window.location.href });
+
+  // Page-bootstrap buffer — tiles being in the DOM doesn't mean Wegmans's
+  // cart subsystem is ready. Without this wait, clicks register as React
+  // events (UI updates locally to qty=1, qty=2) but the cart-add API is
+  // rejected and the qty visually reverts to 0. ~2s is the empirical
+  // minimum for the cart session/CSRF token to be in place.
+  if (tiles.length > 0) {
+    dbg({ step: 'cart_bootstrap_wait', ms: 2000 });
+    await wait(2000);
   }
 
   // ── Gather candidates and find best match ─────────────────────────────
@@ -511,8 +565,78 @@ function buildSearchAndAddScript(
   }
 
   // ── Add to cart from the matched tile ──────────────────────────────────
+  // ADD_DEBUG snapshots are posted at every state change so we can diagnose
+  // a "success but cart unchanged" failure from the log alone.
+  function dbgAdd(payload) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({ type: 'ADD_DEBUG' }, payload))); } catch(_) {}
+  }
+  function snapshotBtn(label, btn) {
+    if (!btn) { dbgAdd({ step: label, found: false }); return null; }
+    var rect = btn.getBoundingClientRect();
+    var aria = btn.getAttribute('aria-label') || null;
+    return {
+      step: label,
+      found: true,
+      tag: btn.tagName,
+      cls: (btn.className || '').slice(0, 80),
+      text: (btn.textContent || '').trim().slice(0, 60),
+      ariaLabel: aria,
+      disabled: btn.disabled || false,
+      visible: rect.width > 0 && rect.height > 0,
+      rect: { x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) },
+      innerHtml: (btn.innerHTML || '').slice(0, 120),
+    };
+  }
+  function dbgBtn(label, btn) { dbgAdd(snapshotBtn(label, btn) || { step: label, found: false }); }
+
+  // Robust click — dispatches the full pointer event sequence (pointerdown,
+  // mousedown, pointerup, mouseup, click) with proper coordinates. React's
+  // synthetic event system on mobile WebView listens for pointer events,
+  // and bare .click() often doesn't trigger the handler. Falls back to
+  // element.click() if any event constructor isn't available.
+  // Scroll an element into the *visible* viewport, accounting for Wegmans's
+  // sticky header. scrollIntoView({block:'center'}) alone leaves the button
+  // partially behind the header (rect y came back as -36 in earlier runs).
+  async function scrollIntoCenter(el) {
+    el.scrollIntoView({ behavior: 'instant', block: 'center' });
+    await wait(300);
+    var rect = el.getBoundingClientRect();
+    // Wegmans's sticky header is ~80px on mobile. If the element top is in
+    // that zone, scroll up so the element is fully below the header.
+    var STICKY_HEADER_PX = 100;
+    if (rect.top < STICKY_HEADER_PX) {
+      window.scrollBy(0, rect.top - STICKY_HEADER_PX - 20);
+      await wait(200);
+    }
+  }
+
+  function robustClick(btn) {
+    // Re-read the rect right before dispatching so coordinates are accurate
+    // even if a previous step caused a reflow.
+    //
+    // CRITICAL: only ONE click should fire onClick per call. Earlier this
+    // function called btn.click() unconditionally AFTER dispatching a
+    // synthetic 'click' event — that made every robustClick() trigger
+    // Wegmans's onClick handler twice (qty=1 → cart got qty=2, etc.).
+    // Native btn.click() is now only a fallback for when synthetic events
+    // throw (rare — only on environments missing PointerEvent constructor).
+    try {
+      var rect = btn.getBoundingClientRect();
+      var x = rect.left + rect.width / 2;
+      var y = rect.top + rect.height / 2;
+      var pOpts = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, view: window, pointerType: 'touch' };
+      var mOpts = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, view: window };
+      btn.dispatchEvent(new PointerEvent('pointerdown', pOpts));
+      btn.dispatchEvent(new MouseEvent('mousedown', mOpts));
+      btn.dispatchEvent(new PointerEvent('pointerup', pOpts));
+      btn.dispatchEvent(new MouseEvent('mouseup', mOpts));
+      btn.dispatchEvent(new MouseEvent('click', mOpts));
+    } catch(_) {
+      try { btn.click(); } catch(__) {}
+    }
+  }
+
   try {
-    bestTile.scrollIntoView({ behavior: 'instant', block: 'center' });
 
     // Helper: wait for stepper add-button inside tile
     function waitForIncBtn(targetTile, maxMs) {
@@ -530,28 +654,37 @@ function buildSearchAndAddScript(
       });
     }
 
-    // Helper: click increment button N times
-    function clickIncN(btn, n) {
-      return new Promise(function(resolve) {
-        var idx = 0;
-        function next() {
-          if (idx >= n) return resolve();
-          wait(300).then(function() {
-            btn.click();
-            return wait(500);
-          }).then(function() {
-            idx++;
-            next();
-          });
-        }
-        next();
-      });
+    // Helper: click increment button N times, logging before/after state.
+    // Each click needs settle time after: Wegmans's cart API is async, and
+    // clicking + again before the server response can race the optimistic-
+    // update reconciliation and visually reset qty to 0.
+    //
+    // NOTE: no retry-on-aria-unchanged. The + button's aria-label is a
+    // static "Add 1 of X to cart" description that doesn't change between
+    // clicks even when the cart qty does — retrying on that signal caused
+    // double-adds (qty+N bugs). Trust the click; the 700ms buffer is
+    // enough for the cart API to commit between clicks.
+    async function clickIncN(btn, n) {
+      for (var i = 0; i < n; i++) {
+        await scrollIntoCenter(btn);
+        var beforeAria = btn.getAttribute('aria-label');
+        dbgAdd({ step: 'inc_pre_click', i: i + 1, of: n, ariaLabel: beforeAria });
+        await wait(200);
+        robustClick(btn);
+        await wait(700);
+        var afterAria = btn.getAttribute('aria-label');
+        dbgAdd({ step: 'inc_post_click', i: i + 1, of: n, ariaLabel: afterAria });
+      }
     }
+
+    dbgAdd({ step: 'add_phase_start', qty: QTY, bestName: bestName });
 
     // State 3: stepper already open
     var incBtn = bestTile.querySelector(INC_BTN_SEL);
     if (incBtn) {
+      dbgBtn('state3_stepper_open_incBtn', incBtn);
       await clickIncN(incBtn, QTY);
+      await wait(300);  // final settle before next ingredient
       document.removeEventListener('focusin', __noKbd, true);
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }));
       return;
@@ -559,41 +692,103 @@ function buildSearchAndAddScript(
 
     var defaultBtn = bestTile.querySelector(ADD_BTN_SEL);
     if (!defaultBtn) {
+      // No default-add-button — log all buttons in the tile so we can find
+      // the correct selector on mobile.
+      var allButtons = Array.from(bestTile.querySelectorAll('button')).slice(0, 8);
+      dbgAdd({
+        step: 'no_default_btn_dump',
+        tileButtonCount: allButtons.length,
+        buttons: allButtons.map(function(b) { return snapshotBtn('btn', b); }),
+      });
       document.removeEventListener('focusin', __noKbd, true);
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_button', candidates: candidates }));
       return;
     }
 
-    // Distinguish fresh (SVG only) from bubble (shows cart qty number)
-    var isBubble = /\\d/.test(defaultBtn.textContent);
+    // Scroll the BUTTON into view (not the tile) — the tile is tall enough
+    // that scrolling it to center can leave the button hidden behind the
+    // sticky header. Earlier runs reported rect y=-36 (off-screen).
+    await scrollIntoCenter(defaultBtn);
     await wait(200);
-    defaultBtn.click();
+    dbgBtn('default_btn_pre_click', defaultBtn);
+
+    // Distinguish fresh (SVG only) from bubble (shows cart qty number).
+    // textContent on the button itself — NOT aria-label, which contains
+    // "Quantity of X is N" and would always include a digit.
+    var btnText = (defaultBtn.textContent || '').trim();
+    var isBubble = /\\d/.test(btnText);
+    dbgAdd({ step: 'state_decision', isBubble: isBubble, btnText: btnText.slice(0, 40), qty: QTY });
+
+    robustClick(defaultBtn);
+    // Settle after first click — Wegmans's cart API is async; the server
+    // needs to commit qty=1 before any subsequent click can succeed.
+    await wait(700);
+    dbgBtn('default_btn_post_click', defaultBtn);
 
     // State 1: fresh add — first click already added 1 unit
     if (!isBubble) {
       if (QTY === 1) {
-        await wait(600);
+        // Verify state changed — defaultBtn should now show a digit (became a bubble).
+        var verifyText = ((bestTile.querySelector(ADD_BTN_SEL) || {}).textContent || '').trim();
+        var verifyHasDigit = /\\d/.test(verifyText);
+        dbgAdd({ step: 'state1_fresh_qty1_verify', postText: verifyText.slice(0, 40), hasDigit: verifyHasDigit });
+
+        // If the click didn't register (button didn't transition to bubble),
+        // retry once after scrolling.
+        if (!verifyHasDigit) {
+          var retryBtn = bestTile.querySelector(ADD_BTN_SEL);
+          if (retryBtn) {
+            dbgAdd({ step: 'state1_retry_attempt' });
+            await scrollIntoCenter(retryBtn);
+            await wait(200);
+            robustClick(retryBtn);
+            await wait(700);
+            var retryText = ((bestTile.querySelector(ADD_BTN_SEL) || {}).textContent || '').trim();
+            dbgAdd({ step: 'state1_retry_verify', postText: retryText.slice(0, 40), hasDigit: /\\d/.test(retryText) });
+          }
+        }
         document.removeEventListener('focusin', __noKbd, true);
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }));
         return;
       }
+      // QTY > 1 fresh-add — verify the first click actually transitioned the
+      // button. If not, retry once (same logic as the QTY===1 branch).
+      var afterFirstClickText = ((bestTile.querySelector(ADD_BTN_SEL) || {}).textContent || '').trim();
+      var firstClickHasDigit = /\\d/.test(afterFirstClickText);
+      dbgAdd({ step: 'state1_fresh_qtyN_first_verify', postText: afterFirstClickText.slice(0, 40), hasDigit: firstClickHasDigit, qty: QTY });
+      if (!firstClickHasDigit) {
+        var retryBtn = bestTile.querySelector(ADD_BTN_SEL);
+        if (retryBtn) {
+          dbgAdd({ step: 'state1_fresh_qtyN_first_retry' });
+          await scrollIntoCenter(retryBtn);
+          await wait(200);
+          robustClick(retryBtn);
+          await wait(700);
+        }
+      }
       incBtn = await waitForIncBtn(bestTile);
+      dbgBtn('state1_fresh_post_first_incBtn', incBtn);
       if (!incBtn) {
         document.removeEventListener('focusin', __noKbd, true);
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'stepper_not_found', candidates: candidates }));
         return;
       }
       await clickIncN(incBtn, QTY - 1);
+      // Final settle so the last increment commits before this script ends.
+      await wait(300);
 
     // State 2: bubble — click only opened stepper, need all QTY units
     } else {
       incBtn = await waitForIncBtn(bestTile);
+      dbgBtn('state2_bubble_incBtn', incBtn);
       if (!incBtn) {
         document.removeEventListener('focusin', __noKbd, true);
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'stepper_not_found', candidates: candidates }));
         return;
       }
       await clickIncN(incBtn, QTY);
+      // Final settle so the last increment commits before this script ends.
+      await wait(800);
     }
 
     document.removeEventListener('focusin', __noKbd, true);
@@ -603,6 +798,126 @@ function buildSearchAndAddScript(
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: candidates }));
   }
 })();true;`;
+}
+
+// ── Parallel worker support (Wegmans-specific) ─────────────────────────────
+//
+// Hidden worker WebViews are navigated to /shop/search?query=<term> URLs and
+// run this script as `injectedJavaScript`. It runs on every page load:
+//
+//   - On the warmup load (no `query` param, e.g. www.wegmans.com), do nothing.
+//   - On a search page, wait for product tiles to render, extract up to 8
+//     candidates, and post WORKER_RESULT with the workerId and term.
+//
+// Each worker is instantiated with its workerId baked into the script body.
+
+const WEGMANS_WORKER_EXTRACT_BODY = `
+(function() {
+  function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+  function dbg(payload) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({ type: 'WORKER_DEBUG', workerId: WORKER_ID }, payload))); } catch(_) {}
+  }
+  function getNameFromTile(tile) {
+    var h3 = tile.querySelector('h3[data-testid="-baseHeading"]');
+    if (!h3) return null;
+    var t = (h3.textContent || '').trim().replace(/\\s+/g, ' ');
+    return t.length > 0 ? t : null;
+  }
+  function findCard(el) {
+    var node = el;
+    for (var up = 0; up < 8; up++) {
+      if (!node || !node.parentElement) return null;
+      node = node.parentElement;
+      if (node.querySelector('img')) return node;
+    }
+    return null;
+  }
+  function extractPrice(card) {
+    var priceEl = card.querySelector('[class*="price"], [data-testid*="price"], [class*="Price"]');
+    if (priceEl) {
+      var t = priceEl.textContent.trim();
+      if (t) return t;
+    }
+    var m = card.textContent.match(/\\$\\d+\\.\\d{2}/);
+    return m ? m[0] : null;
+  }
+
+  // Extract query from URL. Skip if this is a warmup load (no query).
+  var query = '';
+  try {
+    var sp = new URLSearchParams(window.location.search);
+    query = sp.get('query') || '';
+  } catch(_) {}
+  if (!query) {
+    dbg({ step: 'warmup_load', url: window.location.href });
+    return;
+  }
+
+  // Async extraction
+  (async function() {
+    dbg({ step: 'extract_start', query: query, url: window.location.href });
+
+    // Poll for tiles. First page load on a worker has MSAL bootstrap so allow
+    // up to 12s; subsequent loads on the same worker are faster.
+    var TILE_SEL = 'div.component--product-tile';
+    var tiles = [];
+    var waitedMs = 0;
+    for (var poll = 0; poll < 60; poll++) {
+      tiles = Array.from(document.querySelectorAll(TILE_SEL)).slice(0, 20);
+      if (tiles.length > 0) break;
+      await wait(200);
+      waitedMs += 200;
+    }
+
+    if (tiles.length === 0) {
+      dbg({ step: 'no_tiles', waitedMs: waitedMs });
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'WORKER_RESULT', workerId: WORKER_ID, query: query, candidates: [],
+      }));
+      return;
+    }
+
+    var seen = new Set();
+    var candidates = [];
+    for (var ti = 0; ti < tiles.length && candidates.length < 8; ti++) {
+      var tile = tiles[ti];
+      var name = getNameFromTile(tile);
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      var card = findCard(tile.querySelector('h3[data-testid="-baseHeading"]')) || tile;
+      var imgEl = card.querySelector('img');
+      candidates.push({
+        productName: name,
+        imageUrl: imgEl ? imgEl.src : null,
+        outOfStock: false,
+        preferences: null,
+        price: extractPrice(card),
+        isWeightItem: false,
+      });
+    }
+
+    dbg({ step: 'extract_done', waitedMs: waitedMs, candidateCount: candidates.length, firstName: candidates[0] ? candidates[0].productName : null });
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'WORKER_RESULT', workerId: WORKER_ID, query: query, candidates: candidates,
+    }));
+  })();
+})();
+true;
+`;
+
+/** Returns injectedJavaScript for a single worker. The workerId is baked in. */
+export function buildWegmansWorkerScript(workerId: number): string {
+  return 'var WORKER_ID = ' + workerId + ';\n' + WEGMANS_WORKER_EXTRACT_BODY;
+}
+
+/** Returns the Wegmans warmup URL for a worker (loads homepage to bootstrap MSAL). */
+export function getWegmansWarmupUrl(): string {
+  return WEGMANS_URL;
+}
+
+/** Returns the Wegmans search URL for a given query. */
+export function getWegmansSearchUrl(query: string): string {
+  return 'https://www.wegmans.com/shop/search?query=' + encodeURIComponent(query);
 }
 
 // ── Export ──────────────────────────────────────────────────────────────────

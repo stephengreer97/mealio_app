@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<!--
+  Synthetic Wegmans product-tile fixture.
+
+  Not a captured page — handwritten to exercise specific paths in
+  src/lib/webview-scripts/wegmans.ts without requiring a live capture.
+
+  Selectors used by the script:
+    div.component--product-tile         (tile container)
+    h3[data-testid="-baseHeading"]      (product name)
+    button.default-add-button           (add button — also instrumented
+                                         with a window.__addClickCount
+                                         counter so the double-click
+                                         regression test can assert "the
+                                         button's onClick fired exactly once")
+
+  Layout:
+    - A fixed-position .header (80px tall) at top:0 to simulate Wegmans's
+      sticky header. The scrollIntoCenter regression test relies on this
+      to verify the button is scrolled below the header (rect.y >= 0).
+    - 1200px of empty .spacer to push the tile below the initial viewport
+      so scrolling actually has work to do.
+    - body is tall (2000px+) so window.scrollBy/scrollIntoView behave.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Synthetic Wegmans tile</title>
+    <style>
+      html, body { margin: 0; padding: 0; }
+      body { min-height: 2400px; font-family: sans-serif; }
+      .header {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 80px;
+        background: #c8102e;
+        color: white;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        padding: 0 16px;
+      }
+      .spacer { height: 1200px; }
+      .component--product-tile {
+        margin: 16px;
+        padding: 12px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        max-width: 360px;
+        background: white;
+      }
+      .component--product-tile h3 { font-size: 14px; margin: 8px 0; }
+      .component--product-tile img { width: 80px; height: 80px; object-fit: cover; }
+      button.default-add-button {
+        padding: 10px 18px;
+        background: #c8102e;
+        color: white;
+        border: none;
+        border-radius: 999px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">Wegmans</div>
+
+    <div class="spacer"></div>
+
+    <div class="component--product-tile">
+      <h3 data-testid="-baseHeading">Wegmans Pico de Gallo Salsa</h3>
+      <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'/%3E" alt="" />
+      <button
+        class="default-add-button"
+        aria-label="Add to cart"
+        type="button"
+      >Add</button>
+    </div>
+
+    <div style="height: 400px;"></div>
+
+    <script>
+      // Instrument the add button to record onClick invocations. The
+      // robustClick regression test asserts this counter is exactly 1 after
+      // the script's first click — pinning the May-18 double-click bug.
+      window.__addClickCount = 0;
+      document
+        .querySelector('button.default-add-button')
+        .addEventListener('click', function () {
+          window.__addClickCount = (window.__addClickCount || 0) + 1;
+        });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,125 @@
+name: Tests
+
+# The main test suite: unit + component + fixture tests, all on cheap
+# ubuntu runners. Runs on every push and PR. The expensive iOS Maestro
+# workflow (ios-maestro.yml) is separate and only fires on PRs to main.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-and-components:
+    name: Unit + component tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # NOTE: the path pattern must come BEFORE --selectProjects — the flag
+      # is variadic and would otherwise swallow the path as a project name.
+      - name: Unit tests (node project)
+        run: npx jest tests/unit --selectProjects node --ci
+
+      - name: Component tests (jest-expo project)
+        run: npx jest --selectProjects components --ci
+
+  fixtures:
+    name: Fixture tests (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The runner self-test also needs chromium, so it lives in this
+          # matrix rather than the unit job.
+          - name: runner
+            spec: tests/fixture-runners/runScript.test.ts
+          - name: wegmans
+            spec: tests/fixture-tests/wegmans.spec.ts
+          - name: heb
+            spec: tests/fixture-tests/heb.spec.ts
+          - name: walmart
+            spec: tests/fixture-tests/walmart.spec.ts
+          - name: albertsons
+            spec: tests/fixture-tests/albertsons.spec.ts
+          - name: aldi
+            spec: tests/fixture-tests/aldi.spec.ts
+          - name: amazon-fresh
+            spec: tests/fixture-tests/amazon-fresh.spec.ts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Playwright needs its own chromium build + system libs.
+      # Cache the browser binaries keyed on the playwright version.
+      - name: Get Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ steps.pw.outputs.version }}
+
+      - name: Install Playwright chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium --with-deps
+
+      - name: Install Playwright system deps only (cached browsers)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Fixture tests for ${{ matrix.name }}
+        run: npx jest ${{ matrix.spec }} --ci
+
+  typecheck:
+    name: TypeScript typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Pre-existing type errors live in a few screens (MealDetailSheet,
+      # AccountScreen, MyMealsScreen, CreatorPortalScreen). Until those are
+      # cleaned up we gate only on NEW errors: fail if the error count
+      # exceeds the known baseline.
+      - name: Typecheck with baseline
+        run: |
+          BASELINE=14
+          COUNT=$(npx tsc --noEmit --skipLibCheck 2>&1 | grep -cE "error TS" || true)
+          echo "TypeScript errors: $COUNT (baseline: $BASELINE)"
+          if [ "$COUNT" -gt "$BASELINE" ]; then
+            echo "::error::Type error count ($COUNT) exceeds baseline ($BASELINE) — new type errors introduced."
+            npx tsc --noEmit --skipLibCheck 2>&1 | grep -E "error TS" | head -40
+            exit 1
+          fi

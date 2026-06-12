@@ -1,0 +1,17 @@
+# Smoke test: app boots, splash clears, login screen renders.
+#
+# If this flow fails, the build is fundamentally broken — splash never
+# clears, JS bundle didn't load, or LoginScreen crashed on first render.
+
+appId: co.mealio.app
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+    stopApp: true
+
+# The splash screen has the same red background as the brand. Wait for the
+# login screen's text content to appear so we know hydration completed.
+- assertVisible: "Welcome back"
+- assertVisible: "Sign in to your account"
+- assertVisible: "Mealio"

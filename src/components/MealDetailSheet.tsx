@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Feather } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import {
   View,
   Text,
@@ -260,7 +260,13 @@ export default function MealDetailSheet({
         {/* Kroger cart result screen */}
         {krogerResult && (
           <View style={resultStyles.overlay}>
-            <Text style={resultStyles.icon}>{krogerResult.notFound.length === 0 ? '✅' : '⚠️'}</Text>
+            <View style={{ marginBottom: 8 }}>
+              <Ionicons
+                name={krogerResult.notFound.length === 0 ? 'checkmark-circle' : 'alert-circle'}
+                size={56}
+                color={krogerResult.notFound.length === 0 ? '#22c55e' : '#f59e0b'}
+              />
+            </View>
             <Text style={resultStyles.title}>
               {krogerResult.notFound.length === 0
                 ? 'Added to cart!'

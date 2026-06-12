@@ -61,3 +61,14 @@ logs/
 
 # EAS
 .eas/
+
+# Test infrastructure — never commit these.
+# NOTE: git does not support inline comments in .gitignore. A trailing
+# comment becomes part of the pattern and the rule silently fails to match.
+# Persistent Chrome profiles for capture/live tests (contain login cookies):
+tests/.chrome-profile/
+# Unencrypted credentials:
+tests/live/creds.json
+
+# Claude Code personal settings (commands/ and MCP-SETUP.md ARE committed)
+.claude/settings.local.json

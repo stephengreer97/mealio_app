@@ -594,9 +594,19 @@ function buildSearchAndAddScriptFn(
   var CRITICAL = new Set(['organic','grass','fed','free','range','cage','large','small','jumbo',
     'medium','extra','spicy','mild','hot','sweet','whole','skim','nonfat','lowfat',
     'salted','unsalted','sodium','boneless','skinless','lean','ground']);
-  function scoreMatch(a, b) {
-    function n(s) { return s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim(); }
-    var na = n(a), nb = n(b);
+  // Dual normalization to handle stores that mangle ñ/é/etc. inconsistently
+  // across renderings (Walmart strips ñ entirely on certain queries; others
+  // may NFD-decompose). Score both ways and take the better.
+  function normDiacritic(s) {
+    return s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
+      .replace(/[^a-z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim();
+  }
+  function normStrip(s) {
+    return s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
+      .replace(/[^\\x00-\\x7f]/g, '').replace(/[^a-z0-9 ]/g, ' ')
+      .replace(/\\s+/g, ' ').trim();
+  }
+  function scoreOne(na, nb) {
     if (na === nb) return 100;
     var wa = na.split(' ').filter(Boolean), sb = new Set(nb.split(' ').filter(Boolean));
     for (var i = 0; i < wa.length; i++) { if (CRITICAL.has(wa[i]) && !sb.has(wa[i])) return 0; }
@@ -604,6 +614,11 @@ function buildSearchAndAddScriptFn(
     var p = m / wa.length;
     if (p < 0.7) return 0;
     return Math.min(99, Math.round(p * 100));
+  }
+  function scoreMatch(a, b) {
+    var s1 = scoreOne(normDiacritic(a), normDiacritic(b));
+    var s2 = scoreOne(normStrip(a), normStrip(b));
+    return Math.max(s1, s2);
   }
 
   function normalizeForScoring(s) {
