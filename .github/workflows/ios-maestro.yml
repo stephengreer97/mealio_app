@@ -1,24 +1,23 @@
 name: iOS Maestro
 
 # Runs Maestro UI flows against an iOS Simulator using a PREBUILT app from
-# EAS Build — GitHub never compiles the app. This keeps billed macOS time
-# to ~10 min/run instead of ~45.
+# EAS Build — GitHub never compiles the app.
 #
-# Pipeline:
-#   1. Somebody (usually Claude, per the standing workflow) runs
-#      `eas build --platform ios --profile ios-simulator --no-wait`
-#      whenever app code changes. That build happens on EAS's Macs.
-#   2. This workflow downloads the LATEST FINISHED ios-simulator build via
-#      `eas build:list`, installs it on a simulator, runs the Maestro flows.
+# Two jobs so billed macOS time stays minimal (~10 min):
+#   1. wait-for-eas (ubuntu, 1x billing): finds the EAS ios-simulator build
+#      for THIS commit. If one is in progress, waits for it. If none exists
+#      for the commit, falls back to the latest finished build with a
+#      warning (smoke-test semantics). Outputs the artifact URL.
+#   2. ios-maestro (macos, 10x billing): starts only once an artifact is
+#      ready — downloads, installs on a simulator, runs the flows.
 #
-# Runs on every PR (owner's call). Caveat: the tested binary is the latest
-# finished EAS sim build, which can lag the triggering commit if no fresh
-# build was kicked. Treat this lane as a smoke check on the assembled app,
-# not commit-exact validation (the Jest suite in test.yml is the
-# commit-exact gatekeeper).
+# Kick a commit-exact build with:
+#   eas build --platform ios --profile ios-simulator --no-wait
+# (per the standing workflow, the engineer does this whenever app code
+# changes; flow-only changes can ride the fallback.)
 #
 # Requires the EXPO_TOKEN repo secret (expo.dev → Account settings →
-# Access tokens). Without it the job fails fast with a clear message.
+# Access tokens).
 
 on:
   workflow_dispatch:
@@ -31,23 +30,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ios-maestro:
-    name: iOS Simulator + Maestro flows
-    runs-on: macos-15
-    timeout-minutes: 25
+  wait-for-eas:
+    name: Find / wait for EAS simulator build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-
+    outputs:
+      build_url: ${{ steps.find.outputs.build_url }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Guard — EXPO_TOKEN present
         run: |
           if [ -z "$EXPO_TOKEN" ]; then
             echo "::error::EXPO_TOKEN secret is not set. Create an access token at https://expo.dev/accounts/mealio/settings/access-tokens and add it as a repo secret named EXPO_TOKEN."
             exit 1
           fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -61,22 +61,61 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Download latest EAS simulator build
+      - name: Find or wait for the simulator build
+        id: find
         run: |
-          BUILD_JSON=$(npx eas-cli@latest build:list \
-            --platform ios \
-            --build-profile ios-simulator \
-            --status finished \
-            --limit 1 \
-            --json --non-interactive)
-          BUILD_URL=$(echo "$BUILD_JSON" | jq -r '.[0].artifacts.buildUrl // empty')
-          BUILD_DATE=$(echo "$BUILD_JSON" | jq -r '.[0].completedAt // "unknown"')
-          if [ -z "$BUILD_URL" ]; then
-            echo "::error::No finished ios-simulator build found on EAS. Run: eas build --platform ios --profile ios-simulator"
+          # On pull_request events github.sha is the synthetic merge commit;
+          # the EAS build (kicked locally) carries the branch HEAD sha.
+          TARGET_SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "Target commit: $TARGET_SHA"
+          URL=""
+          for i in $(seq 1 40); do
+            BUILDS=$(npx eas-cli build:list \
+              --platform ios \
+              --build-profile ios-simulator \
+              --limit 10 \
+              --json --non-interactive)
+
+            # 1. Finished build for exactly this commit?
+            URL=$(echo "$BUILDS" | jq -r --arg sha "$TARGET_SHA" \
+              '[.[] | select(.gitCommitHash==$sha and .status=="FINISHED")][0].artifacts.buildUrl // empty')
+            [ -n "$URL" ] && { echo "Found commit-exact finished build."; break; }
+
+            # 2. Build for this commit still running? Wait for it.
+            INPROG=$(echo "$BUILDS" | jq -r --arg sha "$TARGET_SHA" \
+              '[.[] | select(.gitCommitHash==$sha and (.status=="IN_PROGRESS" or .status=="IN_QUEUE" or .status=="NEW" or .status=="PENDING"))] | length')
+            if [ "$INPROG" != "0" ]; then
+              echo "EAS build for $TARGET_SHA in progress — waiting (attempt $i/40)…"
+              sleep 60
+              continue
+            fi
+
+            # 3. No build for this commit at all — fall back to latest finished.
+            URL=$(echo "$BUILDS" | jq -r \
+              '[.[] | select(.status=="FINISHED")][0].artifacts.buildUrl // empty')
+            if [ -n "$URL" ]; then
+              echo "::warning::No EAS build for commit $TARGET_SHA — using the latest finished simulator build (may not include this commit's changes)."
+            fi
+            break
+          done
+          if [ -z "$URL" ]; then
+            echo "::error::No usable EAS ios-simulator build. Kick one with: eas build --platform ios --profile ios-simulator"
             exit 1
           fi
-          echo "Using EAS build completed at: $BUILD_DATE"
-          curl -fsSL "$BUILD_URL" -o /tmp/mealio-sim.tar.gz
+          echo "build_url=$URL" >> "$GITHUB_OUTPUT"
+
+  ios-maestro:
+    name: iOS Simulator + Maestro flows
+    needs: wait-for-eas
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download EAS simulator build
+        run: |
+          curl -fsSL "${{ needs.wait-for-eas.outputs.build_url }}" -o /tmp/mealio-sim.tar.gz
           mkdir -p /tmp/mealio-app
           tar xzf /tmp/mealio-sim.tar.gz -C /tmp/mealio-app
           APP_PATH=$(find /tmp/mealio-app -maxdepth 2 -name "*.app" | head -1)

@@ -1,7 +1,10 @@
-# Smoke test: app boots, splash clears, login screen renders.
+# Smoke test: app boots, splash clears, Discover screen renders with live
+# trending meals.
 #
-# If this flow fails, the build is fundamentally broken — splash never
-# clears, JS bundle didn't load, or LoginScreen crashed on first render.
+# The app launches into Discover in guest mode (login is NOT the first
+# screen — there's a Sign In button in the header). If this flow fails,
+# the build is fundamentally broken: splash never cleared, JS bundle
+# didn't load, or the Discover screen crashed on first render.
 
 appId: co.mealio.app
 ---
@@ -10,8 +13,7 @@ appId: co.mealio.app
     clearKeychain: true
     stopApp: true
 
-# The splash screen has the same red background as the brand. Wait for the
-# login screen's text content to appear so we know hydration completed.
-- assertVisible: "Welcome back"
-- assertVisible: "Sign in to your account"
-- assertVisible: "Mealio"
+# Discover screen markers (guest mode).
+- assertVisible: "Trending"
+- assertVisible: "Sign In"
+- assertVisible: "Trending Meals"

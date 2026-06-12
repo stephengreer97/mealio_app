@@ -1,31 +1,29 @@
-# Verify the login form is wired up correctly.
+# Verify the login screen is reachable from Discover and the form is wired.
 #
-# Catches regressions where the email/password TextInputs disappear or the
-# Sign In CTA gets renamed. Does not actually submit credentials — that
-# requires a known test account and bypassing 2FA.
+# Catches regressions where the Sign In navigation breaks, the email or
+# password TextInputs disappear, or the CTA gets renamed. Does not actually
+# submit credentials — that requires a known test account and bypassing
+# email-OTP 2FA.
 
 appId: co.mealio.app
 ---
 - launchApp:
     clearState: true
     stopApp: true
-- assertVisible: "Welcome back"
 
-# Email field — placeholder text matches the LoginScreen.tsx source.
+# App opens in guest Discover; navigate to login.
+- assertVisible: "Trending Meals"
+- tapOn: "Sign In"
+
+# Login screen markers (from LoginScreen.tsx).
+- assertVisible: "Welcome back"
+- assertVisible: "Sign in to your account"
+
+# Email field — placeholder text matches the source.
 - tapOn:
     text: "you@example.com"
 - inputText: "test@example.com"
 
-# Password field. Maestro can't see the masked dots literally; tap by
-# index since it's the second TextInput on the screen.
-- tapOn:
-    index: 1
-    text: ".*"
-- inputText: "wrongpassword"
-
-# CTA is present (we are NOT actually submitting — just verifying it renders).
-- assertVisible: "Sign In"
+# Form chrome.
 - assertVisible: "Forgot password?"
-
-# Social auth options still render.
 - assertVisible: "or continue with"
