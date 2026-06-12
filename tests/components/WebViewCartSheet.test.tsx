@@ -135,3 +135,54 @@ describe('WebViewCartSheet — qty → start search', () => {
     expect(queryByText(/add ingredients to/i)).toBeNull();
   });
 });
+
+describe('WebViewCartSheet — login_check timeout', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('falls back to the login webview when LOGIN_STATUS never arrives', () => {
+    const { getByText, queryByText } = render(
+      <WebViewCartSheet
+        visible
+        meals={[baseMeal()]}
+        storeId="aldi"
+        storeName="ALDI"
+        onClose={() => {}}
+      />,
+    );
+    act(() => {
+      fireEvent.press(getByText(/add ingredients to/i));
+    });
+    // In login_check: spinner shows "Checking login…".
+    expect(getByText(/checking login/i)).toBeTruthy();
+
+    // No LOGIN_STATUS ever posts. After the safety window the sheet must
+    // NOT still be spinning on the login check.
+    act(() => {
+      jest.advanceTimersByTime(21_000);
+    });
+    expect(queryByText(/checking login/i)).toBeNull();
+  });
+});
+
+describe('WebViewCartSheet — searching/adding progress bar', () => {
+  it('renders a progress bar (not the old "x of x" counter) during the spinner steps', () => {
+    const { getByText, queryByText, queryByTestId } = render(
+      <WebViewCartSheet
+        visible
+        meals={[baseMeal()]}
+        storeId="aldi"
+        storeName="ALDI"
+        onClose={() => {}}
+      />,
+    );
+    act(() => {
+      fireEvent.press(getByText(/add ingredients to/i));
+    });
+    // login_check / searching / adding share the spinner screen. The "x of x"
+    // counter is gone for good; the bar only mounts in searching/adding, so
+    // here (login_check) neither may render — and once a flow regression
+    // resurrects the counter this is the assertion that catches it.
+    expect(queryByText(/\d+ of \d+ (ingredients|items)/)).toBeNull();
+  });
+});

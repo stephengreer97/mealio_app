@@ -619,6 +619,130 @@ function buildSearchAndAddScript(
 })();true;`;
 }
 
+// ── Parallel worker support ───────────────────────────────────────────────────
+//
+// Mirrors the Wegmans 5-worker pool (see wegmans.ts buildWegmansWorkerScript
+// and useParallelSearchPool): each hidden worker WebView loads a search URL
+// from getAldiSearchUrl, and this injected script extracts up to 8 product
+// candidates and posts WORKER_RESULT with the baked-in workerId. Unlike the
+// sequential EXTRACT_PRODUCTS_SCRIPT, every dispatch is a fresh page load,
+// so no stale-tile detection is needed.
+
+const ALDI_WORKER_EXTRACT_BODY = `(function() {
+  function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+  function dbg(obj) {
+    try {
+      obj.type = 'WORKER_DEBUG'; obj.workerId = WORKER_ID;
+      window.ReactNativeWebView.postMessage(JSON.stringify(obj));
+    } catch(_) {}
+  }
+
+  var CARD_LINK_SEL = 'a[href*="/store/aldi/products/"]';
+  var ATC_SEL = 'button[aria-label^="Add 1 "]';
+
+  function findCard(el) {
+    var node = el.parentElement;
+    for (var depth = 0; depth < 10 && node; depth++) {
+      if (node.querySelector('img') && node.textContent.length > 30) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function extractPrice(card) {
+    if (!card) return null;
+    var text = card.textContent || '';
+    var m = text.match(/\\$\\d+\\.\\d{2}/);
+    return m ? m[0] : null;
+  }
+
+  function getProductName(card) {
+    var addBtn = card.querySelector(ATC_SEL);
+    if (addBtn) {
+      var m = (addBtn.getAttribute('aria-label') || '').match(/^Add 1 (?:item|ct)\\s+(.+)/i);
+      if (m) return m[1].trim();
+    }
+    var img = card.querySelector('img[alt]');
+    if (img) {
+      var alt = img.getAttribute('alt').trim();
+      if (alt.length > 2 && !/placeholder|logo|banner/i.test(alt)) return alt;
+    }
+    var link = card.querySelector(CARD_LINK_SEL);
+    if (link) {
+      var href = link.getAttribute('href') || '';
+      var slugMatch = href.match(/\\/products\\/\\d+-(.+)/);
+      if (slugMatch) {
+        return slugMatch[1].split('-').map(function(w) {
+          return w.charAt(0).toUpperCase() + w.slice(1);
+        }).join(' ');
+      }
+    }
+    return null;
+  }
+
+  // Query comes from the search URL (/store/aldi/s?k=...). No query means a
+  // warmup/initial load — stay silent so the pool doesn't record a result.
+  var query = '';
+  try {
+    var sp = new URLSearchParams(window.location.search);
+    query = sp.get('k') || '';
+  } catch(_) {}
+  if (!query) {
+    dbg({ step: 'warmup_load', url: window.location.href });
+    return;
+  }
+
+  (async function() {
+    dbg({ step: 'extract_start', query: query, url: window.location.href });
+
+    var productLinks = [];
+    var waitedMs = 0;
+    for (var poll = 0; poll < 50; poll++) {
+      productLinks = Array.from(document.querySelectorAll(CARD_LINK_SEL));
+      if (productLinks.length > 0) break;
+      await wait(200);
+      waitedMs += 200;
+    }
+
+    var seen = new Set();
+    var candidates = [];
+    for (var pi = 0; pi < productLinks.length && candidates.length < 8; pi++) {
+      var card = findCard(productLinks[pi]);
+      if (!card) continue;
+      var name = getProductName(card);
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      var addBtn = card.querySelector(ATC_SEL);
+      var outOfStock = addBtn ? (addBtn.disabled || addBtn.getAttribute('aria-disabled') === 'true') : false;
+      var imgEl = card.querySelector('img');
+      candidates.push({
+        productName: name,
+        imageUrl: imgEl ? imgEl.src : null,
+        outOfStock: outOfStock,
+        preferences: null,
+        price: extractPrice(card),
+      });
+    }
+
+    dbg({ step: 'extract_done', waitedMs: waitedMs, candidateCount: candidates.length, firstName: candidates[0] ? candidates[0].productName : null });
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'WORKER_RESULT', workerId: WORKER_ID, query: query, candidates: candidates,
+    }));
+  })();
+})();
+true;
+`;
+
+/** Returns injectedJavaScript for a single worker. The workerId is baked in. */
+export function buildAldiWorkerScript(workerId: number): string {
+  return 'var WORKER_ID = ' + workerId + ';\n' + ALDI_WORKER_EXTRACT_BODY;
+}
+
+/** Returns the ALDI (Instacart) search URL for a given query. */
+export function getAldiSearchUrl(query: string): string {
+  return 'https://www.aldi.us/store/aldi/s?k=' + encodeURIComponent(query);
+}
+
 // ── Public interface ──────────────────────────────────────────────────────────
 
 export function getScripts() {
