@@ -26,7 +26,9 @@ jobs:
     # macos-15 ships Xcode 16.x — React Native requires >= 16.1.
     # (macos-14's default 15.4 fails pod install.)
     runs-on: macos-15
-    timeout-minutes: 35
+    # Release xcodebuild of an RN app takes 25-35 min cold on these runners;
+    # pods + deps consume ~10 more. 35 min was hit mid-build.
+    timeout-minutes: 60
     env:
       EXPO_NO_TELEMETRY: 1
 
@@ -85,7 +87,11 @@ jobs:
 
       - name: Build for iOS Simulator
         run: |
-          # Workspace name is derived from the slug in app.json ("mealio").
+          # Workspace name is derived from the name in app.json ("Mealio").
+          # Single invocation, -quiet to keep the log readable. (An earlier
+          # `| xcpretty || (xcodebuild …)` fallback pattern caused a full
+          # SECOND build when xcpretty was missing — never do that.)
+          set -o pipefail
           xcodebuild \
             -workspace ios/Mealio.xcworkspace \
             -scheme Mealio \
@@ -93,15 +99,8 @@ jobs:
             -sdk iphonesimulator \
             -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            | xcpretty || (xcodebuild \
-            -workspace ios/Mealio.xcworkspace \
-            -scheme Mealio \
-            -configuration Release \
-            -sdk iphonesimulator \
-            -destination "platform=iOS Simulator,id=$SIM_UDID" \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO)
+            -quiet \
+            CODE_SIGNING_ALLOWED=NO
 
       - name: Install app on simulator
         run: |
