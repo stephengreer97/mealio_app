@@ -1,0 +1,26 @@
+# Discover search filtering: a nonsense query empties the list, clearing it
+# restores the meals. Catches regressions in the client-side search filter
+# and the empty state.
+
+appId: co.mealio.app
+---
+- launchApp:
+    clearState: true
+    stopApp: true
+
+- assertVisible: "Trending Meals"
+- extendedWaitUntil:
+    visible:
+      id: "meal-card-0"
+    timeout: 15000
+
+- tapOn: "Search meals or creators…"
+- inputText: "zzzqqxx no such meal"
+- assertVisible: "No meals found"
+
+# Clear the query (the ✕ affordance inside the search bar) → list returns.
+- eraseText
+- extendedWaitUntil:
+    visible:
+      id: "meal-card-0"
+    timeout: 10000

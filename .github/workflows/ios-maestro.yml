@@ -170,6 +170,25 @@ jobs:
         run: xcrun simctl io booted screenshot failure-screenshot.png || true
         continue-on-error: true
 
+      # When Maestro reports "App crashed or stopped", the real stack lives in
+      # the simulator's crash reports. Collect them so launch crashes are
+      # diagnosable from the run page instead of needing a local repro.
+      - name: Collect crash reports on failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          mkdir -p crash-reports
+          cp ~/Library/Logs/DiagnosticReports/* crash-reports/ 2>/dev/null || true
+          ls -la crash-reports || true
+
+      - name: Upload crash reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-reports
+          path: crash-reports/
+          if-no-files-found: ignore
+
       - name: Upload screenshot artifact
         if: failure()
         uses: actions/upload-artifact@v4

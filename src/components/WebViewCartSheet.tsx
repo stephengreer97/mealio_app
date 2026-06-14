@@ -29,6 +29,28 @@ import {
   buildWegmansWorkerScript,
   getWegmansSearchUrl,
 } from '../lib/webview-scripts/wegmans';
+import {
+  buildAldiWorkerScript,
+  getAldiSearchUrl,
+} from '../lib/webview-scripts/aldi';
+import { buildCartCountScript } from '../lib/webview-scripts/cart-count';
+
+// ── Parallel search config ───────────────────────────────────────────────────
+//
+// Stores whose choose-product flow runs across the hidden worker-WebView pool
+// instead of the sequential single-WebView path. To enable a store: write a
+// getXSearchUrl + buildXWorkerScript pair in its webview-scripts module (the
+// worker script extracts candidates and posts WORKER_RESULT; see aldi.ts for
+// the template) and add an entry here. Stores with aggressive WAFs (HEB
+// Imperva, Walmart robot challenge) should NOT be added without live testing —
+// five concurrent WebViews from one device can look like automation.
+const PARALLEL_SEARCH_STORES: Record<string, {
+  getSearchUrl: (term: string) => string;
+  buildWorkerScript: (workerId: number) => string;
+}> = {
+  wegmans: { getSearchUrl: getWegmansSearchUrl, buildWorkerScript: buildWegmansWorkerScript },
+  aldi: { getSearchUrl: getAldiSearchUrl, buildWorkerScript: buildAldiWorkerScript },
+};
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -157,6 +179,12 @@ export default function WebViewCartSheet({
   // Step: done
   const [totalAdded, setTotalAdded] = useState(0);
   const [totalFailed, setTotalFailed] = useState(0);
+  // Cart snapshot validation (silent-miss detection): badge count captured
+  // right after login confirms, compared against the badge after the run.
+  // null anywhere means "couldn't read the badge" → validation is skipped.
+  const cartCountBeforeRef = useRef<number | null>(null);
+  const cartCountPendingRef = useRef<'before' | 'after' | null>(null);
+  const [cartDeltaWarning, setCartDeltaWarning] = useState<string | null>(null);
   const [addedNames, setAddedNames] = useState<string[]>([]);
 
   // WebView refs
@@ -188,6 +216,12 @@ export default function WebViewCartSheet({
   // never advance. Cleared when SEARCH_RESULT or SEARCH_AND_ADD_RESULT arrives.
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const SEARCH_TIMEOUT_MS = 15_000;
+  // Same safety net for the login check. If CHECK_LOGIN never posts a
+  // LOGIN_STATUS (page hung, WAF interstitial swallowed the script, store
+  // changed its DOM), fall back to showing the login WebView — the same
+  // behavior as an explicit "not logged in" — instead of spinning forever.
+  const loginCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const LOGIN_CHECK_TIMEOUT_MS = 20_000;
   // Tracks which search idx to resume from after a robot/captcha challenge
   // (Walmart redirects to /blocked when it suspects automation; user has to
   // press-and-hold to verify). -1 when no challenge in progress.
@@ -226,27 +260,30 @@ export default function WebViewCartSheet({
   // timeout state machine lives in useParallelSearchPool; this component owns
   // only the start trigger, the per-worker WebView render, and the "all done →
   // build SearchResult list → go to review" finalization.
-  const WEGMANS_WORKER_COUNT = 5;
-  const WEGMANS_WORKER_TIMEOUT_MS = 20_000;
-  const isWegmansStore = storeId === 'wegmans';
+  const PARALLEL_WORKER_COUNT = 5;
+  const PARALLEL_WORKER_TIMEOUT_MS = 20_000;
+  // Null for stores that haven't opted into the worker-pool path.
+  const parallelCfg = PARALLEL_SEARCH_STORES[storeId] ?? null;
 
-  const wegmansPool = useParallelSearchPool<ConsolidatedIngredient, Candidate[]>({
-    workerCount: WEGMANS_WORKER_COUNT,
-    workerTimeoutMs: WEGMANS_WORKER_TIMEOUT_MS,
-    getUrl: (item) => getWegmansSearchUrl(item.ingredientName),
+  const parallelPool = useParallelSearchPool<ConsolidatedIngredient, Candidate[]>({
+    workerCount: PARALLEL_WORKER_COUNT,
+    workerTimeoutMs: PARALLEL_WORKER_TIMEOUT_MS,
+    getUrl: (item) => (parallelCfg ? parallelCfg.getSearchUrl(item.ingredientName) : ''),
     emptyResult: () => [],
   });
 
   const workerScripts = useMemo(
-    () => new Array(WEGMANS_WORKER_COUNT).fill(0).map((_, i) => buildWegmansWorkerScript(i)),
-    [],
+    () => parallelCfg
+      ? new Array(PARALLEL_WORKER_COUNT).fill(0).map((_, i) => parallelCfg.buildWorkerScript(i))
+      : [],
+    [parallelCfg],
   );
   const workerSources = useMemo(
-    () => wegmansPool.workerUris.map((uri) => ({ uri: uri || 'about:blank' })),
-    [wegmansPool.workerUris],
+    () => parallelPool.workerUris.map((uri) => ({ uri: uri || 'about:blank' })),
+    [parallelPool.workerUris],
   );
 
-  const finishWegmansParallel = useCallback((resultsByIdx: Map<number, Candidate[]>) => {
+  const finishParallelSearch = useCallback((resultsByIdx: Map<number, Candidate[]>) => {
     const active = activeItemsRef.current;
     const results: SearchResult[] = [];
     for (let idx = 0; idx < active.length; idx++) {
@@ -263,23 +300,23 @@ export default function WebViewCartSheet({
       });
     }
     const summary = results.map((r) => ({ term: r.term, count: r.candidates.length, first: r.candidates[0]?.productName }));
-    console.log(`[Cart ${ts()}]`, 'wegmans parallel: finishing → review', JSON.stringify(summary));
+    console.log(`[Cart ${ts()}]`, 'parallel search: finishing → review', JSON.stringify(summary));
     searchResultsRef.current = results;
     setSearchResults(results);
     setStep('review');
     setReviewIdx(0);
   }, []);
 
-  const startWegmansParallel = useCallback(() => {
+  const startParallelSearch = useCallback(() => {
     const active = activeItemsRef.current;
     if (active.length === 0) {
-      console.log(`[Cart ${ts()}]`, 'wegmans parallel: no active items, skipping');
+      console.log(`[Cart ${ts()}]`, 'parallel search: no active items, skipping');
       return;
     }
-    console.log(`[Cart ${ts()}]`, 'wegmans parallel: dispatching', active.length, 'across', WEGMANS_WORKER_COUNT, 'workers');
+    console.log(`[Cart ${ts()}]`, 'parallel search: dispatching', active.length, 'across', PARALLEL_WORKER_COUNT, 'workers');
     setSearchingLabel(`Searching ${active.length} ingredients…`);
-    wegmansPool.start(active, finishWegmansParallel);
-  }, [wegmansPool, finishWegmansParallel]);
+    parallelPool.start(active, finishParallelSearch);
+  }, [parallelPool, finishParallelSearch]);
 
   const onWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
     try {
@@ -290,13 +327,13 @@ export default function WebViewCartSheet({
       }
       if (msg.type === 'WORKER_RESULT') {
         console.log(`[Cart ${ts()}]`, 'WORKER_RESULT w', workerId, 'candidates=', (msg.candidates || []).length);
-        wegmansPool.reportResult(workerId, msg.candidates || []);
+        parallelPool.reportResult(workerId, msg.candidates || []);
         return;
       }
     } catch (e) {
       console.log(`[Cart ${ts()}]`, 'onWorkerMessage parse error w', workerId, e);
     }
-  }, [wegmansPool]);
+  }, [parallelPool]);
 
   // ── Reset on open ────────────────────────────────────────────────────────
 
@@ -327,6 +364,7 @@ export default function WebViewCartSheet({
       inflightScriptRef.current = null;
       if (addTimeoutRef.current) { clearTimeout(addTimeoutRef.current); addTimeoutRef.current = null; }
       if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
+      if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
       robotChallengeResumeIdxRef.current = -1;
       onSearchPageRef.current = false;
       loginCheckActiveRef.current = false;
@@ -336,11 +374,14 @@ export default function WebViewCartSheet({
       autoPickedItemsRef.current = [];
       searchResultsRef.current = [];
       isCustomSearchRef.current = false;
+      cartCountBeforeRef.current = null;
+      cartCountPendingRef.current = null;
+      setCartDeltaWarning(null);
 
       // Reset Wegmans parallel worker state. The hook clears its queue,
       // active flag, timers, and worker URIs in one call — workers unmount
       // because isActive flips to false.
-      wegmansPool.reset();
+      parallelPool.reset();
 
       // If any ingredient has no chosen product yet, skip the qty step and
       // auto-start the search/choose flow immediately.
@@ -357,6 +398,7 @@ export default function WebViewCartSheet({
         setSearchingLabel('Checking login…');
         loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
         setWebviewUri(scriptsRef.current!.storeUrl + '?_t=' + Date.now());
+        armLoginCheckTimeout();
       } else {
         setStep('qty');
       }
@@ -387,7 +429,50 @@ export default function WebViewCartSheet({
   const toggleAll = () => setCheckedItems((prev) => prev.map(() => !allChecked));
   const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0).length;
 
+  // Cart snapshot AFTER the run: the webview is still on the last search
+  // page (it stays mounted through 'done'), whose header badge reflects the
+  // adds. Only fires when the before-snapshot succeeded and something was
+  // reported added.
+  useEffect(() => {
+    if (step !== 'done' || totalAdded === 0 || cartCountBeforeRef.current == null) return;
+    const countScript = buildCartCountScript(storeId);
+    if (!countScript) return;
+    cartCountPendingRef.current = 'after';
+    webviewRef.current?.injectJavaScript(countScript);
+  }, [step, totalAdded, storeId]);
+
+  // Clear all safety timers on unmount. Without this, closing the sheet mid
+  // login-check / search / add leaves a real setTimeout running that later
+  // fires setState on an unmounted component (and, in tests, logs after the
+  // test finishes — "Cannot log after tests are done").
+  useEffect(() => {
+    return () => {
+      if (loginCheckTimeoutRef.current) clearTimeout(loginCheckTimeoutRef.current);
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+      if (addTimeoutRef.current) clearTimeout(addTimeoutRef.current);
+    };
+  }, []);
+
   // ── Start flow ──────────────────────────────────────────────────────────
+
+  const armLoginCheckTimeout = useCallback(() => {
+    if (loginCheckTimeoutRef.current) clearTimeout(loginCheckTimeoutRef.current);
+    loginCheckTimeoutRef.current = setTimeout(() => {
+      loginCheckTimeoutRef.current = null;
+      if (stepRef.current !== 'login_check') return;
+      console.log(`[Cart ${ts()}]`, 'LOGIN CHECK timeout — no LOGIN_STATUS, falling back to login webview');
+      loginCheckActiveRef.current = false;
+      // Mirror the LOGIN_STATUS:false branch: show the webview so the user
+      // can log in (or see whatever the store is actually displaying).
+      const alreadyOnStore = lastLoadEndUrlRef.current &&
+        lastLoadEndUrlRef.current.includes(scriptsRef.current!.domain);
+      setStep('login');
+      lastLoadEndUrlRef.current = '';
+      if (!alreadyOnStore) {
+        setWebviewUri(scriptsRef.current!.loginUrl);
+      }
+    }, LOGIN_CHECK_TIMEOUT_MS);
+  }, []);
 
   const handleStartSearch = () => {
     const active = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0);
@@ -398,6 +483,7 @@ export default function WebViewCartSheet({
     setSearchingLabel('Checking login…');
     loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
     setWebviewUri(scriptsRef.current!.storeUrl + '?_t=' + Date.now());
+    armLoginCheckTimeout();
   };
 
   // ── Navigation to next search item ──────────────────────────────────────
@@ -591,6 +677,7 @@ export default function WebViewCartSheet({
       console.log(`[Cart ${ts()}]`, 'onLoadEnd detected anti-bot block — showing webview for user');
       if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
       if (addTimeoutRef.current) { clearTimeout(addTimeoutRef.current); addTimeoutRef.current = null; }
+      if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
       loadQueueRef.current = [];
       expectedNavUrlRef.current = '';
       lastLoadEndUrlRef.current = url;
@@ -744,8 +831,17 @@ export default function WebViewCartSheet({
 
         if (msg.type === 'LOGIN_STATUS') {
           loginCheckActiveRef.current = false;
+          if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
           if (msg.isLoggedIn) {
             setBrowserShown(false);
+            // Snapshot the cart badge BEFORE any adds. Fire-and-forget: if the
+            // message loses the race against the first search navigation, the
+            // before-count stays null and validation is skipped.
+            const countScript = buildCartCountScript(storeId);
+            if (countScript) {
+              cartCountPendingRef.current = 'before';
+              webviewRef.current?.injectJavaScript(countScript);
+            }
             setStep('searching');
             // Wegmans parallel path: if all active ingredients are choose-flow
             // (no saved searchTerm) AND the store is Wegmans, dispatch them
@@ -753,9 +849,9 @@ export default function WebViewCartSheet({
             // existing sequential single-WebView flow.
             const active = activeItemsRef.current;
             const allChoose = active.length > 0 && active.every((it) => !it.searchTerm);
-            console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', storeId, 'isWegmansStore=', isWegmansStore, 'allChoose=', allChoose, 'activeLen=', active.length);
-            if (isWegmansStore && allChoose) {
-              startWegmansParallel();
+            console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', storeId, 'parallel=', !!parallelCfg, 'allChoose=', allChoose, 'activeLen=', active.length);
+            if (parallelCfg && allChoose) {
+              startParallelSearch();
             } else {
               navigateToSearchItem(0);
             }
@@ -777,9 +873,32 @@ export default function WebViewCartSheet({
           return;
         }
 
+        if (msg.type === 'CART_COUNT') {
+          const phase = cartCountPendingRef.current;
+          cartCountPendingRef.current = null;
+          const count = typeof msg.count === 'number' ? msg.count : null;
+          console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count);
+          if (phase === 'before') {
+            cartCountBeforeRef.current = count;
+          } else if (phase === 'after') {
+            const before = cartCountBeforeRef.current;
+            const expected = addResultsRef.current.filter((r) => r.success).length;
+            // Badge counts units, expected counts product lines; units ≥ lines
+            // when everything landed, so delta < lines is a real shortfall.
+            if (before != null && count != null && expected > 0 && count - before < expected) {
+              const delta = Math.max(count - before, 0);
+              setCartDeltaWarning(
+                `Cart check: ${storeName} shows ${delta} new item${delta === 1 ? '' : 's'} in the cart, but ${expected} ${expected === 1 ? 'was' : 'were'} reported added. Please double-check your cart.`
+              );
+            }
+          }
+          return;
+        }
+
         // Popup-based login (e.g. Albertsons): background poll detected login success.
         if (msg.type === 'LOGIN_COMPLETE') {
           loginCheckActiveRef.current = false;
+          if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
           setBrowserShown(false);
           setStep('searching');
           navigateToSearchItem(0);
@@ -1217,13 +1336,13 @@ export default function WebViewCartSheet({
         </View>
         )}
 
-        {/* ── Hidden Wegmans parallel worker pool ───────────────────────────
+        {/* ── Hidden parallel worker pool (PARALLEL_SEARCH_STORES) ─────────
             5 WebViews mounted offscreen ONLY while parallel search is running.
-            Mounted by startWegmansParallel() with their initial dispatch URIs,
-            unmounted by finishWegmansParallel() to free resources before the
+            Mounted by startParallelSearch() with their initial dispatch URIs,
+            unmounted by finishParallelSearch() to free resources before the
             review/ATC phase. Avoids overwhelming iOS WebView init during the
             (single-WebView) login_check phase. */}
-        {isWegmansStore && wegmansPool.isActive && (
+        {parallelCfg && parallelPool.isActive && (
           <View
             pointerEvents="none"
             style={{
@@ -1235,7 +1354,7 @@ export default function WebViewCartSheet({
               top: -9999,
             }}
           >
-            {wegmansPool.workerUris.map((uri, i) => uri ? (
+            {parallelPool.workerUris.map((uri, i) => uri ? (
               <WebView
                 key={'wegmans-worker-' + i}
                 source={workerSources[i]}
@@ -1345,13 +1464,23 @@ export default function WebViewCartSheet({
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={storeColor} />
             <Text style={styles.spinnerLabel}>{searchingLabel}</Text>
-            {(step === 'searching' || step === 'adding') && (
-              <Text style={styles.spinnerSub}>
-                {step === 'searching'
-                  ? `${searchIdxRef.current} of ${activeItemsRef.current.length} ingredients`
-                  : `${addingIdxRef.current} of ${addingItemsRef.current.length} items`}
-              </Text>
-            )}
+            {(step === 'searching' || step === 'adding') && (() => {
+              // Re-renders are driven by the per-item setSearchingLabel calls,
+              // so reading the index refs here stays current.
+              const total = step === 'searching'
+                ? activeItemsRef.current.length
+                : addingItemsRef.current.length;
+              const idx = step === 'searching' ? searchIdxRef.current : addingIdxRef.current;
+              const pct = total > 0 ? Math.min(idx / total, 1) * 100 : 0;
+              return (
+                <View style={styles.progressTrack} testID="cart-progress-track">
+                  <View
+                    style={[styles.progressFill, { width: `${pct}%`, backgroundColor: storeColor }]}
+                    testID="cart-progress-fill"
+                  />
+                </View>
+              );
+            })()}
           </View>
         )}
 
@@ -1732,6 +1861,12 @@ export default function WebViewCartSheet({
                         {totalFailed} item{totalFailed !== 1 ? 's' : ''} could not be added.
                       </Text>
                     )}
+                    {cartDeltaWarning && (
+                      <View style={styles.cartCheckBanner} testID="cart-check-warning">
+                        <Ionicons name="alert-circle" size={18} color="#b45309" />
+                        <Text style={styles.cartCheckBannerText}>{cartDeltaWarning}</Text>
+                      </View>
+                    )}
                   </>
                 ) : (
                   <>
@@ -1867,7 +2002,33 @@ const styles = StyleSheet.create({
   // Spinner
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 },
   spinnerLabel: { fontSize: 15, fontFamily: 'Inter_500Medium', color: Colors.text2, textAlign: 'center' },
-  spinnerSub: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3 },
+  progressTrack: {
+    width: '60%',
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.border,
+    marginTop: 14,
+    overflow: 'hidden',
+  },
+  progressFill: { height: '100%', borderRadius: 3 },
+  cartCheckBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 12,
+  },
+  cartCheckBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
+    color: '#92400e',
+    lineHeight: 18,
+  },
 
   // Review step
   searchedBox: {

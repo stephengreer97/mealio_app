@@ -35,7 +35,16 @@ export default function MealCard({ meal, onPress, subtitle, savedAt, selected, o
       testID={testID}
     >
       {photoUrl ? (
-        <Image source={{ uri: photoUrl }} style={styles.image} contentFit="cover" />
+        <Image
+          source={{ uri: photoUrl }}
+          style={styles.image}
+          contentFit="cover"
+          // Reuse the decoded bitmap as the FlatList recycles rows instead of
+          // accumulating one per scrolled card — bounds memory on long lists
+          // and on memory-constrained devices (incl. CI simulators).
+          recyclingKey={meal.id}
+          cachePolicy="memory-disk"
+        />
       ) : (
         <View style={[styles.image, styles.imagePlaceholder]}>
           <Text style={styles.placeholderEmoji}>🍽️</Text>

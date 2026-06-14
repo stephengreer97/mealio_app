@@ -13,26 +13,48 @@ class ApiError extends Error {
   }
 }
 
+// RN's fetch has no request timeout, so a stalled connection hangs forever —
+// which in flows like Kroger add-to-cart means a spinner that never resolves.
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new ApiError(408, 'Request timed out. Please try again.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+type RequestOptions = RequestInit & { timeoutMs?: number };
+
 async function request<T>(
   path: string,
-  options: RequestInit = {},
+  options: RequestOptions = {},
   retry = true
 ): Promise<T> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options;
   const accessToken = await getAccessToken();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(options.headers ? (options.headers as Record<string, string>) : {}),
+    ...(fetchOptions.headers ? (fetchOptions.headers as Record<string, string>) : {}),
   };
 
   if (accessToken) {
     headers['Authorization'] = `Bearer ${accessToken}`;
   }
 
-  const response = await fetch(`${BASE_URL}${path}`, {
-    ...options,
+  const response = await fetchWithTimeout(`${BASE_URL}${path}`, {
+    ...fetchOptions,
     headers,
-  });
+  }, timeoutMs);
 
   if (response.status === 401 && retry) {
     // The server uses a long-lived access token (90 days). /api/auth/renew takes the
@@ -43,13 +65,13 @@ async function request<T>(
       throw new ApiError(401, 'Unauthorized');
     }
 
-    const refreshRes = await fetch(`${BASE_URL}/api/auth/renew`, {
+    const refreshRes = await fetchWithTimeout(`${BASE_URL}/api/auth/renew`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${currentToken}`,
       },
-    });
+    }, DEFAULT_TIMEOUT_MS);
 
     if (!refreshRes.ok) {
       await clear();
@@ -103,13 +125,13 @@ export const auth = {
     request<{ user: User }>('/api/auth/verify', { method: 'GET' }),
 
   renew: (accessToken: string) =>
-    fetch(`${BASE_URL}/api/auth/renew`, {
+    fetchWithTimeout(`${BASE_URL}/api/auth/renew`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${accessToken}`,
       },
-    }).then((r) => r.json()),
+    }, DEFAULT_TIMEOUT_MS).then((r) => r.json()),
 
   logout: () =>
     request<void>('/api/auth/logout', { method: 'POST' }),
@@ -380,12 +402,15 @@ export const kroger = {
     request<{ added: string[]; notFound: string[]; cartAdded: boolean }>('/api/kroger/add-to-cart', {
       method: 'POST',
       body: JSON.stringify({ ingredients: ingredients.map((i) => ({ productName: i.ingredientName ?? i.productName, quantity: i.productQty ?? i.qty ?? i.quantity ?? 1 })), locationId }),
+      // Server fans out to the Kroger API per ingredient — needs more headroom.
+      timeoutMs: 60_000,
     }),
 
   addToCartDirect: (items: Array<{ upc: string; quantity: number }>, locationId?: string) =>
     request<{ added: number; cartAdded: boolean }>('/api/kroger/add-to-cart', {
       method: 'POST',
       body: JSON.stringify({ items, locationId }),
+      timeoutMs: 60_000,
     }),
 
   searchProducts: (ingredients: Array<{ ingredientName?: string; productName?: string; productQty?: number; qty?: number; quantity?: number }>, locationId?: string, storeId?: string, mealNames?: string[]) =>
@@ -401,6 +426,7 @@ export const kroger = {
     }>('/api/kroger/search-products', {
       method: 'POST',
       body: JSON.stringify({ ingredients, locationId, storeId, mealNames }),
+      timeoutMs: 60_000,
     }),
 };
 

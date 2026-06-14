@@ -65,3 +65,32 @@ describe('ALDI EXTRACT_PRODUCTS_SCRIPT', () => {
     },
   );
 });
+
+describe('ALDI parallel worker script (Phase G rollout)', () => {
+  itWithFixture(
+    'search-results-tortillas.html',
+    'worker extracts candidates and posts WORKER_RESULT with its workerId',
+    async (runner) => {
+      const { buildAldiWorkerScript } = await import('../../src/lib/webview-scripts/aldi');
+      await runner.inject(buildAldiWorkerScript(3));
+      const result = await runner.waitForMessage('WORKER_RESULT', 12_000);
+      expect(result.workerId).toBe(3);
+      expect(result.query).toBe('tortillas');
+      expect(result.candidates.length).toBeGreaterThan(0);
+      expect(result.candidates[0].productName).toBeTruthy();
+    },
+    // The worker reads its query from the search URL — mimic the real one.
+    { url: 'https://www.aldi.us/store/aldi/s?k=tortillas' },
+  );
+
+  itWithFixture(
+    'logged-in-home.html',
+    'worker stays silent on a warmup load (no ?k= query)',
+    async (runner) => {
+      const { buildAldiWorkerScript } = await import('../../src/lib/webview-scripts/aldi');
+      await runner.inject(buildAldiWorkerScript(0));
+      await expect(runner.waitForMessage('WORKER_RESULT', 3_000)).rejects.toThrow();
+    },
+    { url: 'https://www.aldi.us' },
+  );
+});
