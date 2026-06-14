@@ -1,0 +1,31 @@
+# Signup form validation: submitting an empty form surfaces field errors
+# instead of firing a network request. Catches regressions in the client-side
+# validate() and the error display wiring on Input.
+
+appId: co.mealio.app
+---
+- launchApp:
+    clearState: true
+    stopApp: true
+
+- assertVisible: "Trending Meals"
+- tapOn: "Sign In"
+- assertVisible: "Welcome back"
+- tapOn: "Create an account"
+- assertVisible: "Create account"
+
+# Submit empty → validation errors render under their fields.
+# Tap by id: Maestro text matching is case-insensitive, so "Create Account"
+# (the button) also matches "Create account" (the screen title) and the
+# title wins hierarchy order — that tap is a no-op.
+- tapOn:
+    id: "signup-submit"
+- assertVisible: "First name is required"
+- assertVisible: "Email is required"
+- assertVisible: "Password is required"
+
+# Note: the invalid-email regex branch isn't covered here. Reaching the
+# submit button after typing an email requires dismissing the keyboard,
+# which Maestro can't do against this app's inputs (KeyboardAwareScrollView
+# + custom Input). That branch is covered by a unit-level test instead;
+# this flow stays on the reliable empty-form path.

@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../../navigation/AuthStack';
 import { auth } from '../../lib/api';
+import { isValidEmail } from '../../lib/validation';
 import { Colors } from '../../constants/colors';
 import Input from '../../components/ui/Input';
 import Button from '../../components/ui/Button';
@@ -23,7 +24,7 @@ export default function ForgotPasswordScreen({ navigation }: Props) {
   const [sent, setSent] = useState(false);
 
   async function handleSubmit() {
-    if (!email.trim() || !/\S+@\S+\.\S+/.test(email)) {
+    if (!email.trim() || !isValidEmail(email)) {
       Alert.alert('Error', 'Please enter a valid email');
       return;
     }
