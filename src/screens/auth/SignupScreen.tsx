@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../../navigation/AuthStack';
 import { auth } from '../../lib/api';
+import { isValidEmail } from '../../lib/validation';
 import { Colors } from '../../constants/colors';
 import Input from '../../components/ui/Input';
 import Button from '../../components/ui/Button';
@@ -45,7 +46,7 @@ export default function SignupScreen({ navigation }: Props) {
     if (!firstName.trim()) e.firstName = 'First name is required';
     if (!lastName.trim()) e.lastName = 'Last name is required';
     if (!email.trim()) e.email = 'Email is required';
-    else if (!/\S+@\S+\.\S+/.test(email)) e.email = 'Invalid email';
+    else if (!isValidEmail(email)) e.email = 'Invalid email';
     if (!password) e.password = 'Password is required';
     else if (password.length < 8) e.password = 'Password must be at least 8 characters';
     setErrors(e);

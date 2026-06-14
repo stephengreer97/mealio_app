@@ -18,6 +18,7 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import { AuthStackParamList } from '../../navigation/AuthStack';
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../lib/api';
+import { isValidEmail } from '../../lib/validation';
 import { Colors, Radius } from '../../constants/colors';
 import Input from '../../components/ui/Input';
 import Button from '../../components/ui/Button';
@@ -70,7 +71,7 @@ export default function LoginScreen({ navigation }: Props) {
   function validate() {
     const e: typeof errors = {};
     if (!email.trim()) e.email = 'Email is required';
-    else if (!/\S+@\S+\.\S+/.test(email)) e.email = 'Invalid email';
+    else if (!isValidEmail(email)) e.email = 'Invalid email';
     if (!password) e.password = 'Password is required';
     setErrors(e);
     return Object.keys(e).length === 0;
