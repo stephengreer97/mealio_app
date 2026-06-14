@@ -441,6 +441,18 @@ export default function WebViewCartSheet({
     webviewRef.current?.injectJavaScript(countScript);
   }, [step, totalAdded, storeId]);
 
+  // Clear all safety timers on unmount. Without this, closing the sheet mid
+  // login-check / search / add leaves a real setTimeout running that later
+  // fires setState on an unmounted component (and, in tests, logs after the
+  // test finishes — "Cannot log after tests are done").
+  useEffect(() => {
+    return () => {
+      if (loginCheckTimeoutRef.current) clearTimeout(loginCheckTimeoutRef.current);
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+      if (addTimeoutRef.current) clearTimeout(addTimeoutRef.current);
+    };
+  }, []);
+
   // ── Start flow ──────────────────────────────────────────────────────────
 
   const armLoginCheckTimeout = useCallback(() => {
