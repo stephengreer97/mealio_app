@@ -1476,12 +1476,21 @@ export default function WebViewCartSheet({
             <ActivityIndicator size="large" color={storeColor} />
             <Text style={styles.spinnerLabel}>{searchingLabel}</Text>
             {(step === 'searching' || step === 'adding') && (() => {
-              // Re-renders are driven by the per-item setSearchingLabel calls,
-              // so reading the index refs here stays current.
-              const total = step === 'searching'
-                ? activeItemsRef.current.length
-                : addingItemsRef.current.length;
-              const idx = step === 'searching' ? searchIdxRef.current : addingIdxRef.current;
+              // Parallel choose-product search dispatches all items at once, so
+              // the index refs never advance — drive the bar from the pool's
+              // reactive completed/total instead. The sequential flow still
+              // reads the index refs (re-rendered via setSearchingLabel).
+              let total: number;
+              let idx: number;
+              if (step === 'searching' && parallelPool.isActive) {
+                total = parallelPool.total;
+                idx = parallelPool.completed;
+              } else {
+                total = step === 'searching'
+                  ? activeItemsRef.current.length
+                  : addingItemsRef.current.length;
+                idx = step === 'searching' ? searchIdxRef.current : addingIdxRef.current;
+              }
               const pct = total > 0 ? Math.min(idx / total, 1) * 100 : 0;
               return (
                 <View style={styles.progressTrack} testID="cart-progress-track">

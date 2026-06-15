@@ -53,6 +53,10 @@ export interface ParallelPool<TItem, TResult> {
   /** True while a start() run is in flight. False once all items have been
    *  collected (real or timeout) or before the first start(). */
   isActive: boolean;
+  /** Number of items that have a result so far in the current run (reactive). */
+  completed: number;
+  /** Total items dispatched in the current run (reactive). */
+  total: number;
   /** Begin dispatching `items` across workers. `onAllDone` fires exactly
    *  once when every item has a result. Indexes in the result Map align
    *  with the indexes in `items`. Subsequent start() calls before the
@@ -83,6 +87,11 @@ export function useParallelSearchPool<TItem, TResult>(
     new Array(workerCount).fill(''),
   );
   const [isActive, setIsActive] = useState(false);
+  // Reactive progress for the UI: how many items have a result so far, out of
+  // the total dispatched. (The sequential flow tracks progress via index refs;
+  // the pool dispatches all at once, so it must surface its own count.)
+  const [completed, setCompleted] = useState(0);
+  const [total, setTotal] = useState(0);
 
   const queueRef = useRef<QueueEntry<TItem>[]>([]);
   const resultsRef = useRef<Map<number, TResult>>(new Map());
@@ -140,6 +149,7 @@ export function useParallelSearchPool<TItem, TResult>(
       const stuckIdx = workerIdxRef.current[workerId];
       if (stuckIdx < 0) return;
       resultsRef.current.set(stuckIdx, emptyResult());
+      setCompleted(resultsRef.current.size);
       workerBusyRef.current[workerId] = false;
       workerIdxRef.current[workerId] = -1;
       if (!tryFinish()) {
@@ -156,6 +166,7 @@ export function useParallelSearchPool<TItem, TResult>(
     }
     clearTimer(workerId);
     resultsRef.current.set(idx, result);
+    setCompleted(resultsRef.current.size);
     workerBusyRef.current[workerId] = false;
     workerIdxRef.current[workerId] = -1;
     if (!tryFinish()) {
@@ -172,6 +183,8 @@ export function useParallelSearchPool<TItem, TResult>(
     for (let i = 0; i < workerCount; i++) clearTimer(i);
     onAllDoneRef.current = null;
     setIsActive(false);
+    setCompleted(0);
+    setTotal(0);
     setWorkerUris(new Array(workerCount).fill(''));
   }, [workerCount, clearTimer]);
 
@@ -185,6 +198,8 @@ export function useParallelSearchPool<TItem, TResult>(
       queueRef.current = items.map((item, idx) => ({ idx, item }));
       resultsRef.current = new Map();
       totalRef.current = items.length;
+      setCompleted(0);
+      setTotal(items.length);
       workerBusyRef.current = new Array(workerCount).fill(false);
       workerIdxRef.current = new Array(workerCount).fill(-1);
       onAllDoneRef.current = onAllDone;
@@ -197,5 +212,5 @@ export function useParallelSearchPool<TItem, TResult>(
     [isActive, workerCount, dispatchToWorker],
   );
 
-  return { workerUris, isActive, start, reportResult, reset };
+  return { workerUris, isActive, completed, total, start, reportResult, reset };
 }

@@ -47,6 +47,22 @@ describe('useParallelSearchPool — start()', () => {
     ]);
   });
 
+  it('tracks progress: total set on start, completed rises per result', () => {
+    const { result } = setup();
+    act(() => {
+      result.current.start([{ term: 'a' }, { term: 'b' }, { term: 'c' }], () => {});
+    });
+    expect(result.current.total).toBe(3);
+    expect(result.current.completed).toBe(0);
+    act(() => { result.current.reportResult(0, ['r0']); });
+    expect(result.current.completed).toBe(1);
+    act(() => { result.current.reportResult(1, ['r1']); });
+    expect(result.current.completed).toBe(2);
+    act(() => { result.current.reset(); });
+    expect(result.current.completed).toBe(0);
+    expect(result.current.total).toBe(0);
+  });
+
   it('leaves extra workers idle when items < workerCount', () => {
     const { result } = setup();
     act(() => {
