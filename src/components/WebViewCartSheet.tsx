@@ -120,8 +120,14 @@ export default function WebViewCartSheet({
   onClose,
   onIngredientChosen,
 }: WebViewCartSheetProps) {
-  const storeColor = STORES.find((s) => s.id === storeId)?.color ?? '#dd0031';
-  const scripts = useMemo(() => getStoreScripts(storeId)!, [storeId]);
+  // Lock the store to whatever it was when the sheet opened. The parent
+  // (MyMealsScreen) can change `storeId` mid-flow — its loadMeals() auto-selects
+  // the store with the most meals — which previously made the parallel workers
+  // build URLs for the WRONG store (e.g. acmemarkets.com while the user was on
+  // H-E-B → 0 results). lockedStoreId only updates when the sheet (re)opens.
+  const [lockedStoreId, setLockedStoreId] = useState(storeId);
+  const storeColor = STORES.find((s) => s.id === lockedStoreId)?.color ?? '#dd0031';
+  const scripts = useMemo(() => getStoreScripts(lockedStoreId)!, [lockedStoreId]);
 
   const [step, _setStep] = useState<Step>('qty');
   const stepRef = useRef<Step>('qty');
@@ -319,6 +325,14 @@ export default function WebViewCartSheet({
 
   useEffect(() => {
     if (visible) {
+      // Snapshot the store at open and lock it. Use it synchronously for the
+      // immediate setup below (state update lags a render, but onMessage and
+      // the parallel pool must see the right store from the first tick).
+      const openStoreId = storeId;
+      const openScripts = getStoreScripts(openStoreId)!;
+      setLockedStoreId(openStoreId);
+      scriptsRef.current = openScripts;
+      console.log(`[Cart ${ts()}]`, 'cart opened: locking store=', openStoreId);
       const consolidated = consolidateIngredients(meals);
       setItems(consolidated);
       setCheckedItems(consolidated.map(() => true));
@@ -415,11 +429,11 @@ export default function WebViewCartSheet({
   // reported added.
   useEffect(() => {
     if (step !== 'done' || totalAdded === 0 || cartCountBeforeRef.current == null) return;
-    const countScript = buildCartCountScript(storeId);
+    const countScript = buildCartCountScript(lockedStoreId);
     if (!countScript) return;
     cartCountPendingRef.current = 'after';
     webviewRef.current?.injectJavaScript(countScript);
-  }, [step, totalAdded, storeId]);
+  }, [step, totalAdded, lockedStoreId]);
 
   // Clear all safety timers on unmount. Without this, closing the sheet mid
   // login-check / search / add leaves a real setTimeout running that later
@@ -817,7 +831,7 @@ export default function WebViewCartSheet({
             // Snapshot the cart badge BEFORE any adds. Fire-and-forget: if the
             // message loses the race against the first search navigation, the
             // before-count stays null and validation is skipped.
-            const countScript = buildCartCountScript(storeId);
+            const countScript = buildCartCountScript(lockedStoreId);
             if (countScript) {
               cartCountPendingRef.current = 'before';
               webviewRef.current?.injectJavaScript(countScript);
@@ -830,7 +844,7 @@ export default function WebViewCartSheet({
             // back to the sequential single-WebView flow.
             const active = activeItemsRef.current;
             const allChoose = active.length > 0 && active.every((it) => !it.searchTerm);
-            console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', storeId, 'parallel=', !!parallelCfg, 'allChoose=', allChoose, 'activeLen=', active.length);
+            console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', lockedStoreId, 'parallel=', !!parallelCfg, 'allChoose=', allChoose, 'activeLen=', active.length);
             if (parallelCfg && allChoose) {
               startParallelSearch();
             } else {
