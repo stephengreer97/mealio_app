@@ -79,11 +79,24 @@ export const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
 
   var CARD_SEL = '[data-component="product-card"], [data-qe-id="productCard"]';
 
-  await wait(800);
+  // Poll for the product grid instead of a single 800ms check. A warm webview
+  // (sequential flow) paints cards almost immediately, but a freshly-mounted
+  // worker webview (parallel flow) needs several seconds on its first load to
+  // bootstrap HEB's SPA before the grid renders — a one-shot 800ms wait read
+  // an empty page and reported 0. Poll up to ~14s; return as soon as cards
+  // appear, so the warm case stays fast.
+  var cards = [];
+  var waitedMs = 0;
+  for (var poll = 0; poll < 70; poll++) {
+    cards = Array.from(document.querySelectorAll(CARD_SEL)).slice(0, 20);
+    if (cards.length > 0) break;
+    await wait(200);
+    waitedMs += 200;
+  }
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'poll_done', url: window.location.href, cardCount: cards.length, waitedMs: waitedMs }));
 
   var TITLE_SEL = '[data-qe-id="productTitle"]';
 
-  var cards = Array.from(document.querySelectorAll(CARD_SEL)).slice(0, 20);
   if (cards.length === 0) {
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: [] }));

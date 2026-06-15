@@ -1328,18 +1328,23 @@ export default function WebViewCartSheet({
             pointerEvents="none"
             style={{
               position: 'absolute',
-              width: 1,
-              height: 1,
+              // Real phone-sized viewport, parked far offscreen and invisible.
+              // A WebView's internal browser viewport equals its OWN style size,
+              // independent of where it sits in the RN tree — and viewport-lazy
+              // storefronts (HEB renders its product grid by visible area) need
+              // a real size or the grid never paints and the worker extracts 0.
+              width: 414,
+              height: 896,
               opacity: 0,
-              left: -9999,
-              top: -9999,
+              left: -100000,
+              top: -100000,
             }}
           >
             {parallelPool.workerUris.map((uri, i) => uri ? (
               <WebView
-                key={'wegmans-worker-' + i}
+                key={'parallel-worker-' + i}
                 source={workerSources[i]}
-                style={{ width: 1, height: 1 }}
+                style={{ width: 414, height: 896 }}
                 onMessage={(e) => onWorkerMessage(i, e)}
                 onShouldStartLoadWithRequest={(request) => (
                   request.url.startsWith('http://') ||

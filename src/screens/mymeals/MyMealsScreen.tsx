@@ -58,6 +58,11 @@ export default function MyMealsScreen() {
   const [selectedMealIds, setSelectedMealIds] = useState<Set<string>>(new Set());
   const [reviewVisible, setReviewVisible] = useState(false);
   const [webViewCartVisible, setWebViewCartVisible] = useState(false);
+  // Store the cart was opened for. Frozen at open so the auto-select-store
+  // effect (loadMeals picks the store with the most meals) can't switch the
+  // store out from under an in-flight cart — that desynced the sheet (logs
+  // showed e.g. storeId=acme while running an H-E-B cart).
+  const [cartStoreId, setCartStoreId] = useState<string>('');
 
   // Choose products flow
   const [choosingMeal, setChoosingMeal] = useState<Meal | null>(null);
@@ -559,7 +564,7 @@ export default function MyMealsScreen() {
         return (
           <TouchableOpacity
             style={[styles.floatingCart, { backgroundColor: selectedStore_?.color ?? Colors.brand }]}
-            onPress={() => setWebViewCartVisible(true)}
+            onPress={() => { setCartStoreId(selectedStore); setWebViewCartVisible(true); }}
             activeOpacity={0.88}
           >
             <Ionicons name={webViewNeedsChoose ? 'search' : 'cart'} size={18} color="#fff" />
@@ -598,8 +603,8 @@ export default function MyMealsScreen() {
       <WebViewCartSheet
         visible={webViewCartVisible}
         meals={selectedMeals}
-        storeId={selectedStore}
-        storeName={selectedStore_?.name ?? 'Store'}
+        storeId={cartStoreId || selectedStore}
+        storeName={STORES.find((s) => s.id === (cartStoreId || selectedStore))?.name ?? 'Store'}
         onClose={() => { setWebViewCartVisible(false); setSelectedMealIds(new Set()); }}
         onIngredientChosen={handleIngredientChosen}
       />
