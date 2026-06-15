@@ -9,6 +9,8 @@
 //   TYPE B — Search results       (e.g. /s?k=...&i=amazonfresh)
 // Both types use lazy rendering that requires polling for elements.
 
+import { buildExtractWorker } from './worker-search';
+
 const AMAZON_URL = 'https://www.amazon.com/fresh';
 const AMAZON_LOGIN_URL = 'https://www.amazon.com/ap/signin';
 const AMAZON_CART_URL = 'https://www.amazon.com/cart';
@@ -1448,5 +1450,7 @@ export function getScripts() {
     buildAddToCartScript,
     buildSearchScript,
     buildSearchAndAddScript,
+    getSearchUrl: (term: string) => 'https://www.amazon.com/s?k=' + encodeURIComponent(term) + '&i=amazonfresh',
+    buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, EXTRACT_PRODUCTS_SCRIPT),
   };
 }

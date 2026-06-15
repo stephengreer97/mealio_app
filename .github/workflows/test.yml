@@ -61,6 +61,10 @@ jobs:
             spec: tests/fixture-tests/aldi.spec.ts
           - name: amazon-fresh
             spec: tests/fixture-tests/amazon-fresh.spec.ts
+          - name: cart-count
+            spec: tests/fixture-tests/cart-count.spec.ts
+          - name: parallel-workers
+            spec: tests/fixture-tests/parallel-workers.spec.ts
     steps:
       - uses: actions/checkout@v4
 
