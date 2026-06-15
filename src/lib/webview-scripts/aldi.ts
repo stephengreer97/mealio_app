@@ -762,5 +762,7 @@ export function getScripts() {
     buildAddToCartScript: buildAddToCartScript,
     buildSearchScript: buildSearchScript,
     buildSearchAndAddScript: buildSearchAndAddScript,
+    getSearchUrl: getAldiSearchUrl,
+    buildWorkerScript: buildAldiWorkerScript,
   };
 }

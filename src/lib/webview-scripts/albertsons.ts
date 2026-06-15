@@ -17,6 +17,7 @@
 //   Cart URL fallback:  /shop/cart.html
 
 import type { StoreScripts } from './index';
+import { buildExtractWorker } from './worker-search';
 
 // ── Domain map ──────────────────────────────────────────────────────────────
 
@@ -904,5 +905,7 @@ export function getScripts(storeId: string): StoreScripts {
     buildAddToCartScript: buildAddToCartScript,
     buildSearchScript: buildSearchScript(domain),
     buildSearchAndAddScript: buildSearchAndAddScriptFn,
+    getSearchUrl: (term: string) => `${storeOrigin}/shop/search-results.html?q=` + encodeURIComponent(term),
+    buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, buildExtractProductsScript()),
   };
 }

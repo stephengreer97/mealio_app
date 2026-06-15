@@ -25,32 +25,7 @@ import {
   consolidateIngredients,
 } from '../lib/consolidateIngredients';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
-import {
-  buildWegmansWorkerScript,
-  getWegmansSearchUrl,
-} from '../lib/webview-scripts/wegmans';
-import {
-  buildAldiWorkerScript,
-  getAldiSearchUrl,
-} from '../lib/webview-scripts/aldi';
 import { buildCartCountScript } from '../lib/webview-scripts/cart-count';
-
-// ── Parallel search config ───────────────────────────────────────────────────
-//
-// Stores whose choose-product flow runs across the hidden worker-WebView pool
-// instead of the sequential single-WebView path. To enable a store: write a
-// getXSearchUrl + buildXWorkerScript pair in its webview-scripts module (the
-// worker script extracts candidates and posts WORKER_RESULT; see aldi.ts for
-// the template) and add an entry here. Stores with aggressive WAFs (HEB
-// Imperva, Walmart robot challenge) should NOT be added without live testing —
-// five concurrent WebViews from one device can look like automation.
-const PARALLEL_SEARCH_STORES: Record<string, {
-  getSearchUrl: (term: string) => string;
-  buildWorkerScript: (workerId: number) => string;
-}> = {
-  wegmans: { getSearchUrl: getWegmansSearchUrl, buildWorkerScript: buildWegmansWorkerScript },
-  aldi: { getSearchUrl: getAldiSearchUrl, buildWorkerScript: buildAldiWorkerScript },
-};
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -262,8 +237,13 @@ export default function WebViewCartSheet({
   // build SearchResult list → go to review" finalization.
   const PARALLEL_WORKER_COUNT = 5;
   const PARALLEL_WORKER_TIMEOUT_MS = 20_000;
-  // Null for stores that haven't opted into the worker-pool path.
-  const parallelCfg = PARALLEL_SEARCH_STORES[storeId] ?? null;
+  // A store opts into the worker-pool choose-product path by exposing BOTH
+  // getSearchUrl and buildWorkerScript on its StoreScripts. Null otherwise →
+  // sequential single-WebView flow. (WAF note: HEB/Walmart/Albertsons run 5
+  // concurrent WebViews here; live-tested in dev before shipping.)
+  const parallelCfg = (scripts.getSearchUrl && scripts.buildWorkerScript)
+    ? { getSearchUrl: scripts.getSearchUrl, buildWorkerScript: scripts.buildWorkerScript }
+    : null;
 
   const parallelPool = useParallelSearchPool<ConsolidatedIngredient, Candidate[]>({
     workerCount: PARALLEL_WORKER_COUNT,
@@ -843,10 +823,11 @@ export default function WebViewCartSheet({
               webviewRef.current?.injectJavaScript(countScript);
             }
             setStep('searching');
-            // Wegmans parallel path: if all active ingredients are choose-flow
-            // (no saved searchTerm) AND the store is Wegmans, dispatch them
-            // across 5 hidden worker WebViews. Otherwise fall back to the
-            // existing sequential single-WebView flow.
+            // Parallel choose-product path: if every active ingredient is
+            // choose-flow (no saved searchTerm) AND this store opts into the
+            // worker pool (scripts expose getSearchUrl + buildWorkerScript),
+            // dispatch them across 5 hidden worker WebViews. Otherwise fall
+            // back to the sequential single-WebView flow.
             const active = activeItemsRef.current;
             const allChoose = active.length > 0 && active.every((it) => !it.searchTerm);
             console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', storeId, 'parallel=', !!parallelCfg, 'allChoose=', allChoose, 'activeLen=', active.length);

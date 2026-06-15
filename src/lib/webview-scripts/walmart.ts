@@ -5,6 +5,7 @@
 // adapted to the StoreScripts interface used by the store registry.
 
 import type { StoreScripts } from './index';
+import { buildExtractWorker } from './worker-search';
 
 const WALMART_URL = 'https://www.walmart.com/grocery';
 const WALMART_LOGIN_URL = 'https://www.walmart.com/account/login';
@@ -940,5 +941,7 @@ export function getScripts(): StoreScripts {
     buildAddToCartScript,
     buildSearchScript,
     buildSearchAndAddScript,
+    getSearchUrl: (term: string) => 'https://www.walmart.com/search?q=' + encodeURIComponent(term),
+    buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, EXTRACT_PRODUCTS_SCRIPT),
   };
 }

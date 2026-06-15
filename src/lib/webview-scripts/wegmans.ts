@@ -936,5 +936,9 @@ export function getScripts(): StoreScripts {
     buildAddToCartScript,
     buildSearchScript,
     buildSearchAndAddScript,
+    // Wegmans ships its own purpose-built worker (MSAL bootstrap handling),
+    // exposed here so the parallel pool is driven uniformly off StoreScripts.
+    getSearchUrl: getWegmansSearchUrl,
+    buildWorkerScript: buildWegmansWorkerScript,
   };
 }

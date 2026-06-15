@@ -12,6 +12,7 @@ import { getScripts as getAlbertsonsScripts, ALBERTSONS_FAMILY_IDS } from './alb
 import { getScripts as getAldiScripts } from './aldi';
 import { getScripts as getAmazonFreshScripts } from './amazon-fresh';
 import { getScripts as getWegmansScripts } from './wegmans';
+import { buildExtractWorker } from './worker-search';
 
 export interface StoreScripts {
   storeUrl: string;
@@ -33,6 +34,16 @@ export interface StoreScripts {
   buildSearchScript: (term: string) => string;
   /** Builds script to search + auto-add if match found. Posts SEARCH_AND_ADD_RESULT. */
   buildSearchAndAddScript: (term: string, qty: number, dropdown: { type: string; selectedText: string; selectedValue: string } | null) => string;
+  // ── Parallel product search (optional) ──────────────────────────────────
+  // A store that provides BOTH of these opts into the 5-worker parallel pool
+  // for the choose-product flow: WebViewCartSheet dispatches each ingredient
+  // to a hidden worker WebView loaded at getSearchUrl, injects
+  // buildWorkerScript, and collects WORKER_RESULT. Omit them to stay on the
+  // sequential single-WebView path.
+  /** Direct search-results URL for a term (loads results without typing). */
+  getSearchUrl?: (term: string) => string;
+  /** Injected JS for one worker; posts WORKER_RESULT with the workerId. */
+  buildWorkerScript?: (workerId: number) => string;
 }
 
 // ── HEB adapter ──────────────────────────────────────────────────────────────
@@ -52,6 +63,8 @@ const hebScripts: StoreScripts = {
   buildAddToCartScript: hebBuildATC,
   buildSearchScript: hebBuildSearch,
   buildSearchAndAddScript: hebBuildSearchAndAdd,
+  getSearchUrl: (term) => 'https://www.heb.com/search?q=' + encodeURIComponent(term),
+  buildWorkerScript: (workerId) => buildExtractWorker(workerId, EXTRACT_PRODUCTS_SCRIPT),
 };
 
 // ── Lookup ───────────────────────────────────────────────────────────────────
