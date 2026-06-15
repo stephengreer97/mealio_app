@@ -126,6 +126,11 @@ export default function WebViewCartSheet({
   // build URLs for the WRONG store (e.g. acmemarkets.com while the user was on
   // H-E-B → 0 results). lockedStoreId only updates when the sheet (re)opens.
   const [lockedStoreId, setLockedStoreId] = useState(storeId);
+  // Same locked id as a ref, set synchronously at open. The parallel pool's
+  // getUrl is captured in callbacks that can go stale (referencing the store
+  // from an earlier render); reading this ref makes the worker URL resolve to
+  // the CURRENT locked store at call time, immune to closure staleness.
+  const lockedStoreIdRef = useRef(storeId);
   const storeColor = STORES.find((s) => s.id === lockedStoreId)?.color ?? '#dd0031';
   const scripts = useMemo(() => getStoreScripts(lockedStoreId)!, [lockedStoreId]);
 
@@ -254,7 +259,12 @@ export default function WebViewCartSheet({
   const parallelPool = useParallelSearchPool<ConsolidatedIngredient, Candidate[]>({
     workerCount: PARALLEL_WORKER_COUNT,
     workerTimeoutMs: PARALLEL_WORKER_TIMEOUT_MS,
-    getUrl: (item) => (parallelCfg ? parallelCfg.getSearchUrl(item.ingredientName) : ''),
+    // Resolve the store from the live ref (not the captured parallelCfg) so a
+    // stale dispatch closure can't build URLs for a previously-selected store.
+    getUrl: (item) => {
+      const s = getStoreScripts(lockedStoreIdRef.current);
+      return s?.getSearchUrl ? s.getSearchUrl(item.ingredientName) : '';
+    },
     emptyResult: () => [],
   });
 
@@ -330,6 +340,7 @@ export default function WebViewCartSheet({
       // the parallel pool must see the right store from the first tick).
       const openStoreId = storeId;
       const openScripts = getStoreScripts(openStoreId)!;
+      lockedStoreIdRef.current = openStoreId;
       setLockedStoreId(openStoreId);
       scriptsRef.current = openScripts;
       console.log(`[Cart ${ts()}]`, 'cart opened: locking store=', openStoreId);
@@ -844,7 +855,7 @@ export default function WebViewCartSheet({
             // back to the sequential single-WebView flow.
             const active = activeItemsRef.current;
             const allChoose = active.length > 0 && active.every((it) => !it.searchTerm);
-            console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', lockedStoreId, 'parallel=', !!parallelCfg, 'allChoose=', allChoose, 'activeLen=', active.length);
+            console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', lockedStoreIdRef.current, 'parallel=', !!parallelCfg, 'allChoose=', allChoose, 'activeLen=', active.length);
             if (parallelCfg && allChoose) {
               startParallelSearch();
             } else {
