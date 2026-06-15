@@ -35,13 +35,35 @@ export function buildExtractWorker(workerId: number, extractScript: string): str
   var rn = window.ReactNativeWebView;
   if (!rn || !rn.postMessage) return;
   var orig = rn.postMessage.bind(rn);
+
+  // Cold-start warmup: a freshly-mounted worker WebView loads the search URL
+  // with no warm session/cache, so the store's extractor (e.g. HEB waits a
+  // fixed 800ms then checks once) can read the page before products paint and
+  // report 0. When the FIRST extract on a given search URL comes back empty,
+  // reload once — the second load is warm (cookies set, shell cached) and
+  // renders like the sequential single-WebView case. Keyed by URL so each
+  // dispatched ingredient gets its own one-shot retry; the flag is cleared
+  // when a result is finally forwarded.
+  var RETRY_KEY = 'mealioWorkerRetry:' + location.pathname + location.search;
+  var alreadyRetried = false;
+  try { alreadyRetried = sessionStorage.getItem(RETRY_KEY) === '1'; } catch (e) {}
+
   rn.postMessage = function(s) {
     try {
       var m = JSON.parse(s);
       if (m && m.type === 'SEARCH_RESULT') {
         if (posted) return;
+        var candidates = m.candidates || [];
+        // Empty on the first attempt for a real search page → warm up + reload.
+        if (candidates.length === 0 && !alreadyRetried && location.search) {
+          posted = true;
+          try { sessionStorage.setItem(RETRY_KEY, '1'); } catch (e) {}
+          setTimeout(function() { try { location.reload(); } catch (e) {} }, 700);
+          return;
+        }
         posted = true;
-        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, candidates: m.candidates || [] }));
+        try { sessionStorage.removeItem(RETRY_KEY); } catch (e) {}
+        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, candidates: candidates }));
         return;
       }
     } catch (e) {}
