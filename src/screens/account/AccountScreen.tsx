@@ -23,6 +23,7 @@ import { Creator, Meal } from '../../types';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+import CookieManager from '@react-native-cookies/cookies';
 
 export default function AccountScreen() {
   const { user, isCreator, logout, refreshUser } = useAuth();
@@ -37,6 +38,7 @@ export default function AccountScreen() {
 
   // Subscription
   const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [storeLogoutLoading, setStoreLogoutLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
   const [offerings, setOfferings] = useState<PurchasesPackage[]>([]);
@@ -353,6 +355,44 @@ export default function AccountScreen() {
     ]);
   }
 
+  async function handleStoreLogout() {
+    Alert.alert(
+      'Log Out of Grocery Stores',
+      'This signs you out of every connected grocery store (H-E-B, Albertsons, Walmart, Kroger, etc.). You will need to reconnect Kroger to use it again. Your Mealio account stays signed in.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Log Out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setStoreLogoutLoading(true);
+              // WebView stores (HEB, Albertsons, Walmart, etc.): clear the cookie
+              // jar (incl. HttpOnly store auth cookies). Pass both true/false to
+              // cover iOS WKWebView and the shared NSHTTPCookieStorage; the arg is
+              // ignored on Android.
+              await CookieManager.clearAll(true);
+              await CookieManager.clearAll(false);
+              // Kroger is API/OAuth, not a WebView cookie — disconnect it
+              // server-side too so "all stores" really means all.
+              if (krogerConnected) {
+                await krogerApi.disconnect();
+                setKrogerConnected(false);
+                setKrogerLocations({});
+                setKrogerLocationsList([]);
+              }
+              Alert.alert('Signed out', "You've been signed out of all grocery stores.");
+            } catch (err: any) {
+              Alert.alert('Error', err?.message || 'Could not sign out of grocery stores.');
+            } finally {
+              setStoreLogoutLoading(false);
+            }
+          },
+        },
+      ],
+    );
+  }
+
   const selectedPkgType = billing === 'annual' ? 'ANNUAL' : 'MONTHLY';
   const selectedPkg = offerings.find(p => p.packageType === selectedPkgType) ?? offerings[0] ?? null;
   const fallbackPrice = billing === 'annual' ? '$39.99' : '$3.99';
@@ -657,6 +697,18 @@ export default function AccountScreen() {
           </Card>
         )}
 
+        {/* Log out of grocery stores */}
+        <Button
+          label="Log Out of Grocery Stores"
+          variant="secondary"
+          loading={storeLogoutLoading}
+          onPress={handleStoreLogout}
+          style={styles.storeLogoutBtn}
+        />
+        <Text style={styles.storeLogoutHint}>
+          Signs you out of every connected grocery store.
+        </Text>
+
         {/* Sign Out */}
         <Button
           label="Sign Out"
@@ -774,6 +826,8 @@ const styles = StyleSheet.create({
   deletedName: { flex: 1, fontSize: 15, fontFamily: 'Inter_500Medium', color: Colors.text2 },
   deletedActions: { flexDirection: 'row', gap: 8 },
   actionBtn: { minWidth: 72 },
+  storeLogoutBtn: { marginTop: 8 },
+  storeLogoutHint: { fontSize: 12, color: Colors.text3, fontFamily: 'Inter_400Regular', marginTop: 6, marginBottom: 4, textAlign: 'center' },
   signOutBtn: { marginTop: 8 },
   krogerDesc: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2, marginBottom: 10, lineHeight: 19 },
   krogerBrandNote: {

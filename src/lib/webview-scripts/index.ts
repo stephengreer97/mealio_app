@@ -24,6 +24,11 @@ export interface StoreScripts {
   isSearchUrl: (url: string) => boolean;
   /** Returns true if the URL indicates a successful login redirect. */
   isLoginSuccessUrl: (url: string) => boolean;
+  /** When true, re-inject checkLoginScript on every login-step page load that
+   *  lands back on the store (not auth/sign-in URLs, which are handled earlier).
+   *  Needed for stores whose login detection relies on a background poll that
+   *  dies when the page reloads after the user signs in (e.g. Albertsons). */
+  reinjectLoginCheckOnNav?: boolean;
   /** Injected to check if the user is logged in. Posts LOGIN_STATUS. */
   checkLoginScript: string;
   /** Injected on search results page. Posts SEARCH_RESULT with candidates. */

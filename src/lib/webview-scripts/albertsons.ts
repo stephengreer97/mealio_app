@@ -41,6 +41,13 @@ const DOMAIN_MAP: Record<string, string> = {
 
 export const ALBERTSONS_FAMILY_IDS: string[] = Object.keys(DOMAIN_MAP);
 
+/** Cart page URL for a given Albertsons-family brand. The cart lives at
+ *  /erums/cart (a separate Angular app from the /shop storefront). */
+export function getAlbertsonsCartPageUrl(storeId: string): string {
+  const domain = DOMAIN_MAP[storeId] || 'albertsons.com';
+  return `https://www.${domain}/erums/cart`;
+}
+
 // ── Login check ─────────────────────────────────────────────────────────────
 
 function buildCheckLoginScript(domain: string): string {
@@ -900,6 +907,10 @@ export function getScripts(storeId: string): StoreScripts {
     // Albertsons login is a popup on the same page — login success is detected via
     // LOGIN_COMPLETE message from the background poll, not via URL change.
     isLoginSuccessUrl: () => false,
+    // The page reloads after sign-in, killing the background poll's JS context.
+    // Re-inject the login check on each post-login store load so the check
+    // re-runs and detects the now-logged-in state.
+    reinjectLoginCheckOnNav: true,
     checkLoginScript: buildCheckLoginScript(domain),
     extractProductsScript: buildExtractProductsScript(),
     buildAddToCartScript: buildAddToCartScript,

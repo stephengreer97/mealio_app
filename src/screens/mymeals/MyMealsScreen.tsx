@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../../constants/colors';
 import { Meal, Ingredient } from '../../types';
 import { meals as mealsApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
+import { mergeChosenProduct, createMealSaveQueue } from '../../lib/saveChosenIngredient';
 import { useAuth } from '../../context/AuthContext';
 import { STORES, isKrogerBrand, isWebViewStore } from '../../constants/stores';
 import { ALL_TAGS } from '../../constants/tags';
@@ -46,6 +47,16 @@ function hasUnchosenProducts(meal: Meal): boolean {
 export default function MyMealsScreen() {
   const { user, isCreator } = useAuth();
   const [allMeals, setAllMeals] = useState<Meal[]>([]);
+  // Mirror of allMeals read by handleIngredientChosen. The handler must build
+  // its PATCH from the FRESHEST ingredient array (including saves still settling
+  // from a prior choice on the same meal), not the render-time snapshot — see
+  // the per-meal serialization in handleIngredientChosen.
+  const allMealsRef = useRef<Meal[]>([]);
+  useEffect(() => { allMealsRef.current = allMeals; }, [allMeals]);
+  // Per-meal promise chain so concurrent choices on the same meal serialize
+  // instead of racing (each PATCH rewrites the meal's whole ingredient array;
+  // overlapping writes from a stale base would clobber each other).
+  const enqueueMealSave = useRef(createMealSaveQueue()).current;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedStore, setSelectedStore] = useState<string>(STORES[0].id);
@@ -271,24 +282,34 @@ export default function MyMealsScreen() {
 
   async function handleIngredientChosen(ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null) {
     await Promise.all(
-      mealIds.map(async (mealId) => {
-        const meal = allMeals.find((m) => m.id === mealId);
-        if (!meal) return;
-        const updatedIngredients = (meal.ingredients as any[]).map((ing) => {
-          const name = ing.ingredientName ?? ing.productName ?? ing.product_name ?? ing.name ?? '';
-          const term = ing.searchTerm ?? ing.search_term ?? name;
-          if (name !== ingredientName && term !== ingredientName) return ing;
-          const updates: Record<string, any> = { searchTerm: productName };
-          if (mealQtys && mealQtys[mealId] != null) updates.productQty = mealQtys[mealId];
-          if (dropdown) updates.dropdown = dropdown;
-          else if ('dropdown' in ing) updates.dropdown = null; // clear stale preference if none selected
-          return { ...ing, ...updates };
-        });
-        try {
-          const updated = await mealsApi.update(mealId, { ingredients: updatedIngredients } as any);
-          setAllMeals((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
-        } catch {}
-      }),
+      mealIds.map((mealId) =>
+        // Serialize all saves for this meal: each PATCH runs after (and reads the
+        // result of) the previous one. Choices arrive faster than the server
+        // round-trip, so without this they'd each rebuild the whole ingredient
+        // array from a stale snapshot and overwrite earlier saves
+        // (last-write-wins). Keyed per meal, so different meals save in parallel.
+        enqueueMealSave(mealId, async () => {
+          // Read the freshest copy (updated by any prior chained save below),
+          // never the render snapshot.
+          const meal = allMealsRef.current.find((m) => m.id === mealId);
+          if (!meal) return;
+          const updatedIngredients = mergeChosenProduct(
+            meal.ingredients as any[],
+            ingredientName,
+            productName,
+            { qty: mealQtys?.[mealId], dropdown },
+          );
+          try {
+            const updated = await mealsApi.update(mealId, { ingredients: updatedIngredients } as any);
+            // Update the ref synchronously so the next chained save for this meal
+            // builds on this result, not the pre-save state.
+            allMealsRef.current = allMealsRef.current.map((m) => (m.id === updated.id ? updated : m));
+            setAllMeals((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+          } catch (err) {
+            console.warn(`[MyMeals] failed to save chosen product "${productName}" for ingredient "${ingredientName}" (meal ${mealId})`, err);
+          }
+        }),
+      ),
     );
   }
 
