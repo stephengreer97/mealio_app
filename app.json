@@ -16,7 +16,6 @@
       "supportsTablet": false,
       "bundleIdentifier": "co.mealio.app",
       "associatedDomains": [
-        "applinks:mealio.co",
         "applinks:mealio.co"
       ],
       "infoPlist": {

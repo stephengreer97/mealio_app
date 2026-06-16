@@ -64,5 +64,12 @@
     "tsx": "^4.22.2",
     "typescript": "^5.3.3"
   },
-  "private": true
+  "private": true,
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": ["@react-native-cookies/cookies"]
+      }
+    }
+  }
 }
