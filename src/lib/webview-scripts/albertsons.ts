@@ -785,6 +785,35 @@ function buildSearchAndAddScriptFn(
     });
   }
 
+  // The header cart-count badge reflects the REAL (server) cart, unlike the
+  // product tile's optimistic bubble — so it only ticks up when an item
+  // actually commits. null = badge unreadable (fall back to the tile bubble).
+  function getHeaderCartCount() {
+    var el = document.querySelector('[data-qa="hdr-crt-txt-plus"]');
+    if (!el) return null;
+    var t = (el.textContent || '').trim();
+    if (t === '') return 0;
+    var m = t.match(/\\d+/);
+    return m ? parseInt(m[0], 10) : 0;
+  }
+
+  // Confirm an add by the header cart count incrementing (authoritative). Falls
+  // back to the tile qty bubble only when the header count isn't readable.
+  function waitForCartConfirm(headerBefore, tileBefore) {
+    return new Promise(function(resolve) {
+      var elapsed = 0;
+      function tick() {
+        var hc = getHeaderCartCount();
+        if (headerBefore != null && hc != null && hc > headerBefore) { resolve(true); return; }
+        if (headerBefore == null && getCartQty() > tileBefore) { resolve(true); return; }
+        if (elapsed >= 7000) { resolve(false); return; }
+        elapsed += 250;
+        setTimeout(tick, 250);
+      }
+      tick();
+    });
+  }
+
   // Poll for ATC buttons to appear (up to 6s).
   var allAtcBtns = [];
   for (var poll = 0; poll < 20; poll++) {
@@ -855,12 +884,13 @@ function buildSearchAndAddScriptFn(
       if (stepperAlreadyOpen) {
         for (var i = 0; i < QTY; i++) {
           var qtyBefore = getCartQty();
+          var headerBefore = getHeaderCartCount();
           var incBtn = i === 0 ? preExistingIncrement : await pollForIncrement(bestName);
           if (!incBtn) break;
           incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
           await wait(100);
           incBtn.click();
-          var confirmed = await waitForQtyChange(qtyBefore);
+          var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
           if (confirmed) actuallyClicked++;
         }
       } else {
@@ -869,12 +899,13 @@ function buildSearchAndAddScriptFn(
         await wait(600);
         for (var i = 0; i < QTY; i++) {
           var qtyBefore = getCartQty();
+          var headerBefore = getHeaderCartCount();
           var incBtn = await pollForIncrement(bestName);
           if (!incBtn) break;
           incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
           await wait(100);
           incBtn.click();
-          var confirmed = await waitForQtyChange(qtyBefore);
+          var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
           if (confirmed) actuallyClicked++;
         }
       }
@@ -883,6 +914,7 @@ function buildSearchAndAddScriptFn(
       // After each click, poll until the cart qty increases before continuing.
       for (var i = 0; i < QTY; i++) {
         var qtyBefore = getCartQty();
+        var headerBefore = getHeaderCartCount();
         var buttonToClick;
         if (i === 0) {
           buttonToClick = bestAtcBtn;
@@ -908,11 +940,12 @@ function buildSearchAndAddScriptFn(
         buttonToClick.scrollIntoView({ behavior: 'instant', block: 'center' });
         await wait(100);
         buttonToClick.click();
-        // Wait for the cart to confirm the add (qty increases) before proceeding.
-        var confirmed = await waitForQtyChange(qtyBefore);
+        // Confirm via the header cart count (the real cart), not the tile bubble.
+        var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'ADD_DEBUG', step: 'click_confirmed_' + i,
-          confirmed: confirmed, qtyBefore: qtyBefore, qtyAfter: getCartQty()
+          confirmed: confirmed, qtyBefore: qtyBefore, qtyAfter: getCartQty(),
+          headerBefore: headerBefore, headerAfter: getHeaderCartCount()
         }));
         if (confirmed) actuallyClicked++;
       }
