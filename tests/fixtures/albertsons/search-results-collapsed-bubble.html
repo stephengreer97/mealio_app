@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<!--
+  Albertsons search result where the product is ALREADY in the cart: it shows a
+  collapsed quantity bubble (data-qa="qty-stppr-bbl") INSTEAD of an "Add 1 unit
+  of" button. The bubble's aria-label is truncated with an ellipsis and a
+  trailing "(packaging may vary)" note that the real product name never contains.
+
+  Regression: buildSearchAndAddScript must (1) not bail just because there's no
+  ATC button, and (2) match this truncated bubble to the searched product, then
+  click it to reveal the stepper.
+-->
+<html>
+<head><meta charset="utf-8"><title>search</title></head>
+<body>
+  <main id="r_body">
+    <span data-qa="hdr-crt-txt-plus">1</span>
+    <div class="product-card">
+      <button
+        data-qa="qty-stppr-bbl"
+        class="btn btn-primary btn-circle--md bubble-qty-info"
+        id="bubble_qtyInfo_136150034"
+        aria-label="collapsed, 1 unit of Lucerne Heavy Whipping Cream -...(packaging may vary) in cart. Click to update">1</button>
+    </div>
+  </main>
+</body>
+</html>

@@ -302,10 +302,18 @@ function buildAddToCartScript(
         .trim();
       var score = -1;
       if (/\\.{3}|\\u2026/.test(cleaned)) {
-        var parts = cleaned.split(/\\.{3}|\\u2026/).map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 3; });
-        var targetLower = productName.toLowerCase();
-        var allPartsMatch = parts.length > 0 && parts.every(function(p) { return targetLower.indexOf(p.toLowerCase()) !== -1; });
-        score = allPartsMatch ? 95 : -1;
+        // Truncated label, e.g. "Lucerne Heavy Whipping Cream -...(packaging may
+        // vary)". Score on the words shown BEFORE the ellipsis against the target;
+        // trailing noise after "..." (like "(packaging may vary)") is never in the
+        // real product name, so requiring it to match would wrongly reject the bubble.
+        var beforeEllipsis = cleaned.split(/\\.{3}|\\u2026/)[0];
+        var tWords = normalizeForScoring(productName).split(' ').filter(Boolean);
+        var fWords = normalizeForScoring(beforeEllipsis).split(' ').filter(Boolean);
+        if (fWords.length > 0) {
+          var hit = fWords.filter(function(w) { return tWords.indexOf(w) !== -1; }).length;
+          var pct = hit / fWords.length;
+          score = pct < 0.7 ? -1 : Math.round(pct * 100);
+        }
       } else {
         var targetWords = normalizeForScoring(productName).split(' ').filter(Boolean);
         var foundWords = normalizeForScoring(cleaned).split(' ').filter(Boolean);
@@ -721,10 +729,18 @@ function buildSearchAndAddScriptFn(
         .trim();
       var score = -1;
       if (/\\.{3}|\\u2026/.test(cleaned)) {
-        var parts = cleaned.split(/\\.{3}|\\u2026/).map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 3; });
-        var targetLower = productName.toLowerCase();
-        var allPartsMatch = parts.length > 0 && parts.every(function(p) { return targetLower.indexOf(p.toLowerCase()) !== -1; });
-        score = allPartsMatch ? 95 : -1;
+        // Truncated label, e.g. "Lucerne Heavy Whipping Cream -...(packaging may
+        // vary)". Score on the words shown BEFORE the ellipsis against the target;
+        // trailing noise after "..." (like "(packaging may vary)") is never in the
+        // real product name, so requiring it to match would wrongly reject the bubble.
+        var beforeEllipsis = cleaned.split(/\\.{3}|\\u2026/)[0];
+        var tWords = normalizeForScoring(productName).split(' ').filter(Boolean);
+        var fWords = normalizeForScoring(beforeEllipsis).split(' ').filter(Boolean);
+        if (fWords.length > 0) {
+          var hit = fWords.filter(function(w) { return tWords.indexOf(w) !== -1; }).length;
+          var pct = hit / fWords.length;
+          score = pct < 0.7 ? -1 : Math.round(pct * 100);
+        }
       } else {
         var targetWords = normalizeForScoring(productName).split(' ').filter(Boolean);
         var foundWords = normalizeForScoring(cleaned).split(' ').filter(Boolean);
@@ -874,7 +890,15 @@ function buildSearchAndAddScriptFn(
     if (candidates.length >= 8) break;
   }
 
-  if (!bestName || !bestAtcBtn) {
+  // The product may already be in the cart, shown as a collapsed bubble or an
+  // open stepper INSTEAD of an "Add 1 unit of" button — so there may be no ATC
+  // candidate (bestName/bestAtcBtn null). Match these against SEARCH_TERM.
+  var matchName = bestName || SEARCH_TERM;
+  var preExistingBubble = findBubbleForProduct(matchName);
+  var preExistingIncrement = !preExistingBubble ? findIncrementForProduct(matchName) : null;
+
+  // Give up only if there's no ATC button AND the item isn't already in the cart.
+  if (!bestAtcBtn && !preExistingBubble && !preExistingIncrement) {
     var hasExactOos = candidates.some(function(c) { return scoreMatch(SEARCH_TERM, c.productName) === 100 && c.outOfStock; });
     var reason = candidates.length === 0 ? 'no_results' : hasExactOos ? 'out_of_stock' : 'low_confidence';
     document.removeEventListener('focusin', __noKbd, true);
@@ -883,16 +907,12 @@ function buildSearchAndAddScriptFn(
   }
 
   try {
-    // Check for pre-existing qty (product already in cart)
-    var preExistingBubble = findBubbleForProduct(bestName);
-    var preExistingIncrement = !preExistingBubble ? findIncrementForProduct(bestName) : null;
-
-    // Wait for cart state overlay if ATC found
-    if (!preExistingBubble && !preExistingIncrement) {
+    // If we have an ATC but the in-cart bubble hasn't rendered yet, give it a moment.
+    if (!preExistingBubble && !preExistingIncrement && bestAtcBtn) {
       for (var wa = 0; wa < 3 && !preExistingBubble && !preExistingIncrement; wa++) {
         await wait(400);
-        preExistingBubble = findBubbleForProduct(bestName);
-        preExistingIncrement = !preExistingBubble ? findIncrementForProduct(bestName) : null;
+        preExistingBubble = findBubbleForProduct(matchName);
+        preExistingIncrement = !preExistingBubble ? findIncrementForProduct(matchName) : null;
       }
     }
 
@@ -905,7 +925,7 @@ function buildSearchAndAddScriptFn(
         for (var i = 0; i < QTY; i++) {
           var qtyBefore = getCartQty();
           var headerBefore = getHeaderCartCount();
-          var incBtn = i === 0 ? preExistingIncrement : await pollForIncrement(bestName);
+          var incBtn = i === 0 ? preExistingIncrement : await pollForIncrement(matchName);
           if (!incBtn) break;
           incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
           await wait(100);
@@ -920,7 +940,7 @@ function buildSearchAndAddScriptFn(
         for (var i = 0; i < QTY; i++) {
           var qtyBefore = getCartQty();
           var headerBefore = getHeaderCartCount();
-          var incBtn = await pollForIncrement(bestName);
+          var incBtn = await pollForIncrement(matchName);
           if (!incBtn) break;
           incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
           await wait(100);
@@ -940,13 +960,13 @@ function buildSearchAndAddScriptFn(
           buttonToClick = bestAtcBtn;
         } else {
           // Try increment (handles bubble→stepper), fall back to re-clicking ATC
-          buttonToClick = await pollForIncrement(bestName);
+          buttonToClick = await pollForIncrement(matchName);
           if (!buttonToClick) {
             var freshAtc = Array.from(document.querySelectorAll(ATC_SEL));
             for (var fa = 0; fa < freshAtc.length; fa++) {
               var faLabel = freshAtc[fa].getAttribute('aria-label') || '';
               var faMatch = faLabel.match(/^Add 1 unit of (.+)/i);
-              if (faMatch && faMatch[1].trim() === bestName) { buttonToClick = freshAtc[fa]; break; }
+              if (faMatch && faMatch[1].trim() === matchName) { buttonToClick = freshAtc[fa]; break; }
             }
           }
           window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -972,7 +992,7 @@ function buildSearchAndAddScriptFn(
     }
 
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: actuallyClicked >= 1, productName: bestName, actuallyClicked: actuallyClicked, qty: QTY }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: actuallyClicked >= 1, productName: matchName, actuallyClicked: actuallyClicked, qty: QTY }));
   } catch(e) {
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: candidates }));

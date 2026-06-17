@@ -41,6 +41,37 @@ describe('Albertsons cart-page count (snapshot before/after)', () => {
   );
 });
 
+describe('Albertsons regression: product already in cart (collapsed bubble)', () => {
+  // When the searched product is already in the cart, Albertsons shows a
+  // collapsed qty bubble (no ATC button) with a TRUNCATED aria-label. The add
+  // script must match that bubble to the product and CLICK it (to reveal the
+  // stepper) rather than bailing as "not found".
+  itWithFixture(
+    'search-results-collapsed-bubble.html',
+    'matches the truncated bubble to the product and clicks it',
+    async (runner) => {
+      // Flag the bubble click (the static fixture has no real handler).
+      await runner.page.evaluate(() => {
+        const b = document.querySelector('[data-qa="qty-stppr-bbl"]');
+        if (b) b.addEventListener('click', () => {
+          (window as unknown as { __bubbleClicked?: boolean }).__bubbleClicked = true;
+        });
+      });
+      const script = scripts.buildSearchAndAddScript(
+        'Lucerne Heavy Whipping Cream - 16 Oz',
+        1,
+        null,
+      );
+      await runner.inject(script);
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      const clicked = await runner.page.evaluate(
+        () => (window as unknown as { __bubbleClicked?: boolean }).__bubbleClicked === true,
+      );
+      expect(clicked).toBe(true);
+    },
+  );
+});
+
 describe('Albertsons family CHECK_LOGIN_SCRIPT', () => {
   // CAVEAT: the script clicks the profile button then scans document.body
   // for "sign out" / "log out". The click is a no-op in static fixtures
