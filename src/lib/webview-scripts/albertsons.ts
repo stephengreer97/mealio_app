@@ -565,46 +565,57 @@ function buildSearchScript(domain: string) {
   document.querySelectorAll('input, textarea').forEach(function(el) { el.setAttribute('inputmode', 'none'); });
   document.addEventListener('focusin', __noKbd, true);
 
+  var searchUrl = 'https://www.${domain}/shop/search-results.html?q=' + encodeURIComponent(term);
+
   // Click the search icon button to reveal/focus the input
   var openBtn = document.querySelector('button[aria-label="search"]');
   if (openBtn) { openBtn.click(); await wait(300); }
 
-  // Find search input
-  var input = document.querySelector('input[type="search"][name="q"]');
-  if (!input) {
-    input = document.querySelector('input[type="search"], input[name="q"], input[placeholder*="search" i]');
+  // Poll for the search input — the storefront hydrates async, and submitting
+  // before it's ready sends an empty ?q=.
+  var input = null;
+  for (var p = 0; p < 40; p++) {
+    input = document.querySelector('input[type="search"][name="q"]')
+      || document.querySelector('input[type="search"], input[name="q"], input[placeholder*="search" i]');
+    if (input) break;
+    await wait(150);
   }
 
-  if (!input) {
+  var submitted = false;
+  if (input) {
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    // Set the value and VERIFY it stuck before submitting — Angular's binding
+    // can drop a programmatic set if the component isn't wired yet, which is
+    // what caused empty-query searches. Retry until input.value holds the term.
+    var ok = false;
+    for (var t = 0; t < 20; t++) {
+      setter.call(input, '');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      setter.call(input, term);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await wait(120);
+      if (input.value === term) { ok = true; break; }
+    }
+    if (ok) {
+      // Only press Enter once the term is actually in the box.
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      submitted = true;
+      var startUrl = window.location.href;
+      for (var i = 0; i < 30; i++) {
+        if (window.location.href !== startUrl) break;
+        await wait(100);
+      }
+    }
+  }
+
+  // Fallback: input never appeared, value never stuck, or Enter didn't navigate
+  // to a real results page → navigate straight to the search URL (correct query).
+  if (!submitted || window.location.href.indexOf('search-results') === -1) {
     document.removeEventListener('focusin', __noKbd, true);
+    window.location.href = searchUrl;
     return;
-  }
-
-  // Set value via native setter to avoid triggering the mobile keyboard
-  var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  setter.call(input, '');
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  await wait(50);
-  setter.call(input, term);
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-  await wait(100);
-
-  // Submit via Enter key
-  input.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-    bubbles: true, cancelable: true
-  }));
-  input.dispatchEvent(new KeyboardEvent('keyup', {
-    key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-    bubbles: true, cancelable: true
-  }));
-
-  // Wait for URL change (up to 3 seconds)
-  var startUrl = window.location.href;
-  for (var i = 0; i < 30; i++) {
-    if (window.location.href !== startUrl) break;
-    await wait(100);
   }
 
   document.removeEventListener('focusin', __noKbd, true);
