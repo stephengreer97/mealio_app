@@ -329,7 +329,15 @@ export const FIXTURE_CAPTURE_STORES: Record<string, StoreCaptureConfig> = {
         file: 'cart-with-items.html',
         url: 'https://www.amazon.com/cart',
         waitFor: 'body',
-        instruction: 'Add at least one Amazon Fresh item to the cart first.',
+        instruction:
+          'Add at least one Amazon Fresh item to the cart first. This is the cart LANDING page (the "cart of carts" with a collapsed Fresh preview + a "view full cart" link). Capture it as-is.',
+      },
+      {
+        file: 'cart-fresh-full.html',
+        url: 'https://www.amazon.com/cart',
+        waitFor: 'body',
+        instruction:
+          'Add 2+ DIFFERENT Amazon Fresh items to your cart. Tap the cart icon, then on the Amazon Fresh section tap "View full cart" (the cart_expand_link_fresh link) so EVERY item is listed individually with its name and quantity. Capture THAT expanded Fresh cart page (not the collapsed cart-of-carts summary). This is what the cart snapshot reads.',
       },
       {
         file: 'search-results-product-in-cart.html',
