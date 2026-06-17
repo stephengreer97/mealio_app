@@ -224,11 +224,15 @@ const ALBERTSONS_CART_PAGE_SCRIPT = `(async function() {
     if (!name) continue;
     // qty: prefer the visible stepper text, else parse the decrease-button id suffix.
     var qty = 0;
-    var qEl = document.querySelector('[id^="check' + pid + '-"]');
-    if (qEl) { var qmt = (qEl.textContent || '').match(/\\d+/); if (qmt) qty = parseInt(qmt[0], 10); }
-    if (!qty) {
-      var dec = document.querySelector('[id^="fcdecBtn' + pid + '-"]');
-      if (dec) { var dm = dec.id.match(/-(\\d+)$/); if (dm) qty = parseInt(dm[1], 10); }
+    // Real qty lives in the cart-qty display text ("N - click to specify a
+    // quantity"). Do NOT use the stepper button id suffix (fcdecBtn<pid>-N) —
+    // that N is the row index, not the quantity.
+    var qEls = document.querySelectorAll(
+      '[id^="cartQty' + pid + '"], [id="normal' + pid + '"], [id^="rounded-cartQty' + pid + '"]'
+    );
+    for (var qi = 0; qi < qEls.length; qi++) {
+      var qmt = (qEls[qi].textContent || '').match(/\\d+/);
+      if (qmt) { qty = parseInt(qmt[0], 10); break; }
     }
     if (!qty) qty = 1;
     seen[pid] = true;

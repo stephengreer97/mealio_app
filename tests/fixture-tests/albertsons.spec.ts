@@ -18,15 +18,16 @@ const scripts = getStoreScripts('acme')!;
 
 describe('Albertsons cart-page count (snapshot before/after)', () => {
   // Counts on /erums/cart: dedupe by product id (the page renders each item
-  // twice for responsive layouts), qty from the stepper id / .stepper-qty.
-  // Fixture has Basmati x2 + Hunt's x1 → 3 units, 2 distinct items.
+  // twice for responsive layouts). Qty comes from the cart-qty display text,
+  // NOT the stepper button id suffix (that suffix is a row index). Fixture has
+  // Basmati x1 + Hunt's x1 → 2 units, 2 distinct items.
   itWithFixture(
     'cart-with-items.html',
     'sums cart line-item quantities (deduped) and posts CART_COUNT',
     async (runner) => {
       await runner.inject(buildCartPageCountScript('acme')!);
       const result = await runner.waitForMessage('CART_COUNT', 8_000);
-      expect(result.count).toBe(3);
+      expect(result.count).toBe(2);
       expect(Array.isArray(result.items)).toBe(true);
       expect(result.items).toHaveLength(2);
       const byName = Object.fromEntries(
@@ -34,7 +35,7 @@ describe('Albertsons cart-page count (snapshot before/after)', () => {
       );
       const basmati = Object.keys(byName).find((n) => /basmati/i.test(n));
       const hunts = Object.keys(byName).find((n) => /hunt/i.test(n));
-      expect(basmati && byName[basmati]).toBe(2);
+      expect(basmati && byName[basmati]).toBe(1);
       expect(hunts && byName[hunts]).toBe(1);
     },
   );
