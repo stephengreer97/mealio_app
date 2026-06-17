@@ -48,6 +48,13 @@ export function getAlbertsonsCartPageUrl(storeId: string): string {
   return `https://www.${domain}/erums/cart`;
 }
 
+/** Albertsons over-constrains on long queries — a full product title (esp. the
+ *  size suffix) returns zero results. Search with the first 5 words only; the
+ *  scorer still matches candidates against the full saved name for precision. */
+export function albertsonsSearchQuery(name: string): string {
+  return (name || '').trim().split(/\s+/).slice(0, 5).join(' ');
+}
+
 // ── Login check ─────────────────────────────────────────────────────────────
 
 function buildCheckLoginScript(domain: string): string {
@@ -552,7 +559,9 @@ function buildAddToCartScript(
 
 function buildSearchScript(domain: string) {
   return function (term: string): string {
-    var escaped = JSON.stringify(term);
+    // Search with the first 5 words only (Albertsons returns nothing for long
+    // full-title queries). Scoring still uses the full name downstream.
+    var escaped = JSON.stringify(albertsonsSearchQuery(term));
     return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   var term = ${escaped};
@@ -995,7 +1004,7 @@ export function getScripts(storeId: string): StoreScripts {
     buildAddToCartScript: buildAddToCartScript,
     buildSearchScript: buildSearchScript(domain),
     buildSearchAndAddScript: buildSearchAndAddScriptFn,
-    getSearchUrl: (term: string) => `${storeOrigin}/shop/search-results.html?q=` + encodeURIComponent(term),
+    getSearchUrl: (term: string) => `${storeOrigin}/shop/search-results.html?q=` + encodeURIComponent(albertsonsSearchQuery(term)),
     buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, buildExtractProductsScript()),
   };
 }
