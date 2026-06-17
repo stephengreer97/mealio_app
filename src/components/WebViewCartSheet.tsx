@@ -25,7 +25,7 @@ import {
   consolidateIngredients,
 } from '../lib/consolidateIngredients';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
-import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, diffCartItems, findUnaddedItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -472,22 +472,24 @@ export default function WebViewCartSheet({
   // off the last search page (still mounted through 'done').
   useEffect(() => {
     if (step !== 'done' || totalAdded === 0 || cartCountBeforeRef.current == null) return;
+    const cartPageScript = buildCartPageCountScript(lockedStoreId);
     const cartPageUrl = getCartPageUrl(lockedStoreId);
-    const cartPageScript = cartPageUrl ? buildCartPageCountScript(lockedStoreId) : null;
-    if (cartPageUrl && cartPageScript) {
+    const openCartScript = buildOpenCartScript(lockedStoreId);
+    if (cartPageScript && (cartPageUrl || openCartScript)) {
       cartCountPendingRef.current = 'after';
       cartProbeBeginSearchRef.current = false; // after-probe resumes nothing
       loadQueueRef.current = [cartPageScript];
       lastLoadEndUrlRef.current = '';
       expectedNavUrlRef.current = '';
-      // Fall back to the plain list if /cart never loads/counts, instead of
+      // Fall back to the plain list if the cart never loads/counts, instead of
       // spinning forever.
       if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
       cartRowsTimeoutRef.current = setTimeout(() => {
         cartRowsTimeoutRef.current = null;
         setCartRowsTimedOut(true);
       }, CART_PROBE_TIMEOUT_MS);
-      setWebviewUri(cartPageUrl + '?_t=' + Date.now());
+      if (cartPageUrl) setWebviewUri(cartPageUrl + '?_t=' + Date.now());
+      else webviewRef.current?.injectJavaScript(openCartScript!);
       return;
     }
     const countScript = buildCartCountScript(lockedStoreId);
@@ -737,10 +739,11 @@ export default function WebViewCartSheet({
     // Resolve the store from the ref: onMessage is created once (deps []) so the
     // lockedStoreId STATE it closes over is the pre-open value; the ref is current.
     const probeStoreId = lockedStoreIdRef.current;
-    const cartPageUrl = getCartPageUrl(probeStoreId);
-    const cartPageScript = cartPageUrl ? buildCartPageCountScript(probeStoreId) : null;
-    console.log(`[Cart ${ts()}]`, 'snapshotBefore: storeId=', probeStoreId, 'cartPage=', !!cartPageUrl, 'activeLen=', activeItemsRef.current.length);
-    if (cartPageUrl && cartPageScript) {
+    const cartPageScript = buildCartPageCountScript(probeStoreId);
+    const cartPageUrl = getCartPageUrl(probeStoreId);     // HEB / Albertsons: direct URL
+    const openCartScript = buildOpenCartScript(probeStoreId); // Amazon: click the cart icon
+    console.log(`[Cart ${ts()}]`, 'snapshotBefore: storeId=', probeStoreId, 'cartUrl=', !!cartPageUrl, 'cartClick=', !!openCartScript, 'activeLen=', activeItemsRef.current.length);
+    if (cartPageScript && (cartPageUrl || openCartScript)) {
       cartCountPendingRef.current = 'before';
       cartProbeBeginSearchRef.current = true;
       loadQueueRef.current = [cartPageScript];
@@ -756,7 +759,10 @@ export default function WebViewCartSheet({
         loadQueueRef.current = [];
         beginSearchFlow();
       }, CART_PROBE_TIMEOUT_MS);
-      setWebviewUri(cartPageUrl + '?_t=' + Date.now());
+      // URL stores navigate directly; click stores (Amazon) click the cart icon
+      // on the current page, which navigates — onLoadEnd then pops the count script.
+      if (cartPageUrl) setWebviewUri(cartPageUrl + '?_t=' + Date.now());
+      else webviewRef.current?.injectJavaScript(openCartScript!);
     } else {
       const countScript = buildCartCountScript(probeStoreId);
       if (countScript) {
@@ -992,19 +998,36 @@ export default function WebViewCartSheet({
           } else if (phase === 'after') {
             const before = cartCountBeforeRef.current;
             const expected = addResultsRef.current.filter((r) => r.success).length;
-            // Badge counts units, expected counts product lines; units ≥ lines
-            // when everything landed, so delta < lines is a real shortfall.
-            if (before != null && count != null && expected > 0 && count - before < expected) {
-              const delta = Math.max(count - before, 0);
-              setCartDeltaWarning(
-                `Cart check: ${storeName} shows ${delta} new item${delta === 1 ? '' : 's'} in the cart, but ${expected} ${expected === 1 ? 'was' : 'were'} reported added. Please double-check your cart.`
-              );
-            }
+            // Name the warning after the LOCKED store (source of truth), so the
+            // text can't drift from the brand the cart actually ran on.
+            const lockedName = STORES.find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
             // Per-line breakdown for the done screen (cart-page stores only):
             // added qty in green, pre-existing qty in grey.
+            let rows: CartRow[] | null = null;
             if (Array.isArray(msg.items)) {
               if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
-              setCartResultRows(diffCartItems(cartItemsBeforeRef.current, msg.items));
+              rows = diffCartItems(cartItemsBeforeRef.current, msg.items);
+              setCartResultRows(rows);
+            }
+            // When we have per-item cart data, name the products Mealio reported
+            // as added that didn't actually show up in the cart (silent misses).
+            let missing: string[] = [];
+            if (rows) {
+              const reportedAdded = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
+              const addedCartNames = rows.filter((r) => r.added).map((r) => r.name);
+              missing = findUnaddedItems(reportedAdded, addedCartNames);
+            }
+            if (missing.length > 0) {
+              setCartDeltaWarning(
+                `Cart check: ${missing.length} item${missing.length === 1 ? '' : 's'} may not have been added to your ${lockedName} cart: ${missing.join(', ')}. Please double-check your cart.`
+              );
+            } else if (before != null && count != null && expected > 0 && count - before < expected) {
+              // No per-item data (header-badge stores) or names didn't resolve —
+              // fall back to the count-shortfall message.
+              const delta = Math.max(count - before, 0);
+              setCartDeltaWarning(
+                `Cart check: ${lockedName} shows ${delta} new item${delta === 1 ? '' : 's'} in the cart, but ${expected} ${expected === 1 ? 'was' : 'were'} reported added. Please double-check your cart.`
+              );
             }
           }
           return;
@@ -2024,7 +2047,7 @@ export default function WebViewCartSheet({
                 )}
               </View>
 
-              {!cartResultRows && !cartRowsTimedOut && getCartPageUrl(lockedStoreId) && totalAdded > 0 && cartCountBeforeRef.current != null ? (
+              {!cartResultRows && !cartRowsTimedOut && buildCartPageCountScript(lockedStoreId) && totalAdded > 0 && cartCountBeforeRef.current != null ? (
                 // Cart-page store with a baseline: the after-probe is loading /cart.
                 // Show a loading state instead of the plain list so the breakdown
                 // doesn't flash in. (No baseline → the after-probe won't run, so we

@@ -92,6 +92,37 @@ export interface CartRow {
  * green row (added qty). Added rows are listed first. Items that left the cart
  * during the run are omitted.
  */
+function cartTokens(s: string): string[] {
+  return (s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 2);
+}
+
+/** Lenient match between a store cart title and a product name Mealio added.
+ *  True when most of the reported name's tokens appear in the cart name (or
+ *  vice versa) — tolerant of weight/size suffixes and minor title differences. */
+export function cartNameMatches(cartName: string, reportedName: string): boolean {
+  const ct = cartTokens(cartName);
+  const rt = cartTokens(reportedName);
+  if (rt.length === 0 || ct.length === 0) return false;
+  const cset = new Set(ct);
+  const overlap = rt.filter((t) => cset.has(t)).length;
+  return overlap / rt.length >= 0.6;
+}
+
+/**
+ * Given the product names Mealio reported as successfully added and the names
+ * of the items that ACTUALLY appeared as new in the cart, return the reported
+ * names with no matching cart item — i.e. the ones that silently failed to add.
+ */
+export function findUnaddedItems(reportedAdded: string[], addedCartNames: string[]): string[] {
+  return reportedAdded.filter(
+    (rn) => !addedCartNames.some((cn) => cartNameMatches(cn, rn)),
+  );
+}
+
 export function diffCartItems(before: CartItem[], after: CartItem[]): CartRow[] {
   const beforeQty = new Map<string, number>();
   for (const it of before) beforeQty.set(it.name, (beforeQty.get(it.name) || 0) + it.qty);
@@ -122,6 +153,20 @@ export function diffCartItems(before: CartItem[], after: CartItem[]): CartRow[] 
 export function buildCartPageCountScript(storeId: string): string | null {
   if (storeId === 'heb') return HEB_CART_PAGE_SCRIPT;
   if (ALBERTSONS_FAMILY_IDS.includes(storeId)) return ALBERTSONS_CART_PAGE_SCRIPT;
+  // Amazon Fresh: needs a MOBILE cart capture before its selectors can be
+  // written (the app's WebView is mobile UA; the captured cart fixture is
+  // desktop markup). The click-to-open-cart framework below is ready for it.
+  return null;
+}
+
+/**
+ * Some stores have no reliable direct cart URL (e.g. Amazon Fresh gates direct
+ * /cart loads). For those, this returns a script that CLICKS the in-page cart
+ * icon to navigate to the cart, after which the cart-page count script is
+ * injected on the resulting page load. Returns null for URL-based stores and
+ * stores not yet wired (Amazon Fresh — pending a mobile cart capture).
+ */
+export function buildOpenCartScript(_storeId: string): string | null {
   return null;
 }
 
