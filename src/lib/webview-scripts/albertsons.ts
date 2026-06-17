@@ -381,6 +381,37 @@ function buildAddToCartScript(
     });
   }
 
+  // The header cart-count badge reflects the REAL (server) cart, unlike the
+  // product tile's optimistic bubble — so it only ticks up when an item
+  // actually commits. Returns null when the badge can't be read (then callers
+  // fall back to the tile bubble). Empty text = 0 (empty cart).
+  function getHeaderCartCount() {
+    var el = document.querySelector('[data-qa="hdr-crt-txt-plus"]');
+    if (!el) return null;
+    var t = (el.textContent || '').trim();
+    if (t === '') return 0;
+    var m = t.match(/\\d+/);
+    return m ? parseInt(m[0], 10) : 0;
+  }
+
+  // Confirm an add by the header cart count incrementing (authoritative). Falls
+  // back to the tile qty bubble only when the header count isn't readable, so a
+  // store/page without the badge still works. Polls up to ~7s.
+  function waitForCartConfirm(headerBefore, tileBefore) {
+    return new Promise(function(resolve) {
+      var elapsed = 0;
+      function tick() {
+        var hc = getHeaderCartCount();
+        if (headerBefore != null && hc != null && hc > headerBefore) { resolve(true); return; }
+        if (headerBefore == null && getCartQty() > tileBefore) { resolve(true); return; }
+        if (elapsed >= 7000) { resolve(false); return; }
+        elapsed += 250;
+        setTimeout(tick, 250);
+      }
+      tick();
+    });
+  }
+
   // Poll for ATC buttons to appear (up to 6s).
   var allAtcBtns = [];
   for (var poll = 0; poll < 20; poll++) {
@@ -445,12 +476,13 @@ function buildAddToCartScript(
     if (stepperAlreadyOpen) {
       for (var i = 0; i < QTY; i++) {
         var qtyBefore = getCartQty();
+        var headerBefore = getHeaderCartCount();
         var incBtn = i === 0 ? preExistingIncrement : await pollForIncrement(TARGET_NAME);
         if (!incBtn) break;
         incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
         await wait(100);
         incBtn.click();
-        var confirmed = await waitForQtyChange(qtyBefore);
+        var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
         if (confirmed) actuallyClicked++;
       }
     } else {
@@ -459,12 +491,13 @@ function buildAddToCartScript(
       await wait(600);
       for (var i = 0; i < QTY; i++) {
         var qtyBefore = getCartQty();
+        var headerBefore = getHeaderCartCount();
         var incBtn = await pollForIncrement(TARGET_NAME);
         if (!incBtn) break;
         incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
         await wait(100);
         incBtn.click();
-        var confirmed = await waitForQtyChange(qtyBefore);
+        var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
         if (confirmed) actuallyClicked++;
       }
     }
@@ -472,6 +505,7 @@ function buildAddToCartScript(
     // Normal path: ATC adds first unit, increment handles the rest.
     for (var i = 0; i < QTY; i++) {
       var qtyBefore = getCartQty();
+      var headerBefore = getHeaderCartCount();
       var buttonToClick;
       if (i === 0) {
         buttonToClick = bestAtcBtn;
@@ -495,10 +529,11 @@ function buildAddToCartScript(
       buttonToClick.scrollIntoView({ behavior: 'instant', block: 'center' });
       await wait(100);
       buttonToClick.click();
-      var confirmed = await waitForQtyChange(qtyBefore);
+      var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
       window.ReactNativeWebView.postMessage(JSON.stringify({
         type: 'ADD_DEBUG', step: 'click_confirmed_' + i,
-        confirmed: confirmed, qtyBefore: qtyBefore, qtyAfter: getCartQty()
+        confirmed: confirmed, qtyBefore: qtyBefore, qtyAfter: getCartQty(),
+        headerBefore: headerBefore, headerAfter: getHeaderCartCount()
       }));
       if (confirmed) actuallyClicked++;
     }
