@@ -143,8 +143,35 @@ jobs:
       - name: Install app on simulator
         run: xcrun simctl install "$SIM_UDID" "$APP_PATH"
 
-      - name: Run Maestro flows
-        run: maestro test tests/maestro/flows --format junit --output maestro-report.xml
+      # Run each flow in its own simulator session. Running all 7 in one
+      # `maestro test <dir>` session accumulated memory across the clearState
+      # cold launches and the OS would OOM-kill the app on a later flow
+      # (surfaced as "App crashed or stopped", no app crash report — a Jetsam
+      # kill, not a code crash). Shutting down + erasing the sim between flows
+      # releases that memory so each flow starts from a clean slate.
+      - name: Run Maestro flows (isolated per flow)
+        run: |
+          set -o pipefail
+          FAILED=""
+          for flow in tests/maestro/flows/*.yaml; do
+            name=$(basename "$flow" .yaml)
+            echo "::group::Maestro flow $name"
+            xcrun simctl bootstatus "$SIM_UDID" -b
+            xcrun simctl install "$SIM_UDID" "$APP_PATH" || true
+            if ! maestro test "$flow" --format junit --output "report-$name.xml"; then
+              echo "::error::Maestro flow $name failed"
+              FAILED="$FAILED $name"
+            fi
+            echo "::endgroup::"
+            # Reset the simulator's memory before the next flow.
+            xcrun simctl shutdown "$SIM_UDID" || true
+            xcrun simctl erase "$SIM_UDID" || true
+            xcrun simctl boot "$SIM_UDID" || true
+          done
+          if [ -n "$FAILED" ]; then
+            echo "::error::Failed flows:$FAILED"
+            exit 1
+          fi
 
       - name: Upload Maestro report
         if: always()
@@ -152,7 +179,7 @@ jobs:
         with:
           name: maestro-report
           path: |
-            maestro-report.xml
+            report-*.xml
             ~/.maestro/tests/
 
       # PM acceptance surface: PNGs saved by 04-screenshot-tour.yaml. Review
