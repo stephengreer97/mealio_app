@@ -108,7 +108,12 @@ jobs:
     name: iOS Simulator + Maestro flows
     needs: wait-for-eas
     runs-on: macos-15
-    timeout-minutes: 25
+    # The isolated-per-flow lane erases+reboots+reinstalls a fresh simulator per
+    # flow (~2 min overhead each) to avoid cumulative-memory OOM. With ~7 flows
+    # that runs ~26 min, which exceeded the old 25-min cap and got cancelled.
+    # Bumped to 40 for headroom. (Per-flow erase overhead is the deeper cost —
+    # candidate for a future optimization.)
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
