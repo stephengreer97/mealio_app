@@ -54,9 +54,9 @@ describe('useParallelSearchPool — start()', () => {
     });
     expect(result.current.total).toBe(3);
     expect(result.current.completed).toBe(0);
-    act(() => { result.current.reportResult(0, ['r0']); });
+    act(() => { result.current.reportResult(0, { hits: 1 }); });
     expect(result.current.completed).toBe(1);
-    act(() => { result.current.reportResult(1, ['r1']); });
+    act(() => { result.current.reportResult(1, { hits: 1 }); });
     expect(result.current.completed).toBe(2);
     act(() => { result.current.reset(); });
     expect(result.current.completed).toBe(0);
