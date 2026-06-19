@@ -138,6 +138,16 @@ const CHECK_LOGIN_SCRIPT = `(function() {
 // ── Product extraction ─────────────────────────────────────────────────────
 
 const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
+  // Re-injection guard. The cart flow re-injects the inflight script on a
+  // same-URL onLoadEnd — REQUIRED for Wegmans' SSO/MSAL reload (which lands in a
+  // fresh JS context, so this flag is reset and the script re-runs). But the
+  // Wegmans SPA also fires spurious onLoadEnds while THIS run is still polling
+  // for results; re-running then posts a DUPLICATE SEARCH_RESULT that the next
+  // item consumes → wrong products. The guard no-ops those same-context
+  // re-injections; the try/finally clears it on every exit so the next item runs.
+  if (window.__wegmansExtractActive) return;
+  window.__wegmansExtractActive = true;
+  try {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
   function __noKbd(e) {
@@ -158,7 +168,11 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
   // Wait for tiles to (a) exist AND (b) differ from the previous search's
   // first-tile name. onLoadEnd fires the moment Wegmans pushes the new URL,
   // but the SPA needs another ~500ms+ to fetch results and re-render tiles.
-  var stale = window.__wegmansStaleTitle || '';
+  // The previous first-tile is stashed in sessionStorage by buildSearchScript
+  // (survives the full-page nav, unlike a window var). Without it, the extract
+  // grabs whatever tiles are present — sometimes the PREVIOUS search's results.
+  var stale = '';
+  try { stale = sessionStorage.getItem('__wegStaleTitle') || ''; } catch(_) {}
   var tiles = [];
   var tilesChanged = false;
   var waitedMs = 0;
@@ -171,8 +185,12 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
     await wait(200);
     waitedMs += 200;
   }
-  // Clear so the next search starts with a fresh capture.
-  window.__wegmansStaleTitle = '';
+  // Leave THIS search's first tile behind as the baseline for the NEXT search.
+  // buildSearchScript also sets it, but the next extract can race ahead of
+  // buildSearchScript (a stray onLoadEnd on the old page pops it early); having
+  // the baseline already in place means that early run WAITS for the tiles to
+  // change instead of grabbing these (now stale) results.
+  try { sessionStorage.setItem('__wegStaleTitle', getFirstTileName()); } catch(_) {}
 
   window.ReactNativeWebView.postMessage(JSON.stringify({
     type: 'EXTRACT_DEBUG',
@@ -234,6 +252,7 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
 
   document.removeEventListener('focusin', __noKbd, true);
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: candidates }));
+  } finally { window.__wegmansExtractActive = false; }
 })();true;`;
 
 // ── Add to cart ────────────────────────────────────────────────────────────
@@ -424,8 +443,14 @@ function buildSearchScript(term: string): string {
   // that so WebViewCartSheet's NAV_INTENT comparison succeeds.
   var expectedUrl = 'https://www.wegmans.com/shop/search?query=' + encodeURIComponent(${escaped}.toLowerCase());
   try {
+    // Stash the CURRENT first product tile so the extract on the next page can
+    // wait until results actually change (avoids reading the previous search's
+    // tiles before Wegmans' SPA re-renders). sessionStorage survives the full nav.
+    var t = document.querySelector('div.component--product-tile h3[data-testid="-baseHeading"]');
+    var firstName = t ? (t.textContent || '').trim().replace(/\\s+/g, ' ') : '';
+    try { sessionStorage.setItem('__wegStaleTitle', firstName); } catch(_) {}
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'NAV_INTENT', target: expectedUrl }));
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_DEBUG', step: 'url_nav', url: expectedUrl }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_DEBUG', step: 'url_nav', url: expectedUrl, staleTitle: firstName }));
   } catch(_) {}
   window.location.href = expectedUrl;
 })();true;`;
@@ -940,5 +965,14 @@ export function getScripts(): StoreScripts {
     // exposed here so the parallel pool is driven uniformly off StoreScripts.
     getSearchUrl: getWegmansSearchUrl,
     buildWorkerScript: buildWegmansWorkerScript,
+    // Wegmans WAF 403s the concurrent worker searches — even 2 staggered workers
+    // still blocked — so run searches SERIALLY (like ALDI). Also drop the `?_t=`
+    // cache-buster on main-webview navs. workerCount/stagger are kept for if/when
+    // the parallel path is retried. NOTE: no `spaSearch` — Wegmans relies on the
+    // SSO/MSAL inflight re-injection.
+    forceSerialSearch: true,
+    cacheBustNav: false,
+    workerCount: 2,
+    workerStaggerMs: 400,
   };
 }

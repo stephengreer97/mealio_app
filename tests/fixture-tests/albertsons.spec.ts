@@ -8,12 +8,69 @@
 // running `npm run capture -- albertsons`.
 
 import { getStoreScripts } from '../../src/lib/webview-scripts';
+import { buildCartPageCountScript } from '../../src/lib/webview-scripts/cart-count';
 import { storeFixtures } from './_helpers';
 
 const { itWithFixture } = storeFixtures('albertsons');
 // 'acme' is one of the Albertsons family IDs; getStoreScripts dispatches
 // based on the family list inside webview-scripts/index.ts.
 const scripts = getStoreScripts('acme')!;
+
+describe('Albertsons cart-page count (snapshot before/after)', () => {
+  // Counts on /erums/cart: dedupe by product id (the page renders each item
+  // twice for responsive layouts). Qty comes from the cart-qty display text,
+  // NOT the stepper button id suffix (that suffix is a row index). Fixture has
+  // Basmati x1 + Hunt's x1 → 2 units, 2 distinct items.
+  itWithFixture(
+    'cart-with-items.html',
+    'sums cart line-item quantities (deduped) and posts CART_COUNT',
+    async (runner) => {
+      await runner.inject(buildCartPageCountScript('acme')!);
+      const result = await runner.waitForMessage('CART_COUNT', 8_000);
+      expect(result.count).toBe(2);
+      expect(Array.isArray(result.items)).toBe(true);
+      expect(result.items).toHaveLength(2);
+      const byName = Object.fromEntries(
+        result.items.map((it: { name: string; qty: number }) => [it.name, it.qty]),
+      );
+      const basmati = Object.keys(byName).find((n) => /basmati/i.test(n));
+      const hunts = Object.keys(byName).find((n) => /hunt/i.test(n));
+      expect(basmati && byName[basmati]).toBe(1);
+      expect(hunts && byName[hunts]).toBe(1);
+    },
+  );
+});
+
+describe('Albertsons regression: product already in cart (collapsed bubble)', () => {
+  // When the searched product is already in the cart, Albertsons shows a
+  // collapsed qty bubble (no ATC button) with a TRUNCATED aria-label. The add
+  // script must match that bubble to the product and CLICK it (to reveal the
+  // stepper) rather than bailing as "not found".
+  itWithFixture(
+    'search-results-collapsed-bubble.html',
+    'matches the truncated bubble to the product and clicks it',
+    async (runner) => {
+      // Flag the bubble click (the static fixture has no real handler).
+      await runner.page.evaluate(() => {
+        const b = document.querySelector('[data-qa="qty-stppr-bbl"]');
+        if (b) b.addEventListener('click', () => {
+          (window as unknown as { __bubbleClicked?: boolean }).__bubbleClicked = true;
+        });
+      });
+      const script = scripts.buildSearchAndAddScript(
+        'Lucerne Heavy Whipping Cream - 16 Oz',
+        1,
+        null,
+      );
+      await runner.inject(script);
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      const clicked = await runner.page.evaluate(
+        () => (window as unknown as { __bubbleClicked?: boolean }).__bubbleClicked === true,
+      );
+      expect(clicked).toBe(true);
+    },
+  );
+});
 
 describe('Albertsons family CHECK_LOGIN_SCRIPT', () => {
   // CAVEAT: the script clicks the profile button then scans document.body

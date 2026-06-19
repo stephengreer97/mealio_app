@@ -25,7 +25,7 @@ import {
   consolidateIngredients,
 } from '../lib/consolidateIngredients';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
-import { buildCartCountScript } from '../lib/webview-scripts/cart-count';
+import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -106,6 +106,20 @@ function isWeightBased(name: string): boolean {
   return /H-E-B (Deli|Fish Market)/i.test(name);
 }
 
+// HTTP statuses anti-bot systems (Akamai, DataDome, PerimeterX) use to block.
+const ANTI_BOT_STATUSES = [403, 429, 503];
+
+// onHttpError fires for subresources too (images, XHR, assets). Only a top-level
+// page load on the store domain should be treated as a block — filter the rest.
+function isLikelyPageUrl(url: string, domain: string): boolean {
+  return (
+    !!url &&
+    url.includes(domain) &&
+    !/\.(js|css|png|jpe?g|gif|webp|svg|woff2?|ttf|ico|json|mp4|map)(\?|$)/i.test(url) &&
+    !/\/api\//.test(url)
+  );
+}
+
 function fmtWeight(qty: number): string {
   return `${(qty * 0.25).toFixed(2)} lb`;
 }
@@ -120,8 +134,19 @@ export default function WebViewCartSheet({
   onClose,
   onIngredientChosen,
 }: WebViewCartSheetProps) {
-  const storeColor = STORES.find((s) => s.id === storeId)?.color ?? '#dd0031';
-  const scripts = useMemo(() => getStoreScripts(storeId)!, [storeId]);
+  // Lock the store to whatever it was when the sheet opened. The parent
+  // (MyMealsScreen) can change `storeId` mid-flow — its loadMeals() auto-selects
+  // the store with the most meals — which previously made the parallel workers
+  // build URLs for the WRONG store (e.g. acmemarkets.com while the user was on
+  // H-E-B → 0 results). lockedStoreId only updates when the sheet (re)opens.
+  const [lockedStoreId, setLockedStoreId] = useState(storeId);
+  // Same locked id as a ref, set synchronously at open. The parallel pool's
+  // getUrl is captured in callbacks that can go stale (referencing the store
+  // from an earlier render); reading this ref makes the worker URL resolve to
+  // the CURRENT locked store at call time, immune to closure staleness.
+  const lockedStoreIdRef = useRef(storeId);
+  const storeColor = STORES.find((s) => s.id === lockedStoreId)?.color ?? '#dd0031';
+  const scripts = useMemo(() => getStoreScripts(lockedStoreId)!, [lockedStoreId]);
 
   const [step, _setStep] = useState<Step>('qty');
   const stepRef = useRef<Step>('qty');
@@ -134,7 +159,19 @@ export default function WebViewCartSheet({
   // Step: searching / adding
   const [searchingLabel, setSearchingLabel] = useState('');
   const [webviewUri, setWebviewUri] = useState('');
+  // Mirror of webviewUri for navTo (a []-dep callback). Lets it tell "navigate
+  // to a new URL" from "reload the same URL" without the cache-buster query.
+  const webviewUriRef = useRef('');
   const [browserShown, setBrowserShown] = useState(false);
+  // Set to the HTTP status (e.g. 'http-403') when the store blocks us with an
+  // anti-bot response. Reuses the robot_challenge step UI but swaps the banner
+  // and shows a manual "Try again" button. Null = not blocked.
+  const [blockReason, setBlockReason] = useState<string | null>(null);
+  // Synchronous mirror of blockReason for onLoadEnd (a []-dep callback that
+  // reads refs). Set the instant a block is detected so the very next onLoadEnd
+  // for the 403 page does NOT auto-resume — that resume re-navigated and
+  // re-blocked, which was the tight 403 loop.
+  const blockReasonRef = useRef<string | null>(null);
 
   // Step: review
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -159,6 +196,33 @@ export default function WebViewCartSheet({
   // null anywhere means "couldn't read the badge" → validation is skipped.
   const cartCountBeforeRef = useRef<number | null>(null);
   const cartCountPendingRef = useRef<'before' | 'after' | null>(null);
+  // Cart-PAGE counting (HEB): the before-probe navigates to /cart, counts, then
+  // resumes the search flow. This flag tells the CART_COUNT handler to kick off
+  // the search once the before-count lands; the timer is a safety net so a /cart
+  // that never loads/counts can't wedge the run.
+  const cartProbeBeginSearchRef = useRef<boolean>(false);
+  const cartProbeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const CART_PROBE_TIMEOUT_MS = 10_000;
+  // The done-screen breakdown spinner falls back to the plain list after this,
+  // so a cart page that never loads/counts (e.g. Amazon's multi-hop cart) can't
+  // hang on "Updating your … cart" forever.
+  const CART_ROWS_TIMEOUT_MS = 8_000;
+  // Per-line cart contents captured by the before-probe, diffed against the
+  // after-probe to render the done screen (added in green vs already-in-cart in
+  // grey). Only populated for cart-page stores (HEB).
+  const cartItemsBeforeRef = useRef<CartItem[]>([]);
+  // For click-path cart stores (Amazon: cart icon → cart-of-carts → expand the
+  // Fresh cart), the before-probe reports the final cart URL it counted on. We
+  // cache it here and navigate straight there for the after-snapshot, skipping
+  // the multi-hop click chain (saves a couple seconds). Null when no URL was
+  // captured — the after-probe then falls back to the open-cart click path.
+  const capturedCartUrlRef = useRef<string | null>(null);
+  const [cartResultRows, setCartResultRows] = useState<CartRow[] | null>(null);
+  // While the after-probe loads /cart on the done screen, show a loading state
+  // (not the old added-names list) so the breakdown doesn't flash in. Flips true
+  // if the after-probe never returns, so we fall back instead of spinning forever.
+  const [cartRowsTimedOut, setCartRowsTimedOut] = useState(false);
+  const cartRowsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [cartDeltaWarning, setCartDeltaWarning] = useState<string | null>(null);
   const [addedNames, setAddedNames] = useState<string[]>([]);
 
@@ -191,6 +255,12 @@ export default function WebViewCartSheet({
   // never advance. Cleared when SEARCH_RESULT or SEARCH_AND_ADD_RESULT arrives.
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const SEARCH_TIMEOUT_MS = 15_000;
+  // Safety net for the Review/Choose custom search. If the user-typed search
+  // never posts a SEARCH_RESULT (page reload-loops, WAF re-challenge, SPA submit
+  // swallowed), customSearching would stay true forever and every review button
+  // is disabled — wedging the user with no way out but closing the sheet.
+  const customSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const CUSTOM_SEARCH_TIMEOUT_MS = 15_000;
   // Same safety net for the login check. If CHECK_LOGIN never posts a
   // LOGIN_STATUS (page hung, WAF interstitial swallowed the script, store
   // changed its DOM), fall back to showing the login WebView — the same
@@ -235,20 +305,29 @@ export default function WebViewCartSheet({
   // timeout state machine lives in useParallelSearchPool; this component owns
   // only the start trigger, the per-worker WebView render, and the "all done →
   // build SearchResult list → go to review" finalization.
-  const PARALLEL_WORKER_COUNT = 5;
+  // Worker count + initial-dispatch stagger are per-store (anti-bot tuning):
+  // ALDI uses 3 staggered workers; everyone else defaults to 5 at once.
+  const PARALLEL_WORKER_COUNT = scripts.workerCount ?? 5;
+  const PARALLEL_WORKER_STAGGER_MS = scripts.workerStaggerMs ?? 0;
   const PARALLEL_WORKER_TIMEOUT_MS = 20_000;
   // A store opts into the worker-pool choose-product path by exposing BOTH
   // getSearchUrl and buildWorkerScript on its StoreScripts. Null otherwise →
   // sequential single-WebView flow. (WAF note: HEB/Walmart/Albertsons run 5
   // concurrent WebViews here; live-tested in dev before shipping.)
-  const parallelCfg = (scripts.getSearchUrl && scripts.buildWorkerScript)
+  const parallelCfg = (scripts.getSearchUrl && scripts.buildWorkerScript && !scripts.forceSerialSearch)
     ? { getSearchUrl: scripts.getSearchUrl, buildWorkerScript: scripts.buildWorkerScript }
     : null;
 
   const parallelPool = useParallelSearchPool<ConsolidatedIngredient, Candidate[]>({
     workerCount: PARALLEL_WORKER_COUNT,
     workerTimeoutMs: PARALLEL_WORKER_TIMEOUT_MS,
-    getUrl: (item) => (parallelCfg ? parallelCfg.getSearchUrl(item.ingredientName) : ''),
+    dispatchStaggerMs: PARALLEL_WORKER_STAGGER_MS,
+    // Resolve the store from the live ref (not the captured parallelCfg) so a
+    // stale dispatch closure can't build URLs for a previously-selected store.
+    getUrl: (item) => {
+      const s = getStoreScripts(lockedStoreIdRef.current);
+      return s?.getSearchUrl ? s.getSearchUrl(item.ingredientName) : '';
+    },
     emptyResult: () => [],
   });
 
@@ -256,7 +335,7 @@ export default function WebViewCartSheet({
     () => parallelCfg
       ? new Array(PARALLEL_WORKER_COUNT).fill(0).map((_, i) => parallelCfg.buildWorkerScript(i))
       : [],
-    [parallelCfg],
+    [parallelCfg, PARALLEL_WORKER_COUNT],
   );
   const workerSources = useMemo(
     () => parallelPool.workerUris.map((uri) => ({ uri: uri || 'about:blank' })),
@@ -298,6 +377,28 @@ export default function WebViewCartSheet({
     parallelPool.start(active, finishParallelSearch);
   }, [parallelPool, finishParallelSearch]);
 
+  // Navigate the store WebView. Default: append a `?_t=<ts>` cache-buster so the
+  // load is unique (forces a real reload + dodges the onLoadEnd same-URL dedup).
+  // For stores that opt out (cacheBustNav:false — ALDI, whose anti-bot 403s on
+  // that synthetic query), use the CLEAN URL instead: if it's already the
+  // current source, force a reload(); otherwise set it. Either way clear the
+  // dedup so the next onLoadEnd re-injects.
+  const navTo = useCallback((baseUrl: string) => {
+    const s = getStoreScripts(lockedStoreIdRef.current);
+    if (s?.cacheBustNav !== false) {
+      setWebviewUri(baseUrl + (baseUrl.includes('?') ? '&' : '?') + '_t=' + Date.now());
+      return;
+    }
+    lastLoadEndUrlRef.current = '';
+    if (webviewUriRef.current === baseUrl && webviewRef.current) {
+      webviewRef.current.reload();
+    } else {
+      setWebviewUri(baseUrl);
+    }
+  }, []);
+
+  useEffect(() => { webviewUriRef.current = webviewUri; }, [webviewUri]);
+
   const onWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
@@ -319,6 +420,15 @@ export default function WebViewCartSheet({
 
   useEffect(() => {
     if (visible) {
+      // Snapshot the store at open and lock it. Use it synchronously for the
+      // immediate setup below (state update lags a render, but onMessage and
+      // the parallel pool must see the right store from the first tick).
+      const openStoreId = storeId;
+      const openScripts = getStoreScripts(openStoreId)!;
+      lockedStoreIdRef.current = openStoreId;
+      setLockedStoreId(openStoreId);
+      scriptsRef.current = openScripts;
+      console.log(`[Cart ${ts()}]`, 'cart opened: locking store=', openStoreId);
       const consolidated = consolidateIngredients(meals);
       setItems(consolidated);
       setCheckedItems(consolidated.map(() => true));
@@ -336,6 +446,8 @@ export default function WebViewCartSheet({
       setTotalFailed(0);
       setAddedNames([]);
       setBrowserShown(false);
+      setBlockReason(null);
+      blockReasonRef.current = null;
       console.log(`[Cart ${ts()}]`, 'initial webviewUri=', scriptsRef.current!.storeUrl);
       setWebviewUri(scriptsRef.current!.storeUrl);
       loadQueueRef.current = [];
@@ -344,7 +456,12 @@ export default function WebViewCartSheet({
       inflightScriptRef.current = null;
       if (addTimeoutRef.current) { clearTimeout(addTimeoutRef.current); addTimeoutRef.current = null; }
       if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
+      if (customSearchTimeoutRef.current) { clearTimeout(customSearchTimeoutRef.current); customSearchTimeoutRef.current = null; }
+      if (cartProbeTimeoutRef.current) { clearTimeout(cartProbeTimeoutRef.current); cartProbeTimeoutRef.current = null; }
       if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
+      isCustomSearchRef.current = false;
+      cartProbeBeginSearchRef.current = false;
+      cartCountBeforeRef.current = null;
       robotChallengeResumeIdxRef.current = -1;
       onSearchPageRef.current = false;
       loginCheckActiveRef.current = false;
@@ -356,6 +473,11 @@ export default function WebViewCartSheet({
       isCustomSearchRef.current = false;
       cartCountBeforeRef.current = null;
       cartCountPendingRef.current = null;
+      cartItemsBeforeRef.current = [];
+      capturedCartUrlRef.current = null;
+      setCartResultRows(null);
+      setCartRowsTimedOut(false);
+      if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
       setCartDeltaWarning(null);
 
       // Reset Wegmans parallel worker state. The hook clears its queue,
@@ -377,7 +499,7 @@ export default function WebViewCartSheet({
         setStep('login_check');
         setSearchingLabel('Checking login…');
         loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
-        setWebviewUri(scriptsRef.current!.storeUrl + '?_t=' + Date.now());
+        navTo(scriptsRef.current!.storeUrl);
         armLoginCheckTimeout();
       } else {
         setStep('qty');
@@ -409,17 +531,60 @@ export default function WebViewCartSheet({
   const toggleAll = () => setCheckedItems((prev) => prev.map(() => !allChecked));
   const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0).length;
 
-  // Cart snapshot AFTER the run: the webview is still on the last search
-  // page (it stays mounted through 'done'), whose header badge reflects the
-  // adds. Only fires when the before-snapshot succeeded and something was
-  // reported added.
+  // Cart snapshot AFTER the run. Only fires when the before-snapshot succeeded
+  // and something was reported added. For cart-page stores (HEB) navigate the
+  // now-idle webview to /cart and count there; otherwise read the header badge
+  // off the last search page (still mounted through 'done').
   useEffect(() => {
     if (step !== 'done' || totalAdded === 0 || cartCountBeforeRef.current == null) return;
-    const countScript = buildCartCountScript(storeId);
+    const cartPageScript = buildCartPageCountScript(lockedStoreId);
+    // Prefer a direct cart URL: the store's static one, else the URL the
+    // before-probe cached (click-path stores). Hitting it directly skips the
+    // cart-icon → cart-of-carts → expand-link hops. If the cached URL ever
+    // lands on the collapsed cart, the count script's own expand-link fallback
+    // and the 8s timeout recover.
+    const cartPageUrl = getCartPageUrl(lockedStoreId) ?? capturedCartUrlRef.current;
+    const openCartScript = buildOpenCartScript(lockedStoreId);
+    const inlineCartScript = buildInlineCartScript(lockedStoreId); // ALDI side panel
+    // Whenever the done screen shows the breakdown spinner (gated on a per-item
+    // cart script), arm a fallback so it can never hang: after CART_ROWS_TIMEOUT_MS
+    // with no per-item rows, flip to the plain list. Armed here so EVERY probe
+    // path below (cart-page nav, open-cart click, inline panel, header badge) is
+    // covered — Amazon's multi-hop cart was the one that slipped through and
+    // spun forever.
+    if (cartPageScript || inlineCartScript) {
+      if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
+      cartRowsTimeoutRef.current = setTimeout(() => {
+        cartRowsTimeoutRef.current = null;
+        setCartRowsTimedOut(true);
+      }, CART_ROWS_TIMEOUT_MS);
+    }
+    if (inlineCartScript) {
+      // Side-panel cart (ALDI): inject the self-contained open+count+close
+      // script directly on the now-idle webview (still on a store page).
+      cartCountPendingRef.current = 'after';
+      webviewRef.current?.injectJavaScript(inlineCartScript);
+      return;
+    }
+    if (cartPageScript && (cartPageUrl || openCartScript)) {
+      cartCountPendingRef.current = 'after';
+      cartProbeBeginSearchRef.current = false; // after-probe resumes nothing
+      loadQueueRef.current = [cartPageScript];
+      lastLoadEndUrlRef.current = '';
+      expectedNavUrlRef.current = '';
+      if (cartPageUrl) {
+        // Cache-bust with the right separator — a cached cart URL already has a query.
+        setWebviewUri(cartPageUrl + (cartPageUrl.includes('?') ? '&' : '?') + '_t=' + Date.now());
+      } else {
+        webviewRef.current?.injectJavaScript(openCartScript!);
+      }
+      return;
+    }
+    const countScript = buildCartCountScript(lockedStoreId);
     if (!countScript) return;
     cartCountPendingRef.current = 'after';
     webviewRef.current?.injectJavaScript(countScript);
-  }, [step, totalAdded, storeId]);
+  }, [step, totalAdded, lockedStoreId]);
 
   // Clear all safety timers on unmount. Without this, closing the sheet mid
   // login-check / search / add leaves a real setTimeout running that later
@@ -430,6 +595,9 @@ export default function WebViewCartSheet({
       if (loginCheckTimeoutRef.current) clearTimeout(loginCheckTimeoutRef.current);
       if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
       if (addTimeoutRef.current) clearTimeout(addTimeoutRef.current);
+      if (customSearchTimeoutRef.current) clearTimeout(customSearchTimeoutRef.current);
+      if (cartProbeTimeoutRef.current) clearTimeout(cartProbeTimeoutRef.current);
+      if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
     };
   }, []);
 
@@ -462,7 +630,7 @@ export default function WebViewCartSheet({
     setStep('login_check');
     setSearchingLabel('Checking login…');
     loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
-    setWebviewUri(scriptsRef.current!.storeUrl + '?_t=' + Date.now());
+    navTo(scriptsRef.current!.storeUrl);
     armLoginCheckTimeout();
   };
 
@@ -526,7 +694,7 @@ export default function WebViewCartSheet({
         webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(term));
       } else {
         loadQueueRef.current = [scriptsRef.current!.buildSearchScript(term), script];
-        setWebviewUri(scriptsRef.current!.storeUrl + '?_t=' + Date.now());
+        navTo(scriptsRef.current!.storeUrl);
       }
     } else {
       // Choose-product path: extract candidates for user to pick from.
@@ -538,7 +706,7 @@ export default function WebViewCartSheet({
         webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(term));
       } else {
         loadQueueRef.current = [scriptsRef.current!.buildSearchScript(term), scriptsRef.current!.extractProductsScript];
-        setWebviewUri(scriptsRef.current!.storeUrl + '?_t=' + Date.now());
+        navTo(scriptsRef.current!.storeUrl);
       }
     }
     // Arm a safety timeout. If neither SEARCH_RESULT nor SEARCH_AND_ADD_RESULT
@@ -614,7 +782,7 @@ export default function WebViewCartSheet({
       webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(item.searchTerm));
     } else {
       loadQueueRef.current = [scriptsRef.current!.buildSearchScript(item.searchTerm), scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty)];
-      setWebviewUri(scriptsRef.current!.storeUrl + '?_t=' + Date.now());
+      navTo(scriptsRef.current!.storeUrl);
     }
     // Arm the per-item timeout. On fire: synthesize a failure ADD_RESULT,
     // wipe any pending queue/nav-intent, and advance.
@@ -629,6 +797,96 @@ export default function WebViewCartSheet({
       navigateToAddItem(nextIdx, itemsToAdd);
     }, ADD_TIMEOUT_MS);
   }, []);
+
+  // Kick off the search phase (parallel pool when every active item is a
+  // choose-flow ingredient and the store opts in, else the sequential WebView
+  // flow). Extracted so the HEB cart-page before-probe can defer it until the
+  // before-count lands.
+  const beginSearchFlow = useCallback(() => {
+    setStep('searching');
+    const active = activeItemsRef.current;
+    const allChoose = active.length > 0 && active.every((it) => !it.searchTerm);
+    // Resolve parallel-vs-serial from the LIVE locked store, NOT the captured
+    // `parallelCfg`. onMessage has []-deps and reaches here via a closure chain
+    // that froze `parallelCfg` at an early render (before this store was locked),
+    // so a serial store (forceSerialSearch) could wrongly run parallel. The ref
+    // is always current (same source the worker pool's getUrl uses).
+    const s = getStoreScripts(lockedStoreIdRef.current);
+    const canParallel = !!(s && s.getSearchUrl && s.buildWorkerScript && !s.forceSerialSearch);
+    console.log(`[Cart ${ts()}]`, 'beginSearchFlow: parallel=', canParallel, 'allChoose=', allChoose, 'activeLen=', active.length, 'store=', lockedStoreIdRef.current);
+    if (canParallel && allChoose) {
+      startParallelSearch();
+    } else {
+      navigateToSearchItem(0);
+    }
+  }, [startParallelSearch, navigateToSearchItem]);
+
+  // Snapshot the cart BEFORE any adds, then start the search. For cart-page
+  // stores (HEB, Albertsons family) navigate to the cart URL, count there, and
+  // gate the search start on the before-count (with a timeout safety net). For
+  // others read the header badge and start immediately. Called from both login
+  // paths (LOGIN_STATUS for already-logged-in, LOGIN_COMPLETE for popup login).
+  const snapshotBeforeAndBeginSearch = useCallback(() => {
+    // Move off the (visible) login step into searching FIRST, so the webview is
+    // hidden while the before-probe loads the cart page. Otherwise a fresh-login
+    // store (Albertsons) would briefly show /erums/cart on screen mid-probe.
+    setStep('searching');
+    // Resolve the store from the ref: onMessage is created once (deps []) so the
+    // lockedStoreId STATE it closes over is the pre-open value; the ref is current.
+    const probeStoreId = lockedStoreIdRef.current;
+    const cartPageScript = buildCartPageCountScript(probeStoreId);
+    const cartPageUrl = getCartPageUrl(probeStoreId);     // HEB / Albertsons: direct URL
+    const openCartScript = buildOpenCartScript(probeStoreId); // Amazon: click the cart icon
+    const inlineCartScript = buildInlineCartScript(probeStoreId); // ALDI: in-page side panel
+    console.log(`[Cart ${ts()}]`, 'snapshotBefore: storeId=', probeStoreId, 'cartUrl=', !!cartPageUrl, 'cartClick=', !!openCartScript, 'inlineCart=', !!inlineCartScript, 'activeLen=', activeItemsRef.current.length);
+    if (inlineCartScript) {
+      // Side-panel cart (ALDI): no navigation — inject the self-contained
+      // open+count+close script directly, and gate the search start on the
+      // before-count (the panel is closed before CART_COUNT posts, so the search
+      // bar is clear). Reuse the cart-probe timeout as the safety net.
+      cartCountPendingRef.current = 'before';
+      cartProbeBeginSearchRef.current = true;
+      if (cartProbeTimeoutRef.current) clearTimeout(cartProbeTimeoutRef.current);
+      cartProbeTimeoutRef.current = setTimeout(() => {
+        cartProbeTimeoutRef.current = null;
+        if (!cartProbeBeginSearchRef.current) return;
+        console.log(`[Cart ${ts()}]`, 'inline cart before-probe timed out — starting search without a baseline');
+        cartProbeBeginSearchRef.current = false;
+        cartCountPendingRef.current = null;
+        beginSearchFlow();
+      }, CART_PROBE_TIMEOUT_MS);
+      webviewRef.current?.injectJavaScript(inlineCartScript);
+      return;
+    }
+    if (cartPageScript && (cartPageUrl || openCartScript)) {
+      cartCountPendingRef.current = 'before';
+      cartProbeBeginSearchRef.current = true;
+      loadQueueRef.current = [cartPageScript];
+      lastLoadEndUrlRef.current = '';
+      expectedNavUrlRef.current = '';
+      if (cartProbeTimeoutRef.current) clearTimeout(cartProbeTimeoutRef.current);
+      cartProbeTimeoutRef.current = setTimeout(() => {
+        cartProbeTimeoutRef.current = null;
+        if (!cartProbeBeginSearchRef.current) return; // before-count already resumed it
+        console.log(`[Cart ${ts()}]`, 'cart before-probe timed out — starting search without a baseline');
+        cartProbeBeginSearchRef.current = false;
+        cartCountPendingRef.current = null;
+        loadQueueRef.current = [];
+        beginSearchFlow();
+      }, CART_PROBE_TIMEOUT_MS);
+      // URL stores navigate directly; click stores (Amazon) click the cart icon
+      // on the current page, which navigates — onLoadEnd then pops the count script.
+      if (cartPageUrl) setWebviewUri(cartPageUrl + '?_t=' + Date.now());
+      else webviewRef.current?.injectJavaScript(openCartScript!);
+    } else {
+      const countScript = buildCartCountScript(probeStoreId);
+      if (countScript) {
+        cartCountPendingRef.current = 'before';
+        webviewRef.current?.injectJavaScript(countScript);
+      }
+      beginSearchFlow();
+    }
+  }, [beginSearchFlow]);
 
   // ── WebView events ───────────────────────────────────────────────────────
 
@@ -668,6 +926,10 @@ export default function WebViewCartSheet({
     // Already in the challenge: if URL is back to a normal walmart page,
     // resume from the saved idx.
     if (stepRef.current === 'robot_challenge') {
+      // HTTP-block (403/429/503) has no URL marker and nothing to solve —
+      // re-navigating just re-blocks (the tight 403 loop). Stay put until the
+      // user taps "Try again".
+      if (blockReasonRef.current) return;
       if (!onBlockedPage) {
         const resumeIdx = robotChallengeResumeIdxRef.current >= 0 ? robotChallengeResumeIdxRef.current : 0;
         robotChallengeResumeIdxRef.current = -1;
@@ -718,13 +980,25 @@ export default function WebViewCartSheet({
       // loaded page. The store's script uses a window-level guard to no-op
       // duplicate runs within the same JS context.
       const sameUrl = url === lastLoadEndUrlRef.current;
+      // SPA-search stores (ALDI/Instacart) fire onLoadEnd multiple times for ONE
+      // pushState route change WITHOUT reloading — the injected script is still
+      // running. Re-injecting there would spawn a second concurrent run of
+      // buildSearchAndAddScript, posting a duplicate result that over-advances
+      // searchIdxRef and skips items. Only re-inject for stores whose same-URL
+      // onLoadEnd really is a script-killing reload (e.g. Wegmans SSO bootstrap).
+      const reinjectInflight = !s.spaSearch;
       const allowRecheck =
         stepRef.current === 'login' ||
         stepRef.current === 'login_check' ||
-        (stepRef.current === 'searching' && !!inflightScriptRef.current);
-      if (sameUrl && !allowRecheck) return;
+        (stepRef.current === 'searching' && !!inflightScriptRef.current && reinjectInflight);
+      if (sameUrl && !allowRecheck) {
+        if (sameUrl && stepRef.current === 'searching' && inflightScriptRef.current && !reinjectInflight) {
+          console.log(`[Cart ${ts()}]`, 'onLoadEnd same-URL during searching — SPA store, NOT re-injecting (script still running)');
+        }
+        return;
+      }
       lastLoadEndUrlRef.current = url;
-      if (sameUrl && stepRef.current === 'searching' && inflightScriptRef.current) {
+      if (sameUrl && stepRef.current === 'searching' && inflightScriptRef.current && reinjectInflight) {
         console.log(`[Cart ${ts()}]`, 'onLoadEnd same-URL during searching — re-injecting inflight script');
         webviewRef.current?.injectJavaScript(inflightScriptRef.current);
         return;
@@ -754,14 +1028,29 @@ export default function WebViewCartSheet({
         lastLoadEndUrlRef.current = '';
       }
     } else if (stepRef.current === 'login' && s.checkLoginScript) {
-      // Only re-inject login check after login completes and the user lands back
-      // on the store. During multi-step logins (Amazon email → password → MFA),
-      // any re-injection could disrupt the flow.
-      if (s.isLoginSuccessUrl && s.isLoginSuccessUrl(url)) {
+      // Re-inject login check after login completes and the user lands back on
+      // the store. By here, /login & /sign-in URLs were already handled above, so
+      // this fires on the post-login store page. During multi-step logins (Amazon
+      // email → password → MFA), re-injection could disrupt the flow, so it's
+      // gated to isLoginSuccessUrl or stores that opt in via reinjectLoginCheckOnNav
+      // (poll-based logins whose detection dies on the post-sign-in reload).
+      if ((s.isLoginSuccessUrl && s.isLoginSuccessUrl(url)) || s.reinjectLoginCheckOnNav) {
         console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — back on store, re-injecting login check');
         webviewRef.current?.injectJavaScript(s.checkLoginScript);
       } else {
         console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — not on store yet, skipping re-inject');
+      }
+    } else if (cartCountPendingRef.current) {
+      // A cart probe is mid-flight and the queue is already drained — this load
+      // is a navigation the count script itself triggered (Amazon: cart icon →
+      // cart-of-carts → Fresh expand link). Re-inject the count script so it
+      // runs on the freshly-loaded page (the expanded Fresh cart).
+      const cartPageScript = buildCartPageCountScript(lockedStoreIdRef.current);
+      if (cartPageScript) {
+        console.log(`[Cart ${ts()}]`, 'onLoadEnd cart probe navigated — re-injecting count script');
+        webviewRef.current?.injectJavaScript(cartPageScript);
+      } else {
+        console.log(`[Cart ${ts()}]`, 'onLoadEnd queue empty, no inject');
       }
     } else {
       console.log(`[Cart ${ts()}]`, 'onLoadEnd queue empty, no inject');
@@ -777,6 +1066,56 @@ export default function WebViewCartSheet({
     },
     [],
   );
+
+  // Anti-bot block (HTTP 403/429/503): tear down the in-flight run and surface
+  // the store page so the user can complete any challenge, then retry. Reuses
+  // the robot_challenge step (webview visible + banner), with blockReason set so
+  // the banner/title swap to the "blocked" copy and a manual retry is offered.
+  const handleHttpBlock = useCallback((statusCode: number, url: string) => {
+    if (!ANTI_BOT_STATUSES.includes(statusCode)) return;
+    const s = scriptsRef.current;
+    if (!s || !isLikelyPageUrl(url, s.domain)) return;
+    const st = stepRef.current;
+    // Only meaningful while we're driving the store; ignore once the user is in
+    // the review/done UI or already looking at a challenge.
+    if (st === 'qty' || st === 'review' || st === 'searchResult' || st === 'done' || st === 'robot_challenge') return;
+    console.log(`[Cart ${ts()}]`, `HTTP ${statusCode} block on`, url, '— surfacing challenge');
+    if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
+    if (addTimeoutRef.current) { clearTimeout(addTimeoutRef.current); addTimeoutRef.current = null; }
+    if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
+    loadQueueRef.current = [];
+    expectedNavUrlRef.current = '';
+    parallelPool.reset();
+    robotChallengeResumeIdxRef.current = searchIdxRef.current;
+    blockReasonRef.current = 'http-' + statusCode;
+    setBlockReason('http-' + statusCode);
+    setStep('robot_challenge');
+  }, [parallelPool, setStep]);
+
+  const onHttpError = useCallback((e: any) => {
+    const code = e?.nativeEvent?.statusCode;
+    const url = e?.nativeEvent?.url ?? '';
+    if (typeof code === 'number') handleHttpBlock(code, url);
+  }, [handleHttpBlock]);
+
+  // Manual retry from the blocked state: re-run the login check from a fresh
+  // store load. If the block cleared (or the user solved a challenge) it
+  // proceeds; if not, the 403 fires again and we land back here.
+  const retryAfterBlock = useCallback(() => {
+    setBlockReason(null);
+    blockReasonRef.current = null;
+    robotChallengeResumeIdxRef.current = -1;
+    parallelPool.reset();
+    searchIdxRef.current = 0;
+    onSearchPageRef.current = false;
+    loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
+    lastLoadEndUrlRef.current = '';
+    expectedNavUrlRef.current = '';
+    setStep('login_check');
+    setSearchingLabel('Checking login…');
+    navTo(scriptsRef.current!.storeUrl);
+    armLoginCheckTimeout();
+  }, [parallelPool, setStep, armLoginCheckTimeout]);
 
   const onMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -814,28 +1153,8 @@ export default function WebViewCartSheet({
           if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
           if (msg.isLoggedIn) {
             setBrowserShown(false);
-            // Snapshot the cart badge BEFORE any adds. Fire-and-forget: if the
-            // message loses the race against the first search navigation, the
-            // before-count stays null and validation is skipped.
-            const countScript = buildCartCountScript(storeId);
-            if (countScript) {
-              cartCountPendingRef.current = 'before';
-              webviewRef.current?.injectJavaScript(countScript);
-            }
-            setStep('searching');
-            // Parallel choose-product path: if every active ingredient is
-            // choose-flow (no saved searchTerm) AND this store opts into the
-            // worker pool (scripts expose getSearchUrl + buildWorkerScript),
-            // dispatch them across 5 hidden worker WebViews. Otherwise fall
-            // back to the sequential single-WebView flow.
-            const active = activeItemsRef.current;
-            const allChoose = active.length > 0 && active.every((it) => !it.searchTerm);
-            console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', storeId, 'parallel=', !!parallelCfg, 'allChoose=', allChoose, 'activeLen=', active.length);
-            if (parallelCfg && allChoose) {
-              startParallelSearch();
-            } else {
-              navigateToSearchItem(0);
-            }
+            console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', lockedStoreIdRef.current, 'parallel=', !!parallelCfg, 'activeLen=', activeItemsRef.current.length);
+            snapshotBeforeAndBeginSearch();
           } else if (stepRef.current !== 'login') {
             // First transition to login — show the webview for the user to log in.
             // Only navigate if the webview isn't already on the store's domain.
@@ -861,15 +1180,52 @@ export default function WebViewCartSheet({
           console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count);
           if (phase === 'before') {
             cartCountBeforeRef.current = count;
+            cartItemsBeforeRef.current = Array.isArray(msg.items) ? msg.items : [];
+            // Cache the cart URL the before-probe counted on (click-path stores
+            // only — URL stores already have a direct getCartPageUrl). The
+            // after-probe hits it directly instead of re-walking the click chain.
+            if (typeof msg.url === 'string' && msg.url && !getCartPageUrl(lockedStoreIdRef.current)) {
+              capturedCartUrlRef.current = msg.url;
+            }
+            // Cart-page probe: the before-count was gated in front of the search,
+            // so kick off the search now (once).
+            if (cartProbeBeginSearchRef.current) {
+              cartProbeBeginSearchRef.current = false;
+              if (cartProbeTimeoutRef.current) { clearTimeout(cartProbeTimeoutRef.current); cartProbeTimeoutRef.current = null; }
+              beginSearchFlow();
+            }
           } else if (phase === 'after') {
             const before = cartCountBeforeRef.current;
             const expected = addResultsRef.current.filter((r) => r.success).length;
-            // Badge counts units, expected counts product lines; units ≥ lines
-            // when everything landed, so delta < lines is a real shortfall.
-            if (before != null && count != null && expected > 0 && count - before < expected) {
+            // Name the warning after the LOCKED store (source of truth), so the
+            // text can't drift from the brand the cart actually ran on.
+            const lockedName = STORES.find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
+            // Per-line breakdown for the done screen (cart-page stores only):
+            // added qty in green, pre-existing qty in grey.
+            let rows: CartRow[] | null = null;
+            if (Array.isArray(msg.items)) {
+              if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
+              rows = diffCartItems(cartItemsBeforeRef.current, msg.items);
+              setCartResultRows(rows);
+            }
+            // When we have per-item cart data, name the products Mealio reported
+            // as added that didn't actually show up in the cart (silent misses).
+            let missing: string[] = [];
+            if (rows) {
+              const reportedAdded = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
+              const addedCartNames = rows.filter((r) => r.added).map((r) => r.name);
+              missing = findUnaddedItems(reportedAdded, addedCartNames);
+            }
+            if (missing.length > 0) {
+              setCartDeltaWarning(
+                `Cart check: ${missing.length} item${missing.length === 1 ? '' : 's'} may not have been added to your ${lockedName} cart: ${missing.join(', ')}. Please double-check your cart.`
+              );
+            } else if (before != null && count != null && expected > 0 && count - before < expected) {
+              // No per-item data (header-badge stores) or names didn't resolve —
+              // fall back to the count-shortfall message.
               const delta = Math.max(count - before, 0);
               setCartDeltaWarning(
-                `Cart check: ${storeName} shows ${delta} new item${delta === 1 ? '' : 's'} in the cart, but ${expected} ${expected === 1 ? 'was' : 'were'} reported added. Please double-check your cart.`
+                `Cart check: ${lockedName} shows ${delta} new item${delta === 1 ? '' : 's'} in the cart, but ${expected} ${expected === 1 ? 'was' : 'were'} reported added. Please double-check your cart.`
               );
             }
           }
@@ -881,8 +1237,9 @@ export default function WebViewCartSheet({
           loginCheckActiveRef.current = false;
           if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
           setBrowserShown(false);
-          setStep('searching');
-          navigateToSearchItem(0);
+          // Same before-snapshot + search start as the LOGIN_STATUS path, so the
+          // cart-page probe runs for popup-login stores (Albertsons) too.
+          snapshotBeforeAndBeginSearch();
           return;
         }
 
@@ -976,6 +1333,7 @@ export default function WebViewCartSheet({
           // Custom search during review — update suggestions without advancing the queue.
           if (isCustomSearchRef.current) {
             isCustomSearchRef.current = false;
+            if (customSearchTimeoutRef.current) { clearTimeout(customSearchTimeoutRef.current); customSearchTimeoutRef.current = null; }
             setCustomSuggestions(msg.candidates ?? []);
             setCustomSearching(false);
             setSelectedSuggIdx(0);
@@ -1100,6 +1458,18 @@ export default function WebViewCartSheet({
     setCustomSearching(true);
     setCustomSearchTerm(trimmed);
     loadQueueRef.current = [scriptsRef.current!.extractProductsScript];
+    // Recovery timer: if no SEARCH_RESULT lands, surface "no results" (which
+    // re-enables the buttons via !customSearching) instead of hanging.
+    if (customSearchTimeoutRef.current) clearTimeout(customSearchTimeoutRef.current);
+    customSearchTimeoutRef.current = setTimeout(() => {
+      customSearchTimeoutRef.current = null;
+      if (!isCustomSearchRef.current) return; // result already arrived
+      console.log(`[Cart ${ts()}]`, 'CUSTOM SEARCH timeout for', trimmed, '— re-enabling review buttons');
+      isCustomSearchRef.current = false;
+      loadQueueRef.current = []; // drop the stale queued extract so a later reload can't fire it
+      setCustomSuggestions([]);
+      setCustomSearching(false);
+    }, CUSTOM_SEARCH_TIMEOUT_MS);
     webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(trimmed));
   }, []);
 
@@ -1222,7 +1592,7 @@ export default function WebViewCartSheet({
       : `Review Ingredients (${reviewIdx + 1} of ${searchResults.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
-    robot_challenge: `${storeName} verification`,
+    robot_challenge: blockReason ? `${storeName} blocked us` : `${storeName} verification`,
   };
 
   // ── Derived ──────────────────────────────────────────────────────────────
@@ -1264,10 +1634,20 @@ export default function WebViewCartSheet({
               Log in to your {storeName} account, then Mealio will add your ingredients automatically.
             </Text>
           )}
-          {step === 'robot_challenge' && (
+          {step === 'robot_challenge' && !blockReason && (
             <Text style={styles.loginBanner}>
               {storeName} asked us to verify you're a human — complete the press-and-hold below and Mealio will pick up where it left off.
             </Text>
+          )}
+          {step === 'robot_challenge' && blockReason && (
+            <View>
+              <Text style={styles.loginBanner}>
+                {storeName} temporarily blocked automated access. Complete any challenge shown below, or wait a few minutes — then tap Try again.
+              </Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={retryAfterBlock}>
+                <Text style={styles.retryBtnText}>Try again</Text>
+              </TouchableOpacity>
+            </View>
           )}
           <WebView
             ref={webviewRef}
@@ -1276,6 +1656,7 @@ export default function WebViewCartSheet({
             style={{ flex: 1 }}
             onLoadEnd={onLoadEnd}
             onMessage={onMessage}
+            onHttpError={onHttpError}
             onNavigationStateChange={onNavigationStateChange}
             onShouldStartLoadWithRequest={(request) => {
               // Block custom URL schemes that would open the native app.
@@ -1293,26 +1674,6 @@ export default function WebViewCartSheet({
             allowsInlineMediaPlayback
             mediaPlaybackRequiresUserAction={false}
             userAgent={STORE_WEBVIEW_UA}
-            injectedJavaScript={`
-              // Hide app download banners (Albertsons, etc.)
-              (function() {
-                var meta = document.createElement('meta');
-                meta.name = 'smartbanner:disable';
-                document.head.appendChild(meta);
-                var sel = '[class*="smartbanner" i], [class*="app-banner" i], [class*="appBanner" i], [id*="smartbanner" i], [class*="download-app" i], [class*="downloadApp" i], meta[name="apple-itunes-app"]';
-                var els = document.querySelectorAll(sel);
-                for (var i = 0; i < els.length; i++) els[i].remove();
-                new MutationObserver(function(muts) {
-                  for (var m = 0; m < muts.length; m++) {
-                    for (var n = 0; n < muts[m].addedNodes.length; n++) {
-                      var node = muts[m].addedNodes[n];
-                      if (node.nodeType === 1 && node.matches && node.matches(sel)) node.remove();
-                    }
-                  }
-                }).observe(document.body, { childList: true, subtree: true });
-              })();
-              true;
-            `}
           />
         </View>
         )}
@@ -1328,19 +1689,25 @@ export default function WebViewCartSheet({
             pointerEvents="none"
             style={{
               position: 'absolute',
-              width: 1,
-              height: 1,
+              // Real phone-sized viewport, parked far offscreen and invisible.
+              // A WebView's internal browser viewport equals its OWN style size,
+              // independent of where it sits in the RN tree — and viewport-lazy
+              // storefronts (HEB renders its product grid by visible area) need
+              // a real size or the grid never paints and the worker extracts 0.
+              width: 414,
+              height: 896,
               opacity: 0,
-              left: -9999,
-              top: -9999,
+              left: -100000,
+              top: -100000,
             }}
           >
             {parallelPool.workerUris.map((uri, i) => uri ? (
               <WebView
-                key={'wegmans-worker-' + i}
+                key={'parallel-worker-' + i}
                 source={workerSources[i]}
-                style={{ width: 1, height: 1 }}
+                style={{ width: 414, height: 896 }}
                 onMessage={(e) => onWorkerMessage(i, e)}
+                onHttpError={onHttpError}
                 onShouldStartLoadWithRequest={(request) => (
                   request.url.startsWith('http://') ||
                   request.url.startsWith('https://') ||
@@ -1446,12 +1813,21 @@ export default function WebViewCartSheet({
             <ActivityIndicator size="large" color={storeColor} />
             <Text style={styles.spinnerLabel}>{searchingLabel}</Text>
             {(step === 'searching' || step === 'adding') && (() => {
-              // Re-renders are driven by the per-item setSearchingLabel calls,
-              // so reading the index refs here stays current.
-              const total = step === 'searching'
-                ? activeItemsRef.current.length
-                : addingItemsRef.current.length;
-              const idx = step === 'searching' ? searchIdxRef.current : addingIdxRef.current;
+              // Parallel choose-product search dispatches all items at once, so
+              // the index refs never advance — drive the bar from the pool's
+              // reactive completed/total instead. The sequential flow still
+              // reads the index refs (re-rendered via setSearchingLabel).
+              let total: number;
+              let idx: number;
+              if (step === 'searching' && parallelPool.isActive) {
+                total = parallelPool.total;
+                idx = parallelPool.completed;
+              } else {
+                total = step === 'searching'
+                  ? activeItemsRef.current.length
+                  : addingItemsRef.current.length;
+                idx = step === 'searching' ? searchIdxRef.current : addingIdxRef.current;
+              }
               const pct = total > 0 ? Math.min(idx / total, 1) * 100 : 0;
               return (
                 <View style={styles.progressTrack} testID="cart-progress-track">
@@ -1862,7 +2238,64 @@ export default function WebViewCartSheet({
                 )}
               </View>
 
-              {addedNames.length > 0 && (
+              {!cartResultRows && !cartRowsTimedOut && (buildCartPageCountScript(lockedStoreId) || buildInlineCartScript(lockedStoreId)) && totalAdded > 0 && cartCountBeforeRef.current != null ? (
+                // Cart-page store (or inline side-panel store like ALDI) with a
+                // baseline: the after-probe is reading the cart. Show a loading
+                // state instead of the plain list so the breakdown doesn't flash
+                // in. (No baseline → the after-probe won't run, so we skip the
+                // spinner and fall through to the plain list below.)
+                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+                  <ActivityIndicator size="small" color={storeColor} />
+                  <Text style={{ fontSize: 13, color: Colors.text3, fontFamily: 'Inter_400Regular' }}>
+                    Updating your {storeName} cart…
+                  </Text>
+                </View>
+              ) : cartResultRows ? (
+                // Cart-page stores: full cart breakdown — added qty in green with
+                // a +, pre-existing qty in grey. Qty shown on each row.
+                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 }}>
+                    <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.text2 }}>
+                      Your {storeName} cart
+                    </Text>
+                    <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.text2 }}>
+                      {(() => { const n = cartResultRows.reduce((s, r) => s + r.qty, 0); return `${n} item${n !== 1 ? 's' : ''}`; })()}
+                    </Text>
+                  </View>
+                  {cartResultRows.length === 0 ? (
+                    <Text style={{ fontSize: 14, color: Colors.text3, paddingVertical: 10, fontFamily: 'Inter_400Regular' }}>
+                      Your cart is empty.
+                    </Text>
+                  ) : (
+                    cartResultRows.map((row, i) => (
+                      <View
+                        key={i}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          paddingVertical: 10,
+                          borderBottomWidth: i < cartResultRows.length - 1 ? 1 : 0,
+                          borderBottomColor: Colors.border,
+                        }}
+                        testID={row.added ? 'cart-row-added' : 'cart-row-existing'}
+                      >
+                        <View style={{ width: 22, alignItems: 'center' }}>
+                          {row.added && <Ionicons name="add" size={18} color="#22c55e" />}
+                        </View>
+                        <Text
+                          style={{ flex: 1, fontSize: 14, fontFamily: 'Inter_400Regular', color: row.added ? '#15803d' : Colors.text3 }}
+                          numberOfLines={2}
+                        >
+                          {row.name}
+                        </Text>
+                        <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: row.added ? '#15803d' : Colors.text3, marginLeft: 8 }}>
+                          x{row.qty}
+                        </Text>
+                      </View>
+                    ))
+                  )}
+                </ScrollView>
+              ) : addedNames.length > 0 ? (
                 <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 8 }}>
                   {addedNames.map((name, i) => (
                     <View
@@ -1877,8 +2310,9 @@ export default function WebViewCartSheet({
                     </View>
                   ))}
                 </ScrollView>
+              ) : (
+                <View style={{ flex: 1 }} />
               )}
-              {addedNames.length === 0 && <View style={{ flex: 1 }} />}
 
               <View style={[styles.footer, { gap: 8 }]}>
                 {!wasChooseFlow && totalAdded > 0 && (
@@ -1935,6 +2369,21 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     borderBottomWidth: 1,
     borderBottomColor: '#fde68a',
+  },
+  retryBtn: {
+    alignSelf: 'flex-start',
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: Colors.brand,
+  },
+  retryBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
   },
 
   listContent: { paddingHorizontal: 20, paddingVertical: 16 },

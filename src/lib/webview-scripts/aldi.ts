@@ -22,36 +22,116 @@ const CHECK_LOGIN_SCRIPT = `(async function() {
   window.__aldiLoginCheckActive = true;
   try {
     function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+
+    var MENU_SEL = '[role="dialog"][aria-label="Main Menu"]';
+    var HAMBURGER_SEL = '[data-testid="hamburger-coachmark-button"], button[aria-label="Main Menu"]';
+
+    // The logged-in state (user name vs "Sign In"/"Register") is only visible
+    // INSIDE the Main Menu dialog, so it must be opened before it can be read.
+    function getMenu() {
+      var d = document.querySelector(MENU_SEL);
+      return (d && d.textContent && d.textContent.length > 5) ? d : null;
+    }
+
+    // Open the Main Menu (if not already open) and wait for it to render.
+    // Returns the dialog element, or null if it never appeared.
+    async function openMenu() {
+      var menu = getMenu();
+      if (menu) return menu;
+      var btn = document.querySelector(HAMBURGER_SEL);
+      if (btn) btn.click();
+      for (var i = 0; i < 20; i++) {
+        menu = getMenu();
+        if (menu) return menu;
+        await wait(200);
+      }
+      return null;
+    }
+
+    // Close the Main Menu so the modal doesn't block the search flow that follows.
+    function closeMenu() {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+      var menu = document.querySelector(MENU_SEL);
+      if (menu) {
+        var closeBtn = menu.querySelector('button[aria-label*="close" i], button[aria-label*="dismiss" i]');
+        if (closeBtn) closeBtn.click();
+      }
+    }
+
+    // Positive proof of logged-OUT: the sign-in CTA. Checked FIRST and treated
+    // as decisive, so we never falsely claim logged-in while it's still
+    // rendering (the menu mounts before its contents populate).
+    var SIGNED_OUT_RE = /sign in|log in|register|create account/;
+    // Positive proof of logged-IN: personalized menu entries that only exist for
+    // a signed-in account (plus the account/sign-out controls when present).
+    var SIGNED_IN_RE = /buy it again|saved recipes|sign out|log out|your account|account settings/;
+
+    // Open the menu and decide login state. The menu's contents render AFTER the
+    // dialog mounts, so an early read can miss the "Sign in" CTA and look
+    // logged-in. So: (a) short-circuit to 'out' the instant the CTA appears
+    // (the safe direction), and (b) only trust 'in' once the menu text has
+    // STABILIZED (no length change across two ticks) and a logged-in signal is
+    // present. Returns 'in' | 'out' | 'unknown'.
+    async function evaluateMenu() {
+      var menu = await openMenu();
+      if (!menu) return 'unknown';
+      var lastLen = -1, stableTicks = 0, text = '';
+      for (var i = 0; i < 28; i++) {            // up to ~7s
+        menu = getMenu() || menu;
+        text = (menu.textContent || '').toLowerCase();
+        if (SIGNED_OUT_RE.test(text)) return 'out';
+        if (text.length === lastLen) {
+          if (++stableTicks >= 2) break;        // menu has settled
+        } else { stableTicks = 0; lastLen = text.length; }
+        await wait(250);
+      }
+      if (SIGNED_OUT_RE.test(text)) return 'out';
+      if (SIGNED_IN_RE.test(text)) return 'in';
+      return 'unknown';
+    }
+
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'start', url: window.location.href }));
 
-    // Poll for the Main Menu dialog to appear (up to 4s, usually < 1s).
-    var menuDialog = null;
-    for (var mi = 0; mi < 20; mi++) {
-      menuDialog = document.querySelector('[role="dialog"][aria-label="Main Menu"]');
-      if (menuDialog && menuDialog.textContent.length > 5) break;
-      menuDialog = null;
-      await wait(200);
-    }
-    var menuText = menuDialog ? menuDialog.textContent.toLowerCase() : '';
-    var hasSignOut = menuText.includes('sign out') || menuText.includes('log out');
-    var hasSignIn = menuText.includes('sign in') || menuText.includes('log in') || menuText.includes('register');
-    // Logged in = menu exists and no longer shows sign-in prompt.
-    var isLoggedIn = !!menuDialog && !hasSignIn;
+    var verdict = await evaluateMenu();
+    // Default-safe: only a positive 'in' counts as logged-in. 'unknown' (the
+    // menu never produced a decisive signal) shows the login UI.
+    var isLoggedIn = verdict === 'in';
 
     window.ReactNativeWebView.postMessage(JSON.stringify({
-      type: 'LOGIN_DEBUG', step: 'check_done',
-      menuFound: !!menuDialog, hasSignOut: hasSignOut, hasSignIn: hasSignIn, isLoggedIn: isLoggedIn
+      type: 'LOGIN_DEBUG', step: 'check_done', verdict: verdict, isLoggedIn: isLoggedIn
     }));
 
-    // If not logged in, open the hamburger menu so the user sees "Sign In"
-    // when the webview becomes visible.
-    if (!isLoggedIn) {
-      var menuBtn = document.querySelector('[data-testid="hamburger-coachmark-button"], button[aria-label="Main Menu"]');
-      if (menuBtn) menuBtn.click();
+    if (isLoggedIn) {
+      // Close the menu so the upcoming search isn't blocked by the modal.
+      closeMenu();
+      window.__aldiLoginCheckActive = false;
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }));
+      return;
     }
 
+    // Not logged in (or inconclusive) — leave the menu open so the user sees
+    // "Sign In" when the webview becomes visible, then post the status. Keep
+    // __aldiLoginCheckActive set so a reinject (reinjectLoginCheckOnNav) during
+    // the poll is suppressed and can't double-drive the menu.
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false }));
+
+    // Background poll: every 2s for up to 3 minutes, re-evaluate the menu.
+    // Covers SPA logins that finish without a full page reload (where
+    // reinjectLoginCheckOnNav never fires). Posts LOGIN_COMPLETE.
+    for (var pi = 0; pi < 90; pi++) {
+      await wait(2000);
+      // Don't fight a sign-in modal: if some OTHER visible dialog is up (the
+      // login form), skip this tick rather than yanking the Main Menu open.
+      var other = document.querySelector('[role="dialog"][aria-modal="true"]:not([aria-label="Main Menu"])');
+      if (other && other.offsetParent !== null) continue;
+      if (await evaluateMenu() === 'in') {
+        closeMenu();
+        window.__aldiLoginCheckActive = false;
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_COMPLETE' }));
+        return;
+      }
+    }
     window.__aldiLoginCheckActive = false;
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: isLoggedIn }));
   } catch(e) {
     window.__aldiLoginCheckActive = false;
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false, error: String(e) }));
@@ -757,6 +837,10 @@ export function getScripts() {
       return url.includes('aldi.us/store/');
     },
     isLoginSuccessUrl: function() { return false; },
+    // Instacart reloads the storefront after sign-in. Re-run the login check on
+    // that nav so an already-completed login is detected (the background poll in
+    // CHECK_LOGIN_SCRIPT is the fallback for SPA logins with no full reload).
+    reinjectLoginCheckOnNav: true,
     checkLoginScript: CHECK_LOGIN_SCRIPT,
     extractProductsScript: EXTRACT_PRODUCTS_SCRIPT,
     buildAddToCartScript: buildAddToCartScript,
@@ -764,5 +848,19 @@ export function getScripts() {
     buildSearchAndAddScript: buildSearchAndAddScript,
     getSearchUrl: getAldiSearchUrl,
     buildWorkerScript: buildAldiWorkerScript,
+    // ALDI (Instacart) anti-bot 403s on concurrent worker requests — confirmed
+    // 2026-06-17 that 5 parallel workers still 403 even with the cache-buster
+    // removed, so concurrency itself is a trigger. Run searches SERIALLY.
+    // workerCount / stagger are kept for if/when the parallel path is retried.
+    forceSerialSearch: true,
+    workerCount: 3,
+    workerStaggerMs: 400,
+    // The anti-bot 403s on the `?_t=` cache-buster query (it lands right on the
+    // blocked storefront request). Navigate to the clean URL instead.
+    cacheBustNav: false,
+    // Instacart SPA: search is a pushState route change (no reload), so the same
+    // search page fires onLoadEnd multiple times while the add script is still
+    // running. Suppress inflight re-injection so we don't double-add / skip items.
+    spaSearch: true,
   };
 }

@@ -216,12 +216,26 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
   }
 
   // 3. Poll for cards (Walmart's grid hydrates async after document load).
+  //    The grid fills PROGRESSIVELY, so don't extract on the first 1-2 cards —
+  //    wait for the count to STABILIZE (no growth) before reading. A cold first
+  //    load can render a couple cards, hold just long enough to look "settled",
+  //    then fill in the rest — so DISTRUST a low count: accept a healthy count
+  //    (>= GOOD) as soon as it's stable, but for a small count keep polling
+  //    longer (~3.6s) to let the grid finish before treating it as genuinely few.
+  var GOOD = 4;
   var cards = [];
+  var lastCount = -1, stable = 0;
   for (var poll = 0; poll < 30; poll++) {
     var all = Array.from(document.querySelectorAll(CARD_SEL));
     cards = all.filter(isInSearchResults).slice(0, 20);
-    if (cards.length > 0) {
-      log('cards_ready', { pollIdx: poll, totalMatched: all.length, kept: cards.length });
+    if (cards.length > 0 && cards.length === lastCount) stable++;
+    else { stable = 0; lastCount = cards.length; }
+    if (stable >= 2 && cards.length >= GOOD) {
+      log('cards_ready', { pollIdx: poll, totalMatched: all.length, kept: cards.length, reason: 'healthy' });
+      break;
+    }
+    if (stable >= 2 && cards.length > 0 && poll >= 18) {
+      log('cards_ready', { pollIdx: poll, totalMatched: all.length, kept: cards.length, reason: 'small_confirmed' });
       break;
     }
     await wait(200);
@@ -943,5 +957,11 @@ export function getScripts(): StoreScripts {
     buildSearchAndAddScript,
     getSearchUrl: (term: string) => 'https://www.walmart.com/search?q=' + encodeURIComponent(term),
     buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, EXTRACT_PRODUCTS_SCRIPT),
+    // Walmart is an SPA: navigating to /search?q= fires onLoadEnd more than once
+    // while the search-and-add script is still running. Without this, the inflight
+    // re-injection runs a DUPLICATE search-and-add — which double-adds (then the
+    // next item's nav race-cancels the cart POST so the item reverts to 0) and
+    // overwrites the next item's result slot (skipping it). See aldi.ts.
+    spaSearch: true,
   };
 }

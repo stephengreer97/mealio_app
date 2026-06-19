@@ -72,10 +72,19 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
     if (/^[\\d$.,\\s/()%]+(?:off|each|lb|oz|ounce|count|fl)/i.test(text)) return true;
     if (/Positively reviewed|Purchased often|Returned infrequently/i.test(text)) return true;
     if (/^See all details$/i.test(text)) return true;
+    if (/^Quantity not updated/i.test(text)) return true;
     return false;
   }
   function getNameB(card) {
-    var h2 = card.querySelector('h2');
+    // Pick the product-title h2, skipping the quick-shop widget's status h2
+    // (e.g. "Quantity not updated" inside .ax-qs__error) which would otherwise
+    // be read as the brand and prepended to the real name.
+    var h2 = null, __h2s = card.querySelectorAll('h2');
+    for (var __hi = 0; __hi < __h2s.length; __hi++) {
+      if (__h2s[__hi].closest('.ax-qs__error, .qs-atc-plus, [class*="qs-widget"]')) continue;
+      h2 = __h2s[__hi]; break;
+    }
+    if (!h2 && __h2s.length) h2 = __h2s[0];
     var brandText = h2 ? h2.textContent.trim() : '';
     // 1. h2 aria-label has the full product name on desktop
     if (h2) {
@@ -317,11 +326,20 @@ function buildAddToCartScript(
     if (/^[\\d$.,\\s/()%]+(?:off|each|lb|oz|ounce|count|fl)/i.test(text)) return true;
     if (/Positively reviewed|Purchased often|Returned infrequently/i.test(text)) return true;
     if (/^See all details$/i.test(text)) return true;
+    if (/^Quantity not updated/i.test(text)) return true;
     return false;
   }
   function getCardName(card) {
     if (card.matches(CARD_B)) {
-      var h2 = card.querySelector('h2');
+      // Pick the product-title h2, skipping the quick-shop widget's status h2
+      // (e.g. "Quantity not updated" inside .ax-qs__error) which would otherwise
+      // be read as the brand and prepended to the real name.
+      var h2 = null, __h2s = card.querySelectorAll('h2');
+      for (var __hi = 0; __hi < __h2s.length; __hi++) {
+        if (__h2s[__hi].closest('.ax-qs__error, .qs-atc-plus, [class*="qs-widget"]')) continue;
+        h2 = __h2s[__hi]; break;
+      }
+      if (!h2 && __h2s.length) h2 = __h2s[0];
       var brandText = h2 ? h2.textContent.trim() : '';
       // 1. aria-label has full name on desktop
       if (h2) {
@@ -824,6 +842,15 @@ function buildSearchAndAddScript(
   var cleanSearchTerm = searchTerm.replace(/^Sponsored Ad - /i, '');
   var escapedTerm = JSON.stringify(cleanSearchTerm);
   return `(async function() {
+  // Run guard: Amazon SERPs fire onLoadEnd multiple times for the same URL, and
+  // the sheet re-injects the inflight script on a same-URL fire (SSO-bootstrap
+  // recovery). Without this, the add runs twice in one page context — double-
+  // adding the item AND consuming the next item's result slot. A real page
+  // reload makes a fresh JS context (flag clears, the add runs normally); a
+  // spurious duplicate onLoadEnd sees the flag set and no-ops.
+  if (window.__mealioFreshAddBusy) return;
+  window.__mealioFreshAddBusy = true;
+
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
   function __noKbd(e) {
@@ -894,11 +921,20 @@ function buildSearchAndAddScript(
     if (/^[\\d$.,\\s/()%]+(?:off|each|lb|oz|ounce|count|fl)/i.test(text)) return true;
     if (/Positively reviewed|Purchased often|Returned infrequently/i.test(text)) return true;
     if (/^See all details$/i.test(text)) return true;
+    if (/^Quantity not updated/i.test(text)) return true;
     return false;
   }
   function getCardName(card) {
     if (card.matches(CARD_B)) {
-      var h2 = card.querySelector('h2');
+      // Pick the product-title h2, skipping the quick-shop widget's status h2
+      // (e.g. "Quantity not updated" inside .ax-qs__error) which would otherwise
+      // be read as the brand and prepended to the real name.
+      var h2 = null, __h2s = card.querySelectorAll('h2');
+      for (var __hi = 0; __hi < __h2s.length; __hi++) {
+        if (__h2s[__hi].closest('.ax-qs__error, .qs-atc-plus, [class*="qs-widget"]')) continue;
+        h2 = __h2s[__hi]; break;
+      }
+      if (!h2 && __h2s.length) h2 = __h2s[0];
       var brandText = h2 ? h2.textContent.trim() : '';
       // 1. aria-label has full name on desktop
       if (h2) {

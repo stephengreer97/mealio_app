@@ -4,10 +4,27 @@
 // running `npm run capture -- walmart`.
 
 import { getStoreScripts } from '../../src/lib/webview-scripts';
+import { buildCartPageCountScript } from '../../src/lib/webview-scripts/cart-count';
 import { storeFixtures } from './_helpers';
 
 const { itWithFixture } = storeFixtures('walmart');
 const scripts = getStoreScripts('walmart')!;
+
+describe('Walmart cart-page snapshot', () => {
+  itWithFixture(
+    'cart-with-items.html',
+    'reads line items (name + qty) from the /cart page',
+    async (runner) => {
+      await runner.inject(buildCartPageCountScript('walmart')!);
+      const result = await runner.waitForMessage('CART_COUNT', 12_000);
+      expect(result.items.length).toBe(4);
+      expect(result.count).toBeGreaterThanOrEqual(4);
+      expect(result.items.every((i: any) => i.name && i.qty >= 1)).toBe(true);
+      // Each line's name should be a real product title, not a stray qty/number.
+      expect(result.items.some((i: any) => /sour cream/i.test(i.name))).toBe(true);
+    },
+  );
+});
 
 describe('Walmart CHECK_LOGIN_SCRIPT', () => {
   // Run against the drawer-OPEN fixture, not the bare home page. The script

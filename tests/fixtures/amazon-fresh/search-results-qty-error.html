@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<!--
+  Amazon Fresh search result where a PRIOR quantity update failed, so Amazon
+  injects a "Quantity not updated" status h2 inside the quick-shop widget
+  (.ax-qs__error). The card's FIRST h2 in document order is therefore the error,
+  not the product title.
+
+  Regression: getNameB / getCardName must skip the quick-shop status h2 and read
+  the real product-title h2 (the brand), so the extracted name is
+  "COLAVITA, Italian Crushed Tomatoes, …" and NEVER begins with
+  "Quantity not updated".
+-->
+<html>
+<head><meta charset="utf-8"><title>search</title></head>
+<body>
+  <div class="s-main-slot">
+    <div role="listitem"
+         data-asin="B07J2LR5R6"
+         data-index="3"
+         data-component-type="s-search-result"
+         class="s-result-item s-asin sg-col">
+      <!-- Quick-shop add widget with a failed-update status. Its h2 comes first
+           in the DOM, which is exactly what used to poison the name. -->
+      <div class="a-section a-padding-medium ax-qs__error qs-widget-error">
+        <h2>Quantity not updated</h2>
+      </div>
+      <!-- Real product card body -->
+      <div class="sg-col-inner">
+        <h2 class="a-size-mini"><a class="a-link-normal" href="/COLAVITA/dp/B07J2LR5R6"><span>COLAVITA</span></a></h2>
+        <a class="a-link-normal" href="/Italian-Crushed-Tomatoes/dp/B07J2LR5R6">
+          <span class="a-text-normal">Italian Crushed Tomatoes, Recart Box, 13.76 Ounce</span>
+        </a>
+        <a class="a-link-normal" href="/dp/B07J2LR5R6"><img src="https://example.com/img.jpg" alt=""></a>
+        <div class="a-row a-size-small">4.7 out of 5 stars (2K)</div>
+        <div class="a-price"><span class="a-offscreen">$1.49</span></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

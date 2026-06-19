@@ -47,6 +47,22 @@ describe('useParallelSearchPool — start()', () => {
     ]);
   });
 
+  it('tracks progress: total set on start, completed rises per result', () => {
+    const { result } = setup();
+    act(() => {
+      result.current.start([{ term: 'a' }, { term: 'b' }, { term: 'c' }], () => {});
+    });
+    expect(result.current.total).toBe(3);
+    expect(result.current.completed).toBe(0);
+    act(() => { result.current.reportResult(0, { hits: 1 }); });
+    expect(result.current.completed).toBe(1);
+    act(() => { result.current.reportResult(1, { hits: 1 }); });
+    expect(result.current.completed).toBe(2);
+    act(() => { result.current.reset(); });
+    expect(result.current.completed).toBe(0);
+    expect(result.current.total).toBe(0);
+  });
+
   it('leaves extra workers idle when items < workerCount', () => {
     const { result } = setup();
     act(() => {
@@ -78,6 +94,36 @@ describe('useParallelSearchPool — start()', () => {
       result.current.start([{ term: 'x' }, { term: 'y' }], () => {});
     });
     expect(result.current.workerUris).toEqual(beforeUris);
+  });
+});
+
+describe('useParallelSearchPool — staggered dispatch', () => {
+  it('dispatches worker 0 immediately and the rest after the stagger delay', () => {
+    // Long worker timeout so a worker can't time out mid-advance and grab a
+    // still-queued item (which would scramble the positional mapping below).
+    const { result } = setup({ dispatchStaggerMs: 400, workerTimeoutMs: 100_000 });
+    act(() => {
+      result.current.start([{ term: 'a' }, { term: 'b' }, { term: 'c' }], () => {});
+    });
+    // Only worker 0 goes out synchronously; 1 and 2 are still pending.
+    expect(result.current.workerUris[0]).toBe('https://example/?q=a');
+    expect(result.current.workerUris[1]).toBe('');
+    expect(result.current.workerUris[2]).toBe('');
+    // Past the max jittered stagger (i*400 + up to 400 → ≤1200ms for worker 2).
+    act(() => { jest.advanceTimersByTime(1_600); });
+    expect(result.current.workerUris[1]).toBe('https://example/?q=b');
+    expect(result.current.workerUris[2]).toBe('https://example/?q=c');
+  });
+
+  it('reset() cancels pending staggered dispatches (runId guard)', () => {
+    const { result } = setup({ dispatchStaggerMs: 400 });
+    act(() => {
+      result.current.start([{ term: 'a' }, { term: 'b' }, { term: 'c' }], () => {});
+    });
+    act(() => { result.current.reset(); });
+    // A stale stagger timer must not dispatch onto the reset pool.
+    act(() => { jest.advanceTimersByTime(2_000); });
+    expect(result.current.workerUris).toEqual(['', '', '']);
   });
 });
 

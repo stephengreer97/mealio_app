@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<!--
+  Minimal reproduction of HEB's "Yogurt" search page, distilled from a live
+  desktop capture (2026-06). The page leads with a "Yogurt's perfect pairings"
+  entity carousel whose tiles are MiniProductCardBody — they carry
+  data-component="product-card" but NOT data-qe-id="productCard". The first such
+  tile is "H-E-B Classic Granola", which the old card selector grabbed as the #1
+  candidate for a yogurt search.
+
+  The genuine results live in the search grid (#search_product_grid /
+  [data-qe-id="productCardContainer"]) and each carries data-qe-id="productCard".
+  This fixture pins that __hebFindCards() returns only the grid yogurts and never
+  the carousel granola.
+-->
+<html>
+<head><meta charset="utf-8"><title>yogurt | H-E-B</title></head>
+<body>
+  <main id="r_body">
+    <h1 id="searchGridHeader"><span><span>“yogurt”</span></span></h1>
+
+    <!-- "Yogurt's perfect pairings" entity carousel — NOT real results. -->
+    <div class="visualComponentContainer" data-component="entity-carousel">
+      <h2 class="SectionTitle_titleText__T9XEQ">Yogurt's perfect pairings</h2>
+      <ul data-component="carousel-items-list">
+        <li data-component="carousel-item">
+          <div data-component="product-card" class="MiniProductCardBody_container__kFpcJ">
+            <a class="MiniProductCardBody_productLink__j0cJ1" href="/product-detail/h-e-b-classic-granola/1194845">
+              <div data-qe-id="productTitle" class="ProductTitle_container__ta1o4 MiniProductCardBody_productTitle__iXIPR">
+                <span class="ProductTitle_displayName__gvcIf" title="H-E-B Classic Granola, 14 oz">H-E-B Classic Granola, 14 oz</span>
+              </div>
+            </a>
+            <button type="button" data-qe-id="addToCart">Add to cart</button>
+          </div>
+        </li>
+        <li data-component="carousel-item">
+          <div data-component="product-card" class="MiniProductCardBody_container__kFpcJ">
+            <a class="MiniProductCardBody_productLink__j0cJ1" href="/product-detail/fresh-bunch-of-organic-bananas/320228">
+              <div data-qe-id="productTitle" class="ProductTitle_container__ta1o4 MiniProductCardBody_productTitle__iXIPR">
+                <span class="ProductTitle_displayName__gvcIf" title="Fresh Bunch of Organic Bananas">Fresh Bunch of Organic Bananas, 4-7 Bananas</span>
+              </div>
+            </a>
+            <button type="button" data-qe-id="addToCart">Add to cart</button>
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <!-- The real search grid. Only these carry data-qe-id="productCard". -->
+    <div id="search_product_grid">
+      <span data-qe-id="searchResultCount">708 results</span>
+      <div class="BasicGrid_basicGrid__dZgBP" data-qe-id="productCardContainer" data-testid="productCardContainer">
+
+        <div data-component="product-card">
+          <div class="ProductCardNormalCard_card__dAhz7" data-component="product-card-card" data-qe-id="productCard">
+            <a href="/product-detail/h-e-b-17g-protein-whole-milk-greek-yogurt-plain-32-oz/12016560">
+              <img class="Image_image__daeDB" alt="H-E-B 17g Protein Whole Milk Greek Yogurt - Plain, 32 oz" src="https://images.heb.com/is/image/HEBGrocery/012016560-1?hei=360&wid=360">
+              <div data-qe-id="productPrice" class="ProductPrice_priceContainer__C2CXi">
+                <span class="Price_price__Y8KDa"><span class="SalePrice_salePrice__r_ist">$5.65</span><span> each</span></span>
+              </div>
+              <div data-qe-id="productTitle" class="ProductTitle_container__ta1o4">
+                <span class="ProductTitle_displayName__gvcIf" title="H-E-B 17g Protein Whole Milk Greek Yogurt - Plain, 32 oz">H-E-B 17g Protein Whole Milk Greek Yogurt - Plain, 32 oz</span>
+              </div>
+            </a>
+            <div data-qe-id="buttonContainer">
+              <button type="button" data-qe-id="addToCart">Add to cart</button>
+            </div>
+          </div>
+        </div>
+
+        <div data-component="product-card">
+          <div class="ProductCardNormalCard_card__dAhz7" data-component="product-card-card" data-qe-id="productCard">
+            <a href="/product-detail/hill-country-fare-blended-vanilla-low-fat-yogurt-32-oz/2193681">
+              <img class="Image_image__daeDB" alt="Hill Country Fare Blended Vanilla Low-Fat Yogurt, 32 oz" src="https://images.heb.com/is/image/HEBGrocery/002193681-1?hei=360&wid=360">
+              <div data-qe-id="productPrice" class="ProductPrice_priceContainer__C2CXi">
+                <span class="Price_price__Y8KDa"><span class="SalePrice_salePrice__r_ist">$2.77</span><span> each</span></span>
+              </div>
+              <div data-qe-id="productTitle" class="ProductTitle_container__ta1o4">
+                <span class="ProductTitle_displayName__gvcIf" title="Hill Country Fare Blended Vanilla Low-Fat Yogurt, 32 oz">Hill Country Fare Blended Vanilla Low-Fat Yogurt, 32 oz</span>
+              </div>
+            </a>
+            <div data-qe-id="buttonContainer">
+              <button type="button" data-qe-id="addToCart">Add to cart</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- In-grid two-panel sponsored rail: also MiniProductCardBody, no productCard id. -->
+        <div class="SearchGrid_gridTwoPanelContainer__IaAdl" data-component="grid-two-panel-container">
+          <ul data-component="carousel-items-list">
+            <li data-component="carousel-item">
+              <div data-component="product-card" class="MiniProductCardBody_container__kFpcJ">
+                <a href="/product-detail/oikos-fusion-protein-yogurt-drink/16221017">
+                  <div data-qe-id="productTitle" class="ProductTitle_container__ta1o4 MiniProductCardBody_productTitle__iXIPR">
+                    <span class="ProductTitle_displayName__gvcIf" title="Oikos Fusion 23g Protein Yogurt Drink - Mixed Berry, 7 oz">Oikos Fusion 23g Protein Yogurt Drink - Mixed Berry, 7 oz</span>
+                  </div>
+                </a>
+                <button type="button" data-qe-id="addToCart">Add to cart</button>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <div data-component="product-card">
+          <div class="ProductCardNormalCard_card__dAhz7" data-component="product-card-card" data-qe-id="productCard">
+            <a href="/product-detail/fage-total-0-nonfat-plain-greek-yogurt-32-oz/1297099">
+              <img class="Image_image__daeDB" alt="Fage Total 0% Nonfat Plain Greek Yogurt, 32 oz" src="https://images.heb.com/is/image/HEBGrocery/001297099-1?hei=360&wid=360">
+              <div data-qe-id="productPrice" class="ProductPrice_priceContainer__C2CXi">
+                <span class="Price_price__Y8KDa"><span class="SalePrice_salePrice__r_ist">$7.31</span><span> each</span></span>
+              </div>
+              <div data-qe-id="productTitle" class="ProductTitle_container__ta1o4">
+                <span class="ProductTitle_displayName__gvcIf" title="Fage Total 0% Nonfat Plain Greek Yogurt, 32 oz">Fage Total 0% Nonfat Plain Greek Yogurt, 32 oz</span>
+              </div>
+            </a>
+            <div data-qe-id="buttonContainer">
+              <button type="button" data-qe-id="addToCart">Add to cart</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</body>
+</html>

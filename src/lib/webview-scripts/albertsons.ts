@@ -41,6 +41,20 @@ const DOMAIN_MAP: Record<string, string> = {
 
 export const ALBERTSONS_FAMILY_IDS: string[] = Object.keys(DOMAIN_MAP);
 
+/** Cart page URL for a given Albertsons-family brand. The cart lives at
+ *  /erums/cart (a separate Angular app from the /shop storefront). */
+export function getAlbertsonsCartPageUrl(storeId: string): string {
+  const domain = DOMAIN_MAP[storeId] || 'albertsons.com';
+  return `https://www.${domain}/erums/cart`;
+}
+
+/** Albertsons over-constrains on long queries — a full product title (esp. the
+ *  size suffix) returns zero results. Search with the first 5 words only; the
+ *  scorer still matches candidates against the full saved name for precision. */
+export function albertsonsSearchQuery(name: string): string {
+  return (name || '').trim().split(/\s+/).slice(0, 5).join(' ');
+}
+
 // ── Login check ─────────────────────────────────────────────────────────────
 
 function buildCheckLoginScript(domain: string): string {
@@ -288,10 +302,18 @@ function buildAddToCartScript(
         .trim();
       var score = -1;
       if (/\\.{3}|\\u2026/.test(cleaned)) {
-        var parts = cleaned.split(/\\.{3}|\\u2026/).map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 3; });
-        var targetLower = productName.toLowerCase();
-        var allPartsMatch = parts.length > 0 && parts.every(function(p) { return targetLower.indexOf(p.toLowerCase()) !== -1; });
-        score = allPartsMatch ? 95 : -1;
+        // Truncated label, e.g. "Lucerne Heavy Whipping Cream -...(packaging may
+        // vary)". Score on the words shown BEFORE the ellipsis against the target;
+        // trailing noise after "..." (like "(packaging may vary)") is never in the
+        // real product name, so requiring it to match would wrongly reject the bubble.
+        var beforeEllipsis = cleaned.split(/\\.{3}|\\u2026/)[0];
+        var tWords = normalizeForScoring(productName).split(' ').filter(Boolean);
+        var fWords = normalizeForScoring(beforeEllipsis).split(' ').filter(Boolean);
+        if (fWords.length > 0) {
+          var hit = fWords.filter(function(w) { return tWords.indexOf(w) !== -1; }).length;
+          var pct = hit / fWords.length;
+          score = pct < 0.7 ? -1 : Math.round(pct * 100);
+        }
       } else {
         var targetWords = normalizeForScoring(productName).split(' ').filter(Boolean);
         var foundWords = normalizeForScoring(cleaned).split(' ').filter(Boolean);
@@ -374,6 +396,37 @@ function buildAddToCartScript(
     });
   }
 
+  // The header cart-count badge reflects the REAL (server) cart, unlike the
+  // product tile's optimistic bubble — so it only ticks up when an item
+  // actually commits. Returns null when the badge can't be read (then callers
+  // fall back to the tile bubble). Empty text = 0 (empty cart).
+  function getHeaderCartCount() {
+    var el = document.querySelector('[data-qa="hdr-crt-txt-plus"]');
+    if (!el) return null;
+    var t = (el.textContent || '').trim();
+    if (t === '') return 0;
+    var m = t.match(/\\d+/);
+    return m ? parseInt(m[0], 10) : 0;
+  }
+
+  // Confirm an add by the header cart count incrementing (authoritative). Falls
+  // back to the tile qty bubble only when the header count isn't readable, so a
+  // store/page without the badge still works. Polls up to ~7s.
+  function waitForCartConfirm(headerBefore, tileBefore) {
+    return new Promise(function(resolve) {
+      var elapsed = 0;
+      function tick() {
+        var hc = getHeaderCartCount();
+        if (headerBefore != null && hc != null && hc > headerBefore) { resolve(true); return; }
+        if (headerBefore == null && getCartQty() > tileBefore) { resolve(true); return; }
+        if (elapsed >= 7000) { resolve(false); return; }
+        elapsed += 250;
+        setTimeout(tick, 250);
+      }
+      tick();
+    });
+  }
+
   // Poll for ATC buttons to appear (up to 6s).
   var allAtcBtns = [];
   for (var poll = 0; poll < 20; poll++) {
@@ -438,12 +491,13 @@ function buildAddToCartScript(
     if (stepperAlreadyOpen) {
       for (var i = 0; i < QTY; i++) {
         var qtyBefore = getCartQty();
+        var headerBefore = getHeaderCartCount();
         var incBtn = i === 0 ? preExistingIncrement : await pollForIncrement(TARGET_NAME);
         if (!incBtn) break;
         incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
         await wait(100);
         incBtn.click();
-        var confirmed = await waitForQtyChange(qtyBefore);
+        var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
         if (confirmed) actuallyClicked++;
       }
     } else {
@@ -452,12 +506,13 @@ function buildAddToCartScript(
       await wait(600);
       for (var i = 0; i < QTY; i++) {
         var qtyBefore = getCartQty();
+        var headerBefore = getHeaderCartCount();
         var incBtn = await pollForIncrement(TARGET_NAME);
         if (!incBtn) break;
         incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
         await wait(100);
         incBtn.click();
-        var confirmed = await waitForQtyChange(qtyBefore);
+        var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
         if (confirmed) actuallyClicked++;
       }
     }
@@ -465,6 +520,7 @@ function buildAddToCartScript(
     // Normal path: ATC adds first unit, increment handles the rest.
     for (var i = 0; i < QTY; i++) {
       var qtyBefore = getCartQty();
+      var headerBefore = getHeaderCartCount();
       var buttonToClick;
       if (i === 0) {
         buttonToClick = bestAtcBtn;
@@ -488,10 +544,11 @@ function buildAddToCartScript(
       buttonToClick.scrollIntoView({ behavior: 'instant', block: 'center' });
       await wait(100);
       buttonToClick.click();
-      var confirmed = await waitForQtyChange(qtyBefore);
+      var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
       window.ReactNativeWebView.postMessage(JSON.stringify({
         type: 'ADD_DEBUG', step: 'click_confirmed_' + i,
-        confirmed: confirmed, qtyBefore: qtyBefore, qtyAfter: getCartQty()
+        confirmed: confirmed, qtyBefore: qtyBefore, qtyAfter: getCartQty(),
+        headerBefore: headerBefore, headerAfter: getHeaderCartCount()
       }));
       if (confirmed) actuallyClicked++;
     }
@@ -510,7 +567,9 @@ function buildAddToCartScript(
 
 function buildSearchScript(domain: string) {
   return function (term: string): string {
-    var escaped = JSON.stringify(term);
+    // Search with the first 5 words only (Albertsons returns nothing for long
+    // full-title queries). Scoring still uses the full name downstream.
+    var escaped = JSON.stringify(albertsonsSearchQuery(term));
     return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   var term = ${escaped};
@@ -523,46 +582,57 @@ function buildSearchScript(domain: string) {
   document.querySelectorAll('input, textarea').forEach(function(el) { el.setAttribute('inputmode', 'none'); });
   document.addEventListener('focusin', __noKbd, true);
 
+  var searchUrl = 'https://www.${domain}/shop/search-results.html?q=' + encodeURIComponent(term);
+
   // Click the search icon button to reveal/focus the input
   var openBtn = document.querySelector('button[aria-label="search"]');
   if (openBtn) { openBtn.click(); await wait(300); }
 
-  // Find search input
-  var input = document.querySelector('input[type="search"][name="q"]');
-  if (!input) {
-    input = document.querySelector('input[type="search"], input[name="q"], input[placeholder*="search" i]');
+  // Poll for the search input — the storefront hydrates async, and submitting
+  // before it's ready sends an empty ?q=.
+  var input = null;
+  for (var p = 0; p < 40; p++) {
+    input = document.querySelector('input[type="search"][name="q"]')
+      || document.querySelector('input[type="search"], input[name="q"], input[placeholder*="search" i]');
+    if (input) break;
+    await wait(150);
   }
 
-  if (!input) {
+  var submitted = false;
+  if (input) {
+    var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    // Set the value and VERIFY it stuck before submitting — Angular's binding
+    // can drop a programmatic set if the component isn't wired yet, which is
+    // what caused empty-query searches. Retry until input.value holds the term.
+    var ok = false;
+    for (var t = 0; t < 20; t++) {
+      setter.call(input, '');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      setter.call(input, term);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await wait(120);
+      if (input.value === term) { ok = true; break; }
+    }
+    if (ok) {
+      // Only press Enter once the term is actually in the box.
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      submitted = true;
+      var startUrl = window.location.href;
+      for (var i = 0; i < 30; i++) {
+        if (window.location.href !== startUrl) break;
+        await wait(100);
+      }
+    }
+  }
+
+  // Fallback: input never appeared, value never stuck, or Enter didn't navigate
+  // to a real results page → navigate straight to the search URL (correct query).
+  if (!submitted || window.location.href.indexOf('search-results') === -1) {
     document.removeEventListener('focusin', __noKbd, true);
+    window.location.href = searchUrl;
     return;
-  }
-
-  // Set value via native setter to avoid triggering the mobile keyboard
-  var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  setter.call(input, '');
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  await wait(50);
-  setter.call(input, term);
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-  await wait(100);
-
-  // Submit via Enter key
-  input.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-    bubbles: true, cancelable: true
-  }));
-  input.dispatchEvent(new KeyboardEvent('keyup', {
-    key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-    bubbles: true, cancelable: true
-  }));
-
-  // Wait for URL change (up to 3 seconds)
-  var startUrl = window.location.href;
-  for (var i = 0; i < 30; i++) {
-    if (window.location.href !== startUrl) break;
-    await wait(100);
   }
 
   document.removeEventListener('focusin', __noKbd, true);
@@ -659,10 +729,18 @@ function buildSearchAndAddScriptFn(
         .trim();
       var score = -1;
       if (/\\.{3}|\\u2026/.test(cleaned)) {
-        var parts = cleaned.split(/\\.{3}|\\u2026/).map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 3; });
-        var targetLower = productName.toLowerCase();
-        var allPartsMatch = parts.length > 0 && parts.every(function(p) { return targetLower.indexOf(p.toLowerCase()) !== -1; });
-        score = allPartsMatch ? 95 : -1;
+        // Truncated label, e.g. "Lucerne Heavy Whipping Cream -...(packaging may
+        // vary)". Score on the words shown BEFORE the ellipsis against the target;
+        // trailing noise after "..." (like "(packaging may vary)") is never in the
+        // real product name, so requiring it to match would wrongly reject the bubble.
+        var beforeEllipsis = cleaned.split(/\\.{3}|\\u2026/)[0];
+        var tWords = normalizeForScoring(productName).split(' ').filter(Boolean);
+        var fWords = normalizeForScoring(beforeEllipsis).split(' ').filter(Boolean);
+        if (fWords.length > 0) {
+          var hit = fWords.filter(function(w) { return tWords.indexOf(w) !== -1; }).length;
+          var pct = hit / fWords.length;
+          score = pct < 0.7 ? -1 : Math.round(pct * 100);
+        }
       } else {
         var targetWords = normalizeForScoring(productName).split(' ').filter(Boolean);
         var foundWords = normalizeForScoring(cleaned).split(' ').filter(Boolean);
@@ -743,6 +821,35 @@ function buildSearchAndAddScriptFn(
     });
   }
 
+  // The header cart-count badge reflects the REAL (server) cart, unlike the
+  // product tile's optimistic bubble — so it only ticks up when an item
+  // actually commits. null = badge unreadable (fall back to the tile bubble).
+  function getHeaderCartCount() {
+    var el = document.querySelector('[data-qa="hdr-crt-txt-plus"]');
+    if (!el) return null;
+    var t = (el.textContent || '').trim();
+    if (t === '') return 0;
+    var m = t.match(/\\d+/);
+    return m ? parseInt(m[0], 10) : 0;
+  }
+
+  // Confirm an add by the header cart count incrementing (authoritative). Falls
+  // back to the tile qty bubble only when the header count isn't readable.
+  function waitForCartConfirm(headerBefore, tileBefore) {
+    return new Promise(function(resolve) {
+      var elapsed = 0;
+      function tick() {
+        var hc = getHeaderCartCount();
+        if (headerBefore != null && hc != null && hc > headerBefore) { resolve(true); return; }
+        if (headerBefore == null && getCartQty() > tileBefore) { resolve(true); return; }
+        if (elapsed >= 7000) { resolve(false); return; }
+        elapsed += 250;
+        setTimeout(tick, 250);
+      }
+      tick();
+    });
+  }
+
   // Poll for ATC buttons to appear (up to 6s).
   var allAtcBtns = [];
   for (var poll = 0; poll < 20; poll++) {
@@ -783,7 +890,15 @@ function buildSearchAndAddScriptFn(
     if (candidates.length >= 8) break;
   }
 
-  if (!bestName || !bestAtcBtn) {
+  // The product may already be in the cart, shown as a collapsed bubble or an
+  // open stepper INSTEAD of an "Add 1 unit of" button — so there may be no ATC
+  // candidate (bestName/bestAtcBtn null). Match these against SEARCH_TERM.
+  var matchName = bestName || SEARCH_TERM;
+  var preExistingBubble = findBubbleForProduct(matchName);
+  var preExistingIncrement = !preExistingBubble ? findIncrementForProduct(matchName) : null;
+
+  // Give up only if there's no ATC button AND the item isn't already in the cart.
+  if (!bestAtcBtn && !preExistingBubble && !preExistingIncrement) {
     var hasExactOos = candidates.some(function(c) { return scoreMatch(SEARCH_TERM, c.productName) === 100 && c.outOfStock; });
     var reason = candidates.length === 0 ? 'no_results' : hasExactOos ? 'out_of_stock' : 'low_confidence';
     document.removeEventListener('focusin', __noKbd, true);
@@ -792,16 +907,12 @@ function buildSearchAndAddScriptFn(
   }
 
   try {
-    // Check for pre-existing qty (product already in cart)
-    var preExistingBubble = findBubbleForProduct(bestName);
-    var preExistingIncrement = !preExistingBubble ? findIncrementForProduct(bestName) : null;
-
-    // Wait for cart state overlay if ATC found
-    if (!preExistingBubble && !preExistingIncrement) {
+    // If we have an ATC but the in-cart bubble hasn't rendered yet, give it a moment.
+    if (!preExistingBubble && !preExistingIncrement && bestAtcBtn) {
       for (var wa = 0; wa < 3 && !preExistingBubble && !preExistingIncrement; wa++) {
         await wait(400);
-        preExistingBubble = findBubbleForProduct(bestName);
-        preExistingIncrement = !preExistingBubble ? findIncrementForProduct(bestName) : null;
+        preExistingBubble = findBubbleForProduct(matchName);
+        preExistingIncrement = !preExistingBubble ? findIncrementForProduct(matchName) : null;
       }
     }
 
@@ -813,12 +924,13 @@ function buildSearchAndAddScriptFn(
       if (stepperAlreadyOpen) {
         for (var i = 0; i < QTY; i++) {
           var qtyBefore = getCartQty();
-          var incBtn = i === 0 ? preExistingIncrement : await pollForIncrement(bestName);
+          var headerBefore = getHeaderCartCount();
+          var incBtn = i === 0 ? preExistingIncrement : await pollForIncrement(matchName);
           if (!incBtn) break;
           incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
           await wait(100);
           incBtn.click();
-          var confirmed = await waitForQtyChange(qtyBefore);
+          var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
           if (confirmed) actuallyClicked++;
         }
       } else {
@@ -827,12 +939,13 @@ function buildSearchAndAddScriptFn(
         await wait(600);
         for (var i = 0; i < QTY; i++) {
           var qtyBefore = getCartQty();
-          var incBtn = await pollForIncrement(bestName);
+          var headerBefore = getHeaderCartCount();
+          var incBtn = await pollForIncrement(matchName);
           if (!incBtn) break;
           incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
           await wait(100);
           incBtn.click();
-          var confirmed = await waitForQtyChange(qtyBefore);
+          var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
           if (confirmed) actuallyClicked++;
         }
       }
@@ -841,18 +954,19 @@ function buildSearchAndAddScriptFn(
       // After each click, poll until the cart qty increases before continuing.
       for (var i = 0; i < QTY; i++) {
         var qtyBefore = getCartQty();
+        var headerBefore = getHeaderCartCount();
         var buttonToClick;
         if (i === 0) {
           buttonToClick = bestAtcBtn;
         } else {
           // Try increment (handles bubble→stepper), fall back to re-clicking ATC
-          buttonToClick = await pollForIncrement(bestName);
+          buttonToClick = await pollForIncrement(matchName);
           if (!buttonToClick) {
             var freshAtc = Array.from(document.querySelectorAll(ATC_SEL));
             for (var fa = 0; fa < freshAtc.length; fa++) {
               var faLabel = freshAtc[fa].getAttribute('aria-label') || '';
               var faMatch = faLabel.match(/^Add 1 unit of (.+)/i);
-              if (faMatch && faMatch[1].trim() === bestName) { buttonToClick = freshAtc[fa]; break; }
+              if (faMatch && faMatch[1].trim() === matchName) { buttonToClick = freshAtc[fa]; break; }
             }
           }
           window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -866,18 +980,19 @@ function buildSearchAndAddScriptFn(
         buttonToClick.scrollIntoView({ behavior: 'instant', block: 'center' });
         await wait(100);
         buttonToClick.click();
-        // Wait for the cart to confirm the add (qty increases) before proceeding.
-        var confirmed = await waitForQtyChange(qtyBefore);
+        // Confirm via the header cart count (the real cart), not the tile bubble.
+        var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'ADD_DEBUG', step: 'click_confirmed_' + i,
-          confirmed: confirmed, qtyBefore: qtyBefore, qtyAfter: getCartQty()
+          confirmed: confirmed, qtyBefore: qtyBefore, qtyAfter: getCartQty(),
+          headerBefore: headerBefore, headerAfter: getHeaderCartCount()
         }));
         if (confirmed) actuallyClicked++;
       }
     }
 
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: actuallyClicked >= 1, productName: bestName, actuallyClicked: actuallyClicked, qty: QTY }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: actuallyClicked >= 1, productName: matchName, actuallyClicked: actuallyClicked, qty: QTY }));
   } catch(e) {
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: candidates }));
@@ -900,12 +1015,16 @@ export function getScripts(storeId: string): StoreScripts {
     // Albertsons login is a popup on the same page — login success is detected via
     // LOGIN_COMPLETE message from the background poll, not via URL change.
     isLoginSuccessUrl: () => false,
+    // The page reloads after sign-in, killing the background poll's JS context.
+    // Re-inject the login check on each post-login store load so the check
+    // re-runs and detects the now-logged-in state.
+    reinjectLoginCheckOnNav: true,
     checkLoginScript: buildCheckLoginScript(domain),
     extractProductsScript: buildExtractProductsScript(),
     buildAddToCartScript: buildAddToCartScript,
     buildSearchScript: buildSearchScript(domain),
     buildSearchAndAddScript: buildSearchAndAddScriptFn,
-    getSearchUrl: (term: string) => `${storeOrigin}/shop/search-results.html?q=` + encodeURIComponent(term),
+    getSearchUrl: (term: string) => `${storeOrigin}/shop/search-results.html?q=` + encodeURIComponent(albertsonsSearchQuery(term)),
     buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, buildExtractProductsScript()),
   };
 }

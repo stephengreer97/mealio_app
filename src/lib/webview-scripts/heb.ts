@@ -5,6 +5,74 @@ export const HEB_URL = 'https://www.heb.com';
 export const HEB_LOGIN_URL = 'https://www.heb.com/my-account/login';
 export const HEB_CART_URL = 'https://www.heb.com/cart';
 
+// ── Shared: find genuine search-result cards (skip carousels) ──────────────────
+//
+// HEB's search page layers several "product-card" components on top of the real
+// results: a "<term>'s perfect pairings" entity carousel and a two-panel
+// sponsored rail. Those use MiniProductCardBody — they carry
+// data-component="product-card" but NOT data-qe-id="productCard". For a "Yogurt"
+// search the pairings carousel led with "H-E-B Classic Granola", which the old
+// selector ([data-component="product-card"], [data-qe-id="productCard"]) grabbed
+// in DOM order as the first candidate.
+//
+// Genuine result tiles are the only ones with data-qe-id="productCard", and they
+// live inside the search grid (#search_product_grid / [data-qe-id="productCardContainer"]).
+// Select on that id, scoped to the grid, and fall back to the legacy combined
+// selector only if the page exposes no productCard ids at all (older DOM variant).
+const HEB_FIND_CARDS_FN = `
+  function __hebFindCards() {
+    var grid = document.querySelector('[data-qe-id="productCardContainer"]')
+      || document.querySelector('#search_product_grid');
+    var scope = grid || document;
+    var real = Array.prototype.slice.call(scope.querySelectorAll('[data-qe-id="productCard"]'));
+    if (real.length > 0) return real;
+    return Array.prototype.slice.call(scope.querySelectorAll('[data-component="product-card"], [data-qe-id="productCard"]'));
+  }
+`;
+
+// ── Shared: read only FRESH results (skip the previous search's stale cards) ────
+//
+// HEB is an SPA: an in-page search changes the URL to /search?q=<newterm> and
+// fetches results asynchronously, leaving the PREVIOUS search's product cards
+// mounted for a beat. A naive "cards.length > 0" poll grabs those stale cards
+// immediately (e.g. a "Cilantro" search returning the prior "Hoisin Sauce" page).
+//
+// HEB echoes the searched query into <h1 id="searchGridHeader">, which only
+// updates once the new results render. So gate card-reads on the header matching
+// the term in the URL. Falls back to whatever is present after gateMs (so an
+// unusual/missing header can't stall the flow) and stops entirely after maxMs.
+// Depends on __hebFindCards (interpolate HEB_FIND_CARDS_FN first).
+const HEB_WAIT_FRESH_FN = `
+  function __hebExpectedTerm() {
+    try {
+      var m = /[?&]q=([^&]*)/.exec(window.location.search || '');
+      return m ? decodeURIComponent(m[1].replace(/\\+/g, ' ')) : '';
+    } catch (e) { return ''; }
+  }
+  function __hebNorm(s) {
+    return (s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\\s+/g, ' ').trim();
+  }
+  function __hebHeaderFresh(expectedNorm) {
+    if (!expectedNorm) return true; // no q param (e.g. a product page) — nothing to gate on
+    var header = document.querySelector('#searchGridHeader');
+    var ht = __hebNorm(header ? header.textContent : '');
+    return !!ht && ht.indexOf(expectedNorm) !== -1;
+  }
+  async function __hebFreshCards(waitFn, maxMs, gateMs) {
+    var expected = __hebNorm(__hebExpectedTerm());
+    var cards = [];
+    var waited = 0;
+    while (waited < maxMs) {
+      var fresh = waited >= gateMs || __hebHeaderFresh(expected);
+      cards = __hebFindCards().slice(0, 20);
+      if (fresh && cards.length > 0) break;
+      await waitFn(200);
+      waited += 200;
+    }
+    return { cards: cards, waitedMs: waited };
+  }
+`;
+
 // ── Login check ───────────────────────────────────────────────────────────────
 
 /**
@@ -76,14 +144,23 @@ export const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
     }
   }
   document.addEventListener('focusin', __noKbd, true);
-
-  var CARD_SEL = '[data-component="product-card"], [data-qe-id="productCard"]';
-
-  await wait(800);
+${HEB_FIND_CARDS_FN}
+${HEB_WAIT_FRESH_FN}
+  // Poll for the product grid instead of a single 800ms check. A warm webview
+  // (sequential flow) paints cards almost immediately, but a freshly-mounted
+  // worker webview (parallel flow) needs several seconds on its first load to
+  // bootstrap HEB's SPA before the grid renders — a one-shot 800ms wait read
+  // an empty page and reported 0. Poll up to ~14s; return as soon as cards for
+  // the SEARCHED TERM appear (header gate), so we never read the previous
+  // search's stale cards and the warm case stays fast. Past gateMs (8s) we
+  // accept whatever is present so an unusual header can't stall the flow.
+  var __fresh = await __hebFreshCards(wait, 14000, 8000);
+  var cards = __fresh.cards;
+  var waitedMs = __fresh.waitedMs;
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'poll_done', url: window.location.href, cardCount: cards.length, waitedMs: waitedMs }));
 
   var TITLE_SEL = '[data-qe-id="productTitle"]';
 
-  var cards = Array.from(document.querySelectorAll(CARD_SEL)).slice(0, 20);
   if (cards.length === 0) {
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: [] }));
@@ -282,12 +359,11 @@ export function buildAddToCartScript(
     return false;
   }
 
-  var CARD_SEL = '[data-component="product-card"], [data-qe-id="productCard"]';
   var TITLE_SEL = '[data-qe-id="productTitle"]';
-
+${HEB_FIND_CARDS_FN}
   await wait(800);
 
-  var cards = Array.from(document.querySelectorAll(CARD_SEL));
+  var cards = __hebFindCards();
   var targetCard = null;
   for (var ci = 0; ci < cards.length; ci++) {
     var el = cards[ci].querySelector(TITLE_SEL);
@@ -466,8 +542,9 @@ export function buildSearchAndAddScript(
   var SEARCH_TERM = ${escapedTerm};
   var QTY = ${qty};
   var DROPDOWN = ${escapedDropdown};
-  var CARD_SEL = '[data-component="product-card"], [data-qe-id="productCard"]';
   var TITLE_SEL = '[data-qe-id="productTitle"]';
+${HEB_FIND_CARDS_FN}
+${HEB_WAIT_FRESH_FN}
 
   async function handleWeightDropdown(qty) {
     var targetLbs = qty * 0.25;
@@ -537,7 +614,10 @@ export function buildSearchAndAddScript(
     return Math.max(s1, s2);
   }
 
-  var cards = Array.from(document.querySelectorAll(CARD_SEL)).slice(0, 20);
+  // Wait for results matching the searched term before scoring — otherwise an
+  // in-page SPA search reads the previous search's cards still on the page and
+  // either mis-adds or falsely reports "couldn't match".
+  var cards = (await __hebFreshCards(wait, 14000, 8000)).cards;
   var candidates = [];
   var seen = new Set();
   var bestCard = null, bestBtn = null, bestName = null;

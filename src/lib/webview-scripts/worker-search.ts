@@ -35,6 +35,7 @@ export function buildExtractWorker(workerId: number, extractScript: string): str
   var rn = window.ReactNativeWebView;
   if (!rn || !rn.postMessage) return;
   var orig = rn.postMessage.bind(rn);
+
   rn.postMessage = function(s) {
     try {
       var m = JSON.parse(s);
@@ -44,8 +45,16 @@ export function buildExtractWorker(workerId: number, extractScript: string): str
         orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, candidates: m.candidates || [] }));
         return;
       }
+      // Forward the extractor's diagnostic messages (tagged with the worker
+      // id) so cold-start behavior is visible in the RN logs during dev.
+      if (m && (m.type === 'EXTRACT_DEBUG' || m.type === 'WORKER_DEBUG')) {
+        m.type = 'WORKER_DEBUG';
+        m.workerId = WORKER_ID;
+        orig(JSON.stringify(m));
+        return;
+      }
     } catch (e) {}
-    // Non-SEARCH_RESULT (debug etc.) — swallow to keep the worker bridge quiet.
+    // Other messages (PRICE_DEBUG, PREF_DEBUG, …) — swallow to keep the bridge quiet.
   };
 })();
 ${extractScript}`;

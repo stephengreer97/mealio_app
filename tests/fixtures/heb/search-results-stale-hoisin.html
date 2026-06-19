@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<!--
+  Reproduction of HEB's in-page (SPA) search staleness. The page is loaded at
+  /search?q=cilantro (the term just searched), but the DOM still shows the
+  PREVIOUS search's results: the header echoes "hoisin sauce" and the grid holds
+  the Hoisin Sauce card. HEB swaps in the real cilantro results a beat later.
+
+  The regression test simulates that async swap (updates the header + grid ~1.2s
+  after the extract script starts) and asserts the extractor waits for the grid
+  to reflect "cilantro" instead of returning the stale Hoisin card.
+-->
+<html>
+<head><meta charset="utf-8"><title>cilantro | H-E-B</title></head>
+<body>
+  <main id="r_body">
+    <!-- Header still showing the PREVIOUS search term. -->
+    <h1 id="searchGridHeader"><span><span>&ldquo;hoisin sauce&rdquo;</span></span></h1>
+
+    <div id="search_product_grid">
+      <span data-qe-id="searchResultCount">1 result</span>
+      <div class="BasicGrid_basicGrid__dZgBP" data-qe-id="productCardContainer" data-testid="productCardContainer">
+        <div data-component="product-card">
+          <div class="ProductCardNormalCard_card__dAhz7" data-component="product-card-card" data-qe-id="productCard">
+            <a href="/product-detail/lee-kum-kee-hoisin-sauce-20-oz/536333">
+              <img class="Image_image__daeDB" alt="Lee Kum Kee Hoisin Sauce, 20 oz" src="https://images.heb.com/is/image/HEBGrocery/000536333-1?hei=360&wid=360">
+              <div data-qe-id="productPrice" class="ProductPrice_priceContainer__C2CXi">
+                <span class="Price_price__Y8KDa"><span class="SalePrice_salePrice__r_ist">$4.81</span><span> each</span></span>
+              </div>
+              <div data-qe-id="productTitle" class="ProductTitle_container__ta1o4">
+                <span class="ProductTitle_displayName__gvcIf" title="Lee Kum Kee Hoisin Sauce, 20 oz">Lee Kum Kee Hoisin Sauce, 20 oz</span>
+              </div>
+            </a>
+            <div data-qe-id="buttonContainer">
+              <button type="button" data-qe-id="addToCart">Add to cart</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

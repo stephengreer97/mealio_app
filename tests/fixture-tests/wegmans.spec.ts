@@ -11,11 +11,29 @@
 
 import { loadFixture } from '../fixture-runners/runScript';
 import { getScripts } from '../../src/lib/webview-scripts/wegmans';
+import { buildCartPageCountScript } from '../../src/lib/webview-scripts/cart-count';
 import { storeFixtures } from './_helpers';
 
 const { fxPath, itWithFixture } = storeFixtures('wegmans');
 const fx = fxPath;
 const scripts = getScripts();
+
+describe('Wegmans cart-page snapshot', () => {
+  itWithFixture(
+    'cart-with-items.html',
+    'reads line items (name + qty) from the /cart page, ignoring recommendation tiles',
+    async (runner) => {
+      await runner.inject(buildCartPageCountScript('wegmans')!);
+      const result = await runner.waitForMessage('CART_COUNT', 12_000);
+      // Fixture cart has one real line: Mission tortillas x2 (the rest of the
+      // page is ~70 recommendation tiles, which must NOT be counted).
+      expect(result.items.length).toBe(1);
+      expect(result.count).toBe(2);
+      expect(result.items[0].name).toMatch(/Mission Super Soft Flour Tortillas/i);
+      expect(result.items[0].qty).toBe(2);
+    },
+  );
+});
 
 describe('Wegmans CHECK_LOGIN_SCRIPT', () => {
   itWithFixture(
