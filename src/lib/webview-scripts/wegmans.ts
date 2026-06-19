@@ -948,9 +948,6 @@ export function getWegmansSearchUrl(query: string): string {
 // ── Export ──────────────────────────────────────────────────────────────────
 
 export function getScripts(): StoreScripts {
-  // TEMP(bundle-check): proves the serial build is live. If the cart log shows
-  // `parallel= true` but NOT this line, the running bundle is stale → reload.
-  console.log('[wegmans] getScripts BUILD-MARKER v2 — forceSerialSearch:true workerCount:2');
   return {
     storeUrl: WEGMANS_URL,
     loginUrl: WEGMANS_LOGIN_URL,
