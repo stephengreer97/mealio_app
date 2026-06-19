@@ -8,6 +8,7 @@
 // running `npm run capture -- aldi`.
 
 import { getStoreScripts } from '../../src/lib/webview-scripts';
+import { buildInlineCartScript } from '../../src/lib/webview-scripts/cart-count';
 import { storeFixtures } from './_helpers';
 
 const { itWithFixture } = storeFixtures('aldi');
@@ -16,7 +17,7 @@ const scripts = getStoreScripts('aldi')!;
 describe('ALDI CHECK_LOGIN_SCRIPT', () => {
   itWithFixture(
     'logged-in-home.html',
-    'detects logged-in via header copy or hamburger-menu state',
+    'detects logged-in via the open Main Menu (personalized entries)',
     async (runner) => {
       await runner.inject(scripts.checkLoginScript);
       const status = await runner.waitForMessage('LOGIN_STATUS', 15_000);
@@ -24,6 +25,50 @@ describe('ALDI CHECK_LOGIN_SCRIPT', () => {
     },
   );
 
+  itWithFixture(
+    'logged-in-home.html',
+    'reports logged-OUT when the menu shows a Sign In CTA',
+    async (runner) => {
+      // Turn the real Main Menu into a signed-out one by injecting the CTA.
+      await runner.page.evaluate(() => {
+        const menu = document.querySelector('[role="dialog"][aria-label="Main Menu"]')!;
+        const a = document.createElement('a');
+        a.textContent = 'Sign in';
+        const r = document.createElement('a');
+        r.textContent = 'Register';
+        menu.appendChild(a);
+        menu.appendChild(r);
+      });
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 15_000);
+      expect(status.isLoggedIn).toBe(false);
+    },
+  );
+
+  itWithFixture(
+    'logged-in-home.html',
+    'does NOT false-positive when the Sign In CTA renders late (race)',
+    async (runner) => {
+      // Reproduce the live bug: the menu mounts as a skeleton (no signed-in
+      // tokens), and the "Sign in/Register" CTA paints a beat later. The old
+      // absence-based check read the skeleton and wrongly returned logged-in.
+      await runner.page.evaluate(() => {
+        const menu = document.querySelector('[role="dialog"][aria-label="Main Menu"]')!;
+        menu.textContent = 'Loading menu';
+        setTimeout(() => {
+          const a = document.createElement('a');
+          a.textContent = 'Sign in';
+          const r = document.createElement('a');
+          r.textContent = 'Register';
+          menu.appendChild(a);
+          menu.appendChild(r);
+        }, 300);
+      });
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 15_000);
+      expect(status.isLoggedIn).toBe(false);
+    },
+  );
 });
 
 describe('ALDI regression: product already in cart (bubble state)', () => {
@@ -49,6 +94,25 @@ describe('ALDI regression: stepper already open', () => {
       await runner.inject(script);
       const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
       expect(result).toBeDefined();
+    },
+  );
+});
+
+describe('ALDI cart side-panel snapshot', () => {
+  itWithFixture(
+    'cart-with-items.html',
+    'reads line items (name + qty) from the open Cart panel',
+    async (runner) => {
+      await runner.inject(buildInlineCartScript('aldi')!);
+      const result = await runner.waitForMessage('CART_COUNT', 12_000);
+      expect(result.count).toBe(6);
+      expect(Array.isArray(result.items)).toBe(true);
+      expect(result.items.length).toBe(6);
+      const names = result.items.map((i: any) => i.name);
+      expect(names).toContain('Organic Broccoli');
+      expect(names).toContain('Happy Harvest Crushed Tomatoes');
+      // Every line carries a positive qty.
+      expect(result.items.every((i: any) => typeof i.qty === 'number' && i.qty >= 1)).toBe(true);
     },
   );
 });

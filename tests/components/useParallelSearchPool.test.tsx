@@ -97,6 +97,36 @@ describe('useParallelSearchPool — start()', () => {
   });
 });
 
+describe('useParallelSearchPool — staggered dispatch', () => {
+  it('dispatches worker 0 immediately and the rest after the stagger delay', () => {
+    // Long worker timeout so a worker can't time out mid-advance and grab a
+    // still-queued item (which would scramble the positional mapping below).
+    const { result } = setup({ dispatchStaggerMs: 400, workerTimeoutMs: 100_000 });
+    act(() => {
+      result.current.start([{ term: 'a' }, { term: 'b' }, { term: 'c' }], () => {});
+    });
+    // Only worker 0 goes out synchronously; 1 and 2 are still pending.
+    expect(result.current.workerUris[0]).toBe('https://example/?q=a');
+    expect(result.current.workerUris[1]).toBe('');
+    expect(result.current.workerUris[2]).toBe('');
+    // Past the max jittered stagger (i*400 + up to 400 → ≤1200ms for worker 2).
+    act(() => { jest.advanceTimersByTime(1_600); });
+    expect(result.current.workerUris[1]).toBe('https://example/?q=b');
+    expect(result.current.workerUris[2]).toBe('https://example/?q=c');
+  });
+
+  it('reset() cancels pending staggered dispatches (runId guard)', () => {
+    const { result } = setup({ dispatchStaggerMs: 400 });
+    act(() => {
+      result.current.start([{ term: 'a' }, { term: 'b' }, { term: 'c' }], () => {});
+    });
+    act(() => { result.current.reset(); });
+    // A stale stagger timer must not dispatch onto the reset pool.
+    act(() => { jest.advanceTimersByTime(2_000); });
+    expect(result.current.workerUris).toEqual(['', '', '']);
+  });
+});
+
 describe('useParallelSearchPool — reportResult / queue draining', () => {
   it('records a result against the item index the worker was dispatched on', () => {
     const { result } = setup();

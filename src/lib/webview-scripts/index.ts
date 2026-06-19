@@ -49,6 +49,27 @@ export interface StoreScripts {
   getSearchUrl?: (term: string) => string;
   /** Injected JS for one worker; posts WORKER_RESULT with the workerId. */
   buildWorkerScript?: (workerId: number) => string;
+  /** Number of concurrent worker WebViews for this store's parallel pool.
+   *  Defaults to 5. Lower it for stores with aggressive anti-bot (ALDI: 3). */
+  workerCount?: number;
+  /** Stagger (ms) between the initial worker dispatches for this store, to
+   *  avoid N simultaneous search requests. Defaults to 0 (all at once). */
+  workerStaggerMs?: number;
+  /** Force the sequential single-WebView search even though getSearchUrl +
+   *  buildWorkerScript are present. Used for stores whose anti-bot trips on the
+   *  concurrent worker requests (ALDI). The worker scripts stay available for
+   *  tests / future re-enable; they just aren't used at runtime. */
+  forceSerialSearch?: boolean;
+  /** Default true: navigations append a `?_t=<ts>` cache-buster. Set false for
+   *  stores whose anti-bot flags that synthetic query (ALDI) — navTo then uses
+   *  the clean URL + a forced reload() instead. */
+  cacheBustNav?: boolean;
+  /** True for SPA storefronts (ALDI/Instacart) whose search changes the URL via
+   *  pushState (no reload). Such stores fire onLoadEnd multiple times for ONE
+   *  route change while the injected script is still running, so the cart flow
+   *  must NOT re-inject the inflight script on a same-URL onLoadEnd (that spawns
+   *  a duplicate add-run that over-advances the item index and skips items). */
+  spaSearch?: boolean;
 }
 
 // ── HEB adapter ──────────────────────────────────────────────────────────────

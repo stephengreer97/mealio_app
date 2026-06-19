@@ -43,6 +43,12 @@ export interface ParallelPoolOptions<TItem, TResult> {
   /** Synthetic empty result used on timeout, so the result map always has
    *  exactly `items.length` entries when the pool finishes. */
   emptyResult: () => TResult;
+  /** When > 0, the INITIAL burst is staggered: worker 0 starts immediately and
+   *  each subsequent worker starts after ~i * dispatchStaggerMs (plus jitter),
+   *  instead of all firing at once. Softens the "N simultaneous requests"
+   *  pattern that trips anti-bot. Later dispatches (as workers free up) are
+   *  already naturally spread out. Defaults to 0 (no stagger). */
+  dispatchStaggerMs?: number;
 }
 
 export interface ParallelPool<TItem, TResult> {
@@ -80,6 +86,7 @@ export function useParallelSearchPool<TItem, TResult>(
 ): ParallelPool<TItem, TResult> {
   const { workerCount, getUrl, emptyResult } = options;
   const workerTimeoutMs = options.workerTimeoutMs ?? 20_000;
+  const dispatchStaggerMs = options.dispatchStaggerMs ?? 0;
 
   // workerUris is the only piece of React-visible state; everything else is
   // refs so a single dispatch tick can read+update without scheduling renders.
@@ -102,6 +109,10 @@ export function useParallelSearchPool<TItem, TResult>(
     new Array(workerCount).fill(null),
   );
   const onAllDoneRef = useRef<((r: Map<number, TResult>) => void) | null>(null);
+  // Bumped on every start()/reset(). A staggered initial-dispatch timer checks
+  // this against the run it was scheduled in, so a reset (or a new run) cancels
+  // any still-pending stagger timers without per-timer bookkeeping.
+  const runIdRef = useRef(0);
 
   const setWorkerUri = useCallback((workerId: number, uri: string) => {
     setWorkerUris((prev) => {
@@ -181,6 +192,7 @@ export function useParallelSearchPool<TItem, TResult>(
     workerBusyRef.current = new Array(workerCount).fill(false);
     workerIdxRef.current = new Array(workerCount).fill(-1);
     for (let i = 0; i < workerCount; i++) clearTimer(i);
+    runIdRef.current++; // invalidate any pending staggered-dispatch timers
     onAllDoneRef.current = null;
     setIsActive(false);
     setCompleted(0);
@@ -204,12 +216,23 @@ export function useParallelSearchPool<TItem, TResult>(
       workerIdxRef.current = new Array(workerCount).fill(-1);
       onAllDoneRef.current = onAllDone;
       setIsActive(true);
-      for (let i = 0; i < workerCount; i++) {
-        if (queueRef.current.length === 0) break;
-        dispatchToWorker(i);
+      const runId = ++runIdRef.current;
+      const burst = Math.min(workerCount, items.length);
+      for (let i = 0; i < burst; i++) {
+        if (dispatchStaggerMs <= 0 || i === 0) {
+          dispatchToWorker(i);
+          continue;
+        }
+        // Stagger worker i by ~i * base + up to one base of jitter, so the
+        // initial requests don't all leave at the same instant.
+        const delay = i * dispatchStaggerMs + Math.floor(Math.random() * dispatchStaggerMs);
+        setTimeout(() => {
+          if (runIdRef.current !== runId) return; // reset / superseded by a new run
+          dispatchToWorker(i);
+        }, delay);
       }
     },
-    [isActive, workerCount, dispatchToWorker],
+    [isActive, workerCount, dispatchToWorker, dispatchStaggerMs],
   );
 
   return { workerUris, isActive, completed, total, start, reportResult, reset };
