@@ -108,12 +108,7 @@ jobs:
     name: iOS Simulator + Maestro flows
     needs: wait-for-eas
     runs-on: macos-15
-    # The isolated-per-flow lane erases+reboots+reinstalls a fresh simulator per
-    # flow (~2 min overhead each) to avoid cumulative-memory OOM. With ~7 flows
-    # that runs ~26 min, which exceeded the old 25-min cap and got cancelled.
-    # Bumped to 40 for headroom. (Per-flow erase overhead is the deeper cost —
-    # candidate for a future optimization.)
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -148,30 +143,37 @@ jobs:
       - name: Install app on simulator
         run: xcrun simctl install "$SIM_UDID" "$APP_PATH"
 
-      # Run each flow in its own simulator session. Running all 7 in one
-      # `maestro test <dir>` session accumulated memory across the clearState
-      # cold launches and the OS would OOM-kill the app on a later flow
-      # (surfaced as "App crashed or stopped", no app crash report — a Jetsam
-      # kill, not a code crash). Shutting down + erasing the sim between flows
-      # releases that memory so each flow starts from a clean slate.
-      - name: Run Maestro flows (isolated per flow)
+      # The app is occasionally killed on a cold launch on the memory-constrained
+      # CI runner (surfaced as "App crashed or stopped", with NO co.mealio.app
+      # crash report — host memory pressure, not a code crash). Running all 7
+      # flows in one session let that pressure accumulate until a later flow
+      # died.
+      #
+      # Fix: free host memory BEFORE each flow with `sudo purge` (frees cached/
+      # inactive RAM) and kill any lingering app process. This is cheap and,
+      # crucially, does NOT reboot/erase the simulator — so the XCTest driver
+      # stays installed and only the first flow pays driver-startup cost.
+      # (Erasing the sim between flows forced a driver reinstall each time and
+      # blew the timeout.) A single per-flow retry remains as a backstop.
+      - name: Run Maestro flows
+        env:
+          MAESTRO_DRIVER_STARTUP_TIMEOUT: "120000"
         run: |
-          set -o pipefail
           FAILED=""
           for flow in tests/maestro/flows/*.yaml; do
             name=$(basename "$flow" .yaml)
-            echo "::group::Maestro flow $name"
-            xcrun simctl bootstatus "$SIM_UDID" -b
-            xcrun simctl install "$SIM_UDID" "$APP_PATH" || true
+            echo "::group::Maestro $name"
+            sudo purge || true
+            xcrun simctl terminate "$SIM_UDID" co.mealio.app 2>/dev/null || true
             if ! maestro test "$flow" --format junit --output "report-$name.xml"; then
-              echo "::error::Maestro flow $name failed"
-              FAILED="$FAILED $name"
+              echo "::warning::$name failed — purging and retrying once."
+              sudo purge || true
+              xcrun simctl terminate "$SIM_UDID" co.mealio.app 2>/dev/null || true
+              if ! maestro test "$flow" --format junit --output "report-$name.xml"; then
+                FAILED="$FAILED $name"
+              fi
             fi
             echo "::endgroup::"
-            # Reset the simulator's memory before the next flow.
-            xcrun simctl shutdown "$SIM_UDID" || true
-            xcrun simctl erase "$SIM_UDID" || true
-            xcrun simctl boot "$SIM_UDID" || true
           done
           if [ -n "$FAILED" ]; then
             echo "::error::Failed flows:$FAILED"
