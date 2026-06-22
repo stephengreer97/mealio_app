@@ -1117,6 +1117,23 @@ export default function WebViewCartSheet({
     armLoginCheckTimeout();
   }, [parallelPool, setStep, armLoginCheckTimeout]);
 
+  // Manual "I'm already logged in" recovery from the login step. If detection
+  // timed out or posted logged-out on a slow load but the user is in fact
+  // signed in, one tap re-runs the check from a fresh store load and, if logged
+  // in, proceeds without the user re-entering anything. Universal safety net so
+  // a genuinely-logged-in user is never stranded on the login prompt.
+  const recheckLogin = useCallback(() => {
+    searchIdxRef.current = 0;
+    onSearchPageRef.current = false;
+    loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
+    lastLoadEndUrlRef.current = '';
+    expectedNavUrlRef.current = '';
+    setStep('login_check');
+    setSearchingLabel('Checking login…');
+    navTo(scriptsRef.current!.storeUrl);
+    armLoginCheckTimeout();
+  }, [setStep, armLoginCheckTimeout]);
+
   const onMessage = useCallback(
     (event: WebViewMessageEvent) => {
       try {
@@ -1630,9 +1647,14 @@ export default function WebViewCartSheet({
           webviewVisible && step !== 'login' && step !== 'robot_challenge' && { borderWidth: 2, borderColor: '#ef4444' },
         ]} pointerEvents={webviewVisible ? 'auto' : 'none'}>
           {step === 'login' && (
-            <Text style={styles.loginBanner}>
-              Log in to your {storeName} account, then Mealio will add your ingredients automatically.
-            </Text>
+            <View>
+              <Text style={styles.loginBanner}>
+                Log in to your {storeName} account, then Mealio will add your ingredients automatically.
+              </Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={recheckLogin}>
+                <Text style={styles.retryBtnText}>I'm already logged in</Text>
+              </TouchableOpacity>
+            </View>
           )}
           {step === 'robot_challenge' && !blockReason && (
             <Text style={styles.loginBanner}>

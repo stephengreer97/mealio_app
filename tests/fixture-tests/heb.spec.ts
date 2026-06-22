@@ -11,20 +11,32 @@ const { itWithFixture } = storeFixtures('heb');
 const scripts = getStoreScripts('heb')!;
 
 describe('HEB CHECK_LOGIN_SCRIPT', () => {
-  // CAVEAT: the script's logic is "click profile button, wait 2s, if I'm
-  // still running (no redirect) report logged in." In a captured static
-  // fixture the click is a no-op (no JS handlers), so the script ALWAYS
-  // reports logged-in regardless of the captured state. The test below is
-  // therefore vacuous — it pins the script's terminal post-message contract
-  // but does NOT distinguish in/out from static DOM. Real signal lives in
-  // the panel-open pinning test below.
+  // Positive-proof detection: against the captured account-panel-open DOM the
+  // "Log out" control is present in the body text, so CHECK_LOGIN must report
+  // logged-in. Unlike the old "no redirect => logged in" heuristic, this is a
+  // real signal even in a static fixture.
   itWithFixture(
-    'logged-in-home.html',
-    'CHECK_LOGIN reaches its terminal LOGIN_STATUS post [VACUOUS in static fixtures]',
+    'logged-in-account-panel-open.html',
+    'CHECK_LOGIN reports logged-in when the panel "Log out" marker is present',
     async (runner) => {
       await runner.inject(scripts.checkLoginScript);
       const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
       expect(status.isLoggedIn).toBe(true);
+    },
+  );
+
+  // Regression for the bad-network false-positive: with the account panel
+  // CLOSED there is no "Log out" marker, and a static click cannot open it, so
+  // CHECK_LOGIN must report logged-OUT. The old script inferred login from the
+  // absence of a logout redirect, which a slow connection could fake — this
+  // pins that it no longer does.
+  itWithFixture(
+    'logged-in-home.html',
+    'CHECK_LOGIN reports logged-out when no "Log out" marker is visible',
+    async (runner) => {
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
+      expect(status.isLoggedIn).toBe(false);
     },
   );
 

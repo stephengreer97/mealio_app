@@ -85,9 +85,11 @@ export const CHECK_LOGIN_SCRIPT = `(async function() {
   try {
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'start', url: window.location.href }));
 
-    // Poll for the profile button (up to 3s, usually < 1s).
+    // Poll for the profile button (up to ~10s on a slow network, usually < 1s).
+    // The page itself may not have rendered yet on a bad connection, so we wait
+    // for the button rather than giving up early and reporting logged-out.
     var profileBtn = null;
-    for (var pi = 0; pi < 15; pi++) {
+    for (var pi = 0; pi < 50; pi++) {
       profileBtn = document.querySelector('button[aria-label*="account" i]')
         || document.querySelector('button[aria-label*="profile" i]');
       if (profileBtn) break;
@@ -106,21 +108,32 @@ export const CHECK_LOGIN_SCRIPT = `(async function() {
     }
 
     // Click the profile icon. Two outcomes:
-    // Logged in: stays on heb.com (account page/panel opens)
+    // Logged in: stays on heb.com and opens an in-page account panel that
+    //   contains a "Log out" control.
     // Not logged in: navigates to accounts.heb.com (kills this script;
-    //   onLoadEnd fallback in WebViewCartSheet detects the login page)
+    //   onLoadEnd fallback in WebViewCartSheet detects the login page).
     profileBtn.click();
 
-    // Wait for a potential redirect. If not logged in, HEB navigates to
-    // accounts.heb.com within ~1s which kills this script. If we're still
-    // running after 2s, we were not redirected and are logged in.
-    await wait(2000);
+    // Require POSITIVE proof of login: poll for the panel's "Log out" / "Sign
+    // out" control to appear (up to ~3s). NEVER infer login from the absence of
+    // a redirect — a slow network can stall the logged-out redirect past our
+    // wait and make a signed-out session look signed-in. If the marker never
+    // appears we report logged-out and the user is shown the login webview.
+    var LOGGED_IN_RE = /log ?out|sign ?out/;
+    var loggedIn = false;
+    for (var ci = 0; ci < 40; ci++) {           // up to ~8s for the panel to render
+      await wait(200);
+      var bodyText = (document.body.innerText || '').slice(0, 8000).toLowerCase();
+      if (LOGGED_IN_RE.test(bodyText)) { loggedIn = true; break; }
+    }
 
-    // Still here — close any panel that opened and report logged in.
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'panel_check', loggedIn: loggedIn }));
+
+    // Close any panel that opened, then report the proven state.
     document.body.click();
     await wait(200);
     window.__hebLoginCheckActive = false;
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: loggedIn }));
   } catch(e) {
     window.__hebLoginCheckActive = false;
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false, error: String(e) }));
