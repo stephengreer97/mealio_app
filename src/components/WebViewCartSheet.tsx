@@ -25,6 +25,8 @@ import {
   consolidateIngredients,
 } from '../lib/consolidateIngredients';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
+import { buildSearchAndAddWorker } from '../lib/webview-scripts/worker-search';
+import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS } from '../constants/features';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -52,6 +54,14 @@ interface SearchResult {
   measure: string | null;
   reason: 'out_of_stock' | 'no_results' | 'low_confidence';
   isChoose: boolean; // true = choose-product flow (no searchTerm yet); false = review unmatched (searchTerm set but no match)
+}
+
+// Result a parallel-add worker reports for one ingredient.
+interface AddResult {
+  success: boolean;
+  productName: string | null;
+  reason: string | null;
+  candidates: Candidate[];
 }
 
 interface PickedItem {
@@ -363,6 +373,26 @@ export default function WebViewCartSheet({
     emptyResult: () => [],
   });
 
+  // Parallel ADD pool (FEATURE_PARALLEL_ADD): the regular add flow's workers
+  // search AND add one product each, concurrently. Bounded lower than search
+  // (PARALLEL_ADD_WORKERS) since concurrent cart writes are riskier than reads.
+  // Per-item term/qty/preference ride in the URL hash; the worker's add script
+  // reads them and confirms via the store cart badge (> prev).
+  const addPool = useParallelSearchPool<ConsolidatedIngredient, AddResult>({
+    workerCount: PARALLEL_ADD_WORKERS,
+    workerTimeoutMs: PARALLEL_WORKER_TIMEOUT_MS,
+    dispatchStaggerMs: PARALLEL_WORKER_STAGGER_MS,
+    getUrl: (item) => {
+      const s = getStoreScripts(lockedStoreIdRef.current);
+      if (!s?.getSearchUrl || !item.searchTerm) return '';
+      const payload = encodeURIComponent(JSON.stringify({
+        term: item.searchTerm, qty: item.productQty, dropdown: item.dropdown ?? null,
+      }));
+      return s.getSearchUrl(item.searchTerm) + '#mealio=' + payload;
+    },
+    emptyResult: () => ({ success: false, productName: null, reason: 'timeout', candidates: [] }),
+  });
+
   // Emit coarse status (incl. a determinate progress fraction) upward so the
   // provider can drive the floating bubble. No-op in modal mode.
   useEffect(() => {
@@ -398,13 +428,16 @@ export default function WebViewCartSheet({
     let progress: number | null = null;
     if (step === 'done') {
       progress = 1;
+    } else if (addPool.isActive) {
+      // Parallel add: determinate, one tick per ingredient confirmed.
+      progress = addPool.total > 0 ? Math.min(1, addPool.completed / addPool.total) : null;
     } else if (parallelPool.isActive) {
       progress = null;
     } else if (total > 0 && (step === 'searching' || step === 'adding')) {
       progress = Math.min(1, processedCount / total);
     }
     onStatusChange({ phase: step, kind: kindMap[step], label: labelMap[step], progress });
-  }, [step, searchingLabel, storeName, onStatusChange, processedCount, parallelPool.isActive]);
+  }, [step, searchingLabel, storeName, onStatusChange, processedCount, parallelPool.isActive, addPool.isActive, addPool.completed, addPool.total]);
 
   const workerScripts = useMemo(
     () => parallelCfg
@@ -415,6 +448,22 @@ export default function WebViewCartSheet({
   const workerSources = useMemo(
     () => parallelPool.workerUris.map((uri) => ({ uri: uri || 'about:blank' })),
     [parallelPool.workerUris],
+  );
+
+  // Add-worker scripts: one fixed search-and-add script per worker (placeholder
+  // params; real ones come from the URL hash at runtime). Only stores whose
+  // buildSearchAndAddScript reads the #mealio hash support parallel add today
+  // (HEB pilot); others fall back to sequential via beginSearchFlow's gate.
+  const addWorkerScripts = useMemo(
+    () => parallelCfg
+      ? new Array(PARALLEL_ADD_WORKERS).fill(0).map((_, i) =>
+          buildSearchAndAddWorker(i, scripts.buildSearchAndAddScript('', 1, null)))
+      : [],
+    [parallelCfg, scripts],
+  );
+  const addWorkerSources = useMemo(
+    () => addPool.workerUris.map((uri) => ({ uri: uri || 'about:blank' })),
+    [addPool.workerUris],
   );
 
   const finishParallelSearch = useCallback((resultsByIdx: Map<number, Candidate[]>) => {
@@ -451,6 +500,77 @@ export default function WebViewCartSheet({
     setSearchingLabel(`Searching ${active.length} ingredients…`);
     parallelPool.start(active, finishParallelSearch);
   }, [parallelPool, finishParallelSearch]);
+
+  // ── Parallel ADD (FEATURE_PARALLEL_ADD) ─────────────────────────────────────
+
+  const finishParallelAdd = useCallback((resultsByIdx: Map<number, AddResult>) => {
+    const active = activeItemsRef.current;
+    const addedNames: string[] = [];
+    const failedResults: SearchResult[] = [];
+    for (let idx = 0; idx < active.length; idx++) {
+      const item = active[idx];
+      const r = resultsByIdx.get(idx);
+      const name = item.searchTerm || item.ingredientName;
+      if (r && r.success) {
+        addedNames.push(r.productName || name);
+        addResultsRef.current.push({ name: r.productName || name, success: true });
+      } else {
+        // Unconfirmed → route to the existing review path with whatever the
+        // worker found, so the user can pick/retry sequentially.
+        failedResults.push({
+          term: name,
+          candidates: r?.candidates ?? [],
+          mealIngredients: item.mealIngredients,
+          unit: item.unit,
+          measure: item.measure,
+          reason: r?.reason === 'out_of_stock' ? 'out_of_stock' : (r?.candidates?.length ? 'low_confidence' : 'no_results'),
+          isChoose: false,
+        });
+        addResultsRef.current.push({ name, success: false });
+      }
+    }
+    console.log(`[Cart ${ts()}]`, 'parallel add: done. added=', addedNames.length, 'failed=', failedResults.length);
+    if (failedResults.length > 0) {
+      searchResultsRef.current = failedResults;
+      setSearchResults(failedResults);
+      setStep('searchResult');
+      setReviewIdx(0);
+    } else {
+      setTotalAdded(addResultsRef.current.filter((x) => x.success).length);
+      setTotalFailed(0);
+      setAddedNames(addedNames);
+      setStep('done');
+    }
+  }, []);
+
+  const startParallelAdd = useCallback(() => {
+    const active = activeItemsRef.current;
+    if (active.length === 0) return;
+    console.log(`[Cart ${ts()}]`, 'parallel ADD: dispatching', active.length, 'across', PARALLEL_ADD_WORKERS, 'workers');
+    setStep('adding');
+    setSearchingLabel(`Adding ${active.length} ingredients…`);
+    addPool.start(active, finishParallelAdd);
+  }, [addPool, finishParallelAdd, setStep]);
+
+  const onAddWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
+    try {
+      const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type === 'WORKER_DEBUG') {
+        console.log(`[Cart ${ts()}]`, 'ADD WORKER_DEBUG w', workerId, JSON.stringify(msg).slice(0, 200));
+        return;
+      }
+      if (msg.type === 'WORKER_RESULT') {
+        console.log(`[Cart ${ts()}]`, 'ADD WORKER_RESULT w', workerId, 'success=', msg.success, 'product=', msg.productName);
+        addPool.reportResult(workerId, {
+          success: !!msg.success, productName: msg.productName ?? null,
+          reason: msg.reason ?? null, candidates: msg.candidates ?? [],
+        });
+        return;
+      }
+    } catch (e) {
+      console.log(`[Cart ${ts()}]`, 'onAddWorkerMessage parse error w', workerId, e);
+    }
+  }, [addPool]);
 
   // Navigate the store WebView. Default: append a `?_t=<ts>` cache-buster so the
   // load is unique (forces a real reload + dodges the onLoadEnd same-URL dedup).
@@ -559,7 +679,7 @@ export default function WebViewCartSheet({
       // Reset Wegmans parallel worker state. The hook clears its queue,
       // active flag, timers, and worker URIs in one call — workers unmount
       // because isActive flips to false.
-      parallelPool.reset();
+      parallelPool.reset(); addPool.reset();
 
       // If any ingredient has no chosen product yet, skip the qty step and
       // auto-start the search/choose flow immediately.
@@ -896,10 +1016,14 @@ export default function WebViewCartSheet({
     console.log(`[Cart ${ts()}]`, 'beginSearchFlow: parallel=', canParallel, 'allChoose=', allChoose, 'activeLen=', active.length, 'store=', lockedStoreIdRef.current);
     if (canParallel && allChoose) {
       startParallelSearch();
+    } else if (canParallel && !allChoose && FEATURE_PARALLEL_ADD) {
+      // Regular add flow through the parallel pool: each worker searches AND
+      // adds one product concurrently. Unconfirmed items fall to review.
+      startParallelAdd();
     } else {
       navigateToSearchItem(0);
     }
-  }, [startParallelSearch, navigateToSearchItem]);
+  }, [startParallelSearch, startParallelAdd, navigateToSearchItem]);
 
   // Snapshot the cart BEFORE any adds, then start the search. For cart-page
   // stores (HEB, Albertsons family) navigate to the cart URL, count there, and
@@ -1186,7 +1310,7 @@ export default function WebViewCartSheet({
     if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
     loadQueueRef.current = [];
     expectedNavUrlRef.current = '';
-    parallelPool.reset();
+    parallelPool.reset(); addPool.reset();
     robotChallengeResumeIdxRef.current = searchIdxRef.current;
     blockReasonRef.current = 'http-' + statusCode;
     setBlockReason('http-' + statusCode);
@@ -1206,7 +1330,7 @@ export default function WebViewCartSheet({
     setBlockReason(null);
     blockReasonRef.current = null;
     robotChallengeResumeIdxRef.current = -1;
-    parallelPool.reset();
+    parallelPool.reset(); addPool.reset();
     searchIdxRef.current = 0;
     onSearchPageRef.current = false;
     loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
@@ -1855,6 +1979,38 @@ export default function WebViewCartSheet({
                 thirdPartyCookiesEnabled
                 userAgent={STORE_WEBVIEW_UA}
                 injectedJavaScript={workerScripts[i]}
+              />
+            ) : null)}
+          </View>
+        )}
+
+        {/* ── Hidden parallel ADD pool (FEATURE_PARALLEL_ADD) ──────────────
+            Mounted offscreen only while parallel add is running. Each worker
+            loads getSearchUrl(term)#mealio=<json> and runs the search-and-add
+            script, reporting WORKER_RESULT. */}
+        {parallelCfg && addPool.isActive && (
+          <View
+            pointerEvents="none"
+            style={{ position: 'absolute', width: 414, height: 896, opacity: 0, left: -100000, top: -100000 }}
+          >
+            {addPool.workerUris.map((uri, i) => uri ? (
+              <WebView
+                key={'parallel-add-worker-' + i}
+                source={addWorkerSources[i]}
+                style={{ width: 414, height: 896 }}
+                onMessage={(e) => onAddWorkerMessage(i, e)}
+                onHttpError={onHttpError}
+                onShouldStartLoadWithRequest={(request) => (
+                  request.url.startsWith('http://') ||
+                  request.url.startsWith('https://') ||
+                  request.url.startsWith('about:')
+                )}
+                javaScriptEnabled
+                domStorageEnabled
+                sharedCookiesEnabled
+                thirdPartyCookiesEnabled
+                userAgent={STORE_WEBVIEW_UA}
+                injectedJavaScript={addWorkerScripts[i]}
               />
             ) : null)}
           </View>
