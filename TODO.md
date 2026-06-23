@@ -6,6 +6,30 @@ list is per-session and does not persist; this file does).
 
 ## Open
 
+- [ ] **Background add-to-cart (in-app, v1)** — run add-to-cart in the background
+  behind a draggable circular-progress bubble (bottom-right) instead of a
+  blocking modal. Tap to open the current sheet; success → check (opens cart
+  snapshot), review/out-of-stock or snapshot problem → warning (opens that
+  page). Login handled UP FRONT in foreground, then collapse to the bubble.
+  Local notification on terminal/action states when backgrounded. Phases:
+  (1) lift engine into root `CartJobProvider`, sheet becomes a consumer, flag-
+  gated, prove parity; (2) bubble + drag + login-up-front collapse; (3) AppState
+  pause/resume of timers + expo-notifications; (4) polish (haptics, a11y,
+  position persistence, cancel, tests). NOTE: true run-while-app-CLOSED is NOT
+  possible on-device (iOS/Android suspend JS + WebView); v1 pauses on background
+  and resumes on foreground. See v2 below for the closed-app path.
+- [ ] **Background add-to-cart (server-side, v2)** — true background while the app
+  is fully closed, with real push on completion. Do NOT move the WebView trick
+  server-side (storing passwords / replaying the user's cookies breaks every
+  store's ToS, and risks CFAA). Instead use official partner APIs with user
+  OAuth so the user consents on the retailer's own screen and we never hold
+  credentials: primary is the **Instacart Developer Platform** (recipe /
+  shopping-list → cart; covers most US grocery incl. ALDI, Costco, many regional
+  chains); plus the **Kroger Developer API** cart endpoints (OAuth, whole Kroger
+  family); Walmart partner/affiliate where add-to-cart is available. Hybrid:
+  API-backed + truly-background for covered stores, on-device (v1) for the rest.
+  Costs: per-retailer partner approval, OAuth integrations, legal sign-off per
+  integration. mealio.co backend fires APNs/FCM when the cart is built.
 - [ ] **Parallel add-to-cart (experiment + per-store flag; exclude ALDI)** — try
   adding via `useParallelSearchPool` with `buildSearchAndAddScript`. KEY RISK:
   workers share one cookie jar = one server-side cart, so concurrent adds are

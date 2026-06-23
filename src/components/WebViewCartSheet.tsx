@@ -61,7 +61,19 @@ interface PickedItem {
   qty: number;
 }
 
-type Step = 'qty' | 'login_check' | 'login' | 'searching' | 'searchResult' | 'review' | 'adding' | 'done' | 'robot_challenge';
+export type Step = 'qty' | 'login_check' | 'login' | 'searching' | 'searchResult' | 'review' | 'adding' | 'done' | 'robot_challenge';
+
+// Coarse state the floating bubble renders from. `kind` drives the icon and the
+// provider's collapse/expand decisions; `phase` is the raw step; `label` is a
+// short human string.
+export type CartJobKind = 'setup' | 'running' | 'attention' | 'warning' | 'done';
+export interface CartJobStatus {
+  phase: Step;
+  kind: CartJobKind;
+  label: string;
+  /** 0..1 determinate progress for the bubble ring, or null = indeterminate. */
+  progress: number | null;
+}
 
 export interface WebViewCartSheetProps {
   visible: boolean;
@@ -70,6 +82,18 @@ export interface WebViewCartSheetProps {
   storeName: string;
   onClose: () => void;
   onIngredientChosen?: (ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null) => void;
+  /** 'modal' (default) renders the original native pageSheet — unchanged
+   *  behavior. 'layer' renders a provider-controlled root overlay that can be
+   *  slid offscreen (collapsed) while keeping the WebView mounted, so the cart
+   *  job can run in the background behind the floating status bubble. */
+  presentation?: 'modal' | 'layer';
+  /** Layer mode only: when true the sheet is slid offscreen (background). */
+  collapsed?: boolean;
+  /** Fires whenever the job's coarse status changes, so the provider can drive
+   *  the floating bubble and collapse/expand. */
+  onStatusChange?: (status: CartJobStatus) => void;
+  /** Layer mode only: user tapped the minimize control (collapse to bubble). */
+  onMinimize?: () => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -133,6 +157,10 @@ export default function WebViewCartSheet({
   storeName,
   onClose,
   onIngredientChosen,
+  presentation = 'modal',
+  collapsed = false,
+  onStatusChange,
+  onMinimize,
 }: WebViewCartSheetProps) {
   // Lock the store to whatever it was when the sheet opened. The parent
   // (MyMealsScreen) can change `storeId` mid-flow — its loadMeals() auto-selects
@@ -190,6 +218,10 @@ export default function WebViewCartSheet({
 
   // Step: done
   const [totalAdded, setTotalAdded] = useState(0);
+  // Items processed so far (re-render-driving mirror of searchIdxRef), used to
+  // drive the bubble's determinate progress ring. searchIdxRef alone is a ref
+  // and never triggers a render, so it can't feed progress directly.
+  const [processedCount, setProcessedCount] = useState(0);
   const [totalFailed, setTotalFailed] = useState(0);
   // Cart snapshot validation (silent-miss detection): badge count captured
   // right after login confirms, compared against the badge after the run.
@@ -331,6 +363,49 @@ export default function WebViewCartSheet({
     emptyResult: () => [],
   });
 
+  // Emit coarse status (incl. a determinate progress fraction) upward so the
+  // provider can drive the floating bubble. No-op in modal mode.
+  useEffect(() => {
+    if (!onStatusChange) return;
+    const kindMap: Record<Step, CartJobKind> = {
+      qty: 'setup',
+      login_check: 'running',
+      login: 'attention',
+      robot_challenge: 'attention',
+      searching: 'running',
+      adding: 'running',
+      searchResult: 'warning',
+      review: 'warning',
+      done: 'done',
+    };
+    const labelMap: Record<Step, string> = {
+      qty: 'Set quantities',
+      login_check: 'Checking login…',
+      login: `Log in to ${storeName}`,
+      robot_challenge: 'Verification needed',
+      searching: searchingLabel || 'Adding to cart…',
+      adding: searchingLabel || 'Adding to cart…',
+      searchResult: 'Choose a product',
+      review: 'Review needed',
+      done: 'Done',
+    };
+    // Progress: per-item position through the search/add funnel. processedCount
+    // advances once per ingredient and DOES trigger renders (unlike searchIdxRef,
+    // and unlike totalAdded which the sequential search-and-add path never
+    // updates — that left the ring frozen). The parallel search phase has no
+    // per-item signal, so show the indeterminate spinner there.
+    const total = activeItemsRef.current.length;
+    let progress: number | null = null;
+    if (step === 'done') {
+      progress = 1;
+    } else if (parallelPool.isActive) {
+      progress = null;
+    } else if (total > 0 && (step === 'searching' || step === 'adding')) {
+      progress = Math.min(1, processedCount / total);
+    }
+    onStatusChange({ phase: step, kind: kindMap[step], label: labelMap[step], progress });
+  }, [step, searchingLabel, storeName, onStatusChange, processedCount, parallelPool.isActive]);
+
   const workerScripts = useMemo(
     () => parallelCfg
       ? new Array(PARALLEL_WORKER_COUNT).fill(0).map((_, i) => parallelCfg.buildWorkerScript(i))
@@ -443,6 +518,7 @@ export default function WebViewCartSheet({
       setCustomSuggestions([]);
       setCustomSearchTerm('');
       setTotalAdded(0);
+      setProcessedCount(0);
       setTotalFailed(0);
       setAddedNames([]);
       setBrowserShown(false);
@@ -637,6 +713,9 @@ export default function WebViewCartSheet({
   // ── Navigation to next search item ──────────────────────────────────────
 
   const navigateToSearchItem = useCallback((idx: number) => {
+    // Drive the progress ring: idx is the per-item position (0..N), advancing
+    // once per ingredient through the sequential search/add funnel.
+    setProcessedCount(idx);
     // Clear any prior search timer — even on the all-done branch — so a late
     // firing can't synthesize a phantom failure on the next session.
     if (searchTimeoutRef.current) {
@@ -775,6 +854,7 @@ export default function WebViewCartSheet({
       return;
     }
     const item = itemsToAdd[idx];
+    console.log(`[Cart ${ts()}]`, 'navigateToAddItem idx=', idx, 'searchTerm=', item.searchTerm, 'product=', item.productName, 'qty=', item.qty, 'pref=', item.preference?.text ?? null, 'onSearchPage=', onSearchPageRef.current);
     setSearchingLabel(`Adding ${item.productName}…`);
     if (onSearchPageRef.current) {
       loadQueueRef.current = [scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty)];
@@ -939,6 +1019,27 @@ export default function WebViewCartSheet({
         navigateToSearchItem(resumeIdx);
       }
       return;
+    }
+    // Immediate logged-out detection. During the login check, a logged-in
+    // profile click stays on the store; navigating to the store's login/auth
+    // page instead means the user is signed out. Show the login webview now
+    // rather than waiting out the login-check timeout. Must run BEFORE the
+    // auth-redirect skip below, since some stores' login form lives behind an
+    // /authorize URL (HEB → accounts.heb.com) that the skip would swallow.
+    if (stepRef.current === 'login_check') {
+      const onLoginPage = s.isLoginPageUrl
+        ? s.isLoginPageUrl(url)
+        : /\/login|\/sign-in|\/signin/i.test(url);
+      if (onLoginPage) {
+        console.log(`[Cart ${ts()}]`, 'onLoadEnd login page during login_check — showing login immediately');
+        if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
+        loginCheckActiveRef.current = false;
+        loadQueueRef.current = [];
+        expectedNavUrlRef.current = '';
+        setStep('login');
+        lastLoadEndUrlRef.current = '';
+        return;
+      }
     }
     // Skip intermediate auth/SSO redirect pages — scripts injected here get killed
     // when the page redirects to the final destination.
@@ -1428,12 +1529,19 @@ export default function WebViewCartSheet({
           const idx = addingIdxRef.current;
           const itemsToAdd = addingItemsRef.current;
           const item = itemsToAdd[idx];
+          console.log(`[Cart ${ts()}]`, 'ADD_RESULT idx=', idx, 'success=', msg.success, 'product=', item?.productName, 'reason=', msg.reason ?? null);
           if (item) {
             addResultsRef.current.push({ name: item.productName, success: msg.success });
           }
           const nextIdx = idx + 1;
           addingIdxRef.current = nextIdx;
-          navigateToAddItem(nextIdx, itemsToAdd);
+          // Buffer before advancing — same as the SEARCH_AND_ADD_RESULT path —
+          // so the add's in-flight cart POST commits before the next navigation
+          // (for the last item, the jump to the cart page for the snapshot)
+          // race-cancels it. Without this, the review-flow click fired but the
+          // request never reached HEB, so the item reported success yet never
+          // landed in the cart.
+          setTimeout(() => navigateToAddItem(nextIdx, itemsToAdd), 400);
         }
       } catch {
         // ignore
@@ -1618,8 +1726,7 @@ export default function WebViewCartSheet({
 
   // ── Render ───────────────────────────────────────────────────────────────
 
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+  const content = (
       <SafeAreaView style={styles.safe}>
 
         {/* Header */}
@@ -1634,9 +1741,16 @@ export default function WebViewCartSheet({
             <View style={{ width: 28 }} />
           )}
           <Text style={styles.title}>{titleMap[step]}</Text>
-          <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Text style={styles.close}>✕</Text>
-          </TouchableOpacity>
+          <View style={styles.headerRight}>
+            {presentation === 'layer' && onMinimize && (
+              <TouchableOpacity onPress={onMinimize} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ marginRight: 16 }}>
+                <Ionicons name="chevron-down" size={20} color={Colors.brand} />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={styles.close}>✕</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Hidden / Visible WebView — not mounted during qty step so the qty UI
@@ -2354,6 +2468,26 @@ export default function WebViewCartSheet({
         })()}
 
       </SafeAreaView>
+  );
+
+  // Layer mode: a provider-controlled root overlay that slides offscreen when
+  // collapsed (WebView stays mounted, background job keeps running). Used for
+  // the floating-bubble background-cart flow.
+  if (presentation === 'layer') {
+    return (
+      <View
+        style={[styles.layerRoot, collapsed && styles.layerCollapsed]}
+        pointerEvents={collapsed ? 'none' : 'auto'}
+      >
+        {content}
+      </View>
+    );
+  }
+
+  // Modal mode (default): unchanged native pageSheet.
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      {content}
     </Modal>
   );
 }
@@ -2362,6 +2496,13 @@ export default function WebViewCartSheet({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
+
+  // Layer-mode root: full-screen overlay above the app. When collapsed it is
+  // pushed far offscreen so the WebView stays mounted (job keeps running) while
+  // the app underneath is fully interactive.
+  layerRoot: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: Colors.bg, zIndex: 100, elevation: 100 },
+  layerCollapsed: { transform: [{ translateX: 100000 }] },
+  headerRight: { flexDirection: 'row', alignItems: 'center' },
 
   header: {
     flexDirection: 'row',

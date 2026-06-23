@@ -1,0 +1,215 @@
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { BackHandler, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import WebViewCartSheet, {
+  CartJobStatus,
+  WebViewCartSheetProps,
+} from '../components/WebViewCartSheet';
+import CartStatusBubble from '../components/CartStatusBubble';
+import { STORES } from '../constants/stores';
+import { Colors } from '../constants/colors';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CartJobProvider owns the single add-to-cart job for the whole app.
+//
+// The WebView cart engine (WebViewCartSheet) is mounted HERE, at the app root,
+// so it survives navigation between screens. In layer mode the sheet can slide
+// offscreen (collapsed) while its WebView keeps running, so the job runs in the
+// background behind a floating status bubble:
+//   • Start expanded. Login is handled UP FRONT in the foreground.
+//   • Once work enters search/add, auto-collapse to the bubble.
+//   • Steps that need the user (login, robot challenge) force the sheet open.
+//   • Review-needed / done show a warning / check on the bubble; the user taps
+//     to expand (we don't yank the sheet open under them).
+// ─────────────────────────────────────────────────────────────────────────────
+
+type CartJobParams = Pick<
+  WebViewCartSheetProps,
+  'meals' | 'storeId' | 'storeName' | 'onIngredientChosen'
+> & {
+  /** Called when the job sheet is dismissed, after the job is cleared. */
+  onClose?: () => void;
+};
+
+interface CartJobContextValue {
+  startJob: (params: CartJobParams) => void;
+  closeJob: () => void;
+  isActive: boolean;
+}
+
+const CartJobContext = createContext<CartJobContextValue | null>(null);
+
+export function useCartJob(): CartJobContextValue {
+  const ctx = useContext(CartJobContext);
+  if (!ctx) {
+    throw new Error('useCartJob must be used within a CartJobProvider');
+  }
+  return ctx;
+}
+
+export function CartJobProvider({ children }: { children: React.ReactNode }) {
+  const [job, setJob] = useState<CartJobParams | null>(null);
+  const [status, setStatus] = useState<CartJobStatus | null>(null);
+  // Expanded = full sheet visible; collapsed = slid offscreen + bubble shown.
+  const [expanded, setExpanded] = useState(true);
+  // Bumped on every startJob so the sheet REMOUNTS fresh each run. Without this,
+  // starting a second job while the first is still active (e.g. its done/snapshot
+  // state was never dismissed) only swaps props on the same instance, so the old
+  // step ('done' → cart snapshot) leaks into the new run.
+  const [jobKey, setJobKey] = useState(0);
+  const prevPhaseRef = useRef<string | null>(null);
+  // One-time "keep the app open" notice, shown when the job first goes
+  // background (in-app background can't survive the app being fully closed).
+  const [showKeepOpen, setShowKeepOpen] = useState(false);
+  const noticeShownRef = useRef(false);
+
+  const jobRef = useRef<CartJobParams | null>(null);
+  jobRef.current = job;
+
+  const startJob = useCallback((params: CartJobParams) => {
+    prevPhaseRef.current = null;
+    noticeShownRef.current = false;
+    setShowKeepOpen(false);
+    setStatus(null);
+    setExpanded(true);
+    setJobKey((k) => k + 1);
+    setJob(params);
+  }, []);
+
+  const closeJob = useCallback(() => {
+    const onClose = jobRef.current?.onClose;
+    setJob(null);
+    setStatus(null);
+    setExpanded(true);
+    setShowKeepOpen(false);
+    noticeShownRef.current = false;
+    prevPhaseRef.current = null;
+    onClose?.();
+  }, []);
+
+  // Map status transitions to expand/collapse decisions.
+  const handleStatus = useCallback((st: CartJobStatus) => {
+    setStatus(st);
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = st.phase;
+    // Steps that need the user must be in the foreground.
+    if (st.kind === 'attention') {
+      setExpanded(true);
+      return;
+    }
+    // Collapse to the bubble only on the FIRST entry into search/add from a
+    // foreground phase (login / review) — not on every progress tick, so a
+    // manual peek (tapping the bubble) is not yanked closed.
+    const enteringWork =
+      (st.phase === 'searching' || st.phase === 'adding') &&
+      prev !== 'searching' &&
+      prev !== 'adding';
+    if (enteringWork) {
+      setExpanded(false);
+      // First time we go background this job: tell the user to stay in the app.
+      if (!noticeShownRef.current) {
+        noticeShownRef.current = true;
+        setShowKeepOpen(true);
+      }
+    }
+  }, []);
+
+  // Android hardware back: when the sheet is expanded over the app, collapse it
+  // to the bubble rather than letting back escape the (modeless) overlay.
+  useEffect(() => {
+    if (!job || !expanded) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setExpanded(false);
+      return true;
+    });
+    return () => sub.remove();
+  }, [job, expanded]);
+
+  const value = useMemo<CartJobContextValue>(
+    () => ({ startJob, closeJob, isActive: job !== null }),
+    [startJob, closeJob, job],
+  );
+
+  const storeColor = job
+    ? STORES.find((s) => s.id === job.storeId)?.color ?? Colors.brand
+    : Colors.brand;
+
+  return (
+    <CartJobContext.Provider value={value}>
+      {children}
+      {job && (
+        <WebViewCartSheet
+          key={jobKey}
+          visible
+          presentation="layer"
+          collapsed={!expanded}
+          meals={job.meals}
+          storeId={job.storeId}
+          storeName={job.storeName}
+          onClose={closeJob}
+          onMinimize={() => setExpanded(false)}
+          onStatusChange={handleStatus}
+          onIngredientChosen={job.onIngredientChosen}
+        />
+      )}
+      {job && !expanded && status && (
+        <CartStatusBubble
+          status={status}
+          storeColor={storeColor}
+          onPress={() => setExpanded(true)}
+        />
+      )}
+
+      <Modal
+        visible={showKeepOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowKeepOpen(false)}
+      >
+        <View style={styles.noticeBackdrop}>
+          <View style={styles.noticeCard}>
+            <Text style={styles.noticeTitle}>Keep Mealio open</Text>
+            <Text style={styles.noticeBody}>
+              Mealio is adding your items in the background. Please stay in the app
+              until the progress ring finishes — leaving will pause it.
+            </Text>
+            <TouchableOpacity
+              style={[styles.noticeBtn, { backgroundColor: storeColor }]}
+              onPress={() => setShowKeepOpen(false)}
+            >
+              <Text style={styles.noticeBtnText}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </CartJobContext.Provider>
+  );
+}
+
+const styles = StyleSheet.create({
+  noticeBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+  },
+  noticeCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 22,
+    width: '100%',
+    maxWidth: 340,
+  },
+  noticeTitle: { fontSize: 18, fontFamily: 'Inter_700Bold', color: Colors.text1, marginBottom: 8 },
+  noticeBody: { fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text2, lineHeight: 20, marginBottom: 18 },
+  noticeBtn: { borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
+  noticeBtnText: { color: '#fff', fontSize: 15, fontFamily: 'Inter_600SemiBold' },
+});
