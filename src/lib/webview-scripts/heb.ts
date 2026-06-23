@@ -862,6 +862,12 @@ ${HEB_WAIT_FRESH_FN}
     }
 
     var __committed = await __waitForCartIncrease(__cartBefore, 50);
+    // Parallel-worker mode: the badge can tick up from a SIBLING worker's add,
+    // so __committed may pass while our OWN cart POST is still in flight. The
+    // pool re-navigates this worker the instant we post the result, which would
+    // cancel that request. Give it a beat to flush first. (The sequential flow
+    // has the RN-side navigation buffer, so it skips this.)
+    if (__committed && location.hash && location.hash.indexOf('#mealio=') === 0) await wait(450);
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify(__committed
       ? { type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }
