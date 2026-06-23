@@ -618,6 +618,19 @@ export function buildSearchAndAddScript(
   var SEARCH_TERM = ${escapedTerm};
   var QTY = ${qty};
   var DROPDOWN = ${escapedDropdown};
+  // Parallel-add worker mode: the pool injects ONE fixed script per worker, so
+  // each item's term/qty/preference ride in the URL hash (#mealio=<json>). When
+  // present, override the baked-in defaults. No hash → sequential flow, unchanged.
+  try {
+    if (location.hash && location.hash.indexOf('#mealio=') === 0) {
+      var __mq = JSON.parse(decodeURIComponent(location.hash.slice(8)));
+      if (__mq) {
+        if (typeof __mq.term === 'string') SEARCH_TERM = __mq.term;
+        if (typeof __mq.qty === 'number') QTY = __mq.qty;
+        if (__mq.dropdown !== undefined) DROPDOWN = __mq.dropdown;
+      }
+    }
+  } catch (e) {}
   var TITLE_SEL = '[data-qe-id="productTitle"]';
 ${HEB_FIND_CARDS_FN}
 ${HEB_WAIT_FRESH_FN}
