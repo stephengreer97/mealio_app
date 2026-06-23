@@ -10,6 +10,7 @@
 // Both types use lazy rendering that requires polling for elements.
 
 import { buildExtractWorker } from './worker-search';
+import { buildCartConfirmFn } from './cart-confirm';
 
 const AMAZON_URL = 'https://www.amazon.com/fresh';
 const AMAZON_LOGIN_URL = 'https://www.amazon.com/ap/signin';
@@ -287,7 +288,7 @@ function buildAddToCartScript(
 
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
-
+${buildCartConfirmFn(['#nav-cart-count'], '(\\d+)')}
   function __noKbd(e) {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
       e.target.setAttribute('inputmode', 'none');
@@ -690,6 +691,10 @@ function buildAddToCartScript(
     return;
   }
 
+  // Snapshot the header cart count before adding — success is gated on it
+  // actually ticking up (deterministic commit), not just on a click landing.
+  var __cartBefore = __cartCount();
+
   // ── Type B: Search results ────────────────────────────────────────────────
   if (targetCard.matches(CARD_B)) {
     var addBtn = await waitForAddButtonB(targetCard);
@@ -767,8 +772,11 @@ function buildAddToCartScript(
         advanced: __postIncQty > preIncQty,
       }));
     }
+    var __committedB = await __waitForCartIncrease(__cartBefore, 50);
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: true }));
+    window.ReactNativeWebView.postMessage(JSON.stringify(__committedB
+      ? { type: 'ADD_RESULT', success: true }
+      : { type: 'ADD_RESULT', success: false, reason: 'cart_not_incremented' }));
     return;
   }
 
@@ -815,8 +823,11 @@ function buildAddToCartScript(
     quantityAdded++;
   }
 
+  var __committedA = await __waitForCartIncrease(__cartBefore, 50);
   document.removeEventListener('focusin', __noKbd, true);
-  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: true }));
+  window.ReactNativeWebView.postMessage(JSON.stringify(__committedA
+    ? { type: 'ADD_RESULT', success: true }
+    : { type: 'ADD_RESULT', success: false, reason: 'cart_not_incremented' }));
 })();true;`;
 }
 
@@ -852,7 +863,7 @@ function buildSearchAndAddScript(
   window.__mealioFreshAddBusy = true;
 
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
-
+${buildCartConfirmFn(['#nav-cart-count'], '(\\d+)')}
   function __noKbd(e) {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
       e.target.setAttribute('inputmode', 'none');
@@ -1328,6 +1339,9 @@ function buildSearchAndAddScript(
     return;
   }
 
+  // Header cart count before adding — success is gated on it ticking up.
+  var __cartBefore = __cartCount();
+
   try {
     // ── Type B: Search results ──────────────────────────────────────────────
     if (bestCard.matches(CARD_B)) {
@@ -1414,8 +1428,11 @@ function buildSearchAndAddScript(
           advanced: __postIncQty > preIncQty,
         }));
       }
+      var __committedB = await __waitForCartIncrease(__cartBefore, 50);
       document.removeEventListener('focusin', __noKbd, true);
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }));
+      window.ReactNativeWebView.postMessage(JSON.stringify(__committedB
+        ? { type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }
+        : { type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'cart_not_incremented', productName: bestName, candidates: candidates }));
       return;
     }
 
@@ -1461,8 +1478,11 @@ function buildSearchAndAddScript(
       quantityAdded++;
     }
 
+    var __committedA = await __waitForCartIncrease(__cartBefore, 50);
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }));
+    window.ReactNativeWebView.postMessage(JSON.stringify(__committedA
+      ? { type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }
+      : { type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'cart_not_incremented', productName: bestName, candidates: candidates }));
   } catch(e) {
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: candidates }));

@@ -24,6 +24,14 @@ export interface StoreScripts {
   isSearchUrl: (url: string) => boolean;
   /** Returns true if the URL indicates a successful login redirect. */
   isLoginSuccessUrl: (url: string) => boolean;
+  /** Returns true if the URL is the store's login / sign-in page. During the
+   *  login check a logged-in profile click stays on the store, so navigating
+   *  here means the user is signed out — the flow shows the login webview
+   *  immediately instead of waiting out the login-check timeout. Needed for
+   *  stores whose login form lives behind an /authorize URL that the generic
+   *  auth-redirect skip would otherwise swallow (HEB → accounts.heb.com).
+   *  Defaults to a generic /login|/sign-in matcher when omitted. */
+  isLoginPageUrl?: (url: string) => boolean;
   /** When true, re-inject checkLoginScript on every login-step page load that
    *  lands back on the store (not auth/sign-in URLs, which are handled earlier).
    *  Needed for stores whose login detection relies on a background poll that
@@ -84,6 +92,14 @@ const hebScripts: StoreScripts = {
   // Do NOT match the OIDC callback — it must complete its redirect chain
   // to set session cookies. onLoadEnd re-injection handles post-login detection.
   isLoginSuccessUrl: () => false,
+  // Logged-out profile clicks redirect to accounts.heb.com (an /authorize URL).
+  // Recognize it so the login check shows the form immediately.
+  isLoginPageUrl: (url) => /accounts\.heb\.com/i.test(url) || /\/my-account\/login/i.test(url),
+  // After the user signs in, HEB lands back on www.heb.com. Re-run the login
+  // check there so the flow continues on its own. The auth-redirect skip means
+  // this only fires once the OIDC chain settles on the store (cookies set), and
+  // never on the accounts.heb.com login form, so it can't fight the user.
+  reinjectLoginCheckOnNav: true,
   checkLoginScript: CHECK_LOGIN_SCRIPT,
   extractProductsScript: EXTRACT_PRODUCTS_SCRIPT,
   buildAddToCartScript: hebBuildATC,

@@ -119,12 +119,44 @@ export const CHECK_LOGIN_SCRIPT = `(async function() {
     // a redirect — a slow network can stall the logged-out redirect past our
     // wait and make a signed-out session look signed-in. If the marker never
     // appears we report logged-out and the user is shown the login webview.
+    // Collect visible text INCLUDING one level of shadow DOM — HEB's account
+    // panel may render inside a web component whose text document.body.innerText
+    // does not see (which would make a logged-in panel look logged-out).
+    function deepText() {
+      var out = document.body.innerText || '';
+      var hosts = document.querySelectorAll('*');
+      for (var hi = 0; hi < hosts.length; hi++) {
+        var sr = hosts[hi].shadowRoot;
+        if (sr) { try { out += ' ' + (sr.textContent || ''); } catch (e) {} }
+      }
+      return out;
+    }
     var LOGGED_IN_RE = /log ?out|sign ?out/;
     var loggedIn = false;
+    var lastText = '';
     for (var ci = 0; ci < 40; ci++) {           // up to ~8s for the panel to render
       await wait(200);
-      var bodyText = (document.body.innerText || '').slice(0, 8000).toLowerCase();
-      if (LOGGED_IN_RE.test(bodyText)) { loggedIn = true; break; }
+      lastText = deepText().toLowerCase();
+      if (LOGGED_IN_RE.test(lastText)) { loggedIn = true; break; }
+    }
+
+    if (!loggedIn) {
+      // Diagnostic: dump what the panel actually rendered so we can pick a
+      // reliable logged-in marker when the default one misses.
+      var shadowHosts = 0;
+      var allEls = document.querySelectorAll('*');
+      for (var si = 0; si < allEls.length; si++) { if (allEls[si].shadowRoot) shadowHosts++; }
+      var panels = Array.prototype.slice.call(
+        document.querySelectorAll('[role="dialog"], aside, [class*="drawer" i], [class*="panel" i], [class*="account" i]'), 0, 6
+      ).map(function(d) {
+        return { tag: d.tagName, cls: (d.getAttribute('class') || '').slice(0, 60), text: (d.innerText || '').trim().slice(0, 220) };
+      });
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'LOGIN_DEBUG', step: 'panel_miss',
+        shadowHosts: shadowHosts,
+        textSample: lastText.slice(0, 1500),
+        panels: panels
+      }));
     }
 
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'panel_check', loggedIn: loggedIn }));
@@ -491,27 +523,58 @@ ${HEB_FIND_CARDS_FN}
     document.body.click();
     await wait(300);
   } else if (!hasPopup) {
+    // Deterministic commit confirmation: wait for the top-right header cart
+    // badge to actually increment before reporting success. Its aria-label reads
+    // "Go to Cart page. N items in your cart. $X". Holding here until the count
+    // ticks up means (a) we only report success when the add really committed,
+    // and (b) the RN side won't navigate (and race-cancel the add request)
+    // before it lands. When the item is already in the cart, HEB reuses this
+    // same addToCart button as the "add 1 more" incrementer.
+    function cartCount() {
+      var el = document.querySelector('[data-qe-id="headerCartButtonDesktop"], [data-testid="cart-link"]');
+      var a = el ? (el.getAttribute('aria-label') || '') : '';
+      var m = a.match(/(\\d+)\\s*items?/i);
+      return m ? parseInt(m[1], 10) : -1;
+    }
+    async function waitForCartIncrease(prev, maxTicks) {
+      if (prev < 0) { await wait(2500); return true; }   // badge unreadable → generous settle (slow networks)
+      for (var w = 0; w < maxTicks; w++) {
+        if (cartCount() > prev) return true;
+        await wait(200);
+      }
+      return false;
+    }
+
+    var cartBefore = cartCount();
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '2_preclick', cartBefore: cartBefore, visible: addBtn.offsetParent !== null, disabled: addBtn.disabled || addBtn.getAttribute('aria-disabled') === 'true' }));
+
     addBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
     await wait(100);
     addBtn.click();
-    await wait(600);
+    await wait(400);
 
-    // Check for weight dropdown (e.g. fresh fish/meat sold by lb)
+    // Weight dropdown (fresh fish/meat sold by lb) intercepts before any cart change.
     if (await handleWeightDropdown(QTY)) {
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: true }));
       return;
     }
 
-    // For qty > 1: after first add, button may become an incrementer OR stay as ATC.
+    var committed = await waitForCartIncrease(cartBefore, 50);   // up to ~10s (slow networks)
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '3_postclick', cartAfter: cartCount(), committed: committed }));
+    if (!committed) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'cart_not_incremented' }));
+      return;
+    }
+
+    // Remaining units: same button is the "add 1 more" incrementer; wait for each tick.
     for (var j = 1; j < QTY; j++) {
-      var btn = targetCard.querySelector('button[data-qe-id="cartQuantityCounterIncrement"]');
-      if (!btn) btn = targetCard.querySelector('button[data-qe-id="addToCart"]');
-      if (!btn) break;
-      if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') break;
+      var prev = cartCount();
+      var btn = targetCard.querySelector('button[data-qe-id="addToCart"]');
+      if (!btn || btn.disabled || btn.getAttribute('aria-disabled') === 'true') break;
       btn.scrollIntoView({ behavior: 'instant', block: 'center' });
       await wait(100);
       btn.click();
-      if (j < QTY - 1) await wait(500);
+      await waitForCartIncrease(prev, 40);
     }
   } else {
     // hasPopup but no recorded preference — try clicking and check for weight dropdown
