@@ -29,6 +29,8 @@ import MealDetailSheet from '../../components/MealDetailSheet';
 import KrogerCartReviewSheet from '../../components/KrogerCartReviewSheet';
 import WebViewCartSheet from '../../components/WebViewCartSheet';
 import ProductChooserSheet from '../../components/ProductChooserSheet';
+import { useCartJob } from '../../context/CartJobContext';
+import { FEATURE_BACKGROUND_CART } from '../../constants/features';
 import IngredientEditor from '../../components/IngredientEditor';
 import PhotoPicker from '../../components/PhotoPicker';
 import Button from '../../components/ui/Button';
@@ -64,6 +66,9 @@ export default function MyMealsScreen() {
   const [detailVisible, setDetailVisible] = useState(false);
   const [krogerConnected, setKrogerConnected] = useState(false);
   const [krogerLocations, setKrogerLocations] = useState<Record<string, { locationId: string; locationName: string }>>({});
+
+  // Background add-to-cart job owner (root-level WebView engine).
+  const cartJob = useCartJob();
 
   // Multi-select / Kroger cart
   const [selectedMealIds, setSelectedMealIds] = useState<Set<string>>(new Set());
@@ -585,7 +590,20 @@ export default function MyMealsScreen() {
         return (
           <TouchableOpacity
             style={[styles.floatingCart, { backgroundColor: selectedStore_?.color ?? Colors.brand }]}
-            onPress={() => { setCartStoreId(selectedStore); setWebViewCartVisible(true); }}
+            onPress={() => {
+              if (FEATURE_BACKGROUND_CART) {
+                cartJob.startJob({
+                  meals: selectedMeals,
+                  storeId: selectedStore,
+                  storeName: STORES.find((s) => s.id === selectedStore)?.name ?? 'Store',
+                  onIngredientChosen: handleIngredientChosen,
+                  onClose: () => setSelectedMealIds(new Set()),
+                });
+              } else {
+                setCartStoreId(selectedStore);
+                setWebViewCartVisible(true);
+              }
+            }}
             activeOpacity={0.88}
           >
             <Ionicons name={webViewNeedsChoose ? 'search' : 'cart'} size={18} color="#fff" />
@@ -621,14 +639,18 @@ export default function MyMealsScreen() {
         }}
       />
 
-      <WebViewCartSheet
-        visible={webViewCartVisible}
-        meals={selectedMeals}
-        storeId={cartStoreId || selectedStore}
-        storeName={STORES.find((s) => s.id === (cartStoreId || selectedStore))?.name ?? 'Store'}
-        onClose={() => { setWebViewCartVisible(false); setSelectedMealIds(new Set()); }}
-        onIngredientChosen={handleIngredientChosen}
-      />
+      {/* Inline cart mount — only when the background-cart engine is OFF.
+          When ON, the root-level CartJobProvider owns the WebView instead. */}
+      {!FEATURE_BACKGROUND_CART && (
+        <WebViewCartSheet
+          visible={webViewCartVisible}
+          meals={selectedMeals}
+          storeId={cartStoreId || selectedStore}
+          storeName={STORES.find((s) => s.id === (cartStoreId || selectedStore))?.name ?? 'Store'}
+          onClose={() => { setWebViewCartVisible(false); setSelectedMealIds(new Set()); }}
+          onIngredientChosen={handleIngredientChosen}
+        />
+      )}
 
       {choosingMeal && (
         <ProductChooserSheet
