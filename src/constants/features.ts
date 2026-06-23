@@ -16,6 +16,7 @@ export const FEATURE_BACKGROUND_CART = true;
 // is the correctness guard. Experiment flag, off by default while we pilot HEB.
 export const FEATURE_PARALLEL_ADD = false;
 
-// Concurrency cap for parallel add-to-cart. Lower than parallel search (5) since
-// concurrent cart WRITES are riskier than concurrent reads.
-export const PARALLEL_ADD_WORKERS = 3;
+// Concurrency cap for parallel add-to-cart. The sequential reconciliation pass
+// re-adds anything the concurrent pass missed (false positives from the shared
+// cart counter), so we can run wide for speed.
+export const PARALLEL_ADD_WORKERS = 5;

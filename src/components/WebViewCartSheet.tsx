@@ -321,6 +321,11 @@ export default function WebViewCartSheet({
   const addingItemsRef = useRef<PickedItem[]>([]);
   const addResultsRef = useRef<{ name: string; success: boolean }[]>([]);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
+  // Parallel-add reconciliation: results from the concurrent pass (by item idx)
+  // and a one-shot arm so the after-snapshot re-adds the genuinely-missing items
+  // (false positives from the shared cart counter) sequentially, exactly once.
+  const parallelResultByIdxRef = useRef<Map<number, AddResult>>(new Map());
+  const parallelReconcileArmedRef = useRef(false);
   // Items that were auto-picked during search (had searchTerm set, match found — skip review).
   const autoPickedItemsRef = useRef<PickedItem[]>([]);
   // Sync mirror of searchResults for use inside callbacks (avoids stale closure on state).
@@ -383,7 +388,10 @@ export default function WebViewCartSheet({
     // Longer than search: an add worker also runs the cart-badge confirmation
     // poll (up to ~10s on a slow network) on top of search + click.
     workerTimeoutMs: 35_000,
-    dispatchStaggerMs: PARALLEL_WORKER_STAGGER_MS,
+    // Stagger the initial burst so 5 workers don't all cold-start their search
+    // pages at the same instant — that simultaneous load left some grids unpainted
+    // when the add script ran (no_results / product=null). Spreads them out.
+    dispatchStaggerMs: PARALLEL_WORKER_STAGGER_MS || 500,
     getUrl: (item) => {
       const s = getStoreScripts(lockedStoreIdRef.current);
       if (!s?.getSearchUrl || !item.searchTerm) return '';
@@ -507,43 +515,28 @@ export default function WebViewCartSheet({
 
   const finishParallelAdd = useCallback((resultsByIdx: Map<number, AddResult>) => {
     const active = activeItemsRef.current;
-    const addedNames: string[] = [];
-    const failedResults: SearchResult[] = [];
+    // The concurrent pass is best-effort — its per-worker confirmation reads a
+    // SHARED cart counter, so under concurrency a worker can falsely confirm
+    // (its count rose because a sibling's add landed). So we DON'T trust these
+    // results: record the reported successes, then arm the after-snapshot to
+    // reconcile against the real cart and re-add anything missing sequentially.
+    parallelResultByIdxRef.current = resultsByIdx;
+    addResultsRef.current = [];
+    let successCount = 0;
     for (let idx = 0; idx < active.length; idx++) {
-      const item = active[idx];
       const r = resultsByIdx.get(idx);
-      const name = item.searchTerm || item.ingredientName;
       if (r && r.success) {
-        addedNames.push(r.productName || name);
-        addResultsRef.current.push({ name: r.productName || name, success: true });
-      } else {
-        // Unconfirmed → route to the existing review path with whatever the
-        // worker found, so the user can pick/retry sequentially.
-        failedResults.push({
-          term: name,
-          candidates: r?.candidates ?? [],
-          mealIngredients: item.mealIngredients,
-          unit: item.unit,
-          measure: item.measure,
-          reason: r?.reason === 'out_of_stock' ? 'out_of_stock' : (r?.candidates?.length ? 'low_confidence' : 'no_results'),
-          isChoose: false,
-        });
-        addResultsRef.current.push({ name, success: false });
+        addResultsRef.current.push({ name: r.productName || active[idx].searchTerm || active[idx].ingredientName, success: true });
+        successCount++;
       }
     }
-    console.log(`[Cart ${ts()}]`, 'parallel add: done. added=', addedNames.length, 'failed=', failedResults.length);
-    if (failedResults.length > 0) {
-      searchResultsRef.current = failedResults;
-      setSearchResults(failedResults);
-      setStep('searchResult');
-      setReviewIdx(0);
-    } else {
-      setTotalAdded(addResultsRef.current.filter((x) => x.success).length);
-      setTotalFailed(0);
-      setAddedNames(addedNames);
-      setStep('done');
-    }
-  }, []);
+    console.log(`[Cart ${ts()}]`, 'parallel add: pass done. reported success=', successCount, 'of', active.length, '— reconciling against cart');
+    parallelReconcileArmedRef.current = true;
+    setTotalAdded(successCount);
+    setTotalFailed(0);
+    setAddedNames(addResultsRef.current.map((x) => x.name));
+    setStep('done');
+  }, [setStep]);
 
   const startParallelAdd = useCallback(() => {
     const active = activeItemsRef.current;
@@ -562,7 +555,7 @@ export default function WebViewCartSheet({
         return;
       }
       if (msg.type === 'WORKER_RESULT') {
-        console.log(`[Cart ${ts()}]`, 'ADD WORKER_RESULT w', workerId, 'success=', msg.success, 'product=', msg.productName);
+        console.log(`[Cart ${ts()}]`, 'ADD WORKER_RESULT w', workerId, 'success=', msg.success, 'product=', msg.productName, 'reason=', msg.reason ?? null);
         addPool.reportResult(workerId, {
           success: !!msg.success, productName: msg.productName ?? null,
           reason: msg.reason ?? null, candidates: msg.candidates ?? [],
@@ -673,6 +666,8 @@ export default function WebViewCartSheet({
       cartCountPendingRef.current = null;
       cartItemsBeforeRef.current = [];
       capturedCartUrlRef.current = null;
+      parallelReconcileArmedRef.current = false;
+      parallelResultByIdxRef.current = new Map();
       setCartResultRows(null);
       setCartRowsTimedOut(false);
       if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
@@ -734,7 +729,10 @@ export default function WebViewCartSheet({
   // now-idle webview to /cart and count there; otherwise read the header badge
   // off the last search page (still mounted through 'done').
   useEffect(() => {
-    if (step !== 'done' || totalAdded === 0 || cartCountBeforeRef.current == null) return;
+    // Normally skip the probe when nothing was added — but a parallel-add
+    // reconciliation needs the snapshot even at 0 reported successes (to find
+    // what to re-add), so allow it through when armed.
+    if (step !== 'done' || (totalAdded === 0 && !parallelReconcileArmedRef.current) || cartCountBeforeRef.current == null) return;
     const cartPageScript = buildCartPageCountScript(lockedStoreId);
     // Prefer a direct cart URL: the store's static one, else the URL the
     // before-probe cached (click-path stores). Hitting it directly skips the
@@ -1451,6 +1449,40 @@ export default function WebViewCartSheet({
               if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
               rows = diffCartItems(cartItemsBeforeRef.current, msg.items);
               setCartResultRows(rows);
+            }
+            // ── Parallel-add reconciliation (one-shot) ──────────────────────
+            // Trust the CART, not the workers: anything the concurrent pass
+            // reported as added that isn't actually in the cart (shared-counter
+            // false positives), plus anything it failed, gets re-added
+            // SEQUENTIALLY here — single-threaded, so no race.
+            if (parallelReconcileArmedRef.current) {
+              parallelReconcileArmedRef.current = false;
+              const reconResults = parallelResultByIdxRef.current;
+              const active = activeItemsRef.current;
+              const addedCartNames = rows ? rows.filter((r) => r.added).map((r) => r.name) : [];
+              const retryItems: ConsolidatedIngredient[] = [];
+              const confirmed: { name: string; success: boolean }[] = [];
+              active.forEach((item, idx) => {
+                const r = reconResults.get(idx);
+                const reportedName = (r && r.productName) || item.searchTerm || item.ingredientName;
+                const inCart = !!(r && r.success && findUnaddedItems([reportedName], addedCartNames).length === 0);
+                if (inCart) confirmed.push({ name: reportedName, success: true });
+                else retryItems.push(item);
+              });
+              console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm));
+              if (retryItems.length > 0) {
+                addResultsRef.current = confirmed;
+                activeItemsRef.current = retryItems;
+                searchIdxRef.current = 0;
+                onSearchPageRef.current = false;
+                setCartResultRows(null);
+                setCartDeltaWarning(null);
+                setSearchingLabel(`Adding ${retryItems.length} item${retryItems.length === 1 ? '' : 's'}…`);
+                setStep('searching');
+                navigateToSearchItem(0);
+                return;
+              }
+              // All confirmed — fall through to the normal (empty) warning state.
             }
             // When we have per-item cart data, name the products Mealio reported
             // as added that didn't actually show up in the cart (silent misses).
