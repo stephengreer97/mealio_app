@@ -631,6 +631,21 @@ export function buildSearchAndAddScript(
       }
     }
   } catch (e) {}
+  // Cart-badge confirmation (mirrors buildAddToCartScript): gate success on the
+  // header cart count actually rising, so each (parallel) worker only reports
+  // success when its add truly committed. Unreadable badge → 2.5s settle.
+  function __cartCount() {
+    var el = document.querySelector('[data-qe-id="headerCartButtonDesktop"], [data-testid="cart-link"]');
+    var a = el ? (el.getAttribute('aria-label') || '') : '';
+    var m = a.match(/(\\d+)\\s*items?/i);
+    return m ? parseInt(m[1], 10) : -1;
+  }
+  async function __waitForCartIncrease(prev, ticks) {
+    if (prev < 0) { await wait(2500); return true; }
+    for (var w = 0; w < ticks; w++) { if (__cartCount() > prev) return true; await wait(200); }
+    return false;
+  }
+  var __cartBefore = -1;
   var TITLE_SEL = '[data-qe-id="productTitle"]';
 ${HEB_FIND_CARDS_FN}
 ${HEB_WAIT_FRESH_FN}
@@ -742,6 +757,7 @@ ${HEB_WAIT_FRESH_FN}
 
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'DEBUG', step: '0_best_found', bestName: bestName, bestHasPopup: bestHasPopup, hasDropdown: !!DROPDOWN, qty: QTY }));
   try {
+    __cartBefore = __cartCount();
     bestBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
     await wait(100);
     bestBtn.click();
@@ -845,8 +861,11 @@ ${HEB_WAIT_FRESH_FN}
       }
     }
 
+    var __committed = await __waitForCartIncrease(__cartBefore, 50);
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }));
+    window.ReactNativeWebView.postMessage(JSON.stringify(__committed
+      ? { type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }
+      : { type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'cart_not_incremented', productName: bestName, candidates: candidates }));
   } catch(e) {
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: candidates }));

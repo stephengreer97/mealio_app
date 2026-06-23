@@ -380,7 +380,9 @@ export default function WebViewCartSheet({
   // reads them and confirms via the store cart badge (> prev).
   const addPool = useParallelSearchPool<ConsolidatedIngredient, AddResult>({
     workerCount: PARALLEL_ADD_WORKERS,
-    workerTimeoutMs: PARALLEL_WORKER_TIMEOUT_MS,
+    // Longer than search: an add worker also runs the cart-badge confirmation
+    // poll (up to ~10s on a slow network) on top of search + click.
+    workerTimeoutMs: 35_000,
     dispatchStaggerMs: PARALLEL_WORKER_STAGGER_MS,
     getUrl: (item) => {
       const s = getStoreScripts(lockedStoreIdRef.current);
