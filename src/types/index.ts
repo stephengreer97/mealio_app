@@ -72,11 +72,19 @@ export interface Creator {
   photoUrl?: string | null;
   socialHandle?: string | null;
   followers?: number;
-  quarterlySaves?: number;
-  allTimeSaves?: number;
-  sharePercent?: number;
   isFollowing?: boolean;
   createdAt?: string;
+}
+
+// Profit share is based entirely on the creator's meal saves over a rolling
+// 12-month window as a share of all creators' saves in the same window.
+export interface CreatorStats {
+  followers: number;
+  savesAnnual: number;             // this creator's saves in the last 365 days
+  savesAll: number;                // this creator's all-time saves
+  totalCreatorAnnualSaves: number; // all creators' saves in the last 365 days (denominator)
+  annualPct: number;               // savesAnnual / totalCreatorAnnualSaves * 100
+  sharePercent: number;            // profit-share percentage (== annualPct)
 }
 
 export interface CreatorApplication {

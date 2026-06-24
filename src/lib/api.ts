@@ -1,5 +1,5 @@
 import { getAccessToken, getRefreshToken, save, clear } from './tokenStorage';
-import { Meal, PresetMeal, Creator, User, Ingredient } from '../types';
+import { Meal, PresetMeal, Creator, CreatorStats, User, Ingredient } from '../types';
 import { normalizeIngredients } from './normalizeIngredients';
 import { mapMeal, mapPresetMeal, mapCreator } from './api-mappers';
 
@@ -272,13 +272,13 @@ export const creators = {
       .then((r) => (r.creators ?? []).map(mapCreator)),
 
   getMe: () =>
-    request<{ creator: any | null; application: any | null; meals?: any[]; stats?: any }>(
+    request<{ creator: any | null; application: any | null; meals?: any[]; stats?: CreatorStats }>(
       '/api/creator/me', { method: 'GET' }
     ).then((r) => ({
       creator: r.creator ? mapCreator(r.creator) : null,
       application: r.application ?? null,
       meals: (r.meals ?? []).map(mapPresetMeal),
-      stats: r.stats ?? null,
+      stats: (r.stats ?? null) as CreatorStats | null,
     })),
 
   updateMe: (data: Partial<Creator>) =>
