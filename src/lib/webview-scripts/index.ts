@@ -87,7 +87,10 @@ const hebScripts: StoreScripts = {
   loginUrl: HEB_LOGIN_URL,
   cartUrl: HEB_CART_URL,
   domain: 'heb.com',
-  appScheme: 'heb://',
+  // Opens the My H-E-B app (com.heb.myheb). HEB exposes no cart-specific deep
+  // link, so this lands on the app's home — still better than the website. The
+  // 'heb://' scheme was wrong (copied the Kroger-family naming; HEB isn't Kroger).
+  appScheme: 'myheb://',
   isSearchUrl: (url) => url.includes('/search'),
   // Do NOT match the OIDC callback — it must complete its redirect chain
   // to set session cookies. onLoadEnd re-injection handles post-login detection.
