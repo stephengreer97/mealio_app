@@ -2539,6 +2539,15 @@ export default function WebViewCartSheet({
                         </Text>
                       </TouchableOpacity>
                     </View>
+                    {/* Skip — lets the user move past an ingredient with no match
+                        instead of being stuck on a disabled Next. */}
+                    <TouchableOpacity
+                      onPress={() => handleReviewDecision('skip')}
+                      disabled={customSearching}
+                      style={[styles.skipBtn, customSearching && { opacity: 0.4 }]}
+                    >
+                      <Text style={styles.skipBtnText}>Skip this ingredient</Text>
+                    </TouchableOpacity>
                   </>
                 ) : (
                   // Review-unmatched flow: add to cart (with or without saving searchTerm).
