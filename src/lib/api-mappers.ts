@@ -64,9 +64,6 @@ export function mapCreator(c: any): Creator {
     socialHandle: c.social_handle ?? c.socialHandle ?? null,
     followers: c.followers ?? 0,
     isFollowing: c.is_following ?? c.isFollowing ?? false,
-    quarterlySaves: c.quarterlySaves ?? 0,
-    allTimeSaves: c.allTimeSaves ?? 0,
-    sharePercent: c.sharePercent ?? 0,
     createdAt: c.created_at ?? c.createdAt,
   };
 }

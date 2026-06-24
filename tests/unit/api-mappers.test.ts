@@ -214,9 +214,6 @@ describe('mapCreator', () => {
   it('defaults numeric counters to 0', () => {
     const r = mapCreator(minimal);
     expect(r.followers).toBe(0);
-    expect(r.quarterlySaves).toBe(0);
-    expect(r.allTimeSaves).toBe(0);
-    expect(r.sharePercent).toBe(0);
   });
 
   it('defaults isFollowing to false', () => {

@@ -17,7 +17,7 @@ import { Image } from 'expo-image';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import PhotoPicker from '../../components/PhotoPicker';
 import { Colors, Radius } from '../../constants/colors';
-import { Creator, PresetMeal, Ingredient } from '../../types';
+import { Creator, CreatorStats, PresetMeal, Ingredient } from '../../types';
 import { creators as creatorsApi } from '../../lib/api';
 import MealDetailSheet from '../../components/MealDetailSheet';
 import Card from '../../components/ui/Card';
@@ -29,7 +29,7 @@ import { ALL_TAGS } from '../../constants/tags';
 
 export default function CreatorPortalScreen() {
   const [creator, setCreator] = useState<Creator | null>(null);
-  const [stats, setStats] = useState<any>(null);
+  const [stats, setStats] = useState<CreatorStats | null>(null);
   const [meals, setMeals] = useState<PresetMeal[]>([]);
   const [loading, setLoading] = useState(true);
   const [earningsOpen, setEarningsOpen] = useState(false);
@@ -213,8 +213,8 @@ export default function CreatorPortalScreen() {
                     <Text style={styles.statLabel}>Followers</Text>
                   </Card>
                   <Card style={styles.statCard}>
-                    <Text style={styles.statValue}>{stats.savesQtr ?? 0}</Text>
-                    <Text style={styles.statLabel}>Quarterly Saves</Text>
+                    <Text style={styles.statValue}>{stats.savesAnnual ?? 0}</Text>
+                    <Text style={styles.statLabel}>Saves (12 mo)</Text>
                   </Card>
                   <Card style={styles.statCard}>
                     <Text style={styles.statValue}>{stats.savesAll ?? 0}</Text>
@@ -231,27 +231,24 @@ export default function CreatorPortalScreen() {
                   <Feather name="dollar-sign" size={16} color={Colors.brand} style={{ marginRight: 6 }} />
                   <Text style={styles.earningsRowLabel}>How earnings work</Text>
                   <View style={styles.shareBadge}>
-                    <Text style={styles.shareBadgeText}>{(stats.combinedSharePct ?? 0).toFixed(1)}% share</Text>
+                    <Text style={styles.shareBadgeText}>{(stats.sharePercent ?? 0).toFixed(1)}% share</Text>
                   </View>
                   <Feather name={earningsOpen ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.text3} />
                 </TouchableOpacity>
                 {earningsOpen && (
                   <View style={styles.earningsBody}>
                     <Text style={styles.earningsText}>
-                      Each quarter, 1/3 of subscription profit goes to the creator pool. Your share is split evenly between two factors:
+                      Each quarter, 1/3 of subscription profit goes to the creator pool. Your share is based entirely on your meal saves over the last 12 months as a percentage of all creator meal saves over the same rolling window.
                     </Text>
                     <View style={styles.earningsFactorRow}>
                       <Feather name="trending-up" size={14} color={Colors.brand} />
                       <Text style={styles.earningsFactorText}>
-                        Quarterly saves — {(stats.qtrPct ?? stats.combinedSharePct / 2).toFixed(1)}% × 50%
+                        Saves (last 12 months): {(stats.savesAnnual ?? 0).toLocaleString()} of {(stats.totalCreatorAnnualSaves ?? 0).toLocaleString()}
                       </Text>
                     </View>
-                    <View style={styles.earningsFactorRow}>
-                      <Feather name="archive" size={14} color={Colors.brand} />
-                      <Text style={styles.earningsFactorText}>
-                        All-time saves — {(stats.alltimePct ?? stats.combinedSharePct / 2).toFixed(1)}% × 50%
-                      </Text>
-                    </View>
+                    <Text style={[styles.earningsText, { marginTop: 8 }]}>
+                      Your share: <Text style={styles.earningsShareEmphasis}>{(stats.sharePercent ?? 0).toFixed(2)}%</Text> of the creator pool
+                    </Text>
                     <Text style={[styles.earningsText, { marginTop: 8 }]}>
                       Payouts above $25 are issued at quarter end via Tremendous.
                     </Text>
@@ -505,6 +502,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   earningsText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2, lineHeight: 19 },
+  earningsShareEmphasis: { fontFamily: 'Inter_600SemiBold', color: Colors.brand },
   earningsFactorRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   earningsFactorText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text1 },
   mealsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
