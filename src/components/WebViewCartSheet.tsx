@@ -25,6 +25,8 @@ import {
   consolidateIngredients,
 } from '../lib/consolidateIngredients';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
+import { buildSearchAndAddWorker } from '../lib/webview-scripts/worker-search';
+import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS } from '../constants/features';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -52,6 +54,14 @@ interface SearchResult {
   measure: string | null;
   reason: 'out_of_stock' | 'no_results' | 'low_confidence';
   isChoose: boolean; // true = choose-product flow (no searchTerm yet); false = review unmatched (searchTerm set but no match)
+}
+
+// Result a parallel-add worker reports for one ingredient.
+interface AddResult {
+  success: boolean;
+  productName: string | null;
+  reason: string | null;
+  candidates: Candidate[];
 }
 
 interface PickedItem {
@@ -227,7 +237,7 @@ export default function WebViewCartSheet({
   // right after login confirms, compared against the badge after the run.
   // null anywhere means "couldn't read the badge" → validation is skipped.
   const cartCountBeforeRef = useRef<number | null>(null);
-  const cartCountPendingRef = useRef<'before' | 'after' | null>(null);
+  const cartCountPendingRef = useRef<'before' | 'after' | 'reconcile' | null>(null);
   // Cart-PAGE counting (HEB): the before-probe navigates to /cart, counts, then
   // resumes the search flow. This flag tells the CART_COUNT handler to kick off
   // the search once the before-count lands; the timer is a safety net so a /cart
@@ -235,6 +245,12 @@ export default function WebViewCartSheet({
   const cartProbeBeginSearchRef = useRef<boolean>(false);
   const cartProbeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const CART_PROBE_TIMEOUT_MS = 10_000;
+  // Safety net for the after/reconcile probe: if CART_COUNT never posts (a cart
+  // page that loops or never hydrates), retry once then finalize so reconcile
+  // can't wait forever.
+  const cartProbeResultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cartProbeRetriedRef = useRef(false);
+  const CART_PROBE_RESULT_TIMEOUT_MS = 14_000;
   // The done-screen breakdown spinner falls back to the plain list after this,
   // so a cart page that never loads/counts (e.g. Amazon's multi-hop cart) can't
   // hang on "Updating your … cart" forever.
@@ -311,6 +327,20 @@ export default function WebViewCartSheet({
   const addingItemsRef = useRef<PickedItem[]>([]);
   const addResultsRef = useRef<{ name: string; success: boolean }[]>([]);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
+  // Parallel-add reconciliation: results from the concurrent pass (by item idx)
+  // and a one-shot arm so the after-snapshot re-adds the genuinely-missing items
+  // (false positives from the shared cart counter) sequentially, exactly once.
+  const parallelResultByIdxRef = useRef<Map<number, AddResult>>(new Map());
+  const parallelReconcileArmedRef = useRef(false);
+  // Set when the reconcile probe finalized using its own cart read, so the
+  // 'done' effect doesn't fire a redundant second after-probe.
+  const reconcileFinalizedRef = useRef(false);
+  // Forward-only progress across the parallel pass → sequential reconcile: keep
+  // ONE denominator (the original item count) and a baseline of how many are
+  // already done, so the ring continues instead of restarting at 0 for the
+  // (smaller) reconcile subset. 0 = not a parallel run → normal per-item progress.
+  const parallelOriginalTotalRef = useRef(0);
+  const reconcileBaseRef = useRef(0);
   // Items that were auto-picked during search (had searchTerm set, match found — skip review).
   const autoPickedItemsRef = useRef<PickedItem[]>([]);
   // Sync mirror of searchResults for use inside callbacks (avoids stale closure on state).
@@ -363,6 +393,31 @@ export default function WebViewCartSheet({
     emptyResult: () => [],
   });
 
+  // Parallel ADD pool (FEATURE_PARALLEL_ADD): the regular add flow's workers
+  // search AND add one product each, concurrently. Bounded lower than search
+  // (PARALLEL_ADD_WORKERS) since concurrent cart writes are riskier than reads.
+  // Per-item term/qty/preference ride in the URL hash; the worker's add script
+  // reads them and confirms via the store cart badge (> prev).
+  const addPool = useParallelSearchPool<ConsolidatedIngredient, AddResult>({
+    workerCount: PARALLEL_ADD_WORKERS,
+    // Longer than search: an add worker also runs the cart-badge confirmation
+    // poll (up to ~10s on a slow network) on top of search + click.
+    workerTimeoutMs: 35_000,
+    // Stagger the initial burst so 5 workers don't all cold-start their search
+    // pages at the same instant — that simultaneous load left some grids unpainted
+    // when the add script ran (no_results / product=null). Spreads them out.
+    dispatchStaggerMs: PARALLEL_WORKER_STAGGER_MS || 500,
+    getUrl: (item) => {
+      const s = getStoreScripts(lockedStoreIdRef.current);
+      if (!s?.getSearchUrl || !item.searchTerm) return '';
+      const payload = encodeURIComponent(JSON.stringify({
+        term: item.searchTerm, qty: item.productQty, dropdown: item.dropdown ?? null,
+      }));
+      return s.getSearchUrl(item.searchTerm) + '#mealio=' + payload;
+    },
+    emptyResult: () => ({ success: false, productName: null, reason: 'timeout', candidates: [] }),
+  });
+
   // Emit coarse status (incl. a determinate progress fraction) upward so the
   // provider can drive the floating bubble. No-op in modal mode.
   useEffect(() => {
@@ -398,13 +453,21 @@ export default function WebViewCartSheet({
     let progress: number | null = null;
     if (step === 'done') {
       progress = 1;
+    } else if (addPool.isActive) {
+      // Parallel add: determinate, one tick per ingredient processed.
+      progress = addPool.total > 0 ? Math.min(1, addPool.completed / addPool.total) : null;
     } else if (parallelPool.isActive) {
       progress = null;
+    } else if (parallelOriginalTotalRef.current > 0 && (step === 'searching' || step === 'adding')) {
+      // Forward-only across the parallel pass → cart-check → sequential top-up:
+      // one denominator (original total) plus the already-done baseline, so the
+      // ring continues rather than restarting at 0 for the smaller reconcile set.
+      progress = Math.min(1, (reconcileBaseRef.current + processedCount) / parallelOriginalTotalRef.current);
     } else if (total > 0 && (step === 'searching' || step === 'adding')) {
       progress = Math.min(1, processedCount / total);
     }
     onStatusChange({ phase: step, kind: kindMap[step], label: labelMap[step], progress });
-  }, [step, searchingLabel, storeName, onStatusChange, processedCount, parallelPool.isActive]);
+  }, [step, searchingLabel, storeName, onStatusChange, processedCount, parallelPool.isActive, addPool.isActive, addPool.completed, addPool.total]);
 
   const workerScripts = useMemo(
     () => parallelCfg
@@ -415,6 +478,22 @@ export default function WebViewCartSheet({
   const workerSources = useMemo(
     () => parallelPool.workerUris.map((uri) => ({ uri: uri || 'about:blank' })),
     [parallelPool.workerUris],
+  );
+
+  // Add-worker scripts: one fixed search-and-add script per worker (placeholder
+  // params; real ones come from the URL hash at runtime). Only stores whose
+  // buildSearchAndAddScript reads the #mealio hash support parallel add today
+  // (HEB pilot); others fall back to sequential via beginSearchFlow's gate.
+  const addWorkerScripts = useMemo(
+    () => parallelCfg
+      ? new Array(PARALLEL_ADD_WORKERS).fill(0).map((_, i) =>
+          buildSearchAndAddWorker(i, scripts.buildSearchAndAddScript('', 1, null)))
+      : [],
+    [parallelCfg, scripts],
+  );
+  const addWorkerSources = useMemo(
+    () => addPool.workerUris.map((uri) => ({ uri: uri || 'about:blank' })),
+    [addPool.workerUris],
   );
 
   const finishParallelSearch = useCallback((resultsByIdx: Map<number, Candidate[]>) => {
@@ -451,6 +530,117 @@ export default function WebViewCartSheet({
     setSearchingLabel(`Searching ${active.length} ingredients…`);
     parallelPool.start(active, finishParallelSearch);
   }, [parallelPool, finishParallelSearch]);
+
+  // ── Parallel ADD (FEATURE_PARALLEL_ADD) ─────────────────────────────────────
+
+  // Probe the cart for its current contents → CART_COUNT (phase-tagged). Shared
+  // by the done-screen after-snapshot and the parallel-add reconcile. Arms a
+  // result-timeout so a cart page that never posts can't strand the flow.
+  const triggerCartProbe = useCallback((phase: 'after' | 'reconcile') => {
+    const sid = lockedStoreIdRef.current;
+    const cartPageScript = buildCartPageCountScript(sid);
+    const cartPageUrl = getCartPageUrl(sid) ?? capturedCartUrlRef.current;
+    const openCartScript = buildOpenCartScript(sid);
+    const inlineCartScript = buildInlineCartScript(sid);
+    if (cartPageScript || inlineCartScript) {
+      if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
+      cartRowsTimeoutRef.current = setTimeout(() => { cartRowsTimeoutRef.current = null; setCartRowsTimedOut(true); }, CART_ROWS_TIMEOUT_MS);
+    }
+    if (cartProbeResultTimeoutRef.current) clearTimeout(cartProbeResultTimeoutRef.current);
+    cartProbeResultTimeoutRef.current = setTimeout(() => {
+      cartProbeResultTimeoutRef.current = null;
+      console.log(`[Cart ${ts()}]`, 'cart probe timeout — no CART_COUNT for', phase);
+      cartCountPendingRef.current = null;
+      if (phase === 'reconcile') {
+        parallelReconcileArmedRef.current = false;
+        setCartDeltaWarning(`Couldn't verify your ${storeName} cart — please double-check it.`);
+        setStep('done');
+      }
+    }, CART_PROBE_RESULT_TIMEOUT_MS);
+    if (inlineCartScript) {
+      cartCountPendingRef.current = phase;
+      webviewRef.current?.injectJavaScript(inlineCartScript);
+      return;
+    }
+    if (cartPageScript && (cartPageUrl || openCartScript)) {
+      cartCountPendingRef.current = phase;
+      cartProbeBeginSearchRef.current = false;
+      loadQueueRef.current = [cartPageScript];
+      lastLoadEndUrlRef.current = '';
+      expectedNavUrlRef.current = '';
+      if (cartPageUrl) {
+        setWebviewUri(cartPageUrl + (cartPageUrl.includes('?') ? '&' : '?') + '_t=' + Date.now());
+      } else {
+        webviewRef.current?.injectJavaScript(openCartScript!);
+      }
+      return;
+    }
+    const countScript = buildCartCountScript(sid);
+    if (!countScript) {
+      if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
+      if (phase === 'reconcile') { parallelReconcileArmedRef.current = false; setStep('done'); }
+      return;
+    }
+    cartCountPendingRef.current = phase;
+    webviewRef.current?.injectJavaScript(countScript);
+  }, [setStep, storeName, setWebviewUri]);
+
+  const finishParallelAdd = useCallback((resultsByIdx: Map<number, AddResult>) => {
+    const active = activeItemsRef.current;
+    // The concurrent pass is best-effort — its per-worker confirmation reads a
+    // SHARED cart counter, so under concurrency a worker can falsely confirm.
+    // Don't trust it: record the reported successes, keep the bubble RUNNING
+    // (no premature check), and probe the REAL cart to reconcile.
+    parallelResultByIdxRef.current = resultsByIdx;
+    addResultsRef.current = [];
+    let successCount = 0;
+    for (let idx = 0; idx < active.length; idx++) {
+      const r = resultsByIdx.get(idx);
+      if (r && r.success) {
+        addResultsRef.current.push({ name: r.productName || active[idx].searchTerm || active[idx].ingredientName, success: true });
+        successCount++;
+      }
+    }
+    console.log(`[Cart ${ts()}]`, 'parallel add: pass done. reported success=', successCount, 'of', active.length, '— reconciling against cart');
+    parallelReconcileArmedRef.current = true;
+    cartProbeRetriedRef.current = false;
+    // Hold the ring at the parallel peak through the cart-check, then the
+    // reconcile branch corrects the baseline to the CONFIRMED count.
+    reconcileBaseRef.current = successCount;
+    setProcessedCount(0);
+    setSearchingLabel('Checking your cart…');
+    triggerCartProbe('reconcile');
+  }, [triggerCartProbe]);
+
+  const startParallelAdd = useCallback(() => {
+    const active = activeItemsRef.current;
+    if (active.length === 0) return;
+    console.log(`[Cart ${ts()}]`, 'parallel ADD: dispatching', active.length, 'across', PARALLEL_ADD_WORKERS, 'workers');
+    parallelOriginalTotalRef.current = active.length; // forward-only progress denominator
+    setStep('adding');
+    setSearchingLabel(`Adding ${active.length} ingredients…`);
+    addPool.start(active, finishParallelAdd);
+  }, [addPool, finishParallelAdd, setStep]);
+
+  const onAddWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
+    try {
+      const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type === 'WORKER_DEBUG') {
+        console.log(`[Cart ${ts()}]`, 'ADD WORKER_DEBUG w', workerId, JSON.stringify(msg).slice(0, 200));
+        return;
+      }
+      if (msg.type === 'WORKER_RESULT') {
+        console.log(`[Cart ${ts()}]`, 'ADD WORKER_RESULT w', workerId, 'success=', msg.success, 'product=', msg.productName, 'reason=', msg.reason ?? null);
+        addPool.reportResult(workerId, {
+          success: !!msg.success, productName: msg.productName ?? null,
+          reason: msg.reason ?? null, candidates: msg.candidates ?? [],
+        });
+        return;
+      }
+    } catch (e) {
+      console.log(`[Cart ${ts()}]`, 'onAddWorkerMessage parse error w', workerId, e);
+    }
+  }, [addPool]);
 
   // Navigate the store WebView. Default: append a `?_t=<ts>` cache-buster so the
   // load is unique (forces a real reload + dodges the onLoadEnd same-URL dedup).
@@ -551,6 +741,13 @@ export default function WebViewCartSheet({
       cartCountPendingRef.current = null;
       cartItemsBeforeRef.current = [];
       capturedCartUrlRef.current = null;
+      parallelReconcileArmedRef.current = false;
+      reconcileFinalizedRef.current = false;
+      cartProbeRetriedRef.current = false;
+      parallelOriginalTotalRef.current = 0;
+      reconcileBaseRef.current = 0;
+      if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
+      parallelResultByIdxRef.current = new Map();
       setCartResultRows(null);
       setCartRowsTimedOut(false);
       if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
@@ -559,7 +756,7 @@ export default function WebViewCartSheet({
       // Reset Wegmans parallel worker state. The hook clears its queue,
       // active flag, timers, and worker URIs in one call — workers unmount
       // because isActive flips to false.
-      parallelPool.reset();
+      parallelPool.reset(); addPool.reset();
 
       // If any ingredient has no chosen product yet, skip the qty step and
       // auto-start the search/choose flow immediately.
@@ -612,55 +809,13 @@ export default function WebViewCartSheet({
   // now-idle webview to /cart and count there; otherwise read the header badge
   // off the last search page (still mounted through 'done').
   useEffect(() => {
-    if (step !== 'done' || totalAdded === 0 || cartCountBeforeRef.current == null) return;
-    const cartPageScript = buildCartPageCountScript(lockedStoreId);
-    // Prefer a direct cart URL: the store's static one, else the URL the
-    // before-probe cached (click-path stores). Hitting it directly skips the
-    // cart-icon → cart-of-carts → expand-link hops. If the cached URL ever
-    // lands on the collapsed cart, the count script's own expand-link fallback
-    // and the 8s timeout recover.
-    const cartPageUrl = getCartPageUrl(lockedStoreId) ?? capturedCartUrlRef.current;
-    const openCartScript = buildOpenCartScript(lockedStoreId);
-    const inlineCartScript = buildInlineCartScript(lockedStoreId); // ALDI side panel
-    // Whenever the done screen shows the breakdown spinner (gated on a per-item
-    // cart script), arm a fallback so it can never hang: after CART_ROWS_TIMEOUT_MS
-    // with no per-item rows, flip to the plain list. Armed here so EVERY probe
-    // path below (cart-page nav, open-cart click, inline panel, header badge) is
-    // covered — Amazon's multi-hop cart was the one that slipped through and
-    // spun forever.
-    if (cartPageScript || inlineCartScript) {
-      if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
-      cartRowsTimeoutRef.current = setTimeout(() => {
-        cartRowsTimeoutRef.current = null;
-        setCartRowsTimedOut(true);
-      }, CART_ROWS_TIMEOUT_MS);
-    }
-    if (inlineCartScript) {
-      // Side-panel cart (ALDI): inject the self-contained open+count+close
-      // script directly on the now-idle webview (still on a store page).
-      cartCountPendingRef.current = 'after';
-      webviewRef.current?.injectJavaScript(inlineCartScript);
-      return;
-    }
-    if (cartPageScript && (cartPageUrl || openCartScript)) {
-      cartCountPendingRef.current = 'after';
-      cartProbeBeginSearchRef.current = false; // after-probe resumes nothing
-      loadQueueRef.current = [cartPageScript];
-      lastLoadEndUrlRef.current = '';
-      expectedNavUrlRef.current = '';
-      if (cartPageUrl) {
-        // Cache-bust with the right separator — a cached cart URL already has a query.
-        setWebviewUri(cartPageUrl + (cartPageUrl.includes('?') ? '&' : '?') + '_t=' + Date.now());
-      } else {
-        webviewRef.current?.injectJavaScript(openCartScript!);
-      }
-      return;
-    }
-    const countScript = buildCartCountScript(lockedStoreId);
-    if (!countScript) return;
-    cartCountPendingRef.current = 'after';
-    webviewRef.current?.injectJavaScript(countScript);
-  }, [step, totalAdded, lockedStoreId]);
+    if (step !== 'done' || cartCountBeforeRef.current == null) return;
+    // The reconcile pass already read the cart with its own probe and set the
+    // final state — don't fire a redundant second after-probe.
+    if (reconcileFinalizedRef.current) { reconcileFinalizedRef.current = false; return; }
+    if (totalAdded === 0) return;
+    triggerCartProbe('after');
+  }, [step, totalAdded, lockedStoreId, triggerCartProbe]);
 
   // Clear all safety timers on unmount. Without this, closing the sheet mid
   // login-check / search / add leaves a real setTimeout running that later
@@ -674,6 +829,7 @@ export default function WebViewCartSheet({
       if (customSearchTimeoutRef.current) clearTimeout(customSearchTimeoutRef.current);
       if (cartProbeTimeoutRef.current) clearTimeout(cartProbeTimeoutRef.current);
       if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
+      if (cartProbeResultTimeoutRef.current) clearTimeout(cartProbeResultTimeoutRef.current);
     };
   }, []);
 
@@ -896,10 +1052,14 @@ export default function WebViewCartSheet({
     console.log(`[Cart ${ts()}]`, 'beginSearchFlow: parallel=', canParallel, 'allChoose=', allChoose, 'activeLen=', active.length, 'store=', lockedStoreIdRef.current);
     if (canParallel && allChoose) {
       startParallelSearch();
+    } else if (canParallel && !allChoose && FEATURE_PARALLEL_ADD) {
+      // Regular add flow through the parallel pool: each worker searches AND
+      // adds one product concurrently. Unconfirmed items fall to review.
+      startParallelAdd();
     } else {
       navigateToSearchItem(0);
     }
-  }, [startParallelSearch, navigateToSearchItem]);
+  }, [startParallelSearch, startParallelAdd, navigateToSearchItem]);
 
   // Snapshot the cart BEFORE any adds, then start the search. For cart-page
   // stores (HEB, Albertsons family) navigate to the cart URL, count there, and
@@ -1091,6 +1251,11 @@ export default function WebViewCartSheet({
       const allowRecheck =
         stepRef.current === 'login' ||
         stepRef.current === 'login_check' ||
+        // A cart-count probe is in flight: HEB re-renders the cart page (same
+        // URL) a beat after load, which kills the injected count script before
+        // it polls/posts. Let same-URL reloads through so the re-inject branch
+        // below can re-run it until CART_COUNT actually comes back.
+        !!cartCountPendingRef.current ||
         (stepRef.current === 'searching' && !!inflightScriptRef.current && reinjectInflight);
       if (sameUrl && !allowRecheck) {
         if (sameUrl && stepRef.current === 'searching' && inflightScriptRef.current && !reinjectInflight) {
@@ -1186,7 +1351,7 @@ export default function WebViewCartSheet({
     if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
     loadQueueRef.current = [];
     expectedNavUrlRef.current = '';
-    parallelPool.reset();
+    parallelPool.reset(); addPool.reset();
     robotChallengeResumeIdxRef.current = searchIdxRef.current;
     blockReasonRef.current = 'http-' + statusCode;
     setBlockReason('http-' + statusCode);
@@ -1206,7 +1371,7 @@ export default function WebViewCartSheet({
     setBlockReason(null);
     blockReasonRef.current = null;
     robotChallengeResumeIdxRef.current = -1;
-    parallelPool.reset();
+    parallelPool.reset(); addPool.reset();
     searchIdxRef.current = 0;
     onSearchPageRef.current = false;
     loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
@@ -1294,6 +1459,7 @@ export default function WebViewCartSheet({
         if (msg.type === 'CART_COUNT') {
           const phase = cartCountPendingRef.current;
           cartCountPendingRef.current = null;
+          if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
           const count = typeof msg.count === 'number' ? msg.count : null;
           console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count);
           if (phase === 'before') {
@@ -1312,6 +1478,70 @@ export default function WebViewCartSheet({
               if (cartProbeTimeoutRef.current) { clearTimeout(cartProbeTimeoutRef.current); cartProbeTimeoutRef.current = null; }
               beginSearchFlow();
             }
+          } else if (phase === 'reconcile') {
+            // Parallel-add reconciliation: trust the CART, not the workers. Any
+            // item reported-added that isn't actually in the cart (shared-counter
+            // false positive), plus any that failed, gets re-added SEQUENTIALLY
+            // (single-threaded → no race).
+            parallelReconcileArmedRef.current = false;
+            let rows: CartRow[] | null = null;
+            if (Array.isArray(msg.items)) {
+              if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
+              rows = diffCartItems(cartItemsBeforeRef.current, msg.items);
+            }
+            const reconResults = parallelResultByIdxRef.current;
+            const active = activeItemsRef.current;
+            if (!rows) {
+              // Can't diff per-item (header-badge store) → trust the worker
+              // results. Parallel add is HEB-only today (a per-item cart store),
+              // so this is just a safety fallback.
+              const wins = active
+                .map((item, idx) => { const r = reconResults.get(idx); return r && r.success ? { name: r.productName || item.searchTerm || item.ingredientName, success: true } : null; })
+                .filter((x): x is { name: string; success: boolean } => x !== null);
+              addResultsRef.current = wins;
+              setTotalAdded(wins.length);
+              setTotalFailed(active.length - wins.length);
+              setAddedNames(wins.map((x) => x.name));
+              reconcileFinalizedRef.current = true;
+              setStep('done');
+              return;
+            }
+            const addedCartNames = rows.filter((r) => r.added).map((r) => r.name);
+            const retryItems: ConsolidatedIngredient[] = [];
+            const confirmed: { name: string; success: boolean }[] = [];
+            active.forEach((item, idx) => {
+              const r = reconResults.get(idx);
+              const reportedName = (r && r.productName) || item.searchTerm || item.ingredientName;
+              const inCart = !!(r && r.success && findUnaddedItems([reportedName], addedCartNames).length === 0);
+              if (inCart) confirmed.push({ name: reportedName, success: true });
+              else retryItems.push(item);
+            });
+            console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm));
+            if (retryItems.length > 0) {
+              addResultsRef.current = confirmed;
+              activeItemsRef.current = retryItems;
+              searchIdxRef.current = 0;
+              onSearchPageRef.current = false;
+              // Forward-only progress: continue from the CONFIRMED count over the
+              // original total, so the ring resumes instead of restarting at 0.
+              reconcileBaseRef.current = confirmed.length;
+              setProcessedCount(0);
+              setSearchingLabel(`Topping up ${retryItems.length} item${retryItems.length === 1 ? '' : 's'} we couldn't confirm…`);
+              setStep('searching');
+              navigateToSearchItem(0);
+              return;
+            }
+            // Everything confirmed — finalize using THIS probe's data, no second
+            // snapshot (reconcileFinalizedRef makes the 'done' effect skip its probe).
+            addResultsRef.current = confirmed;
+            setCartResultRows(rows);
+            setTotalAdded(confirmed.length);
+            setTotalFailed(0);
+            setAddedNames(confirmed.map((x) => x.name));
+            setCartDeltaWarning(null);
+            reconcileFinalizedRef.current = true;
+            setStep('done');
+            return;
           } else if (phase === 'after') {
             const before = cartCountBeforeRef.current;
             const expected = addResultsRef.current.filter((r) => r.success).length;
@@ -1860,6 +2090,38 @@ export default function WebViewCartSheet({
           </View>
         )}
 
+        {/* ── Hidden parallel ADD pool (FEATURE_PARALLEL_ADD) ──────────────
+            Mounted offscreen only while parallel add is running. Each worker
+            loads getSearchUrl(term)#mealio=<json> and runs the search-and-add
+            script, reporting WORKER_RESULT. */}
+        {parallelCfg && addPool.isActive && (
+          <View
+            pointerEvents="none"
+            style={{ position: 'absolute', width: 414, height: 896, opacity: 0, left: -100000, top: -100000 }}
+          >
+            {addPool.workerUris.map((uri, i) => uri ? (
+              <WebView
+                key={'parallel-add-worker-' + i}
+                source={addWorkerSources[i]}
+                style={{ width: 414, height: 896 }}
+                onMessage={(e) => onAddWorkerMessage(i, e)}
+                onHttpError={onHttpError}
+                onShouldStartLoadWithRequest={(request) => (
+                  request.url.startsWith('http://') ||
+                  request.url.startsWith('https://') ||
+                  request.url.startsWith('about:')
+                )}
+                javaScriptEnabled
+                domStorageEnabled
+                sharedCookiesEnabled
+                thirdPartyCookiesEnabled
+                userAgent={STORE_WEBVIEW_UA}
+                injectedJavaScript={addWorkerScripts[i]}
+              />
+            ) : null)}
+          </View>
+        )}
+
 
         {/* ── Step: qty ──────────────────────────────────────────────────── */}
         {step === 'qty' && (
@@ -2277,6 +2539,15 @@ export default function WebViewCartSheet({
                         </Text>
                       </TouchableOpacity>
                     </View>
+                    {/* Skip — lets the user move past an ingredient with no match
+                        instead of being stuck on a disabled Next. */}
+                    <TouchableOpacity
+                      onPress={() => handleReviewDecision('skip')}
+                      disabled={customSearching}
+                      style={[styles.skipBtn, customSearching && { opacity: 0.4 }]}
+                    >
+                      <Text style={styles.skipBtnText}>Skip this ingredient</Text>
+                    </TouchableOpacity>
                   </>
                 ) : (
                   // Review-unmatched flow: add to cart (with or without saving searchTerm).

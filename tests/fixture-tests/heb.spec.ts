@@ -229,7 +229,7 @@ describe('HEB regression: preference modal flow', () => {
 describe('HEB buildSearchAndAddScript', () => {
   itWithFixture(
     'search-results-tortillas.html',
-    'finds matching tile and posts SEARCH_AND_ADD_RESULT:success',
+    'finds and adds the exact-match tile (posts SEARCH_AND_ADD_RESULT)',
     async (runner) => {
       // The search term must be an exact literal match for one of the
       // captured product titles — HEB's scoreMatch requires === 100. This
@@ -243,7 +243,11 @@ describe('HEB buildSearchAndAddScript', () => {
       );
       await runner.inject(script);
       const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
-      expect(result.success).toBe(true);
+      // The script found and clicked the exact-match tile. In a STATIC fixture a
+      // click can't move the real cart badge, so the cart-confirmation gate
+      // reports cart_not_incremented — what matters here is that it matched the
+      // RIGHT product. (Live, the badge ticks up and success is true.)
+      expect(result.productName).toBe('Mission Super Soft Flour Tortillas, Fajita Size, 40 ct');
     },
     { url: 'https://www.heb.com/search?q=mission%20flour%20tortillas' },
   );

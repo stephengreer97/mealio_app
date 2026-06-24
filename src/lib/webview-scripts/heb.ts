@@ -618,6 +618,34 @@ export function buildSearchAndAddScript(
   var SEARCH_TERM = ${escapedTerm};
   var QTY = ${qty};
   var DROPDOWN = ${escapedDropdown};
+  // Parallel-add worker mode: the pool injects ONE fixed script per worker, so
+  // each item's term/qty/preference ride in the URL hash (#mealio=<json>). When
+  // present, override the baked-in defaults. No hash → sequential flow, unchanged.
+  try {
+    if (location.hash && location.hash.indexOf('#mealio=') === 0) {
+      var __mq = JSON.parse(decodeURIComponent(location.hash.slice(8)));
+      if (__mq) {
+        if (typeof __mq.term === 'string') SEARCH_TERM = __mq.term;
+        if (typeof __mq.qty === 'number') QTY = __mq.qty;
+        if (__mq.dropdown !== undefined) DROPDOWN = __mq.dropdown;
+      }
+    }
+  } catch (e) {}
+  // Cart-badge confirmation (mirrors buildAddToCartScript): gate success on the
+  // header cart count actually rising, so each (parallel) worker only reports
+  // success when its add truly committed. Unreadable badge → 2.5s settle.
+  function __cartCount() {
+    var el = document.querySelector('[data-qe-id="headerCartButtonDesktop"], [data-testid="cart-link"]');
+    var a = el ? (el.getAttribute('aria-label') || '') : '';
+    var m = a.match(/(\\d+)\\s*items?/i);
+    return m ? parseInt(m[1], 10) : -1;
+  }
+  async function __waitForCartIncrease(prev, ticks) {
+    if (prev < 0) { await wait(2500); return true; }
+    for (var w = 0; w < ticks; w++) { if (__cartCount() > prev) return true; await wait(200); }
+    return false;
+  }
+  var __cartBefore = -1;
   var TITLE_SEL = '[data-qe-id="productTitle"]';
 ${HEB_FIND_CARDS_FN}
 ${HEB_WAIT_FRESH_FN}
@@ -729,6 +757,7 @@ ${HEB_WAIT_FRESH_FN}
 
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'DEBUG', step: '0_best_found', bestName: bestName, bestHasPopup: bestHasPopup, hasDropdown: !!DROPDOWN, qty: QTY }));
   try {
+    __cartBefore = __cartCount();
     bestBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
     await wait(100);
     bestBtn.click();
@@ -832,8 +861,17 @@ ${HEB_WAIT_FRESH_FN}
       }
     }
 
+    var __committed = await __waitForCartIncrease(__cartBefore, 50);
+    // Parallel-worker mode: the badge can tick up from a SIBLING worker's add,
+    // so __committed may pass while our OWN cart POST is still in flight. The
+    // pool re-navigates this worker the instant we post the result, which would
+    // cancel that request. Give it a beat to flush first. (The sequential flow
+    // has the RN-side navigation buffer, so it skips this.)
+    if (__committed && location.hash && location.hash.indexOf('#mealio=') === 0) await wait(450);
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }));
+    window.ReactNativeWebView.postMessage(JSON.stringify(__committed
+      ? { type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }
+      : { type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'cart_not_incremented', productName: bestName, candidates: candidates }));
   } catch(e) {
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: candidates }));

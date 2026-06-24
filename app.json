@@ -20,7 +20,7 @@
       ],
       "infoPlist": {
         "LSApplicationQueriesSchemes": [
-          "heb",
+          "myheb",
           "kroger",
           "harristeeter",
           "kingsoopers",

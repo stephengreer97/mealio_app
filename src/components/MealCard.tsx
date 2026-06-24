@@ -60,9 +60,13 @@ export default function MealCard({ meal, onPress, subtitle, savedAt, selected, o
       <View style={styles.body}>
         <Text style={styles.name} numberOfLines={2}>{meal.name}</Text>
         <View style={styles.meta}>
-          <Text style={styles.metaText} numberOfLines={1}>
-            {subtitle ?? `${ingredientCount} items`}
-          </Text>
+          {subtitle ? (
+            <Text style={styles.metaText} numberOfLines={1}>
+              {subtitle}
+            </Text>
+          ) : (
+            <View style={{ flex: 1 }} />
+          )}
           {onView && (
             <TouchableOpacity onPress={onView} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Text style={styles.viewBtn}>View</Text>

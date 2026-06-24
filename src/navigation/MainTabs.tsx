@@ -1,4 +1,5 @@
 import React from 'react';
+import { View } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -9,6 +10,7 @@ import AccountScreen from '../screens/account/AccountScreen';
 import CreatorPortalScreen from '../screens/creator/CreatorPortalScreen';
 import HelpScreen from '../screens/help/HelpScreen';
 import AdminScreen from '../screens/admin/AdminScreen';
+import BroadcastBanner from '../components/BroadcastBanner';
 
 export type MainTabsParamList = {
   Discover: undefined;
@@ -25,7 +27,9 @@ export default function MainTabs() {
   const { isCreator, isAdmin } = useAuth();
 
   return (
-    <Tab.Navigator
+    <View style={{ flex: 1 }}>
+      <BroadcastBanner />
+      <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarActiveTintColor: Colors.brand,
@@ -68,6 +72,7 @@ export default function MainTabs() {
         component={HelpScreen}
         options={{ tabBarLabel: '', tabBarShowLabel: false }}
       />
-    </Tab.Navigator>
+      </Tab.Navigator>
+    </View>
   );
 }
