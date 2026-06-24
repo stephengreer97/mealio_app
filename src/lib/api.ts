@@ -184,6 +184,14 @@ export const account = {
     request<void>('/api/account/delete', { method: 'DELETE' }),
 };
 
+// Broadcast
+export const broadcast = {
+  // Public endpoint — `stores` empty means show to everyone; otherwise only users
+  // with a saved meal at one of those stores should see the message.
+  get: () =>
+    request<{ message: string | null; stores: string[] }>('/api/broadcast', { method: 'GET' }),
+};
+
 // Meals
 export const meals = {
   list: () =>
