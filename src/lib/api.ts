@@ -185,11 +185,16 @@ export const account = {
 };
 
 // Broadcast
+export interface Broadcast {
+  id: string;
+  message: string;
+  stores: string[];      // empty = everyone; else only users with a meal at one
+  forceShow: boolean;    // show on every launch even after dismissal
+  createdAt: string;
+}
 export const broadcast = {
-  // Public endpoint — `stores` empty means show to everyone; otherwise only users
-  // with a saved meal at one of those stores should see the message.
-  get: () =>
-    request<{ message: string | null; stores: string[] }>('/api/broadcast', { method: 'GET' }),
+  // Public endpoint — returns all active broadcasts.
+  get: () => request<{ broadcasts: Broadcast[] }>('/api/broadcast', { method: 'GET' }),
 };
 
 // Meals
