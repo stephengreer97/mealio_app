@@ -95,27 +95,12 @@ type Step = 'qty' | 'searching' | 'searchResult' | 'review' | 'adding' | 'done';
 
 // ── Store URLs ────────────────────────────────────────────────────────────────
 
-// Native app URL schemes for each Kroger-family store.
-// canOpenURL returns true if the app is installed (requires LSApplicationQueriesSchemes on iOS).
-const STORE_APP_SCHEMES: Record<string, string> = {
-  kroger:        'kroger://',
-  harris_teeter: 'harristeeter://',
-  king_soopers:  'kingsoopers://',
-  fred_meyer:    'fredmeyer://',
-  ralphs:        'ralphs://',
-  smiths:        'smithsfoodanddrug://',
-  frys:          'frysfood://',
-  marianos:      'marianos://',
-  pick_n_save:   'picknsave://',
-  dillons:       'dillons://',
-  bakers:        'bakersplus://',
-  city_market:   'citymarket://',
-  pay_less:      'payless://',
-  metro_market:  'metromarket://',
-  carrs:         'carrs://',
-  qfc:           'qfc://',
-};
-
+// Each Kroger-family store opens via its website cart URL, which is a verified
+// Universal Link (per the app's Apple App Site Association file) for the shared
+// Kroger app — on a device with the app installed it lands directly on the
+// in-app cart, otherwise it opens the cart in the browser. No custom URL scheme
+// is needed: the app exposes no reliable per-banner scheme, and the https cart
+// link is both verified and opens the cart (a scheme would only reach the home).
 const STORE_URLS: Record<string, string> = {
   kroger:        'kroger.com',
   ralphs:        'ralphs.com',
@@ -445,16 +430,9 @@ export default function KrogerCartReviewSheet({
     );
 
   const storeUrl = STORE_URLS[storeId] ?? 'kroger.com';
-  const appScheme = STORE_APP_SCHEMES[storeId];
 
   const handleOpenStore = async () => {
-    if (appScheme) {
-      const canOpen = await Linking.canOpenURL(appScheme).catch(() => false);
-      if (canOpen) {
-        await Linking.openURL(appScheme);
-        return;
-      }
-    }
+    // Universal Link → opens the Kroger app's cart if installed, else the browser.
     await Linking.openURL(`https://www.${storeUrl}/cart`);
   };
 

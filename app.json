@@ -20,23 +20,7 @@
       ],
       "infoPlist": {
         "LSApplicationQueriesSchemes": [
-          "myheb",
-          "kroger",
-          "harristeeter",
-          "kingsoopers",
-          "fredmeyer",
-          "ralphs",
-          "smithsfoodanddrug",
-          "frysfood",
-          "marianos",
-          "picknsave",
-          "dillons",
-          "bakersplus",
-          "citymarket",
-          "payless",
-          "metromarket",
-          "carrs",
-          "qfc"
+          "myheb"
         ],
         "ITSAppUsesNonExemptEncryption": false
       }
