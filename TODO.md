@@ -26,12 +26,11 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
   run full Maestro coverage against it: product search, add-to-cart, cart
   snapshot, product reconciliation, and the rest of the flow. (Deferred to its own
   session — Maestro is not yet set up in the repo.)
-- [ ] **Deep link for the remaining stores** — figure out the real native app
-  scheme per store and wire it. HEB done (`myheb://`). The 16 Kroger-family
-  schemes are unverified guesses; each needs an on-device check.
 - [ ] **Marketing/lifecycle emails — creators.** Reminder emails to publish meals,
   auto-sent based on lack of activity; plus an initial onboarding email with
-  tips. [C] builds + wires auto-send; [S] provides/approves copy + tips content.
+  tips. [C] builds + wires auto-send; Also builds Admin dashboard for viewing/tracking 
+  the emails and click rates. Plan more dashboard features [S] provides/approves copy 
+  + tips content.
 - [ ] **Marketing emails — users.** Upsell to Full Access, auto-sent to users who
   have not paid. [C] builds + wires the trigger; [S] approves copy.
 - [ ] **Creator invite emails.** Email creators to invite them to participate.
@@ -92,7 +91,12 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 - Android App Links — verified already wired (autoVerify intent filter +
   `assetlinks.json` + AASA + in-app `/meal` routing). Remaining [S]: confirm the
   `assetlinks.json` SHA-256 matches the Play App Signing cert + on-device test.
-- HEB deep link — `myheb://` (the bogus `heb://` opened the website).
+- Deep links to store carts (PR #12, found via Apple's AASA CDN — no app installs):
+  Kroger family → `https://<domain>/cart` Universal Link (opens app to cart);
+  HEB → `myheb://`; Amazon → `com.amazon.mobile.shopping.web://amazon.com/gp/cart/view.html`
+  (device-confirmed); Walmart already opened via its cart-URL fallback. Albertsons
+  family / ALDI / Wegmans expose no cart deep link — website-cart fallback stays.
+  Dropped the 16 unverified Kroger `<name>://` guesses + their LSApplicationQueriesSchemes.
 - App broadcast → in-app dismissible banner with per-store targeting, then upgraded
   to MULTIPLE simultaneous broadcasts with server-generated IDs (dismissal keyed by
   id, so reused wording re-shows), a "show on every launch" (forceShow) option, and
