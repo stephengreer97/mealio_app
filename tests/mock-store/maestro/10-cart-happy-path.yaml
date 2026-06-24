@@ -1,0 +1,47 @@
+# Mock-store HAPPY PATH: a logged-in user with a meal saved at "Mock Store"
+# runs add-to-cart end to end and sees every item confirmed in the cart snapshot.
+#
+# SCAFFOLD — not yet in tests/maestro/flows/ (see tests/mock-store/README.md).
+# Unmet deps: dev build (__DEV__ registers the mock store), a test account
+# (MEALIO_TEST_EMAIL/PASSWORD, regular tier → no 2FA), a seeded `mockstore` meal
+# with default ingredient terms, and `npm run mock-store` on :8788.
+# TODO(tomorrow): confirm every testID/label against the real cart-sheet UI.
+
+appId: co.mealio.app
+env:
+  EMAIL: ${MEALIO_TEST_EMAIL}
+  PASSWORD: ${MEALIO_TEST_PASSWORD}
+---
+- launchApp:
+    clearState: true
+    stopApp: true
+
+# Sign in (regular account → no email OTP).
+- tapOn: "Sign In"
+- tapOn:
+    id: "login-email"          # TODO confirm
+- inputText: ${EMAIL}
+- tapOn:
+    id: "login-password"       # TODO confirm
+- inputText: ${PASSWORD}
+- tapOn: "Log In"              # TODO confirm
+
+# Open the seeded mock-store meal and start add-to-cart.
+- tapOn: "My Meals"
+- extendedWaitUntil:
+    visible:
+      id: "meal-card-0"
+    timeout: 15000
+- tapOn:
+    id: "meal-card-0"
+- tapOn: "Add to Cart"        # TODO confirm
+- tapOn: "Mock Store"         # store selector
+
+# The engine logs into the (always-logged-in) mock store, searches each
+# ingredient (default term → exact match), auto-adds, confirms via the cart
+# badge, then snapshots /cart. Assert the done screen shows the added items.
+- extendedWaitUntil:
+    visible: "Done"            # TODO confirm done-screen marker
+    timeout: 60000
+- assertVisible: "added"      # cart snapshot "N added" rows
+- assertNotVisible: "could not be added"
