@@ -27,7 +27,7 @@ import {
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
 import { buildSearchAndAddWorker } from '../lib/webview-scripts/worker-search';
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS } from '../constants/features';
-import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, cartNameMatches, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -1506,15 +1506,28 @@ export default function WebViewCartSheet({
               setStep('done');
               return;
             }
-            const addedCartNames = rows.filter((r) => r.added).map((r) => r.name);
+            // Qty-aware reconcile: compare each item's EXPECTED quantity against
+            // the quantity that actually landed in the cart (sum of matching added
+            // rows). A product present but short (added ×1 when ×2 was wanted)
+            // gets topped up by the shortfall — not just fully-missing items.
+            const addedRows = rows.filter((r) => r.added);
             const retryItems: ConsolidatedIngredient[] = [];
             const confirmed: { name: string; success: boolean }[] = [];
             active.forEach((item, idx) => {
               const r = reconResults.get(idx);
               const reportedName = (r && r.productName) || item.searchTerm || item.ingredientName;
-              const inCart = !!(r && r.success && findUnaddedItems([reportedName], addedCartNames).length === 0);
-              if (inCart) confirmed.push({ name: reportedName, success: true });
-              else retryItems.push(item);
+              const expectedQty = Math.max(1, item.productQty || 1);
+              const actualQty = addedRows
+                .filter((row) => cartNameMatches(row.name, reportedName))
+                .reduce((sum, row) => sum + row.qty, 0);
+              const shortfall = expectedQty - actualQty;
+              if (shortfall <= 0) {
+                confirmed.push({ name: reportedName, success: true });
+              } else {
+                // Re-add only the missing units; re-adding the full qty would
+                // over-add the units that already landed.
+                retryItems.push({ ...item, productQty: shortfall });
+              }
             });
             console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm));
             if (retryItems.length > 0) {
