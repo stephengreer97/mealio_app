@@ -14,7 +14,7 @@ export const FEATURE_BACKGROUND_CART = true;
 // forceSerialSearch → HEB, Walmart, Amazon, Albertsons); Wegmans and ALDI run
 // serial regardless. Per-worker confirmation via the cart-count badge (> prev)
 // is the correctness guard. Experiment flag, off by default while we pilot HEB.
-export const FEATURE_PARALLEL_ADD = false;
+export const FEATURE_PARALLEL_ADD = true;  // LOCAL pilot — uncommitted
 
 // Concurrency cap for parallel add-to-cart. The sequential reconciliation pass
 // re-adds anything the concurrent pass missed (false positives from the shared
