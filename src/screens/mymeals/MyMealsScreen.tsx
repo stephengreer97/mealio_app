@@ -65,7 +65,7 @@ export default function MyMealsScreen() {
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
   const [krogerConnected, setKrogerConnected] = useState(false);
-  const [krogerLocations, setKrogerLocations] = useState<Record<string, { locationId: string; locationName: string }>>({});
+  const [krogerLocations, setKrogerLocations] = useState<Record<string, { locationId: string; locationName: string | null }>>({});
 
   // Background add-to-cart job owner (root-level WebView engine).
   const cartJob = useCartJob();
@@ -96,7 +96,7 @@ export default function MyMealsScreen() {
   const [formVisible, setFormVisible] = useState(false);
   const [mealName, setMealName] = useState('');
   const [formStore, setFormStore] = useState('');
-  const [ingredients, setIngredients] = useState<Ingredient[]>([{ productName: '', quantity: 1 }]);
+  const [ingredients, setIngredients] = useState<Ingredient[]>([{ ingredientName: '', searchTerm: null, qty: 1, productQty: 1, unit: 'qty', measure: null }]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [difficulty, setDifficulty] = useState<number | null>(null);
   const [mealAuthor, setMealAuthor] = useState('');

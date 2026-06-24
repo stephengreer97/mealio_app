@@ -11,6 +11,9 @@ export interface User {
 
 export interface Ingredient {
   ingredientName: string;
+  // Product-name alias some call sites read defensively. The normalizer folds
+  // product_name / productName / name into ingredientName, so this is rarely set.
+  productName?: string;
   searchTerm?: string | null;
   qty: number;
   productQty: number;

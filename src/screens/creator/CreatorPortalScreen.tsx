@@ -95,7 +95,7 @@ export default function CreatorPortalScreen() {
     setMealRecipe(meal.recipe ?? '');
     setMealSource(meal.source ?? '');
     setMealServes((meal as any).serves ?? '');
-    setMealIngredients(meal.ingredients.length ? [...meal.ingredients] : [{ productName: '', quantity: 1 }]);
+    setMealIngredients(meal.ingredients.length ? [...meal.ingredients] : [{ ingredientName: '', searchTerm: null, qty: 1, productQty: 1, unit: 'qty', measure: null }]);
     setMealTags([...(meal.tags ?? [])]);
     setMealDifficulty(meal.difficulty ?? null);
     setMealPhotoUrl(meal.photoUrl ?? '');
@@ -243,13 +243,13 @@ export default function CreatorPortalScreen() {
                     <View style={styles.earningsFactorRow}>
                       <Feather name="trending-up" size={14} color={Colors.brand} />
                       <Text style={styles.earningsFactorText}>
-                        Quarterly saves — {(stats.qtrPct ?? stats.combinedSharePct / 2 ?? 0).toFixed(1)}% × 50%
+                        Quarterly saves — {(stats.qtrPct ?? stats.combinedSharePct / 2).toFixed(1)}% × 50%
                       </Text>
                     </View>
                     <View style={styles.earningsFactorRow}>
                       <Feather name="archive" size={14} color={Colors.brand} />
                       <Text style={styles.earningsFactorText}>
-                        All-time saves — {(stats.alltimePct ?? stats.combinedSharePct / 2 ?? 0).toFixed(1)}% × 50%
+                        All-time saves — {(stats.alltimePct ?? stats.combinedSharePct / 2).toFixed(1)}% × 50%
                       </Text>
                     </View>
                     <Text style={[styles.earningsText, { marginTop: 8 }]}>

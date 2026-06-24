@@ -49,7 +49,7 @@ export default function AccountScreen() {
 
   // Kroger
   const [krogerConnected, setKrogerConnected] = useState(false);
-  const [krogerLocations, setKrogerLocations] = useState<Record<string, { locationId: string; locationName: string }>>({});
+  const [krogerLocations, setKrogerLocations] = useState<Record<string, { locationId: string; locationName: string | null }>>({});
   const [krogerZip, setKrogerZip] = useState('');
   const [krogerLocationsList, setKrogerLocationsList] = useState<Array<{ locationId: string; name: string; chain?: string; storeId: string; address: string }>>([]);
   const [krogerSearching, setKrogerSearching] = useState(false);
@@ -470,10 +470,10 @@ export default function AccountScreen() {
                 <Text style={styles.subPricePeriod}>
                   {billing === 'annual' ? 'billed annually' : 'billed monthly'} · auto-renews · cancel anytime
                 </Text>
-                {selectedPkg?.product.introductoryDiscount?.paymentMode === 'FREE_TRIAL' && (
+                {(selectedPkg?.product as any)?.introductoryDiscount?.paymentMode === 'FREE_TRIAL' && (
                   <Text style={styles.subTrial}>
-                    Includes a {selectedPkg.product.introductoryDiscount.periodNumberOfUnits}-
-                    {selectedPkg.product.introductoryDiscount.periodUnit?.toLowerCase()} free trial.
+                    Includes a {(selectedPkg.product as any).introductoryDiscount.periodNumberOfUnits}-
+                    {(selectedPkg.product as any).introductoryDiscount.periodUnit?.toLowerCase()} free trial.
                     After the trial, you will be automatically charged {selectedPkg.product.priceString}/
                     {billing === 'annual' ? 'year' : 'month'}.
                   </Text>
