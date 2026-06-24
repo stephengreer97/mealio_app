@@ -3,48 +3,64 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as SecureStore from 'expo-secure-store';
 import { Ionicons } from '@expo/vector-icons';
-import { broadcast as broadcastApi, meals as mealsApi } from '../lib/api';
+import { broadcast as broadcastApi, meals as mealsApi, type Broadcast } from '../lib/api';
 import { Colors } from '../constants/colors';
 
-// SecureStore key holding the last broadcast message the user dismissed, so the
-// same message doesn't reappear (a new/changed message will, since it won't match).
-const DISMISS_KEY = 'broadcast_dismissed';
+// SecureStore key holding a JSON array of dismissed broadcast IDs. Dismissal is
+// keyed by ID (not message text), so reusing wording still re-shows. forceShow
+// broadcasts ignore this list and reappear every launch.
+const DISMISS_KEY = 'broadcast_dismissed_ids';
+
+async function readDismissed(): Promise<string[]> {
+  const raw = await SecureStore.getItemAsync(DISMISS_KEY).catch(() => null);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
- * Dismissible banner that surfaces the server broadcast message. Mounted once at
- * the top of the logged-in app. Respects store targeting: when the broadcast has
- * a non-empty store list, it only shows if the user has a saved meal at one of
- * those stores. Renders nothing (no layout impact) when there's nothing to show.
+ * Stacked, dismissible banners for active broadcasts. Mounted once at the top of
+ * the logged-in app. Each banner respects store targeting (only shown if the user
+ * has a saved meal at a targeted store) and per-ID dismissal. Renders nothing
+ * (no layout impact) when there's nothing to show.
  */
 export default function BroadcastBanner() {
   const insets = useSafeAreaInsets();
-  const [message, setMessage] = useState<string | null>(null);
+  const [visible, setVisible] = useState<Broadcast[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const { message: msg, stores } = await broadcastApi.get();
-        if (!msg) return;
+        const { broadcasts } = await broadcastApi.get();
+        if (!broadcasts?.length) return;
 
-        const dismissed = await SecureStore.getItemAsync(DISMISS_KEY).catch(() => null);
-        if (dismissed === msg) return;
+        const dismissed = await readDismissed();
+        let candidates = broadcasts.filter(
+          (b) => b.message?.trim() && (b.forceShow || !dismissed.includes(b.id)),
+        );
+        if (candidates.length === 0) return;
 
-        // Store targeting — only show if the user has a meal at a targeted store.
-        if (stores && stores.length > 0) {
+        // Store targeting — fetch the user's meal stores once if any candidate targets stores.
+        if (candidates.some((b) => b.stores?.length)) {
           let userStores: string[] = [];
+          let mealsOk = true;
           try {
             const userMeals = await mealsApi.list();
             userStores = userMeals.map((m) => m.storeId).filter(Boolean);
           } catch {
-            // Couldn't load meals — don't risk showing a targeted message to the
-            // wrong audience; skip it this session.
-            return;
+            mealsOk = false; // couldn't verify — drop targeted ones, keep untargeted
           }
-          if (!userStores.some((s) => stores.includes(s))) return;
+          candidates = candidates.filter(
+            (b) => !b.stores?.length || (mealsOk && userStores.some((s) => b.stores.includes(s))),
+          );
         }
 
-        if (!cancelled) setMessage(msg);
+        if (!cancelled && candidates.length) setVisible(candidates);
       } catch {
         // Broadcast is best-effort; never block the app on it.
       }
@@ -54,20 +70,30 @@ export default function BroadcastBanner() {
     };
   }, []);
 
-  if (!message) return null;
+  if (visible.length === 0) return null;
 
-  const dismiss = () => {
-    SecureStore.setItemAsync(DISMISS_KEY, message).catch(() => {});
-    setMessage(null);
+  const dismiss = async (b: Broadcast) => {
+    // forceShow broadcasts come back next launch, so only hide them for the session.
+    if (!b.forceShow) {
+      const ids = await readDismissed();
+      if (!ids.includes(b.id)) {
+        SecureStore.setItemAsync(DISMISS_KEY, JSON.stringify([...ids, b.id])).catch(() => {});
+      }
+    }
+    setVisible((prev) => prev.filter((x) => x.id !== b.id));
   };
 
   return (
-    <View style={[styles.bar, { paddingTop: insets.top + 10 }]}>
-      <Ionicons name="megaphone-outline" size={16} color="#fff" style={{ marginRight: 8 }} />
-      <Text style={styles.text}>{message}</Text>
-      <TouchableOpacity onPress={dismiss} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-        <Ionicons name="close" size={18} color="#fff" />
-      </TouchableOpacity>
+    <View style={{ backgroundColor: Colors.brand, paddingTop: insets.top }}>
+      {visible.map((b, i) => (
+        <View key={b.id} style={[styles.bar, i > 0 && styles.divider]}>
+          <Ionicons name="megaphone-outline" size={16} color="#fff" style={{ marginRight: 8 }} />
+          <Text style={styles.text}>{b.message}</Text>
+          <TouchableOpacity onPress={() => dismiss(b)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      ))}
     </View>
   );
 }
@@ -76,9 +102,12 @@ const styles = StyleSheet.create({
   bar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.brand,
     paddingHorizontal: 14,
-    paddingBottom: 10,
+    paddingVertical: 10,
+  },
+  divider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.25)',
   },
   text: {
     flex: 1,
