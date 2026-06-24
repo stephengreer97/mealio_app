@@ -13,14 +13,6 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 
 ### Engineering — [C]
 
-- [ ] **Parallel add-to-cart** — IN PROGRESS (branch `feat/parallel-add-cart`).
-  5-worker pool doing search-and-add concurrently, sequential reconciliation
-  backstop, deterministic cart-count confirmation, forward-only progress.
-  KEY RISK: workers share one cookie jar = one server-side cart, so concurrent
-  adds are WRITES that can race; the reconciliation pass + cart-count guard cover
-  it. ALDI/Wegmans stay serial (`forceSerialSearch`). Remaining: commit the 3
-  pending changes (myheb deep link + `FEATURE_PARALLEL_ADD`), decide the flag,
-  push + open PR.
 - [ ] **Android WebView WAF compatibility — dynamic UA + Custom Tabs eval.**
   (1) Dynamic Android UA in `src/lib/webview-user-agent.ts` (currently static
   "Android 16 / Chrome 138 / Pixel 9"): map `Platform.Version` → Android version,
@@ -30,21 +22,13 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 - [ ] **HEB multi-quantity add-to-cart — test + fix.** Adding multiple qty of one
   product appears broken, and the cart snapshot is not catching the miss.
   Investigate the qty path and tighten snapshot detection.
-- [ ] **"Skip" option when no results found** — during BOTH product search and
-  add-to-cart reconciliation. When nothing matches, give the user an explicit
-  skip action instead of a dead end.
 - [ ] **Mock store + complete Maestro suite.** Build a controllable mock store and
   run full Maestro coverage against it: product search, add-to-cart, cart
-  snapshot, product reconciliation, and the rest of the flow.
-- [ ] **App broadcast message.** Use the old mealio_central broadcast message as
-  scaffold. Add the option to broadcast only to users who have meals saved at
-  certain stores.
-- [ ] **Deep link for every store** — figure out the real native app scheme per
-  store and wire it. HEB done (`myheb://`, lands on app home; no cart path).
-- [ ] **Android App Links — website → app redirect.** Opening mealio.co links on
-  an Android device should redirect into the app (verified Android App Links /
-  `assetlinks.json` + intent filters), mirroring the iOS Universal Links setup.
-- [ ] **Remove the "x items" label when a meal has no author** (in-app).
+  snapshot, product reconciliation, and the rest of the flow. (Deferred to its own
+  session — Maestro is not yet set up in the repo.)
+- [ ] **Deep link for the remaining stores** — figure out the real native app
+  scheme per store and wire it. HEB done (`myheb://`). The 16 Kroger-family
+  schemes are unverified guesses; each needs an on-device check.
 - [ ] **Marketing/lifecycle emails — creators.** Reminder emails to publish meals,
   auto-sent based on lack of activity; plus an initial onboarding email with
   tips. [C] builds + wires auto-send; [S] provides/approves copy + tips content.
@@ -98,6 +82,25 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 ---
 
 ## Done
+
+### GTM burndown (2026-06-23 / 24)
+- Parallel add-to-cart — shipped ON (`FEATURE_PARALLEL_ADD`); covers all WebView
+  stores except ALDI + Wegmans (serial). PR #10.
+- "Skip" option when no results — added to the choose-product flow (the review /
+  reconciliation flow already had it).
+- Remove the "N items" label on authorless meals.
+- Android App Links — verified already wired (autoVerify intent filter +
+  `assetlinks.json` + AASA + in-app `/meal` routing). Remaining [S]: confirm the
+  `assetlinks.json` SHA-256 matches the Play App Signing cert + on-device test.
+- HEB deep link — `myheb://` (the bogus `heb://` opened the website).
+- App broadcast → in-app dismissible banner with per-store targeting, then upgraded
+  to MULTIPLE simultaneous broadcasts with server-generated IDs (dismissal keyed by
+  id, so reused wording re-shows), a "show on every launch" (forceShow) option, and
+  admin list/remove. PRs: website #4 + #5, app #10 + #11.
+- Mobile TypeScript cleanup — cleared the pre-existing tsc errors (Ingredient
+  `productName` alias, valid empty-ingredient placeholders, nullable Kroger
+  `locationName`, RevenueCat `introductoryDiscount` cast, dead nullish check).
+  tsc clean, jest 207/207. Pushed straight to main.
 
 ### Background add-to-cart v1 (in-app) — MERGED (PR #9)
 - Root `CartJobProvider` owns the WebView engine; the sheet is a consumer.
