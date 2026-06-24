@@ -1500,7 +1500,7 @@ export function getScripts() {
     // The Amazon Shopping app's URL-carrying scheme opens the cart inside the app.
     // handleOpenCart tries this first, then falls back to the https cartUrl in the
     // browser if the app isn't installed. (Bare amazon:// / amzn:// don't work.)
-    appScheme: 'com.amazon.mobile.shopping.web://amazon.com/cart/view.html',
+    appScheme: 'com.amazon.mobile.shopping.web://amazon.com/gp/cart/view.html',
     domain: AMAZON_DOMAIN,
     isSearchUrl: (url: string) => url.includes('/s?') && url.includes('amazon.com'),
     isLoginSuccessUrl: (url: string) =>
