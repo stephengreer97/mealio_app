@@ -24,6 +24,7 @@
 // lives in the header of every store page, so no cart navigation is needed.
 
 import { ALBERTSONS_FAMILY_IDS, getAlbertsonsCartPageUrl } from './albertsons';
+import { MOCK_STORE_URL } from './mockstore';
 
 interface CountExtractor {
   /** querySelector for the badge element. */
@@ -65,6 +66,7 @@ const CART_PAGE_URL: Record<string, string> = {
   heb: 'https://www.heb.com/cart',
   walmart: 'https://www.walmart.com/cart',
   wegmans: 'https://www.wegmans.com/cart',
+  mockstore: MOCK_STORE_URL + '/cart',   // dev/test only
 };
 
 /** The cart-page URL for stores that count via the cart page, else null. */
@@ -157,9 +159,35 @@ export function buildCartPageCountScript(storeId: string): string | null {
   if (storeId === 'walmart') return WALMART_CART_PAGE_SCRIPT;
   if (storeId === 'wegmans') return WEGMANS_CART_PAGE_SCRIPT;
   if (storeId === 'amazon') return AMAZON_CART_PAGE_SCRIPT;
+  if (storeId === 'mockstore') return MOCKSTORE_CART_PAGE_SCRIPT;
   if (ALBERTSONS_FAMILY_IDS.includes(storeId)) return ALBERTSONS_CART_PAGE_SCRIPT;
   return null;
 }
+
+// Mock store /cart (dev/test only). Each line is .mock-cart-line[data-name] with
+// a .mock-cart-name and .mock-cart-qty. Deterministic DOM, so no hydration race.
+const MOCKSTORE_CART_PAGE_SCRIPT = `(async function() {
+  function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+  function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
+  var lines = [];
+  for (var i = 0; i < 20; i++) {
+    lines = Array.prototype.slice.call(document.querySelectorAll('.mock-cart-line'));
+    if (lines.length > 0 || document.querySelector('#mock-cart-lines[data-count="0"]')) break;
+    await wait(150);
+  }
+  var count = 0, items = [];
+  for (var j = 0; j < lines.length; j++) {
+    var nmEl = lines[j].querySelector('.mock-cart-name');
+    var nm = nmEl ? norm(nmEl.textContent) : '';
+    if (!nm) continue;
+    var qEl = lines[j].querySelector('.mock-cart-qty');
+    var q = parseInt(qEl ? norm(qEl.textContent) : '0', 10);
+    if (isNaN(q) || q < 1) q = 1;
+    count += q;
+    items.push({ name: nm, qty: q });
+  }
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'CART_COUNT', count: count, items: items }));
+})(); true;`;
 
 // Wegmans /cart line items: each item's stepper "Add" button carries both the
 // name and the current qty in its aria-label —

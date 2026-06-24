@@ -1,0 +1,41 @@
+# Mock-store CHOOSE PRODUCT: a meal whose ingredient term contains "multi" yields
+# 5 candidates with no exact match, so the engine surfaces the Choose-Product UI.
+# Pick one and confirm it lands in the cart.
+#
+# SCAFFOLD — see tests/mock-store/README.md (deps: dev build, test account, a
+# seeded `mockstore` meal with a "...multi" ingredient, mock server on :8788).
+# TODO(tomorrow): confirm testIDs/labels against the real cart-sheet UI.
+
+appId: co.mealio.app
+env:
+  EMAIL: ${MEALIO_TEST_EMAIL}
+  PASSWORD: ${MEALIO_TEST_PASSWORD}
+---
+- launchApp:
+    clearState: true
+    stopApp: true
+# --- sign in + open the seeded "multi" meal (same preamble as 10) ---
+- tapOn: "Sign In"
+- tapOn: { id: "login-email" }
+- inputText: ${EMAIL}
+- tapOn: { id: "login-password" }
+- inputText: ${PASSWORD}
+- tapOn: "Log In"
+- tapOn: "My Meals"
+- extendedWaitUntil: { visible: { id: "meal-card-0" }, timeout: 15000 }
+- tapOn: { id: "meal-card-0" }
+- tapOn: "Add to Cart"
+- tapOn: "Mock Store"
+
+# No exact match → Choose Product. Pick the first candidate and continue.
+- extendedWaitUntil:
+    visible: "Choose Product"     # TODO confirm header
+    timeout: 30000
+- tapOn:
+    id: "candidate-0"             # TODO confirm candidate row testID
+- tapOn: "Next"                   # or "Save" on the last item — TODO confirm
+
+- extendedWaitUntil:
+    visible: "Done"
+    timeout: 60000
+- assertVisible: "added"

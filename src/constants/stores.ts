@@ -22,6 +22,7 @@ export const WEBVIEW_STORE_IDS = new Set([
   'albertsons', 'safeway', 'vons', 'jewel_osco', 'shaws', 'acme',
   'tom_thumb', 'randalls', 'pavilions', 'star_market', 'haggen',
   'carrs', 'kings', 'balduccis', 'united',
+  'mockstore',   // dev/test only — deterministic store for Maestro e2e
 ]);
 
 export function isWebViewStore(storeId: string): boolean {
@@ -65,3 +66,10 @@ export const STORES: Store[] = [
   { id: 'walmart',        name: 'Walmart',             color: '#0053E2' },
   { id: 'wegmans',        name: 'Wegmans',             color: '#000000' },
 ];
+
+// Dev/test only: surface the deterministic mock store in the store list so
+// Maestro can save a meal at it and run the full add-to-cart flow. Never shown
+// in production builds.
+if (typeof __DEV__ !== 'undefined' && __DEV__) {
+  STORES.push({ id: 'mockstore', name: 'Mock Store', color: '#0a7d4b' });
+}

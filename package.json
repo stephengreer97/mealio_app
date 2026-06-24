@@ -12,7 +12,8 @@
     "test:fixtures": "jest tests/fixture-tests",
     "test:live": "MEALIO_RUN_LIVE_TESTS=1 jest tests/live",
     "capture": "tsx tests/fixture-runners/capture-fixtures.ts",
-    "capture:server": "tsx tests/fixture-runners/capture-server.ts"
+    "capture:server": "tsx tests/fixture-runners/capture-server.ts",
+    "mock-store": "node tests/mock-store/server.js"
   },
   "dependencies": {
     "@expo-google-fonts/inter": "^0.4.2",

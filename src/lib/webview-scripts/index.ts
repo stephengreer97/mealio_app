@@ -12,6 +12,7 @@ import { getScripts as getAlbertsonsScripts, ALBERTSONS_FAMILY_IDS } from './alb
 import { getScripts as getAldiScripts } from './aldi';
 import { getScripts as getAmazonFreshScripts } from './amazon-fresh';
 import { getScripts as getWegmansScripts } from './wegmans';
+import { getScripts as getMockStoreScripts } from './mockstore';
 import { buildExtractWorker } from './worker-search';
 
 export interface StoreScripts {
@@ -121,6 +122,9 @@ export function getStoreScripts(storeId: string): StoreScripts | null {
     case 'aldi':           return getAldiScripts();
     case 'amazon':         return getAmazonFreshScripts();
     case 'wegmans':        return getWegmansScripts();
+    // Dev/test only: the deterministic mock store for Maestro e2e. Returns null
+    // in production so it can never be reached even if a meal carries the id.
+    case 'mockstore':      return __DEV__ ? getMockStoreScripts() : null;
     default:
       if (ALBERTSONS_FAMILY_IDS.includes(storeId)) {
         return getAlbertsonsScripts(storeId);
