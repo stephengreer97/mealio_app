@@ -1,58 +1,118 @@
 # Mealio — Running TODO
 
-Single source of truth for ongoing infra/feature work. Mirror these open items
+Single source of truth for ongoing infra/feature work. Mirror the open items
 into the Claude Code harness task list at the start of a session (the harness
 list is per-session and does not persist; this file does).
 
-## Open
+Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
+**[C]** = Claude can build/do it. Mixed items note who owns what.
 
-- [ ] **Background add-to-cart (in-app, v1)** — run add-to-cart in the background
-  behind a draggable circular-progress bubble (bottom-right) instead of a
-  blocking modal. Tap to open the current sheet; success → check (opens cart
-  snapshot), review/out-of-stock or snapshot problem → warning (opens that
-  page). Login handled UP FRONT in foreground, then collapse to the bubble.
-  Local notification on terminal/action states when backgrounded. Phases:
-  (1) lift engine into root `CartJobProvider`, sheet becomes a consumer, flag-
-  gated, prove parity; (2) bubble + drag + login-up-front collapse; (3) AppState
-  pause/resume of timers + expo-notifications; (4) polish (haptics, a11y,
-  position persistence, cancel, tests). NOTE: true run-while-app-CLOSED is NOT
-  possible on-device (iOS/Android suspend JS + WebView); v1 pauses on background
-  and resumes on foreground. See v2 below for the closed-app path.
-- [ ] **Background add-to-cart (server-side, v2)** — true background while the app
+---
+
+## GTM — must ship before launch
+
+### Engineering — [C]
+
+- [ ] **Parallel add-to-cart** — IN PROGRESS (branch `feat/parallel-add-cart`).
+  5-worker pool doing search-and-add concurrently, sequential reconciliation
+  backstop, deterministic cart-count confirmation, forward-only progress.
+  KEY RISK: workers share one cookie jar = one server-side cart, so concurrent
+  adds are WRITES that can race; the reconciliation pass + cart-count guard cover
+  it. ALDI/Wegmans stay serial (`forceSerialSearch`). Remaining: commit the 3
+  pending changes (myheb deep link + `FEATURE_PARALLEL_ADD`), decide the flag,
+  push + open PR.
+- [ ] **Android WebView WAF compatibility — dynamic UA + Custom Tabs eval.**
+  (1) Dynamic Android UA in `src/lib/webview-user-agent.ts` (currently static
+  "Android 16 / Chrome 138 / Pixel 9"): map `Platform.Version` → Android version,
+  query Chrome WebView version or keep a freshness policy. (2) Per-store smoke
+  test on real Android for all 6 WebView stores. (3) Evaluate Custom Tabs where
+  the in-app WebView is fingerprinted.
+- [ ] **HEB multi-quantity add-to-cart — test + fix.** Adding multiple qty of one
+  product appears broken, and the cart snapshot is not catching the miss.
+  Investigate the qty path and tighten snapshot detection.
+- [ ] **"Skip" option when no results found** — during BOTH product search and
+  add-to-cart reconciliation. When nothing matches, give the user an explicit
+  skip action instead of a dead end.
+- [ ] **Mock store + complete Maestro suite.** Build a controllable mock store and
+  run full Maestro coverage against it: product search, add-to-cart, cart
+  snapshot, product reconciliation, and the rest of the flow.
+- [ ] **App broadcast message.** Use the old mealio_central broadcast message as
+  scaffold. Add the option to broadcast only to users who have meals saved at
+  certain stores.
+- [ ] **Deep link for every store** — figure out the real native app scheme per
+  store and wire it. HEB done (`myheb://`, lands on app home; no cart path).
+- [ ] **Android App Links — website → app redirect.** Opening mealio.co links on
+  an Android device should redirect into the app (verified Android App Links /
+  `assetlinks.json` + intent filters), mirroring the iOS Universal Links setup.
+- [ ] **Remove the "x items" label when a meal has no author** (in-app).
+- [ ] **Marketing/lifecycle emails — creators.** Reminder emails to publish meals,
+  auto-sent based on lack of activity; plus an initial onboarding email with
+  tips. [C] builds + wires auto-send; [S] provides/approves copy + tips content.
+- [ ] **Marketing emails — users.** Upsell to Full Access, auto-sent to users who
+  have not paid. [C] builds + wires the trigger; [S] approves copy.
+- [ ] **Creator invite emails.** Email creators to invite them to participate.
+  [C] builds template + send mechanism; [S] provides the recipient list + copy.
+
+### Manual / accounts / content — [S]
+
+- [ ] **Create a YouTube video** and add it to both app store listings.
+- [ ] **Fix screenshots and publish to the Google Play Store.** ([C] can assist
+  with framing/copy; capture + Play Console publish are [S].)
+- [ ] **Google Play + RevenueCat setup.** Dashboard/console config is [S]; [C] can
+  wire the RevenueCat SDK in-app.
+
+---
+
+## Just Before GTM
+
+- [ ] **Upgrade to higher tier?** — Vercel, Supabase.
+- [ ] **Test partner payout via Tremendous.**
+- [ ] **Verify everything on the help page.**
+- [ ] **Decide on the website carousel.**
+
+---
+
+## Stretch Goals
+
+- [ ] **Background add-to-cart, v2 (server-side).** True background while the app
   is fully closed, with real push on completion. Do NOT move the WebView trick
-  server-side (storing passwords / replaying the user's cookies breaks every
-  store's ToS, and risks CFAA). Instead use official partner APIs with user
-  OAuth so the user consents on the retailer's own screen and we never hold
-  credentials: primary is the **Instacart Developer Platform** (recipe /
-  shopping-list → cart; covers most US grocery incl. ALDI, Costco, many regional
-  chains); plus the **Kroger Developer API** cart endpoints (OAuth, whole Kroger
-  family); Walmart partner/affiliate where add-to-cart is available. Hybrid:
-  API-backed + truly-background for covered stores, on-device (v1) for the rest.
-  Costs: per-retailer partner approval, OAuth integrations, legal sign-off per
-  integration. mealio.co backend fires APNs/FCM when the cart is built.
-- [ ] **Parallel add-to-cart (experiment + per-store flag; exclude ALDI)** — try
-  adding via `useParallelSearchPool` with `buildSearchAndAddScript`. KEY RISK:
-  workers share one cookie jar = one server-side cart, so concurrent adds are
-  WRITES that can race (drop/clobber/double-add). Separate branch. Bounded
-  concurrency (2–3), cart-count (#69 snapshot) as hard guard + retry. MUST
-  exclude ALDI (anti-bot 403s on concurrency — reuse `forceSerialSearch`).
-- [ ] **Android WebView WAF compatibility — dynamic UA + Custom Tabs eval**
-  (Android is next). (1) Dynamic Android UA in `src/lib/webview-user-agent.ts`
-  (currently static "Android 16 / Chrome 138 / Pixel 9"): map `Platform.Version`
-  → Android version, query Chrome WebView version or keep a freshness policy.
-  (2) Per-store smoke test on real Android for all 6 WebView stores. (3) Evaluate
-  Custom Tabs where the in-app WebView is fingerprinted.
-- [ ] **Store DOM drift detection — selector canary or recapture cadence** —
-  detect store redesigns before users hit broken carts. Prior live-Playwright
-  attempt was WAF-blocked (datacenter IP). Options: residential-IP canary from
-  Stephen's home machine on a local cron with realistic UA; or scheduled
-  fixture-recapture cadence.
-- [ ] **Live-store Maestro tests with 2FA trust-cookie persistence** — clear 2FA
-  once and reuse the device-trust COOKIE (long-lived, NOT IP-based). (a) LOCAL:
-  golden simulator, log in once, Maestro `clearState:false`, always install OVER
-  the app. (b) CI-portable: capture trust cookies via `CookieManager.get`
-  (reads HttpOnly), store as secret, inject via `CookieManager.set`.
+  server-side (storing passwords / replaying cookies breaks store ToS + risks
+  CFAA). Use official partner APIs with user OAuth: primary **Instacart Developer
+  Platform**, plus **Kroger Developer API** cart endpoints and Walmart partner
+  where available. mealio.co backend fires APNs/FCM when the cart is built.
+- [ ] **Store DOM drift detection — selector canary or recapture cadence.** Catch
+  store redesigns before users hit broken carts. Residential-IP canary from
+  Stephen's home machine on a local cron with realistic UA, or a scheduled
+  fixture-recapture cadence. (Live-Playwright was WAF-blocked from datacenter IP.)
+- [ ] **Live-store Maestro tests with 2FA trust-cookie persistence.** Clear 2FA
+  once and reuse the long-lived device-trust COOKIE (NOT IP-based). LOCAL: golden
+  simulator, Maestro `clearState:false`, install OVER the app. CI: capture trust
+  cookies via `CookieManager.get`, store as secret, inject via `CookieManager.set`.
+- [ ] **Contact stores for direct API / OAuth access.**
+- [ ] **Nutrition section + breakdown** (requires API integration).
+- [ ] **Price section + breakdown** (requires API integration).
+- [ ] **Support for other countries.**
+- [ ] **Generate-photo search text.** Auto-populates with the meal name but stays
+  editable. Consider a full overhaul / AI-generated photos.
+
+---
+
 ## Done
+
+### Background add-to-cart v1 (in-app) — MERGED (PR #9)
+- Root `CartJobProvider` owns the WebView engine; the sheet is a consumer.
+  Draggable circular-progress bubble (bottom-right): tap to expand; success →
+  cart snapshot, review/out-of-stock/snapshot problem → warning. Login handled
+  up front in the foreground, then auto-collapse. One-time "keep the app open"
+  popup. Push notification on terminal/action states when backgrounded.
+  Deterministic cart-count confirmation gates add success.
+- Phases 3 (AppState pause/resume of timers + notifications) and 4 (haptics,
+  a11y, position persistence, cancel, tests) intentionally DROPPED — not doing.
+
+### Sunset browser extensions (2026-06-23)
+- Chrome + Firefox extension repos archived read-only; mealio_central server
+  hooks + UI references removed (PR #3 on mealio_website). Cart automation is now
+  the Kroger web integration + the mobile app only.
 
 ### Walmart
 - Cart snapshot (before/after) — Walmart has a /cart page, so URL-based like HEB.
@@ -95,7 +155,7 @@ list is per-session and does not persist; this file does).
   context); if Wegmans add-to-cart ever drops items past the first, harden it the
   same try/finally way.
 
-### ALDI anti-bot + login (current work)
+### ALDI anti-bot + login
 - Verified ALDI serial search end-to-end after the 403 cooldown: clean storefront
   loads (no cache-buster), correct login verdict, search + add-to-cart complete,
   cart snapshot working.
