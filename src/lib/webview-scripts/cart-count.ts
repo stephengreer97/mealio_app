@@ -422,26 +422,46 @@ export function buildInlineCartScript(storeId: string): string | null {
 
 const HEB_CART_PAGE_SCRIPT = `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
-  // Poll briefly for item rows to render (HEB hydrates the cart client-side).
-  var rows = [];
-  for (var i = 0; i < 20; i++) {
-    rows = Array.prototype.slice.call(document.querySelectorAll('[data-qe-id="itemRow"]'));
-    if (rows.length > 0) break;
-    await wait(200);
+  function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
+  function rowQty(row) {
+    var inp = row.querySelector('[data-qe-id="cartQuantityCounterValue"]');
+    if (!inp) return 0;
+    // Prefer the live .value property; the value ATTRIBUTE is the server-rendered
+    // initial qty and goes stale after a client-side increment.
+    var v = parseInt(inp.value, 10);
+    if (!v || isNaN(v)) {
+      var alt = inp.getAttribute('aria-valuenow') || inp.getAttribute('value') || '';
+      var m = String(alt).match(/(\\d+)/);
+      v = m ? parseInt(m[1], 10) : 0;
+    }
+    return isNaN(v) ? 0 : v;
   }
-  var count = 0;
-  var items = [];
-  for (var j = 0; j < rows.length; j++) {
-    var inp = rows[j].querySelector('[data-qe-id="cartQuantityCounterValue"]');
-    var raw = inp ? (inp.value || inp.getAttribute('value') || '0') : '0';
-    var v = parseInt(raw, 10);
-    if (isNaN(v)) v = 0;
-    count += v;
-    var nameEl = rows[j].querySelector('[data-qe-id="itemRowDetailsName"]');
-    var nm = nameEl ? (nameEl.textContent || '').trim().replace(/\\s+/g, ' ') : '';
-    if (nm) items.push({ name: nm, qty: v });
+  function snapshot() {
+    var rows = Array.prototype.slice.call(document.querySelectorAll('[data-qe-id="itemRow"]'));
+    var count = 0, items = [];
+    for (var j = 0; j < rows.length; j++) {
+      var q = rowQty(rows[j]);
+      count += q;
+      var nameEl = rows[j].querySelector('[data-qe-id="itemRowDetailsName"]');
+      var nm = nameEl ? norm(nameEl.textContent) : '';
+      if (nm) items.push({ name: nm, qty: q });
+    }
+    return { count: count, items: items, rows: rows.length };
   }
-  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'CART_COUNT', count: count, items: items }));
+  // Poll for item rows to render (HEB hydrates the cart client-side).
+  var snap = snapshot();
+  for (var i = 0; i < 20 && snap.rows === 0; i++) { await wait(200); snap = snapshot(); }
+  // Stabilize: a line that was just incremented can briefly read its pre-update
+  // qty, so the first read can under-count. Re-read until the total holds steady
+  // across two consecutive reads (bounded) before trusting it.
+  var stable = 0;
+  for (var k = 0; k < 15; k++) {
+    await wait(250);
+    var next = snapshot();
+    if (next.count === snap.count && next.rows === snap.rows) { stable++; snap = next; if (stable >= 2) break; }
+    else { stable = 0; snap = next; }
+  }
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'CART_COUNT', count: snap.count, items: snap.items }));
 })(); true;`;
 
 // Albertsons family /erums/cart (Angular app). Each line item is an

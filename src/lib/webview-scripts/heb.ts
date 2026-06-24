@@ -846,17 +846,34 @@ ${HEB_WAIT_FRESH_FN}
       await wait(600);
       if (await handleWeightDropdown(QTY)) {
         // Weight select handled — nothing more to do
-      } else {
-        // For qty > 1: after first add, button may become an incrementer OR stay as ATC.
+      } else if (QTY > 1) {
+        // Multi-quantity: confirm each unit via the card button label, which reads
+        // "N added" — the quantity for THIS product, unaffected by sibling workers
+        // touching the shared header cart badge. Confirm the first unit, then click
+        // "add 1 more" for each remaining unit, waiting for the label to tick up
+        // each time (with one retry) so a dropped click is caught instead of
+        // silently under-adding. (qty 1 needs none of this — the cart-increase gate
+        // below confirms the single unit.)
+        var __cardAddedQty = function() {
+          var b = bestCard.querySelector('button[data-qe-id="addToCart"]');
+          var m = (b ? (b.textContent || '') : '').match(/(\\d+)\\s*added/i);
+          return m ? parseInt(m[1], 10) : 0;
+        };
+        var __waitAddedQty = async function(target, ticks) {
+          for (var w = 0; w < ticks; w++) { if (__cardAddedQty() >= target) return true; await wait(200); }
+          return false;
+        };
+        await __waitAddedQty(1, 15);   // let the first unit's label settle (~3s max)
         for (var j = 1; j < QTY; j++) {
-          var incrBtn = bestCard.querySelector('button[data-qe-id="cartQuantityCounterIncrement"]');
-          if (!incrBtn) incrBtn = bestCard.querySelector('button[data-qe-id="addToCart"]');
-          if (!incrBtn) break;
-          if (incrBtn.disabled || incrBtn.getAttribute('aria-disabled') === 'true') break;
+          var prevQty = __cardAddedQty();
+          if (prevQty >= QTY) break;
+          var incrBtn = bestCard.querySelector('button[data-qe-id="cartQuantityCounterIncrement"]')
+                     || bestCard.querySelector('button[data-qe-id="addToCart"]');
+          if (!incrBtn || incrBtn.disabled || incrBtn.getAttribute('aria-disabled') === 'true') break;
           incrBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
           await wait(100);
           incrBtn.click();
-          if (j < QTY - 1) await wait(500);
+          if (!(await __waitAddedQty(prevQty + 1, 30))) { incrBtn.click(); await __waitAddedQty(prevQty + 1, 25); }
         }
       }
     }
