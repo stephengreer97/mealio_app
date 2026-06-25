@@ -368,40 +368,54 @@ export function buildAddToCartScript(
 
   // Handles fresh fish/meat items where Add to Cart opens a weight picker.
   // 1 qty = 0.25 lbs. Tries native <select> then ARIA [role="listbox"].
-  async function handleWeightDropdown(qty) {
+  async function handleWeightDropdown(qty, scope) {
     var targetLbs = qty * 0.25;
-    var allSelects = Array.from(document.querySelectorAll('select'));
-    for (var si = 0; si < allSelects.length; si++) {
-      var sopts = Array.from(allSelects[si].options);
-      if (!sopts.some(function(o) { return /\\blbs?\\b/i.test(o.textContent); })) continue;
-      var sBest = null, sBestDiff = Infinity;
-      for (var soi = 0; soi < sopts.length; soi++) {
-        var sv = parseFloat(sopts[soi].textContent);
-        if (!isNaN(sv)) { var sd = Math.abs(sv - targetLbs); if (sd < sBestDiff) { sBestDiff = sd; sBest = sopts[soi]; } }
-      }
-      if (sBest) {
-        allSelects[si].value = sBest.value || sBest.textContent.trim();
-        allSelects[si].dispatchEvent(new Event('change', { bubbles: true }));
-        allSelects[si].dispatchEvent(new Event('input', { bubbles: true }));
-        await wait(400);
-        var confirmBtn = document.querySelector('button[data-qe-id="cartQuantityTrigger"]');
-        if (confirmBtn) { confirmBtn.click(); await wait(400); }
-        return true;
-      }
-    }
-    var listbox = document.querySelector('[role="listbox"]');
-    if (listbox) {
-      var lbOpts = Array.from(listbox.querySelectorAll('[role="option"]'));
-      if (lbOpts.some(function(o) { return /\\blbs?\\b/i.test(o.textContent); })) {
-        var lbBest = null, lbBestDiff = Infinity;
-        for (var lbi = 0; lbi < lbOpts.length; lbi++) {
-          var lv = parseFloat(lbOpts[lbi].textContent);
-          if (!isNaN(lv)) { var ld = Math.abs(lv - targetLbs); if (ld < lbBestDiff) { lbBestDiff = ld; lbBest = lbOpts[lbi]; } }
+    // Search ONLY the target product's own card, then a weight-picker modal that
+    // our Add click opened — never page-wide. Otherwise a sibling product sold by
+    // weight (e.g. a "..., lb" bulk item with its own inline dropdown sitting in
+    // the same search results) gets a weight selected and added too.
+    function pickIn(root) {
+      var selects = Array.from(root.querySelectorAll('select'));
+      for (var si = 0; si < selects.length; si++) {
+        var sopts = Array.from(selects[si].options);
+        if (!sopts.some(function(o) { return /\\blbs?\\b/i.test(o.textContent); })) continue;
+        var sBest = null, sBestDiff = Infinity;
+        for (var soi = 0; soi < sopts.length; soi++) {
+          var sv = parseFloat(sopts[soi].textContent);
+          if (!isNaN(sv)) { var sd = Math.abs(sv - targetLbs); if (sd < sBestDiff) { sBestDiff = sd; sBest = sopts[soi]; } }
         }
-        if (lbBest) { lbBest.click(); await wait(400); return true; }
+        if (sBest) {
+          selects[si].value = sBest.value || sBest.textContent.trim();
+          selects[si].dispatchEvent(new Event('change', { bubbles: true }));
+          selects[si].dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        }
       }
+      var listbox = root.querySelector('[role="listbox"]');
+      if (listbox) {
+        var lbOpts = Array.from(listbox.querySelectorAll('[role="option"]'));
+        if (lbOpts.some(function(o) { return /\\blbs?\\b/i.test(o.textContent); })) {
+          var lbBest = null, lbBestDiff = Infinity;
+          for (var lbi = 0; lbi < lbOpts.length; lbi++) {
+            var lv = parseFloat(lbOpts[lbi].textContent);
+            if (!isNaN(lv)) { var ld = Math.abs(lv - targetLbs); if (ld < lbBestDiff) { lbBestDiff = ld; lbBest = lbOpts[lbi]; } }
+          }
+          if (lbBest) { lbBest.click(); return true; }
+        }
+      }
+      return false;
     }
-    return false;
+    var handledRoot = null;
+    if (scope && pickIn(scope)) handledRoot = scope;
+    if (!handledRoot) {
+      var dialog = document.querySelector('[role="dialog"]:not([aria-label="Search"]), [role="presentation"]:not([aria-label="Search"])');
+      if (dialog && (!scope || !scope.contains(dialog)) && pickIn(dialog)) handledRoot = dialog;
+    }
+    if (!handledRoot) return false;
+    await wait(400);
+    var confirmBtn = handledRoot.querySelector('button[data-qe-id="cartQuantityTrigger"]') || document.querySelector('button[data-qe-id="cartQuantityTrigger"]');
+    if (confirmBtn) { confirmBtn.click(); await wait(400); }
+    return true;
   }
 
   var TITLE_SEL = '[data-qe-id="productTitle"]';
@@ -554,7 +568,7 @@ ${HEB_FIND_CARDS_FN}
     await wait(400);
 
     // Weight dropdown (fresh fish/meat sold by lb) intercepts before any cart change.
-    if (await handleWeightDropdown(QTY)) {
+    if (await handleWeightDropdown(QTY, targetCard)) {
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: true }));
       return;
     }
@@ -582,7 +596,7 @@ ${HEB_FIND_CARDS_FN}
     await wait(100);
     addBtn.click();
     await wait(700);
-    if (await handleWeightDropdown(QTY)) {
+    if (await handleWeightDropdown(QTY, targetCard)) {
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: true }));
       return;
     }
@@ -650,40 +664,54 @@ export function buildSearchAndAddScript(
 ${HEB_FIND_CARDS_FN}
 ${HEB_WAIT_FRESH_FN}
 
-  async function handleWeightDropdown(qty) {
+  async function handleWeightDropdown(qty, scope) {
     var targetLbs = qty * 0.25;
-    var allSelects = Array.from(document.querySelectorAll('select'));
-    for (var si = 0; si < allSelects.length; si++) {
-      var sopts = Array.from(allSelects[si].options);
-      if (!sopts.some(function(o) { return /\\blbs?\\b/i.test(o.textContent); })) continue;
-      var sBest = null, sBestDiff = Infinity;
-      for (var soi = 0; soi < sopts.length; soi++) {
-        var sv = parseFloat(sopts[soi].textContent);
-        if (!isNaN(sv)) { var sd = Math.abs(sv - targetLbs); if (sd < sBestDiff) { sBestDiff = sd; sBest = sopts[soi]; } }
-      }
-      if (sBest) {
-        allSelects[si].value = sBest.value || sBest.textContent.trim();
-        allSelects[si].dispatchEvent(new Event('change', { bubbles: true }));
-        allSelects[si].dispatchEvent(new Event('input', { bubbles: true }));
-        await wait(400);
-        var confirmBtn = document.querySelector('button[data-qe-id="cartQuantityTrigger"]');
-        if (confirmBtn) { confirmBtn.click(); await wait(400); }
-        return true;
-      }
-    }
-    var listbox = document.querySelector('[role="listbox"]');
-    if (listbox) {
-      var lbOpts = Array.from(listbox.querySelectorAll('[role="option"]'));
-      if (lbOpts.some(function(o) { return /\\blbs?\\b/i.test(o.textContent); })) {
-        var lbBest = null, lbBestDiff = Infinity;
-        for (var lbi = 0; lbi < lbOpts.length; lbi++) {
-          var lv = parseFloat(lbOpts[lbi].textContent);
-          if (!isNaN(lv)) { var ld = Math.abs(lv - targetLbs); if (ld < lbBestDiff) { lbBestDiff = ld; lbBest = lbOpts[lbi]; } }
+    // Search ONLY the target product's own card, then a weight-picker modal that
+    // our Add click opened — never page-wide. Otherwise a sibling product sold by
+    // weight (e.g. a "..., lb" bulk item with its own inline dropdown sitting in
+    // the same search results) gets a weight selected and added too.
+    function pickIn(root) {
+      var selects = Array.from(root.querySelectorAll('select'));
+      for (var si = 0; si < selects.length; si++) {
+        var sopts = Array.from(selects[si].options);
+        if (!sopts.some(function(o) { return /\\blbs?\\b/i.test(o.textContent); })) continue;
+        var sBest = null, sBestDiff = Infinity;
+        for (var soi = 0; soi < sopts.length; soi++) {
+          var sv = parseFloat(sopts[soi].textContent);
+          if (!isNaN(sv)) { var sd = Math.abs(sv - targetLbs); if (sd < sBestDiff) { sBestDiff = sd; sBest = sopts[soi]; } }
         }
-        if (lbBest) { lbBest.click(); await wait(400); return true; }
+        if (sBest) {
+          selects[si].value = sBest.value || sBest.textContent.trim();
+          selects[si].dispatchEvent(new Event('change', { bubbles: true }));
+          selects[si].dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        }
       }
+      var listbox = root.querySelector('[role="listbox"]');
+      if (listbox) {
+        var lbOpts = Array.from(listbox.querySelectorAll('[role="option"]'));
+        if (lbOpts.some(function(o) { return /\\blbs?\\b/i.test(o.textContent); })) {
+          var lbBest = null, lbBestDiff = Infinity;
+          for (var lbi = 0; lbi < lbOpts.length; lbi++) {
+            var lv = parseFloat(lbOpts[lbi].textContent);
+            if (!isNaN(lv)) { var ld = Math.abs(lv - targetLbs); if (ld < lbBestDiff) { lbBestDiff = ld; lbBest = lbOpts[lbi]; } }
+          }
+          if (lbBest) { lbBest.click(); return true; }
+        }
+      }
+      return false;
     }
-    return false;
+    var handledRoot = null;
+    if (scope && pickIn(scope)) handledRoot = scope;
+    if (!handledRoot) {
+      var dialog = document.querySelector('[role="dialog"]:not([aria-label="Search"]), [role="presentation"]:not([aria-label="Search"])');
+      if (dialog && (!scope || !scope.contains(dialog)) && pickIn(dialog)) handledRoot = dialog;
+    }
+    if (!handledRoot) return false;
+    await wait(400);
+    var confirmBtn = handledRoot.querySelector('button[data-qe-id="cartQuantityTrigger"]') || document.querySelector('button[data-qe-id="cartQuantityTrigger"]');
+    if (confirmBtn) { confirmBtn.click(); await wait(400); }
+    return true;
   }
 
   await wait(800);
@@ -844,7 +872,7 @@ ${HEB_WAIT_FRESH_FN}
     } else {
       // No preference modal — standard add (may include weight-select items like Fish Market by lb)
       await wait(600);
-      if (await handleWeightDropdown(QTY)) {
+      if (await handleWeightDropdown(QTY, bestCard)) {
         // Weight select handled — nothing more to do
       } else if (QTY > 1) {
         // Multi-quantity: confirm each unit via the card button label, which reads
