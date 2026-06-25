@@ -1,7 +1,10 @@
-# Mock-store NO RESULTS → SKIP: a seeded meal with a "noresults" ingredient → 0
-# candidates → review with a Skip affordance. Skip it and finish.
+# Mock-store RECONCILE: a seeded "failadd" ingredient — the first add reports
+# success but silently doesn't persist (the mock store drops it once), so the
+# worker's optimistic success is a false positive. The reconcile pass reads the
+# real cart, finds it missing, and re-adds it (the 2nd add persists). No manual
+# interaction — assert the item ends up in the cart.
 #
-# Seed: meal "E2E Skip" at "Mock Store" with one ingredient term "rice noresults".
+# Seed: meal "E2E Reconcile" at "Mock Store" with one ingredient term "ham failadd".
 
 appId: co.mealio.app
 env:
@@ -25,7 +28,7 @@ env:
 - tapOn: { id: "tab-mymeals" }
 - extendedWaitUntil: { visible: "Mock Store", timeout: 15000 }
 - tapOn: "Mock Store"
-- tapOn: { id: "meal-card-E2E Skip" }
+- tapOn: { id: "meal-card-E2E Reconcile" }
 - tapOn: { id: "floating-add-to-cart" }
 - extendedWaitUntil: { visible: "Add Ingredients to Mock Store Cart.*", timeout: 15000 }
 - tapOn: "Add Ingredients to Mock Store Cart.*"
@@ -36,13 +39,10 @@ env:
     when: { visible: "Got it" }
     commands: [{ tapOn: "Got it" }]
 
-# 0 results → "Items Not Added"; open the bubble and enter review.
+# Reconcile runs automatically; wait it out, then open the snapshot.
 - extendedWaitUntil: { visible: { id: "cart-status-bubble" }, timeout: 30000 }
+- extendedWaitUntil: { notVisible: { id: "cart-progress-fill" }, timeout: 90000 }
 - tapOn: { id: "cart-status-bubble" }
-- extendedWaitUntil: { visible: "Items Not Added", timeout: 30000 }
-- tapOn: "Review .* Item.*"
-
-# Review Ingredients: no candidates → skip the ingredient.
-- extendedWaitUntil: { visible: "No products found.*", timeout: 15000 }
-- tapOn: "Skip this ingredient"
-- extendedWaitUntil: { notVisible: "Skip this ingredient", timeout: 30000 }
+# After reconcile the item is actually in the cart, and nothing is flagged missing.
+- assertVisible: { id: "cart-row-added" }
+- assertNotVisible: "could not be added"

@@ -1,41 +1,58 @@
-# Mock-store CHOOSE PRODUCT: a meal whose ingredient term contains "multi" yields
-# 5 candidates with no exact match, so the engine surfaces the Choose-Product UI.
-# Pick one and confirm it lands in the cart.
+# Mock-store CHOOSE PRODUCT: a seeded meal with a "multi" ingredient → 5
+# candidates, no exact match → the engine surfaces Choose Product. Pick one.
 #
-# SCAFFOLD — see tests/mock-store/README.md (deps: dev build, test account, a
-# seeded `mockstore` meal with a "...multi" ingredient, mock server on :8788).
-# TODO(tomorrow): confirm testIDs/labels against the real cart-sheet UI.
+# Seed: meal "E2E Choose" at "Mock Store" with one ingredient term "cheese multi".
+# See 10-cart-happy-path.yaml for the testID/seed/build prerequisites.
 
 appId: co.mealio.app
 env:
   EMAIL: ${MEALIO_TEST_EMAIL}
   PASSWORD: ${MEALIO_TEST_PASSWORD}
 ---
-- launchApp:
-    clearState: true
-    stopApp: true
-# --- sign in + open the seeded "multi" meal (same preamble as 10) ---
+- launchApp: { clearState: true, clearKeychain: true, stopApp: true }
+
+# Sign in (see flow 10 for why each step is shaped this way).
 - tapOn: "Sign In"
 - tapOn: { id: "login-email" }
 - inputText: ${EMAIL}
 - tapOn: { id: "login-password" }
 - inputText: ${PASSWORD}
-- tapOn: "Log In"
-- tapOn: "My Meals"
-- extendedWaitUntil: { visible: { id: "meal-card-0" }, timeout: 15000 }
-- tapOn: { id: "meal-card-0" }
-- tapOn: "Add to Cart"
+- pressKey: Enter
+- tapOn: { id: "login-submit" }
+
+# Reach My Meals → Mock Store, select the seeded meal, confirm the review sheet,
+# then handle the store webview login + one-time popup.
+- extendedWaitUntil: { visible: "Trending Meals", timeout: 20000 }
+- tapOn: { id: "tab-mymeals" }
+- extendedWaitUntil: { visible: "Mock Store", timeout: 15000 }
 - tapOn: "Mock Store"
+- tapOn: { id: "meal-card-E2E Choose" }
+- tapOn: { id: "floating-add-to-cart" }
+- extendedWaitUntil: { visible: "Add Ingredients to Mock Store Cart.*", timeout: 15000 }
+- tapOn: "Add Ingredients to Mock Store Cart.*"
+- runFlow:
+    when: { visible: "Sign In" }
+    commands: [{ tapOn: "Sign In" }]
+- runFlow:
+    when: { visible: "Got it" }
+    commands: [{ tapOn: "Got it" }]
 
-# No exact match → Choose Product. Pick the first candidate and continue.
-- extendedWaitUntil:
-    visible: "Choose Product"     # TODO confirm header
-    timeout: 30000
-- tapOn:
-    id: "candidate-0"             # TODO confirm candidate row testID
-- tapOn: "Next"                   # or "Save" on the last item — TODO confirm
+# No exact match → the job ends on the "Items Not Added" summary. Open the
+# bubble, then enter the review flow.
+- extendedWaitUntil: { visible: { id: "cart-status-bubble" }, timeout: 30000 }
+- tapOn: { id: "cart-status-bubble" }
+- extendedWaitUntil: { visible: "Items Not Added", timeout: 30000 }
+- tapOn: "Review .* Item.*"          # "Review 1 Item →" (trailing arrow + count)
 
-- extendedWaitUntil:
-    visible: "Done"
-    timeout: 60000
-- assertVisible: "added"
+# Review Ingredients: pick the store's first suggestion, bump qty 0→1, add it.
+- extendedWaitUntil: { visible: "No exact match found", timeout: 15000 }
+- tapOn: { id: "candidate-0" }
+- tapOn: "+"                          # qty defaults to 0; one ingredient → one stepper
+- tapOn: "Add to Cart Only"
+
+# Resolving the review finishes the job, which collapses to the success bubble;
+# reopen it to read the cart snapshot.
+- extendedWaitUntil: { visible: { id: "cart-status-bubble" }, timeout: 60000 }
+- extendedWaitUntil: { notVisible: { id: "cart-progress-fill" }, timeout: 60000 }
+- tapOn: { id: "cart-status-bubble" }
+- extendedWaitUntil: { visible: { id: "cart-row-added" }, timeout: 30000 }

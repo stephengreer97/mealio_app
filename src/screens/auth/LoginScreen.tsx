@@ -27,6 +27,13 @@ WebBrowser.maybeCompleteAuthSession();
 
 type Props = { navigation: NativeStackNavigationProp<AuthStackParamList, 'Login'> };
 
+// In E2E builds, render the password field as a plain (non-secure) input with
+// autofill disabled. iOS Strong Password AutoFill on a secureTextEntry field
+// swallows Maestro's text injection, so onChangeText never fires and the field
+// stays empty (the email field, being non-secure, fills fine). Real builds keep
+// secure entry + password autofill untouched.
+const E2E = process.env.EXPO_PUBLIC_E2E === '1';
+
 export default function LoginScreen({ navigation }: Props) {
   const { login, loginWithToken } = useAuth();
   const [email, setEmail] = useState('');
@@ -171,6 +178,7 @@ export default function LoginScreen({ navigation }: Props) {
             <Text style={styles.subtitle}>Sign in to your account</Text>
 
             <Input
+              testID="login-email"
               label="Email"
               placeholder="you@example.com"
               value={email}
@@ -181,12 +189,14 @@ export default function LoginScreen({ navigation }: Props) {
             />
 
             <Input
+              testID="login-password"
               label="Password"
               placeholder="••••••••"
               value={password}
               onChangeText={setPassword}
-              isPassword
-              autoComplete="password"
+              isPassword={!E2E}
+              autoComplete={E2E ? 'off' : 'password'}
+              textContentType={E2E ? 'oneTimeCode' : undefined}
               error={errors.password}
             />
 
@@ -194,7 +204,7 @@ export default function LoginScreen({ navigation }: Props) {
               <Text style={styles.forgotText}>Forgot password?</Text>
             </TouchableOpacity>
 
-            <Button label="Sign In" onPress={handleLogin} loading={loading} disabled={anyLoading} style={styles.submitBtn} />
+            <Button testID="login-submit" label="Sign In" onPress={handleLogin} loading={loading} disabled={anyLoading} style={styles.submitBtn} />
 
             <View style={styles.divider}>
               <View style={styles.dividerLine} />

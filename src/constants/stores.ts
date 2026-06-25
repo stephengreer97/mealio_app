@@ -1,3 +1,5 @@
+import { MOCK_STORE_ENABLED } from '../lib/webview-scripts/mockstore';
+
 export interface Store {
   id: string;
   name: string;
@@ -67,9 +69,9 @@ export const STORES: Store[] = [
   { id: 'wegmans',        name: 'Wegmans',             color: '#000000' },
 ];
 
-// Dev/test only: surface the deterministic mock store in the store list so
-// Maestro can save a meal at it and run the full add-to-cart flow. Never shown
-// in production builds.
-if (typeof __DEV__ !== 'undefined' && __DEV__) {
+// Dev/e2e only: surface the deterministic mock store in the store list so
+// Maestro can save a meal at it and run the full add-to-cart flow. Excluded from
+// production builds (the e2e flag is unset there).
+if (MOCK_STORE_ENABLED) {
   STORES.push({ id: 'mockstore', name: 'Mock Store', color: '#0a7d4b' });
 }
