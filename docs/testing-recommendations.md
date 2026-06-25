@@ -89,6 +89,39 @@ partial adds). Far faster and more thorough than Maestro for edge cases.
 
 ---
 
+## Regression test matrix — run against every store
+
+The mock store covers these against one controllable backend, but cart behavior
+differs per real store (preference modals, weight items, snapshot shape), so each
+case should be exercised against **every supported store**. Several of these are
+not yet verified and may surface bugs.
+
+1. **Add the same item twice in one run.** The cart should end with qty 2 (one
+   line, qty 2 — or two lines if the store models it that way), and the snapshot
+   must report the correct total.
+2. **Add an item that is already in the cart, twice in one run.** Starting from a
+   pre-existing qty, the run should add exactly 2 more — the snapshot diff must
+   measure the delta, not the absolute, and not double-count the pre-existing
+   units.
+3. **Preference-selection stores.** Test adding *and* incrementing an item that
+   requires a preference (size/variant modal). Also verify how the cart snapshot
+   behaves when the selection happens via a modal — does it still read the right
+   product name + qty afterwards?
+4. **Search returns no results.** Adding an item whose search yields nothing
+   should route to the "choose alternative" / review flow (not silently drop).
+5. **Out-of-stock / no-results is always caught.** Verify that an OOS or
+   no-results item is surfaced by the "choose alternative" flow *or* flagged by
+   the cart snapshot — never silently missing. (This is the class of bug fixed in
+   PR #16 for the parallel path; confirm it holds for every store, serial and
+   parallel.)
+6. **Snapshots key on full product name + qty.** Ensure every store's cart
+   snapshot matches on the *full* product name and accounts for quantities, so
+   similar names don't cross-count (cf. the Ancho/Guajillo pepper double-count).
+7. **Non-quantity (weight / by-the-pound) items.** Test how items not measured in
+   discrete qty are handled by the cart snapshot — current behavior is unverified.
+
+---
+
 ## iOS / Maestro gotchas learned (reference)
 
 Captured so the next person doesn't re-derive them:
