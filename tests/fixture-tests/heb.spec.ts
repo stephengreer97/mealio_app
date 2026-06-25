@@ -70,6 +70,32 @@ describe('HEB EXTRACT_PRODUCTS_SCRIPT', () => {
       expect(first.productName.length).toBeGreaterThan(0);
     },
   );
+
+  itWithFixture(
+    'search-results-weight-dropdown-closed.html',
+    'detects sold-by-weight items and reads their real lb increments',
+    async (runner) => {
+      await runner.inject(scripts.extractProductsScript);
+      const result = await runner.waitForMessage('SEARCH_RESULT', 14_000);
+      const weighty = (result.candidates as any[]).filter(
+        (c) => c.isWeightItem && Array.isArray(c.weightOptions) && c.weightOptions.length > 0,
+      );
+      // The "bulk coffee" search is almost all by-the-pound items.
+      expect(weighty.length).toBeGreaterThan(0);
+      // Placeholder ("Select a Weight", value 0) filtered out; the remaining
+      // options are the real buyable lb weights, positive and ascending.
+      expect(weighty.every((c) => c.weightOptions.every((w: number) => w > 0))).toBe(true);
+      const w = weighty[0].weightOptions as number[];
+      expect(w.length).toBeGreaterThan(1);
+      const increment = w[1] - w[0];
+      // We read the product's OWN increment from the dropdown (1 lb for these
+      // coffees) rather than assuming a fixed lb-per-qty: the first option equals
+      // one increment and the steps are uniform.
+      expect(increment).toBeGreaterThan(0);
+      expect(w[0]).toBeCloseTo(increment);
+      expect(w[2] - w[1]).toBeCloseTo(increment);
+    },
+  );
 });
 
 describe('HEB regression: "perfect pairings" carousel is not extracted', () => {

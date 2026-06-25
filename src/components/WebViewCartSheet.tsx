@@ -44,6 +44,10 @@ interface Candidate {
   preferences: Array<{ text: string; value: string }> | null;
   price: string | null;
   isWeightItem?: boolean;
+  /** For sold-by-weight items: the buyable weights (lb) from the addByWeight
+   *  dropdown, in order. Increments differ per product, so this drives the
+   *  weight chooser + add (qty = the Nth option). */
+  weightOptions?: number[];
 }
 
 interface SearchResult {
