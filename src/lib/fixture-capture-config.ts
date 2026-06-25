@@ -140,6 +140,21 @@ export const FIXTURE_CAPTURE_STORES: Record<string, StoreCaptureConfig> = {
           'Find an item that requires you to pick a variant (e.g. avocados with size choices). Tap + on its tile — HEB pops a preference modal. Tap Capture WHILE the modal is open.',
       },
       {
+        file: 'search-results-weight-dropdown-closed.html',
+        url: 'https://www.heb.com/search?q=bulk%20coffee',
+        optional: true,
+        instruction:
+          'Find a SOLD-BY-THE-POUND weight item — e.g. "CAFE Olé by H-E-B Bavarian Hazelnut Medium Roast Whole Bean Bulk Coffee, lb" — whose tile shows a WEIGHT DROPDOWN (a weight selector like "0.25 lb") instead of a normal "Add to cart" button. Do NOT open the dropdown. Capture the search results as-is. This pins the tile + dropdown-control structure so we can read the weight increments. (Pairs with search-results-weight-dropdown-open.html.)',
+      },
+      {
+        file: 'search-results-weight-dropdown-open.html',
+        url: 'https://www.heb.com/search?q=bulk%20coffee',
+        optional: true,
+        suggestedDelayMs: 2000,
+        instruction:
+          'Same "… Bulk Coffee, lb" weight item — now TAP its weight dropdown so the full list of weight options is visible (e.g. 0.25 lb, 0.5 lb, 0.75 lb, …). Use "Capture in 2s": tap the dropdown in the WebView, then immediately tap the timed capture before it closes. We need the rendered option weight values to detect the increment.',
+      },
+      {
         file: 'search-results-out-of-stock.html',
         url: 'https://www.heb.com/search?q=seasonal',
         optional: true,
