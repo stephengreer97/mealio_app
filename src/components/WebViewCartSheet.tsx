@@ -1513,8 +1513,28 @@ export default function WebViewCartSheet({
             const addedRows = rows.filter((r) => r.added);
             const retryItems: ConsolidatedIngredient[] = [];
             const confirmed: { name: string; success: boolean }[] = [];
+            const reviewFailures: SearchResult[] = [];
             active.forEach((item, idx) => {
               const r = reconResults.get(idx);
+              // Honor a worker's explicit, definitive failure. An out-of-stock /
+              // no-results item is genuinely not in the cart, so it must NOT be
+              // (a) qty-matched by name — productName is null, and the search term
+              // loosely collides with a sibling's row, falsely "confirming" it —
+              // nor (b) blindly retried (it will just fail again). Route it to the
+              // review queue so the user can pick an alternative or skip, exactly
+              // like the serial add path does.
+              if (r && !r.success && (r.reason === 'out_of_stock' || r.reason === 'no_results')) {
+                reviewFailures.push({
+                  term: item.searchTerm || item.ingredientName,
+                  candidates: r.candidates ?? [],
+                  mealIngredients: item.mealIngredients,
+                  unit: item.unit,
+                  measure: item.measure,
+                  reason: r.reason,
+                  isChoose: false,
+                });
+                return;
+              }
               const reportedName = (r && r.productName) || item.searchTerm || item.ingredientName;
               const expectedQty = Math.max(1, item.productQty || 1);
               const actualQty = addedRows
@@ -1529,7 +1549,15 @@ export default function WebViewCartSheet({
                 retryItems.push({ ...item, productQty: shortfall });
               }
             });
-            console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm));
+            console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm), 'review=', reviewFailures.length, reviewFailures.map((r) => `${r.term}:${r.reason}`));
+            // Surface definitive failures (out of stock / no results) in the
+            // review queue. When there are also qty top-ups, the sequential retry
+            // below finishes into the review step because searchResults is now
+            // non-empty; otherwise we route there directly after this block.
+            if (reviewFailures.length > 0) {
+              searchResultsRef.current = [...searchResultsRef.current, ...reviewFailures];
+              setSearchResults(searchResultsRef.current);
+            }
             if (retryItems.length > 0) {
               addResultsRef.current = confirmed;
               activeItemsRef.current = retryItems;
@@ -1544,14 +1572,24 @@ export default function WebViewCartSheet({
               navigateToSearchItem(0);
               return;
             }
-            // Everything confirmed — finalize using THIS probe's data, no second
-            // snapshot (reconcileFinalizedRef makes the 'done' effect skip its probe).
+            // No qty top-ups. If workers flagged definitive failures (OOS / no
+            // results), show the "Items Not Added" review summary so the user can
+            // resolve them, rather than silently finishing.
             addResultsRef.current = confirmed;
             setCartResultRows(rows);
             setTotalAdded(confirmed.length);
-            setTotalFailed(0);
             setAddedNames(confirmed.map((x) => x.name));
             setCartDeltaWarning(null);
+            if (reviewFailures.length > 0) {
+              setTotalFailed(reviewFailures.length);
+              reconcileFinalizedRef.current = true;
+              setReviewIdx(0);
+              setStep('searchResult');
+              return;
+            }
+            // Everything confirmed — finalize using THIS probe's data, no second
+            // snapshot (reconcileFinalizedRef makes the 'done' effect skip its probe).
+            setTotalFailed(0);
             reconcileFinalizedRef.current = true;
             setStep('done');
             return;
