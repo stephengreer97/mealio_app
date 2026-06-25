@@ -121,6 +121,13 @@ export const FIXTURE_CAPTURE_STORES: Record<string, StoreCaptureConfig> = {
         instruction: 'Add at least one item to your H-E-B cart manually first.',
       },
       {
+        file: 'cart-with-weight-item.html',
+        url: 'https://www.heb.com/cart',
+        optional: true,
+        instruction:
+          'Add a SOLD-BY-THE-POUND item to your H-E-B cart (e.g. a "… Bulk Coffee, lb" — pick a weight from its dropdown), then open /cart and Capture. We need to see how the cart line renders a weight item (its name + how the weight/quantity is shown) so the snapshot + reconcile can confirm weight items by weight rather than a discrete count.',
+      },
+      {
         file: 'search-results-product-in-cart.html',
         url: 'https://www.heb.com/search?q=sour%20cream',
         instruction:

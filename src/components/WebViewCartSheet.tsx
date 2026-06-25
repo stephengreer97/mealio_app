@@ -44,6 +44,10 @@ interface Candidate {
   preferences: Array<{ text: string; value: string }> | null;
   price: string | null;
   isWeightItem?: boolean;
+  /** For sold-by-weight items: the buyable weights (lb) from the addByWeight
+   *  dropdown, in order. Increments differ per product, so this drives the
+   *  weight chooser + add (qty = the Nth option). */
+  weightOptions?: number[];
 }
 
 interface SearchResult {
@@ -2409,6 +2413,14 @@ export default function WebViewCartSheet({
           const mealQtys = getReviewMealQtys(reviewIdx);
           const totalQty = getReviewTotalQty(reviewIdx);
           const isWeightCandidate = !!(candidate?.isWeightItem);
+          // Use the product's OWN detected weight increments (from the dropdown)
+          // instead of the legacy fixed qty*0.25. qty is the option index, so the
+          // picker shows the real buyable weight (e.g. "1 lb", "2 lb") and matches
+          // exactly what add-to-cart will select.
+          const weightOpts = (candidate?.weightOptions && candidate.weightOptions.length) ? candidate.weightOptions : null;
+          const weightLabel = (idx: number) =>
+            weightOpts ? `${weightOpts[Math.min(Math.max(1, idx), weightOpts.length) - 1]} lb` : fmtWeight(idx);
+          const maxWeightSteps = weightOpts ? weightOpts.length : Infinity;
           const needsPref = candidate && !candidate.outOfStock && candidate.preferences && candidate.preferences.length > 0;
           console.log(`[Cart ${ts()}]`, 'review render', { isChoose, reviewIdx, candidateName: candidate?.productName, prefs: candidate?.preferences, needsPref, selectedSuggIdx });
           const canAdd = !customSearching && (
@@ -2592,9 +2604,9 @@ export default function WebViewCartSheet({
                           <Text style={styles.qtyBtnText}>−</Text>
                         </TouchableOpacity>
                         <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: qty === 0 ? '#ef4444' : Colors.text1, minWidth: 36, textAlign: 'center' }}>
-                          {isWeightCandidate ? fmtWeight(qty) : qty}
+                          {isWeightCandidate ? weightLabel(qty) : qty}
                         </Text>
-                        <TouchableOpacity onPress={() => adjustReviewMealQty(reviewIdx, mi.mealId, 1)} style={styles.qtyBtn}>
+                        <TouchableOpacity onPress={() => { if (!isWeightCandidate || qty < maxWeightSteps) adjustReviewMealQty(reviewIdx, mi.mealId, 1); }} style={styles.qtyBtn}>
                           <Text style={styles.qtyBtnText}>+</Text>
                         </TouchableOpacity>
                       </View>
@@ -2619,9 +2631,9 @@ export default function WebViewCartSheet({
                             <Text style={styles.qtyBtnText}>−</Text>
                           </TouchableOpacity>
                           <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: chooseQty === 0 ? '#ef4444' : Colors.text1, minWidth: 20, textAlign: 'center' }}>
-                            {isWeightCandidate ? fmtWeight(chooseQty) : chooseQty}
+                            {isWeightCandidate ? weightLabel(chooseQty) : chooseQty}
                           </Text>
-                          <TouchableOpacity onPress={() => setChooseQty((q) => q + 1)} style={styles.qtyBtn}>
+                          <TouchableOpacity onPress={() => setChooseQty((q) => Math.min(q + 1, maxWeightSteps))} style={styles.qtyBtn}>
                             <Text style={styles.qtyBtnText}>+</Text>
                           </TouchableOpacity>
                         </View>
