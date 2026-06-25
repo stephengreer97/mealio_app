@@ -1514,15 +1514,36 @@ export default function WebViewCartSheet({
             const retryItems: ConsolidatedIngredient[] = [];
             const confirmed: { name: string; success: boolean }[] = [];
             const reviewFailures: SearchResult[] = [];
+
+            // Attribute each added cart unit to a SINGLE item. Summing every
+            // name-matching row per item double-counts when two distinct products
+            // have near-identical names (e.g. "…Dried Chile Ancho Peppers, 4 oz"
+            // vs "…Guajillo Peppers, 4 oz"): each pepper's name matches both rows,
+            // so a 1-of-2 shortfall looks fully stocked. Instead, consume from a
+            // shared pool — reserve exact-name matches first, then let a loose
+            // match take only what's genuinely left over.
+            const pool = addedRows.map((row) => ({ name: row.name, qty: row.qty }));
+            const norm = (s: string) => (s || '').trim().toLowerCase();
+            const claimQty = (reportedName: string, need: number, exactOnly: boolean): number => {
+              let got = 0;
+              for (const row of pool) {
+                if (got >= need) break;
+                if (row.qty <= 0) continue;
+                const match = exactOnly ? norm(row.name) === norm(reportedName) : cartNameMatches(row.name, reportedName);
+                if (match) { const take = Math.min(row.qty, need - got); row.qty -= take; got += take; }
+              }
+              return got;
+            };
+
+            // Resolve each item's identity up front, routing definitive failures
+            // out so they don't consume pool units. An out-of-stock / no-results
+            // item is genuinely not in the cart, so it must NOT be qty-matched
+            // (productName is null; the search term loosely collides with a
+            // sibling's row) nor blindly retried — route it to review so the user
+            // can pick an alternative or skip, like the serial add path.
+            const toMatch: { item: ConsolidatedIngredient; reportedName: string; expectedQty: number; claimed: number }[] = [];
             active.forEach((item, idx) => {
               const r = reconResults.get(idx);
-              // Honor a worker's explicit, definitive failure. An out-of-stock /
-              // no-results item is genuinely not in the cart, so it must NOT be
-              // (a) qty-matched by name — productName is null, and the search term
-              // loosely collides with a sibling's row, falsely "confirming" it —
-              // nor (b) blindly retried (it will just fail again). Route it to the
-              // review queue so the user can pick an alternative or skip, exactly
-              // like the serial add path does.
               if (r && !r.success && (r.reason === 'out_of_stock' || r.reason === 'no_results')) {
                 reviewFailures.push({
                   term: item.searchTerm || item.ingredientName,
@@ -1535,18 +1556,25 @@ export default function WebViewCartSheet({
                 });
                 return;
               }
-              const reportedName = (r && r.productName) || item.searchTerm || item.ingredientName;
-              const expectedQty = Math.max(1, item.productQty || 1);
-              const actualQty = addedRows
-                .filter((row) => cartNameMatches(row.name, reportedName))
-                .reduce((sum, row) => sum + row.qty, 0);
-              const shortfall = expectedQty - actualQty;
+              toMatch.push({
+                item,
+                reportedName: (r && r.productName) || item.searchTerm || item.ingredientName,
+                expectedQty: Math.max(1, item.productQty || 1),
+                claimed: 0,
+              });
+            });
+            // Pass 1: every item reserves its exact-name units. Pass 2: items still
+            // short take loose matches from whatever remains unclaimed.
+            toMatch.forEach((m) => { m.claimed = claimQty(m.reportedName, m.expectedQty, true); });
+            toMatch.forEach((m) => { if (m.claimed < m.expectedQty) m.claimed += claimQty(m.reportedName, m.expectedQty - m.claimed, false); });
+            toMatch.forEach((m) => {
+              const shortfall = m.expectedQty - m.claimed;
               if (shortfall <= 0) {
-                confirmed.push({ name: reportedName, success: true });
+                confirmed.push({ name: m.reportedName, success: true });
               } else {
                 // Re-add only the missing units; re-adding the full qty would
                 // over-add the units that already landed.
-                retryItems.push({ ...item, productQty: shortfall });
+                retryItems.push({ ...m.item, productQty: shortfall });
               }
             });
             console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm), 'review=', reviewFailures.length, reviewFailures.map((r) => `${r.term}:${r.reason}`));
