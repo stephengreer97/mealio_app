@@ -22,15 +22,6 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 - [ ] **HEB multi-quantity add-to-cart — test + fix.** Adding multiple qty of one
   product appears broken, and the cart snapshot is not catching the miss.
   Investigate the qty path and tighten snapshot detection.
-- [ ] **Mock store + complete Maestro suite.** IN PROGRESS (branch
-  `feat/mock-store-maestro`). Standalone Vercel store (`mealio_mock_store` repo,
-  cookie cart + hardwired login `test@mealio.co` / `Test123456789!`) drives full
-  Maestro coverage: search, add-to-cart, cart snapshot, choose-product, skip,
-  out-of-stock, reconcile, parallel. Gated on `__DEV__ || EXPO_PUBLIC_E2E=1`
-  (mock store hidden in prod). CI: `ios-maestro.yml` runs flow 10 (happy path) as
-  a non-blocking bring-up step against an EAS `ios-simulator` build; iterate via
-  GitHub Actions (no local Mac). Seed via `tests/mock-store/seed.sql`. NEXT:
-  green flow 10, then expand to flows 11-15 and promote into `tests/maestro/flows/`.
 - [ ] **Profit-share formula — drop the all-time component → 100% rolling annual.**
   Replace the all-time term with a single rolling-12-month window so payouts track
   recent contribution, not lifetime totals. Fix the calc, the creator page (earnings
@@ -87,6 +78,15 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
   once and reuse the long-lived device-trust COOKIE (NOT IP-based). LOCAL: golden
   simulator, Maestro `clearState:false`, install OVER the app. CI: capture trust
   cookies via `CookieManager.get`, store as secret, inject via `CookieManager.set`.
+- [ ] **Testing enhancements.** Full assessment + reasoning in
+  [`docs/testing-recommendations.md`](docs/testing-recommendations.md). Top picks:
+  (1) real-store DOM-drift detection (same as the item above — the #1 gap, since
+  the mock store + fixtures validate engine logic but can't catch a store
+  redesign); (2) extract the cart reconcile/decision logic into pure,
+  unit-testable functions (would have caught the pepper double-count instantly);
+  (3) programmatic CI seeding, promote mock-store flows to blocking + add a
+  parallel-OOS regression flow, harden `inputText` flakiness; (4) an Android
+  Maestro lane and eventually a current-iOS runner.
 - [ ] **Contact stores for direct API / OAuth access.**
 - [ ] **Nutrition section + breakdown** (requires API integration).
 - [ ] **Price section + breakdown** (requires API integration).
@@ -97,6 +97,28 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 ---
 
 ## Done
+
+### Testing + cart correctness (2026-06-24 / 25)
+- **Mock store + complete Maestro suite — DONE (PR #17, merged).** Vercel-hosted
+  controllable store gated behind `__DEV__ || EXPO_PUBLIC_E2E`; six green flows
+  (10–15: happy path, choose-product, no-results skip, out-of-stock, reconcile,
+  parallel) covering login detection → search/add → cart snapshot → every
+  reconcile branch. Runs as a non-blocking CI bring-up step on an EAS
+  ios-simulator build (creds via `-e`, `clearKeychain` per flow, one retry).
+  testIDs: `tab-*`, `meal-card-<name>`, `candidate-<i>`, E2E-only plain password
+  field. Seed via `tests/mock-store/seed.sql`. iOS/Maestro gotchas captured in
+  [`docs/testing-recommendations.md`](docs/testing-recommendations.md).
+- **Parallel reconcile correctness (PR #16, merged).** (1) A worker's explicit
+  out-of-stock / no-results failure now surfaces in the "Items Not Added" review
+  instead of being silently dropped. (2) Reconcile consumes added units from a
+  shared pool (exact-name first) so two near-identical products (Ancho vs
+  Guajillo peppers) can't cross-count and mask a per-item qty shortfall.
+- **HEB multi-qty under-add + qty-aware snapshot/reconcile (PR #13, merged).**
+- **Fixed flaky ALDI fixture test** — its extract waits ~10s for a stale→fresh
+  SPA transition that never happens on a static fixture, so the 12s timeout had
+  no headroom under parallel load; bumped to 25s.
+- Next testing steps live in **Stretch → Testing enhancements** +
+  `docs/testing-recommendations.md`.
 
 ### GTM burndown (2026-06-23 / 24)
 - Parallel add-to-cart — shipped ON (`FEATURE_PARALLEL_ADD`); covers all WebView

@@ -123,7 +123,12 @@ describe('ALDI EXTRACT_PRODUCTS_SCRIPT', () => {
     'extracts ≥1 product candidate from Instacart-style result grid',
     async (runner) => {
       await runner.inject(scripts.extractProductsScript);
-      const result = await runner.waitForMessage('SEARCH_RESULT', 12_000);
+      // ALDI's extract waits for a stale→fresh transition (the SPA replaces old
+      // results in place). A static fixture never transitions, so the script
+      // polls its full ~10s budget (50 × 200ms) before falling through and
+      // extracting — leaving the old 12s timeout almost no headroom, which
+      // flaked under the full parallel jest run. Give it room (cf. HEB's 14s).
+      const result = await runner.waitForMessage('SEARCH_RESULT', 25_000);
       expect(result.candidates.length).toBeGreaterThan(0);
       expect(result.candidates[0].productName).toBeTruthy();
     },
