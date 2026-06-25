@@ -50,14 +50,26 @@ export default function MainTabs() {
         },
       })}
     >
-      <Tab.Screen name="Discover" component={DiscoverScreen} options={{ tabBarLabel: 'Discover' }} />
-      <Tab.Screen name="MyMeals" component={MyMealsScreen} options={{ tabBarLabel: 'My Meals' }} />
-      <Tab.Screen name="Account" component={AccountScreen} options={{ tabBarLabel: 'Account' }} />
+      <Tab.Screen
+        name="Discover"
+        component={DiscoverScreen}
+        options={{ tabBarLabel: 'Discover', tabBarButtonTestID: 'tab-discover' }}
+      />
+      <Tab.Screen
+        name="MyMeals"
+        component={MyMealsScreen}
+        options={{ tabBarLabel: 'My Meals', tabBarButtonTestID: 'tab-mymeals' }}
+      />
+      <Tab.Screen
+        name="Account"
+        component={AccountScreen}
+        options={{ tabBarLabel: 'Account', tabBarButtonTestID: 'tab-account' }}
+      />
       {isCreator && (
         <Tab.Screen
           name="Creator"
           component={CreatorPortalScreen}
-          options={{ tabBarLabel: 'Creator' }}
+          options={{ tabBarLabel: 'Creator', tabBarButtonTestID: 'tab-creator' }}
         />
       )}
       {isAdmin && (

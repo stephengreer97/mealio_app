@@ -2394,6 +2394,7 @@ export default function WebViewCartSheet({
                   return (
                     <TouchableOpacity
                       key={i}
+                      testID={`candidate-${i}`}
                       onPress={() => { setSelectedSuggIdx(i); setSelectedPreference(null); }}
                       style={[
                         styles.suggRow,

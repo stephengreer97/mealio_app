@@ -1,11 +1,16 @@
-# Mock-store HAPPY PATH: a logged-in user with a meal saved at "Mock Store"
-# runs add-to-cart end to end and sees every item confirmed in the cart snapshot.
+# Mock-store HAPPY PATH: a logged-in user adds a seeded mock-store meal to cart;
+# every ingredient auto-adds and the cart snapshot shows the items.
 #
-# SCAFFOLD — not yet in tests/maestro/flows/ (see tests/mock-store/README.md).
-# Unmet deps: dev build (__DEV__ registers the mock store), a test account
-# (MEALIO_TEST_EMAIL/PASSWORD, regular tier → no 2FA), a seeded `mockstore` meal
-# with default ingredient terms, and `npm run mock-store` on :8788.
-# TODO(tomorrow): confirm every testID/label against the real cart-sheet UI.
+# Requires (see tests/mock-store/README.md): an e2e/dev build (the mock store is
+# gated on __DEV__ || EXPO_PUBLIC_E2E), the mock store deployed + reachable, a
+# REGULAR test account (no 2FA) via MEALIO_TEST_EMAIL/PASSWORD, and a seeded meal
+# named "E2E Happy" saved at store "Mock Store" with default-term ingredients
+# (e.g. milk, eggs, bread → all auto-add).
+#
+# testIDs used (all added in this branch): login-email/password/submit,
+# floating-add-to-cart, cart-status-bubble, cart-row-added.
+# NOTE: a couple of taps are by visible TEXT and may need tuning on the first
+# real run (the store-filter pill, the one-time "keep the app open" popup).
 
 appId: co.mealio.app
 env:
@@ -14,34 +19,67 @@ env:
 ---
 - launchApp:
     clearState: true
+    # expo-secure-store keeps the auth token in the iOS keychain, which
+    # clearState does NOT wipe — without this, a prior flow's login persists and
+    # the app relaunches already-authenticated, so the sign-in steps fail.
+    clearKeychain: true
     stopApp: true
 
-# Sign in (regular account → no email OTP).
+# Sign in (regular account → no OTP). App opens to Discover (guest) with a
+# "Sign In" in the header.
 - tapOn: "Sign In"
-- tapOn:
-    id: "login-email"          # TODO confirm
+- tapOn: { id: "login-email" }
 - inputText: ${EMAIL}
-- tapOn:
-    id: "login-password"       # TODO confirm
+- tapOn: { id: "login-password" }
 - inputText: ${PASSWORD}
-- tapOn: "Log In"              # TODO confirm
+# Dismiss the keyboard first — it covers the "Sign In" button, so tapping
+# login-submit while it's up lands on the keyboard instead of the button.
+# `hideKeyboard` is unsupported on the iOS simulator, so press Return on the
+# (single-line) password field, which blurs it and drops the keyboard.
+- pressKey: Enter
+- tapOn: { id: "login-submit" }
 
-# Open the seeded mock-store meal and start add-to-cart.
-- tapOn: "My Meals"
-- extendedWaitUntil:
-    visible:
-      id: "meal-card-0"
-    timeout: 15000
-- tapOn:
-    id: "meal-card-0"
-- tapOn: "Add to Cart"        # TODO confirm
-- tapOn: "Mock Store"         # store selector
+# Wait for the main tabs to mount after login. Discover loads first and shows
+# the "Trending Meals" section header — a reliable post-login marker that proves
+# we actually reached MainTabs (i.e. login succeeded). Then switch to My Meals
+# via the tab's testID (label-text matching the tab bar is flaky).
+- extendedWaitUntil: { visible: "Trending Meals", timeout: 20000 }
+- tapOn: { id: "tab-mymeals" }
+- extendedWaitUntil: { visible: "Mock Store", timeout: 15000 }
+- tapOn: "Mock Store"          # store-filter pill (selects the mockstore tab)
+# Select the seeded meal by testID — the card is a TouchableOpacity that absorbs
+# its title text, so match the stable meal-card-<name> id instead. In cart mode
+# tapping the card toggles selection, which reveals the floating add-to-cart.
+- tapOn: { id: "meal-card-E2E Happy" }
+- tapOn: { id: "floating-add-to-cart" }
 
-# The engine logs into the (always-logged-in) mock store, searches each
-# ingredient (default term → exact match), auto-adds, confirms via the cart
-# badge, then snapshots /cart. Assert the done screen shows the added items.
-- extendedWaitUntil:
-    visible: "Done"            # TODO confirm done-screen marker
-    timeout: 60000
-- assertVisible: "added"      # cart snapshot "N added" rows
+# Review sheet: all ingredients are pre-checked. Confirm to push them to the
+# store cart (this is what actually starts the WebView cart job). The button
+# label ends in " →", and Maestro anchors its text regex to the full label, so
+# match with a trailing .* rather than the bare phrase.
+- extendedWaitUntil: { visible: "Add Ingredients to Mock Store Cart.*", timeout: 15000 }
+- tapOn: "Add Ingredients to Mock Store Cart.*"
+
+# The mock store starts LOGGED OUT, so the cart job shows the store login webview
+# (form pre-filled with the test creds) up front. Sign in; the app then detects
+# the logged-in state and continues. (All flows share this step.)
+- runFlow:
+    when: { visible: "Sign In" }
+    commands:
+      - tapOn: "Sign In"       # the store's pre-filled login button (in the webview)
+
+# A one-time "keep the app open" popup may appear on first run — dismiss if shown.
+- runFlow:
+    when: { visible: "Got it" }
+    commands:
+      - tapOn: "Got it"        # TODO confirm popup button label
+
+# Login on the (always-logged-in) mock store passes instantly and the job
+# collapses to the floating bubble. Wait for it to finish, then open the snapshot.
+- extendedWaitUntil: { visible: { id: "cart-status-bubble" }, timeout: 30000 }
+- extendedWaitUntil: { notVisible: { id: "cart-progress-fill" }, timeout: 60000 }
+- tapOn: { id: "cart-status-bubble" }
+
+# Cart snapshot: items were added.
+- assertVisible: { id: "cart-row-added" }
 - assertNotVisible: "could not be added"

@@ -1,7 +1,8 @@
-# Mock-store NO RESULTS → SKIP: a seeded meal with a "noresults" ingredient → 0
-# candidates → review with a Skip affordance. Skip it and finish.
+# Mock-store PARALLEL: a seeded meal with several default-term ingredients →
+# the engine adds them via the parallel worker pool → all land in the cart.
 #
-# Seed: meal "E2E Skip" at "Mock Store" with one ingredient term "rice noresults".
+# Seed: meal "E2E Parallel" at "Mock Store" with 4+ default-term ingredients
+# (e.g. milk, eggs, bread, butter) — all exact matches → auto-add, no interaction.
 
 appId: co.mealio.app
 env:
@@ -25,7 +26,7 @@ env:
 - tapOn: { id: "tab-mymeals" }
 - extendedWaitUntil: { visible: "Mock Store", timeout: 15000 }
 - tapOn: "Mock Store"
-- tapOn: { id: "meal-card-E2E Skip" }
+- tapOn: { id: "meal-card-E2E Parallel" }
 - tapOn: { id: "floating-add-to-cart" }
 - extendedWaitUntil: { visible: "Add Ingredients to Mock Store Cart.*", timeout: 15000 }
 - tapOn: "Add Ingredients to Mock Store Cart.*"
@@ -36,13 +37,8 @@ env:
     when: { visible: "Got it" }
     commands: [{ tapOn: "Got it" }]
 
-# 0 results → "Items Not Added"; open the bubble and enter review.
 - extendedWaitUntil: { visible: { id: "cart-status-bubble" }, timeout: 30000 }
+- extendedWaitUntil: { notVisible: { id: "cart-progress-fill" }, timeout: 90000 }
 - tapOn: { id: "cart-status-bubble" }
-- extendedWaitUntil: { visible: "Items Not Added", timeout: 30000 }
-- tapOn: "Review .* Item.*"
-
-# Review Ingredients: no candidates → skip the ingredient.
-- extendedWaitUntil: { visible: "No products found.*", timeout: 15000 }
-- tapOn: "Skip this ingredient"
-- extendedWaitUntil: { notVisible: "Skip this ingredient", timeout: 30000 }
+- assertVisible: { id: "cart-row-added" }
+- assertNotVisible: "could not be added"

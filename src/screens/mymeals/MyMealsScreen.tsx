@@ -461,6 +461,7 @@ export default function MyMealsScreen() {
       <View style={styles.mealRow}>
         <MealCard
           meal={item}
+          testID={`meal-card-${item.name}`}
           onPress={isCartEnabled ? () => toggleMealSelect(item.id) : () => openMeal(item)}
           subtitle={item.author ?? undefined}
           selected={isCartEnabled ? selectedMealIds.has(item.id) : undefined}
@@ -470,6 +471,7 @@ export default function MyMealsScreen() {
         {next ? (
           <MealCard
             meal={next}
+            testID={`meal-card-${next.name}`}
             onPress={isCartEnabled ? () => toggleMealSelect(next.id) : () => openMeal(next)}
             subtitle={next.author ?? undefined}
             selected={isCartEnabled ? selectedMealIds.has(next.id) : undefined}
@@ -589,6 +591,7 @@ export default function MyMealsScreen() {
         const webViewUnchosenCount = selectedMeals.filter(hasUnchosenProducts).length;
         return (
           <TouchableOpacity
+            testID="floating-add-to-cart"
             style={[styles.floatingCart, { backgroundColor: selectedStore_?.color ?? Colors.brand }]}
             onPress={() => {
               if (FEATURE_BACKGROUND_CART) {

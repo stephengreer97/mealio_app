@@ -22,10 +22,26 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 - [ ] **HEB multi-quantity add-to-cart — test + fix.** Adding multiple qty of one
   product appears broken, and the cart snapshot is not catching the miss.
   Investigate the qty path and tighten snapshot detection.
-- [ ] **Mock store + complete Maestro suite.** Build a controllable mock store and
-  run full Maestro coverage against it: product search, add-to-cart, cart
-  snapshot, product reconciliation, and the rest of the flow. (Deferred to its own
-  session — Maestro is not yet set up in the repo.)
+- [ ] **Mock store + complete Maestro suite.** IN PROGRESS (branch
+  `feat/mock-store-maestro`). Standalone Vercel store (`mealio_mock_store` repo,
+  cookie cart + hardwired login `test@mealio.co` / `Test123456789!`) drives full
+  Maestro coverage: search, add-to-cart, cart snapshot, choose-product, skip,
+  out-of-stock, reconcile, parallel. Gated on `__DEV__ || EXPO_PUBLIC_E2E=1`
+  (mock store hidden in prod). CI: `ios-maestro.yml` runs flow 10 (happy path) as
+  a non-blocking bring-up step against an EAS `ios-simulator` build; iterate via
+  GitHub Actions (no local Mac). Seed via `tests/mock-store/seed.sql`. NEXT:
+  green flow 10, then expand to flows 11-15 and promote into `tests/maestro/flows/`.
+- [ ] **Profit-share formula — drop the all-time component → 100% rolling annual.**
+  Replace the all-time term with a single rolling-12-month window so payouts track
+  recent contribution, not lifetime totals. Fix the calc, the creator page (earnings
+  display), the admin page (payout view), the help/terms copy, and the mobile
+  `CreatorPortalScreen`. (Website work delegated to a background agent on
+  `feat/profit-share-rolling-annual`.)
+- [ ] **In-app + web bug report → emails contact@mealio.co.** A bug-report form in
+  the Help section of both the website and the mobile app. Submitting POSTs to a new
+  endpoint that emails contact@mealio.co (via Resend) and auto-attaches useful
+  diagnostics (app/build version, platform/OS, logged-in user, current screen/route,
+  recent error/log context). [C] builds end-to-end.
 - [ ] **Marketing/lifecycle emails — creators.** Reminder emails to publish meals,
   auto-sent based on lack of activity; plus an initial onboarding email with
   tips. [C] builds + wires auto-send; Also builds Admin dashboard for viewing/tracking 

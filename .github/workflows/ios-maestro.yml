@@ -158,6 +158,9 @@ jobs:
       - name: Run Maestro flows
         env:
           MAESTRO_DRIVER_STARTUP_TIMEOUT: "120000"
+          # Test account for the mock-store cart flows (regular tier → no 2FA).
+          MEALIO_TEST_EMAIL: ${{ secrets.MEALIO_TEST_EMAIL }}
+          MEALIO_TEST_PASSWORD: ${{ secrets.MEALIO_TEST_PASSWORD }}
         run: |
           FAILED=""
           for flow in tests/maestro/flows/*.yaml; do
@@ -179,6 +182,60 @@ jobs:
             echo "::error::Failed flows:$FAILED"
             exit 1
           fi
+
+      # Bring-up: run the mock-store cart flows (still in tests/mock-store/maestro/,
+      # not the required tests/maestro/flows/). Non-blocking so a selector we're
+      # still tuning doesn't fail the required suite. Maestro's --debug-output
+      # captures a screenshot + the full view hierarchy at the failure point, which
+      # is how we pick the right selectors without a local simulator. Starts with
+      # the happy path; expand to 11–15 (and move into flows/) once it's green.
+      - name: Run mock-store cart flows (bring-up, non-blocking)
+        if: always()
+        continue-on-error: true
+        env:
+          MAESTRO_DRIVER_STARTUP_TIMEOUT: "120000"
+          MEALIO_TEST_EMAIL: ${{ secrets.MEALIO_TEST_EMAIL }}
+          MEALIO_TEST_PASSWORD: ${{ secrets.MEALIO_TEST_PASSWORD }}
+        run: |
+          # Maestro does NOT import shell env into ${...} interpolation; the creds
+          # must be passed as params with -e, or the flow's
+          # `env: { EMAIL: ${MEALIO_TEST_EMAIL} }` resolves to the literal string
+          # "undefined" (which is what landed in the email field).
+          run_flow() {
+            maestro test "$1" \
+              -e MEALIO_TEST_EMAIL="$MEALIO_TEST_EMAIL" \
+              -e MEALIO_TEST_PASSWORD="$MEALIO_TEST_PASSWORD" \
+              --debug-output "mockstore-debug/$2"
+          }
+          for flow in tests/mock-store/maestro/*.yaml; do
+            name=$(basename "$flow" .yaml)
+            echo "::group::mock-store $name"
+            sudo purge || true
+            xcrun simctl terminate "$SIM_UDID" co.mealio.app 2>/dev/null || true
+            # One retry: inputText on the memory-pressured runner occasionally
+            # corrupts/reorders characters (e.g. the email), which is a transient
+            # flake rather than a real selector issue.
+            if ! run_flow "$flow" "$name"; then
+              echo "::warning::$name failed — purging and retrying once."
+              sudo purge || true
+              xcrun simctl terminate "$SIM_UDID" co.mealio.app 2>/dev/null || true
+              run_flow "$flow" "$name" \
+                || echo "::warning::$name failed (bring-up) — see the mockstore-debug artifact"
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Upload mock-store debug (screenshots + view hierarchy)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mockstore-debug
+          path: mockstore-debug
+          # Maestro writes the screenshot + view hierarchy under a hidden
+          # `.maestro/` dir; without this they're silently skipped ("No files
+          # were found"), which is why earlier debug uploads were empty.
+          include-hidden-files: true
+          if-no-files-found: ignore
 
       - name: Upload Maestro report
         if: always()

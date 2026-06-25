@@ -1,7 +1,7 @@
-# Mock-store NO RESULTS → SKIP: a seeded meal with a "noresults" ingredient → 0
-# candidates → review with a Skip affordance. Skip it and finish.
+# Mock-store OUT OF STOCK: a seeded "oos" ingredient → candidates present but out
+# of stock → review flags it; skip it.
 #
-# Seed: meal "E2E Skip" at "Mock Store" with one ingredient term "rice noresults".
+# Seed: meal "E2E OOS" at "Mock Store" with one ingredient term "soda oos".
 
 appId: co.mealio.app
 env:
@@ -25,7 +25,7 @@ env:
 - tapOn: { id: "tab-mymeals" }
 - extendedWaitUntil: { visible: "Mock Store", timeout: 15000 }
 - tapOn: "Mock Store"
-- tapOn: { id: "meal-card-E2E Skip" }
+- tapOn: { id: "meal-card-E2E OOS" }
 - tapOn: { id: "floating-add-to-cart" }
 - extendedWaitUntil: { visible: "Add Ingredients to Mock Store Cart.*", timeout: 15000 }
 - tapOn: "Add Ingredients to Mock Store Cart.*"
@@ -36,13 +36,15 @@ env:
     when: { visible: "Got it" }
     commands: [{ tapOn: "Got it" }]
 
-# 0 results → "Items Not Added"; open the bubble and enter review.
+# Candidate is out of stock → "Items Not Added"; open the bubble and enter review.
 - extendedWaitUntil: { visible: { id: "cart-status-bubble" }, timeout: 30000 }
 - tapOn: { id: "cart-status-bubble" }
 - extendedWaitUntil: { visible: "Items Not Added", timeout: 30000 }
 - tapOn: "Review .* Item.*"
 
-# Review Ingredients: no candidates → skip the ingredient.
-- extendedWaitUntil: { visible: "No products found.*", timeout: 15000 }
+# Review Ingredients: the only candidate is out of stock → skip the ingredient.
+# The candidate rows are badged "Out of stock"; the row touchable absorbs the
+# badge into a combined label, so wrap the match in .* (anchored regex).
+- extendedWaitUntil: { visible: ".*Out of stock.*", timeout: 15000 }
 - tapOn: "Skip this ingredient"
 - extendedWaitUntil: { notVisible: "Skip this ingredient", timeout: 30000 }

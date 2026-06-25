@@ -120,6 +120,7 @@ export default function CartStatusBubble({
 
   return (
     <Animated.View
+      testID="cart-status-bubble"
       style={[styles.bubble, { transform: pos.getTranslateTransform() }]}
       accessibilityRole="button"
       accessibilityLabel={`Cart job: ${status.label}. Double tap to open.`}

@@ -13,9 +13,18 @@
 
 import { buildExtractWorker } from './worker-search';
 
-// Must match tests/mock-store/server.js and the CART_PAGE_URL entry in
-// cart-count.ts. localhost works from the iOS Simulator's WebView (CI target).
-export const MOCK_STORE_URL = 'http://localhost:8788';
+// The mock store is hosted standalone on Vercel (repo: mealio_mock_store) so the
+// WebView loads a real remote https site. Point at the deployment via
+// EXPO_PUBLIC_MOCK_STORE_URL (set in the ios-simulator EAS profile / a local .env).
+export const MOCK_STORE_URL = process.env.EXPO_PUBLIC_MOCK_STORE_URL || 'https://mealiomockstore.vercel.app';
+
+// Host (for the StoreScripts.domain match), derived from the URL.
+const MOCK_STORE_HOST = MOCK_STORE_URL.replace(/^https?:\/\//, '').split('/')[0];
+
+// Available only in dev and the dedicated e2e build (EXPO_PUBLIC_E2E=1). The
+// production build never sets the flag, so the mock store is excluded there.
+export const MOCK_STORE_ENABLED =
+  (typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_E2E === '1';
 
 // ── Login ──────────────────────────────────────────────────────────────────
 const CHECK_LOGIN_SCRIPT = `(function() {
@@ -125,11 +134,15 @@ function buildSearchScript(term: string): string {
 export function getScripts() {
   return {
     storeUrl: MOCK_STORE_URL + '/',
-    loginUrl: MOCK_STORE_URL + '/',
+    loginUrl: MOCK_STORE_URL + '/login',
     cartUrl: MOCK_STORE_URL + '/cart',
-    domain: 'localhost',
+    domain: MOCK_STORE_HOST,
     isSearchUrl: (url: string) => url.includes('/search'),
     isLoginSuccessUrl: () => false,
+    // Logged-out store pages 302 to /login; recognize it so the flow shows the
+    // login webview, and re-run the check after sign-in lands back on the store.
+    isLoginPageUrl: (url: string) => url.includes('/login'),
+    reinjectLoginCheckOnNav: true,
     checkLoginScript: CHECK_LOGIN_SCRIPT,
     extractProductsScript: EXTRACT_PRODUCTS_SCRIPT,
     buildAddToCartScript,
