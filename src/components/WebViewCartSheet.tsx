@@ -282,6 +282,11 @@ export default function WebViewCartSheet({
   const loadQueueRef = useRef<string[]>([]);
   // Tracks the last URL processed by onLoadEnd to deduplicate extra fires per page load.
   const lastLoadEndUrlRef = useRef('');
+  // True when the page the WebView is currently on (during search/add) is the
+  // store's login wall — set passively in onLoadEnd. We only ACT on it when a
+  // search then comes back empty (mid-run logout detection), so a transient
+  // redirect that recovers can't falsely abort the run.
+  const midRunLoginPageRef = useRef(false);
   // True once the WebView has landed on a store search page — lets subsequent items
   // skip the homepage round-trip and inject buildSearchScript directly.
   const onSearchPageRef = useRef(false);
@@ -1040,6 +1045,7 @@ export default function WebViewCartSheet({
   // before-count lands.
   const beginSearchFlow = useCallback(() => {
     setStep('searching');
+    midRunLoginPageRef.current = false;
     const active = activeItemsRef.current;
     const allChoose = active.length > 0 && active.every((it) => !it.searchTerm);
     // Resolve parallel-vs-serial from the LIVE locked store, NOT the captured
@@ -1200,6 +1206,16 @@ export default function WebViewCartSheet({
         lastLoadEndUrlRef.current = '';
         return;
       }
+    } else if (stepRef.current === 'searching' || stepRef.current === 'adding') {
+      // Mid-run logout: a session that expires (or is invalidated by store
+      // anti-automation) bounces searches to the login page, where every search
+      // returns nothing. Note whether THIS page is the login wall; the empty
+      // result handler reads this flag to halt instead of churning through every
+      // item as a false "no results". Reflects the current page (auto-resets when
+      // a real search page loads).
+      midRunLoginPageRef.current = s.isLoginPageUrl
+        ? s.isLoginPageUrl(url)
+        : /\/login|\/sign-in|\/signin/i.test(url);
     }
     // Skip intermediate auth/SSO redirect pages — scripts injected here get killed
     // when the page redirects to the final destination.
@@ -1703,7 +1719,22 @@ export default function WebViewCartSheet({
           searchIdxRef.current = nextIdx;
           if (item) {
             if (msg.success) {
+              midRunLoginPageRef.current = false;
               addResultsRef.current.push({ name: msg.productName || item.searchTerm!, success: true });
+            } else if (midRunLoginPageRef.current) {
+              // The search came back empty because it ran on the store's login
+              // wall — the session was lost mid-run. Stop churning every remaining
+              // item into a false "no results"; halt and re-prompt login. After
+              // re-auth the login-success path re-runs the add (reconcile dedupes).
+              console.log(`[Cart ${ts()}]`, 'mid-run logout detected (empty result on login page) — halting + showing login');
+              midRunLoginPageRef.current = false;
+              loadQueueRef.current = [];
+              inflightScriptRef.current = null;
+              expectedNavUrlRef.current = '';
+              lastLoadEndUrlRef.current = '';
+              if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
+              setStep('login');
+              return;
             } else {
               const newResult: SearchResult = {
                 term: item.searchTerm!,
