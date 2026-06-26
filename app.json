@@ -7,11 +7,6 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "scheme": "mealio",
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#DD0031"
-    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "co.mealio.app",
@@ -62,6 +57,26 @@
         {
           "photosPermission": "Mealio uses your photo library so you can add a custom photo to your saved meals.",
           "microphonePermission": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#DD0031",
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain",
+          "ios": {
+            "enableFullScreenImage_legacy": true,
+            "image": "./assets/splash-icon.png",
+            "backgroundColor": "#DD0031",
+            "resizeMode": "contain"
+          },
+          "android": {
+            "image": "./assets/android-splash-icon.png",
+            "imageWidth": 220,
+            "backgroundColor": "#DD0031",
+            "resizeMode": "contain"
+          }
         }
       ],
       "expo-secure-store",
