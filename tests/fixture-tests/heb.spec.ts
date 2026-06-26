@@ -201,6 +201,29 @@ describe('HEB cart-page count (snapshot before/after)', () => {
       result.items.forEach((it: { qty: number }) => expect(it.qty).toBe(1));
     },
   );
+
+  // Sold-by-weight lines (Deli / Fish Market / bulk) have NO
+  // cartQuantityCounterValue — the snapshot must read their weight from the
+  // itemRowWeighedQuantityDropdown / "Quantity: N lb" a11y text and tag them
+  // isWeight, so reconcile confirms them by presence instead of re-adding (they
+  // used to read as qty 0 → "missing" → double-added).
+  itWithFixture(
+    'cart-with-weight-item.html',
+    'reads sold-by-weight lines as isWeight with their lb amount',
+    async (runner) => {
+      await runner.inject(buildCartPageCountScript('heb')!);
+      const result = await runner.waitForMessage('CART_COUNT', 8_000);
+      const weighty = (result.items as any[]).filter((it) => it.isWeight);
+      // The captured cart has multiple by-the-pound items (Bulk Coffee, Deli
+      // Roast Beef, Fish Market Trout).
+      expect(weighty.length).toBeGreaterThan(0);
+      // Each carries a positive lb weight and counts as one present unit.
+      expect(weighty.every((it) => typeof it.weight === 'number' && it.weight > 0)).toBe(true);
+      expect(weighty.every((it) => it.qty === 1)).toBe(true);
+      // The bulk coffee is one of them.
+      expect(weighty.some((it) => /bulk coffee/i.test(it.name))).toBe(true);
+    },
+  );
 });
 
 describe('HEB regression: product already in cart (bubble state)', () => {

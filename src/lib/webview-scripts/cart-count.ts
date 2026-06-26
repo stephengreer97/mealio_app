@@ -79,6 +79,10 @@ export function getCartPageUrl(storeId: string): string | null {
 export interface CartItem {
   name: string;
   qty: number;
+  /** Sold-by-weight line (HEB Deli / Fish Market / bulk). qty is 1 (present);
+   *  weight carries the lb amount. Reconciled by presence, not discrete count. */
+  isWeight?: boolean;
+  weight?: number;
 }
 
 export interface CartRow {
@@ -86,6 +90,8 @@ export interface CartRow {
   qty: number;
   /** true = added by this run (green +), false = already in the cart (grey). */
   added: boolean;
+  isWeight?: boolean;
+  weight?: number;
 }
 
 /**
@@ -136,8 +142,8 @@ export function diffCartItems(before: CartItem[], after: CartItem[]): CartRow[] 
     const bq = beforeQty.get(it.name) || 0;
     const greyQty = Math.min(bq, it.qty);
     const greenQty = Math.max(it.qty - bq, 0);
-    if (greenQty > 0) green.push({ name: it.name, qty: greenQty, added: true });
-    if (greyQty > 0) grey.push({ name: it.name, qty: greyQty, added: false });
+    if (greenQty > 0) green.push({ name: it.name, qty: greenQty, added: true, isWeight: it.isWeight, weight: it.weight });
+    if (greyQty > 0) grey.push({ name: it.name, qty: greyQty, added: false, isWeight: it.isWeight, weight: it.weight });
   }
   return [...green, ...grey];
 }
@@ -464,15 +470,42 @@ const HEB_CART_PAGE_SCRIPT = `(async function() {
     }
     return isNaN(v) ? 0 : v;
   }
+  // Sold-by-weight lines have NO cartQuantityCounterValue — instead a
+  // itemRowWeighedQuantityDropdown and an a11y "Quantity: N lb" label. Read the
+  // weight (lb) so these aren't seen as qty 0 (which made reconcile think the
+  // item was missing and re-add it). Returns the weight in lb, or 0 if not a
+  // weight line.
+  function rowWeightLb(row) {
+    if (!row.querySelector('[data-qe-id="itemRowWeighedQuantityDropdown"]')) return 0;
+    // Prefer the live select value; fall back to the a11y "Quantity: N lb" text
+    // (server-rendered, present even when the select value isn't reflected as an
+    // attribute).
+    var sel = row.querySelector('[data-qe-id="itemRowWeighedQuantityDropdown"]');
+    var w = sel ? parseFloat(sel.value) : NaN;
+    if (!w || isNaN(w)) {
+      var txt = row.textContent || '';
+      var m = txt.match(/Quantity:\\s*([0-9]+(?:\\.[0-9]+)?)\\s*lbs?/i);
+      if (m) w = parseFloat(m[1]);
+    }
+    return (!w || isNaN(w)) ? 0 : w;
+  }
   function snapshot() {
     var rows = Array.prototype.slice.call(document.querySelectorAll('[data-qe-id="itemRow"]'));
     var count = 0, items = [];
     for (var j = 0; j < rows.length; j++) {
-      var q = rowQty(rows[j]);
-      count += q;
       var nameEl = rows[j].querySelector('[data-qe-id="itemRowDetailsName"]');
       var nm = nameEl ? norm(nameEl.textContent) : '';
-      if (nm) items.push({ name: nm, qty: q });
+      var wlb = rowWeightLb(rows[j]);
+      if (wlb > 0) {
+        // Weight line: present in the cart at <wlb> lb. Count it as one unit so
+        // the total stays meaningful; carry the weight + flag for reconcile.
+        count += 1;
+        if (nm) items.push({ name: nm, qty: 1, weight: wlb, isWeight: true });
+      } else {
+        var q = rowQty(rows[j]);
+        count += q;
+        if (nm) items.push({ name: nm, qty: q });
+      }
     }
     return { count: count, items: items, rows: rows.length };
   }

@@ -1545,7 +1545,7 @@ export default function WebViewCartSheet({
             // (productName is null; the search term loosely collides with a
             // sibling's row) nor blindly retried — route it to review so the user
             // can pick an alternative or skip, like the serial add path.
-            const toMatch: { item: ConsolidatedIngredient; reportedName: string; expectedQty: number; claimed: number }[] = [];
+            const toMatch: { item: ConsolidatedIngredient; reportedName: string; expectedQty: number; claimed: number; confirmedWeight?: boolean }[] = [];
             active.forEach((item, idx) => {
               const r = reconResults.get(idx);
               if (r && !r.success && (r.reason === 'out_of_stock' || r.reason === 'no_results')) {
@@ -1567,11 +1567,23 @@ export default function WebViewCartSheet({
                 claimed: 0,
               });
             });
+            // Weight items first, confirmed by PRESENCE. A sold-by-weight line is
+            // a single cart row at N lb regardless of the chosen poundage, so it
+            // can't be count-compared (qty 3 lb ≠ 3 units). If a weight row matches
+            // by name, it's confirmed; consume it from the pool so a sibling can't
+            // claim it. (rows already tag weight lines via the cart snapshot.)
+            const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false }));
+            toMatch.forEach((m) => {
+              if (m.confirmedWeight) return;
+              const w = weightPool.find((p) => !p.used && cartNameMatches(p.name, m.reportedName));
+              if (w) { w.used = true; m.confirmedWeight = true; }
+            });
             // Pass 1: every item reserves its exact-name units. Pass 2: items still
             // short take loose matches from whatever remains unclaimed.
-            toMatch.forEach((m) => { m.claimed = claimQty(m.reportedName, m.expectedQty, true); });
-            toMatch.forEach((m) => { if (m.claimed < m.expectedQty) m.claimed += claimQty(m.reportedName, m.expectedQty - m.claimed, false); });
+            toMatch.forEach((m) => { if (!m.confirmedWeight) m.claimed = claimQty(m.reportedName, m.expectedQty, true); });
+            toMatch.forEach((m) => { if (!m.confirmedWeight && m.claimed < m.expectedQty) m.claimed += claimQty(m.reportedName, m.expectedQty - m.claimed, false); });
             toMatch.forEach((m) => {
+              if (m.confirmedWeight) { confirmed.push({ name: m.reportedName, success: true }); return; }
               const shortfall = m.expectedQty - m.claimed;
               if (shortfall <= 0) {
                 confirmed.push({ name: m.reportedName, success: true });
