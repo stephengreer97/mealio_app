@@ -30,7 +30,8 @@
       "adaptiveIcon": {
         "backgroundColor": "#DD0031",
         "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png"
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
       "intentFilters": [
@@ -50,9 +51,7 @@
           ]
         }
       ],
-      "permissions": [
-        "android.permission.RECORD_AUDIO"
-      ]
+      "permissions": []
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -61,7 +60,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Mealio uses your photo library so you can add a custom photo to your saved meals."
+          "photosPermission": "Mealio uses your photo library so you can add a custom photo to your saved meals.",
+          "microphonePermission": false
         }
       ],
       "expo-secure-store",

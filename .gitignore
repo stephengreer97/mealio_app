@@ -61,6 +61,8 @@ logs/
 
 # EAS
 .eas/
+# Google Play service-account key for `eas submit` — never commit.
+google-play-service-account.json
 
 # Test infrastructure — never commit these.
 # NOTE: git does not support inline comments in .gitignore. A trailing
