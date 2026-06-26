@@ -69,10 +69,17 @@ permission has been uploaded to a track, so do step 5 first.
   **content rating** questionnaire, **Data safety** form, **target audience**,
   and the privacy policy URL (`https://mealio.co/privacy`).
 
-## ⚠️ Production-track restriction for new accounts
-If the Play developer account is an **individual** account created after
-Nov 2023, Google requires **closed testing with 12+ testers for 14 continuous
-days**, then an approved application for production access, before the
-Production track is available. If that applies, temporarily set
-`submit.production.android.track` to `internal` (or `closed`) in `eas.json`,
-run testing, then switch back to `production`.
+## ⚠️ Production-track restriction (applies to this account)
+This is a **new individual** Play account, so the Production track is locked
+until Google's testing requirement is met. Path to production:
+
+1. **`internal` track** (current `eas.json` setting) — submit the first AAB
+   here. Instant availability to up to 100 testers; use it to verify the build
+   installs, Google Sign-In works (SHA-1 registered), and a Play license-tester
+   purchase succeeds. Internal testing does **not** count toward the production
+   requirement.
+2. **`closed` track** — once the build is sound, promote/submit to a closed
+   track with **12+ testers**. This starts the mandatory **14 continuous day**
+   clock. Set `submit.production.android.track` to `closed`.
+3. **Apply for production access** in Play Console after the 14 days, then
+   switch `track` to `production` and submit.
