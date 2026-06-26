@@ -147,6 +147,14 @@ export const FIXTURE_CAPTURE_STORES: Record<string, StoreCaptureConfig> = {
           'Find an item that requires you to pick a variant (e.g. avocados with size choices). Tap + on its tile — HEB pops a preference modal. Tap Capture WHILE the modal is open.',
       },
       {
+        file: 'search-results-deli-weight-modal-open.html',
+        url: 'https://www.heb.com/search?q=deli%20turkey',
+        optional: true,
+        suggestedDelayMs: 2000,
+        instruction:
+          'Find an H-E-B DELI "Custom Sliced, lb" item (e.g. "H-E-B Deli Oven Roasted Turkey Breast, Custom Sliced, lb"). Tap + / Add — it opens a modal that has BOTH the slicing preference (No preference / Shaved / Thin / …) AND a weight selector. Use "Capture in 2s": tap Add in the WebView, then immediately tap the timed capture WHILE that modal is open. We need the modal\'s weight-control structure (deli weight lives in the modal, not on the search card) to read its options and remember the chosen weight alongside the slicing.',
+      },
+      {
         file: 'search-results-weight-dropdown-closed.html',
         url: 'https://www.heb.com/search?q=bulk%20coffee',
         optional: true,
