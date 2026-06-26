@@ -24,6 +24,7 @@ import {
   ConsolidatedIngredient,
   consolidateIngredients,
 } from '../lib/consolidateIngredients';
+import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
 import { buildSearchAndAddWorker } from '../lib/webview-scripts/worker-search';
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS } from '../constants/features';
@@ -798,12 +799,13 @@ export default function WebViewCartSheet({
     setItems((prev) =>
       prev.map((it, idx) => {
         if (idx !== i) return it;
-        // Sold-by-weight item: step the remembered weight by its increment (down
-        // to one increment) instead of the integer count.
-        if (it.purchaseWeight != null) {
-          const step = it.weightStep ?? 0.25;
-          return { ...it, purchaseWeight: Math.max(step, +(it.purchaseWeight + delta * step).toFixed(2)) };
+        const w = ingredientWeight(it);
+        // Dropdown-weight item: step the absolute weight by its increment.
+        if (w?.mode === 'dropdown') {
+          return { ...it, purchaseWeight: Math.max(w.step, +((it.purchaseWeight ?? w.step) + delta * w.step).toFixed(2)) };
         }
+        // Stepper-weight (Deli) AND normal items both step productQty by 1; the
+        // weight display derives from productQty × step.
         return { ...it, productQty: Math.max(0, it.productQty + delta) };
       }),
     );
@@ -813,8 +815,8 @@ export default function WebViewCartSheet({
 
   const allChecked = checkedItems.length === 0 || checkedItems.every((c) => c);
   const toggleAll = () => setCheckedItems((prev) => prev.map(() => !allChecked));
-  // A weight item is "active" whenever it has a chosen weight (its productQty
-  // isn't the unit it's measured in), else a normal item needs productQty > 0.
+  // A dropdown-weight item is active whenever it has a chosen weight; stepper
+  // and normal items need productQty > 0.
   const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && (it.purchaseWeight != null || it.productQty > 0)).length;
 
   // Cart snapshot AFTER the run. Only fires when the before-snapshot succeeded
@@ -1984,8 +1986,9 @@ export default function WebViewCartSheet({
           candidate.isWeightItem && wopts && wopts.length
             ? wopts[Math.min(Math.max(1, idx), wopts.length) - 1]
             : null;
-        // The increment is the smallest buyable weight (options start at it).
-        const weightStep = (candidate.isWeightItem && wopts && wopts.length) ? wopts[0] : null;
+        // The increment: a dropdown item's smallest option, else 0.25 lb for a
+        // stepper-weight item (HEB Deli — no dropdown, increments by weight).
+        const weightStep = candidate.isWeightItem ? ((wopts && wopts.length) ? wopts[0] : 0.25) : null;
 
         if (action === 'choose') {
           // Choose-product flow: save the selection as the ingredient's searchTerm + qty. No cart.
@@ -2306,9 +2309,10 @@ export default function WebViewCartSheet({
                         </Text>
                       ) : null}
                       {it.mealIngredients.map((mi, mIdx) => {
+                        const w = ingredientWeight(it);
                         const isQty = it.unit.toLowerCase() === 'qty';
-                        const measurement = it.purchaseWeight != null
-                          ? `${it.purchaseWeight} lb`
+                        const measurement = w
+                          ? weightLabelLb(w.lb)
                           : (isQty ? `${mi.qty} qty` : `${it.measure} ${it.unit}`);
                         return (
                           <Text key={mIdx} style={styles.mealNames}>{mi.mealName} • {measurement}</Text>
@@ -2316,8 +2320,9 @@ export default function WebViewCartSheet({
                       })}
                     </View>
                     {(() => {
-                      const atMin = it.purchaseWeight != null
-                        ? it.purchaseWeight <= (it.weightStep ?? 0.25)
+                      const w = ingredientWeight(it);
+                      const atMin = w?.mode === 'dropdown'
+                        ? (it.purchaseWeight ?? 0) <= w.step
                         : it.productQty === 0;
                       return (
                     <TouchableOpacity
@@ -2331,7 +2336,7 @@ export default function WebViewCartSheet({
                       );
                     })()}
                     <Text style={styles.qtyNum}>
-                      {it.purchaseWeight != null ? `${it.purchaseWeight} lb` : it.productQty}
+                      {(() => { const w = ingredientWeight(it); return w ? weightLabelLb(w.lb) : it.productQty; })()}
                     </Text>
                     <TouchableOpacity
                       onPress={() => updateQty(i, 1)}

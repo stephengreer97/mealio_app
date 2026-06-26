@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Colors, Radius } from '../constants/colors';
 import { Meal, PresetMeal, Ingredient } from '../types';
+import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
 import { meals as mealsApi, images as imagesApi, kroger as krogerApi } from '../lib/api';
 import Button from './ui/Button';
 import Input from './ui/Input';
@@ -136,14 +137,14 @@ export default function MealDetailSheet({
     setIngredients((prev) =>
       prev.map((ing, i) => {
         if (i !== index) return ing;
-        // Sold-by-weight item: step the weight by its dropdown increment instead
-        // of the integer qty (and never below one increment).
-        const pw = (ing as any).purchaseWeight;
-        if (pw != null) {
-          const step = (ing as any).weightStep ?? 0.25;
-          const next = Math.max(step, +(pw + delta * step).toFixed(2));
+        const w = ingredientWeight(ing);
+        // Dropdown-weight item: step the absolute weight by its increment.
+        if (w?.mode === 'dropdown') {
+          const next = Math.max(w.step, +((ing.purchaseWeight ?? w.step) + delta * w.step).toFixed(2));
           return { ...ing, purchaseWeight: next };
         }
+        // Stepper-weight (Deli) and normal items both step productQty; weight
+        // display derives from productQty × step.
         return { ...ing, productQty: Math.max(1, (ing.productQty ?? ing.qty ?? 1) + delta) };
       })
     );
@@ -517,7 +518,7 @@ export default function MealDetailSheet({
                             >
                               <Text style={styles.qtyBtnText}>−</Text>
                             </TouchableOpacity>
-                            <Text style={styles.qtyValue}>{(ing as any).purchaseWeight != null ? `${(ing as any).purchaseWeight} lb` : (ing.productQty ?? ing.qty ?? 1)}</Text>
+                            <Text style={styles.qtyValue}>{(() => { const w = ingredientWeight(ing); return w ? weightLabelLb(w.lb) : (ing.productQty ?? ing.qty ?? 1); })()}</Text>
                             <TouchableOpacity
                               style={styles.qtyBtn}
                               onPress={() => adjustIngredientQty(origIdx, 1)}
@@ -681,9 +682,12 @@ export default function MealDetailSheet({
                           {ing.searchTerm ? (
                             <>
                               <Text style={styles.productLabel} numberOfLines={1}>
-                                {(ing as any).purchaseWeight != null
-                                  ? `${(ing as any).purchaseWeight} lb ${ing.searchTerm}`
-                                  : `${ing.productQty ?? ing.qty ?? 1}x ${ing.searchTerm}`}
+                                {(() => {
+                                  const w = ingredientWeight(ing);
+                                  return w
+                                    ? `${weightLabelLb(w.lb)} ${ing.searchTerm}`
+                                    : `${ing.productQty ?? ing.qty ?? 1}x ${ing.searchTerm}`;
+                                })()}
                               </Text>
                               {(ing as any).dropdown?.selectedText ? (
                                 <Text style={[styles.productLabel, { fontSize: 11 }]} numberOfLines={1}>
