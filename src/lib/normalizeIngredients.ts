@@ -27,6 +27,10 @@ export function normalizeIngredients(raw: any): Ingredient[] {
         unit: item.unit ?? 'qty',
         measure: item.measure ?? null,
         dropdown: item.dropdown ?? null,
+        // Sold-by-weight remembered weight (lb). Must be carried through or the
+        // saved choice is lost on every read — the meal card can't show it and
+        // the cart re-prompts for weight every run.
+        ...(item.purchaseWeight != null ? { purchaseWeight: item.purchaseWeight } : {}),
       };
     }
     return { ingredientName: String(item), qty: 1, productQty: 1, unit: 'qty', measure: null };
