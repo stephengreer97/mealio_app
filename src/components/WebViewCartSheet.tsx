@@ -95,7 +95,7 @@ export interface WebViewCartSheetProps {
   storeId: string;
   storeName: string;
   onClose: () => void;
-  onIngredientChosen?: (ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null) => void;
+  onIngredientChosen?: (ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null) => void;
   /** 'modal' (default) renders the original native pageSheet — unchanged
    *  behavior. 'layer' renders a provider-controlled root overlay that can be
    *  slid offscreen (collapsed) while keeping the WebView mounted, so the cart
@@ -925,7 +925,14 @@ export default function WebViewCartSheet({
     if (item.searchTerm) {
       // Combined path: search + add to cart in one step (no separate add phase).
       setSearchingLabel(`Adding ${term}…`);
-      const script = scriptsRef.current!.buildSearchAndAddScript(term, item.productQty, item.dropdown ?? null);
+      // Sold-by-weight item with a remembered weight: pass it as a 'weight'
+      // dropdown so the add selects the option closest to the saved lb amount
+      // (the store's increments can differ / change). Falls back to the normal
+      // preference dropdown for everything else.
+      const addDropdown = item.purchaseWeight != null
+        ? { type: 'weight', selectedText: `${item.purchaseWeight} lb`, selectedValue: String(item.purchaseWeight) }
+        : (item.dropdown ?? null);
+      const script = scriptsRef.current!.buildSearchAndAddScript(term, item.productQty, addDropdown);
       if (onSearchPageRef.current) {
         loadQueueRef.current = [script];
         // Clear dedup so onLoadEnd fires even if the search URL is identical (same ingredient across meals).
@@ -1942,6 +1949,15 @@ export default function WebViewCartSheet({
         const needsPref = candidate.preferences && candidate.preferences.length > 0;
         const prefText = selectedPreference ?? null;
 
+        // Sold-by-weight: the stepper value is an option index; remember the
+        // chosen ABSOLUTE weight (lb) so a future run re-selects it even if the
+        // store's increments change. Distinct from the recipe measure/unit.
+        const wopts = candidate.weightOptions;
+        const weightFromIdx = (idx: number): number | null =>
+          candidate.isWeightItem && wopts && wopts.length
+            ? wopts[Math.min(Math.max(1, idx), wopts.length) - 1]
+            : null;
+
         if (action === 'choose') {
           // Choose-product flow: save the selection as the ingredient's searchTerm + qty. No cart.
           const qtyMap = Object.fromEntries(currentReview.mealIngredients.map((mi) => [mi.mealId, chooseQty]));
@@ -1957,6 +1973,7 @@ export default function WebViewCartSheet({
             candidate.productName,
             qtyMap,
             dropdown,
+            weightFromIdx(chooseQty),
           );
         } else {
           // Add-to-cart / review-unmatched flow: queue item for cart, optionally save searchTerm.
@@ -1980,6 +1997,7 @@ export default function WebViewCartSheet({
               candidate.productName,
               qtyMap,
               reviewDropdown,
+              weightFromIdx(totalQty),
             );
           }
         }
