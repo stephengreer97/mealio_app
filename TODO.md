@@ -14,11 +14,11 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 ### Engineering — [C]
 
 - [ ] **Android WebView WAF compatibility — dynamic UA + Custom Tabs eval.**
-  (1) Dynamic Android UA in `src/lib/webview-user-agent.ts` (currently static
-  "Android 16 / Chrome 138 / Pixel 9"): map `Platform.Version` → Android version,
-  query Chrome WebView version or keep a freshness policy. (2) Per-store smoke
-  test on real Android for all 6 WebView stores. (3) Evaluate Custom Tabs where
-  the in-app WebView is fingerprinted.
+  (1) ✅ DONE — dynamic Android UA: `Platform.Version` (SDK API level) → Android
+  release in `src/lib/webview-user-agent-build.ts` (unit-tested); Chrome major
+  kept as a maintained freshness constant (Play auto-updates WebView). (2) Per-
+  store smoke test on real Android for all 6 WebView stores [needs device]. (3)
+  Evaluate Custom Tabs where the in-app WebView is fingerprinted [needs device].
 - [ ] **Marketing/lifecycle emails — creators.** Reminder emails to publish meals,
   auto-sent based on lack of activity; plus an initial onboarding email with
   tips. [C] builds + wires auto-send; Also builds Admin dashboard for viewing/tracking 
