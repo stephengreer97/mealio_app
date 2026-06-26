@@ -73,6 +73,27 @@ describe('HEB EXTRACT_PRODUCTS_SCRIPT', () => {
 
   itWithFixture(
     'search-results-weight-dropdown-closed.html',
+    'search+add of a weight item with NO chosen weight bubbles needs_weight (prompt first)',
+    async (runner) => {
+      // No weight passed → the combined add must NOT guess a poundage; it bails
+      // with needs_weight + the options so the review UI can prompt once.
+      const script = scripts.buildSearchAndAddScript(
+        'CAFE Olé by H-E-B Panama Medium Roast Whole Bean Bulk Coffee, lb',
+        1,
+        null,
+      );
+      await runner.inject(script);
+      const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('needs_weight');
+      expect(result.candidates[0].isWeightItem).toBe(true);
+      expect(result.candidates[0].weightOptions.length).toBeGreaterThan(0);
+      expect(result.candidates[0].weightOptions.every((w: number) => w > 0)).toBe(true);
+    },
+  );
+
+  itWithFixture(
+    'search-results-weight-dropdown-closed.html',
     'detects sold-by-weight items and reads their real lb increments',
     async (runner) => {
       await runner.inject(scripts.extractProductsScript);
@@ -199,6 +220,29 @@ describe('HEB cart-page count (snapshot before/after)', () => {
       const names = result.items.map((it: { name: string }) => it.name);
       expect(names.some((n: string) => /tzatziki/i.test(n))).toBe(true);
       result.items.forEach((it: { qty: number }) => expect(it.qty).toBe(1));
+    },
+  );
+
+  // Sold-by-weight lines (Deli / Fish Market / bulk) have NO
+  // cartQuantityCounterValue — the snapshot must read their weight from the
+  // itemRowWeighedQuantityDropdown / "Quantity: N lb" a11y text and tag them
+  // isWeight, so reconcile confirms them by presence instead of re-adding (they
+  // used to read as qty 0 → "missing" → double-added).
+  itWithFixture(
+    'cart-with-weight-item.html',
+    'reads sold-by-weight lines as isWeight with their lb amount',
+    async (runner) => {
+      await runner.inject(buildCartPageCountScript('heb')!);
+      const result = await runner.waitForMessage('CART_COUNT', 8_000);
+      const weighty = (result.items as any[]).filter((it) => it.isWeight);
+      // The captured cart has multiple by-the-pound items (Bulk Coffee, Deli
+      // Roast Beef, Fish Market Trout).
+      expect(weighty.length).toBeGreaterThan(0);
+      // Each carries a positive lb weight and counts as one present unit.
+      expect(weighty.every((it) => typeof it.weight === 'number' && it.weight > 0)).toBe(true);
+      expect(weighty.every((it) => it.qty === 1)).toBe(true);
+      // The bulk coffee is one of them.
+      expect(weighty.some((it) => /bulk coffee/i.test(it.name))).toBe(true);
     },
   );
 });

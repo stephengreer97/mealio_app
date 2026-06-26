@@ -20,6 +20,13 @@ export interface Ingredient {
   unit: string;
   measure?: string | null;
   dropdown?: { type: string; selectedText: string; selectedValue: string } | null;
+  // For sold-by-weight products (HEB Deli / Fish Market / bulk): the weight in
+  // lb the user chose to BUY, remembered across runs. Distinct from measure/unit
+  // (the recipe amount, display-only) and productQty (the count for normal
+  // items). Once set, the item auto-adds at this weight instead of re-prompting.
+  purchaseWeight?: number | null;
+  // The dropdown's weight increment (lb) — the editor steps purchaseWeight by it.
+  weightStep?: number | null;
 }
 
 export interface Meal {

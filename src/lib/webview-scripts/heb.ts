@@ -352,9 +352,11 @@ export function buildAddToCartScript(
   productName: string,
   preference: { text: string } | null,
   qty: number,
+  targetWeightLb?: number | null,
 ): string {
   const escapedName = JSON.stringify(productName);
   const escapedPref = preference ? JSON.stringify(preference) : 'null';
+  const weightTarget = (targetWeightLb != null && !Number.isNaN(targetWeightLb)) ? targetWeightLb : 'NaN';
 
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
@@ -371,6 +373,9 @@ export function buildAddToCartScript(
   var TARGET_NAME = ${escapedName};
   var PREFERENCE = ${escapedPref};
   var QTY = ${qty};
+  // Remembered buy-weight (lb) for a sold-by-weight item; handleWeightDropdown
+  // selects the option closest to it. NaN = no weight target (normal item).
+  var __WEIGHT_TARGET = ${weightTarget};
 
   // Handles fresh fish/meat items where Add to Cart opens a weight picker.
   // 1 qty = 0.25 lbs. Tries native <select> then ARIA [role="listbox"].
@@ -383,12 +388,29 @@ export function buildAddToCartScript(
     // item — there is no separate confirm. Scope to the target card / a picker
     // modal our click opened, never a sibling card's dropdown (which would add an
     // unrelated product).
+    // A remembered weight rides in as DROPDOWN { type:'weight', selectedValue:lb }
+    // on the combined search-and-add path. Prefer the option closest to that
+    // absolute weight (the store's increments can differ/change); otherwise fall
+    // back to the qty-th option. (typeof-guarded so this same helper is valid in
+    // buildAddToCartScript, which has no DROPDOWN var.)
+    var __targetLb = (typeof DROPDOWN !== 'undefined' && DROPDOWN && DROPDOWN.type === 'weight')
+      ? parseFloat(DROPDOWN.selectedValue)
+      : (typeof __WEIGHT_TARGET !== 'undefined' ? __WEIGHT_TARGET : NaN);
+    function __closestOpt(opts, target) {
+      var best = opts[0], bestD = Infinity;
+      for (var i = 0; i < opts.length; i++) {
+        var raw = opts[i].value != null && opts[i].value !== '' ? opts[i].value : opts[i].textContent;
+        var d = Math.abs(parseFloat(raw) - target);
+        if (d < bestD) { bestD = d; best = opts[i]; }
+      }
+      return best;
+    }
     function pickIn(root) {
       var sel = root.querySelector('select[name="addByWeight"]');
       if (sel) {
         var real = Array.from(sel.options).filter(function(o) { return parseFloat(o.value) > 0; });
         if (real.length > 0) {
-          var pick = real[Math.min(Math.max(1, qty), real.length) - 1];
+          var pick = !isNaN(__targetLb) ? __closestOpt(real, __targetLb) : real[Math.min(Math.max(1, qty), real.length) - 1];
           sel.value = pick.value;
           sel.dispatchEvent(new Event('change', { bubbles: true }));
           sel.dispatchEvent(new Event('input', { bubbles: true }));
@@ -399,7 +421,8 @@ export function buildAddToCartScript(
       if (listbox) {
         var lbOpts = Array.from(listbox.querySelectorAll('[role="option"]')).filter(function(o) { return /\\blbs?\\b/i.test(o.textContent); });
         if (lbOpts.length > 0) {
-          lbOpts[Math.min(Math.max(1, qty), lbOpts.length) - 1].click();
+          var lbPick = !isNaN(__targetLb) ? __closestOpt(lbOpts, __targetLb) : lbOpts[Math.min(Math.max(1, qty), lbOpts.length) - 1];
+          lbPick.click();
           return true;
         }
       }
@@ -673,12 +696,29 @@ ${HEB_WAIT_FRESH_FN}
     // item — there is no separate confirm. Scope to the target card / a picker
     // modal our click opened, never a sibling card's dropdown (which would add an
     // unrelated product).
+    // A remembered weight rides in as DROPDOWN { type:'weight', selectedValue:lb }
+    // on the combined search-and-add path. Prefer the option closest to that
+    // absolute weight (the store's increments can differ/change); otherwise fall
+    // back to the qty-th option. (typeof-guarded so this same helper is valid in
+    // buildAddToCartScript, which has no DROPDOWN var.)
+    var __targetLb = (typeof DROPDOWN !== 'undefined' && DROPDOWN && DROPDOWN.type === 'weight')
+      ? parseFloat(DROPDOWN.selectedValue)
+      : (typeof __WEIGHT_TARGET !== 'undefined' ? __WEIGHT_TARGET : NaN);
+    function __closestOpt(opts, target) {
+      var best = opts[0], bestD = Infinity;
+      for (var i = 0; i < opts.length; i++) {
+        var raw = opts[i].value != null && opts[i].value !== '' ? opts[i].value : opts[i].textContent;
+        var d = Math.abs(parseFloat(raw) - target);
+        if (d < bestD) { bestD = d; best = opts[i]; }
+      }
+      return best;
+    }
     function pickIn(root) {
       var sel = root.querySelector('select[name="addByWeight"]');
       if (sel) {
         var real = Array.from(sel.options).filter(function(o) { return parseFloat(o.value) > 0; });
         if (real.length > 0) {
-          var pick = real[Math.min(Math.max(1, qty), real.length) - 1];
+          var pick = !isNaN(__targetLb) ? __closestOpt(real, __targetLb) : real[Math.min(Math.max(1, qty), real.length) - 1];
           sel.value = pick.value;
           sel.dispatchEvent(new Event('change', { bubbles: true }));
           sel.dispatchEvent(new Event('input', { bubbles: true }));
@@ -689,7 +729,8 @@ ${HEB_WAIT_FRESH_FN}
       if (listbox) {
         var lbOpts = Array.from(listbox.querySelectorAll('[role="option"]')).filter(function(o) { return /\\blbs?\\b/i.test(o.textContent); });
         if (lbOpts.length > 0) {
-          lbOpts[Math.min(Math.max(1, qty), lbOpts.length) - 1].click();
+          var lbPick = !isNaN(__targetLb) ? __closestOpt(lbOpts, __targetLb) : lbOpts[Math.min(Math.max(1, qty), lbOpts.length) - 1];
+          lbPick.click();
           return true;
         }
       }
@@ -780,6 +821,23 @@ ${HEB_WAIT_FRESH_FN}
   }
 
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'DEBUG', step: '0_best_found', bestName: bestName, bestHasPopup: bestHasPopup, hasDropdown: !!DROPDOWN, qty: QTY }));
+
+  // Sold-by-weight item with NO remembered weight: don't guess a poundage — bubble
+  // the weight options up so the review UI can prompt once (then it's remembered).
+  // A weight choice arrives as DROPDOWN { type:'weight' }; absent that, prompt.
+  var __bestWeightSel = bestCard.querySelector('select[name="addByWeight"]');
+  if (__bestWeightSel && !(DROPDOWN && DROPDOWN.type === 'weight')) {
+    var __wopts = Array.from(__bestWeightSel.options).map(function(o) { return parseFloat(o.value); }).filter(function(v) { return v > 0; });
+    if (__wopts.length > 0) {
+      document.removeEventListener('focusin', __noKbd, true);
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'needs_weight',
+        candidates: [{ productName: bestName, imageUrl: null, outOfStock: false, preferences: null, price: null, isWeightItem: true, weightOptions: __wopts }],
+      }));
+      return;
+    }
+  }
+
   try {
     __cartBefore = __cartCount();
     bestBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
