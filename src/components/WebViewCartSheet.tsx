@@ -97,7 +97,7 @@ export interface WebViewCartSheetProps {
   storeId: string;
   storeName: string;
   onClose: () => void;
-  onIngredientChosen?: (ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null) => void;
+  onIngredientChosen?: (ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null) => void;
   /** 'modal' (default) renders the original native pageSheet — unchanged
    *  behavior. 'layer' renders a provider-controlled root overlay that can be
    *  slid offscreen (collapsed) while keeping the WebView mounted, so the cart
@@ -1977,6 +1977,8 @@ export default function WebViewCartSheet({
           candidate.isWeightItem && wopts && wopts.length
             ? wopts[Math.min(Math.max(1, idx), wopts.length) - 1]
             : null;
+        // The increment is the smallest buyable weight (options start at it).
+        const weightStep = (candidate.isWeightItem && wopts && wopts.length) ? wopts[0] : null;
 
         if (action === 'choose') {
           // Choose-product flow: save the selection as the ingredient's searchTerm + qty. No cart.
@@ -1994,6 +1996,7 @@ export default function WebViewCartSheet({
             qtyMap,
             dropdown,
             weightFromIdx(chooseQty),
+            weightStep,
           );
         } else {
           // Add-to-cart / review-unmatched flow: queue item for cart, optionally save searchTerm.
@@ -2023,6 +2026,7 @@ export default function WebViewCartSheet({
               qtyMap,
               reviewDropdown,
               chosenWeight,
+              weightStep,
             );
           }
         }
@@ -2848,7 +2852,7 @@ export default function WebViewCartSheet({
                           {row.name}
                         </Text>
                         <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: row.added ? '#15803d' : Colors.text3, marginLeft: 8 }}>
-                          x{row.qty}
+                          {row.isWeight && row.weight ? `${row.weight} lb` : `x${row.qty}`}
                         </Text>
                       </View>
                     ))

@@ -285,7 +285,7 @@ export default function MyMealsScreen() {
     }
   }
 
-  async function handleIngredientChosen(ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null) {
+  async function handleIngredientChosen(ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null) {
     await Promise.all(
       mealIds.map((mealId) =>
         // Serialize all saves for this meal: each PATCH runs after (and reads the
@@ -302,7 +302,7 @@ export default function MyMealsScreen() {
             meal.ingredients as any[],
             ingredientName,
             productName,
-            { qty: mealQtys?.[mealId], dropdown, purchaseWeight },
+            { qty: mealQtys?.[mealId], dropdown, purchaseWeight, weightStep },
           );
           try {
             const updated = await mealsApi.update(mealId, { ingredients: updatedIngredients } as any);

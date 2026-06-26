@@ -25,6 +25,8 @@ export interface Ingredient {
   // (the recipe amount, display-only) and productQty (the count for normal
   // items). Once set, the item auto-adds at this weight instead of re-prompting.
   purchaseWeight?: number | null;
+  // The dropdown's weight increment (lb) — the editor steps purchaseWeight by it.
+  weightStep?: number | null;
 }
 
 export interface Meal {

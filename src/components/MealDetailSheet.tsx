@@ -134,9 +134,18 @@ export default function MealDetailSheet({
 
   function adjustIngredientQty(index: number, delta: number) {
     setIngredients((prev) =>
-      prev.map((ing, i) =>
-        i === index ? { ...ing, productQty: Math.max(1, (ing.productQty ?? ing.qty ?? 1) + delta) } : ing
-      )
+      prev.map((ing, i) => {
+        if (i !== index) return ing;
+        // Sold-by-weight item: step the weight by its dropdown increment instead
+        // of the integer qty (and never below one increment).
+        const pw = (ing as any).purchaseWeight;
+        if (pw != null) {
+          const step = (ing as any).weightStep ?? 0.25;
+          const next = Math.max(step, +(pw + delta * step).toFixed(2));
+          return { ...ing, purchaseWeight: next };
+        }
+        return { ...ing, productQty: Math.max(1, (ing.productQty ?? ing.qty ?? 1) + delta) };
+      })
     );
   }
 
@@ -508,7 +517,7 @@ export default function MealDetailSheet({
                             >
                               <Text style={styles.qtyBtnText}>−</Text>
                             </TouchableOpacity>
-                            <Text style={styles.qtyValue}>{ing.productQty ?? ing.qty ?? 1}</Text>
+                            <Text style={styles.qtyValue}>{(ing as any).purchaseWeight != null ? `${(ing as any).purchaseWeight} lb` : (ing.productQty ?? ing.qty ?? 1)}</Text>
                             <TouchableOpacity
                               style={styles.qtyBtn}
                               onPress={() => adjustIngredientQty(origIdx, 1)}
