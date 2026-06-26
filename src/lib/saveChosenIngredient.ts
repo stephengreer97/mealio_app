@@ -19,6 +19,10 @@ export interface ChosenProductUpdate {
   qty?: number | null;
   /** Preference/dropdown selection, or null to clear a stale one. */
   dropdown?: { type: string; selectedText: string; selectedValue: string } | null;
+  /** Chosen buy-weight (lb) for a sold-by-weight item, remembered across runs. */
+  purchaseWeight?: number | null;
+  /** The weight dropdown's increment (lb), for the meal editor's stepper. */
+  weightStep?: number | null;
 }
 
 /** Name an ingredient row goes by, tolerating the three key variants the DB
@@ -46,6 +50,8 @@ export function mergeChosenProduct(
     if (update.qty != null) updates.productQty = update.qty;
     if (update.dropdown) updates.dropdown = update.dropdown;
     else if ('dropdown' in ing) updates.dropdown = null; // clear stale preference if none selected
+    if (update.purchaseWeight != null) updates.purchaseWeight = update.purchaseWeight;
+    if (update.weightStep != null) updates.weightStep = update.weightStep;
     return { ...ing, ...updates };
   });
 }

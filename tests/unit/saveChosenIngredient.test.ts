@@ -26,6 +26,20 @@ describe('mergeChosenProduct', () => {
     expect(out[1].productQty).toBe(3);
   });
 
+  it('persists purchaseWeight for sold-by-weight items, leaving measure/unit alone', () => {
+    const rows = [{ ingredientName: 'Ground Beef', searchTerm: null, productQty: 1, unit: 'lb', measure: '1' }];
+    const out = mergeChosenProduct(rows, 'Ground Beef', 'H-E-B Ground Beef', { purchaseWeight: 1.5 });
+    expect(out[0].purchaseWeight).toBe(1.5);
+    // Recipe display fields must be untouched.
+    expect(out[0].unit).toBe('lb');
+    expect(out[0].measure).toBe('1');
+  });
+
+  it('does not add purchaseWeight when not provided', () => {
+    const out = mergeChosenProduct(base, 'Saffron', 'H-E-B Saffron', { qty: 2 });
+    expect(out[1].purchaseWeight).toBeUndefined();
+  });
+
   it('matches by existing searchTerm, not just display name', () => {
     const rows = [{ ingredientName: 'milk', searchTerm: 'Whole Milk', productQty: 1 }];
     const out = mergeChosenProduct(rows, 'Whole Milk', 'MALK Oat Milk');

@@ -24,6 +24,7 @@ import {
   ConsolidatedIngredient,
   consolidateIngredients,
 } from '../lib/consolidateIngredients';
+import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
 import { buildSearchAndAddWorker } from '../lib/webview-scripts/worker-search';
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS } from '../constants/features';
@@ -56,7 +57,7 @@ interface SearchResult {
   mealIngredients: MealIngredientQty[];
   unit: string;
   measure: string | null;
-  reason: 'out_of_stock' | 'no_results' | 'low_confidence';
+  reason: 'out_of_stock' | 'no_results' | 'low_confidence' | 'needs_weight';
   isChoose: boolean; // true = choose-product flow (no searchTerm yet); false = review unmatched (searchTerm set but no match)
 }
 
@@ -73,6 +74,8 @@ interface PickedItem {
   productName: string;
   preference: { text: string } | null;
   qty: number;
+  /** Sold-by-weight: the chosen weight (lb) to select at add time. */
+  purchaseWeight?: number | null;
 }
 
 export type Step = 'qty' | 'login_check' | 'login' | 'searching' | 'searchResult' | 'review' | 'adding' | 'done' | 'robot_challenge';
@@ -95,7 +98,7 @@ export interface WebViewCartSheetProps {
   storeId: string;
   storeName: string;
   onClose: () => void;
-  onIngredientChosen?: (ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null) => void;
+  onIngredientChosen?: (ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null) => void;
   /** 'modal' (default) renders the original native pageSheet — unchanged
    *  behavior. 'layer' renders a provider-controlled root overlay that can be
    *  slid offscreen (collapsed) while keeping the WebView mounted, so the cart
@@ -140,10 +143,6 @@ function scoreProductMatch(searchTerm: string, productName: string): number {
 }
 
 // HEB Deli / Fish Market items are sold by weight: 1 qty = 0.25 lb.
-function isWeightBased(name: string): boolean {
-  return /H-E-B (Deli|Fish Market)/i.test(name);
-}
-
 // HTTP statuses anti-bot systems (Akamai, DataDome, PerimeterX) use to block.
 const ANTI_BOT_STATUSES = [403, 429, 503];
 
@@ -286,11 +285,6 @@ export default function WebViewCartSheet({
   const loadQueueRef = useRef<string[]>([]);
   // Tracks the last URL processed by onLoadEnd to deduplicate extra fires per page load.
   const lastLoadEndUrlRef = useRef('');
-  // True when the page the WebView is currently on (during search/add) is the
-  // store's login wall — set passively in onLoadEnd. We only ACT on it when a
-  // search then comes back empty (mid-run logout detection), so a transient
-  // redirect that recovers can't falsely abort the run.
-  const midRunLoginPageRef = useRef(false);
   // True once the WebView has landed on a store search page — lets subsequent items
   // skip the homepage round-trip and inject buildSearchScript directly.
   const onSearchPageRef = useRef(false);
@@ -803,7 +797,17 @@ export default function WebViewCartSheet({
 
   const updateQty = (i: number, delta: number) =>
     setItems((prev) =>
-      prev.map((it, idx) => (idx === i ? { ...it, productQty: Math.max(0, it.productQty + delta) } : it)),
+      prev.map((it, idx) => {
+        if (idx !== i) return it;
+        const w = ingredientWeight(it);
+        // Dropdown-weight item: step the absolute weight by its increment.
+        if (w?.mode === 'dropdown') {
+          return { ...it, purchaseWeight: Math.max(w.step, +((it.purchaseWeight ?? w.step) + delta * w.step).toFixed(2)) };
+        }
+        // Stepper-weight (Deli) AND normal items both step productQty by 1; the
+        // weight display derives from productQty × step.
+        return { ...it, productQty: Math.max(0, it.productQty + delta) };
+      }),
     );
 
   const toggleChecked = (i: number) =>
@@ -811,7 +815,9 @@ export default function WebViewCartSheet({
 
   const allChecked = checkedItems.length === 0 || checkedItems.every((c) => c);
   const toggleAll = () => setCheckedItems((prev) => prev.map(() => !allChecked));
-  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0).length;
+  // A dropdown-weight item is active whenever it has a chosen weight; stepper
+  // and normal items need productQty > 0.
+  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && (it.purchaseWeight != null || it.productQty > 0)).length;
 
   // Cart snapshot AFTER the run. Only fires when the before-snapshot succeeded
   // and something was reported added. For cart-page stores (HEB) navigate the
@@ -864,7 +870,7 @@ export default function WebViewCartSheet({
   }, []);
 
   const handleStartSearch = () => {
-    const active = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0);
+    const active = items.filter((it, i) => (checkedItems[i] ?? true) && (it.purchaseWeight != null || it.productQty > 0));
     if (active.length === 0) return;
     activeItemsRef.current = active;
     searchIdxRef.current = 0;
@@ -930,7 +936,14 @@ export default function WebViewCartSheet({
     if (item.searchTerm) {
       // Combined path: search + add to cart in one step (no separate add phase).
       setSearchingLabel(`Adding ${term}…`);
-      const script = scriptsRef.current!.buildSearchAndAddScript(term, item.productQty, item.dropdown ?? null);
+      // Sold-by-weight item with a remembered weight: pass it as a 'weight'
+      // dropdown so the add selects the option closest to the saved lb amount
+      // (the store's increments can differ / change). Falls back to the normal
+      // preference dropdown for everything else.
+      const addDropdown = item.purchaseWeight != null
+        ? { type: 'weight', selectedText: `${item.purchaseWeight} lb`, selectedValue: String(item.purchaseWeight) }
+        : (item.dropdown ?? null);
+      const script = scriptsRef.current!.buildSearchAndAddScript(term, item.productQty, addDropdown);
       if (onSearchPageRef.current) {
         loadQueueRef.current = [script];
         // Clear dedup so onLoadEnd fires even if the search URL is identical (same ingredient across meals).
@@ -1022,11 +1035,11 @@ export default function WebViewCartSheet({
     console.log(`[Cart ${ts()}]`, 'navigateToAddItem idx=', idx, 'searchTerm=', item.searchTerm, 'product=', item.productName, 'qty=', item.qty, 'pref=', item.preference?.text ?? null, 'onSearchPage=', onSearchPageRef.current);
     setSearchingLabel(`Adding ${item.productName}…`);
     if (onSearchPageRef.current) {
-      loadQueueRef.current = [scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty)];
+      loadQueueRef.current = [scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null)];
       lastLoadEndUrlRef.current = '';
       webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(item.searchTerm));
     } else {
-      loadQueueRef.current = [scriptsRef.current!.buildSearchScript(item.searchTerm), scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty)];
+      loadQueueRef.current = [scriptsRef.current!.buildSearchScript(item.searchTerm), scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null)];
       navTo(scriptsRef.current!.storeUrl);
     }
     // Arm the per-item timeout. On fire: synthesize a failure ADD_RESULT,
@@ -1049,7 +1062,6 @@ export default function WebViewCartSheet({
   // before-count lands.
   const beginSearchFlow = useCallback(() => {
     setStep('searching');
-    midRunLoginPageRef.current = false;
     const active = activeItemsRef.current;
     const allChoose = active.length > 0 && active.every((it) => !it.searchTerm);
     // Resolve parallel-vs-serial from the LIVE locked store, NOT the captured
@@ -1210,16 +1222,6 @@ export default function WebViewCartSheet({
         lastLoadEndUrlRef.current = '';
         return;
       }
-    } else if (stepRef.current === 'searching' || stepRef.current === 'adding') {
-      // Mid-run logout: a session that expires (or is invalidated by store
-      // anti-automation) bounces searches to the login page, where every search
-      // returns nothing. Note whether THIS page is the login wall; the empty
-      // result handler reads this flag to halt instead of churning through every
-      // item as a false "no results". Reflects the current page (auto-resets when
-      // a real search page loads).
-      midRunLoginPageRef.current = s.isLoginPageUrl
-        ? s.isLoginPageUrl(url)
-        : /\/login|\/sign-in|\/signin/i.test(url);
     }
     // Skip intermediate auth/SSO redirect pages — scripts injected here get killed
     // when the page redirects to the final destination.
@@ -1561,7 +1563,7 @@ export default function WebViewCartSheet({
             // (productName is null; the search term loosely collides with a
             // sibling's row) nor blindly retried — route it to review so the user
             // can pick an alternative or skip, like the serial add path.
-            const toMatch: { item: ConsolidatedIngredient; reportedName: string; expectedQty: number; claimed: number }[] = [];
+            const toMatch: { item: ConsolidatedIngredient; reportedName: string; expectedQty: number; claimed: number; confirmedWeight?: boolean }[] = [];
             active.forEach((item, idx) => {
               const r = reconResults.get(idx);
               if (r && !r.success && (r.reason === 'out_of_stock' || r.reason === 'no_results')) {
@@ -1583,11 +1585,23 @@ export default function WebViewCartSheet({
                 claimed: 0,
               });
             });
+            // Weight items first, confirmed by PRESENCE. A sold-by-weight line is
+            // a single cart row at N lb regardless of the chosen poundage, so it
+            // can't be count-compared (qty 3 lb ≠ 3 units). If a weight row matches
+            // by name, it's confirmed; consume it from the pool so a sibling can't
+            // claim it. (rows already tag weight lines via the cart snapshot.)
+            const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false }));
+            toMatch.forEach((m) => {
+              if (m.confirmedWeight) return;
+              const w = weightPool.find((p) => !p.used && cartNameMatches(p.name, m.reportedName));
+              if (w) { w.used = true; m.confirmedWeight = true; }
+            });
             // Pass 1: every item reserves its exact-name units. Pass 2: items still
             // short take loose matches from whatever remains unclaimed.
-            toMatch.forEach((m) => { m.claimed = claimQty(m.reportedName, m.expectedQty, true); });
-            toMatch.forEach((m) => { if (m.claimed < m.expectedQty) m.claimed += claimQty(m.reportedName, m.expectedQty - m.claimed, false); });
+            toMatch.forEach((m) => { if (!m.confirmedWeight) m.claimed = claimQty(m.reportedName, m.expectedQty, true); });
+            toMatch.forEach((m) => { if (!m.confirmedWeight && m.claimed < m.expectedQty) m.claimed += claimQty(m.reportedName, m.expectedQty - m.claimed, false); });
             toMatch.forEach((m) => {
+              if (m.confirmedWeight) { confirmed.push({ name: m.reportedName, success: true }); return; }
               const shortfall = m.expectedQty - m.claimed;
               if (shortfall <= 0) {
                 confirmed.push({ name: m.reportedName, success: true });
@@ -1723,21 +1737,24 @@ export default function WebViewCartSheet({
           searchIdxRef.current = nextIdx;
           if (item) {
             if (msg.success) {
-              midRunLoginPageRef.current = false;
               addResultsRef.current.push({ name: msg.productName || item.searchTerm!, success: true });
-            } else if (midRunLoginPageRef.current) {
-              // The search came back empty because it ran on the store's login
-              // wall — the session was lost mid-run. Stop churning every remaining
-              // item into a false "no results"; halt and re-prompt login. After
-              // re-auth the login-success path re-runs the add (reconcile dedupes).
-              console.log(`[Cart ${ts()}]`, 'mid-run logout detected (empty result on login page) — halting + showing login');
-              midRunLoginPageRef.current = false;
-              loadQueueRef.current = [];
-              inflightScriptRef.current = null;
-              expectedNavUrlRef.current = '';
-              lastLoadEndUrlRef.current = '';
-              if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
-              setStep('login');
+            } else if (msg.reason === 'needs_weight') {
+              // Sold-by-weight item, no remembered weight: the combined add bailed
+              // with the weight options. Route it straight to the review picker
+              // (the candidate already carries weightOptions, so no extract enrich)
+              // — the weight stepper lets the user choose, then it's remembered.
+              const newResult: SearchResult = {
+                term: item.searchTerm!,
+                candidates: msg.candidates ?? [],
+                mealIngredients: item.mealIngredients,
+                unit: item.unit,
+                measure: item.measure,
+                reason: 'needs_weight',
+                isChoose: false,
+              };
+              searchResultsRef.current = [...searchResultsRef.current, newResult];
+              setSearchResults(searchResultsRef.current);
+              setTimeout(() => navigateToSearchItem(nextIdx), 400);
               return;
             } else {
               const newResult: SearchResult = {
@@ -1961,6 +1978,18 @@ export default function WebViewCartSheet({
         const needsPref = candidate.preferences && candidate.preferences.length > 0;
         const prefText = selectedPreference ?? null;
 
+        // Sold-by-weight: the stepper value is an option index; remember the
+        // chosen ABSOLUTE weight (lb) so a future run re-selects it even if the
+        // store's increments change. Distinct from the recipe measure/unit.
+        const wopts = candidate.weightOptions;
+        const weightFromIdx = (idx: number): number | null =>
+          candidate.isWeightItem && wopts && wopts.length
+            ? wopts[Math.min(Math.max(1, idx), wopts.length) - 1]
+            : null;
+        // The increment: a dropdown item's smallest option, else 0.25 lb for a
+        // stepper-weight item (HEB Deli — no dropdown, increments by weight).
+        const weightStep = candidate.isWeightItem ? ((wopts && wopts.length) ? wopts[0] : 0.25) : null;
+
         if (action === 'choose') {
           // Choose-product flow: save the selection as the ingredient's searchTerm + qty. No cart.
           const qtyMap = Object.fromEntries(currentReview.mealIngredients.map((mi) => [mi.mealId, chooseQty]));
@@ -1976,6 +2005,8 @@ export default function WebViewCartSheet({
             candidate.productName,
             qtyMap,
             dropdown,
+            weightFromIdx(chooseQty),
+            weightStep,
           );
         } else {
           // Add-to-cart / review-unmatched flow: queue item for cart, optionally save searchTerm.
@@ -1985,8 +2016,13 @@ export default function WebViewCartSheet({
             productName: candidate.productName,
             preference: needsPref && prefText ? { text: prefText } : null,
             qty: totalQty,
+            purchaseWeight: weightFromIdx(totalQty),
           });
-          if (action === 'update') {
+          // Persist on "Add & Update", AND always for a sold-by-weight item even
+          // via "Add to Cart Only" — otherwise the chosen weight isn't saved and
+          // the item would re-prompt on every run instead of being remembered.
+          const chosenWeight = weightFromIdx(totalQty);
+          if (action === 'update' || (candidate.isWeightItem && chosenWeight != null)) {
             const qtyMap = getReviewMealQtys(reviewIdx);
             let reviewDropdown: { type: string; selectedText: string; selectedValue: string } | null = null;
             if (needsPref && prefText) {
@@ -1999,6 +2035,8 @@ export default function WebViewCartSheet({
               candidate.productName,
               qtyMap,
               reviewDropdown,
+              chosenWeight,
+              weightStep,
             );
           }
         }
@@ -2271,26 +2309,34 @@ export default function WebViewCartSheet({
                         </Text>
                       ) : null}
                       {it.mealIngredients.map((mi, mIdx) => {
-                        const isWeight = isWeightBased(it.searchTerm ?? it.ingredientName);
+                        const w = ingredientWeight(it);
                         const isQty = it.unit.toLowerCase() === 'qty';
-                        const measurement = isWeight ? fmtWeight(mi.qty) : (isQty ? `${mi.qty} qty` : `${it.measure} ${it.unit}`);
+                        const measurement = w
+                          ? weightLabelLb(w.lb)
+                          : (isQty ? `${mi.qty} qty` : `${it.measure} ${it.unit}`);
                         return (
                           <Text key={mIdx} style={styles.mealNames}>{mi.mealName} • {measurement}</Text>
                         );
                       })}
                     </View>
+                    {(() => {
+                      const w = ingredientWeight(it);
+                      const atMin = w?.mode === 'dropdown'
+                        ? (it.purchaseWeight ?? 0) <= w.step
+                        : it.productQty === 0;
+                      return (
                     <TouchableOpacity
                       onPress={() => updateQty(i, -1)}
-                      disabled={it.productQty === 0 || !checked}
-                      style={[styles.qtyBtn, (it.productQty === 0 || !checked) && { opacity: 0.3 }]}
+                      disabled={atMin || !checked}
+                      style={[styles.qtyBtn, (atMin || !checked) && { opacity: 0.3 }]}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
                       <Text style={styles.qtyBtnText}>−</Text>
                     </TouchableOpacity>
+                      );
+                    })()}
                     <Text style={styles.qtyNum}>
-                      {isWeightBased(it.searchTerm ?? it.ingredientName)
-                        ? fmtWeight(it.productQty)
-                        : it.productQty}
+                      {(() => { const w = ingredientWeight(it); return w ? weightLabelLb(w.lb) : it.productQty; })()}
                     </Text>
                     <TouchableOpacity
                       onPress={() => updateQty(i, 1)}
@@ -2418,8 +2464,10 @@ export default function WebViewCartSheet({
           // picker shows the real buyable weight (e.g. "1 lb", "2 lb") and matches
           // exactly what add-to-cart will select.
           const weightOpts = (candidate?.weightOptions && candidate.weightOptions.length) ? candidate.weightOptions : null;
+          // idx is the option index (1-based). 0 = nothing chosen yet → show
+          // "0 lb", mirroring how the qty stepper starts at 0.
           const weightLabel = (idx: number) =>
-            weightOpts ? `${weightOpts[Math.min(Math.max(1, idx), weightOpts.length) - 1]} lb` : fmtWeight(idx);
+            weightOpts ? (idx <= 0 ? '0 lb' : `${weightOpts[Math.min(idx, weightOpts.length) - 1]} lb`) : fmtWeight(idx);
           const maxWeightSteps = weightOpts ? weightOpts.length : Infinity;
           const needsPref = candidate && !candidate.outOfStock && candidate.preferences && candidate.preferences.length > 0;
           console.log(`[Cart ${ts()}]`, 'review render', { isChoose, reviewIdx, candidateName: candidate?.productName, prefs: candidate?.preferences, needsPref, selectedSuggIdx });
@@ -2449,6 +2497,9 @@ export default function WebViewCartSheet({
                 )}
                 {!isChoose && currentReview.reason === 'low_confidence' && (
                   <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3, marginBottom: 6 }}>No exact match found</Text>
+                )}
+                {!isChoose && currentReview.reason === 'needs_weight' && (
+                  <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.brand, marginBottom: 6 }}>⚖ Sold by weight — choose how much to add</Text>
                 )}
                 {/* Searched for */}
                 <View style={styles.searchedBox}>
@@ -2819,7 +2870,7 @@ export default function WebViewCartSheet({
                           {row.name}
                         </Text>
                         <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: row.added ? '#15803d' : Colors.text3, marginLeft: 8 }}>
-                          x{row.qty}
+                          {row.isWeight && row.weight ? `${row.weight} lb` : `x${row.qty}`}
                         </Text>
                       </View>
                     ))

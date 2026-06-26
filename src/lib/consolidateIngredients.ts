@@ -15,6 +15,10 @@ export interface ConsolidatedIngredient {
   measure: string | null;
   searchTerm: string | null;
   dropdown: { type: string; selectedText: string; selectedValue: string } | null;
+  /** Remembered buy-weight (lb) for a sold-by-weight item; drives auto-add. */
+  purchaseWeight?: number | null;
+  /** The weight dropdown's increment (lb); steps the pre-automation picker. */
+  weightStep?: number | null;
   mealIds: string[];
   mealNames: string[];
   mealIngredients: Array<{ mealId: string; mealName: string; qty: number }>;
@@ -76,6 +80,8 @@ export function consolidateIngredients(
           measure: ing.measure ?? null,
           searchTerm: ing.searchTerm ?? null,
           dropdown: ing.dropdown ?? null,
+          purchaseWeight: ing.purchaseWeight ?? null,
+          weightStep: ing.weightStep ?? null,
           mealIds: [meal.id],
           mealNames: [meal.name],
           mealIngredients: [{ mealId: meal.id, mealName: meal.name, qty }],

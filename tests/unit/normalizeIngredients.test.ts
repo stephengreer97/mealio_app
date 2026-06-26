@@ -133,6 +133,16 @@ describe('normalizeIngredients', () => {
       const r = normalizeIngredients([{ ingredientName: 'X' }]);
       expect(r[0].dropdown).toBe(null);
     });
+
+    it('carries purchaseWeight through (sold-by-weight items) so it survives reads', () => {
+      const r = normalizeIngredients([{ ingredientName: 'Ground Beef', searchTerm: 'H-E-B Ground Beef', purchaseWeight: 1.5 }]);
+      expect((r[0] as any).purchaseWeight).toBe(1.5);
+    });
+
+    it('omits purchaseWeight when absent (normal items)', () => {
+      const r = normalizeIngredients([{ ingredientName: 'Milk' }]);
+      expect('purchaseWeight' in r[0]).toBe(false);
+    });
   });
 
   it('handles a mixed array (string + multiple object shapes)', () => {
