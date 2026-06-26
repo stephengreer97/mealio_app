@@ -19,15 +19,6 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
   query Chrome WebView version or keep a freshness policy. (2) Per-store smoke
   test on real Android for all 6 WebView stores. (3) Evaluate Custom Tabs where
   the in-app WebView is fingerprinted.
-- [ ] **HEB multi-quantity add-to-cart — test + fix.** Adding multiple qty of one
-  product appears broken, and the cart snapshot is not catching the miss.
-  Investigate the qty path and tighten snapshot detection.
-- [ ] **Profit-share formula — drop the all-time component → 100% rolling annual.**
-  Replace the all-time term with a single rolling-12-month window so payouts track
-  recent contribution, not lifetime totals. Fix the calc, the creator page (earnings
-  display), the admin page (payout view), the help/terms copy, and the mobile
-  `CreatorPortalScreen`. (Website work delegated to a background agent on
-  `feat/profit-share-rolling-annual`.)
 - [ ] **In-app + web bug report → emails contact@mealio.co.** A bug-report form in
   the Help section of both the website and the mobile app. Submitting POSTs to a new
   endpoint that emails contact@mealio.co (via Resend) and auto-attaches useful
@@ -97,6 +88,36 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 ---
 
 ## Done
+
+### Profit-share → 100% rolling annual (2026-06-24)
+- **Profit-share formula dropped the all-time component → 100% rolling 12-month
+  saves.** Website (mealio_website PR #6): pure-TS calc over `preset_meal_saves`
+  (no migration), creator page, admin leaderboard, help + terms copy. Mobile
+  (mealio_app PR #15): `CreatorPortalScreen` reads the new `savesAnnual` /
+  `sharePercent` fields + typed `CreatorStats`; dropped the stale quarterly/
+  all-time fields.
+
+### HEB cart correctness + sold-by-weight items (2026-06-24 → 26)
+- **HEB multi-quantity add-to-cart — fixed (PR #13).** Confirm each unit via the
+  card's "N added" label + re-click on a dropped click; qty-aware snapshot/
+  reconcile so under-adds are caught instead of silently missed.
+- **Weight-dropdown sibling double-add — fixed (PR #19).** `handleWeightDropdown`
+  was page-wide and added an unrelated by-the-pound sibling (e.g. Bulk Coffee);
+  scoped it to the target card / our own modal.
+- **Mid-run logout detection (PR #21).** A session lost mid-run bounced searches
+  to the login wall; the engine now detects "empty result on the login page" and
+  re-prompts login instead of churning every item to a false "no results".
+- **Sold-by-weight items — full feature (PRs #22, #24).** Two models, auto-
+  detected: **dropdown** items (bulk coffee, Fish Market) remember an absolute
+  `purchaseWeight` (lb) and select the closest option; **HEB Deli** is a
+  **stepper** item (no dropdown — 1 step = 0.25 lb, weight = qty × step), add
+  unchanged. Detect via `select[name="addByWeight"]` + read real increments;
+  prompt-first-then-remember; reconcile weight lines by presence (no double-add);
+  show weight on the meal card/detail, editor incrementer, pre-automation
+  Add-to-Cart sheet, and post-run cart snapshot. Root-cause: `normalizeIngredients`
+  was stripping the saved field on every read — carried through now.
+  (Captured: HEB weight dropdown + cart-with-weight fixtures; `ingredientWeight()`
+  helper centralizes the dropdown-vs-stepper display.)
 
 ### Testing + cart correctness (2026-06-24 / 25)
 - **Mock store + complete Maestro suite — DONE (PR #17, merged).** Vercel-hosted
