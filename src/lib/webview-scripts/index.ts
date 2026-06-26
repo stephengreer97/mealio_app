@@ -43,7 +43,7 @@ export interface StoreScripts {
   /** Injected on search results page. Posts SEARCH_RESULT with candidates. */
   extractProductsScript: string;
   /** Builds script to add a specific product to cart. Posts ADD_RESULT. */
-  buildAddToCartScript: (productName: string, preference: { text: string } | null, qty: number) => string;
+  buildAddToCartScript: (productName: string, preference: { text: string } | null, qty: number, targetWeightLb?: number | null) => string;
   /** Builds script to navigate to search results for a term. */
   buildSearchScript: (term: string) => string;
   /** Builds script to search + auto-add if match found. Posts SEARCH_AND_ADD_RESULT. */

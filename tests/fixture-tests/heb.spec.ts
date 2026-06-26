@@ -73,6 +73,27 @@ describe('HEB EXTRACT_PRODUCTS_SCRIPT', () => {
 
   itWithFixture(
     'search-results-weight-dropdown-closed.html',
+    'search+add of a weight item with NO chosen weight bubbles needs_weight (prompt first)',
+    async (runner) => {
+      // No weight passed → the combined add must NOT guess a poundage; it bails
+      // with needs_weight + the options so the review UI can prompt once.
+      const script = scripts.buildSearchAndAddScript(
+        'CAFE Olé by H-E-B Panama Medium Roast Whole Bean Bulk Coffee, lb',
+        1,
+        null,
+      );
+      await runner.inject(script);
+      const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('needs_weight');
+      expect(result.candidates[0].isWeightItem).toBe(true);
+      expect(result.candidates[0].weightOptions.length).toBeGreaterThan(0);
+      expect(result.candidates[0].weightOptions.every((w: number) => w > 0)).toBe(true);
+    },
+  );
+
+  itWithFixture(
+    'search-results-weight-dropdown-closed.html',
     'detects sold-by-weight items and reads their real lb increments',
     async (runner) => {
       await runner.inject(scripts.extractProductsScript);

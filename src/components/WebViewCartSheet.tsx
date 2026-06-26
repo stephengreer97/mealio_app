@@ -56,7 +56,7 @@ interface SearchResult {
   mealIngredients: MealIngredientQty[];
   unit: string;
   measure: string | null;
-  reason: 'out_of_stock' | 'no_results' | 'low_confidence';
+  reason: 'out_of_stock' | 'no_results' | 'low_confidence' | 'needs_weight';
   isChoose: boolean; // true = choose-product flow (no searchTerm yet); false = review unmatched (searchTerm set but no match)
 }
 
@@ -73,6 +73,8 @@ interface PickedItem {
   productName: string;
   preference: { text: string } | null;
   qty: number;
+  /** Sold-by-weight: the chosen weight (lb) to select at add time. */
+  purchaseWeight?: number | null;
 }
 
 export type Step = 'qty' | 'login_check' | 'login' | 'searching' | 'searchResult' | 'review' | 'adding' | 'done' | 'robot_challenge';
@@ -1024,11 +1026,11 @@ export default function WebViewCartSheet({
     console.log(`[Cart ${ts()}]`, 'navigateToAddItem idx=', idx, 'searchTerm=', item.searchTerm, 'product=', item.productName, 'qty=', item.qty, 'pref=', item.preference?.text ?? null, 'onSearchPage=', onSearchPageRef.current);
     setSearchingLabel(`Adding ${item.productName}…`);
     if (onSearchPageRef.current) {
-      loadQueueRef.current = [scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty)];
+      loadQueueRef.current = [scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null)];
       lastLoadEndUrlRef.current = '';
       webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(item.searchTerm));
     } else {
-      loadQueueRef.current = [scriptsRef.current!.buildSearchScript(item.searchTerm), scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty)];
+      loadQueueRef.current = [scriptsRef.current!.buildSearchScript(item.searchTerm), scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null)];
       navTo(scriptsRef.current!.storeUrl);
     }
     // Arm the per-item timeout. On fire: synthesize a failure ADD_RESULT,
@@ -1727,6 +1729,24 @@ export default function WebViewCartSheet({
           if (item) {
             if (msg.success) {
               addResultsRef.current.push({ name: msg.productName || item.searchTerm!, success: true });
+            } else if (msg.reason === 'needs_weight') {
+              // Sold-by-weight item, no remembered weight: the combined add bailed
+              // with the weight options. Route it straight to the review picker
+              // (the candidate already carries weightOptions, so no extract enrich)
+              // — the weight stepper lets the user choose, then it's remembered.
+              const newResult: SearchResult = {
+                term: item.searchTerm!,
+                candidates: msg.candidates ?? [],
+                mealIngredients: item.mealIngredients,
+                unit: item.unit,
+                measure: item.measure,
+                reason: 'needs_weight',
+                isChoose: false,
+              };
+              searchResultsRef.current = [...searchResultsRef.current, newResult];
+              setSearchResults(searchResultsRef.current);
+              setTimeout(() => navigateToSearchItem(nextIdx), 400);
+              return;
             } else {
               const newResult: SearchResult = {
                 term: item.searchTerm!,
@@ -1983,6 +2003,7 @@ export default function WebViewCartSheet({
             productName: candidate.productName,
             preference: needsPref && prefText ? { text: prefText } : null,
             qty: totalQty,
+            purchaseWeight: weightFromIdx(totalQty),
           });
           if (action === 'update') {
             const qtyMap = getReviewMealQtys(reviewIdx);
@@ -2448,6 +2469,9 @@ export default function WebViewCartSheet({
                 )}
                 {!isChoose && currentReview.reason === 'low_confidence' && (
                   <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3, marginBottom: 6 }}>No exact match found</Text>
+                )}
+                {!isChoose && currentReview.reason === 'needs_weight' && (
+                  <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.brand, marginBottom: 6 }}>⚖ Sold by weight — choose how much to add</Text>
                 )}
                 {/* Searched for */}
                 <View style={styles.searchedBox}>
