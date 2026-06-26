@@ -19,11 +19,6 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
   query Chrome WebView version or keep a freshness policy. (2) Per-store smoke
   test on real Android for all 6 WebView stores. (3) Evaluate Custom Tabs where
   the in-app WebView is fingerprinted.
-- [ ] **In-app + web bug report → emails contact@mealio.co.** A bug-report form in
-  the Help section of both the website and the mobile app. Submitting POSTs to a new
-  endpoint that emails contact@mealio.co (via Resend) and auto-attaches useful
-  diagnostics (app/build version, platform/OS, logged-in user, current screen/route,
-  recent error/log context). [C] builds end-to-end.
 - [ ] **Marketing/lifecycle emails — creators.** Reminder emails to publish meals,
   auto-sent based on lack of activity; plus an initial onboarding email with
   tips. [C] builds + wires auto-send; Also builds Admin dashboard for viewing/tracking 
@@ -96,6 +91,20 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 ---
 
 ## Done
+
+### In-app + web bug report (2026-06-26)
+- **Bug report → contact@mealio.co — shipped.** Help-section form on both the
+  mobile app (mealio_app PR #25) and website (mealio_website PR #7). Mobile keeps
+  an in-memory ring buffer of recent console output (`logBuffer`), redacted **at
+  capture** — strips secrets (JWTs/Bearer/passwords/cookies) + emails but **keeps
+  product/cart names** (Option A — best debugging signal). On submit it POSTs
+  description + redacted logs + context (version, platform/OS, route, user id) to
+  `POST /api/bug-report`, which re-scrubs server-side, caps sizes, and emails
+  contact@mealio.co via Resend with the logs as `session-logs.txt`. Privacy
+  policy updated to disclose it (mealio_website PR #8). Redaction unit-tested.
+  **Owner/counsel track (not code):** App Store/Play data declarations + Resend
+  DPA + counsel review of the policy wording. Claude auto-triage/fix + dedup
+  gating is a separate Stretch item.
 
 ### Profit-share → 100% rolling annual (2026-06-24)
 - **Profit-share formula dropped the all-time component → 100% rolling 12-month
