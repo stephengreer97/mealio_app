@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../../constants/colors';
+import BugReportSheet from '../../components/BugReportSheet';
 
 interface FAQItem {
   question: string;
@@ -123,6 +124,7 @@ function FAQSection({ title, items }: { title: string; items: FAQItem[] }) {
 }
 
 export default function HelpScreen() {
+  const [bugReportOpen, setBugReportOpen] = useState(false);
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -135,10 +137,14 @@ export default function HelpScreen() {
         <View style={styles.contact}>
           <Text style={styles.contactTitle}>Still need help?</Text>
           <Text style={styles.contactBody}>
-            Our support team is happy to help you with any questions.
+            Found a bug or have a question? Let us know and we'll take a look.
           </Text>
+          <TouchableOpacity style={styles.contactBtn} onPress={() => setBugReportOpen(true)}>
+            <Ionicons name="bug-outline" size={20} color={Colors.brand} />
+            <Text style={styles.contactBtnText}>Report a Bug</Text>
+          </TouchableOpacity>
           <TouchableOpacity
-            style={styles.contactBtn}
+            style={[styles.contactBtn, { marginTop: 10 }]}
             onPress={() => Linking.openURL('mailto:contact@mealio.co')}
           >
             <Ionicons name="mail-outline" size={20} color={Colors.brand} />
@@ -146,6 +152,8 @@ export default function HelpScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      <BugReportSheet visible={bugReportOpen} onClose={() => setBugReportOpen(false)} currentRoute="Help" />
     </SafeAreaView>
   );
 }

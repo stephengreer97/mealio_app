@@ -55,6 +55,14 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 
 ## Stretch Goals
 
+- [ ] **Bug report → Claude auto-triage + fix.** Route incoming bug reports
+  (the `/api/bug-report` payload: description + redacted session logs + context)
+  through Claude FIRST. Claude analyzes the problem, cuts a branch, and attempts
+  a fix. If it can't fix it or needs Stephen's input, email contact@mealio.co
+  first. When fixed (PR opened/merged), email again with the resolution. Gate
+  **duplicate/recurring reports of the same issue** so they don't flood the inbox
+  (fingerprint the error/signature; collapse repeats into one thread or a
+  counter). Builds on the bug-report feature below.
 - [ ] **Background add-to-cart, v2 (server-side).** True background while the app
   is fully closed, with real push on completion. Do NOT move the WebView trick
   server-side (storing passwords / replaying cookies breaks store ToS + risks

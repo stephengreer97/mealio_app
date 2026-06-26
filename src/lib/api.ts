@@ -197,6 +197,22 @@ export const broadcast = {
   get: () => request<{ broadcasts: Broadcast[] }>('/api/broadcast', { method: 'GET' }),
 };
 
+// Bug report
+export interface BugReportInput {
+  description: string;
+  /** Redacted recent session logs (from logBuffer.getSessionLogs()). */
+  logs?: string;
+  /** Auto-attached diagnostics (version, platform/OS, route, etc.). */
+  context?: Record<string, unknown>;
+}
+export const bugReport = {
+  submit: (input: BugReportInput) =>
+    request<{ ok: true }>('/api/bug-report', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+};
+
 // Meals
 export const meals = {
   list: () =>

@@ -15,8 +15,13 @@ import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider } from './src/context/AuthContext';
 import { CartJobProvider } from './src/context/CartJobContext';
 import RootNavigator from './src/navigation/RootNavigator';
+import { installConsoleCapture } from './src/lib/logBuffer';
 
 SplashScreen.preventAutoHideAsync();
+
+// Capture console output (redacted) into an in-memory ring buffer so users can
+// attach recent diagnostic logs to a bug report. Runs once, before anything logs.
+installConsoleCapture();
 
 export default function App() {
   const [fontsLoaded] = useFonts({
