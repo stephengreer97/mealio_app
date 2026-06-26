@@ -1,13 +1,15 @@
 // In-memory ring buffer of console output, for attaching to bug reports.
 //
-// PRIVACY (Option B — strip secrets AND all PII): redaction runs at CAPTURE time
-// so nothing sensitive ever sits in the buffer. We strip:
+// PRIVACY (Option A — strip secrets + direct identifiers, keep diagnostic detail):
+// redaction runs at CAPTURE time so nothing sensitive ever sits in the buffer.
+// We strip:
 //   • secrets — JWTs/access tokens, Bearer/Authorization, password/cookie values
-//   • PII — email addresses, and the product/search/ingredient NAMES that appear
-//     in the cart logs (grocery items can reveal dietary/health/religion signals)
-// We KEEP the non-PII diagnostic fields that make the logs useful: store id,
-// step transitions, success/reason flags, worker ids, counts, HTTP errors,
-// timings, route names.
+//   • email addresses (a direct identifier; the user id is already in the report
+//     metadata, and emails carry no debugging value)
+// We KEEP product/ingredient names and cart contents — they're the most useful
+// signal for debugging a failed cart-add — along with store, step, reason,
+// counts, worker ids, HTTP errors, timings. The privacy policy discloses that
+// cart contents may appear in diagnostic logs attached to a bug report.
 //
 // Nothing is written to disk and nothing leaves the device until the user
 // explicitly files a bug report. The buffer is capped so it can't grow unbounded.
@@ -17,12 +19,6 @@ const buffer: string[] = [];
 
 // ── Redaction ────────────────────────────────────────────────────────────────
 
-// Cart logs use a "key= value" shape ([Cart …] ADD WORKER_RESULT w 2 product=
-// H-E-B … reason= null). These keys carry product/ingredient NAMES (PII); mask
-// their value up to the next " key=" token or end of line. NB: deliberately does
-// NOT include store/step/reason/success/count/etc. — those stay.
-const PII_KEYS = ['product', 'productName', 'term', 'searchTerm', 'bestName', 'candidateName', 'reportedName', 'name', 'addedNames'];
-
 const REDACTIONS: Array<[RegExp, string]> = [
   // JWT / access tokens (header.payload.signature)
   [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '‹token›'],
@@ -31,12 +27,8 @@ const REDACTIONS: Array<[RegExp, string]> = [
   // Cookies are entirely sensitive and multi-pair (k=v; k=v) — mask to EOL.
   [/((?:set-)?cookie"?\s*[:=]\s*).*/gi, '$1‹secret›'],
   [/("?(?:authorization|password|passwd|pwd|token|secret|access[_-]?token|refresh[_-]?token)"?\s*[:=]\s*)("?)[^",\s}]+/gi, '$1$2‹secret›'],
-  // Email addresses
+  // Email addresses (direct identifier)
   [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '‹email›'],
-  // JSON name fields: "name":"…", "productName":"…", etc.
-  [new RegExp(`"(${PII_KEYS.join('|')})"\\s*:\\s*"[^"]*"`, 'gi'), '"$1":"‹redacted›"'],
-  // key= value (cart kv format): mask the value until the next " word=" or EOL.
-  [new RegExp(`\\b(${PII_KEYS.join('|')})=\\s*.*?(?=(\\s+[A-Za-z_][A-Za-z0-9_]*=)|$)`, 'gi'), '$1= ‹redacted›'],
 ];
 
 /** Redact secrets + PII from a single log line. Exported for tests. */

@@ -87,8 +87,9 @@ export default function BugReportSheet({ visible, onClose, currentRoute }: Props
           <View style={styles.notice}>
             <Ionicons name="shield-checkmark-outline" size={16} color={Colors.text3} />
             <Text style={styles.noticeText}>
-              To help us debug, recent diagnostic logs from this session are attached. Personal
-              info (your email, what's in your cart) is removed before sending.
+              To help us debug, recent diagnostic logs from this session are attached — including
+              the meals and items involved. Your password, login tokens, and email are never
+              included.
             </Text>
           </View>
 
