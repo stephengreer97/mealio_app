@@ -672,7 +672,9 @@ export default function MealDetailSheet({
                           {ing.searchTerm ? (
                             <>
                               <Text style={styles.productLabel} numberOfLines={1}>
-                                {`${ing.productQty ?? ing.qty ?? 1}x ${ing.searchTerm}`}
+                                {(ing as any).purchaseWeight != null
+                                  ? `${(ing as any).purchaseWeight} lb ${ing.searchTerm}`
+                                  : `${ing.productQty ?? ing.qty ?? 1}x ${ing.searchTerm}`}
                               </Text>
                               {(ing as any).dropdown?.selectedText ? (
                                 <Text style={[styles.productLabel, { fontSize: 11 }]} numberOfLines={1}>

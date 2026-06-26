@@ -2005,7 +2005,11 @@ export default function WebViewCartSheet({
             qty: totalQty,
             purchaseWeight: weightFromIdx(totalQty),
           });
-          if (action === 'update') {
+          // Persist on "Add & Update", AND always for a sold-by-weight item even
+          // via "Add to Cart Only" — otherwise the chosen weight isn't saved and
+          // the item would re-prompt on every run instead of being remembered.
+          const chosenWeight = weightFromIdx(totalQty);
+          if (action === 'update' || (candidate.isWeightItem && chosenWeight != null)) {
             const qtyMap = getReviewMealQtys(reviewIdx);
             let reviewDropdown: { type: string; selectedText: string; selectedValue: string } | null = null;
             if (needsPref && prefText) {
@@ -2018,7 +2022,7 @@ export default function WebViewCartSheet({
               candidate.productName,
               qtyMap,
               reviewDropdown,
-              weightFromIdx(totalQty),
+              chosenWeight,
             );
           }
         }
@@ -2438,8 +2442,10 @@ export default function WebViewCartSheet({
           // picker shows the real buyable weight (e.g. "1 lb", "2 lb") and matches
           // exactly what add-to-cart will select.
           const weightOpts = (candidate?.weightOptions && candidate.weightOptions.length) ? candidate.weightOptions : null;
+          // idx is the option index (1-based). 0 = nothing chosen yet → show
+          // "0 lb", mirroring how the qty stepper starts at 0.
           const weightLabel = (idx: number) =>
-            weightOpts ? `${weightOpts[Math.min(Math.max(1, idx), weightOpts.length) - 1]} lb` : fmtWeight(idx);
+            weightOpts ? (idx <= 0 ? '0 lb' : `${weightOpts[Math.min(idx, weightOpts.length) - 1]} lb`) : fmtWeight(idx);
           const maxWeightSteps = weightOpts ? weightOpts.length : Infinity;
           const needsPref = candidate && !candidate.outOfStock && candidate.preferences && candidate.preferences.length > 0;
           console.log(`[Cart ${ts()}]`, 'review render', { isChoose, reviewIdx, candidateName: candidate?.productName, prefs: candidate?.preferences, needsPref, selectedSuggIdx });
