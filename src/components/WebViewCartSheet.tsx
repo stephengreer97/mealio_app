@@ -142,10 +142,6 @@ function scoreProductMatch(searchTerm: string, productName: string): number {
 }
 
 // HEB Deli / Fish Market items are sold by weight: 1 qty = 0.25 lb.
-function isWeightBased(name: string): boolean {
-  return /H-E-B (Deli|Fish Market)/i.test(name);
-}
-
 // HTTP statuses anti-bot systems (Akamai, DataDome, PerimeterX) use to block.
 const ANTI_BOT_STATUSES = [403, 429, 503];
 
@@ -800,7 +796,16 @@ export default function WebViewCartSheet({
 
   const updateQty = (i: number, delta: number) =>
     setItems((prev) =>
-      prev.map((it, idx) => (idx === i ? { ...it, productQty: Math.max(0, it.productQty + delta) } : it)),
+      prev.map((it, idx) => {
+        if (idx !== i) return it;
+        // Sold-by-weight item: step the remembered weight by its increment (down
+        // to one increment) instead of the integer count.
+        if (it.purchaseWeight != null) {
+          const step = it.weightStep ?? 0.25;
+          return { ...it, purchaseWeight: Math.max(step, +(it.purchaseWeight + delta * step).toFixed(2)) };
+        }
+        return { ...it, productQty: Math.max(0, it.productQty + delta) };
+      }),
     );
 
   const toggleChecked = (i: number) =>
@@ -808,7 +813,9 @@ export default function WebViewCartSheet({
 
   const allChecked = checkedItems.length === 0 || checkedItems.every((c) => c);
   const toggleAll = () => setCheckedItems((prev) => prev.map(() => !allChecked));
-  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0).length;
+  // A weight item is "active" whenever it has a chosen weight (its productQty
+  // isn't the unit it's measured in), else a normal item needs productQty > 0.
+  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && (it.purchaseWeight != null || it.productQty > 0)).length;
 
   // Cart snapshot AFTER the run. Only fires when the before-snapshot succeeded
   // and something was reported added. For cart-page stores (HEB) navigate the
@@ -861,7 +868,7 @@ export default function WebViewCartSheet({
   }, []);
 
   const handleStartSearch = () => {
-    const active = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0);
+    const active = items.filter((it, i) => (checkedItems[i] ?? true) && (it.purchaseWeight != null || it.productQty > 0));
     if (active.length === 0) return;
     activeItemsRef.current = active;
     searchIdxRef.current = 0;
@@ -2299,26 +2306,32 @@ export default function WebViewCartSheet({
                         </Text>
                       ) : null}
                       {it.mealIngredients.map((mi, mIdx) => {
-                        const isWeight = isWeightBased(it.searchTerm ?? it.ingredientName);
                         const isQty = it.unit.toLowerCase() === 'qty';
-                        const measurement = isWeight ? fmtWeight(mi.qty) : (isQty ? `${mi.qty} qty` : `${it.measure} ${it.unit}`);
+                        const measurement = it.purchaseWeight != null
+                          ? `${it.purchaseWeight} lb`
+                          : (isQty ? `${mi.qty} qty` : `${it.measure} ${it.unit}`);
                         return (
                           <Text key={mIdx} style={styles.mealNames}>{mi.mealName} • {measurement}</Text>
                         );
                       })}
                     </View>
+                    {(() => {
+                      const atMin = it.purchaseWeight != null
+                        ? it.purchaseWeight <= (it.weightStep ?? 0.25)
+                        : it.productQty === 0;
+                      return (
                     <TouchableOpacity
                       onPress={() => updateQty(i, -1)}
-                      disabled={it.productQty === 0 || !checked}
-                      style={[styles.qtyBtn, (it.productQty === 0 || !checked) && { opacity: 0.3 }]}
+                      disabled={atMin || !checked}
+                      style={[styles.qtyBtn, (atMin || !checked) && { opacity: 0.3 }]}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
                       <Text style={styles.qtyBtnText}>−</Text>
                     </TouchableOpacity>
+                      );
+                    })()}
                     <Text style={styles.qtyNum}>
-                      {isWeightBased(it.searchTerm ?? it.ingredientName)
-                        ? fmtWeight(it.productQty)
-                        : it.productQty}
+                      {it.purchaseWeight != null ? `${it.purchaseWeight} lb` : it.productQty}
                     </Text>
                     <TouchableOpacity
                       onPress={() => updateQty(i, 1)}
