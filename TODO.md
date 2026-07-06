@@ -13,6 +13,13 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 
 ### Engineering — [C]
 
+- [ ] **BUG: Google SSO sign-in fails — "Access Blocked: Mealio's request is
+  invalid."** Google's OAuth rejects the sign-in (Google 400). Confirm which
+  platform(s) it hits — mobile (`expo-auth-session` Google flow) and/or web
+  (`/api/auth/oauth/google`). Likely causes: OAuth client misconfig — redirect
+  URI not in the authorized list, missing Android signing-cert SHA-1 on the
+  Google Cloud OAuth client, or the OAuth consent screen's publishing /
+  verification status. Blocks all Google sign-in.
 - [ ] **Android WebView WAF compatibility — dynamic UA + Custom Tabs eval.**
   (1) ✅ DONE — dynamic Android UA: `Platform.Version` (SDK API level) → Android
   release in `src/lib/webview-user-agent-build.ts` (unit-tested); Chrome major
