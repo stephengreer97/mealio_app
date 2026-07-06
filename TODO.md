@@ -20,12 +20,6 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
   URI not in the authorized list, missing Android signing-cert SHA-1 on the
   Google Cloud OAuth client, or the OAuth consent screen's publishing /
   verification status. Blocks all Google sign-in.
-- [ ] **Android WebView WAF compatibility — dynamic UA + Custom Tabs eval.**
-  (1) ✅ DONE — dynamic Android UA: `Platform.Version` (SDK API level) → Android
-  release in `src/lib/webview-user-agent-build.ts` (unit-tested); Chrome major
-  kept as a maintained freshness constant (Play auto-updates WebView). (2) Per-
-  store smoke test on real Android for all 6 WebView stores [needs device]. (3)
-  Evaluate Custom Tabs where the in-app WebView is fingerprinted [needs device].
 - [ ] **Marketing/lifecycle emails — creators.** Reminder emails to publish meals,
   auto-sent based on lack of activity; plus an initial onboarding email with
   tips. [C] builds + wires auto-send; Also builds Admin dashboard for viewing/tracking 
@@ -57,6 +51,14 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 
 ## Stretch Goals
 
+- [ ] **Android WebView WAF compatibility — real-device smoke test + Custom Tabs eval.**
+  (1) ✅ DONE — dynamic Android UA (`src/lib/webview-user-agent-build.ts`, PR #27,
+  unit-tested). (2) Per-store smoke test across the 6 WebView stores — **needs a
+  physical Android phone**; the emulator is invalid (x86 / `ranchu` / SwiftShader
+  software-GPU / TLS fingerprint → every store falsely blocks regardless of UA).
+  (3) Custom Tabs (`expo-web-browser`) fallback for any store still blocked. Low
+  risk / deferred: iOS already ships the identical shared dynamic-UA JS against
+  these same WAFs, so Android is formally unverified, not unknown.
 - [ ] **Bug report → Claude auto-triage + fix.** Route incoming bug reports
   (the `/api/bug-report` payload: description + redacted session logs + context)
   through Claude FIRST. Claude analyzes the problem, cuts a branch, and attempts
