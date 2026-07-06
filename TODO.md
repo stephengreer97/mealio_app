@@ -42,6 +42,11 @@ Legend: **[S]** = Stephen does this (accounts / content / outreach / decisions).
 
 ## Just Before GTM
 
+- [ ] **Change `MEALIO_MAILING_ADDRESS` to a real address.** Currently a
+  placeholder (`Mealio, PO Box 1234, Austin, TX 78701`) in Vercel prod + local
+  `.env.local`. Must be a real USPS PO Box / virtual mailbox before ANY
+  marketing/lifecycle email sends — CAN-SPAM requires a valid physical address.
+  Blocks M2 email go-live. (mealio_central)
 - [ ] **Upgrade to higher tier?** — Vercel, Supabase.
 - [ ] **Test partner payout via Tremendous.**
 - [ ] **Verify everything on the help page.**
