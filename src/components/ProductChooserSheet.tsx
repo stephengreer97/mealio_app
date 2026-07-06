@@ -500,7 +500,7 @@ const styles = StyleSheet.create({
   navBtnSecondaryText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: Colors.text2 },
   floatingImageWrap: {
     position: 'absolute',
-    top: 12,
+    top: 44,
     right: 16,
     width: 88,
     height: 88,
