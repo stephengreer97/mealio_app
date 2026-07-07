@@ -116,7 +116,17 @@ export default function SharedMealScreen({ token, onClose }: Props) {
       ]);
     } catch (err: any) {
       if (err.status === 403) {
-        Alert.alert('Limit Reached', 'You\'ve reached the free tier meal limit. Upgrade to save more meals.');
+        // Free-tier limit — don't strand the user with an open picker and no way
+        // forward. Close it and offer to head into the app to upgrade.
+        setPickerVisible(false);
+        Alert.alert(
+          'Limit Reached',
+          "You've reached the free tier meal limit. Upgrade to Full Access to save more meals.",
+          [
+            { text: 'Not now', style: 'cancel' },
+            { text: 'Upgrade', onPress: onClose },
+          ],
+        );
       } else {
         Alert.alert('Error', err.message || 'Could not save meal');
       }

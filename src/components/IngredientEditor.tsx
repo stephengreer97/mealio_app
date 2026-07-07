@@ -35,13 +35,17 @@ function toFormIng(ing: Ingredient): IngredientForm {
 
 function fromFormIng(form: IngredientForm): Ingredient {
   if (form.unit === 'Qty') {
+    // Radix 10 so leading-zero input isn't parsed as octal. A qty of 0 isn't a
+    // valid cart quantity, so an empty/NaN/0 measure defaults to 1.
+    const parsed = parseInt(form.measure, 10);
+    const qty = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
     return {
       ingredientName: form.ingredientName.trim(),
-      qty: parseInt(form.measure) || 1,
+      qty,
       unit: 'qty',
       measure: null,
       searchTerm: form.searchTerm ?? null,
-      productQty: parseInt(form.measure) || 1,
+      productQty: qty,
     };
   }
   return {

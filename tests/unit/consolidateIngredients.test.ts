@@ -154,6 +154,26 @@ describe('consolidateIngredients', () => {
     expect(unchosen.mealIds).toEqual(['m2']);
   });
 
+  it('sums purchaseWeight across meals for a merged sold-by-weight product', () => {
+    const result = consolidateIngredients([
+      meal('m1', 'A', [{ ingredientName: 'Brisket', searchTerm: 'brisket', productQty: 1, purchaseWeight: 1.5 }]),
+      meal('m2', 'B', [{ ingredientName: 'Brisket', searchTerm: 'brisket', productQty: 1, purchaseWeight: 2 }]),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].productQty).toBe(2);
+    // Total poundage must add both meals, not just the first.
+    expect(result[0].purchaseWeight).toBe(3.5);
+  });
+
+  it('leaves purchaseWeight null when no merged row carries a weight', () => {
+    const result = consolidateIngredients([
+      meal('m1', 'A', [{ ingredientName: 'Sour Cream', searchTerm: 'sour cream', productQty: 1 }]),
+      meal('m2', 'B', [{ ingredientName: 'Sour Cream', searchTerm: 'sour cream', productQty: 1 }]),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].purchaseWeight).toBe(null);
+  });
+
   it('clamps qty=0 ingredient to 1 on the consolidated line (saved-meal qty=0 leak)', () => {
     const result = consolidateIngredients([
       meal('m1', 'A', [{ ingredientName: 'Sour Cream', searchTerm: 'sour cream', productQty: 0 }]),

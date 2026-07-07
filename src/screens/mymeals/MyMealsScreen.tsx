@@ -19,7 +19,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../../constants/colors';
 import { Meal, Ingredient } from '../../types';
-import { meals as mealsApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
+import { meals as mealsApi, kroger as krogerApi } from '../../lib/api';
+import { getOffering, purchasePackage } from '../../lib/purchases';
 import { mergeChosenProduct, createMealSaveQueue } from '../../lib/saveChosenIngredient';
 import { useAuth } from '../../context/AuthContext';
 import { STORES, isKrogerBrand, isWebViewStore } from '../../constants/stores';
@@ -47,7 +48,8 @@ function hasUnchosenProducts(meal: Meal): boolean {
 }
 
 export default function MyMealsScreen() {
-  const { user, isCreator } = useAuth();
+  const { user, isCreator, refreshUser } = useAuth();
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
   const [allMeals, setAllMeals] = useState<Meal[]>([]);
   // Mirror of allMeals read by handleIngredientChosen. The handler must build
   // its PATCH from the FRESHEST ingredient array (including saves still settling
@@ -354,16 +356,35 @@ export default function MyMealsScreen() {
   }
 
   async function handleUpgrade() {
+    setUpgradeLoading(true);
     try {
-      const { portalUrl } = await paymentsApi.portal();
-      if (portalUrl) await Linking.openURL(portalUrl);
-    } catch {}
+      const pkg = await getOffering();
+      if (!pkg) {
+        Alert.alert('Unavailable', 'No subscription plans found. Please try again later.');
+        return;
+      }
+      const active = await purchasePackage(pkg);
+      if (active) {
+        await refreshUser();
+        Alert.alert('Welcome to Full Access!', 'Your subscription is now active.');
+      } else {
+        // Purchase went through but the entitlement hasn't propagated yet.
+        Alert.alert('Purchase received', 'Activating your subscription… this can take a moment.');
+        await refreshUser();
+      }
+    } catch (err: any) {
+      if (!err.userCancelled) {
+        Alert.alert('Purchase Failed', err.message || 'Something went wrong. Please try again.');
+      }
+    } finally {
+      setUpgradeLoading(false);
+    }
   }
 
   function openCreate() {
     setMealName('');
     setFormStore('');
-    setIngredients([{ ingredientName: '', qty: 1, productQty: 1, unit: 'qty', measure: null }]);
+    setIngredients([{ ingredientName: '', searchTerm: null, qty: 1, productQty: 1, unit: 'qty', measure: null }]);
     setSelectedTags([]);
     setDifficulty(null);
     setMealAuthor('');
@@ -454,6 +475,10 @@ export default function MyMealsScreen() {
     });
   }
 
+  // NOTE: manual index%2 pairing defeats FlatList virtualization (every item is
+  // rendered). Left as-is for now — unlike DiscoverScreen this list carries
+  // multi-select + per-card warning state, so a numColumns={2} conversion is a
+  // higher-risk change; convert when that state is refactored.
   const renderMeal = useCallback(({ item, index }: { item: Meal; index: number }) => {
     if (index % 2 !== 0) return null;
     const next = storeMeals[index + 1] ?? null;
@@ -538,8 +563,8 @@ export default function MyMealsScreen() {
                 ? 'Meal limit reached'
                 : `${allMeals.length} of ${FREE_LIMIT} free meals saved`}
             </Text>
-            <TouchableOpacity onPress={handleUpgrade}>
-              <Text style={styles.upgradeLink}>Upgrade for unlimited →</Text>
+            <TouchableOpacity onPress={handleUpgrade} disabled={upgradeLoading}>
+              <Text style={styles.upgradeLink}>{upgradeLoading ? 'Loading…' : 'Upgrade for unlimited →'}</Text>
             </TouchableOpacity>
           </View>
         </View>

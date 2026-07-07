@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
+import { View, ActivityIndicator, TouchableOpacity, Text, Alert } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Linking from 'expo-linking';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -148,6 +148,17 @@ export default function RootNavigator() {
         mode="view"
         onClose={() => { presetDetailVisibleRef.current = false; setPresetDetailVisible(false); }}
         onPressSave={() => {
+          // Logged-out users can open a preset via deep link — gate the save
+          // behind sign-in instead of letting it hit a silent 401.
+          if (!user) {
+            setPresetDetailVisible(false);
+            presetDetailVisibleRef.current = false;
+            Alert.alert('Sign In Required', 'Create an account or sign in to save meals.', [
+              { text: 'Not now', style: 'cancel' },
+              { text: 'Sign In', onPress: () => setShowAuth(true) },
+            ]);
+            return;
+          }
           setPresetDetailVisible(false);
           setStoreSelectorVisible(true);
         }}

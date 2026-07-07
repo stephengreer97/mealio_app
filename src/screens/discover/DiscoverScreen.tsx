@@ -110,6 +110,10 @@ export default function DiscoverScreen() {
       if (active) {
         await refreshUser();
         Alert.alert('Welcome to Full Access!', 'Your subscription is now active.');
+      } else {
+        // Purchase succeeded but the entitlement hasn't propagated yet.
+        Alert.alert('Purchase received', 'Activating your subscription… this can take a moment.');
+        await refreshUser();
       }
     } catch (err: any) {
       if (!err.userCancelled) {
@@ -219,32 +223,17 @@ export default function DiscoverScreen() {
     meals.flatMap((m) => [m.author, m.creatorName]).filter((a): a is string => Boolean(a))
   )];
 
-  const renderMeal = useCallback(({ item, index }: { item: PresetMeal; index: number }) => {
-    if (index % 2 !== 0) return null; // render pairs
-    const next = displayMeals[index + 1] ?? null;
-    return (
-      <View style={styles.mealRow}>
-        <MealCard
-          meal={item}
-          onPress={() => openMealDetail(item)}
-          subtitle={item.author ?? item.creatorName ?? undefined}
-          savedAt={savedMap[item.id]}
-          testID={`meal-card-${index}`}
-        />
-        {next ? (
-          <MealCard
-            meal={next}
-            onPress={() => openMealDetail(next)}
-            subtitle={next.author ?? next.creatorName ?? undefined}
-            savedAt={savedMap[next.id]}
-            testID={`meal-card-${index + 1}`}
-          />
-        ) : (
-          <View style={{ flex: 1, marginHorizontal: 4 }} />
-        )}
-      </View>
-    );
-  }, [displayMeals, savedMap]);
+  // One card per item + numColumns={2} so FlatList can virtualize rows, instead
+  // of manual index%2 pairing (which forced every item through renderItem).
+  const renderMeal = useCallback(({ item, index }: { item: PresetMeal; index: number }) => (
+    <MealCard
+      meal={item}
+      onPress={() => openMealDetail(item)}
+      subtitle={item.author ?? item.creatorName ?? undefined}
+      savedAt={savedMap[item.id]}
+      testID={`meal-card-${index}`}
+    />
+  ), [savedMap]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -305,6 +294,8 @@ export default function DiscoverScreen() {
         data={displayMeals}
         keyExtractor={(item) => item.id}
         renderItem={renderMeal}
+        numColumns={2}
+        columnWrapperStyle={styles.mealRow}
         contentContainerStyle={styles.list}
         onEndReached={loadMore}
         onEndReachedThreshold={0.5}

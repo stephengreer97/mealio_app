@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   Alert,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -49,6 +50,7 @@ export default function CreatorProfileSheet({
   const [pickedMeal, setPickedMeal] = useState<PresetMeal | null>(null);
   const [mealDetailOpen, setMealDetailOpen] = useState(false);
   const [mealLoading, setMealLoading] = useState(false);
+  const [loadingMealId, setLoadingMealId] = useState<string | null>(null);
 
   useEffect(() => {
     setFollowing(creator?.isFollowing ?? false);
@@ -159,8 +161,10 @@ export default function CreatorProfileSheet({
                   <TouchableOpacity
                     key={meal.id}
                     style={styles.gridCell}
+                    disabled={mealLoading}
                     onPress={async () => {
                       setMealLoading(true);
+                      setLoadingMealId(meal.id);
                       try {
                         const full = await presetMealsApi.getById(meal.id);
                         setPickedMeal(full);
@@ -170,6 +174,7 @@ export default function CreatorProfileSheet({
                         setMealDetailOpen(true);
                       } finally {
                         setMealLoading(false);
+                        setLoadingMealId(null);
                       }
                     }}
                     activeOpacity={0.8}
@@ -184,6 +189,11 @@ export default function CreatorProfileSheet({
                     <View style={styles.gridLabelOverlay}>
                       <Text style={styles.gridLabel} numberOfLines={2}>{meal.name}</Text>
                     </View>
+                    {loadingMealId === meal.id && (
+                      <View style={styles.gridLoading}>
+                        <ActivityIndicator color="#fff" />
+                      </View>
+                    )}
                   </TouchableOpacity>
                 ))}
               </View>
@@ -253,6 +263,12 @@ const styles = StyleSheet.create({
   gridCell: { width: CELL_SIZE, height: CELL_SIZE, borderRadius: Radius.card, overflow: 'hidden' },
   gridImage: { width: '100%', height: '100%', backgroundColor: Colors.surface },
   gridImagePlaceholder: { justifyContent: 'center', alignItems: 'center' },
+  gridLoading: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   gridEmoji: { fontSize: 28 },
   gridLabelOverlay: {
     position: 'absolute',

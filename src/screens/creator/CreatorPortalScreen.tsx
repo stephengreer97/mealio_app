@@ -78,7 +78,7 @@ export default function CreatorPortalScreen() {
     setMealRecipe('');
     setMealSource('');
     setMealServes('');
-    setMealIngredients([{ ingredientName: '', qty: 1, productQty: 1, unit: 'qty', measure: null }]);
+    setMealIngredients([{ ingredientName: '', searchTerm: null, qty: 1, productQty: 1, unit: 'qty', measure: null }]);
     setMealTags([]);
     setMealDifficulty(null);
     setMealPhotoUrl('');

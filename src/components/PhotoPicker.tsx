@@ -122,7 +122,11 @@ export default function PhotoPicker({ mealName, previewUri, onPhotoReady, onClea
           <Image source={{ uri: previewUri }} style={styles.preview} contentFit="cover" />
         ) : null}
 
-        <TouchableOpacity style={styles.btn} onPress={pickFromLibrary}>
+        <TouchableOpacity
+          style={[styles.btn, (generating || uploading) && styles.btnDisabled]}
+          onPress={pickFromLibrary}
+          disabled={generating || uploading}
+        >
           <Ionicons name="image-outline" size={16} color={Colors.brand} />
           <Text style={styles.btnText}>{previewUri && !thumbs.length ? 'Change' : 'Choose Photo'}</Text>
         </TouchableOpacity>
@@ -181,6 +185,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.brandLight,
   },
   btnGenerate: { borderStyle: 'dashed' },
+  btnDisabled: { opacity: 0.5 },
   btnText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.brand },
   thumbsScroll: { marginTop: 10 },
   thumbWrap: { position: 'relative', marginRight: 8 },

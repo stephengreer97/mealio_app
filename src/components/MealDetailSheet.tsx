@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather } from '@expo/vector-icons';
 import {
   View,
   Text,
@@ -18,7 +18,7 @@ import { Image } from 'expo-image';
 import { Colors, Radius } from '../constants/colors';
 import { Meal, PresetMeal, Ingredient } from '../types';
 import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
-import { meals as mealsApi, images as imagesApi, kroger as krogerApi } from '../lib/api';
+import { meals as mealsApi, images as imagesApi } from '../lib/api';
 import Button from './ui/Button';
 import Input from './ui/Input';
 import IngredientEditor from './IngredientEditor';
@@ -75,8 +75,6 @@ export default function MealDetailSheet({
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sharing, setSharing] = useState(false);
-  const [krogerLoading, setKrogerLoading] = useState(false);
-  const [krogerResult, setKrogerResult] = useState<{ added: string[]; notFound: string[] } | null>(null);
   const [productsExpanded, setProductsExpanded] = useState(false);
   const [editProductsExpanded, setEditProductsExpanded] = useState(true);
 
@@ -231,23 +229,6 @@ export default function MealDetailSheet({
     }
   }
 
-  async function handleAddToKroger() {
-    if (!meal) return;
-    if (!krogerLocationId) {
-      onNeedKrogerStore?.();
-      return;
-    }
-    setKrogerLoading(true);
-    try {
-      const result = await krogerApi.addToCart(meal.ingredients, krogerLocationId);
-      setKrogerResult({ added: result.added ?? [], notFound: result.notFound ?? [] });
-    } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to add to Kroger cart');
-    } finally {
-      setKrogerLoading(false);
-    }
-  }
-
   const displayIngredients = meal?.ingredients ?? [];
   const m = meal as any;
   const authorName = m?.creatorSocial
@@ -266,57 +247,6 @@ export default function MealDetailSheet({
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.safe}>
-
-        {/* Kroger cart result screen */}
-        {krogerResult && (
-          <View style={resultStyles.overlay}>
-            <View style={{ marginBottom: 8 }}>
-              <Ionicons
-                name={krogerResult.notFound.length === 0 ? 'checkmark-circle' : 'alert-circle'}
-                size={56}
-                color={krogerResult.notFound.length === 0 ? '#22c55e' : '#f59e0b'}
-              />
-            </View>
-            <Text style={resultStyles.title}>
-              {krogerResult.notFound.length === 0
-                ? 'Added to cart!'
-                : `${krogerResult.added.length} of ${krogerResult.added.length + krogerResult.notFound.length} items added`}
-            </Text>
-            <Text style={resultStyles.body}>
-              {krogerResult.notFound.length === 0
-                ? `${krogerResult.added.length} item${krogerResult.added.length !== 1 ? 's' : ''} ${krogerResult.added.length === 1 ? 'was' : 'were'} successfully added to your Kroger cart.`
-                : `${krogerResult.notFound.length} item${krogerResult.notFound.length !== 1 ? 's' : ''} could not be added to cart. This may be because the item is out of stock or the store no longer carries it.`}
-            </Text>
-            {krogerResult.notFound.length > 0 && (
-              <View style={resultStyles.notFoundBox}>
-                {krogerResult.notFound.map((name, i) => {
-                  const ing = meal?.ingredients.find(p => p.ingredientName === name);
-                  let hint = '';
-                  if (ing && meal) {
-                    if (!ing.unit || ing.unit === 'qty') {
-                      hint = `${meal.name} calls for ${ing.qty ?? 1} ${ing.ingredientName}`;
-                    } else {
-                      const parts = [ing.measure, ing.unit].filter(Boolean).join(' ');
-                      hint = `${meal.name} calls for ${parts} of ${ing.ingredientName}`;
-                    }
-                  }
-                  return (
-                    <View
-                      key={i}
-                      style={[resultStyles.notFoundItem, i < krogerResult.notFound.length - 1 && resultStyles.notFoundItemBorder]}
-                    >
-                      <Text style={resultStyles.notFoundName}>{name}</Text>
-                      {!!hint && <Text style={resultStyles.notFoundHint}>{hint}</Text>}
-                    </View>
-                  );
-                })}
-              </View>
-            )}
-            <TouchableOpacity style={resultStyles.okBtn} onPress={() => setKrogerResult(null)} activeOpacity={0.8}>
-              <Text style={resultStyles.okBtnText}>OK</Text>
-            </TouchableOpacity>
-          </View>
-        )}
 
         <View style={styles.header}>
           <TouchableOpacity onPress={() => { setEditing(false); onClose(); }} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
@@ -913,75 +843,5 @@ const styles = StyleSheet.create({
     color: Colors.text1,
     minWidth: 20,
     textAlign: 'center',
-  },
-});
-
-const resultStyles = StyleSheet.create({
-  overlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    zIndex: 10,
-    backgroundColor: Colors.surfaceRaised,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32,
-  },
-  icon: {
-    fontSize: 48,
-    marginBottom: 16,
-  },
-  title: {
-    fontSize: 20,
-    fontFamily: 'Inter_700Bold',
-    color: Colors.text1,
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-  body: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: Colors.text2,
-    textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 16,
-  },
-  notFoundBox: {
-    width: '100%',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
-    marginBottom: 24,
-    paddingHorizontal: 12,
-  },
-  notFoundItem: {
-    paddingVertical: 10,
-  },
-  notFoundItemBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  notFoundName: {
-    fontSize: 13,
-    fontFamily: 'Inter_500Medium',
-    color: Colors.text1,
-  },
-  notFoundHint: {
-    fontSize: 11,
-    fontFamily: 'Inter_400Regular',
-    color: Colors.text3,
-    marginTop: 2,
-  },
-  okBtn: {
-    width: '100%',
-    backgroundColor: Colors.brand,
-    borderRadius: Radius.button,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  okBtnText: {
-    fontSize: 15,
-    fontFamily: 'Inter_600SemiBold',
-    color: '#fff',
   },
 });

@@ -34,6 +34,44 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
 
 type RequestOptions = RequestInit & { timeoutMs?: number };
 
+// Single-flight renew: concurrent 401s share one in-flight renewal instead of
+// each firing their own /renew (and a failure clearing the session mid-session).
+let inflightRenew: Promise<void> | null = null;
+
+async function renewAccessToken(): Promise<void> {
+  const currentToken = await getAccessToken();
+  if (!currentToken) {
+    throw new ApiError(401, 'Unauthorized');
+  }
+
+  const refreshRes = await fetchWithTimeout(`${BASE_URL}/api/auth/renew`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${currentToken}`,
+    },
+  }, DEFAULT_TIMEOUT_MS);
+
+  if (!refreshRes.ok) {
+    throw new ApiError(401, 'Session expired');
+  }
+
+  const { accessToken: newAccess, user } = await refreshRes.json();
+  if (!newAccess) {
+    throw new ApiError(401, 'Session expired');
+  }
+  // /renew may omit the user — save() tolerates a missing one and keeps the
+  // already-stored user instead of clobbering it.
+  await save(newAccess, null, user);
+}
+
+function renewOnce(): Promise<void> {
+  if (!inflightRenew) {
+    inflightRenew = renewAccessToken().finally(() => { inflightRenew = null; });
+  }
+  return inflightRenew;
+}
+
 async function request<T>(
   path: string,
   options: RequestOptions = {},
@@ -59,31 +97,13 @@ async function request<T>(
   if (response.status === 401 && retry) {
     // The server uses a long-lived access token (90 days). /api/auth/renew takes the
     // current access token via Authorization header and returns a fresh one.
-    const currentToken = await getAccessToken();
-    if (!currentToken) {
+    // Concurrent 401s coalesce onto a single in-flight renewal (see renewOnce).
+    try {
+      await renewOnce();
+    } catch (err) {
       await clear();
-      throw new ApiError(401, 'Unauthorized');
+      throw err instanceof ApiError ? err : new ApiError(401, 'Session expired');
     }
-
-    const refreshRes = await fetchWithTimeout(`${BASE_URL}/api/auth/renew`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${currentToken}`,
-      },
-    }, DEFAULT_TIMEOUT_MS);
-
-    if (!refreshRes.ok) {
-      await clear();
-      throw new ApiError(401, 'Session expired');
-    }
-
-    const { accessToken: newAccess, user } = await refreshRes.json();
-    if (!newAccess) {
-      await clear();
-      throw new ApiError(401, 'Session expired');
-    }
-    await save(newAccess, null, user);
 
     // Retry original request with new token
     return request<T>(path, options, false);

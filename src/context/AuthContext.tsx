@@ -52,9 +52,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const result = await auth.renew(accessToken);
           if (result.accessToken) {
-            await tokenStorage.save(result.accessToken, null, result.user);
-            setUser(result.user);
-            await Promise.all([checkCreatorStatus(), identifyUser(result.user.id)]);
+            // Renew may omit the user; fall back to the already-stored one.
+            const renewedUser = result.user ?? storedUser;
+            await tokenStorage.save(result.accessToken, null, renewedUser);
+            setUser(renewedUser);
+            await Promise.all([checkCreatorStatus(), identifyUser(renewedUser.id)]);
           } else {
             await tokenStorage.clear();
           }
@@ -117,7 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (result.accessToken) {
       await tokenStorage.save(result.accessToken, null, result.user);
       setUser(result.user);
-      await checkCreatorStatus();
+      await Promise.all([checkCreatorStatus(), identifyUser(result.user.id)]);
     }
 
     return result;

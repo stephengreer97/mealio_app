@@ -38,10 +38,12 @@ export default function Button({
     <TouchableOpacity
       style={[styles.base, variantStyle, sizeStyle, (disabled || loading) && styles.disabled, style]}
       disabled={disabled || loading}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !!(disabled || loading) }}
       {...props}
     >
       {loading ? (
-        <ActivityIndicator color={variant === 'primary' ? '#fff' : Colors.brand} size="small" />
+        <ActivityIndicator color={variant === 'primary' || variant === 'danger' ? '#fff' : Colors.brand} size="small" />
       ) : (
         <Text style={[styles.text, variantText, sizeText, textStyle]}>{label}</Text>
       )}
