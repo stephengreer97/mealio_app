@@ -344,7 +344,7 @@ export default function AccountScreen() {
       if (store === 'app_store') {
         await Linking.openURL('https://apps.apple.com/account/subscriptions');
       } else if (store === 'play_store') {
-        await Linking.openURL('https://play.google.com/store/account/subscriptions?sku=mealio_full_access&package=co.mealio.app');
+        await Linking.openURL('https://play.google.com/store/account/subscriptions?sku=full_access&package=co.mealio.app');
       } else {
         // Stripe subscriber, or subscription not found in RevenueCat (e.g. web-only subscriber).
         const { portalUrl } = await paymentsApi.portal();
