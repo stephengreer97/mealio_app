@@ -64,8 +64,13 @@ export default function AccountScreen() {
     loadDeletedMeals();
     loadKrogerStatus();
     if (isCreator) loadCreatorProfile();
-    if (user?.tier !== 'paid') loadOffering();
   }, [isCreator]);
+
+  // Load offerings once the tier resolves — keyed on tier so it refreshes if the
+  // user/tier arrives after first render (e.g. free plan resolving late).
+  useEffect(() => {
+    if (user?.tier !== 'paid') loadOffering();
+  }, [user?.tier]);
 
   async function loadOffering() {
     const pkgs = await getAllOfferings();
@@ -273,6 +278,10 @@ export default function AccountScreen() {
       if (active) {
         await refreshUser();
         Alert.alert('Welcome to Full Access!', 'Your subscription is now active.');
+      } else {
+        // Purchase succeeded but the entitlement hasn't propagated yet.
+        Alert.alert('Purchase received', 'Activating your subscription… this can take a moment.');
+        await refreshUser();
       }
     } catch (err: any) {
       if (!err.userCancelled) {

@@ -135,10 +135,27 @@ export function findUnaddedItems(reportedAdded: string[], addedCartNames: string
 
 export function diffCartItems(before: CartItem[], after: CartItem[]): CartRow[] {
   const beforeQty = new Map<string, number>();
-  for (const it of before) beforeQty.set(it.name, (beforeQty.get(it.name) || 0) + it.qty);
+  const beforeWeight = new Map<string, number>();
+  for (const it of before) {
+    beforeQty.set(it.name, (beforeQty.get(it.name) || 0) + it.qty);
+    if (it.isWeight && typeof it.weight === 'number') {
+      beforeWeight.set(it.name, (beforeWeight.get(it.name) || 0) + it.weight);
+    }
+  }
   const green: CartRow[] = [];
   const grey: CartRow[] = [];
   for (const it of after) {
+    // Sold-by-weight lines carry qty:1 (present/absent), so the qty diff always
+    // yields greenQty=0 and mislabels a freshly added/topped-up weight line as
+    // "already in cart". Classify by weight instead: a line that's new, or
+    // heavier than the before snapshot, was added/increased by this run.
+    if (it.isWeight) {
+      const bw = beforeWeight.get(it.name) || 0;
+      const aw = typeof it.weight === 'number' ? it.weight : 0;
+      const added = !beforeWeight.has(it.name) || aw > bw;
+      (added ? green : grey).push({ name: it.name, qty: it.qty, added, isWeight: true, weight: it.weight });
+      continue;
+    }
     const bq = beforeQty.get(it.name) || 0;
     const greyQty = Math.min(bq, it.qty);
     const greenQty = Math.max(it.qty - bq, 0);

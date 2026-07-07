@@ -64,6 +64,13 @@ export function consolidateIngredients(
       if (map.has(key)) {
         const e = map.get(key)!;
         e.productQty += qty;
+        // Sold-by-weight lines: total poundage is additive across meals, so
+        // SUM purchaseWeight the same way productQty is accumulated. Taking it
+        // from only the first meal would under-add the weight for the rest.
+        const w = ing.purchaseWeight;
+        if (typeof w === 'number' && Number.isFinite(w)) {
+          e.purchaseWeight = (typeof e.purchaseWeight === 'number' ? e.purchaseWeight : 0) + w;
+        }
         const existing = e.mealIngredients.find((m) => m.mealId === meal.id);
         if (existing) {
           existing.qty += qty;

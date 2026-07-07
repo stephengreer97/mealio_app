@@ -29,6 +29,7 @@ import { useParallelSearchPool } from '../lib/useParallelSearchPool';
 import { buildSearchAndAddWorker } from '../lib/webview-scripts/worker-search';
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS } from '../constants/features';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, cartNameMatches, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -76,6 +77,11 @@ interface PickedItem {
   qty: number;
   /** Sold-by-weight: the chosen weight (lb) to select at add time. */
   purchaseWeight?: number | null;
+  /** The review-queue index this pick was made for (manual-review picks only).
+   *  Lets the "Back" button remove the pick that belongs to the item being left
+   *  rather than blindly popping the last one — "Skip" advances WITHOUT pushing,
+   *  so the last pick can belong to a much earlier item. */
+  reviewIndex?: number;
 }
 
 export type Step = 'qty' | 'login_check' | 'login' | 'searching' | 'searchResult' | 'review' | 'adding' | 'done' | 'robot_challenge';
@@ -115,32 +121,15 @@ export interface WebViewCartSheetProps {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const CRITICAL_WORDS = new Set([
-  'organic', 'grass', 'fed', 'free', 'range', 'cage', 'large', 'small', 'jumbo',
-  'medium', 'extra', 'spicy', 'mild', 'hot', 'sweet', 'whole', 'skim', 'nonfat',
-  'lowfat', 'salted', 'unsalted', 'sodium', 'boneless', 'skinless', 'lean', 'ground',
-]);
-
 function ts(): string {
   const d = new Date();
   return `${d.toLocaleTimeString('en-US', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
-function scoreProductMatch(searchTerm: string, productName: string): number {
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-  const normSearch = norm(searchTerm);
-  const normDesc = norm(productName);
-  if (normSearch === normDesc) return 100;
-  const searchWords = normSearch.split(' ').filter(Boolean);
-  const descWordSet = new Set(normDesc.split(' ').filter(Boolean));
-  for (const w of searchWords) {
-    if (CRITICAL_WORDS.has(w) && !descWordSet.has(w)) return 0;
-  }
-  const matchCount = searchWords.filter(w => descWordSet.has(w)).length;
-  const matchPct = matchCount / searchWords.length;
-  if (matchPct < 0.7) return 0;
-  return Math.min(99, Math.round(matchPct * 100));
-}
+// Product-name match scoring reuses the diacritic-aware scorer in _scoring.ts
+// (the same contract the injected store scripts copy), so accented items like
+// "Jalapeño" auto-pick against a "Jalapeno" candidate instead of always falling
+// to manual review. The previous local scorer stripped diacritics to spaces.
 
 // HEB Deli / Fish Market items are sold by weight: 1 qty = 0.25 lb.
 // HTTP statuses anti-bot systems (Akamai, DataDome, PerimeterX) use to block.
@@ -187,7 +176,11 @@ export default function WebViewCartSheet({
   // the CURRENT locked store at call time, immune to closure staleness.
   const lockedStoreIdRef = useRef(storeId);
   const storeColor = STORES.find((s) => s.id === lockedStoreId)?.color ?? '#dd0031';
-  const scripts = useMemo(() => getStoreScripts(lockedStoreId)!, [lockedStoreId]);
+  // May be null if a meal ever carries a non-WebView store id (e.g. a
+  // Kroger-family store handled by the web integration, or mockstore in prod).
+  // Consumers guard against null and the sheet closes gracefully on open rather
+  // than crashing on a non-null-asserted `.storeUrl`.
+  const scripts = useMemo(() => getStoreScripts(lockedStoreId), [lockedStoreId]);
 
   const [step, _setStep] = useState<Step>('qty');
   const stepRef = useRef<Step>('qty');
@@ -372,14 +365,14 @@ export default function WebViewCartSheet({
   // build SearchResult list → go to review" finalization.
   // Worker count + initial-dispatch stagger are per-store (anti-bot tuning):
   // ALDI uses 3 staggered workers; everyone else defaults to 5 at once.
-  const PARALLEL_WORKER_COUNT = scripts.workerCount ?? 5;
-  const PARALLEL_WORKER_STAGGER_MS = scripts.workerStaggerMs ?? 0;
+  const PARALLEL_WORKER_COUNT = scripts?.workerCount ?? 5;
+  const PARALLEL_WORKER_STAGGER_MS = scripts?.workerStaggerMs ?? 0;
   const PARALLEL_WORKER_TIMEOUT_MS = 20_000;
   // A store opts into the worker-pool choose-product path by exposing BOTH
   // getSearchUrl and buildWorkerScript on its StoreScripts. Null otherwise →
   // sequential single-WebView flow. (WAF note: HEB/Walmart/Albertsons run 5
   // concurrent WebViews here; live-tested in dev before shipping.)
-  const parallelCfg = (scripts.getSearchUrl && scripts.buildWorkerScript && !scripts.forceSerialSearch)
+  const parallelCfg = (scripts?.getSearchUrl && scripts.buildWorkerScript && !scripts.forceSerialSearch)
     ? { getSearchUrl: scripts.getSearchUrl, buildWorkerScript: scripts.buildWorkerScript }
     : null;
 
@@ -488,7 +481,7 @@ export default function WebViewCartSheet({
   // buildSearchAndAddScript reads the #mealio hash support parallel add today
   // (HEB pilot); others fall back to sequential via beginSearchFlow's gate.
   const addWorkerScripts = useMemo(
-    () => parallelCfg
+    () => parallelCfg && scripts
       ? new Array(PARALLEL_ADD_WORKERS).fill(0).map((_, i) =>
           buildSearchAndAddWorker(i, scripts.buildSearchAndAddScript('', 1, null)))
       : [],
@@ -692,7 +685,15 @@ export default function WebViewCartSheet({
       // immediate setup below (state update lags a render, but onMessage and
       // the parallel pool must see the right store from the first tick).
       const openStoreId = storeId;
-      const openScripts = getStoreScripts(openStoreId)!;
+      const openScripts = getStoreScripts(openStoreId);
+      // A non-WebView store id (Kroger-family web integration, or mockstore in
+      // prod) has no scripts. There's nothing this sheet can automate, so close
+      // gracefully instead of crashing on openScripts.storeUrl below.
+      if (!openScripts) {
+        console.warn(`[Cart ${ts()}]`, 'no WebView scripts for store=', openStoreId, '— closing sheet');
+        onClose();
+        return;
+      }
       lockedStoreIdRef.current = openStoreId;
       setLockedStoreId(openStoreId);
       scriptsRef.current = openScripts;
@@ -1831,7 +1832,7 @@ export default function WebViewCartSheet({
 
             if (!isChooseFlow) {
               // Add-to-cart flow: auto-pick if exact in-stock match, else queue for review.
-              const scored = candidates.map(c => ({ c, score: scoreProductMatch(scoreTarget, c.productName) }));
+              const scored = candidates.map(c => ({ c, score: scoreMatch(scoreTarget, c.productName) }));
               const bestInStock = scored.filter(({ score, c }) => score === 100 && !c.outOfStock)[0];
               const bestExactOos = !bestInStock && scored.find(({ score, c }) => score === 100 && c.outOfStock);
 
@@ -2011,13 +2012,20 @@ export default function WebViewCartSheet({
         } else {
           // Add-to-cart / review-unmatched flow: queue item for cart, optionally save searchTerm.
           const totalQty = getReviewTotalQty(reviewIdx);
-          newPicked.push({
+          // Tag the pick with its review index so "Back" removes the correct
+          // one. Replace any prior pick for this same index (re-deciding after
+          // going Back and forward) to avoid a duplicate cart line.
+          const existingIdx = newPicked.findIndex((p) => p.reviewIndex === reviewIdx);
+          const pick: PickedItem = {
             searchTerm: currentReview.term,
             productName: candidate.productName,
             preference: needsPref && prefText ? { text: prefText } : null,
             qty: totalQty,
             purchaseWeight: weightFromIdx(totalQty),
-          });
+            reviewIndex: reviewIdx,
+          };
+          if (existingIdx >= 0) newPicked[existingIdx] = pick;
+          else newPicked.push(pick);
           // Persist on "Add & Update", AND always for a sold-by-weight item even
           // via "Add to Cart Only" — otherwise the chosen weight isn't saved and
           // the item would re-prompt on every run instead of being remembered.
@@ -2745,7 +2753,7 @@ export default function WebViewCartSheet({
                     <View style={{ flexDirection: 'row', gap: 8 }}>
                       {reviewIdx > 0 && (
                         <TouchableOpacity
-                          onPress={() => { setReviewIdx(reviewIdx - 1); setPickedItems((prev) => prev.slice(0, -1)); }}
+                          onPress={() => { const target = reviewIdx - 1; setReviewIdx(target); setPickedItems((prev) => prev.filter((p) => p.reviewIndex !== target)); }}
                           disabled={customSearching}
                           style={[styles.skipBtn, { flex: 1, borderWidth: 1, borderColor: Colors.border, borderRadius: 12 }, customSearching && { opacity: 0.4 }]}
                         >

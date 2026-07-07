@@ -25,11 +25,15 @@ export async function getUser(): Promise<User | null> {
   }
 }
 
-export async function save(accessToken: string, refreshToken: string | undefined | null, user: User): Promise<void> {
+export async function save(accessToken: string, refreshToken: string | undefined | null, user?: User | null): Promise<void> {
   const ops: Promise<void>[] = [
     SecureStore.setItemAsync(KEYS.ACCESS_TOKEN, accessToken),
-    SecureStore.setItemAsync(KEYS.USER, JSON.stringify(user)),
   ];
+  // Tolerate a missing user (e.g. /renew that only returns a token) — keep the
+  // already-stored user rather than writing "undefined"/null over it.
+  if (user) {
+    ops.push(SecureStore.setItemAsync(KEYS.USER, JSON.stringify(user)));
+  }
   if (refreshToken) {
     ops.push(SecureStore.setItemAsync(KEYS.REFRESH_TOKEN, refreshToken));
   }

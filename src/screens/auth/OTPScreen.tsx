@@ -98,7 +98,7 @@ export default function OTPScreen({ navigation, route }: Props) {
           <Button
             label="Back to sign in"
             variant="ghost"
-            onPress={() => navigation.navigate('Login')}
+            onPress={() => navigation.goBack()}
             style={styles.backBtn}
           />
         </View>
