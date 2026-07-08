@@ -8,6 +8,7 @@ import {
   Alert,
   FlatList,
   Linking,
+  Platform,
   TextInput,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
@@ -356,17 +357,53 @@ export default function AccountScreen() {
   async function handleManageSubscription() {
     setPortalLoading(true);
     try {
-      // Route based on WHERE the subscription was purchased, not what platform we're on.
-      // A user who subscribed on the web (Stripe) might be viewing this from the iOS app.
+      // Route based on WHERE the subscription was purchased. A store subscription
+      // can only be managed on the platform it was bought on — an App Store sub
+      // only from an Apple device, a Play sub only from Android. Calling the
+      // native manage UI for the "other" store throws ("this method is not
+      // available in the current platform"), so only call it when the store
+      // matches this device; otherwise point the user to the right place.
       const store = await getActiveSubscriptionStore();
 
-      if (store === 'app_store' || store === 'play_store') {
-        // Native manage-subscriptions UI. On iOS 15+ this is a sheet presented
-        // inside the app; on Android it deep-links to the Play Store (no in-app
-        // equivalent exists on that platform).
+      const nativeOnThisPlatform =
+        (store === 'app_store' && Platform.OS === 'ios') ||
+        (store === 'play_store' && Platform.OS === 'android');
+
+      if (nativeOnThisPlatform) {
+        // On iOS 15+ this is an in-app sheet; on Android it deep-links to Play.
         await Purchases.showManageSubscriptions();
         // They may have just cancelled — pull fresh renewal/expiry state.
         setEntDetails(await getEntitlementDetails());
+      } else if (store === 'app_store') {
+        // Purchased on the App Store but viewing from Android — Google Play can't
+        // manage Apple subscriptions.
+        Alert.alert(
+          'Manage on your Apple device',
+          'This subscription was purchased through the App Store. To change or cancel it, open Settings → your name → Subscriptions on your iPhone or iPad, or manage it on the web.',
+          [
+            { text: 'Close', style: 'cancel' },
+            {
+              text: 'Open on the web',
+              onPress: () =>
+                WebBrowser.openBrowserAsync('https://apps.apple.com/account/subscriptions'),
+            },
+          ],
+        );
+      } else if (store === 'play_store') {
+        // Purchased on Google Play but viewing from iOS — the App Store can't
+        // manage Play subscriptions.
+        Alert.alert(
+          'Manage on your Android device',
+          'This subscription was purchased through Google Play. To change or cancel it, open the Play Store → Subscriptions on your Android device, or manage it on the web.',
+          [
+            { text: 'Close', style: 'cancel' },
+            {
+              text: 'Open on the web',
+              onPress: () =>
+                WebBrowser.openBrowserAsync('https://play.google.com/store/account/subscriptions'),
+            },
+          ],
+        );
       } else {
         // Stripe subscriber, or subscription not found in RevenueCat (e.g. web-only
         // subscriber). Open the billing portal in an in-app browser sheet instead

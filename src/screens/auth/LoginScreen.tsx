@@ -67,6 +67,25 @@ export default function LoginScreen({ navigation, route }: Props) {
       : null as any
   );
 
+  // Android uses the native Google Sign-In SDK (Credential Manager), which
+  // returns an id_token directly with no browser redirect. iOS keeps the
+  // expo-auth-session flow above. Configure the native SDK once, on Android only.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    // Import lazily and Android-only. A static import would evaluate the native
+    // module on iOS too and crash with "RNGoogleSignin could not be found",
+    // since iOS uses the expo-auth-session flow above and never links this call.
+    import('@react-native-google-signin/google-signin')
+      .then(({ GoogleSignin }) => {
+        GoogleSignin.configure({
+          webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB,
+        });
+      })
+      .catch(() => {
+        // Native module unavailable (older dev build). A fresh build resolves it.
+      });
+  }, []);
+
   useEffect(() => {
     if (googleResponse?.type === 'success') {
       const idToken = googleResponse.authentication?.idToken;
@@ -109,6 +128,10 @@ export default function LoginScreen({ navigation, route }: Props) {
   }
 
   async function handleGoogleSignIn() {
+    // Android: native SDK. iOS: existing expo-auth-session browser flow.
+    if (Platform.OS === 'android') {
+      return handleGoogleSignInAndroid();
+    }
     setSocialLoading('google');
     try {
       await googlePromptAsync();
@@ -116,6 +139,37 @@ export default function LoginScreen({ navigation, route }: Props) {
     } catch {
       setSocialLoading(null);
       Alert.alert('Sign In Failed', 'Could not connect to Google. Please try again.');
+    }
+  }
+
+  async function handleGoogleSignInAndroid() {
+    const { GoogleSignin, isSuccessResponse, isErrorWithCode, statusCodes } =
+      await import('@react-native-google-signin/google-signin');
+    setSocialLoading('google');
+    try {
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const response = await GoogleSignin.signIn();
+      if (isSuccessResponse(response)) {
+        const idToken = response.data.idToken;
+        if (idToken) {
+          // handleGoogleToken clears socialLoading in its finally block.
+          await handleGoogleToken(idToken);
+          return;
+        }
+        Alert.alert('Sign In Failed', 'Could not get Google credentials. Please try again.');
+      }
+      // Otherwise the user cancelled (response.type === 'cancelled') — no alert.
+      setSocialLoading(null);
+    } catch (err: any) {
+      setSocialLoading(null);
+      // Silently ignore user-cancelled / already-in-progress; surface the rest.
+      if (
+        isErrorWithCode(err) &&
+        (err.code === statusCodes.SIGN_IN_CANCELLED || err.code === statusCodes.IN_PROGRESS)
+      ) {
+        return;
+      }
+      Alert.alert('Sign In Failed', err?.message || 'Google sign in failed. Please try again.');
     }
   }
 
