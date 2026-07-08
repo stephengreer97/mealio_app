@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -17,13 +18,19 @@ import { Colors, Radius } from '../../constants/colors';
 import { STORES } from '../../constants/stores';
 import { useAuth } from '../../context/AuthContext';
 import { account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
-import { getAllOfferings, purchasePackage, restorePurchases, getActiveSubscriptionStore, ENTITLEMENT_ID } from '../../lib/purchases';
-import type { PurchasesPackage } from 'react-native-purchases';
+import { getAllOfferings, purchasePackage, restorePurchases, getActiveSubscriptionStore, getEntitlementDetails, onEntitlementChange, ENTITLEMENT_ID, type EntitlementDetails } from '../../lib/purchases';
+import Purchases, { type PurchasesPackage } from 'react-native-purchases';
+import * as WebBrowser from 'expo-web-browser';
 import { Creator, Meal } from '../../types';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import CookieManager from '@react-native-cookies/cookies';
+
+/** e.g. "Jul 9, 2026" */
+function formatExpiry(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
 
 export default function AccountScreen() {
   const { user, isCreator, logout, refreshUser } = useAuth();
@@ -43,6 +50,7 @@ export default function AccountScreen() {
   const [portalLoading, setPortalLoading] = useState(false);
   const [offerings, setOfferings] = useState<PurchasesPackage[]>([]);
   const [billing, setBilling] = useState<'monthly' | 'annual'>('monthly');
+  const [entDetails, setEntDetails] = useState<EntitlementDetails | null>(null);
 
   // Account deletion
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -71,6 +79,17 @@ export default function AccountScreen() {
   useEffect(() => {
     if (user?.tier !== 'paid') loadOffering();
   }, [user?.tier]);
+
+  // Renewal/expiry details for the "Full Access until …" line. Refetch on focus
+  // and subscribe to live changes so a cancellation surfaces without a reload.
+  useFocusEffect(
+    useCallback(() => {
+      let mounted = true;
+      getEntitlementDetails().then((d) => { if (mounted) setEntDetails(d); });
+      const unsubscribe = onEntitlementChange((d) => setEntDetails(d));
+      return () => { mounted = false; unsubscribe(); };
+    }, [])
+  );
 
   async function loadOffering() {
     const pkgs = await getAllOfferings();
@@ -341,14 +360,19 @@ export default function AccountScreen() {
       // A user who subscribed on the web (Stripe) might be viewing this from the iOS app.
       const store = await getActiveSubscriptionStore();
 
-      if (store === 'app_store') {
-        await Linking.openURL('https://apps.apple.com/account/subscriptions');
-      } else if (store === 'play_store') {
-        await Linking.openURL('https://play.google.com/store/account/subscriptions?sku=mealio_full_access&package=co.mealio.app');
+      if (store === 'app_store' || store === 'play_store') {
+        // Native manage-subscriptions UI. On iOS 15+ this is a sheet presented
+        // inside the app; on Android it deep-links to the Play Store (no in-app
+        // equivalent exists on that platform).
+        await Purchases.showManageSubscriptions();
+        // They may have just cancelled — pull fresh renewal/expiry state.
+        setEntDetails(await getEntitlementDetails());
       } else {
-        // Stripe subscriber, or subscription not found in RevenueCat (e.g. web-only subscriber).
+        // Stripe subscriber, or subscription not found in RevenueCat (e.g. web-only
+        // subscriber). Open the billing portal in an in-app browser sheet instead
+        // of handing off to the external browser.
         const { portalUrl } = await paymentsApi.portal();
-        if (portalUrl) await Linking.openURL(portalUrl);
+        if (portalUrl) await WebBrowser.openBrowserAsync(portalUrl);
       }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not load subscription management');
@@ -437,7 +461,11 @@ export default function AccountScreen() {
             <>
               <View style={styles.subBadgePaid}>
                 <Text style={styles.subBadgeTitlePaid}>Mealio Full Access</Text>
-                <Text style={styles.subBadgeDesc}>Unlimited saved meals across all stores.</Text>
+                <Text style={styles.subBadgeDesc}>
+                  {entDetails && entDetails.isActive && !entDetails.willRenew && entDetails.expirationDate
+                    ? `Full Access until ${formatExpiry(entDetails.expirationDate)}`
+                    : 'Unlimited saved meals across all stores.'}
+                </Text>
               </View>
               <Button
                 label={portalLoading ? 'Loading…' : 'Manage Subscription'}

@@ -112,7 +112,7 @@ export default function RootNavigator() {
   function renderMain() {
     if (isLoading) return null;
     if (user) return <MainTabs />;
-    if (showAuth) return <AuthStack />;
+    if (showAuth) return <AuthStack onClose={() => setShowAuth(false)} />;
     return (
       <GuestStack.Navigator
         screenOptions={{
