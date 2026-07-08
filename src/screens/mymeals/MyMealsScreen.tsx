@@ -158,6 +158,7 @@ export default function MyMealsScreen() {
   }
 
   async function handleCartButtonPress() {
+    if (isOverFreeLimit()) { showOverLimitNotice(); return; }
     let connected = krogerConnected;
     let locations = krogerLocations;
 
@@ -212,6 +213,7 @@ export default function MyMealsScreen() {
   }
 
   async function handleChooseProducts(meal: Meal) {
+    if (isOverFreeLimit()) { showOverLimitNotice(); return; }
     let connected = krogerConnected;
     let locations = krogerLocations;
     if (!connected) {
@@ -253,6 +255,24 @@ export default function MyMealsScreen() {
     if (mealsNeedingChoose.length === 0) return;
     chooseQueueRef.current = mealsNeedingChoose.slice(1).map((m) => m.id);
     handleChooseProducts(mealsNeedingChoose[0]);
+  }
+
+  // Free accounts keep their saved meals but lose cart automation / choose
+  // products while over the limit — this nudges them to trim to FREE_LIMIT or
+  // upgrade, without touching their data.
+  function isOverFreeLimit() {
+    return user?.tier !== 'paid' && allMeals.length > FREE_LIMIT;
+  }
+
+  function showOverLimitNotice() {
+    Alert.alert(
+      'Free plan limit reached',
+      `Free accounts can use cart automation with up to ${FREE_LIMIT} saved meals. You have ${allMeals.length}. Remove meals until you have ${FREE_LIMIT} or fewer, or upgrade to Full Access to use it with all of them.`,
+      [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Upgrade', onPress: handleUpgrade },
+      ]
+    );
   }
 
   async function handleKrogerSearchStores() {
@@ -593,6 +613,19 @@ export default function MyMealsScreen() {
       />
 
       {isCartEnabled && selectedMealIds.size > 0 && (() => {
+        if (isOverFreeLimit()) {
+          return (
+            <TouchableOpacity
+              testID="floating-over-limit"
+              style={[styles.floatingCart, styles.floatingCartDisabled]}
+              onPress={showOverLimitNotice}
+              activeOpacity={0.9}
+            >
+              <Ionicons name="lock-closed" size={18} color="#fff" />
+              <Text style={styles.floatingCartText}>Reduce to {FREE_LIMIT} meals to add to cart</Text>
+            </TouchableOpacity>
+          );
+        }
         if (isKroger) {
           const needsChoose = selectedMeals.some(hasUnchosenProducts);
           const unchosenCount = selectedMeals.filter(hasUnchosenProducts).length;
@@ -1027,6 +1060,9 @@ const styles = StyleSheet.create({
   tierTextRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   tierLabel: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text2 },
   upgradeLink: { fontSize: 12, fontFamily: 'Inter_600SemiBold', color: Colors.brand },
+  floatingCartDisabled: {
+    backgroundColor: Colors.text3,
+  },
   floatingCart: {
     position: 'absolute',
     bottom: 16,
