@@ -129,3 +129,19 @@ export async function getActiveSubscriptionStore(): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * The store-provided URL for managing the active subscription. On Google Play
+ * this deep-links to the Play subscriptions page; on the App Store it's Apple's
+ * management URL. Null if not configured or there's no active store subscription.
+ * Used on Android, where `Purchases.showManageSubscriptions()` is iOS-only.
+ */
+export async function getManagementURL(): Promise<string | null> {
+  if (!configured) return null;
+  try {
+    const customerInfo = await Purchases.getCustomerInfo();
+    return customerInfo.managementURL ?? null;
+  } catch {
+    return null;
+  }
+}

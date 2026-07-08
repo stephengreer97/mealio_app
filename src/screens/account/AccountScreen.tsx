@@ -19,7 +19,7 @@ import { Colors, Radius } from '../../constants/colors';
 import { STORES } from '../../constants/stores';
 import { useAuth } from '../../context/AuthContext';
 import { account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
-import { getAllOfferings, purchasePackage, restorePurchases, getActiveSubscriptionStore, getEntitlementDetails, onEntitlementChange, ENTITLEMENT_ID, type EntitlementDetails } from '../../lib/purchases';
+import { getAllOfferings, purchasePackage, restorePurchases, getActiveSubscriptionStore, getEntitlementDetails, getManagementURL, onEntitlementChange, ENTITLEMENT_ID, type EntitlementDetails } from '../../lib/purchases';
 import Purchases, { type PurchasesPackage } from 'react-native-purchases';
 import * as WebBrowser from 'expo-web-browser';
 import { Creator, Meal } from '../../types';
@@ -370,8 +370,19 @@ export default function AccountScreen() {
         (store === 'play_store' && Platform.OS === 'android');
 
       if (nativeOnThisPlatform) {
-        // On iOS 15+ this is an in-app sheet; on Android it deep-links to Play.
-        await Purchases.showManageSubscriptions();
+        if (Platform.OS === 'ios') {
+          // iOS 13+: native App Store manage-subscriptions sheet. This method is
+          // iOS-only in react-native-purchases (it throws on Android).
+          await Purchases.showManageSubscriptions();
+        } else {
+          // Android: showManageSubscriptions is not available, so open the Play
+          // Store subscriptions page. RevenueCat's managementURL is the exact
+          // Play deep link; fall back to the generic page filtered to our package.
+          const url =
+            (await getManagementURL()) ??
+            'https://play.google.com/store/account/subscriptions?package=co.mealio.app';
+          await Linking.openURL(url);
+        }
         // They may have just cancelled — pull fresh renewal/expiry state.
         setEntDetails(await getEntitlementDetails());
       } else if (store === 'app_store') {
