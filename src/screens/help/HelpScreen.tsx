@@ -54,7 +54,7 @@ const FAQ_SECTIONS: { title: string; items: FAQItem[] }[] = [
       {
         question: 'How many meals can I save?',
         answer:
-          'Free accounts can save up to 10 meals per store. Upgrade to Pro for unlimited meals and other premium features.',
+          'Free accounts can save up to 3 meals. Upgrade to Full Access for unlimited saved meals and other premium features.',
       },
     ],
   },
