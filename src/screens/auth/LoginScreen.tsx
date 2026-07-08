@@ -10,6 +10,7 @@ import {
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RouteProp } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
 import Svg, { Path } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,7 +26,10 @@ import Button from '../../components/ui/Button';
 
 WebBrowser.maybeCompleteAuthSession();
 
-type Props = { navigation: NativeStackNavigationProp<AuthStackParamList, 'Login'> };
+type Props = {
+  navigation: NativeStackNavigationProp<AuthStackParamList, 'Login'>;
+  route: RouteProp<AuthStackParamList, 'Login'>;
+};
 
 // In E2E builds, render the password field as a plain (non-secure) input with
 // autofill disabled. iOS Strong Password AutoFill on a secureTextEntry field
@@ -34,8 +38,10 @@ type Props = { navigation: NativeStackNavigationProp<AuthStackParamList, 'Login'
 // secure entry + password autofill untouched.
 const E2E = process.env.EXPO_PUBLIC_E2E === '1';
 
-export default function LoginScreen({ navigation }: Props) {
+export default function LoginScreen({ navigation, route }: Props) {
   const { login, loginWithToken } = useAuth();
+  // Present for guests who tapped "Sign In" — lets them return to browsing.
+  const onClose = route.params?.onClose;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -167,6 +173,17 @@ export default function LoginScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView style={styles.safe}>
+      {onClose && (
+        <TouchableOpacity
+          onPress={onClose}
+          style={styles.backBtn}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Back to browsing"
+        >
+          <Ionicons name="arrow-back" size={26} color={Colors.text1} />
+        </TouchableOpacity>
+      )}
       <KeyboardAwareScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" enableOnAndroid extraScrollHeight={24}>
           <View style={styles.header}>
             <Text style={styles.logo}>Mealio</Text>
@@ -274,6 +291,7 @@ function AppleIcon() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
+  backBtn: { marginTop: 4, marginLeft: 12, width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   scroll: { flexGrow: 1, paddingHorizontal: 24, paddingBottom: 40 },
   header: { alignItems: 'center', paddingTop: 48, paddingBottom: 32 },
   logo: {

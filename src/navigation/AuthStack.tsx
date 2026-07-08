@@ -7,7 +7,8 @@ import OTPScreen from '../screens/auth/OTPScreen';
 import ForgotPasswordScreen from '../screens/auth/ForgotPasswordScreen';
 
 export type AuthStackParamList = {
-  Login: undefined;
+  // onClose returns a guest to browsing so they aren't stuck on the auth flow.
+  Login: { onClose?: () => void } | undefined;
   Signup: undefined;
   CheckEmail: { email: string };
   OTP: { twoFactorToken: string; email: string };
@@ -16,10 +17,10 @@ export type AuthStackParamList = {
 
 const Stack = createNativeStackNavigator<AuthStackParamList>();
 
-export default function AuthStack() {
+export default function AuthStack({ onClose }: { onClose?: () => void }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Login" component={LoginScreen} />
+      <Stack.Screen name="Login" component={LoginScreen} initialParams={{ onClose }} />
       <Stack.Screen name="Signup" component={SignupScreen} />
       <Stack.Screen name="CheckEmail" component={CheckEmailScreen} />
       <Stack.Screen name="OTP" component={OTPScreen} />
