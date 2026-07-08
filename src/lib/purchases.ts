@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import Purchases, { LOG_LEVEL, PurchasesPackage } from 'react-native-purchases';
+import Purchases, { LOG_LEVEL, PurchasesPackage, CustomerInfo } from 'react-native-purchases';
 import Constants from 'expo-constants';
 
 const IOS_KEY     = process.env.EXPO_PUBLIC_REVENUECAT_IOS_KEY ?? '';
@@ -84,11 +84,47 @@ export async function checkEntitlement(): Promise<boolean> {
  * 'app_store' | 'play_store' | 'stripe' | 'promotional' | null
  * Returns null if not configured or no active entitlement.
  */
+export type EntitlementDetails = {
+  isActive: boolean;
+  /** False when the subscription is cancelled but still within the paid period. */
+  willRenew: boolean;
+  /** ISO8601 expiration date, or null (e.g. lifetime/promotional). */
+  expirationDate: string | null;
+};
+
+function toDetails(customerInfo: CustomerInfo): EntitlementDetails | null {
+  const e = customerInfo.entitlements.active[ENTITLEMENT_ID];
+  if (!e) return null;
+  return { isActive: e.isActive, willRenew: e.willRenew, expirationDate: e.expirationDate };
+}
+
+/** Renewal/expiry details for the active entitlement, or null if none/not a store sub. */
+export async function getEntitlementDetails(): Promise<EntitlementDetails | null> {
+  if (!configured) return null;
+  try {
+    return toDetails(await Purchases.getCustomerInfo());
+  } catch {
+    return null;
+  }
+}
+
+/** Subscribe to live entitlement changes (e.g. a cancellation landing). Returns an unsubscribe fn. */
+export function onEntitlementChange(cb: (d: EntitlementDetails | null) => void): () => void {
+  if (!configured) return () => {};
+  const listener = (customerInfo: CustomerInfo) => cb(toDetails(customerInfo));
+  Purchases.addCustomerInfoUpdateListener(listener);
+  return () => Purchases.removeCustomerInfoUpdateListener(listener);
+}
+
 export async function getActiveSubscriptionStore(): Promise<string | null> {
   if (!configured) return null;
   try {
     const customerInfo = await Purchases.getCustomerInfo();
-    return customerInfo.entitlements.active[ENTITLEMENT_ID]?.store ?? null;
+    // The SDK returns the store as an uppercase enum ("APP_STORE" | "PLAY_STORE"
+    // | "STRIPE" | ...). Normalize to lowercase so callers can compare against
+    // 'app_store' / 'play_store' (matches RevenueCat's REST representation).
+    const store = customerInfo.entitlements.active[ENTITLEMENT_ID]?.store;
+    return store ? String(store).toLowerCase() : null;
   } catch {
     return null;
   }
