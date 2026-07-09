@@ -19,7 +19,8 @@ import * as ImagePicker from 'expo-image-picker';
 import { Colors, Radius } from '../../constants/colors';
 import { STORES } from '../../constants/stores';
 import { useAuth } from '../../context/AuthContext';
-import { account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
+import { auth as authApi, account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
+import * as tokenStorage from '../../lib/tokenStorage';
 import { getAllOfferings, purchasePackage, restorePurchases, getActiveSubscriptionStore, getEntitlementDetails, getManagementURL, onEntitlementChange, ENTITLEMENT_ID, type EntitlementDetails } from '../../lib/purchases';
 import Purchases, { type PurchasesPackage } from 'react-native-purchases';
 import * as WebBrowser from 'expo-web-browser';
@@ -157,7 +158,10 @@ export default function AccountScreen() {
     setPwLoading(true);
     setPwError('');
     try {
-      await accountApi.changePassword(currentPw, newPw);
+      const res = await accountApi.changePassword(currentPw, newPw);
+      // Changing the password revokes all sessions server-side; persist the fresh
+      // token the server returned so this device stays signed in.
+      if (res?.accessToken) await tokenStorage.save(res.accessToken, null, user);
       setCurrentPw('');
       setNewPw('');
       Alert.alert('Success', 'Password changed successfully');
@@ -427,10 +431,16 @@ export default function AccountScreen() {
   }
 
   async function handleLogout() {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+    Alert.alert('Sign Out', 'Sign out of this device, or of all devices?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: logout },
+      { text: 'This device', onPress: logout },
+      { text: 'All devices', style: 'destructive', onPress: handleLogoutAll },
     ]);
+  }
+
+  async function handleLogoutAll() {
+    try { await authApi.logoutAll(); } catch {}
+    await logout();
   }
 
   async function handleStoreLogout() {
