@@ -10,6 +10,7 @@ import {
   Linking,
   Platform,
   TextInput,
+  Modal,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -55,6 +56,8 @@ export default function AccountScreen() {
 
   // Account deletion
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
   // Kroger
   const [krogerConnected, setKrogerConnected] = useState(false);
@@ -312,29 +315,23 @@ export default function AccountScreen() {
     }
   }
 
-  async function handleDeleteAccount() {
-    Alert.alert(
-      'Delete Account',
-      'This will permanently delete your account and all your saved meals. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete Account',
-          style: 'destructive',
-          onPress: async () => {
-            setDeleteLoading(true);
-            try {
-              await accountApi.deleteAccount();
-              await logout();
-            } catch (err: any) {
-              Alert.alert('Error', err.message || 'Could not delete account. Please try again.');
-            } finally {
-              setDeleteLoading(false);
-            }
-          },
-        },
-      ]
-    );
+  function handleDeleteAccount() {
+    setDeleteConfirmText('');
+    setDeleteConfirmVisible(true);
+  }
+
+  async function confirmDeleteAccount() {
+    if (deleteConfirmText !== 'Delete Account') return;
+    setDeleteLoading(true);
+    try {
+      await accountApi.deleteAccount();
+      setDeleteConfirmVisible(false);
+      await logout();
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not delete account. Please try again.');
+    } finally {
+      setDeleteLoading(false);
+    }
   }
 
   async function handleRestorePurchases() {
@@ -806,6 +803,52 @@ export default function AccountScreen() {
         <TouchableOpacity onPress={handleDeleteAccount} disabled={deleteLoading} style={styles.deleteAccountBtn}>
           <Text style={styles.deleteAccountText}>{deleteLoading ? 'Deleting…' : 'Delete Account'}</Text>
         </TouchableOpacity>
+
+        <Modal
+          visible={deleteConfirmVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => { if (!deleteLoading) setDeleteConfirmVisible(false); }}
+        >
+          <View style={styles.deleteModalOverlay}>
+            <View style={styles.deleteModalCard}>
+              <Text style={styles.deleteModalTitle}>Delete Account</Text>
+              <Text style={styles.deleteModalBody}>
+                This permanently deletes your account, saved meals, and follows. If you&apos;re a creator, your published meals are removed from Discover. This cannot be undone.
+              </Text>
+              <Text style={styles.deleteModalLabel}>Type "Delete Account" to confirm:</Text>
+              <TextInput
+                value={deleteConfirmText}
+                onChangeText={setDeleteConfirmText}
+                placeholder="Delete Account"
+                placeholderTextColor={Colors.text3}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!deleteLoading}
+                style={styles.deleteModalInput}
+              />
+              <View style={styles.deleteModalBtnRow}>
+                <TouchableOpacity
+                  onPress={() => setDeleteConfirmVisible(false)}
+                  disabled={deleteLoading}
+                  style={styles.deleteModalCancel}
+                >
+                  <Text style={styles.deleteModalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={confirmDeleteAccount}
+                  disabled={deleteConfirmText !== 'Delete Account' || deleteLoading}
+                  style={[
+                    styles.deleteModalConfirm,
+                    (deleteConfirmText !== 'Delete Account' || deleteLoading) && styles.deleteModalConfirmDisabled,
+                  ]}
+                >
+                  <Text style={styles.deleteModalConfirmText}>{deleteLoading ? 'Deleting…' : 'Delete'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </KeyboardAwareScrollView>
     </SafeAreaView>
   );
@@ -888,6 +931,18 @@ const styles = StyleSheet.create({
   restoreLinkText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text3 },
   deleteAccountBtn: { alignItems: 'center', paddingVertical: 12, marginTop: 4, marginBottom: 8 },
   deleteAccountText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text3, textDecorationLine: 'underline' },
+  deleteModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 28 },
+  deleteModalCard: { width: '100%', maxWidth: 420, backgroundColor: '#fff', borderRadius: 18, padding: 22 },
+  deleteModalTitle: { fontSize: 18, fontFamily: 'Inter_700Bold', color: Colors.text1, marginBottom: 8 },
+  deleteModalBody: { fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text2, lineHeight: 20, marginBottom: 16 },
+  deleteModalLabel: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.text2, marginBottom: 8 },
+  deleteModalInput: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, fontFamily: 'Inter_400Regular', color: Colors.text1, marginBottom: 18 },
+  deleteModalBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, alignItems: 'center' },
+  deleteModalCancel: { paddingVertical: 12, paddingHorizontal: 18, borderRadius: 12 },
+  deleteModalCancelText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: Colors.text2 },
+  deleteModalConfirm: { paddingVertical: 12, paddingHorizontal: 22, borderRadius: 12, backgroundColor: Colors.brand },
+  deleteModalConfirmDisabled: { backgroundColor: Colors.borderStrong },
+  deleteModalConfirmText: { fontSize: 15, fontFamily: 'Inter_700Bold', color: '#fff' },
   creatorPhotoRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   creatorPhoto: { width: 72, height: 72, borderRadius: 36, backgroundColor: Colors.surface },
   creatorPhotoPlaceholder: { justifyContent: 'center', alignItems: 'center' },
