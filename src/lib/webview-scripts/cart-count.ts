@@ -133,6 +133,54 @@ export function findUnaddedItems(reportedAdded: string[], addedCartNames: string
   );
 }
 
+export interface ShortAdd {
+  name: string;
+  /** Units this run actually added to the cart. */
+  got: number;
+  /** Units that were requested. */
+  expected: number;
+}
+
+/**
+ * Audit added cart quantities against what was requested and return the items
+ * that landed SHORT — present in the cart but with fewer units than asked for
+ * (e.g. a store per-item cap accepted 2 of 3). Fully-missing items (got 0) are
+ * excluded here; they're covered by findUnaddedItems.
+ *
+ * `addedRows` are the added (green) rows from diffCartItems, whose `qty` is the
+ * delta this run added. Each added unit is attributed to a SINGLE audited item
+ * via a shared pool — exact-name matches reserved first, then loose matches take
+ * whatever remains — so two near-identical product names can't both claim the
+ * same row and hide a shortfall. Callers should pass only count-comparable items
+ * (skip sold-by-weight lines, which are one row at N lb regardless of poundage).
+ */
+export function findShortAddedItems(
+  addedRows: CartRow[],
+  audit: { name: string; expectedQty: number }[],
+): ShortAdd[] {
+  const norm = (s: string) => (s || '').trim().toLowerCase();
+  const pool = addedRows.map((row) => ({ name: row.name, qty: row.qty }));
+  const claimQty = (reportedName: string, need: number, exactOnly: boolean): number => {
+    let got = 0;
+    for (const row of pool) {
+      if (got >= need) break;
+      if (row.qty <= 0) continue;
+      const match = exactOnly ? norm(row.name) === norm(reportedName) : cartNameMatches(row.name, reportedName);
+      if (match) { const take = Math.min(row.qty, need - got); row.qty -= take; got += take; }
+    }
+    return got;
+  };
+  const state = audit.map((a) => ({ name: a.name, expected: Math.max(1, a.expectedQty || 1), got: 0 }));
+  // Pass 1 reserves exact-name units for every item; pass 2 lets those still
+  // short take remaining loose matches, so a loose match can't steal units an
+  // exact match needed.
+  state.forEach((s) => { s.got = claimQty(s.name, s.expected, true); });
+  state.forEach((s) => { if (s.got < s.expected) s.got += claimQty(s.name, s.expected - s.got, false); });
+  return state
+    .filter((s) => s.got > 0 && s.got < s.expected)
+    .map((s) => ({ name: s.name, got: s.got, expected: s.expected }));
+}
+
 export function diffCartItems(before: CartItem[], after: CartItem[]): CartRow[] {
   const beforeQty = new Map<string, number>();
   const beforeWeight = new Map<string, number>();

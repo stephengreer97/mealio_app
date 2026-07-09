@@ -308,6 +308,46 @@ function buildAddToCartScript(
     card = card.parentElement;
   }
 
+  // Read the in-cart quantity shown on this product's card. Returns a number
+  // when the count is legible, 0 when only the "Add 1" button is present, or
+  // null when the DOM exposes no counter at all (caller then falls back to a
+  // presence check). ALDI surfaces the count as a "Quantity: N" bubble, an
+  // "N ct"/"N in cart" bubble, an item-quantity testid, or inside the
+  // increment button's aria-label ("Increment quantity, currently N").
+  function getCardQty(el) {
+    if (!el) return null;
+    var q = el.querySelector('[data-testid="item-quantity"], [data-testid*="quantity" i]');
+    if (q) { var qt = (q.textContent || '').match(/\\d+/); if (qt) return parseInt(qt[0], 10); }
+    var bubble = el.querySelector('button[aria-label^="Quantity:"], button[aria-label$=" ct"], button[aria-label$=" in cart"]');
+    if (bubble) { var bm = (bubble.getAttribute('aria-label') || '').match(/(\\d+)/); if (bm) return parseInt(bm[1], 10); }
+    var inc = el.querySelector(INC_SEL);
+    if (inc) { var im = (inc.getAttribute('aria-label') || '').match(/currently\\s+(\\d+)/i); if (im) return parseInt(im[1], 10); }
+    if (el.querySelector(ATC_SEL)) return 0;
+    return null;
+  }
+
+  // Poll until the card's quantity reaches target. Instacart commits the add
+  // over the network, so the count lags the click — bounded poll, not a fixed
+  // wait. When the count is unreadable, fall back to "did the item enter the
+  // cart at all" (stepper/bubble present). Returns false on timeout so the
+  // caller can report an honest failure instead of a hardcoded success.
+  async function confirmQty(el, target) {
+    for (var ci = 0; ci < 16; ci++) {
+      var q = getCardQty(el);
+      if (q !== null) { if (q >= target) return true; }
+      else if (el && (el.querySelector(INC_SEL) || el.querySelector(QTY_BUBBLE_SEL))) return true;
+      await wait(250);
+    }
+    var qf = getCardQty(el);
+    if (qf !== null) return qf >= target;
+    return !!(el && (el.querySelector(INC_SEL) || el.querySelector(QTY_BUBBLE_SEL)));
+  }
+
+  // Baseline before we touch the cart; add is additive, so the target is
+  // whatever was already there plus the requested QTY.
+  var beforeQty = getCardQty(card);
+  var target = (beforeQty === null ? 0 : beforeQty) + QTY;
+
   // Click add button first time.
   targetBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
   await wait(200);
@@ -326,8 +366,13 @@ function buildAddToCartScript(
     quantityAdded++;
   }
 
+  var confirmed = await confirmQty(card, target);
   document.removeEventListener('focusin', __noKbd, true);
-  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: true }));
+  window.ReactNativeWebView.postMessage(JSON.stringify(
+    confirmed
+      ? { type: 'ADD_RESULT', success: true }
+      : { type: 'ADD_RESULT', success: false, reason: 'not_confirmed' }
+  ));
 })();true;`;
 }
 
@@ -652,7 +697,40 @@ function buildSearchAndAddScript(
     return;
   }
 
+  // Read the in-cart quantity on a card (see buildAddToCartScript for the DOM
+  // shapes ALDI uses). Number when legible, 0 when only "Add 1" is present,
+  // null when no counter is exposed.
+  function getCardQty(el) {
+    if (!el) return null;
+    var q = el.querySelector('[data-testid="item-quantity"], [data-testid*="quantity" i]');
+    if (q) { var qt = (q.textContent || '').match(/\\d+/); if (qt) return parseInt(qt[0], 10); }
+    var bubble = el.querySelector('button[aria-label^="Quantity:"], button[aria-label$=" ct"], button[aria-label$=" in cart"]');
+    if (bubble) { var bm = (bubble.getAttribute('aria-label') || '').match(/(\\d+)/); if (bm) return parseInt(bm[1], 10); }
+    var inc = el.querySelector(INC_SEL);
+    if (inc) { var im = (inc.getAttribute('aria-label') || '').match(/currently\\s+(\\d+)/i); if (im) return parseInt(im[1], 10); }
+    if (el.querySelector(ATC_SEL)) return 0;
+    return null;
+  }
+
+  // Bounded poll for the cart to reflect the add over the network; presence
+  // fallback when the count is unreadable. False on timeout → honest failure.
+  async function confirmQty(el, target) {
+    for (var ci = 0; ci < 16; ci++) {
+      var q = getCardQty(el);
+      if (q !== null) { if (q >= target) return true; }
+      else if (el && (el.querySelector(INC_SEL) || el.querySelector(QTY_BUBBLE_SEL))) return true;
+      await wait(250);
+    }
+    var qf = getCardQty(el);
+    if (qf !== null) return qf >= target;
+    return !!(el && (el.querySelector(INC_SEL) || el.querySelector(QTY_BUBBLE_SEL)));
+  }
+
   try {
+    // Baseline before we touch the cart; the add is additive.
+    var beforeQty = getCardQty(bestCard);
+    var target = (beforeQty === null ? 0 : beforeQty) + QTY;
+
     // Find the add button or qty bubble on the matched card.
     var addBtn2 = bestCard.querySelector(ATC_SEL);
     var quantityAdded = 0;
@@ -690,8 +768,16 @@ function buildSearchAndAddScript(
       quantityAdded++;
     }
 
+    var confirmed = await confirmQty(bestCard, target);
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }));
+    if (confirmed) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }));
+    } else {
+      // Same shape as the not-found/low-confidence failures above, so an add
+      // that never committed routes into the Review picker like other search
+      // stores instead of reporting a false success.
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'not_confirmed', candidates: candidates }));
+    }
   } catch(e) {
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'error', candidates: candidates }));
