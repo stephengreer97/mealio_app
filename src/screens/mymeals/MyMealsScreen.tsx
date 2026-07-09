@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as WebBrowser from 'expo-web-browser';
 import { Colors, Radius } from '../../constants/colors';
 import { Meal, Ingredient } from '../../types';
 import { meals as mealsApi, kroger as krogerApi } from '../../lib/api';
@@ -151,7 +152,21 @@ export default function MyMealsScreen() {
   async function handleKrogerConnect() {
     try {
       const { redirectUrl } = await krogerApi.connect(selectedStore);
-      await Linking.openURL(redirectUrl);
+      // In-app OAuth round-trip; the server bounces the final hop back to
+      // mealio://kroger/connected, which the auth session returns here.
+      const result = await WebBrowser.openAuthSessionAsync(redirectUrl, 'mealio://kroger/connected');
+      if (result.type === 'success' && result.url.includes('/connected')) {
+        const d = await krogerApi.status();
+        setKrogerConnected(d.connected);
+        if (d.connected) {
+          setKrogerLocations(d.locations ?? {});
+          if (!d.locations?.[selectedStore]) {
+            setKrogerZip('');
+            setKrogerLocationsList([]);
+            setKrogerPickerVisible(true);
+          }
+        }
+      }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not connect to Kroger');
     }
