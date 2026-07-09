@@ -238,7 +238,19 @@ export default function AccountScreen() {
     setKrogerConnecting(true);
     try {
       const { redirectUrl } = await krogerApi.connect();
-      await Linking.openURL(redirectUrl);
+      // Keep the OAuth round-trip in-app (Custom Tab / ASWebAuthenticationSession).
+      // Kroger redirects to our server callback, which bounces the final hop to
+      // mealio://kroger/connected|denied|error — the auth session returns it here.
+      const result = await WebBrowser.openAuthSessionAsync(redirectUrl, 'mealio://kroger/connected');
+      if (result.type === 'success') {
+        if (result.url.includes('/connected')) {
+          await loadKrogerStatus();
+        } else if (result.url.includes('/denied')) {
+          Alert.alert('Kroger', 'Kroger connection was cancelled.');
+        } else if (result.url.includes('/error')) {
+          Alert.alert('Kroger', 'Something went wrong connecting to Kroger. Please try again.');
+        }
+      }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not connect to Kroger');
     } finally {
