@@ -28,7 +28,7 @@ import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
 import { buildSearchAndAddWorker } from '../lib/webview-scripts/worker-search';
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS } from '../constants/features';
-import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, cartNameMatches, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, findShortAddedItems, cartNameMatches, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -1670,18 +1670,46 @@ export default function WebViewCartSheet({
               rows = diffCartItems(cartItemsBeforeRef.current, msg.items);
               setCartResultRows(rows);
             }
-            // When we have per-item cart data, name the products Mealio reported
-            // as added that didn't actually show up in the cart (silent misses).
+            // When we have per-item cart data, audit each product Mealio reported
+            // as added against what actually landed in the cart:
+            //   • absent entirely   → silent miss (name present in report, no cart row)
+            //   • present but short  → fewer units than requested (e.g. a store
+            //                          per-item cap accepted 2 of 3). The serial
+            //                          path used to only check presence, so a short
+            //                          add slipped through silently — this is the
+            //                          qty check the parallel reconcile branch has.
             let missing: string[] = [];
+            let shortAdds: string[] = [];
             if (rows) {
+              const active = activeItemsRef.current;
               const reportedAdded = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
-              const addedCartNames = rows.filter((r) => r.added).map((r) => r.name);
-              missing = findUnaddedItems(reportedAdded, addedCartNames);
+              const addedRows = rows.filter((r) => r.added);
+              missing = findUnaddedItems(reportedAdded, addedRows.map((r) => r.name));
+              // Only audit items we reported as added (failures already route to
+              // review), skip sold-by-weight lines (one row at N lb, not count-
+              // comparable), and skip fully-missing items (covered by `missing`).
+              const auditItems = active
+                .map((item) => ({
+                  name: item.searchTerm || item.ingredientName,
+                  expectedQty: Math.max(1, item.productQty || 1),
+                  isWeight: item.purchaseWeight != null,
+                }))
+                .filter((a) =>
+                  !a.isWeight
+                  && reportedAdded.some((n) => cartNameMatches(a.name, n))
+                  && !missing.some((n) => cartNameMatches(a.name, n)),
+                );
+              shortAdds = findShortAddedItems(addedRows, auditItems).map((s) => `${s.name} (${s.got} of ${s.expected})`);
             }
-            if (missing.length > 0) {
-              setCartDeltaWarning(
-                `Cart check: ${missing.length} item${missing.length === 1 ? '' : 's'} may not have been added to your ${lockedName} cart: ${missing.join(', ')}. Please double-check your cart.`
-              );
+            if (missing.length > 0 || shortAdds.length > 0) {
+              const parts: string[] = [];
+              if (missing.length > 0) {
+                parts.push(`${missing.length} item${missing.length === 1 ? '' : 's'} may not have been added (${missing.join(', ')})`);
+              }
+              if (shortAdds.length > 0) {
+                parts.push(`${shortAdds.length} item${shortAdds.length === 1 ? '' : 's'} added below the requested quantity, which a store limit can cause (${shortAdds.join(', ')})`);
+              }
+              setCartDeltaWarning(`Cart check on your ${lockedName} cart: ${parts.join('; ')}. Please double-check your cart.`);
             } else if (before != null && count != null && expected > 0 && count - before < expected) {
               // No per-item data (header-badge stores) or names didn't resolve —
               // fall back to the count-shortfall message.

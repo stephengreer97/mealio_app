@@ -89,3 +89,21 @@ list is per-session and does not persist; this file does).
 - [ ] **Price-anchor copy in the upgrade section.** Add "just 1% of the average
   monthly grocery bill" to the Full Access upgrade section to frame the $4.99/mo
   price against what people already spend on groceries.
+- [ ] **RevenueCat analytics enrichment.** Today the integration is minimal: the
+  app only sends `logIn(userId)` (`mealio_app/src/lib/purchases.ts`), and the
+  server webhook (`mealio_central/app/api/payments/revenuecat-webhook/route.ts`)
+  reads only `type`, `app_user_id`, and `expiration_at_ms`, discarding the rest.
+  In priority order:
+  (1) **Persist the full webhook payload** into an append-only `subscription_events`
+  table (price, currency, product_id, period_type, store, country_code,
+  is_trial_conversion, environment). Highest leverage, no mobile changes, no new
+  third-party exposure; unlocks MRR / trial-to-paid / churn analytics from our own
+  DB. Filter `environment` so sandbox purchases do not pollute the numbers.
+  (2) **Set subscriber attributes at logIn** (`$email`, `$displayName`, plus custom
+  ones like signup_platform, is_creator, referral_source) so RC dashboards and any
+  integration become useful. Note: this sends user PII TO RevenueCat, a different
+  data flow than the privacy policy currently discloses (which only mentions data
+  received FROM RC), so confirm the wording covers outbound PII before shipping.
+  (3) **Named Offerings + presented offering id** (or adopt RC Paywalls) so RC
+  Experiments can attribute conversions. Only worth it once we test pricing or
+  paywall copy. `getOffering()` currently just grabs `availablePackages[0]`.
