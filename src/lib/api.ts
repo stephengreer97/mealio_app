@@ -156,6 +156,9 @@ export const auth = {
   logout: () =>
     request<void>('/api/auth/logout', { method: 'POST' }),
 
+  logoutAll: () =>
+    request<void>('/api/auth/logout-all', { method: 'POST' }),
+
   resendVerification: (email: string) =>
     request<void>('/api/auth/resend-verification', {
       method: 'POST',
@@ -196,7 +199,7 @@ export const auth = {
 // Account
 export const account = {
   changePassword: (currentPassword: string, newPassword: string) =>
-    request<void>('/api/account/change-password', {
+    request<{ accessToken?: string }>('/api/account/change-password', {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
     }),

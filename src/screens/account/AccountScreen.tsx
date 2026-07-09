@@ -8,7 +8,9 @@ import {
   Alert,
   FlatList,
   Linking,
+  Platform,
   TextInput,
+  Modal,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -17,8 +19,9 @@ import * as ImagePicker from 'expo-image-picker';
 import { Colors, Radius } from '../../constants/colors';
 import { STORES } from '../../constants/stores';
 import { useAuth } from '../../context/AuthContext';
-import { account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
-import { getAllOfferings, purchasePackage, restorePurchases, getActiveSubscriptionStore, getEntitlementDetails, onEntitlementChange, ENTITLEMENT_ID, type EntitlementDetails } from '../../lib/purchases';
+import { auth as authApi, account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
+import * as tokenStorage from '../../lib/tokenStorage';
+import { getAllOfferings, purchasePackage, restorePurchases, getActiveSubscriptionStore, getEntitlementDetails, getManagementURL, onEntitlementChange, ENTITLEMENT_ID, type EntitlementDetails } from '../../lib/purchases';
 import Purchases, { type PurchasesPackage } from 'react-native-purchases';
 import * as WebBrowser from 'expo-web-browser';
 import { Creator, Meal } from '../../types';
@@ -54,6 +57,8 @@ export default function AccountScreen() {
 
   // Account deletion
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
   // Kroger
   const [krogerConnected, setKrogerConnected] = useState(false);
@@ -153,7 +158,10 @@ export default function AccountScreen() {
     setPwLoading(true);
     setPwError('');
     try {
-      await accountApi.changePassword(currentPw, newPw);
+      const res = await accountApi.changePassword(currentPw, newPw);
+      // Changing the password revokes all sessions server-side; persist the fresh
+      // token the server returned so this device stays signed in.
+      if (res?.accessToken) await tokenStorage.save(res.accessToken, null, user);
       setCurrentPw('');
       setNewPw('');
       Alert.alert('Success', 'Password changed successfully');
@@ -311,29 +319,23 @@ export default function AccountScreen() {
     }
   }
 
-  async function handleDeleteAccount() {
-    Alert.alert(
-      'Delete Account',
-      'This will permanently delete your account and all your saved meals. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete Account',
-          style: 'destructive',
-          onPress: async () => {
-            setDeleteLoading(true);
-            try {
-              await accountApi.deleteAccount();
-              await logout();
-            } catch (err: any) {
-              Alert.alert('Error', err.message || 'Could not delete account. Please try again.');
-            } finally {
-              setDeleteLoading(false);
-            }
-          },
-        },
-      ]
-    );
+  function handleDeleteAccount() {
+    setDeleteConfirmText('');
+    setDeleteConfirmVisible(true);
+  }
+
+  async function confirmDeleteAccount() {
+    if (deleteConfirmText !== 'Delete Account') return;
+    setDeleteLoading(true);
+    try {
+      await accountApi.deleteAccount();
+      setDeleteConfirmVisible(false);
+      await logout();
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not delete account. Please try again.');
+    } finally {
+      setDeleteLoading(false);
+    }
   }
 
   async function handleRestorePurchases() {
@@ -356,17 +358,64 @@ export default function AccountScreen() {
   async function handleManageSubscription() {
     setPortalLoading(true);
     try {
-      // Route based on WHERE the subscription was purchased, not what platform we're on.
-      // A user who subscribed on the web (Stripe) might be viewing this from the iOS app.
+      // Route based on WHERE the subscription was purchased. A store subscription
+      // can only be managed on the platform it was bought on — an App Store sub
+      // only from an Apple device, a Play sub only from Android. Calling the
+      // native manage UI for the "other" store throws ("this method is not
+      // available in the current platform"), so only call it when the store
+      // matches this device; otherwise point the user to the right place.
       const store = await getActiveSubscriptionStore();
 
-      if (store === 'app_store' || store === 'play_store') {
-        // Native manage-subscriptions UI. On iOS 15+ this is a sheet presented
-        // inside the app; on Android it deep-links to the Play Store (no in-app
-        // equivalent exists on that platform).
-        await Purchases.showManageSubscriptions();
+      const nativeOnThisPlatform =
+        (store === 'app_store' && Platform.OS === 'ios') ||
+        (store === 'play_store' && Platform.OS === 'android');
+
+      if (nativeOnThisPlatform) {
+        if (Platform.OS === 'ios') {
+          // iOS 13+: native App Store manage-subscriptions sheet. This method is
+          // iOS-only in react-native-purchases (it throws on Android).
+          await Purchases.showManageSubscriptions();
+        } else {
+          // Android: showManageSubscriptions is not available, so open the Play
+          // Store subscriptions page. RevenueCat's managementURL is the exact
+          // Play deep link; fall back to the generic page filtered to our package.
+          const url =
+            (await getManagementURL()) ??
+            'https://play.google.com/store/account/subscriptions?package=co.mealio.app';
+          await Linking.openURL(url);
+        }
         // They may have just cancelled — pull fresh renewal/expiry state.
         setEntDetails(await getEntitlementDetails());
+      } else if (store === 'app_store') {
+        // Purchased on the App Store but viewing from Android — Google Play can't
+        // manage Apple subscriptions.
+        Alert.alert(
+          'Manage on your Apple device',
+          'This subscription was purchased through the App Store. To change or cancel it, open Settings → your name → Subscriptions on your iPhone or iPad, or manage it on the web.',
+          [
+            { text: 'Close', style: 'cancel' },
+            {
+              text: 'Open on the web',
+              onPress: () =>
+                WebBrowser.openBrowserAsync('https://apps.apple.com/account/subscriptions'),
+            },
+          ],
+        );
+      } else if (store === 'play_store') {
+        // Purchased on Google Play but viewing from iOS — the App Store can't
+        // manage Play subscriptions.
+        Alert.alert(
+          'Manage on your Android device',
+          'This subscription was purchased through Google Play. To change or cancel it, open the Play Store → Subscriptions on your Android device, or manage it on the web.',
+          [
+            { text: 'Close', style: 'cancel' },
+            {
+              text: 'Open on the web',
+              onPress: () =>
+                WebBrowser.openBrowserAsync('https://play.google.com/store/account/subscriptions'),
+            },
+          ],
+        );
       } else {
         // Stripe subscriber, or subscription not found in RevenueCat (e.g. web-only
         // subscriber). Open the billing portal in an in-app browser sheet instead
@@ -382,10 +431,16 @@ export default function AccountScreen() {
   }
 
   async function handleLogout() {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+    Alert.alert('Sign Out', 'Sign out of this device, or of all devices?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: logout },
+      { text: 'This device', onPress: logout },
+      { text: 'All devices', style: 'destructive', onPress: handleLogoutAll },
     ]);
+  }
+
+  async function handleLogoutAll() {
+    try { await authApi.logoutAll(); } catch {}
+    await logout();
   }
 
   async function handleStoreLogout() {
@@ -758,6 +813,52 @@ export default function AccountScreen() {
         <TouchableOpacity onPress={handleDeleteAccount} disabled={deleteLoading} style={styles.deleteAccountBtn}>
           <Text style={styles.deleteAccountText}>{deleteLoading ? 'Deleting…' : 'Delete Account'}</Text>
         </TouchableOpacity>
+
+        <Modal
+          visible={deleteConfirmVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => { if (!deleteLoading) setDeleteConfirmVisible(false); }}
+        >
+          <View style={styles.deleteModalOverlay}>
+            <View style={styles.deleteModalCard}>
+              <Text style={styles.deleteModalTitle}>Delete Account</Text>
+              <Text style={styles.deleteModalBody}>
+                This permanently deletes your account, saved meals, and follows. If you&apos;re a creator, your published meals are removed from Discover. This cannot be undone.
+              </Text>
+              <Text style={styles.deleteModalLabel}>Type "Delete Account" to confirm:</Text>
+              <TextInput
+                value={deleteConfirmText}
+                onChangeText={setDeleteConfirmText}
+                placeholder="Delete Account"
+                placeholderTextColor={Colors.text3}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!deleteLoading}
+                style={styles.deleteModalInput}
+              />
+              <View style={styles.deleteModalBtnRow}>
+                <TouchableOpacity
+                  onPress={() => setDeleteConfirmVisible(false)}
+                  disabled={deleteLoading}
+                  style={styles.deleteModalCancel}
+                >
+                  <Text style={styles.deleteModalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={confirmDeleteAccount}
+                  disabled={deleteConfirmText !== 'Delete Account' || deleteLoading}
+                  style={[
+                    styles.deleteModalConfirm,
+                    (deleteConfirmText !== 'Delete Account' || deleteLoading) && styles.deleteModalConfirmDisabled,
+                  ]}
+                >
+                  <Text style={styles.deleteModalConfirmText}>{deleteLoading ? 'Deleting…' : 'Delete'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </KeyboardAwareScrollView>
     </SafeAreaView>
   );
@@ -840,6 +941,18 @@ const styles = StyleSheet.create({
   restoreLinkText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text3 },
   deleteAccountBtn: { alignItems: 'center', paddingVertical: 12, marginTop: 4, marginBottom: 8 },
   deleteAccountText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text3, textDecorationLine: 'underline' },
+  deleteModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 28 },
+  deleteModalCard: { width: '100%', maxWidth: 420, backgroundColor: '#fff', borderRadius: 18, padding: 22 },
+  deleteModalTitle: { fontSize: 18, fontFamily: 'Inter_700Bold', color: Colors.text1, marginBottom: 8 },
+  deleteModalBody: { fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text2, lineHeight: 20, marginBottom: 16 },
+  deleteModalLabel: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.text2, marginBottom: 8 },
+  deleteModalInput: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, fontFamily: 'Inter_400Regular', color: Colors.text1, marginBottom: 18 },
+  deleteModalBtnRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, alignItems: 'center' },
+  deleteModalCancel: { paddingVertical: 12, paddingHorizontal: 18, borderRadius: 12 },
+  deleteModalCancelText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: Colors.text2 },
+  deleteModalConfirm: { paddingVertical: 12, paddingHorizontal: 22, borderRadius: 12, backgroundColor: Colors.brand },
+  deleteModalConfirmDisabled: { backgroundColor: Colors.borderStrong },
+  deleteModalConfirmText: { fontSize: 15, fontFamily: 'Inter_700Bold', color: '#fff' },
   creatorPhotoRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   creatorPhoto: { width: 72, height: 72, borderRadius: 36, backgroundColor: Colors.surface },
   creatorPhotoPlaceholder: { justifyContent: 'center', alignItems: 'center' },
