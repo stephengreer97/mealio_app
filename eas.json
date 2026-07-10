@@ -35,9 +35,9 @@
       },
       "android": {
         "serviceAccountKeyPath": "./google-play-service-account.json",
-        "track": "internal",
-        "releaseStatus": "completed",
-        "changesNotSentForReview": false
+        "track": "production",
+        "releaseStatus": "draft",
+        "changesNotSentForReview": true
       }
     }
   }
