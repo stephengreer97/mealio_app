@@ -277,6 +277,14 @@ export default function LoginScreen({ navigation, route }: Props) {
 
             <Button testID="login-submit" label="Sign In" onPress={handleLogin} loading={loading} disabled={anyLoading} style={styles.submitBtn} />
 
+            <Button
+              label="Create an account"
+              variant="secondary"
+              onPress={() => navigation.navigate('Signup')}
+              disabled={anyLoading}
+              style={styles.submitBtn}
+            />
+
             <View style={styles.divider}>
               <View style={styles.dividerLine} />
               <Text style={styles.dividerText}>or continue with</Text>
@@ -311,16 +319,6 @@ export default function LoginScreen({ navigation, route }: Props) {
               </TouchableOpacity>
             )}
 
-            <View style={styles.divider}>
-              <View style={styles.dividerLine} />
-            </View>
-
-            <Button
-              label="Create an account"
-              variant="secondary"
-              onPress={() => navigation.navigate('Signup')}
-              disabled={anyLoading}
-            />
           </View>
       </KeyboardAwareScrollView>
     </SafeAreaView>
