@@ -328,7 +328,7 @@ export default function ProductChooserSheet({
                   onPress={handleNextBtn}
                   disabled={productQty === 0}
                 >
-                  <Text style={styles.navBtnText}>{isLast ? 'Save' : 'Next →'}</Text>
+                  <Text style={styles.navBtnText}>{productQty === 0 ? 'Choose Quantity' : isLast ? 'Save' : 'Next →'}</Text>
                 </TouchableOpacity>
               </View>
             </View>

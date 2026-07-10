@@ -654,7 +654,7 @@ export default function MyMealsScreen() {
               <Text style={styles.floatingCartText}>
                 {needsChoose
                   ? `Choose Products for ${unchosenCount} meal${unchosenCount !== 1 ? 's' : ''}`
-                  : `Add ${selectedMealIds.size} meal${selectedMealIds.size !== 1 ? 's' : ''} to ${selectedStore_?.name ?? 'cart'}`}
+                  : `Add ${selectedMealIds.size} meal${selectedMealIds.size !== 1 ? 's' : ''} to ${selectedStore_?.name ? `${selectedStore_.name} cart` : 'cart'}`}
               </Text>
             </TouchableOpacity>
           );
@@ -686,7 +686,7 @@ export default function MyMealsScreen() {
             <Text style={styles.floatingCartText}>
               {webViewNeedsChoose
                 ? `Choose Products for ${webViewUnchosenCount} meal${webViewUnchosenCount !== 1 ? 's' : ''}`
-                : `Add ${selectedMealIds.size} meal${selectedMealIds.size !== 1 ? 's' : ''} to ${selectedStore_?.name ?? 'cart'}`}
+                : `Add ${selectedMealIds.size} meal${selectedMealIds.size !== 1 ? 's' : ''} to ${selectedStore_?.name ? `${selectedStore_.name} cart` : 'cart'}`}
             </Text>
           </TouchableOpacity>
         );
