@@ -74,3 +74,7 @@ tests/live/creds.json
 
 # Claude Code personal settings (commands/ and MCP-SETUP.md ARE committed)
 .claude/settings.local.json
+
+# Personal running backlog — maintained locally, not tracked in git.
+TODO.md
+TODO-DONE.md
