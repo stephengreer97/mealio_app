@@ -222,6 +222,34 @@ export default function CreatorPortalScreen() {
                   </Card>
                 </View>
 
+                {/* Referral link */}
+                <Card style={styles.referralCard}>
+                  <Text style={styles.referralLabel}>YOUR REFERRAL LINK</Text>
+                  {creator.handle ? (
+                    <>
+                      <Text style={styles.referralLink}>mealio.co/{creator.handle}</Text>
+                      <TouchableOpacity
+                        style={styles.referralShareBtn}
+                        onPress={() =>
+                          Share.share({
+                            message: `https://mealio.co/${creator.handle}`,
+                            url: `https://mealio.co/${creator.handle}`,
+                          })
+                        }
+                        activeOpacity={0.85}
+                      >
+                        <Feather name="share-2" size={14} color="#fff" style={{ marginRight: 6 }} />
+                        <Text style={styles.referralShareText}>Share your link</Text>
+                      </TouchableOpacity>
+                      <Text style={styles.referralHint}>New signups from this link are credited to you.</Text>
+                    </>
+                  ) : (
+                    <Text style={styles.referralHint}>
+                      Set your handle at mealio.co/creator to get your referral link.
+                    </Text>
+                  )}
+                </Card>
+
                 {/* How earnings work */}
                 <TouchableOpacity
                   style={styles.earningsRow}
@@ -473,6 +501,19 @@ const styles = StyleSheet.create({
   statCard: { flex: 1, minWidth: '45%', alignItems: 'center', padding: 16 },
   statValue: { fontSize: 28, fontFamily: 'Inter_700Bold', color: Colors.brand, marginBottom: 4 },
   statLabel: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, textAlign: 'center' },
+  referralCard: { padding: 14, marginBottom: 12 },
+  referralLabel: { fontSize: 11, fontFamily: 'Inter_700Bold', color: Colors.text3, letterSpacing: 0.5, marginBottom: 6 },
+  referralLink: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: Colors.brand, marginBottom: 12 },
+  referralShareBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.brand,
+    borderRadius: Radius.button,
+    paddingVertical: 10,
+  },
+  referralShareText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#fff' },
+  referralHint: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, marginTop: 8 },
   earningsRow: {
     flexDirection: 'row',
     alignItems: 'center',
