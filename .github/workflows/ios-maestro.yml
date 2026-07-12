@@ -108,7 +108,8 @@ jobs:
     name: iOS Simulator + Maestro flows
     needs: wait-for-eas
     runs-on: macos-15
-    timeout-minutes: 30
+    # Headroom for the required suite + a time-capped bring-up step + uploads.
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -192,6 +193,10 @@ jobs:
       - name: Run mock-store cart flows (bring-up, non-blocking)
         if: always()
         continue-on-error: true
+        # Hard cap so this non-blocking bring-up can never consume the whole job
+        # budget and cancel it (which would discard the required suite's result).
+        # continue-on-error means a timeout here is ignored and the job proceeds.
+        timeout-minutes: 10
         env:
           MAESTRO_DRIVER_STARTUP_TIMEOUT: "120000"
           MEALIO_TEST_EMAIL: ${{ secrets.MEALIO_TEST_EMAIL }}
