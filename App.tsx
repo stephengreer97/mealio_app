@@ -16,6 +16,7 @@ import { AuthProvider } from './src/context/AuthContext';
 import { CartJobProvider } from './src/context/CartJobContext';
 import RootNavigator from './src/navigation/RootNavigator';
 import { installConsoleCapture } from './src/lib/logBuffer';
+import WebViewVersionProbe from './src/components/WebViewVersionProbe';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -38,6 +39,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
+      <WebViewVersionProbe />
       <AuthProvider>
         <CartJobProvider>
           <NavigationContainer>

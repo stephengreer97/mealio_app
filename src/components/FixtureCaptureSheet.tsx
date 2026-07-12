@@ -13,7 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { Colors } from '../constants/colors';
 import { FIXTURE_CAPTURE_STORES, StoreId } from '../lib/fixture-capture-config';
-import { STORE_WEBVIEW_UA } from '../lib/webview-user-agent';
+import { getStoreWebViewUA } from '../lib/webview-user-agent';
 
 interface Props {
   visible: boolean;
@@ -200,7 +200,7 @@ export default function FixtureCaptureSheet({
           thirdPartyCookiesEnabled
           allowsInlineMediaPlayback
           mediaPlaybackRequiresUserAction={false}
-          userAgent={STORE_WEBVIEW_UA}
+          userAgent={getStoreWebViewUA()}
         />
 
         {lastStatus && (

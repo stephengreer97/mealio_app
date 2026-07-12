@@ -19,7 +19,8 @@ import { Colors } from '../constants/colors';
 import { Meal } from '../types';
 import { STORES } from '../constants/stores';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
-import { STORE_WEBVIEW_UA } from '../lib/webview-user-agent';
+import { getStoreWebViewUA } from '../lib/webview-user-agent';
+import { WEBVIEW_FINGERPRINT_SHIM } from '../lib/webview-fingerprint-shim';
 import { usage } from '../lib/api';
 import {
   ConsolidatedIngredient,
@@ -2260,7 +2261,8 @@ export default function WebViewCartSheet({
             thirdPartyCookiesEnabled
             allowsInlineMediaPlayback
             mediaPlaybackRequiresUserAction={false}
-            userAgent={STORE_WEBVIEW_UA}
+            userAgent={getStoreWebViewUA()}
+            injectedJavaScriptBeforeContentLoaded={WEBVIEW_FINGERPRINT_SHIM}
           />
         </View>
         )}
@@ -2304,7 +2306,8 @@ export default function WebViewCartSheet({
                 domStorageEnabled
                 sharedCookiesEnabled
                 thirdPartyCookiesEnabled
-                userAgent={STORE_WEBVIEW_UA}
+                userAgent={getStoreWebViewUA()}
+                injectedJavaScriptBeforeContentLoaded={WEBVIEW_FINGERPRINT_SHIM}
                 injectedJavaScript={workerScripts[i]}
               />
             ) : null)}
@@ -2336,7 +2339,8 @@ export default function WebViewCartSheet({
                 domStorageEnabled
                 sharedCookiesEnabled
                 thirdPartyCookiesEnabled
-                userAgent={STORE_WEBVIEW_UA}
+                userAgent={getStoreWebViewUA()}
+                injectedJavaScriptBeforeContentLoaded={WEBVIEW_FINGERPRINT_SHIM}
                 injectedJavaScript={addWorkerScripts[i]}
               />
             ) : null)}
