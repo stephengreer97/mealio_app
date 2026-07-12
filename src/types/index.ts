@@ -78,6 +78,7 @@ export interface Creator {
   bio?: string | null;
   photoUrl?: string | null;
   socialHandle?: string | null;
+  handle?: string | null;
   followers?: number;
   isFollowing?: boolean;
   createdAt?: string;

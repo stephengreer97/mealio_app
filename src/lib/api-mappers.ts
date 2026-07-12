@@ -62,6 +62,7 @@ export function mapCreator(c: any): Creator {
     bio: c.bio ?? null,
     photoUrl: c.photo_url ?? c.photoUrl ?? null,
     socialHandle: c.social_handle ?? c.socialHandle ?? null,
+    handle: c.handle ?? null,
     followers: c.followers ?? 0,
     isFollowing: c.is_following ?? c.isFollowing ?? false,
     createdAt: c.created_at ?? c.createdAt,

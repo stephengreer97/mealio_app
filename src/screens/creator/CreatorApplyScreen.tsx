@@ -22,6 +22,7 @@ type State = 'loading' | 'form' | 'pending';
 export default function CreatorApplyScreen() {
   const [state, setState] = useState<State>('loading');
   const [displayName, setDisplayName] = useState('');
+  const [handle, setHandle] = useState('');
   const [phone, setPhone] = useState('');
   const [findUs, setFindUs] = useState('');
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -76,6 +77,8 @@ export default function CreatorApplyScreen() {
   function validate() {
     const e: Record<string, string> = {};
     if (!displayName.trim()) e.displayName = 'Display name is required';
+    if (!handle.trim()) e.handle = 'Choose a handle for your Mealio link';
+    else if (!/^[a-z0-9_-]{3,30}$/.test(handle.trim())) e.handle = '3–30 characters: letters, numbers, hyphens, underscores';
     if (!phone.trim()) e.phone = 'Phone number is required';
     if (!findUs.trim()) e.findUs = 'Please tell us how you found us';
     if (!termsAccepted) e.terms = 'You must accept the terms';
@@ -89,6 +92,7 @@ export default function CreatorApplyScreen() {
     try {
       await creatorsApi.apply({
         displayName: displayName.trim(),
+        handle: handle.trim(),
         phone: phone.trim(),
         findUs: findUs.trim(),
         photoUrl: photoUrl ?? undefined,
@@ -141,6 +145,19 @@ export default function CreatorApplyScreen() {
               onChangeText={setDisplayName}
               error={errors.displayName}
             />
+            <Input
+              label="Your Mealio Link (mealio.co/…)"
+              placeholder="chefsarah"
+              value={handle}
+              onChangeText={(t) => setHandle(t.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+              error={errors.handle}
+            />
+            <Text style={styles.handleWarning}>
+              ⚠ Permanent — this is your referral link and can&apos;t be changed after you apply.
+            </Text>
+            {handle.trim() !== '' && (
+              <Text style={styles.handlePreview}>mealio.co/{handle.trim()}</Text>
+            )}
             <Input
               label="Phone Number"
               placeholder="+1 (555) 000-0000"
@@ -215,6 +232,8 @@ const styles = StyleSheet.create({
   },
   card: { marginBottom: 16 },
   photoLabel: { fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text2, marginBottom: 10 },
+  handleWarning: { fontSize: 12, fontFamily: 'Inter_600SemiBold', color: Colors.brand, marginTop: -6, marginBottom: 6 },
+  handlePreview: { fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text2, marginBottom: 10 },
   photoRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 20 },
   photo: { width: 72, height: 72, borderRadius: 36, backgroundColor: Colors.surface },
   photoPlaceholder: { justifyContent: 'center', alignItems: 'center' },

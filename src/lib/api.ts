@@ -326,7 +326,7 @@ export const creators = {
       body: JSON.stringify({ photoUrl: data.photoUrl, bio: data.bio, displayName: data.displayName }),
     }),
 
-  apply: (data: { displayName: string; phone: string; findUs: string; photoUrl?: string }) =>
+  apply: (data: { displayName: string; handle: string; phone: string; findUs: string; photoUrl?: string }) =>
     request<any>('/api/creator/apply', {
       method: 'POST',
       body: JSON.stringify(data),
