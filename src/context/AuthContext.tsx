@@ -1,8 +1,10 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
+import { AppState, Platform } from 'react-native';
+import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import { User } from '../types';
 import * as tokenStorage from '../lib/tokenStorage';
-import { auth, creators } from '../lib/api';
+import { auth, creators, usage } from '../lib/api';
 import { initPurchases, identifyUser, resetUser } from '../lib/purchases';
 
 interface AuthContextValue {
@@ -24,9 +26,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isCreator, setIsCreator] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Usage analytics: session-level "open" logging (best-effort).
+  const lastOpenLoggedAt = useRef(0);
+  const userRef = useRef<User | null>(null);
+  userRef.current = user;
+
+  function recordOpen() {
+    lastOpenLoggedAt.current = Date.now();
+    usage.logOpen({ source: 'app', platform: Platform.OS, appVersion: Constants.expoConfig?.version });
+  }
+
   useEffect(() => {
     initPurchases();
     initAuth();
+  }, []);
+
+  // Log an open when the app returns to the foreground after being idle a while
+  // (a new session), for signed-in users. Launch opens are logged in initAuth.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active' || !userRef.current) return;
+      if (Date.now() - lastOpenLoggedAt.current < 30 * 60 * 1000) return;
+      recordOpen();
+    });
+    return () => sub.remove();
   }, []);
 
   async function initAuth() {
@@ -46,6 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const { user: verifiedUser } = await auth.verify();
         setUser(verifiedUser);
+        recordOpen();
         await Promise.all([checkCreatorStatus(), identifyUser(verifiedUser.id)]);
       } catch {
         // Token expired — try renewing with the current access token
@@ -56,6 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const renewedUser = result.user ?? storedUser;
             await tokenStorage.save(result.accessToken, null, renewedUser);
             setUser(renewedUser);
+            recordOpen();
             await Promise.all([checkCreatorStatus(), identifyUser(renewedUser.id)]);
           } else {
             await tokenStorage.clear();

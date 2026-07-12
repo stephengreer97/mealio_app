@@ -461,7 +461,7 @@ export const kroger = {
   addToCartDirect: (items: Array<{ upc: string; quantity: number }>, locationId?: string) =>
     request<{ added: number; cartAdded: boolean }>('/api/kroger/add-to-cart', {
       method: 'POST',
-      body: JSON.stringify({ items, locationId }),
+      body: JSON.stringify({ items, locationId, source: 'app' }),
       timeoutMs: 60_000,
     }),
 
@@ -480,6 +480,36 @@ export const kroger = {
       body: JSON.stringify({ ingredients, locationId, storeId, mealNames }),
       timeoutMs: 60_000,
     }),
+};
+
+// Usage analytics. All best-effort: a logging failure must never surface to the
+// caller or block an open / automation run.
+export const usage = {
+  logOpen: async (data: { source: 'app'; platform?: string; appVersion?: string }): Promise<void> => {
+    try {
+      await request<{ ok: boolean }>('/api/usage/open', { method: 'POST', body: JSON.stringify(data) });
+    } catch { /* best-effort */ }
+  },
+
+  logAutomationStart: async (data: { storeId: string; source: 'app'; mealCount?: number; itemsRequested?: number }): Promise<string | null> => {
+    try {
+      const r = await request<{ runId: string }>('/api/usage/automation', {
+        method: 'POST',
+        body: JSON.stringify({ phase: 'start', ...data }),
+      });
+      return r?.runId ?? null;
+    } catch { return null; }
+  },
+
+  logAutomationComplete: async (data: { runId: string; itemsAdded?: number; itemsRequested?: number; outcome: 'success' | 'partial' | 'failed' }): Promise<void> => {
+    if (!data.runId) return;
+    try {
+      await request<{ ok: boolean }>('/api/usage/automation', {
+        method: 'POST',
+        body: JSON.stringify({ phase: 'complete', ...data }),
+      });
+    } catch { /* best-effort */ }
+  },
 };
 
 export { ApiError };

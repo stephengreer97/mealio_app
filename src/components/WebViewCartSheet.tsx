@@ -20,6 +20,7 @@ import { Meal } from '../types';
 import { STORES } from '../constants/stores';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
 import { STORE_WEBVIEW_UA } from '../lib/webview-user-agent';
+import { usage } from '../lib/api';
 import {
   ConsolidatedIngredient,
   consolidateIngredients,
@@ -185,6 +186,27 @@ export default function WebViewCartSheet({
   const [step, _setStep] = useState<Step>('qty');
   const stepRef = useRef<Step>('qty');
   const setStep = useCallback((s: Step) => { stepRef.current = s; _setStep(s); }, []);
+
+  // Usage analytics for the WebView automation run (best-effort). Covers both the
+  // background (startJob) and direct (setWebViewCartVisible) entry paths since it
+  // lives in the sheet. One run per visible open: started -> completed on 'done'.
+  const automationRunIdRef = useRef<string | null>(null);
+  const automationStartedRef = useRef(false);
+  const automationCompletedRef = useRef(false);
+  useEffect(() => {
+    if (visible) {
+      if (!automationStartedRef.current) {
+        automationStartedRef.current = true;
+        usage
+          .logAutomationStart({ storeId, source: 'app', mealCount: meals.length })
+          .then((id) => { automationRunIdRef.current = id; });
+      }
+    } else {
+      automationStartedRef.current = false;
+      automationCompletedRef.current = false;
+      automationRunIdRef.current = null;
+    }
+  }, [visible, storeId, meals.length]);
 
   // Step: qty
   const [items, setItems] = useState<ConsolidatedIngredient[]>([]);
@@ -832,6 +854,17 @@ export default function WebViewCartSheet({
     if (totalAdded === 0) return;
     triggerCartProbe('after');
   }, [step, totalAdded, lockedStoreId, triggerCartProbe]);
+
+  // Usage analytics: log the automation run's completion once it reaches 'done'.
+  // Fires for every finished run (unlike the gated after-probe above).
+  useEffect(() => {
+    if (step !== 'done' || automationCompletedRef.current) return;
+    automationCompletedRef.current = true;
+    const outcome: 'success' | 'partial' | 'failed' =
+      totalAdded === 0 ? 'failed' : cartDeltaWarning ? 'partial' : 'success';
+    const runId = automationRunIdRef.current;
+    if (runId) usage.logAutomationComplete({ runId, itemsAdded: totalAdded, outcome });
+  }, [step, totalAdded, cartDeltaWarning]);
 
   // Clear all safety timers on unmount. Without this, closing the sheet mid
   // login-check / search / add leaves a real setTimeout running that later
