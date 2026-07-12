@@ -49,12 +49,6 @@ const SHIM_SOURCE = `(function () {
     } catch (e) {}
 
     var isEmulator = /Android Emulator|SwiftShader|ATI Technologies|OpenGL ES Translator/i.test(live);
-    // TEMP verify: confirm the native patch rewrote Sec-CH-UA brands to Chrome.
-    try {
-      var uad = navigator.userAgentData;
-      console.log('[mealio-ch] ua=' + navigator.userAgent);
-      if (uad) console.log('[mealio-ch] brands=' + JSON.stringify(uad.brands));
-    } catch (e) {}
     if (!isEmulator) return;
 
     function patch(proto) {
