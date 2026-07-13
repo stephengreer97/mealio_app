@@ -1084,10 +1084,10 @@ export function getScripts(storeId: string): StoreScripts {
     getSearchUrl: (term: string) => `${storeOrigin}/shop/search-results.html?q=` + encodeURIComponent(albertsonsSearchQuery(term)),
     buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, buildExtractProductsScript()),
     // Albertsons search loads are heavy — 5 concurrent WebViews crashed the iOS
-    // WKWebView content process (shared memory budget). 4 staggered by 400ms is
-    // the throughput/stability balance (3 was safe but slow; 5 crashed). Keeps
-    // parallel on (unlike ALDI/Wegmans forceSerialSearch).
-    workerCount: 4,
+    // WKWebView content process (shared memory budget). 3 staggered by 400ms is
+    // proven safe and matches the low global default for anti-bot reasons (fewer
+    // concurrent requests). Keeps parallel on (unlike ALDI/Wegmans forceSerialSearch).
+    workerCount: 3,
     workerStaggerMs: 400,
   };
 }
