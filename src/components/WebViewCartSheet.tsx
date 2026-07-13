@@ -2069,7 +2069,9 @@ export default function WebViewCartSheet({
     if (action !== 'skip' && currentReview) {
       const displayCandidates = customSuggestions.length > 0 ? customSuggestions : currentReview.candidates;
       const candidate = typeof selectedSuggIdx === 'number' ? displayCandidates[selectedSuggIdx] : null;
-      if (candidate && !candidate.outOfStock) {
+      // 'choose' only saves the product for future runs (no cart add), so an
+      // out-of-stock pick is allowed; 'add'/'update' hit the cart, so OOS stays blocked.
+      if (candidate && (action === 'choose' || !candidate.outOfStock)) {
         // Re-deciding this ingredient after a Back: drop any earlier skip for it.
         setSkippedByIdx((prev) => {
           if (!(reviewIdx in prev)) return prev;
@@ -2586,7 +2588,10 @@ export default function WebViewCartSheet({
           const canAdd = !customSearching && (
             selectedSuggIdx === 'custom'
               ? customText.trim().length > 0
-              : candidate != null && !candidate.outOfStock &&
+              // OOS is only blocked in the add-to-cart / review flow. Choose
+              // Product just saves the product as the ingredient's searchTerm for
+              // future runs (no cart add), so an out-of-stock pick is allowed there.
+              : candidate != null && (isChoose || !candidate.outOfStock) &&
                 (isChoose ? chooseQty > 0 : totalQty > 0) &&
                 (!needsPref || selectedPreference != null)
           );
@@ -2667,7 +2672,8 @@ export default function WebViewCartSheet({
                         {
                           borderColor: selected ? storeColor : Colors.border,
                           backgroundColor: selected ? '#fff0f0' : Colors.surface,
-                          opacity: c.outOfStock ? 0.5 : 1,
+                          // Don't dim OOS rows in Choose Product — they're selectable there.
+                          opacity: c.outOfStock && !isChoose ? 0.5 : 1,
                         },
                       ]}
                       activeOpacity={0.7}
