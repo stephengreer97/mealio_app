@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,8 @@ import {
   ScrollView,
   TextInput,
   ActivityIndicator,
+  Animated,
+  PanResponder,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
@@ -54,6 +56,31 @@ export default function ProductChooserSheet({
   const [customSearching, setCustomSearching] = useState(false);
   const [savedCount, setSavedCount] = useState(0);
 
+  // Draggable floating preview image. Starts pinned top-right (see floatingImageWrap
+  // top:44 / right:16 / 88x88); the pan offset translates it from there, clamped to
+  // the picking container. Position resets each time the sheet opens.
+  const IMG = 88;
+  const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const panBase = useRef({ x: 0, y: 0 });
+  const containerSize = useRef({ w: 0, h: 0 });
+  const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 2 || Math.abs(g.dy) > 2,
+      onPanResponderGrant: () => {
+        panBase.current = { x: (pan.x as any)._value, y: (pan.y as any)._value };
+      },
+      onPanResponderMove: (_, g) => {
+        const { w, h } = containerSize.current;
+        const baseLeft = w - 16 - IMG; // resting distance from container left edge
+        const nx = clamp(panBase.current.x + g.dx, -baseLeft, 16);
+        const ny = clamp(panBase.current.y + g.dy, -44, Math.max(0, h - IMG - 44));
+        pan.setValue({ x: nx, y: ny });
+      },
+    })
+  ).current;
+
   const unchosenIngredients = meal.ingredients.filter((i) => !i.searchTerm);
   const current = results[pickIdx];
   const isLast = pickIdx === results.length - 1;
@@ -77,6 +104,7 @@ export default function ProductChooserSheet({
       setSelectedDescription(null);
       setCustomText('');
       setSavedCount(0);
+      pan.setValue({ x: 0, y: 0 });
       doSearch();
     }
   }, [visible]);
@@ -220,11 +248,19 @@ export default function ProductChooserSheet({
         )}
 
         {step === 'picking' && current && (
-          <View style={{ flex: 1 }}>
+          <View
+            style={{ flex: 1 }}
+            onLayout={(e) => {
+              containerSize.current = { w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height };
+            }}
+          >
           {selectedImageUrl ? (
-            <View style={styles.floatingImageWrap} pointerEvents="none">
+            <Animated.View
+              style={[styles.floatingImageWrap, { transform: pan.getTranslateTransform() }]}
+              {...panResponder.panHandlers}
+            >
               <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
-            </View>
+            </Animated.View>
           ) : null}
           <>
             <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
