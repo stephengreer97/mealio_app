@@ -23,13 +23,13 @@
 //      appBannerHistory with maxed display counts so its own frequency cap skips
 //      every nudge type.
 //
-// Applied to Walmart / Wegmans / ALDI / Albertsons-family. NOT applied to HEB or
-// Amazon yet (their WAF issues are handled separately first), nor the mock store.
+// Applied to every real store (Walmart / Wegmans / ALDI / Albertsons-family /
+// HEB / Amazon). Only the mock store is excluded.
 
 import { WEBVIEW_FINGERPRINT_SHIM } from './webview-fingerprint-shim';
 
-// Stores that should NOT get the suppressor (handled elsewhere / not real).
-const SUPPRESSOR_EXCLUDED = new Set(['heb', 'amazon', 'mockstore']);
+// Stores that should NOT get the suppressor (test fixture, not a real storefront).
+const SUPPRESSOR_EXCLUDED = new Set(['mockstore']);
 
 // ── Generic remover ─────────────────────────────────────────────────────────
 // `${DBG}` is replaced with the RN-side __DEV__ boolean so the [nudge-kill] log
@@ -117,7 +117,7 @@ const STORE_SEEDS: Record<string, string> = {
  * The full injectedJavaScriptBeforeContentLoaded payload for a store WebView:
  * the fingerprint shim (always) + the app-banner suppressor (for eligible
  * stores) + any store-specific nudge pre-seed. Returns just the shim for
- * excluded stores (HEB / Amazon / mock).
+ * excluded stores (the mock store).
  */
 export function buildBeforeContentScript(storeId: string): string {
   const parts = [WEBVIEW_FINGERPRINT_SHIM];

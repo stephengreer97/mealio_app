@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Image } from 'expo-image';
+import FloatingPreviewImage from './FloatingPreviewImage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
 import { Meal } from '../types';
@@ -221,11 +221,11 @@ export default function ProductChooserSheet({
 
         {step === 'picking' && current && (
           <View style={{ flex: 1 }}>
-          {selectedImageUrl ? (
-            <View style={styles.floatingImageWrap} pointerEvents="none">
-              <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
-            </View>
-          ) : null}
+          <FloatingPreviewImage
+            uri={selectedImageUrl}
+            wrapStyle={styles.floatingImageWrap}
+            imageStyle={styles.floatingImage}
+          />
           <>
             <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
               <View style={styles.searchedBox}>

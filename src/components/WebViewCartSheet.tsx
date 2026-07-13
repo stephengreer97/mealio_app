@@ -12,8 +12,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
-import { Image } from 'expo-image';
 import WebView, { WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
+import FloatingPreviewImage from './FloatingPreviewImage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Meal } from '../types';
@@ -393,6 +393,10 @@ export default function WebViewCartSheet({
   const PARALLEL_WORKER_COUNT = scripts?.workerCount ?? 5;
   const PARALLEL_WORKER_STAGGER_MS = scripts?.workerStaggerMs ?? 0;
   const PARALLEL_WORKER_TIMEOUT_MS = 20_000;
+  // Parallel-ADD worker count: honor the per-store workerCount (a heavy store
+  // like Albertsons crashed the iOS WKWebView content process with 5 concurrent
+  // add WebViews), falling back to the global pilot default.
+  const PARALLEL_ADD_WORKER_COUNT = scripts?.workerCount ?? PARALLEL_ADD_WORKERS;
   // A store opts into the worker-pool choose-product path by exposing BOTH
   // getSearchUrl and buildWorkerScript on its StoreScripts. Null otherwise →
   // sequential single-WebView flow. (WAF note: HEB/Walmart/Albertsons run 5
@@ -420,7 +424,7 @@ export default function WebViewCartSheet({
   // Per-item term/qty/preference ride in the URL hash; the worker's add script
   // reads them and confirms via the store cart badge (> prev).
   const addPool = useParallelSearchPool<ConsolidatedIngredient, AddResult>({
-    workerCount: PARALLEL_ADD_WORKERS,
+    workerCount: PARALLEL_ADD_WORKER_COUNT,
     // Longer than search: an add worker also runs the cart-badge confirmation
     // poll (up to ~10s on a slow network) on top of search + click.
     workerTimeoutMs: 35_000,
@@ -507,7 +511,7 @@ export default function WebViewCartSheet({
   // (HEB pilot); others fall back to sequential via beginSearchFlow's gate.
   const addWorkerScripts = useMemo(
     () => parallelCfg && scripts
-      ? new Array(PARALLEL_ADD_WORKERS).fill(0).map((_, i) =>
+      ? new Array(PARALLEL_ADD_WORKER_COUNT).fill(0).map((_, i) =>
           buildSearchAndAddWorker(i, scripts.buildSearchAndAddScript('', 1, null)))
       : [],
     [parallelCfg, scripts],
@@ -636,7 +640,7 @@ export default function WebViewCartSheet({
   const startParallelAdd = useCallback(() => {
     const active = activeItemsRef.current;
     if (active.length === 0) return;
-    console.log(`[Cart ${ts()}]`, 'parallel ADD: dispatching', active.length, 'across', PARALLEL_ADD_WORKERS, 'workers');
+    console.log(`[Cart ${ts()}]`, 'parallel ADD: dispatching', active.length, 'across', PARALLEL_ADD_WORKER_COUNT, 'workers');
     parallelOriginalTotalRef.current = active.length; // forward-only progress denominator
     setStep('adding');
     setSearchingLabel(`Adding ${active.length} ingredients…`);
@@ -2556,11 +2560,11 @@ export default function WebViewCartSheet({
 
           return (
             <>
-              {selectedImageUrl ? (
-                <View style={styles.floatingImageWrap} pointerEvents="none">
-                  <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
-                </View>
-              ) : null}
+              <FloatingPreviewImage
+                uri={selectedImageUrl}
+                wrapStyle={styles.floatingImageWrap}
+                imageStyle={styles.floatingImage}
+              />
 
               <KeyboardAwareScrollView style={{ flex: 1 }} contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="handled" enableOnAndroid extraScrollHeight={24}>
                 {/* Reason context — only shown for review-unmatched, not choose-product */}

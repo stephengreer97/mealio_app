@@ -163,13 +163,33 @@ function buildExtractProductsScript(): string {
   }
   document.addEventListener('focusin', __noKbd, true);
 
+  // Only extract from a real search-results page. Albertsons returns nothing for
+  // long queries and can bounce to the homepage / show a "recommended / buy it
+  // again" carousel — those tiles have Add buttons too and would otherwise be
+  // scraped as bogus, irrelevant suggestions.
+  if (location.href.indexOf('search-results') === -1) {
+    document.removeEventListener('focusin', __noKbd, true);
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: [] }));
+    return;
+  }
+
   var ATC_SEL = 'button[aria-label^="Add 1 unit of"]';
 
-  // Poll for ATC buttons to appear (up to 6s).
+  // Poll for ATC buttons, then wait for the result grid to SETTLE — the button
+  // count must hold steady across 2 consecutive checks (300ms apart) before we
+  // extract. Under concurrent load (parallel add) the grid paints its first card
+  // early but keeps hydrating; extracting on first sight grabbed a partial set
+  // and mis-scored every item as low-confidence. Up to ~9s (30 * 300ms).
   var btns = [];
-  for (var poll = 0; poll < 20; poll++) {
+  var lastCount = -1, stableStreak = 0;
+  for (var poll = 0; poll < 30; poll++) {
     btns = Array.from(document.querySelectorAll(ATC_SEL));
-    if (btns.length > 0) break;
+    if (btns.length > 0 && btns.length === lastCount) {
+      if (++stableStreak >= 2) break;
+    } else {
+      stableStreak = btns.length > 0 ? 1 : 0;
+    }
+    lastCount = btns.length;
     await wait(300);
   }
 
@@ -658,6 +678,20 @@ function buildSearchAndAddScriptFn(
 
   var SEARCH_TERM = ${escapedTerm};
   var QTY = ${qty};
+  // Parallel-add worker mode: the pool injects ONE fixed script per worker (built
+  // with an empty term), so each item's real term/qty ride in the URL hash
+  // (#mealio=<json>). Override the baked-in defaults when present. No hash →
+  // sequential flow, unchanged. Without this, workers scored every candidate
+  // against an empty SEARCH_TERM and returned low_confidence for all items.
+  try {
+    if (location.hash && location.hash.indexOf('#mealio=') === 0) {
+      var __mq = JSON.parse(decodeURIComponent(location.hash.slice(8)));
+      if (__mq) {
+        if (typeof __mq.term === 'string') SEARCH_TERM = __mq.term;
+        if (typeof __mq.qty === 'number') QTY = __mq.qty;
+      }
+    }
+  } catch (e) {}
   var ATC_SEL = 'button[aria-label^="Add 1 unit of"]';
   var BUBBLE_SEL = 'button[data-qa="qty-stppr-bbl"]';
   var INCREMENT_SEL = 'button[data-qa="prdctincrmntr"]';
@@ -694,6 +728,17 @@ function buildSearchAndAddScriptFn(
 
   function normalizeForScoring(s) {
     return s.toLowerCase().replace(/[^\\w\\s]/g, ' ').replace(/\\s+/g, ' ').trim();
+  }
+
+  // A surfaced suggestion must share at least one meaningful word with the search
+  // term. Albertsons returns nothing for long queries and shows a "recommended /
+  // buy it again" carousel instead — those Add buttons would otherwise become
+  // bogus suggestions. Zero-overlap products are that carousel, so drop them.
+  function __relevant(name) {
+    var tw = normalizeForScoring(SEARCH_TERM).split(' ').filter(function(w) { return w.length > 2; });
+    if (tw.length === 0) return true;
+    var fw = normalizeForScoring(name).split(' ');
+    return tw.some(function(w) { return fw.indexOf(w) !== -1; });
   }
 
   function scoreProductName(foundName, targetName) {
@@ -806,12 +851,14 @@ function buildSearchAndAddScriptFn(
     return 0;
   }
 
-  // After clicking ATC or increment, poll until the cart qty changes (up to 5s).
+  // After clicking ATC or increment, poll until the cart qty changes (up to 2.5s).
+  // Kept short: the parallel pass reconciles against the real cart afterward and
+  // retries anything not present, so a slow commit is caught there, not here.
   function waitForQtyChange(prevQty) {
     return new Promise(function(resolve) {
       var elapsed = 0;
       function tick() {
-        if (elapsed >= 5000) { resolve(false); return; }
+        if (elapsed >= 2500) { resolve(false); return; }
         var current = getCartQty();
         if (current > prevQty) { resolve(true); return; }
         elapsed += 200;
@@ -842,7 +889,8 @@ function buildSearchAndAddScriptFn(
         var hc = getHeaderCartCount();
         if (headerBefore != null && hc != null && hc > headerBefore) { resolve(true); return; }
         if (headerBefore == null && getCartQty() > tileBefore) { resolve(true); return; }
-        if (elapsed >= 7000) { resolve(false); return; }
+        // Short cap: unconfirmed adds are caught by the post-pass cart reconcile.
+        if (elapsed >= 2500) { resolve(false); return; }
         elapsed += 250;
         setTimeout(tick, 250);
       }
@@ -850,11 +898,19 @@ function buildSearchAndAddScriptFn(
     });
   }
 
-  // Poll for ATC buttons to appear (up to 6s).
+  // Poll for ATC buttons, then wait for the result grid to SETTLE (count steady
+  // across 2 consecutive 300ms checks) before scoring — see buildExtractProductsScript.
+  // Up to ~9s (30 * 300ms).
   var allAtcBtns = [];
-  for (var poll = 0; poll < 20; poll++) {
+  var lastCount = -1, stableStreak = 0;
+  for (var poll = 0; poll < 30; poll++) {
     allAtcBtns = Array.from(document.querySelectorAll(ATC_SEL)).slice(0, 20);
-    if (allAtcBtns.length > 0) break;
+    if (allAtcBtns.length > 0 && allAtcBtns.length === lastCount) {
+      if (++stableStreak >= 2) break;
+    } else {
+      stableStreak = allAtcBtns.length > 0 ? 1 : 0;
+    }
+    lastCount = allAtcBtns.length;
     await wait(300);
   }
 
@@ -899,10 +955,11 @@ function buildSearchAndAddScriptFn(
 
   // Give up only if there's no ATC button AND the item isn't already in the cart.
   if (!bestAtcBtn && !preExistingBubble && !preExistingIncrement) {
+    var surfaced = candidates.filter(__relevant);
     var hasExactOos = candidates.some(function(c) { return scoreMatch(SEARCH_TERM, c.productName) === 100 && c.outOfStock; });
-    var reason = candidates.length === 0 ? 'no_results' : hasExactOos ? 'out_of_stock' : 'low_confidence';
+    var reason = surfaced.length === 0 ? 'no_results' : hasExactOos ? 'out_of_stock' : 'low_confidence';
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: reason, candidates: candidates }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: reason, candidates: surfaced }));
     return;
   }
 
@@ -995,7 +1052,7 @@ function buildSearchAndAddScriptFn(
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: actuallyClicked >= 1, productName: matchName, actuallyClicked: actuallyClicked, qty: QTY }));
   } catch(e) {
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: candidates }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: candidates.filter(__relevant) }));
   }
 })();true;`;
 }
@@ -1026,5 +1083,11 @@ export function getScripts(storeId: string): StoreScripts {
     buildSearchAndAddScript: buildSearchAndAddScriptFn,
     getSearchUrl: (term: string) => `${storeOrigin}/shop/search-results.html?q=` + encodeURIComponent(albertsonsSearchQuery(term)),
     buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, buildExtractProductsScript()),
+    // Albertsons search loads are heavy — 5 concurrent WebViews crashed the iOS
+    // WKWebView content process (shared memory budget). 4 staggered by 400ms is
+    // the throughput/stability balance (3 was safe but slow; 5 crashed). Keeps
+    // parallel on (unlike ALDI/Wegmans forceSerialSearch).
+    workerCount: 4,
+    workerStaggerMs: 400,
   };
 }
