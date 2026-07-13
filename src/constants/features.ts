@@ -18,5 +18,6 @@ export const FEATURE_PARALLEL_ADD = true;  // LOCAL pilot — uncommitted
 
 // Concurrency cap for parallel add-to-cart. The sequential reconciliation pass
 // re-adds anything the concurrent pass missed (false positives from the shared
-// cart counter), so we can run wide for speed.
-export const PARALLEL_ADD_WORKERS = 5;
+// cart counter). Kept low (was 5) to reduce the concurrent-request burst that
+// aggressive WAFs score as automation; the dispatch is also staggered + jittered.
+export const PARALLEL_ADD_WORKERS = 3;

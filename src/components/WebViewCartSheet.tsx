@@ -403,10 +403,13 @@ export default function WebViewCartSheet({
   // timeout state machine lives in useParallelSearchPool; this component owns
   // only the start trigger, the per-worker WebView render, and the "all done →
   // build SearchResult list → go to review" finalization.
-  // Worker count + initial-dispatch stagger are per-store (anti-bot tuning):
-  // ALDI uses 3 staggered workers; everyone else defaults to 5 at once.
-  const PARALLEL_WORKER_COUNT = scripts?.workerCount ?? 5;
-  const PARALLEL_WORKER_STAGGER_MS = scripts?.workerStaggerMs ?? 0;
+  // Worker count + initial-dispatch stagger are per-store, overridable, but the
+  // GLOBAL defaults are kept low for anti-bot reasons: 3 workers (was 5), and a
+  // 400ms staggered dispatch so they don't all fire in one simultaneous burst.
+  // The stagger also activates the pool's per-worker jitter (i*base + random),
+  // so the request pattern isn't a fixed metronome.
+  const PARALLEL_WORKER_COUNT = scripts?.workerCount ?? 3;
+  const PARALLEL_WORKER_STAGGER_MS = scripts?.workerStaggerMs ?? 400;
   const PARALLEL_WORKER_TIMEOUT_MS = 20_000;
   // Parallel-ADD worker count: honor the per-store workerCount (a heavy store
   // like Albertsons crashed the iOS WKWebView content process with 5 concurrent
