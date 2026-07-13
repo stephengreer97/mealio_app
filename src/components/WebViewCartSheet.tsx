@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   TextInput,
   Linking,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
@@ -20,7 +21,7 @@ import { Meal } from '../types';
 import { STORES } from '../constants/stores';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
-import { buildBeforeContentScript } from '../lib/webview-appbanner-suppressor';
+import { WEBVIEW_FINGERPRINT_SHIM } from '../lib/webview-fingerprint-shim';
 import { usage } from '../lib/api';
 import {
   ConsolidatedIngredient,
@@ -185,7 +186,12 @@ export default function WebViewCartSheet({
   // than crashing on a non-null-asserted `.storeUrl`.
   const scripts = useMemo(() => getStoreScripts(lockedStoreId), [lockedStoreId]);
   // Fingerprint shim + app-install-nudge suppressor, injected before store JS.
-  const beforeContent = useMemo(() => buildBeforeContentScript(lockedStoreId), [lockedStoreId]);
+  // Android-only client-hint/fingerprint normalization, injected before store JS.
+  // No-op on iOS (no navigator.userAgentData), and we deliberately inject NOTHING
+  // before content on iOS — an injected before-content script is itself a signal to
+  // aggressive bot defenses (e.g. Walmart/PerimeterX). No app-banner suppression:
+  // that DOM/localStorage tampering tripped WAF blocks and was removed.
+  const beforeContent = Platform.OS === 'android' ? WEBVIEW_FINGERPRINT_SHIM : undefined;
 
   const [step, _setStep] = useState<Step>('qty');
   const stepRef = useRef<Step>('qty');
