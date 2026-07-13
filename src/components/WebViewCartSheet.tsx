@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   TextInput,
   Linking,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
@@ -27,6 +28,7 @@ import {
 } from '../lib/consolidateIngredients';
 import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
+import { useDraggablePreview } from '../lib/useDraggablePreview';
 import { buildSearchAndAddWorker } from '../lib/webview-scripts/worker-search';
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS } from '../constants/features';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, findShortAddedItems, cartNameMatches, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
@@ -236,6 +238,10 @@ export default function WebViewCartSheet({
   const [selectedPreference, setSelectedPreference] = useState<string | null>(null);
   const [reviewMealQtys, setReviewMealQtys] = useState<Record<number, Record<string, number>>>({});
   const [pickedItems, setPickedItems] = useState<PickedItem[]>([]);
+  // Draggable floating product-preview thumbnail (88x88, rests 12px from the right).
+  const preview = useDraggablePreview(88, 88, 12);
+  // Re-center the thumbnail on each new ingredient being reviewed.
+  useEffect(() => { preview.reset(); }, [reviewIdx, preview.reset]);
   // Choose-product flow: single qty per ingredient (default 0, red until set)
   const [chooseQty, setChooseQty] = useState(0);
   // Custom search state (used when user selects "Other — type a product name…")
@@ -729,6 +735,7 @@ export default function WebViewCartSheet({
       setSelectedPreference(null);
       setReviewMealQtys({});
       setPickedItems([]);
+      preview.reset();
       setCustomText('');
       setCustomSearching(false);
       setCustomSuggestions([]);
@@ -2549,14 +2556,8 @@ export default function WebViewCartSheet({
           );
 
           return (
-            <>
-              {selectedImageUrl ? (
-                <View style={styles.floatingImageWrap} pointerEvents="none">
-                  <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
-                </View>
-              ) : null}
-
-              <KeyboardAwareScrollView style={{ flex: 1 }} contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="handled" enableOnAndroid extraScrollHeight={24}>
+            <View style={{ flex: 1 }} onLayout={preview.onContainerLayout}>
+              <KeyboardAwareScrollView style={{ flex: 1 }} contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="handled" enableOnAndroid extraScrollHeight={24} scrollEnabled={preview.scrollEnabled}>
                 {/* Reason context — only shown for review-unmatched, not choose-product */}
                 {!isChoose && currentReview.reason === 'out_of_stock' && (
                   <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginBottom: 6 }}>⚠ Out of stock at this store</Text>
@@ -2571,7 +2572,7 @@ export default function WebViewCartSheet({
                   <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.brand, marginBottom: 6 }}>⚖ Sold by weight — choose how much to add</Text>
                 )}
                 {/* Searched for */}
-                <View style={styles.searchedBox}>
+                <View style={styles.searchedBox} onLayout={preview.onAnchorLayout}>
                   {isChoose ? (
                     <>
                       <Text style={styles.searchedLabel}>
@@ -2832,7 +2833,18 @@ export default function WebViewCartSheet({
                   </>
                 )}
               </View>
-            </>
+
+              {/* Draggable product preview — rendered last so it paints above the list
+                  and its PanResponder wins the touch. */}
+              {selectedImageUrl ? (
+                <Animated.View
+                  style={[styles.floatingImageWrap, { transform: preview.transform }]}
+                  {...preview.panHandlers}
+                >
+                  <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
+                </Animated.View>
+              ) : null}
+            </View>
           );
         })()}
 
@@ -3208,18 +3220,18 @@ const styles = StyleSheet.create({
   // Floating product image
   floatingImageWrap: {
     position: 'absolute',
-    top: 68,
+    top: 0,
     right: 12,
     zIndex: 10,
-    width: 80,
-    height: 80,
+    width: 88,
+    height: 88,
     borderRadius: 8,
     overflow: 'hidden',
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  floatingImage: { width: 80, height: 80 },
+  floatingImage: { width: '100%', height: '100%' },
 
   // Footer
   footer: { paddingHorizontal: 20, paddingVertical: 16, borderTopWidth: 1, borderTopColor: Colors.border },
