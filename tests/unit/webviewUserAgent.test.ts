@@ -55,4 +55,18 @@ describe('buildIosUA', () => {
     expect(ua).toContain('Version/26.1 ');
     expect(ua).toContain('Safari/604.1');
   });
+
+  it('trims a patch version to major.minor (matches real Safari)', () => {
+    const ua = buildIosUA('17.5.1');
+    expect(ua).toContain('CPU iPhone OS 17_5 like Mac OS X');
+    expect(ua).toContain('Version/17.5 ');
+    expect(ua).not.toContain('17_5_1');
+    expect(ua).not.toContain('17.5.1');
+  });
+
+  it('pads a bare major version to major.minor', () => {
+    const ua = buildIosUA('18');
+    expect(ua).toContain('CPU iPhone OS 18_0 like Mac OS X');
+    expect(ua).toContain('Version/18.0 ');
+  });
 });
