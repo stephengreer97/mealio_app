@@ -20,7 +20,7 @@ import { Meal } from '../types';
 import { STORES } from '../constants/stores';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
-import { WEBVIEW_FINGERPRINT_SHIM } from '../lib/webview-fingerprint-shim';
+import { buildBeforeContentScript } from '../lib/webview-appbanner-suppressor';
 import { usage } from '../lib/api';
 import {
   ConsolidatedIngredient,
@@ -183,6 +183,8 @@ export default function WebViewCartSheet({
   // Consumers guard against null and the sheet closes gracefully on open rather
   // than crashing on a non-null-asserted `.storeUrl`.
   const scripts = useMemo(() => getStoreScripts(lockedStoreId), [lockedStoreId]);
+  // Fingerprint shim + app-install-nudge suppressor, injected before store JS.
+  const beforeContent = useMemo(() => buildBeforeContentScript(lockedStoreId), [lockedStoreId]);
 
   const [step, _setStep] = useState<Step>('qty');
   const stepRef = useRef<Step>('qty');
@@ -2262,7 +2264,7 @@ export default function WebViewCartSheet({
             allowsInlineMediaPlayback
             mediaPlaybackRequiresUserAction={false}
             userAgent={getStoreWebViewUA()}
-            injectedJavaScriptBeforeContentLoaded={WEBVIEW_FINGERPRINT_SHIM}
+            injectedJavaScriptBeforeContentLoaded={beforeContent}
           />
         </View>
         )}
@@ -2307,7 +2309,7 @@ export default function WebViewCartSheet({
                 sharedCookiesEnabled
                 thirdPartyCookiesEnabled
                 userAgent={getStoreWebViewUA()}
-                injectedJavaScriptBeforeContentLoaded={WEBVIEW_FINGERPRINT_SHIM}
+                injectedJavaScriptBeforeContentLoaded={beforeContent}
                 injectedJavaScript={workerScripts[i]}
               />
             ) : null)}
@@ -2340,7 +2342,7 @@ export default function WebViewCartSheet({
                 sharedCookiesEnabled
                 thirdPartyCookiesEnabled
                 userAgent={getStoreWebViewUA()}
-                injectedJavaScriptBeforeContentLoaded={WEBVIEW_FINGERPRINT_SHIM}
+                injectedJavaScriptBeforeContentLoaded={beforeContent}
                 injectedJavaScript={addWorkerScripts[i]}
               />
             ) : null)}
