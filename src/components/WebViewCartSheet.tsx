@@ -242,6 +242,10 @@ export default function WebViewCartSheet({
   const preview = useDraggablePreview(88, 88, 12);
   // Re-center the thumbnail on each new ingredient being reviewed.
   useEffect(() => { preview.reset(); }, [reviewIdx, preview.reset]);
+  // Ingredients the user explicitly skipped during review, keyed by reviewIndex
+  // so re-deciding after Back clears the earlier skip. Reported on the done
+  // snapshot — distinct from items the automation failed to add.
+  const [skippedByIdx, setSkippedByIdx] = useState<Record<number, string>>({});
   // Choose-product flow: single qty per ingredient (default 0, red until set)
   const [chooseQty, setChooseQty] = useState(0);
   // Custom search state (used when user selects "Other — type a product name…")
@@ -736,6 +740,7 @@ export default function WebViewCartSheet({
       setReviewMealQtys({});
       setPickedItems([]);
       preview.reset();
+      setSkippedByIdx({});
       setCustomText('');
       setCustomSearching(false);
       setCustomSuggestions([]);
@@ -2040,10 +2045,23 @@ export default function WebViewCartSheet({
 
     const newPicked = [...pickedItems];
 
+    if (action === 'skip') {
+      // Remember this ingredient as skipped so the done snapshot can report it.
+      const skippedName = currentReview?.term ?? '';
+      if (skippedName) setSkippedByIdx((prev) => ({ ...prev, [reviewIdx]: skippedName }));
+    }
+
     if (action !== 'skip' && currentReview) {
       const displayCandidates = customSuggestions.length > 0 ? customSuggestions : currentReview.candidates;
       const candidate = typeof selectedSuggIdx === 'number' ? displayCandidates[selectedSuggIdx] : null;
       if (candidate && !candidate.outOfStock) {
+        // Re-deciding this ingredient after a Back: drop any earlier skip for it.
+        setSkippedByIdx((prev) => {
+          if (!(reviewIdx in prev)) return prev;
+          const next = { ...prev };
+          delete next[reviewIdx];
+          return next;
+        });
         const needsPref = candidate.preferences && candidate.preferences.length > 0;
         const prefText = selectedPreference ?? null;
 
@@ -2851,6 +2869,7 @@ export default function WebViewCartSheet({
         {/* ── Step: done ─────────────────────────────────────────────────── */}
         {step === 'done' && (() => {
           const wasChooseFlow = searchResults.length > 0 && searchResults.every(r => r.isChoose);
+          const skippedNames = Object.values(skippedByIdx).filter(Boolean);
           return (
             <>
               <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 32, paddingBottom: 16 }}>
@@ -2899,6 +2918,20 @@ export default function WebViewCartSheet({
                   </>
                 )}
               </View>
+
+              {/* Ingredients the user chose to skip during review. Distinct from
+                  the automation-failure count above — these were passed over on
+                  purpose, so we surface them plainly rather than as a warning. */}
+              {skippedNames.length > 0 && (
+                <View style={styles.skippedBanner} testID="snapshot-skipped">
+                  <Text style={styles.skippedBannerTitle}>
+                    {skippedNames.length} item{skippedNames.length !== 1 ? 's' : ''} skipped during review
+                  </Text>
+                  <Text style={styles.skippedBannerBody} numberOfLines={3}>
+                    {skippedNames.join(', ')}
+                  </Text>
+                </View>
+              )}
 
               {!cartResultRows && !cartRowsTimedOut && (buildCartPageCountScript(lockedStoreId) || buildInlineCartScript(lockedStoreId)) && totalAdded > 0 && cartCountBeforeRef.current != null ? (
                 // Cart-page store (or inline side-panel store like ALDI) with a
@@ -3147,6 +3180,29 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     color: '#92400e',
     lineHeight: 18,
+  },
+  // Neutral (not a warning) note listing ingredients the user skipped on purpose.
+  skippedBanner: {
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginHorizontal: 20,
+    marginBottom: 8,
+  },
+  skippedBannerTitle: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: Colors.text2,
+  },
+  skippedBannerBody: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text3,
+    lineHeight: 18,
+    marginTop: 2,
   },
 
   // Review step
