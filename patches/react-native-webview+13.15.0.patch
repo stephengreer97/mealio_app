@@ -1,0 +1,72 @@
+diff --git a/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt b/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt
+index 438ab6a..7f446be 100644
+--- a/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt
++++ b/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt
+@@ -17,6 +17,7 @@ import android.webkit.WebSettings
+ import android.webkit.WebView
+ import androidx.webkit.WebSettingsCompat
+ import androidx.webkit.WebViewFeature
++import androidx.webkit.UserAgentMetadata
+ import com.facebook.react.bridge.ReadableArray
+ import com.facebook.react.bridge.ReadableMap
+ import com.facebook.react.common.MapBuilder
+@@ -244,16 +245,49 @@ class RNCWebViewManagerImpl(private val newArch: Boolean = false) {
+ 
+     private fun setUserAgentString(viewWrapper: RNCWebViewWrapper) {
+         val view = viewWrapper.webView
+-        when {
+-            mUserAgent != null -> {
+-                view.settings.userAgentString = mUserAgent
+-            }
+-            mUserAgentWithApplicationName != null -> {
+-                view.settings.userAgentString = mUserAgentWithApplicationName
+-            }
+-            else -> {
+-                view.settings.userAgentString = WebSettings.getDefaultUserAgent(view.context)
+-            }
++        val custom = mUserAgent != null || mUserAgentWithApplicationName != null
++        val appliedUa: String = when {
++            mUserAgent != null -> mUserAgent!!
++            mUserAgentWithApplicationName != null -> mUserAgentWithApplicationName!!
++            else -> WebSettings.getDefaultUserAgent(view.context)
++        }
++        view.settings.userAgentString = appliedUa
++        // Keep the UA Client Hints (Sec-CH-UA) consistent with the UA string.
++        // By default an Android WebView advertises brand "Android WebView", which
++        // contradicts a UA string we've crafted to look like real Chrome — and
++        // that UA-vs-client-hints disagreement is itself a bot/automation tell to
++        // aggressive WAFs. When (and only when) the UA is overridden to a Chrome
++        // string, rewrite the client-hint brands to match real Chrome (Chromium +
++        // Google Chrome), dropping the "Android WebView" brand. No-op if the
++        // WebView doesn't support the UA-metadata API or the UA isn't a Chrome UA.
++        if (custom) {
++            applyChromeUserAgentMetadata(view.settings, appliedUa)
++        }
++    }
++
++    private fun applyChromeUserAgentMetadata(settings: WebSettings, ua: String) {
++        if (!WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) return
++        val major = Regex("Chrome/(\\d+)").find(ua)?.groupValues?.get(1) ?: return
++        val full = "$major.0.0.0"
++        try {
++            val brands = listOf(
++                UserAgentMetadata.BrandVersion.Builder()
++                    .setBrand("Chromium").setMajorVersion(major).setFullVersion(full).build(),
++                UserAgentMetadata.BrandVersion.Builder()
++                    .setBrand("Google Chrome").setMajorVersion(major).setFullVersion(full).build(),
++                UserAgentMetadata.BrandVersion.Builder()
++                    .setBrand("Not:A-Brand").setMajorVersion("99").setFullVersion("99.0.0.0").build()
++            )
++            val metadata = UserAgentMetadata.Builder()
++                .setBrandVersionList(brands)
++                .setFullVersion(full)
++                .setPlatform("Android")
++                .setMobile(true)
++                .build()
++            WebSettingsCompat.setUserAgentMetadata(settings, metadata)
++        } catch (e: Exception) {
++            // Best-effort: if the metadata API rejects our values on this WebView
++            // build, leave the default client hints rather than crash.
+         }
+     }
+ 

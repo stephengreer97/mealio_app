@@ -55,6 +55,12 @@ export function buildAndroidUA(apiLevel: number, chromeMajor: number = ANDROID_C
 }
 
 export function buildIosUA(version: string): string {
-  const cpuVer = version.replace(/\./g, '_');
-  return `Mozilla/5.0 (iPhone; CPU iPhone OS ${cpuVer} like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/${version} Mobile/15E148 Safari/604.1`;
+  // Real Mobile Safari reports only major.minor (e.g. "17.5", never the "17.5.1"
+  // patch), so trim any patch component and pad a bare major to major.minor.
+  // A patch digit / missing minor in the UA is a small automation tell, and
+  // Platform.Version can hand us either form.
+  const parts = version.split('.');
+  const mm = parts.length >= 2 ? `${parts[0]}.${parts[1]}` : `${parts[0] || '17'}.0`;
+  const cpuVer = mm.replace(/\./g, '_');
+  return `Mozilla/5.0 (iPhone; CPU iPhone OS ${cpuVer} like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/${mm} Mobile/15E148 Safari/604.1`;
 }

@@ -140,5 +140,9 @@ describe('Albertsons family EXTRACT_PRODUCTS_SCRIPT', () => {
       expect(result.candidates.length).toBeGreaterThan(0);
       expect(result.candidates[0].productName).toBeTruthy();
     },
+    // The extractor now bails unless it's on a real search-results page (guards
+    // against scraping homepage/recommendation carousels), so load the fixture
+    // under a matching URL.
+    { url: 'https://www.albertsons.com/shop/search-results.html?q=tortillas' },
   );
 });

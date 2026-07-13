@@ -8,11 +8,10 @@ import {
   ScrollView,
   TextInput,
   ActivityIndicator,
-  Animated,
   Pressable,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Image } from 'expo-image';
+import FloatingPreviewImage from './FloatingPreviewImage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
 import { Meal } from '../types';
@@ -358,15 +357,15 @@ export default function ProductChooserSheet({
           </>
 
           {/* Draggable product preview — rendered last so it paints above the list
-              and its PanResponder wins the touch. */}
-          {selectedImageUrl ? (
-            <Animated.View
-              style={[styles.floatingImageWrap, { transform: preview.transform }]}
-              {...preview.panHandlers}
-            >
-              <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
-            </Animated.View>
-          ) : null}
+              and its PanResponder wins the touch. Vanishes when the product has no
+              image (or it fails to load) rather than showing a blank/stale frame. */}
+          <FloatingPreviewImage
+            uri={selectedImageUrl}
+            transform={preview.transform}
+            panHandlers={preview.panHandlers}
+            wrapStyle={styles.floatingImageWrap}
+            imageStyle={styles.floatingImage}
+          />
           </View>
         )}
 

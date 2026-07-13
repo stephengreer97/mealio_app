@@ -9,18 +9,19 @@ import {
   ActivityIndicator,
   TextInput,
   Linking,
-  Animated,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
-import { Image } from 'expo-image';
 import WebView, { WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
+import FloatingPreviewImage from './FloatingPreviewImage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Meal } from '../types';
 import { STORES } from '../constants/stores';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
-import { STORE_WEBVIEW_UA } from '../lib/webview-user-agent';
+import { getStoreWebViewUA } from '../lib/webview-user-agent';
+import { WEBVIEW_FINGERPRINT_SHIM } from '../lib/webview-fingerprint-shim';
 import { usage } from '../lib/api';
 import {
   ConsolidatedIngredient,
@@ -184,6 +185,13 @@ export default function WebViewCartSheet({
   // Consumers guard against null and the sheet closes gracefully on open rather
   // than crashing on a non-null-asserted `.storeUrl`.
   const scripts = useMemo(() => getStoreScripts(lockedStoreId), [lockedStoreId]);
+  // Fingerprint shim + app-install-nudge suppressor, injected before store JS.
+  // Android-only client-hint/fingerprint normalization, injected before store JS.
+  // No-op on iOS (no navigator.userAgentData), and we deliberately inject NOTHING
+  // before content on iOS — an injected before-content script is itself a signal to
+  // aggressive bot defenses (e.g. Walmart/PerimeterX). No app-banner suppression:
+  // that DOM/localStorage tampering tripped WAF blocks and was removed.
+  const beforeContent = Platform.OS === 'android' ? WEBVIEW_FINGERPRINT_SHIM : undefined;
 
   const [step, _setStep] = useState<Step>('qty');
   const stepRef = useRef<Step>('qty');
@@ -395,11 +403,18 @@ export default function WebViewCartSheet({
   // timeout state machine lives in useParallelSearchPool; this component owns
   // only the start trigger, the per-worker WebView render, and the "all done →
   // build SearchResult list → go to review" finalization.
-  // Worker count + initial-dispatch stagger are per-store (anti-bot tuning):
-  // ALDI uses 3 staggered workers; everyone else defaults to 5 at once.
-  const PARALLEL_WORKER_COUNT = scripts?.workerCount ?? 5;
-  const PARALLEL_WORKER_STAGGER_MS = scripts?.workerStaggerMs ?? 0;
+  // Worker count + initial-dispatch stagger are per-store, overridable, but the
+  // GLOBAL defaults are kept low for anti-bot reasons: 3 workers (was 5), and a
+  // 400ms staggered dispatch so they don't all fire in one simultaneous burst.
+  // The stagger also activates the pool's per-worker jitter (i*base + random),
+  // so the request pattern isn't a fixed metronome.
+  const PARALLEL_WORKER_COUNT = scripts?.workerCount ?? 3;
+  const PARALLEL_WORKER_STAGGER_MS = scripts?.workerStaggerMs ?? 400;
   const PARALLEL_WORKER_TIMEOUT_MS = 20_000;
+  // Parallel-ADD worker count: honor the per-store workerCount (a heavy store
+  // like Albertsons crashed the iOS WKWebView content process with 5 concurrent
+  // add WebViews), falling back to the global pilot default.
+  const PARALLEL_ADD_WORKER_COUNT = scripts?.workerCount ?? PARALLEL_ADD_WORKERS;
   // A store opts into the worker-pool choose-product path by exposing BOTH
   // getSearchUrl and buildWorkerScript on its StoreScripts. Null otherwise →
   // sequential single-WebView flow. (WAF note: HEB/Walmart/Albertsons run 5
@@ -427,7 +442,7 @@ export default function WebViewCartSheet({
   // Per-item term/qty/preference ride in the URL hash; the worker's add script
   // reads them and confirms via the store cart badge (> prev).
   const addPool = useParallelSearchPool<ConsolidatedIngredient, AddResult>({
-    workerCount: PARALLEL_ADD_WORKERS,
+    workerCount: PARALLEL_ADD_WORKER_COUNT,
     // Longer than search: an add worker also runs the cart-badge confirmation
     // poll (up to ~10s on a slow network) on top of search + click.
     workerTimeoutMs: 35_000,
@@ -514,7 +529,7 @@ export default function WebViewCartSheet({
   // (HEB pilot); others fall back to sequential via beginSearchFlow's gate.
   const addWorkerScripts = useMemo(
     () => parallelCfg && scripts
-      ? new Array(PARALLEL_ADD_WORKERS).fill(0).map((_, i) =>
+      ? new Array(PARALLEL_ADD_WORKER_COUNT).fill(0).map((_, i) =>
           buildSearchAndAddWorker(i, scripts.buildSearchAndAddScript('', 1, null)))
       : [],
     [parallelCfg, scripts],
@@ -643,7 +658,7 @@ export default function WebViewCartSheet({
   const startParallelAdd = useCallback(() => {
     const active = activeItemsRef.current;
     if (active.length === 0) return;
-    console.log(`[Cart ${ts()}]`, 'parallel ADD: dispatching', active.length, 'across', PARALLEL_ADD_WORKERS, 'workers');
+    console.log(`[Cart ${ts()}]`, 'parallel ADD: dispatching', active.length, 'across', PARALLEL_ADD_WORKER_COUNT, 'workers');
     parallelOriginalTotalRef.current = active.length; // forward-only progress denominator
     setStep('adding');
     setSearchingLabel(`Adding ${active.length} ingredients…`);
@@ -2285,7 +2300,8 @@ export default function WebViewCartSheet({
             thirdPartyCookiesEnabled
             allowsInlineMediaPlayback
             mediaPlaybackRequiresUserAction={false}
-            userAgent={STORE_WEBVIEW_UA}
+            userAgent={getStoreWebViewUA()}
+            injectedJavaScriptBeforeContentLoaded={beforeContent}
           />
         </View>
         )}
@@ -2329,7 +2345,8 @@ export default function WebViewCartSheet({
                 domStorageEnabled
                 sharedCookiesEnabled
                 thirdPartyCookiesEnabled
-                userAgent={STORE_WEBVIEW_UA}
+                userAgent={getStoreWebViewUA()}
+                injectedJavaScriptBeforeContentLoaded={beforeContent}
                 injectedJavaScript={workerScripts[i]}
               />
             ) : null)}
@@ -2361,7 +2378,8 @@ export default function WebViewCartSheet({
                 domStorageEnabled
                 sharedCookiesEnabled
                 thirdPartyCookiesEnabled
-                userAgent={STORE_WEBVIEW_UA}
+                userAgent={getStoreWebViewUA()}
+                injectedJavaScriptBeforeContentLoaded={beforeContent}
                 injectedJavaScript={addWorkerScripts[i]}
               />
             ) : null)}
@@ -2853,15 +2871,15 @@ export default function WebViewCartSheet({
               </View>
 
               {/* Draggable product preview — rendered last so it paints above the list
-                  and its PanResponder wins the touch. */}
-              {selectedImageUrl ? (
-                <Animated.View
-                  style={[styles.floatingImageWrap, { transform: preview.transform }]}
-                  {...preview.panHandlers}
-                >
-                  <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
-                </Animated.View>
-              ) : null}
+                  and its PanResponder wins the touch. Vanishes when the product has
+                  no image (or it fails to load) instead of a blank/stale frame. */}
+              <FloatingPreviewImage
+                uri={selectedImageUrl}
+                transform={preview.transform}
+                panHandlers={preview.panHandlers}
+                wrapStyle={styles.floatingImageWrap}
+                imageStyle={styles.floatingImage}
+              />
             </View>
           );
         })()}
