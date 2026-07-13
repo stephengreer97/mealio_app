@@ -8,13 +8,16 @@ import {
   ScrollView,
   TextInput,
   ActivityIndicator,
+  Animated,
+  Pressable,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
 import { Meal } from '../types';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
+import { useDraggablePreview } from '../lib/useDraggablePreview';
 
 type Step = 'searching' | 'picking' | 'saving' | 'done';
 type Suggestion = { upc: string; description: string; size?: string | null; soldBy?: string | null; averageWeightPerUnit?: string | null; price: number | null; stockLevel?: string; imageUrl?: string | null };
@@ -28,6 +31,20 @@ function formatWeightName(description: string, averageWeightPerUnit: string | nu
   const unit = unitMatch?.[0] ?? 'lb';
   const unitLabel = unit === 'lb' ? 'lbs' : unit;
   return `${description}, avg ${numMatch[1]} ${unitLabel}`;
+}
+
+// The row label used to identify a suggestion (matches the render + selection key).
+function displayNameOf(s: Suggestion): string {
+  const isWeight = s.soldBy === 'WEIGHT';
+  return isWeight
+    ? formatWeightName(s.description, s.averageWeightPerUnit, s.size)
+    : (s.size && !s.description.includes(s.size) ? `${s.description}, ${s.size}` : s.description);
+}
+
+// First in-stock suggestion's label, used to default-select like the other stores do.
+function firstDisplayName(item?: { suggestions: Suggestion[] }): string | null {
+  const s = item?.suggestions?.find((x) => x.stockLevel !== 'TEMPORARILY_OUT_OF_STOCK') ?? item?.suggestions?.[0];
+  return s ? displayNameOf(s) : null;
 }
 
 interface Props {
@@ -54,16 +71,17 @@ export default function ProductChooserSheet({
   const [customSearching, setCustomSearching] = useState(false);
   const [savedCount, setSavedCount] = useState(0);
 
+  // Draggable floating preview image (88x88, rests 16px from the right, centered on
+  // the grey search-term box). See useDraggablePreview for the gesture handling.
+  const preview = useDraggablePreview(88, 88, 16);
+  const insets = useSafeAreaInsets();
+
   const unchosenIngredients = meal.ingredients.filter((i) => !i.searchTerm);
   const current = results[pickIdx];
   const isLast = pickIdx === results.length - 1;
 
   const selectedImageUrl: string | null = (selectedDescription && current)
-    ? current.suggestions.find((s) => {
-        const isWeight = s.soldBy === 'WEIGHT';
-        const name = isWeight ? formatWeightName(s.description, s.averageWeightPerUnit, s.size) : (s.size && !s.description.includes(s.size) ? `${s.description}, ${s.size}` : s.description);
-        return name === selectedDescription;
-      })?.imageUrl ?? null
+    ? current.suggestions.find((s) => displayNameOf(s) === selectedDescription)?.imageUrl ?? null
     : null;
 
   useEffect(() => {
@@ -77,13 +95,15 @@ export default function ProductChooserSheet({
       setSelectedDescription(null);
       setCustomText('');
       setSavedCount(0);
+      preview.reset();
       doSearch();
     }
   }, [visible]);
 
   useEffect(() => {
     setCustomText('');
-  }, [pickIdx]);
+    preview.reset();
+  }, [pickIdx, preview.reset]);
 
   async function doSearch() {
     try {
@@ -97,13 +117,15 @@ export default function ProductChooserSheet({
         })),
         locationId,
       );
-      setResults(
-        unchosenIngredients.map((ing, idx) => ({
-          ingredientName: ing.ingredientName,
-          suggestions: (data.results[idx]?.suggestions ?? []) as Suggestion[],
-        })),
-      );
+      const mapped = unchosenIngredients.map((ing, idx) => ({
+        ingredientName: ing.ingredientName,
+        suggestions: (data.results[idx]?.suggestions ?? []) as Suggestion[],
+      }));
+      setResults(mapped);
       setPickIdx(0);
+      // Default-select the first option so the preview shows immediately, matching
+      // the other stores' Choose Product flow.
+      setSelectedDescription(firstDisplayName(mapped[0]));
       setStep('picking');
     } catch (err: any) {
       setError(err.message || 'Search failed');
@@ -142,7 +164,7 @@ export default function ProductChooserSheet({
     setSelections(newSelections);
     const prevIdx = pickIdx - 1;
     const prevSel = results[prevIdx] ? newSelections.get(results[prevIdx].ingredientName) : undefined;
-    setSelectedDescription(prevSel?.description ?? null);
+    setSelectedDescription(prevSel?.description ?? firstDisplayName(results[prevIdx]));
     setProductQty(prevSel?.qty ?? unchosenIngredients[prevIdx]?.productQty ?? unchosenIngredients[prevIdx]?.qty ?? 1);
     setPickIdx(prevIdx);
   }
@@ -156,7 +178,7 @@ export default function ProductChooserSheet({
     if (!isLast) {
       const nextIdx = pickIdx + 1;
       const nextSel = results[nextIdx] ? newSelections.get(results[nextIdx].ingredientName) : undefined;
-      setSelectedDescription(nextSel?.description ?? null);
+      setSelectedDescription(nextSel?.description ?? firstDisplayName(results[nextIdx]));
       setProductQty(nextSel?.qty ?? 0);
       setPickIdx(nextIdx);
     } else {
@@ -182,8 +204,14 @@ export default function ProductChooserSheet({
   }
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={styles.safe}>
+    // A transparent modal (not presentationStyle="pageSheet") so iOS attaches no
+    // native swipe-to-dismiss gesture — that gesture fought the draggable preview.
+    // We recreate the card look ourselves: a dimmed backdrop with the sheet below a
+    // top gap. Tapping the gap closes it; the ✕ still works too.
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.sheetRoot}>
+        <Pressable style={styles.sheetBackdrop} onPress={onClose} />
+        <SafeAreaView style={[styles.safe, styles.sheetCard, { marginTop: insets.top + 8 }]} edges={['bottom']}>
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={styles.title}>
@@ -220,15 +248,10 @@ export default function ProductChooserSheet({
         )}
 
         {step === 'picking' && current && (
-          <View style={{ flex: 1 }}>
-          {selectedImageUrl ? (
-            <View style={styles.floatingImageWrap} pointerEvents="none">
-              <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
-            </View>
-          ) : null}
+          <View style={{ flex: 1 }} onLayout={preview.onContainerLayout}>
           <>
-            <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-              <View style={styles.searchedBox}>
+            <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} scrollEnabled={preview.scrollEnabled}>
+              <View style={styles.searchedBox} onLayout={preview.onAnchorLayout}>
                 <Text style={styles.searchedLabel}>{meal.name} calls for</Text>
                 <Text style={styles.searchedName}>{(() => {
                   const ing = unchosenIngredients[pickIdx];
@@ -242,7 +265,7 @@ export default function ProductChooserSheet({
               </Text>
               {current.suggestions.map((s, i) => {
                 const isWeight = s.soldBy === 'WEIGHT';
-                const displayName = isWeight ? formatWeightName(s.description, s.averageWeightPerUnit, s.size) : (s.size && !s.description.includes(s.size) ? `${s.description}, ${s.size}` : s.description);
+                const displayName = displayNameOf(s);
                 const priceLabel = s.price != null
                   ? (isWeight && s.size
                       ? `$${s.price.toFixed(2)} / ${s.size.replace(/(\d)([a-zA-Z])/, '$1 $2').toLowerCase()}`
@@ -333,6 +356,17 @@ export default function ProductChooserSheet({
               </View>
             </View>
           </>
+
+          {/* Draggable product preview — rendered last so it paints above the list
+              and its PanResponder wins the touch. */}
+          {selectedImageUrl ? (
+            <Animated.View
+              style={[styles.floatingImageWrap, { transform: preview.transform }]}
+              {...preview.panHandlers}
+            >
+              <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
+            </Animated.View>
+          ) : null}
           </View>
         )}
 
@@ -367,13 +401,23 @@ export default function ProductChooserSheet({
             </TouchableOpacity>
           </View>
         )}
-      </SafeAreaView>
+        </SafeAreaView>
+      </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
+  // Card-style sheet built on a transparent modal (see the return block for why).
+  sheetRoot: { flex: 1, justifyContent: 'flex-end' },
+  sheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
+  sheetCard: {
+    flex: 1,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    overflow: 'hidden',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -500,7 +544,7 @@ const styles = StyleSheet.create({
   navBtnSecondaryText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: Colors.text2 },
   floatingImageWrap: {
     position: 'absolute',
-    top: 44,
+    top: 0,
     right: 16,
     width: 88,
     height: 88,
