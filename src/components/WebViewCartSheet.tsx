@@ -139,6 +139,10 @@ function ts(): string {
 // HTTP statuses anti-bot systems (Akamai, DataDome, PerimeterX) use to block.
 const ANTI_BOT_STATUSES = [403, 429, 503];
 
+// Extra downward offset (px) for the floating preview's default rest in the Review
+// Ingredients flow so it doesn't sit too high vs Choose Product. Tune on-device.
+const REVIEW_PREVIEW_Y_OFFSET = 28;
+
 // onHttpError fires for subresources too (images, XHR, assets). Only a top-level
 // page load on the store domain should be treated as a block — filter the rest.
 function isLikelyPageUrl(url: string, domain: string): boolean {
@@ -248,8 +252,14 @@ export default function WebViewCartSheet({
   const [pickedItems, setPickedItems] = useState<PickedItem[]>([]);
   // Draggable floating product-preview thumbnail (88x88, rests 12px from the right).
   const preview = useDraggablePreview(88, 88, 12);
-  // Re-center the thumbnail on each new ingredient being reviewed.
-  useEffect(() => { preview.reset(); }, [reviewIdx, preview.reset]);
+  // Re-center the thumbnail on each new ingredient being reviewed. The Review
+  // Ingredients flow rests slightly lower than Choose Product — its search box has
+  // a reason line above it, so the centered default otherwise reads as too high.
+  useEffect(() => {
+    const rev = searchResultsRef.current[reviewIdx];
+    preview.setDefaultOffset(rev && !rev.isChoose ? REVIEW_PREVIEW_Y_OFFSET : 0);
+    preview.reset();
+  }, [reviewIdx, preview.reset, preview.setDefaultOffset]);
   // Ingredients the user explicitly skipped during review, keyed by reviewIndex
   // so re-deciding after Back clears the earlier skip. Reported on the done
   // snapshot — distinct from items the automation failed to add.
@@ -2648,19 +2658,33 @@ export default function WebViewCartSheet({
                   )}
                 </View>
 
-                {/* Candidates */}
-                <Text style={styles.suggHeader}>
-                  {hasCandidates
-                    ? (customSuggestions.length > 0 ? `Results for "${customSearchTerm}"` : `${storeName} suggests`)
-                    : 'No products found'}
-                </Text>
-                {customSearchTerm && customSuggestions.length === 0 && !customSearching && (
-                  <Text style={{ fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, marginBottom: 8 }}>
-                    No results for "{customSearchTerm}". Try a different search.
+                {/* Candidates header / loading / no-results empty state */}
+                {customSearching ? (
+                  // Loading icon while a custom search runs — replaces the stale list.
+                  <View style={{ paddingVertical: 28, alignItems: 'center', gap: 8 }}>
+                    <ActivityIndicator color={storeColor} />
+                    <Text style={{ fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3 }}>
+                      Searching{customSearchTerm ? ` for "${customSearchTerm}"` : ''}…
+                    </Text>
+                  </View>
+                ) : hasCandidates ? (
+                  <Text style={styles.suggHeader}>
+                    {customSuggestions.length > 0 ? `Results for "${customSearchTerm}"` : `${storeName} suggests`}
                   </Text>
+                ) : (
+                  // No results: make it explicit the user can search a different product
+                  // name via the "Other — type a product name…" row just below.
+                  <View style={styles.noResultsBox}>
+                    <Text style={styles.noResultsTitle}>
+                      {customSearchTerm ? `No results for "${customSearchTerm}"` : 'No products found'}
+                    </Text>
+                    <Text style={styles.noResultsBody}>
+                      Type a different product name below to search {storeName} again.
+                    </Text>
+                  </View>
                 )}
 
-                {displayCandidates.map((c, i) => {
+                {!customSearching && displayCandidates.map((c, i) => {
                   const selected = selectedSuggIdx === i;
                   return (
                     <TouchableOpacity
@@ -2776,6 +2800,9 @@ export default function WebViewCartSheet({
                     </View>
                   );
                 })}
+                {!isChoose && totalQty === 0 && typeof selectedSuggIdx === 'number' && (
+                  <Text style={styles.qtyHint}>Set a quantity above to add this to your cart.</Text>
+                )}
 
                 {isChoose ? (
                   // Choose-product flow: "Qty to add to cart" + Back / Next→ / Save
@@ -2806,6 +2833,9 @@ export default function WebViewCartSheet({
                           ⚠ {chooseQty} is a lot — does this come in a multipack or bulk size?
                         </Text>
                       )}
+                      {chooseQty === 0 && typeof selectedSuggIdx === 'number' && (
+                        <Text style={styles.qtyHint}>Set a quantity above to add this to your cart.</Text>
+                      )}
                     </View>
                     <View style={{ flexDirection: 'row', gap: 8 }}>
                       <TouchableOpacity
@@ -2821,7 +2851,11 @@ export default function WebViewCartSheet({
                         style={[styles.primaryBtn, { flex: 1, backgroundColor: storeColor }, (!canAdd || customSearching) && { opacity: 0.4 }]}
                       >
                         <Text style={styles.primaryBtnText}>
-                          {customSearching ? 'Searching…' : reviewIdx === searchResults.length - 1 ? 'Save' : 'Next →'}
+                          {customSearching
+                            ? 'Searching…'
+                            : (typeof selectedSuggIdx === 'number' && chooseQty === 0)
+                              ? 'Choose Quantity'
+                              : reviewIdx === searchResults.length - 1 ? 'Save' : 'Next →'}
                         </Text>
                       </TouchableOpacity>
                     </View>
@@ -2844,7 +2878,11 @@ export default function WebViewCartSheet({
                       style={[styles.primaryBtn, { backgroundColor: storeColor }, (!canAdd || customSearching) && { opacity: 0.4 }]}
                     >
                       <Text style={styles.primaryBtnText}>
-                        {customSearching ? 'Searching…' : 'Add & Update Meal Ingredient'}
+                        {customSearching
+                          ? 'Searching…'
+                          : (typeof selectedSuggIdx === 'number' && totalQty === 0)
+                            ? 'Choose Quantity'
+                            : 'Add & Update Meal Ingredient'}
                       </Text>
                     </TouchableOpacity>
                     <TouchableOpacity
@@ -3261,6 +3299,19 @@ const styles = StyleSheet.create({
   suggText: { fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text1 },
   outOfStockText: { fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginTop: 2 },
   prefHint: { fontSize: 11, fontFamily: 'Inter_400Regular', color: Colors.text3, marginTop: 2 },
+  qtyHint: { fontSize: 12, fontFamily: 'Inter_500Medium', color: '#ef4444', marginTop: 2 },
+  noResultsBox: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginBottom: 10,
+    gap: 4,
+  },
+  noResultsTitle: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1 },
+  noResultsBody: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, lineHeight: 17 },
 
   customInput: {
     borderWidth: 1.5,
