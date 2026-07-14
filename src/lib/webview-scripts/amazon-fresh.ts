@@ -45,7 +45,35 @@ const CHECK_LOGIN_SCRIPT = `(async function() {
 
 // ── Product extraction ──────────────────────────────────────────────────────
 
+// Detects Amazon Fresh's "no results … in Amazon Fresh" empty-state, which shows
+// for EVERY search when the account has no Fresh store / serviceable delivery
+// address selected. Injected into the extract + search-and-add scripts so RN can
+// tell this apart from a genuine per-item miss or an anti-bot block. The distinct
+// phrase (not just 0 products) also guards against a broken selector reading as
+// "no store".
+const FRESH_EMPTY_STATE_FN = `
+  function __freshSlotText() {
+    try {
+      var slot = document.querySelector('.s-main-slot, .s-search-results, #search') || document.body;
+      return (slot.textContent || '').replace(/\\s+/g, ' ').trim();
+    } catch (e) { return ''; }
+  }
+  function __freshEmptyState() {
+    try {
+      var t = __freshSlotText();
+      // Fresh's own no-results empty-state (shown for EVERY search when no store /
+      // serviceable address is selected)…
+      if (/no results for[\\s\\S]{0,160}amazon fresh/i.test(t)) return true;
+      // …or a prompt to pick a Fresh store / delivery address.
+      if (/(select|choose|change|enter)[\\s\\S]{0,40}(store|address|zip|location)/i.test(t)
+          && /(amazon fresh|fresh store|delivery)/i.test(t)) return true;
+      return false;
+    } catch (e) { return false; }
+  }
+`;
+
 const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
+${FRESH_EMPTY_STATE_FN}
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
   function __noKbd(e) {
@@ -227,7 +255,7 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
 
   if (cards.length === 0) {
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: [] }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: [], storeUnavailable: __freshEmptyState() }));
     return;
   }
 
@@ -864,6 +892,7 @@ function buildSearchAndAddScript(
 
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 ${buildCartConfirmFn(['#nav-cart-count'], '(\\d+)')}
+${FRESH_EMPTY_STATE_FN}
   function __noKbd(e) {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
       e.target.setAttribute('inputmode', 'none');
@@ -1335,7 +1364,7 @@ ${buildCartConfirmFn(['#nav-cart-count'], '(\\d+)')}
     var hasExactOos = candidates.some(function(c) { return scoreMatch(SEARCH_TERM, c.productName) === 100 && c.outOfStock; });
     var reason = candidates.length === 0 ? 'no_results' : hasExactOos ? 'out_of_stock' : 'low_confidence';
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: reason, candidates: candidates, nameDebug: debugInfo }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: reason, candidates: candidates, storeUnavailable: __freshEmptyState(), nameDebug: debugInfo }));
     return;
   }
 
@@ -1485,7 +1514,7 @@ ${buildCartConfirmFn(['#nav-cart-count'], '(\\d+)')}
       : { type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'cart_not_incremented', productName: bestName, candidates: candidates }));
   } catch(e) {
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: candidates }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: candidates, storeUnavailable: __freshEmptyState() }));
   }
 })();true;`;
 }
