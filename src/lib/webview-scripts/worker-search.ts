@@ -53,7 +53,8 @@ export function buildSearchAndAddWorker(workerId: number, addScript: string): st
         orig(JSON.stringify({
           type: 'WORKER_RESULT', workerId: WORKER_ID, isAdd: true,
           success: !!m.success, productName: m.productName || null,
-          reason: m.reason || null, candidates: m.candidates || []
+          reason: m.reason || null, candidates: m.candidates || [],
+          storeUnavailable: !!m.storeUnavailable
         }));
         return;
       }
@@ -83,7 +84,7 @@ export function buildExtractWorker(workerId: number, extractScript: string): str
       if (m && m.type === 'SEARCH_RESULT') {
         if (posted) return;
         posted = true;
-        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, candidates: m.candidates || [] }));
+        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, candidates: m.candidates || [], storeUnavailable: !!m.storeUnavailable }));
         return;
       }
       // Forward the extractor's diagnostic messages (tagged with the worker

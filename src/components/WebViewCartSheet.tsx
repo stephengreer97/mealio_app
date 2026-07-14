@@ -242,6 +242,16 @@ export default function WebViewCartSheet({
   // for the 403 page does NOT auto-resume — that resume re-navigated and
   // re-blocked, which was the tight 403 loop.
   const blockReasonRef = useRef<string | null>(null);
+  // Amazon Fresh only: set when a search reports the "no results … in Amazon Fresh"
+  // empty-state (see FRESH_EMPTY_STATE_FN). Means the account has no Fresh store /
+  // serviceable delivery address. Checked at the end-of-search gates so we surface
+  // the "choose a store" prompt only when the WHOLE run came up empty (not a single
+  // genuine miss). Reset on open + on retry.
+  const freshStoreUnavailableRef = useRef(false);
+  // Latest handleStoreUnavailable, called from the []-dep search-finish callbacks
+  // (finishParallelSearch / navigateToSearchItem) without pulling it into their deps
+  // — it's defined later in the component, so a direct dep would hit the TDZ.
+  const handleStoreUnavailableRef = useRef<() => void>(() => {});
 
   // Step: review
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -567,6 +577,17 @@ export default function WebViewCartSheet({
     }
     const summary = results.map((r) => ({ term: r.term, count: r.candidates.length, first: r.candidates[0]?.productName }));
     console.log(`[Cart ${ts()}]`, 'parallel search: finishing → review', JSON.stringify(summary));
+    // Amazon Fresh: every item came back empty AND a search reported the Fresh
+    // empty-state → no store/address selected. Surface the picker instead of a
+    // review screen full of "No products found".
+    if (
+      lockedStoreIdRef.current === 'amazon' &&
+      freshStoreUnavailableRef.current &&
+      results.every((r) => r.candidates.length === 0)
+    ) {
+      handleStoreUnavailableRef.current();
+      return;
+    }
     searchResultsRef.current = results;
     setSearchResults(results);
     setStep('review');
@@ -654,7 +675,15 @@ export default function WebViewCartSheet({
         successCount++;
       }
     }
-    console.log(`[Cart ${ts()}]`, 'parallel add: pass done. reported success=', successCount, 'of', active.length, '— reconciling against cart');
+    console.log(`[Cart ${ts()}]`, 'parallel add: pass done. reported success=', successCount, 'of', active.length, '— reconciling against cart', 'freshStoreUnavailable=', freshStoreUnavailableRef.current);
+    // Amazon Fresh: nothing added AND a worker saw the Fresh "no results" empty-
+    // state → no store/address selected. Surface the picker instead of routing the
+    // whole run to the "could not add" review. (Parallel-ADD path, which reconciles
+    // against the cart rather than going through finishParallelSearch.)
+    if (lockedStoreIdRef.current === 'amazon' && freshStoreUnavailableRef.current && successCount === 0) {
+      handleStoreUnavailableRef.current();
+      return;
+    }
     parallelReconcileArmedRef.current = true;
     cartProbeRetriedRef.current = false;
     // Hold the ring at the parallel peak through the cart-check, then the
@@ -683,7 +712,8 @@ export default function WebViewCartSheet({
         return;
       }
       if (msg.type === 'WORKER_RESULT') {
-        console.log(`[Cart ${ts()}]`, 'ADD WORKER_RESULT w', workerId, 'success=', msg.success, 'product=', msg.productName, 'reason=', msg.reason ?? null);
+        console.log(`[Cart ${ts()}]`, 'ADD WORKER_RESULT w', workerId, 'success=', msg.success, 'product=', msg.productName, 'reason=', msg.reason ?? null, 'storeUnavailable=', !!msg.storeUnavailable);
+        if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
         addPool.reportResult(workerId, {
           success: !!msg.success, productName: msg.productName ?? null,
           reason: msg.reason ?? null, candidates: msg.candidates ?? [],
@@ -726,6 +756,7 @@ export default function WebViewCartSheet({
       }
       if (msg.type === 'WORKER_RESULT') {
         console.log(`[Cart ${ts()}]`, 'WORKER_RESULT w', workerId, 'candidates=', (msg.candidates || []).length);
+        if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
         parallelPool.reportResult(workerId, msg.candidates || []);
         return;
       }
@@ -777,6 +808,7 @@ export default function WebViewCartSheet({
       setBrowserShown(false);
       setBlockReason(null);
       blockReasonRef.current = null;
+      freshStoreUnavailableRef.current = false;
       console.log(`[Cart ${ts()}]`, 'initial webviewUri=', scriptsRef.current!.storeUrl);
       setWebviewUri(scriptsRef.current!.storeUrl);
       loadQueueRef.current = [];
@@ -966,6 +998,14 @@ export default function WebViewCartSheet({
     }
     const active = activeItemsRef.current;
     if (idx >= active.length) {
+      // Amazon Fresh: the whole run came up empty with the Fresh empty-state and
+      // nothing landed in the cart → no store/address selected. Prompt the user to
+      // choose one instead of a misleading "nothing added" / review screen.
+      const anyAdded = addResultsRef.current.some((r) => r.success);
+      if (lockedStoreIdRef.current === 'amazon' && freshStoreUnavailableRef.current && !anyAdded) {
+        handleStoreUnavailableRef.current();
+        return;
+      }
       if (searchResultsRef.current.length === 0) {
         console.log(`[Cart ${ts()}]`, 'navigateToSearchItem: all done, no review needed');
         const autoPicked = autoPickedItemsRef.current;
@@ -1457,12 +1497,34 @@ export default function WebViewCartSheet({
     if (typeof code === 'number') handleHttpBlock(code, url);
   }, [handleHttpBlock]);
 
+  // Amazon Fresh: the whole run came back empty with the Fresh "no results" empty-
+  // state, meaning no store / delivery address is selected. Tear down the in-flight
+  // run and surface the Fresh storefront (reusing the robot_challenge step + banner
+  // + manual "Try again") so the user can pick a store, then retry. No polling.
+  const handleStoreUnavailable = useCallback(() => {
+    console.log(`[Cart ${ts()}]`, 'Amazon Fresh: no store/address selected — surfacing store picker');
+    if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
+    if (addTimeoutRef.current) { clearTimeout(addTimeoutRef.current); addTimeoutRef.current = null; }
+    if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
+    loadQueueRef.current = [];
+    expectedNavUrlRef.current = '';
+    parallelPool.reset(); addPool.reset();
+    robotChallengeResumeIdxRef.current = -1;
+    blockReasonRef.current = 'fresh-no-store';
+    setBlockReason('fresh-no-store');
+    setStep('robot_challenge');
+    // Land on the Fresh storefront so the store/address picker is available.
+    navTo(scriptsRef.current!.storeUrl);
+  }, [parallelPool, addPool, setStep, navTo]);
+  useEffect(() => { handleStoreUnavailableRef.current = handleStoreUnavailable; }, [handleStoreUnavailable]);
+
   // Manual retry from the blocked state: re-run the login check from a fresh
   // store load. If the block cleared (or the user solved a challenge) it
   // proceeds; if not, the 403 fires again and we land back here.
   const retryAfterBlock = useCallback(() => {
     setBlockReason(null);
     blockReasonRef.current = null;
+    freshStoreUnavailableRef.current = false;
     robotChallengeResumeIdxRef.current = -1;
     parallelPool.reset(); addPool.reset();
     searchIdxRef.current = 0;
@@ -1827,6 +1889,7 @@ export default function WebViewCartSheet({
             clearTimeout(searchTimeoutRef.current);
             searchTimeoutRef.current = null;
           }
+          if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
           inflightScriptRef.current = null;
           const idx = searchIdxRef.current;
           const active = activeItemsRef.current;
@@ -1888,6 +1951,7 @@ export default function WebViewCartSheet({
             clearTimeout(searchTimeoutRef.current);
             searchTimeoutRef.current = null;
           }
+          if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
           inflightScriptRef.current = null;
           // Preference-fetch pass: enrich a failed SEARCH_AND_ADD_RESULT's candidates with
           // preference data from extractProductsScript, then resume navigation.
@@ -2220,7 +2284,9 @@ export default function WebViewCartSheet({
       : `Review Ingredients (${reviewIdx + 1} of ${searchResults.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
-    robot_challenge: blockReason ? `${storeName} blocked us` : `${storeName} verification`,
+    robot_challenge: blockReason === 'fresh-no-store'
+      ? `Choose an ${storeName} store`
+      : blockReason ? `${storeName} blocked us` : `${storeName} verification`,
   };
 
   // ── Derived ──────────────────────────────────────────────────────────────
@@ -2281,7 +2347,9 @@ export default function WebViewCartSheet({
           {step === 'robot_challenge' && blockReason && (
             <View>
               <Text style={styles.loginBanner}>
-                {storeName} temporarily blocked automated access. Complete any challenge shown below, or wait a few minutes — then tap Try again.
+                {blockReason === 'fresh-no-store'
+                  ? `${storeName} needs a store or delivery address before Mealio can add items. Choose your ${storeName} store below, then tap Try again.`
+                  : `${storeName} temporarily blocked automated access. Complete any challenge shown below, or wait a few minutes — then tap Try again.`}
               </Text>
               <TouchableOpacity style={styles.retryBtn} onPress={retryAfterBlock}>
                 <Text style={styles.retryBtnText}>Try again</Text>
