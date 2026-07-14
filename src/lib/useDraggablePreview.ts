@@ -22,6 +22,7 @@ export function useDraggablePreview(width: number, height: number, rightInset: n
   const committed = useRef({ x: 0, y: 0 }); // last settled translate
   const container = useRef({ w: 0, h: 0 });
   const restY = useRef(0);                  // default translate-y that centers on the anchor
+  const restOffset = useRef(0);             // extra downward nudge added to the default rest (per-flow)
   const moved = useRef(false);              // user has dragged this item — stop auto-centering
   // While a drag is active we disable the scroll view underneath. On iOS the native
   // UIScrollView pan gesture otherwise runs alongside this PanResponder (the JS
@@ -46,19 +47,27 @@ export function useDraggablePreview(width: number, height: number, rightInset: n
 
   const onContainerLayout = useCallback((e: LayoutChangeEvent) => {
     container.current = { w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height };
-    if (!moved.current) place(0, restY.current);
+    if (!moved.current) place(0, restY.current + restOffset.current);
   }, [place]);
 
   // The grey search-term box: center the thumbnail on it (until the user drags).
   const onAnchorLayout = useCallback((e: LayoutChangeEvent) => {
     const { y, height: h } = e.nativeEvent.layout;
     restY.current = Math.max(0, y + h / 2 - height / 2);
-    if (!moved.current) place(0, restY.current);
+    if (!moved.current) place(0, restY.current + restOffset.current);
   }, [place, height]);
 
   const reset = useCallback(() => {
     moved.current = false;
-    place(0, restY.current);
+    place(0, restY.current + restOffset.current);
+  }, [place]);
+
+  // Extra downward nudge for the default rest position, set per-flow (e.g. the
+  // Review Ingredients flow rests slightly lower than Choose Product). The clamp
+  // in `place` keeps it on-screen. No-op once the user has dragged the thumbnail.
+  const setDefaultOffset = useCallback((px: number) => {
+    restOffset.current = px;
+    if (!moved.current) place(0, restY.current + restOffset.current);
   }, [place]);
 
   const responder = useRef(
@@ -95,6 +104,7 @@ export function useDraggablePreview(width: number, height: number, rightInset: n
     onContainerLayout,
     onAnchorLayout,
     reset,
+    setDefaultOffset,
     scrollEnabled, // pass to the scroll view under the thumbnail
   };
 }
