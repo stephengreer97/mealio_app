@@ -391,12 +391,10 @@ export default function WebViewCartSheet({
   // Set when the reconcile probe finalized using its own cart read, so the
   // 'done' effect doesn't fire a redundant second after-probe.
   const reconcileFinalizedRef = useRef(false);
-  // Forward-only progress across the parallel pass → sequential reconcile: keep
-  // ONE denominator (the original item count) and a baseline of how many are
-  // already done, so the ring continues instead of restarting at 0 for the
-  // (smaller) reconcile subset. 0 = not a parallel run → normal per-item progress.
+  // Marks a parallel-add run for the progress effect: >0 means the parallel pass
+  // ran, so post-parallel progress uses the 85/15 split (parallel 0–85%, cart-check
+  // + top-up 85–100%). 0 = not a parallel run → normal per-item progress.
   const parallelOriginalTotalRef = useRef(0);
-  const reconcileBaseRef = useRef(0);
   // Items that were auto-picked during search (had searchTerm set, match found — skip review).
   const autoPickedItemsRef = useRef<PickedItem[]>([]);
   // Sync mirror of searchResults for use inside callbacks (avoids stale closure on state).
@@ -513,19 +511,26 @@ export default function WebViewCartSheet({
     // updates — that left the ring frozen). The parallel search phase has no
     // per-item signal, so show the indeterminate spinner there.
     const total = activeItemsRef.current.length;
+    // Split the parallel-add run so the ring never runs backward: the concurrent
+    // pass owns the first 85%, and the cart-check + sequential top-up own the last
+    // 15%. Previously the parallel pass reached 100% (completed/total) and the
+    // reconcile baseline (confirmed/original, always ≤ that) snapped the ring back.
+    const PARALLEL_ADD_SHARE = 0.85;
     let progress: number | null = null;
     if (step === 'done') {
       progress = 1;
     } else if (addPool.isActive) {
-      // Parallel add: determinate, one tick per ingredient processed.
-      progress = addPool.total > 0 ? Math.min(1, addPool.completed / addPool.total) : null;
+      // Parallel add: determinate, one tick per ingredient — capped at 85%.
+      progress = addPool.total > 0 ? PARALLEL_ADD_SHARE * Math.min(1, addPool.completed / addPool.total) : null;
     } else if (parallelPool.isActive) {
       progress = null;
     } else if (parallelOriginalTotalRef.current > 0 && (step === 'searching' || step === 'adding')) {
-      // Forward-only across the parallel pass → cart-check → sequential top-up:
-      // one denominator (original total) plus the already-done baseline, so the
-      // ring continues rather than restarting at 0 for the smaller reconcile set.
-      progress = Math.min(1, (reconcileBaseRef.current + processedCount) / parallelOriginalTotalRef.current);
+      // Post-parallel: the cart-check holds at 85% (no subset yet), then the
+      // sequential top-up fills 85% → 100% across the reconcile subset (the current
+      // active items). If nothing needs a top-up, the step flips to 'done' (→ 1).
+      const retryCount = activeItemsRef.current.length;
+      const frac = retryCount > 0 ? Math.min(1, processedCount / retryCount) : 1;
+      progress = PARALLEL_ADD_SHARE + (1 - PARALLEL_ADD_SHARE) * frac;
     } else if (total > 0 && (step === 'searching' || step === 'adding')) {
       progress = Math.min(1, processedCount / total);
     }
@@ -686,9 +691,8 @@ export default function WebViewCartSheet({
     }
     parallelReconcileArmedRef.current = true;
     cartProbeRetriedRef.current = false;
-    // Hold the ring at the parallel peak through the cart-check, then the
-    // reconcile branch corrects the baseline to the CONFIRMED count.
-    reconcileBaseRef.current = successCount;
+    // Reset the per-item counter so the cart-check holds the ring at 85% and the
+    // top-up fills the last 15% (see the progress effect).
     setProcessedCount(0);
     setSearchingLabel('Checking your cart…');
     triggerCartProbe('reconcile');
@@ -840,7 +844,6 @@ export default function WebViewCartSheet({
       reconcileFinalizedRef.current = false;
       cartProbeRetriedRef.current = false;
       parallelOriginalTotalRef.current = 0;
-      reconcileBaseRef.current = 0;
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
       setCartResultRows(null);
@@ -1758,9 +1761,8 @@ export default function WebViewCartSheet({
               activeItemsRef.current = retryItems;
               searchIdxRef.current = 0;
               onSearchPageRef.current = false;
-              // Forward-only progress: continue from the CONFIRMED count over the
-              // original total, so the ring resumes instead of restarting at 0.
-              reconcileBaseRef.current = confirmed.length;
+              // Top-up owns the last 15%: reset the counter so it fills 85% → 100%
+              // across this reconcile subset (see the progress effect).
               setProcessedCount(0);
               setSearchingLabel(`Topping up ${retryItems.length} item${retryItems.length === 1 ? '' : 's'} we couldn't confirm…`);
               setStep('searching');
