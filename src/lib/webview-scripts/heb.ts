@@ -443,6 +443,21 @@ export function buildAddToCartScript(
 
   var TITLE_SEL = '[data-qe-id="productTitle"]';
 ${HEB_FIND_CARDS_FN}
+
+  // Product-specific add confirmation: HEB relabels a card's own Add button to
+  // "N added" once the item is in the cart. Unlike the shared header badge, this
+  // can't be nudged by a sibling worker's add, so it is the reliable success
+  // signal. Returns 0 while the button still reads "Add to Cart".
+  function __cardAddedQty(card) {
+    var b = card && card.querySelector('button[data-qe-id="addToCart"]');
+    var m = (b ? (b.textContent || '') : '').match(/(\\d+)\\s*added/i);
+    return m ? parseInt(m[1], 10) : 0;
+  }
+  async function __waitCardAdded(card, target, ticks) {
+    for (var w = 0; w < ticks; w++) { if (__cardAddedQty(card) >= target) return true; await wait(200); }
+    return false;
+  }
+
   await wait(800);
 
   var cards = __hebFindCards();
@@ -517,6 +532,9 @@ ${HEB_FIND_CARDS_FN}
     }
 
     var alreadyInCart = !!targetRow.querySelector('button[data-qe-id="cartQuantityCounterIncrement"]');
+    // Track a real commit (the increment control is present) so we don't report
+    // success when the trigger click silently no-ops. alreadyInCart already has it.
+    var prefCommitted = alreadyInCart;
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '6_alreadyInCart', alreadyInCart: alreadyInCart }));
 
     if (alreadyInCart) {
@@ -546,6 +564,7 @@ ${HEB_FIND_CARDS_FN}
         await wait(200);
       }
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '9_add_confirmed', addConfirmed: addConfirmed }));
+      prefCommitted = addConfirmed;
 
       // Click increment for remaining units
       for (var j = 1; j < QTY; j++) {
@@ -559,14 +578,21 @@ ${HEB_FIND_CARDS_FN}
     await wait(300);
     document.body.click();
     await wait(300);
+
+    // Gate success on a real commit. The preference path used to fall through to
+    // the unconditional success below even when the trigger click never took.
+    if (!prefCommitted) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'cart_not_incremented' }));
+      return;
+    }
   } else if (!hasPopup) {
-    // Deterministic commit confirmation: wait for the top-right header cart
-    // badge to actually increment before reporting success. Its aria-label reads
-    // "Go to Cart page. N items in your cart. $X". Holding here until the count
-    // ticks up means (a) we only report success when the add really committed,
-    // and (b) the RN side won't navigate (and race-cancel the add request)
-    // before it lands. When the item is already in the cart, HEB reuses this
-    // same addToCart button as the "add 1 more" incrementer.
+    // Commit confirmation. PRIMARY signal: the card's own "N added" label, which
+    // is product-specific and can't be tripped by an unrelated add. FALLBACK: the
+    // shared header cart badge ("N items"), for layouts without the per-card
+    // label. No optimistic pass — an unreadable badge is treated as "not
+    // confirmed", not success (the end-of-run cart snapshot is the safety net).
+    // Holding here until confirmed also stops the RN side navigating (and
+    // race-cancelling the add) before it lands.
     function cartCount() {
       var el = document.querySelector('[data-qe-id="headerCartButtonDesktop"], [data-testid="cart-link"]');
       var a = el ? (el.getAttribute('aria-label') || '') : '';
@@ -574,7 +600,7 @@ ${HEB_FIND_CARDS_FN}
       return m ? parseInt(m[1], 10) : -1;
     }
     async function waitForCartIncrease(prev, maxTicks) {
-      if (prev < 0) { await wait(2500); return true; }   // badge unreadable → generous settle (slow networks)
+      if (prev < 0) return false;   // badge unreadable → cannot confirm (strict, no optimistic pass)
       for (var w = 0; w < maxTicks; w++) {
         if (cartCount() > prev) return true;
         await wait(200);
@@ -583,7 +609,8 @@ ${HEB_FIND_CARDS_FN}
     }
 
     var cartBefore = cartCount();
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '2_preclick', cartBefore: cartBefore, visible: addBtn.offsetParent !== null, disabled: addBtn.disabled || addBtn.getAttribute('aria-disabled') === 'true' }));
+    var cardBefore = __cardAddedQty(targetCard);
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '2_preclick', cartBefore: cartBefore, cardBefore: cardBefore, visible: addBtn.offsetParent !== null, disabled: addBtn.disabled || addBtn.getAttribute('aria-disabled') === 'true' }));
 
     addBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
     await wait(100);
@@ -596,25 +623,33 @@ ${HEB_FIND_CARDS_FN}
       return;
     }
 
-    var committed = await waitForCartIncrease(cartBefore, 50);   // up to ~10s (slow networks)
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '3_postclick', cartAfter: cartCount(), committed: committed }));
+    // Per-card label first (~8s), then the shared badge as a short fallback.
+    var committed = await __waitCardAdded(targetCard, cardBefore + 1, 40);
+    if (!committed) committed = await waitForCartIncrease(cartBefore, 12);
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '3_postclick', cardAfter: __cardAddedQty(targetCard), cartAfter: cartCount(), committed: committed }));
     if (!committed) {
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'cart_not_incremented' }));
       return;
     }
 
-    // Remaining units: same button is the "add 1 more" incrementer; wait for each tick.
+    // Remaining units: same button is the "add 1 more" incrementer; confirm each
+    // via the per-card label (badge fallback) so a dropped click is caught.
     for (var j = 1; j < QTY; j++) {
-      var prev = cartCount();
+      var prevCard = __cardAddedQty(targetCard);
+      var prevBadge = cartCount();
       var btn = targetCard.querySelector('button[data-qe-id="addToCart"]');
       if (!btn || btn.disabled || btn.getAttribute('aria-disabled') === 'true') break;
       btn.scrollIntoView({ behavior: 'instant', block: 'center' });
       await wait(100);
       btn.click();
-      await waitForCartIncrease(prev, 40);
+      if (!(await __waitCardAdded(targetCard, prevCard + 1, 30))) await waitForCartIncrease(prevBadge, 12);
     }
   } else {
-    // hasPopup but no recorded preference — try clicking and check for weight dropdown
+    // hasPopup but no recorded preference (e.g. a review pick sourced from a
+    // parallel worker, which doesn't capture preferences). Click, then handle
+    // whichever popup appears: a weight dropdown, or a preference modal we
+    // default to the FIRST option for — mirroring the recorded-preference path's
+    // rows[0] fallback — so the add lands instead of failing pref_required.
     addBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
     await wait(100);
     addBtn.click();
@@ -623,7 +658,58 @@ ${HEB_FIND_CARDS_FN}
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: true }));
       return;
     }
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'pref_required' }));
+
+    // Preference modal with no recorded choice → default to its first row.
+    var dfModal = null;
+    for (var dfi = 0; dfi < 15; dfi++) {
+      dfModal = document.querySelector('[data-qe-id="preferencesRowContainer"]');
+      if (!dfModal) { var dfFs = document.querySelector('fieldset[aria-live="polite"]'); if (dfFs) dfModal = dfFs.parentElement || dfFs; }
+      if (!dfModal) dfModal = document.querySelector('[role="dialog"]:not([aria-label="Search"]),[role="presentation"]:not([aria-label="Search"])');
+      if (dfModal) break;
+      await wait(150);
+    }
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'df_modal', found: !!dfModal }));
+    if (!dfModal) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'pref_required' }));
+      return;
+    }
+    var dfRows = [];
+    for (var dfr = 0; dfr < 20; dfr++) {
+      dfRows = Array.from(dfModal.querySelectorAll('[class*="preferenceContainer"]')).filter(function(r) { return r.tagName !== 'LABEL'; });
+      if (dfRows.length > 0) break;
+      await wait(100);
+    }
+    var dfRow = dfRows.length > 0 ? dfRows[0] : null;
+    if (!dfRow) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'no_row' }));
+      return;
+    }
+    var dfCommitted = !!dfRow.querySelector('button[data-qe-id="cartQuantityCounterIncrement"]');
+    if (!dfCommitted) {
+      var dfTrigger = dfRow.querySelector('button[data-qe-id="cartQuantityTrigger"], button[data-testid="preference-quantity-trigger"]');
+      if (!dfTrigger) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'no_trigger' }));
+        return;
+      }
+      dfTrigger.scrollIntoView({ behavior: 'instant', block: 'center' });
+      await wait(100);
+      dfTrigger.click();
+      for (var dfc = 0; dfc < 20; dfc++) {
+        if (dfRow.querySelector('button[data-qe-id="cartQuantityCounterIncrement"]')) { dfCommitted = true; break; }
+        await wait(200);
+      }
+    }
+    // Remaining units via the row's increment button.
+    for (var dfj = 1; dfj < QTY && dfCommitted; dfj++) {
+      var dfIncr = dfRow.querySelector('button[data-qe-id="cartQuantityCounterIncrement"]');
+      if (dfIncr) { dfIncr.scrollIntoView({ behavior: 'instant', block: 'center' }); await wait(100); dfIncr.click(); await wait(300); }
+    }
+    await wait(300);
+    document.body.click();
+    await wait(300);
+    window.ReactNativeWebView.postMessage(JSON.stringify(dfCommitted
+      ? { type: 'ADD_RESULT', success: true }
+      : { type: 'ADD_RESULT', success: false, reason: 'cart_not_incremented' }));
     return;
   }
 
@@ -670,7 +756,8 @@ export function buildSearchAndAddScript(
   } catch (e) {}
   // Cart-badge confirmation (mirrors buildAddToCartScript): gate success on the
   // header cart count actually rising, so each (parallel) worker only reports
-  // success when its add truly committed. Unreadable badge → 2.5s settle.
+  // success when its add truly committed. Unreadable badge → not confirmed; the
+  // reconcile pass re-reads the real cart, so a false negative is recovered.
   function __cartCount() {
     var el = document.querySelector('[data-qe-id="headerCartButtonDesktop"], [data-testid="cart-link"]');
     var a = el ? (el.getAttribute('aria-label') || '') : '';
@@ -678,7 +765,7 @@ export function buildSearchAndAddScript(
     return m ? parseInt(m[1], 10) : -1;
   }
   async function __waitForCartIncrease(prev, ticks) {
-    if (prev < 0) { await wait(2500); return true; }
+    if (prev < 0) return false;   // badge unreadable → cannot confirm; reconcile re-reads the real cart
     for (var w = 0; w < ticks; w++) { if (__cartCount() > prev) return true; await wait(200); }
     return false;
   }
