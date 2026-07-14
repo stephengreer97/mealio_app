@@ -229,10 +229,13 @@ export default function WebViewCartSheet({
   // Step: searching / adding
   const [searchingLabel, setSearchingLabel] = useState('');
   const [webviewUri, setWebviewUri] = useState('');
+  // Measured size of the live-browser region, used to size the tile grid so the
+  // main WebView + active worker WebViews fit as a 2-up/2-down grid without the
+  // page scrolling. 0 until the first onLayout.
+  const [browserAreaSize, setBrowserAreaSize] = useState({ w: 0, h: 0 });
   // Mirror of webviewUri for navTo (a []-dep callback). Lets it tell "navigate
   // to a new URL" from "reload the same URL" without the cache-buster query.
   const webviewUriRef = useRef('');
-  const [browserShown, setBrowserShown] = useState(false);
   // Set to the HTTP status (e.g. 'http-403') when the store blocks us with an
   // anti-bot response. Reuses the robot_challenge step UI but swaps the banner
   // and shows a manual "Try again" button. Null = not blocked.
@@ -329,6 +332,9 @@ export default function WebViewCartSheet({
   const cartRowsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [cartDeltaWarning, setCartDeltaWarning] = useState<string | null>(null);
   const [addedNames, setAddedNames] = useState<string[]>([]);
+  // Names of items that could not be added, shown on the done screen so the
+  // failure is specific ("Sour Cream could not be added") instead of a bare count.
+  const [failedNames, setFailedNames] = useState<string[]>([]);
 
   // WebView refs
   const webviewRef = useRef<WebView>(null);
@@ -375,13 +381,29 @@ export default function WebViewCartSheet({
   // (Walmart redirects to /blocked when it suspects automation; user has to
   // press-and-hold to verify). -1 when no challenge in progress.
   const robotChallengeResumeIdxRef = useRef<number>(-1);
+  // Consecutive sequential search/add timeouts (no result posted at all). A
+  // single stall advances that one item (it may genuinely hang once); but a run
+  // of them means Mealio can't drive the store — a nudge/interstitial/captcha is
+  // eating clicks, or the store is soft-blocking — so we surface the generic
+  // blocker instead of silently failing every item. Reset by any real progress.
+  const consecutiveTimeoutsRef = useRef(0);
+  const CONSECUTIVE_TIMEOUT_BLOCK = 2;
   // Tracks which step we were in before a login redirect, so we can resume after login.
   const stepBeforeLoginRef = useRef<Step>('searching');
   const loginCheckActiveRef = useRef(false);
   const searchIdxRef = useRef(0);
   const addingIdxRef = useRef(0);
   const addingItemsRef = useRef<PickedItem[]>([]);
-  const addResultsRef = useRef<{ name: string; success: boolean }[]>([]);
+  const addResultsRef = useRef<{ name: string; success: boolean; reason?: string }[]>([]);
+  // Compile the failed-item names (and log their reasons) for the done screen.
+  // Called at each point the flow finalizes into 'done' with failures.
+  const compileFailedNames = useCallback(() => {
+    const failures = addResultsRef.current.filter((r) => !r.success);
+    if (failures.length > 0) {
+      console.log(`[Cart ${ts()}]`, 'failed adds:', JSON.stringify(failures.map((f) => ({ name: f.name, reason: f.reason ?? 'unknown' }))));
+    }
+    setFailedNames(failures.map((f) => f.name));
+  }, []);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
   // Parallel-add reconciliation: results from the concurrent pass (by item idx)
   // and a one-shot arm so the after-snapshot re-adds the genuinely-missing items
@@ -809,7 +831,7 @@ export default function WebViewCartSheet({
       setProcessedCount(0);
       setTotalFailed(0);
       setAddedNames([]);
-      setBrowserShown(false);
+      setFailedNames([]);
       setBlockReason(null);
       blockReasonRef.current = null;
       freshStoreUnavailableRef.current = false;
@@ -828,6 +850,7 @@ export default function WebViewCartSheet({
       cartProbeBeginSearchRef.current = false;
       cartCountBeforeRef.current = null;
       robotChallengeResumeIdxRef.current = -1;
+      consecutiveTimeoutsRef.current = 0;
       onSearchPageRef.current = false;
       loginCheckActiveRef.current = false;
       searchIdxRef.current = 0;
@@ -1027,6 +1050,7 @@ export default function WebViewCartSheet({
           setTotalAdded(added);
           setTotalFailed(failed);
           setAddedNames(names);
+          compileFailedNames();
           setStep('done');
         }
       } else {
@@ -1086,6 +1110,15 @@ export default function WebViewCartSheet({
     searchTimeoutRef.current = setTimeout(() => {
       searchTimeoutRef.current = null;
       inflightScriptRef.current = null;
+      // No SEARCH_RESULT/SEARCH_AND_ADD_RESULT at all → the store never let the
+      // script run. Count it; a run of these means Mealio is being blocked, not
+      // that this one item is missing, so surface the generic blocker.
+      consecutiveTimeoutsRef.current += 1;
+      if (consecutiveTimeoutsRef.current >= CONSECUTIVE_TIMEOUT_BLOCK) {
+        console.log(`[Cart ${ts()}]`, 'SEARCH timeout for', term, '—', consecutiveTimeoutsRef.current, 'in a row, surfacing blocker');
+        surfaceBlocker('no-progress');
+        return;
+      }
       console.log(`[Cart ${ts()}]`, 'SEARCH timeout for', term, '— treating as failed and advancing');
       if (item.searchTerm) {
         // Auto-add flow: also push a SearchResult with empty candidates so
@@ -1102,7 +1135,7 @@ export default function WebViewCartSheet({
         };
         searchResultsRef.current = [...searchResultsRef.current, newResult];
         setSearchResults(searchResultsRef.current);
-        addResultsRef.current.push({ name: item.searchTerm, success: false });
+        addResultsRef.current.push({ name: item.searchTerm, success: false, reason: 'timeout' });
       } else {
         // Choose-product flow: push an empty-candidates SearchResult so the
         // review screen still renders an entry for this ingredient.
@@ -1142,6 +1175,7 @@ export default function WebViewCartSheet({
       setTotalAdded(added);
       setTotalFailed(failed);
       setAddedNames(names);
+      compileFailedNames();
       setStep('done');
       return;
     }
@@ -1160,8 +1194,17 @@ export default function WebViewCartSheet({
     // wipe any pending queue/nav-intent, and advance.
     addTimeoutRef.current = setTimeout(() => {
       addTimeoutRef.current = null;
+      // No ADD_RESULT → the add script never ran. Same no-progress signal as the
+      // search path: a run of these means Mealio is blocked, not that this one
+      // product is unavailable.
+      consecutiveTimeoutsRef.current += 1;
+      if (consecutiveTimeoutsRef.current >= CONSECUTIVE_TIMEOUT_BLOCK) {
+        console.log(`[Cart ${ts()}]`, 'ADD timeout for', item.productName, '—', consecutiveTimeoutsRef.current, 'in a row, surfacing blocker');
+        surfaceBlocker('no-progress');
+        return;
+      }
       console.log(`[Cart ${ts()}]`, 'ADD timeout for', item.productName, '— treating as failed and advancing');
-      addResultsRef.current.push({ name: item.productName, success: false });
+      addResultsRef.current.push({ name: item.productName, success: false, reason: 'timeout' });
       loadQueueRef.current = [];
       expectedNavUrlRef.current = '';
       const nextIdx = idx + 1;
@@ -1469,10 +1512,31 @@ export default function WebViewCartSheet({
     [],
   );
 
-  // Anti-bot block (HTTP 403/429/503): tear down the in-flight run and surface
-  // the store page so the user can complete any challenge, then retry. Reuses
-  // the robot_challenge step (webview visible + banner), with blockReason set so
-  // the banner/title swap to the "blocked" copy and a manual retry is offered.
+  // Single entry point for every "Mealio can't drive the store" condition —
+  // anti-bot HTTP block, /blocked redirect, Fresh no-store, and the no-progress
+  // timeout all route here. Tears down the in-flight run and surfaces the live
+  // store page (robot_challenge step) under one generic banner + manual retry,
+  // so we no longer maintain per-cause UI. `reason` sets blockReason (drives the
+  // Retry button) and is logged; the banner copy is intentionally the same for
+  // all of them since the user just fixes whatever's on screen and taps Retry.
+  const surfaceBlocker = useCallback((reason: string) => {
+    console.log(`[Cart ${ts()}]`, 'surfaceBlocker reason=', reason, 'step=', stepRef.current);
+    if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
+    if (addTimeoutRef.current) { clearTimeout(addTimeoutRef.current); addTimeoutRef.current = null; }
+    if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
+    loadQueueRef.current = [];
+    expectedNavUrlRef.current = '';
+    inflightScriptRef.current = null;
+    parallelPool.reset(); addPool.reset();
+    robotChallengeResumeIdxRef.current = -1;
+    consecutiveTimeoutsRef.current = 0;
+    blockReasonRef.current = reason;
+    setBlockReason(reason);
+    setStep('robot_challenge');
+  }, [parallelPool, addPool, setStep]);
+
+  // Anti-bot block (HTTP 403/429/503): surface the generic blocker so the user
+  // can complete any challenge, then retry.
   const handleHttpBlock = useCallback((statusCode: number, url: string) => {
     if (!ANTI_BOT_STATUSES.includes(statusCode)) return;
     const s = scriptsRef.current;
@@ -1482,17 +1546,8 @@ export default function WebViewCartSheet({
     // the review/done UI or already looking at a challenge.
     if (st === 'qty' || st === 'review' || st === 'searchResult' || st === 'done' || st === 'robot_challenge') return;
     console.log(`[Cart ${ts()}]`, `HTTP ${statusCode} block on`, url, '— surfacing challenge');
-    if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
-    if (addTimeoutRef.current) { clearTimeout(addTimeoutRef.current); addTimeoutRef.current = null; }
-    if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
-    loadQueueRef.current = [];
-    expectedNavUrlRef.current = '';
-    parallelPool.reset(); addPool.reset();
-    robotChallengeResumeIdxRef.current = searchIdxRef.current;
-    blockReasonRef.current = 'http-' + statusCode;
-    setBlockReason('http-' + statusCode);
-    setStep('robot_challenge');
-  }, [parallelPool, setStep]);
+    surfaceBlocker('http-' + statusCode);
+  }, [surfaceBlocker]);
 
   const onHttpError = useCallback((e: any) => {
     const code = e?.nativeEvent?.statusCode;
@@ -1506,19 +1561,10 @@ export default function WebViewCartSheet({
   // + manual "Try again") so the user can pick a store, then retry. No polling.
   const handleStoreUnavailable = useCallback(() => {
     console.log(`[Cart ${ts()}]`, 'Amazon Fresh: no store/address selected — surfacing store picker');
-    if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
-    if (addTimeoutRef.current) { clearTimeout(addTimeoutRef.current); addTimeoutRef.current = null; }
-    if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
-    loadQueueRef.current = [];
-    expectedNavUrlRef.current = '';
-    parallelPool.reset(); addPool.reset();
-    robotChallengeResumeIdxRef.current = -1;
-    blockReasonRef.current = 'fresh-no-store';
-    setBlockReason('fresh-no-store');
-    setStep('robot_challenge');
+    surfaceBlocker('fresh-no-store');
     // Land on the Fresh storefront so the store/address picker is available.
     navTo(scriptsRef.current!.storeUrl);
-  }, [parallelPool, addPool, setStep, navTo]);
+  }, [surfaceBlocker, navTo]);
   useEffect(() => { handleStoreUnavailableRef.current = handleStoreUnavailable; }, [handleStoreUnavailable]);
 
   // Manual retry from the blocked state: re-run the login check from a fresh
@@ -1529,6 +1575,7 @@ export default function WebViewCartSheet({
     blockReasonRef.current = null;
     freshStoreUnavailableRef.current = false;
     robotChallengeResumeIdxRef.current = -1;
+    consecutiveTimeoutsRef.current = 0;
     parallelPool.reset(); addPool.reset();
     searchIdxRef.current = 0;
     onSearchPageRef.current = false;
@@ -1593,7 +1640,6 @@ export default function WebViewCartSheet({
           loginCheckActiveRef.current = false;
           if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
           if (msg.isLoggedIn) {
-            setBrowserShown(false);
             console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', lockedStoreIdRef.current, 'parallel=', !!parallelCfg, 'activeLen=', activeItemsRef.current.length);
             snapshotBeforeAndBeginSearch();
           } else if (stepRef.current !== 'login') {
@@ -1656,10 +1702,14 @@ export default function WebViewCartSheet({
               const wins = active
                 .map((item, idx) => { const r = reconResults.get(idx); return r && r.success ? { name: r.productName || item.searchTerm || item.ingredientName, success: true } : null; })
                 .filter((x): x is { name: string; success: boolean } => x !== null);
+              const lost = active
+                .filter((item, idx) => { const r = reconResults.get(idx); return !(r && r.success); })
+                .map((item) => item.searchTerm || item.ingredientName);
               addResultsRef.current = wins;
               setTotalAdded(wins.length);
               setTotalFailed(active.length - wins.length);
               setAddedNames(wins.map((x) => x.name));
+              setFailedNames(lost);
               reconcileFinalizedRef.current = true;
               setStep('done');
               return;
@@ -1860,7 +1910,6 @@ export default function WebViewCartSheet({
         if (msg.type === 'LOGIN_COMPLETE') {
           loginCheckActiveRef.current = false;
           if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
-          setBrowserShown(false);
           // Same before-snapshot + search start as the LOGIN_STATUS path, so the
           // cart-page probe runs for popup-login stores (Albertsons) too.
           snapshotBeforeAndBeginSearch();
@@ -1891,6 +1940,8 @@ export default function WebViewCartSheet({
             clearTimeout(searchTimeoutRef.current);
             searchTimeoutRef.current = null;
           }
+          // Store responded → progress. Clear the no-progress block counter.
+          consecutiveTimeoutsRef.current = 0;
           if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
           inflightScriptRef.current = null;
           const idx = searchIdxRef.current;
@@ -1953,6 +2004,8 @@ export default function WebViewCartSheet({
             clearTimeout(searchTimeoutRef.current);
             searchTimeoutRef.current = null;
           }
+          // Store responded → progress. Clear the no-progress block counter.
+          consecutiveTimeoutsRef.current = 0;
           if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
           inflightScriptRef.current = null;
           // Preference-fetch pass: enrich a failed SEARCH_AND_ADD_RESULT's candidates with
@@ -2052,12 +2105,14 @@ export default function WebViewCartSheet({
             clearTimeout(addTimeoutRef.current);
             addTimeoutRef.current = null;
           }
+          // Store responded → progress. Clear the no-progress block counter.
+          consecutiveTimeoutsRef.current = 0;
           const idx = addingIdxRef.current;
           const itemsToAdd = addingItemsRef.current;
           const item = itemsToAdd[idx];
           console.log(`[Cart ${ts()}]`, 'ADD_RESULT idx=', idx, 'success=', msg.success, 'product=', item?.productName, 'reason=', msg.reason ?? null);
           if (item) {
-            addResultsRef.current.push({ name: item.productName, success: msg.success });
+            addResultsRef.current.push({ name: item.productName, success: msg.success, reason: msg.success ? undefined : (msg.reason ?? 'unknown') });
           }
           const nextIdx = idx + 1;
           addingIdxRef.current = nextIdx;
@@ -2249,6 +2304,7 @@ export default function WebViewCartSheet({
       setTotalAdded(added);
       setTotalFailed(failed);
       setAddedNames(names);
+      compileFailedNames();
       setStep('done');
       return;
     }
@@ -2286,14 +2342,58 @@ export default function WebViewCartSheet({
       : `Review Ingredients (${reviewIdx + 1} of ${searchResults.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
-    robot_challenge: blockReason === 'fresh-no-store'
-      ? `Choose an ${storeName} store`
-      : blockReason ? `${storeName} blocked us` : `${storeName} verification`,
+    // One generic title for every "Mealio can't drive the store" state — the
+    // banner tells the user what to do; the specific cause no longer matters.
+    robot_challenge: `Action needed on ${storeName}`,
   };
 
-  // ── Derived ──────────────────────────────────────────────────────────────
+  // ── Derived: live-browser layout ───────────────────────────────────────────
 
-  const webviewVisible = step === 'login' || step === 'robot_challenge' || browserShown;
+  // Which pool (if any) is actively working — drives the tile grid.
+  const activeWorkerPool = parallelPool.isActive
+    ? { pool: parallelPool, sources: workerSources, scripts: workerScripts, onMsg: onWorkerMessage, keyPrefix: 'search-worker-' }
+    : addPool.isActive
+    ? { pool: addPool, sources: addWorkerSources, scripts: addWorkerScripts, onMsg: onAddWorkerMessage, keyPrefix: 'add-worker-' }
+    : null;
+
+  // The browser region is on-screen for every automation phase now (no more
+  // spinner). It's hidden — but the main WebView stays mounted — while the user
+  // is in a panel step (qty is not mounted at all; review/searchResult/done keep
+  // the WebView alive behind the panel for the cart snapshot).
+  const browserVisible =
+    step === 'login_check' || step === 'login' || step === 'searching' ||
+    step === 'adding' || step === 'robot_challenge';
+  // Grid = the main WebView tiled alongside the live worker WebViews. Only while
+  // a worker pool is actually running; otherwise the single main WebView fills
+  // the region (login, login_check, sequential search/add, cart snapshot).
+  const gridMode = browserVisible && !!activeWorkerPool;
+
+  // Tile sizing: fixed 2×2 so tiles hold their size and simply drop out of the
+  // grid as workers finish (4→3→2→1). Worker WebViews render at a real 414×896
+  // viewport (viewport-lazy storefronts need it to paint) and are visually
+  // scaled into the tile — the scale is cosmetic, so resizing never disturbs an
+  // in-flight extraction.
+  const TILE_GAP = 8;
+  const tileW = browserAreaSize.w > 0 ? (browserAreaSize.w - TILE_GAP) / 2 : 0;
+  const tileH = browserAreaSize.h > 0 ? (browserAreaSize.h - TILE_GAP) / 2 : 0;
+  const tileScale = tileW > 0 && tileH > 0 ? Math.min(tileW / 414, tileH / 896) : 0;
+
+  // Progress fraction for the caption bar (mirrors the bubble's ring logic:
+  // parallel search/add drive it from the pool's completed/total; the sequential
+  // flow from the index refs, re-rendered via setSearchingLabel).
+  const captionPct = (() => {
+    if (step !== 'searching' && step !== 'adding') return 0;
+    let total: number; let idx: number;
+    if (step === 'searching' && parallelPool.isActive) {
+      total = parallelPool.total; idx = parallelPool.completed;
+    } else if (step === 'adding' && addPool.isActive) {
+      total = addPool.total; idx = addPool.completed;
+    } else {
+      total = step === 'searching' ? activeItemsRef.current.length : addingItemsRef.current.length;
+      idx = step === 'searching' ? searchIdxRef.current : addingIdxRef.current;
+    }
+    return total > 0 ? Math.min(idx / total, 1) * 100 : 0;
+  })();
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -2302,15 +2402,7 @@ export default function WebViewCartSheet({
 
         {/* Header */}
         <View style={styles.header}>
-          {step !== 'login' && step !== 'qty' ? (
-            <TouchableOpacity onPress={() => setBrowserShown(b => !b)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.brand }}>
-                {browserShown ? 'Hide Browser' : 'Show Browser'}
-              </Text>
-            </TouchableOpacity>
-          ) : (
-            <View style={{ width: 28 }} />
-          )}
+          <View style={{ width: 28 }} />
           <Text style={styles.title}>{titleMap[step]}</Text>
           <View style={styles.headerRight}>
             {presentation === 'layer' && onMinimize && (
@@ -2324,15 +2416,25 @@ export default function WebViewCartSheet({
           </View>
         </View>
 
-        {/* Hidden / Visible WebView — not mounted during qty step so the qty UI
-            stays responsive (heavy ecommerce sites otherwise block the JS thread). */}
+        {/* ── Live browser ───────────────────────────────────────────────────
+            The main WebView stays mounted for the whole run (never during qty)
+            so cookies/session and the cart snapshot survive. It is shown live
+            during every automation phase — no spinner. During a parallel pass it
+            tiles alongside the live worker WebViews (main + workers, 2×2); each
+            worker's tile drops out the instant it finishes. Outside a pass the
+            single main WebView fills the region. While the user is in a panel
+            step (review / searchResult / done) the region is hidden but the
+            WebView keeps running behind it for the after-snapshot. */}
         {step !== 'qty' && (
-        <View style={[
-          webviewVisible ? styles.webviewVisible : styles.webviewHidden,
-          webviewVisible && step !== 'login' && step !== 'robot_challenge' && { borderWidth: 2, borderColor: '#ef4444' },
-        ]} pointerEvents={webviewVisible ? 'auto' : 'none'}>
-          {step === 'login' && (
-            <View>
+        <View
+          style={browserVisible ? styles.browserOuter : styles.webviewHidden}
+          pointerEvents={browserVisible ? 'auto' : 'none'}
+        >
+          {/* Top bar: one slot — login banner, blocker banner, or the automation
+              caption. Kept as a single stable child so the WebView below never
+              remounts as it swaps. */}
+          {step === 'login' ? (
+            <View style={styles.topBar}>
               <Text style={styles.loginBanner}>
                 Log in to your {storeName} account, then Mealio will add your ingredients automatically.
               </Text>
@@ -2340,132 +2442,117 @@ export default function WebViewCartSheet({
                 <Text style={styles.retryBtnText}>I'm already logged in</Text>
               </TouchableOpacity>
             </View>
-          )}
-          {step === 'robot_challenge' && !blockReason && (
-            <Text style={styles.loginBanner}>
-              {storeName} asked us to verify you're a human — complete the press-and-hold below and Mealio will pick up where it left off.
-            </Text>
-          )}
-          {step === 'robot_challenge' && blockReason && (
-            <View>
+          ) : step === 'robot_challenge' ? (
+            <View style={styles.topBar}>
               <Text style={styles.loginBanner}>
-                {blockReason === 'fresh-no-store'
-                  ? `${storeName} needs a store or delivery address before Mealio can add items. Choose your ${storeName} store below, then tap Try again.`
-                  : `${storeName} temporarily blocked automated access. Complete any challenge shown below, or wait a few minutes — then tap Try again.`}
+                Something is blocking Mealio from working on {storeName}. Take care of anything
+                showing in the browser below (a prompt, a store or address to choose, or a
+                "verify you're human" check), then tap Try again.
               </Text>
               <TouchableOpacity style={styles.retryBtn} onPress={retryAfterBlock}>
                 <Text style={styles.retryBtnText}>Try again</Text>
               </TouchableOpacity>
             </View>
-          )}
-          <WebView
-            ref={webviewRef}
-            source={{ uri: webviewUri }}
-            // incognito  // TODO: uncomment to force fresh session (no stored cookies)
-            style={{ flex: 1 }}
-            onLoadEnd={onLoadEnd}
-            onMessage={onMessage}
-            onHttpError={onHttpError}
-            onNavigationStateChange={onNavigationStateChange}
-            onShouldStartLoadWithRequest={(request) => {
-              // Block custom URL schemes that would open the native app.
-              // Allow http/https and about: (used internally by the WebView for blank pages).
-              return (
-                request.url.startsWith('http://') ||
-                request.url.startsWith('https://') ||
-                request.url.startsWith('about:')
-              );
+          ) : (step === 'searching' || step === 'adding' || step === 'login_check') ? (
+            <View style={styles.captionBar}>
+              <Text style={styles.captionLabel} numberOfLines={1}>{searchingLabel || titleMap[step]}</Text>
+              {(step === 'searching' || step === 'adding') && (
+                <View style={styles.progressTrack} testID="cart-progress-track">
+                  <View
+                    style={[styles.progressFill, { width: `${captionPct}%`, backgroundColor: storeColor }]}
+                    testID="cart-progress-fill"
+                  />
+                </View>
+              )}
+            </View>
+          ) : null}
+
+          {/* Browser region: fullscreen single WebView, or the tile grid. */}
+          <View
+            style={styles.browserArea}
+            onLayout={(e) => {
+              const { width, height } = e.nativeEvent.layout;
+              setBrowserAreaSize((prev) => (prev.w === width && prev.h === height ? prev : { w: width, h: height }));
             }}
-            javaScriptEnabled
-            domStorageEnabled
-            sharedCookiesEnabled
-            thirdPartyCookiesEnabled
-            allowsInlineMediaPlayback
-            mediaPlaybackRequiresUserAction={false}
-            userAgent={getStoreWebViewUA()}
-            injectedJavaScriptBeforeContentLoaded={beforeContent}
-          />
+          >
+            <View style={gridMode ? styles.gridWrap : styles.fullWrap}>
+              {/* Main WebView cell — always the first child so it never remounts.
+                  Fills the region normally; becomes one tile in grid mode. */}
+              <View style={gridMode ? [styles.tile, { width: tileW, height: tileH }] : styles.fullCell}>
+                <WebView
+                  ref={webviewRef}
+                  source={{ uri: webviewUri }}
+                  // incognito  // TODO: uncomment to force fresh session (no stored cookies)
+                  style={{ flex: 1 }}
+                  onLoadEnd={onLoadEnd}
+                  onMessage={onMessage}
+                  onHttpError={onHttpError}
+                  onNavigationStateChange={onNavigationStateChange}
+                  onShouldStartLoadWithRequest={(request) => {
+                    // Block custom URL schemes that would open the native app.
+                    // Allow http/https and about: (used internally by the WebView for blank pages).
+                    return (
+                      request.url.startsWith('http://') ||
+                      request.url.startsWith('https://') ||
+                      request.url.startsWith('about:')
+                    );
+                  }}
+                  javaScriptEnabled
+                  domStorageEnabled
+                  sharedCookiesEnabled
+                  thirdPartyCookiesEnabled
+                  allowsInlineMediaPlayback
+                  mediaPlaybackRequiresUserAction={false}
+                  userAgent={getStoreWebViewUA()}
+                  injectedJavaScriptBeforeContentLoaded={beforeContent}
+                />
+                {gridMode && (
+                  <View style={styles.tileLabel} pointerEvents="none">
+                    <Text style={styles.tileLabelText} numberOfLines={1}>{storeName}</Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Live worker tiles — each a real 414×896 WebView scaled into the
+                  tile. Rendered only for workers with an active URI, so a worker
+                  that finishes (URI cleared to '') drops straight out of the grid. */}
+              {gridMode && activeWorkerPool && activeWorkerPool.pool.workerUris.map((uri, i) => {
+                if (!uri) return null;
+                const item = activeWorkerPool.pool.workerItems[i];
+                const label = item ? (item.searchTerm ?? item.ingredientName) : '…';
+                return (
+                  <View key={activeWorkerPool.keyPrefix + i} style={[styles.tile, { width: tileW, height: tileH }]}>
+                    <View style={styles.tileClip} pointerEvents="none">
+                      <View style={{ width: 414, height: 896, transform: [{ scale: tileScale }] }}>
+                        <WebView
+                          source={activeWorkerPool.sources[i]}
+                          style={{ width: 414, height: 896 }}
+                          onMessage={(e) => activeWorkerPool.onMsg(i, e)}
+                          onHttpError={onHttpError}
+                          onShouldStartLoadWithRequest={(request) => (
+                            request.url.startsWith('http://') ||
+                            request.url.startsWith('https://') ||
+                            request.url.startsWith('about:')
+                          )}
+                          javaScriptEnabled
+                          domStorageEnabled
+                          sharedCookiesEnabled
+                          thirdPartyCookiesEnabled
+                          userAgent={getStoreWebViewUA()}
+                          injectedJavaScriptBeforeContentLoaded={beforeContent}
+                          injectedJavaScript={activeWorkerPool.scripts[i]}
+                        />
+                      </View>
+                    </View>
+                    <View style={styles.tileLabel} pointerEvents="none">
+                      <Text style={styles.tileLabelText} numberOfLines={1}>{label}</Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          </View>
         </View>
-        )}
-
-        {/* ── Hidden parallel worker pool (PARALLEL_SEARCH_STORES) ─────────
-            5 WebViews mounted offscreen ONLY while parallel search is running.
-            Mounted by startParallelSearch() with their initial dispatch URIs,
-            unmounted by finishParallelSearch() to free resources before the
-            review/ATC phase. Avoids overwhelming iOS WebView init during the
-            (single-WebView) login_check phase. */}
-        {parallelCfg && parallelPool.isActive && (
-          <View
-            pointerEvents="none"
-            style={{
-              position: 'absolute',
-              // Real phone-sized viewport, parked far offscreen and invisible.
-              // A WebView's internal browser viewport equals its OWN style size,
-              // independent of where it sits in the RN tree — and viewport-lazy
-              // storefronts (HEB renders its product grid by visible area) need
-              // a real size or the grid never paints and the worker extracts 0.
-              width: 414,
-              height: 896,
-              opacity: 0,
-              left: -100000,
-              top: -100000,
-            }}
-          >
-            {parallelPool.workerUris.map((uri, i) => uri ? (
-              <WebView
-                key={'parallel-worker-' + i}
-                source={workerSources[i]}
-                style={{ width: 414, height: 896 }}
-                onMessage={(e) => onWorkerMessage(i, e)}
-                onHttpError={onHttpError}
-                onShouldStartLoadWithRequest={(request) => (
-                  request.url.startsWith('http://') ||
-                  request.url.startsWith('https://') ||
-                  request.url.startsWith('about:')
-                )}
-                javaScriptEnabled
-                domStorageEnabled
-                sharedCookiesEnabled
-                thirdPartyCookiesEnabled
-                userAgent={getStoreWebViewUA()}
-                injectedJavaScriptBeforeContentLoaded={beforeContent}
-                injectedJavaScript={workerScripts[i]}
-              />
-            ) : null)}
-          </View>
-        )}
-
-        {/* ── Hidden parallel ADD pool (FEATURE_PARALLEL_ADD) ──────────────
-            Mounted offscreen only while parallel add is running. Each worker
-            loads getSearchUrl(term)#mealio=<json> and runs the search-and-add
-            script, reporting WORKER_RESULT. */}
-        {parallelCfg && addPool.isActive && (
-          <View
-            pointerEvents="none"
-            style={{ position: 'absolute', width: 414, height: 896, opacity: 0, left: -100000, top: -100000 }}
-          >
-            {addPool.workerUris.map((uri, i) => uri ? (
-              <WebView
-                key={'parallel-add-worker-' + i}
-                source={addWorkerSources[i]}
-                style={{ width: 414, height: 896 }}
-                onMessage={(e) => onAddWorkerMessage(i, e)}
-                onHttpError={onHttpError}
-                onShouldStartLoadWithRequest={(request) => (
-                  request.url.startsWith('http://') ||
-                  request.url.startsWith('https://') ||
-                  request.url.startsWith('about:')
-                )}
-                javaScriptEnabled
-                domStorageEnabled
-                sharedCookiesEnabled
-                thirdPartyCookiesEnabled
-                userAgent={getStoreWebViewUA()}
-                injectedJavaScriptBeforeContentLoaded={beforeContent}
-                injectedJavaScript={addWorkerScripts[i]}
-              />
-            ) : null)}
-          </View>
         )}
 
 
@@ -2559,39 +2646,8 @@ export default function WebViewCartSheet({
           </>
         )}
 
-        {/* ── Step: login_check / searching / adding (spinner) ────────────── */}
-        {(step === 'login_check' || step === 'searching' || step === 'adding') && (
-          <View style={styles.centered}>
-            <ActivityIndicator size="large" color={storeColor} />
-            <Text style={styles.spinnerLabel}>{searchingLabel}</Text>
-            {(step === 'searching' || step === 'adding') && (() => {
-              // Parallel choose-product search dispatches all items at once, so
-              // the index refs never advance — drive the bar from the pool's
-              // reactive completed/total instead. The sequential flow still
-              // reads the index refs (re-rendered via setSearchingLabel).
-              let total: number;
-              let idx: number;
-              if (step === 'searching' && parallelPool.isActive) {
-                total = parallelPool.total;
-                idx = parallelPool.completed;
-              } else {
-                total = step === 'searching'
-                  ? activeItemsRef.current.length
-                  : addingItemsRef.current.length;
-                idx = step === 'searching' ? searchIdxRef.current : addingIdxRef.current;
-              }
-              const pct = total > 0 ? Math.min(idx / total, 1) * 100 : 0;
-              return (
-                <View style={styles.progressTrack} testID="cart-progress-track">
-                  <View
-                    style={[styles.progressFill, { width: `${pct}%`, backgroundColor: storeColor }]}
-                    testID="cart-progress-fill"
-                  />
-                </View>
-              );
-            })()}
-          </View>
-        )}
+        {/* login_check / searching / adding no longer render a spinner — the
+            live browser above (fullscreen or tile grid) is the progress UI. */}
 
         {/* ── Step: searchResult ──────────────────────────────────────────── */}
         {step === 'searchResult' && (() => {
@@ -3028,7 +3084,9 @@ export default function WebViewCartSheet({
                     </Text>
                     {totalFailed > 0 && (
                       <Text style={[styles.doneSub, { color: '#b45309' }]}>
-                        {totalFailed} item{totalFailed !== 1 ? 's' : ''} could not be added.
+                        {failedNames.length > 0
+                          ? `Could not add: ${failedNames.join(', ')}`
+                          : `${totalFailed} item${totalFailed !== 1 ? 's' : ''} could not be added.`}
                       </Text>
                     )}
                     {cartDeltaWarning && (
@@ -3208,11 +3266,56 @@ const styles = StyleSheet.create({
   close: { fontSize: 18, color: Colors.text3 },
 
   webviewHidden: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0, pointerEvents: 'none' as const },
-  webviewVisible: {
+  // Live-browser region (visible during every automation phase).
+  browserOuter: {
     flex: 1,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
   },
+  browserArea: { flex: 1, backgroundColor: Colors.border },
+  // Single WebView fills the region (login, login_check, sequential, snapshot).
+  fullWrap: { flex: 1 },
+  fullCell: { flex: 1 },
+  // Tile grid: main + live workers, 2-up wrapping, dropping as workers finish.
+  gridWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignContent: 'flex-start',
+    gap: 8,
+    padding: 0,
+  },
+  tile: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+  },
+  // Clips the oversized (414×896) worker WebView down to the tile after scaling.
+  tileClip: { flex: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  tileLabel: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(17,24,39,0.72)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  tileLabelText: { color: '#fff', fontSize: 11, fontFamily: 'Inter_500Medium' },
+  // Caption bar above the browser during login_check / searching / adding.
+  captionBar: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    backgroundColor: Colors.surface,
+    gap: 8,
+  },
+  captionLabel: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text2 },
+  // Wrapper around the login / blocker banner + action button.
+  topBar: { backgroundColor: '#fff7ed' },
   loginBanner: {
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -3283,15 +3386,12 @@ const styles = StyleSheet.create({
   },
   checkboxInner: { width: 12, height: 12, borderRadius: 2 },
 
-  // Spinner
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 },
-  spinnerLabel: { fontSize: 15, fontFamily: 'Inter_500Medium', color: Colors.text2, textAlign: 'center' },
+  // Progress bar (caption bar under the header during searching / adding).
   progressTrack: {
-    width: '60%',
+    width: '100%',
     height: 6,
     borderRadius: 3,
     backgroundColor: Colors.border,
-    marginTop: 14,
     overflow: 'hidden',
   },
   progressFill: { height: '100%', borderRadius: 3 },

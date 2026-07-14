@@ -53,9 +53,15 @@ export interface ParallelPoolOptions<TItem, TResult> {
 
 export interface ParallelPool<TItem, TResult> {
   /** Current URI for each worker, length = workerCount. Each is an empty
-   *  string before that worker is first dispatched. Mount N hidden WebViews
-   *  and use these as their source. */
+   *  string before that worker is first dispatched AND once a worker goes idle
+   *  (its queue ran dry), so a `uri ? <WebView/> : null` render mounts exactly
+   *  the workers that are actively working — visible tiles drop as workers
+   *  finish. Mount N WebViews and use these as their source. */
   workerUris: string[];
+  /** The item each worker is currently assigned, length = workerCount. null
+   *  when that worker is idle. Lets the UI label each live tile with the
+   *  ingredient it's working on, in lockstep with workerUris. */
+  workerItems: (TItem | null)[];
   /** True while a start() run is in flight. False once all items have been
    *  collected (real or timeout) or before the first start(). */
   isActive: boolean;
@@ -93,6 +99,11 @@ export function useParallelSearchPool<TItem, TResult>(
   const [workerUris, setWorkerUris] = useState<string[]>(() =>
     new Array(workerCount).fill(''),
   );
+  // Reactive per-worker item assignment, mirrored from workerIdxRef so the UI
+  // can label each live tile. null = idle.
+  const [workerItems, setWorkerItems] = useState<(TItem | null)[]>(() =>
+    new Array(workerCount).fill(null),
+  );
   const [isActive, setIsActive] = useState(false);
   // Reactive progress for the UI: how many items have a result so far, out of
   // the total dispatched. (The sequential flow tracks progress via index refs;
@@ -123,6 +134,15 @@ export function useParallelSearchPool<TItem, TResult>(
     });
   }, []);
 
+  const setWorkerItem = useCallback((workerId: number, item: TItem | null) => {
+    setWorkerItems((prev) => {
+      if (prev[workerId] === item) return prev;
+      const next = [...prev];
+      next[workerId] = item;
+      return next;
+    });
+  }, []);
+
   const clearTimer = useCallback((workerId: number) => {
     const t = workerTimersRef.current[workerId];
     if (t) {
@@ -147,12 +167,17 @@ export function useParallelSearchPool<TItem, TResult>(
     if (!next) {
       workerBusyRef.current[workerId] = false;
       workerIdxRef.current[workerId] = -1;
+      // Idle: clear the URI so the worker's tile unmounts (drop from the grid)
+      // the instant it runs out of work, rather than lingering on its last page.
+      setWorkerUri(workerId, '');
+      setWorkerItem(workerId, null);
       return;
     }
     workerBusyRef.current[workerId] = true;
     workerIdxRef.current[workerId] = next.idx;
     const url = getUrl(next.item);
     setWorkerUri(workerId, url);
+    setWorkerItem(workerId, next.item);
 
     clearTimer(workerId);
     workerTimersRef.current[workerId] = setTimeout(() => {
@@ -198,6 +223,7 @@ export function useParallelSearchPool<TItem, TResult>(
     setCompleted(0);
     setTotal(0);
     setWorkerUris(new Array(workerCount).fill(''));
+    setWorkerItems(new Array(workerCount).fill(null));
   }, [workerCount, clearTimer]);
 
   const start = useCallback(
@@ -214,6 +240,7 @@ export function useParallelSearchPool<TItem, TResult>(
       setTotal(items.length);
       workerBusyRef.current = new Array(workerCount).fill(false);
       workerIdxRef.current = new Array(workerCount).fill(-1);
+      setWorkerItems(new Array(workerCount).fill(null));
       onAllDoneRef.current = onAllDone;
       setIsActive(true);
       const runId = ++runIdRef.current;
@@ -235,5 +262,5 @@ export function useParallelSearchPool<TItem, TResult>(
     [isActive, workerCount, dispatchToWorker, dispatchStaggerMs],
   );
 
-  return { workerUris, isActive, completed, total, start, reportResult, reset };
+  return { workerUris, workerItems, isActive, completed, total, start, reportResult, reset };
 }
