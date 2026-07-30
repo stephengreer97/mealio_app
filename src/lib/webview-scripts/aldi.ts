@@ -17,14 +17,36 @@ const ALDI_DOMAIN    = 'aldi.us';
 
 // ── Login check ───────────────────────────────────────────────────────────────
 
-const CHECK_LOGIN_SCRIPT = `(async function() {
+import { selectorsFor, storeConfig, searchUrlFor } from '../automation-config';
+
+const SELECTOR_KEY = 'aldi';
+
+// Compiled-in selector fallbacks; the remote automation config overrides them so
+// an ALDI/Instacart redesign is a config push rather than an App Store release.
+// Read only inside a build function — the config loads after module import, so a
+// module-scope capture would freeze these fallbacks forever.
+const SEL_FALLBACKS = {
+  atc: 'button[aria-label^="Add 1 "]',
+  inc: 'button[aria-label^="Increment quantity"], button[aria-label^="Increase quantity"]',
+  qtyBubble: 'button[aria-label^="Quantity:"]',
+  cardLink: 'a[href*="/store/aldi/products/"]',
+  menu: '[role="dialog"][aria-label="Main Menu"]',
+  hamburger: '[data-testid="hamburger-coachmark-button"], button[aria-label="Main Menu"]',
+};
+
+/** Live selectors as interpolatable JS literals (quotes included). */
+const sel = () => selectorsFor(SELECTOR_KEY, SEL_FALLBACKS);
+
+function buildCheckLoginScript(): string {
+  const s = sel();
+  return `(async function() {
   if (window.__aldiLoginCheckActive) return;
   window.__aldiLoginCheckActive = true;
   try {
     function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
-    var MENU_SEL = '[role="dialog"][aria-label="Main Menu"]';
-    var HAMBURGER_SEL = '[data-testid="hamburger-coachmark-button"], button[aria-label="Main Menu"]';
+    var MENU_SEL = ${s.menu};
+    var HAMBURGER_SEL = ${s.hamburger};
 
     // The logged-in state (user name vs "Sign In"/"Register") is only visible
     // INSIDE the Main Menu dialog, so it must be opened before it can be read.
@@ -137,6 +159,7 @@ const CHECK_LOGIN_SCRIPT = `(async function() {
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false, error: String(e) }));
   }
 })();true;`;
+}
 
 // ── Product extraction ────────────────────────────────────────────────────────
 
@@ -145,7 +168,9 @@ const CHECK_LOGIN_SCRIPT = `(async function() {
  * Extracts product candidates from "Add 1 item" buttons.
  * Posts { type: 'SEARCH_RESULT', candidates: [...] }.
  */
-const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
+function buildExtractProductsScript(): string {
+  const s = sel();
+  return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
   function __noKbd(e) {
@@ -155,11 +180,11 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
   }
   document.addEventListener('focusin', __noKbd, true);
 
-  var ATC_SEL = 'button[aria-label^="Add 1 "]';
-  var QTY_BUBBLE_SEL = 'button[aria-label^="Quantity:"]';
+  var ATC_SEL = ${s.atc};
+  var QTY_BUBBLE_SEL = ${s.qtyBubble};
   // Product cards contain either an add button OR a quantity bubble.
   // Use product card links to find all products regardless of cart state.
-  var CARD_LINK_SEL = 'a[href*="/store/aldi/products/"]';
+  var CARD_LINK_SEL = ${s.cardLink};
 
   // Stale detection: capture current first product link text.
   function getFirstLinkName() {
@@ -257,6 +282,7 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
   document.removeEventListener('focusin', __noKbd, true);
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: candidates }));
 })();true;`;
+}
 
 // ── Add to cart ───────────────────────────────────────────────────────────────
 
@@ -267,6 +293,7 @@ function buildAddToCartScript(
 ): string {
   const escapedName = JSON.stringify(productName);
 
+  const s = sel();
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
@@ -279,9 +306,9 @@ function buildAddToCartScript(
 
   var TARGET_NAME = ${escapedName};
   var QTY = ${qty};
-  var ATC_SEL = 'button[aria-label^="Add 1 "]';
-  var INC_SEL = 'button[aria-label^="Increment quantity"], button[aria-label^="Increase quantity"]';
-  var QTY_BUBBLE_SEL = 'button[aria-label^="Quantity:"], button[aria-label$=" ct"], button[aria-label$=" in cart"]';
+  var ATC_SEL = ${s.atc};
+  var INC_SEL = ${s.inc};
+  var QTY_BUBBLE_SEL = ${s.qtyBubble};
 
   // Find the add button for this product.
   var btns = Array.from(document.querySelectorAll(ATC_SEL));
@@ -380,10 +407,11 @@ function buildAddToCartScript(
 
 function buildSearchScript(term: string): string {
   const escaped = JSON.stringify(term);
+  const s = sel();
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   var term = ${escaped};
-  var ATC_SEL = 'button[aria-label^="Add 1 "]';
+  var ATC_SEL = ${s.atc};
 
   // Capture stale product name for freshness detection.
   function getFirstName() {
@@ -477,6 +505,7 @@ function buildSearchAndAddScript(
   _dropdown: { type: string; selectedText: string; selectedValue: string } | null,
 ): string {
   const escapedTerm = JSON.stringify(searchTerm);
+  const s = sel();
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function __noKbd(e) {
@@ -487,10 +516,10 @@ function buildSearchAndAddScript(
 
   var SEARCH_TERM = ${escapedTerm};
   var QTY = ${qty};
-  var ATC_SEL = 'button[aria-label^="Add 1 "]';
-  var INC_SEL = 'button[aria-label^="Increment quantity"], button[aria-label^="Increase quantity"]';
-  var QTY_BUBBLE_SEL = 'button[aria-label^="Quantity:"]';
-  var CARD_LINK_SEL = 'a[href*="/store/aldi/products/"]';
+  var ATC_SEL = ${s.atc};
+  var INC_SEL = ${s.inc};
+  var QTY_BUBBLE_SEL = ${s.qtyBubble};
+  var CARD_LINK_SEL = ${s.cardLink};
 
   // Stale detection using card links (works for products in cart too).
   function getFirstLinkName() {
@@ -791,10 +820,12 @@ function buildSearchAndAddScript(
 // and useParallelSearchPool): each hidden worker WebView loads a search URL
 // from getAldiSearchUrl, and this injected script extracts up to 8 product
 // candidates and posts WORKER_RESULT with the baked-in workerId. Unlike the
-// sequential EXTRACT_PRODUCTS_SCRIPT, every dispatch is a fresh page load,
+// sequential buildExtractProductsScript(), every dispatch is a fresh page load,
 // so no stale-tile detection is needed.
 
-const ALDI_WORKER_EXTRACT_BODY = `(function() {
+function buildAldiWorkerExtractBody(): string {
+  const s = sel();
+  return `(function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function dbg(obj) {
     try {
@@ -803,8 +834,8 @@ const ALDI_WORKER_EXTRACT_BODY = `(function() {
     } catch(_) {}
   }
 
-  var CARD_LINK_SEL = 'a[href*="/store/aldi/products/"]';
-  var ATC_SEL = 'button[aria-label^="Add 1 "]';
+  var CARD_LINK_SEL = ${s.cardLink};
+  var ATC_SEL = ${s.atc};
 
   function findCard(el) {
     var node = el.parentElement;
@@ -898,10 +929,11 @@ const ALDI_WORKER_EXTRACT_BODY = `(function() {
 })();
 true;
 `;
+}
 
 /** Returns injectedJavaScript for a single worker. The workerId is baked in. */
 export function buildAldiWorkerScript(workerId: number): string {
-  return 'var WORKER_ID = ' + workerId + ';\n' + ALDI_WORKER_EXTRACT_BODY;
+  return 'var WORKER_ID = ' + workerId + ';\n' + buildAldiWorkerExtractBody();
 }
 
 /** Returns the ALDI (Instacart) search URL for a given query. */
@@ -912,10 +944,11 @@ export function getAldiSearchUrl(query: string): string {
 // ── Public interface ──────────────────────────────────────────────────────────
 
 export function getScripts() {
+  const cfg = storeConfig(SELECTOR_KEY);
   return {
-    storeUrl: ALDI_URL,
-    loginUrl: ALDI_LOGIN_URL,
-    cartUrl: ALDI_CART_URL,
+    storeUrl: cfg.storeUrl ?? ALDI_URL,
+    loginUrl: cfg.loginUrl ?? ALDI_LOGIN_URL,
+    cartUrl: cfg.cartUrl ?? ALDI_CART_URL,
     domain: ALDI_DOMAIN,
     isSearchUrl: function(url: string) {
       // Instacart search bar is available on any store page, not just /search.
@@ -925,25 +958,27 @@ export function getScripts() {
     isLoginSuccessUrl: function() { return false; },
     // Instacart reloads the storefront after sign-in. Re-run the login check on
     // that nav so an already-completed login is detected (the background poll in
-    // CHECK_LOGIN_SCRIPT is the fallback for SPA logins with no full reload).
+    // buildCheckLoginScript() is the fallback for SPA logins with no full reload).
     reinjectLoginCheckOnNav: true,
-    checkLoginScript: CHECK_LOGIN_SCRIPT,
-    extractProductsScript: EXTRACT_PRODUCTS_SCRIPT,
+    checkLoginScript: buildCheckLoginScript(),
+    extractProductsScript: buildExtractProductsScript(),
     buildAddToCartScript: buildAddToCartScript,
     buildSearchScript: buildSearchScript,
     buildSearchAndAddScript: buildSearchAndAddScript,
-    getSearchUrl: getAldiSearchUrl,
+    getSearchUrl: (term: string) => searchUrlFor(SELECTOR_KEY, term, getAldiSearchUrl(term)),
     buildWorkerScript: buildAldiWorkerScript,
     // ALDI (Instacart) anti-bot 403s on concurrent worker requests — confirmed
     // 2026-06-17 that 5 parallel workers still 403 even with the cache-buster
     // removed, so concurrency itself is a trigger. Run searches SERIALLY.
     // workerCount / stagger are kept for if/when the parallel path is retried.
-    forceSerialSearch: true,
-    workerCount: 3,
-    workerStaggerMs: 400,
+    // Remotely tunable: if ALDI ever stops 403-ing concurrent searches we can
+    // re-enable the parallel path with a config push instead of a release.
+    forceSerialSearch: cfg.forceSerialSearch ?? true,
+    workerCount: cfg.workerCount ?? 3,
+    workerStaggerMs: cfg.workerStaggerMs ?? 400,
     // The anti-bot 403s on the `?_t=` cache-buster query (it lands right on the
     // blocked storefront request). Navigate to the clean URL instead.
-    cacheBustNav: false,
+    cacheBustNav: cfg.cacheBustNav ?? false,
     // Instacart SPA: search is a pushState route change (no reload), so the same
     // search page fires onLoadEnd multiple times while the add script is still
     // running. Suppress inflight re-injection so we don't double-add / skip items.

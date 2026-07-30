@@ -2,7 +2,7 @@
 
 import {
   HEB_URL, HEB_LOGIN_URL, HEB_CART_URL,
-  CHECK_LOGIN_SCRIPT, EXTRACT_PRODUCTS_SCRIPT,
+  CHECK_LOGIN_SCRIPT, buildExtractProductsScript as hebBuildExtract,
   buildAddToCartScript as hebBuildATC,
   buildSearchScript as hebBuildSearch,
   buildSearchAndAddScript as hebBuildSearchAndAdd,
@@ -14,6 +14,7 @@ import { getScripts as getAmazonFreshScripts } from './amazon-fresh';
 import { getScripts as getWegmansScripts } from './wegmans';
 import { getScripts as getMockStoreScripts, MOCK_STORE_ENABLED } from './mockstore';
 import { buildExtractWorker } from './worker-search';
+import { storeConfig, searchUrlFor, isStoreEnabled } from '../automation-config';
 
 export interface StoreScripts {
   storeUrl: string;
@@ -83,10 +84,17 @@ export interface StoreScripts {
 
 // ── HEB adapter ──────────────────────────────────────────────────────────────
 
-const hebScripts: StoreScripts = {
-  storeUrl: HEB_URL,
-  loginUrl: HEB_LOGIN_URL,
-  cartUrl: HEB_CART_URL,
+// A FUNCTION, not a module-level const: the injected scripts interpolate
+// selectors from the remote automation config, which loads after this module is
+// imported. Building the adapter per call means a config push takes effect on the
+// next cart run instead of requiring an app restart.
+function getHebScripts(): StoreScripts {
+  const cfg = storeConfig('heb');
+  const extract = hebBuildExtract();
+  return {
+  storeUrl: cfg.storeUrl ?? HEB_URL,
+  loginUrl: cfg.loginUrl ?? HEB_LOGIN_URL,
+  cartUrl: cfg.cartUrl ?? HEB_CART_URL,
   domain: 'heb.com',
   // Opens the My H-E-B app (com.heb.myheb). HEB exposes no cart-specific deep
   // link, so this lands on the app's home — still better than the website. The
@@ -105,19 +113,37 @@ const hebScripts: StoreScripts = {
   // never on the accounts.heb.com login form, so it can't fight the user.
   reinjectLoginCheckOnNav: true,
   checkLoginScript: CHECK_LOGIN_SCRIPT,
-  extractProductsScript: EXTRACT_PRODUCTS_SCRIPT,
+  extractProductsScript: extract,
   buildAddToCartScript: hebBuildATC,
   buildSearchScript: hebBuildSearch,
   buildSearchAndAddScript: hebBuildSearchAndAdd,
-  getSearchUrl: (term) => 'https://www.heb.com/search?q=' + encodeURIComponent(term),
-  buildWorkerScript: (workerId) => buildExtractWorker(workerId, EXTRACT_PRODUCTS_SCRIPT),
-};
+  getSearchUrl: (term) =>
+    searchUrlFor('heb', term, 'https://www.heb.com/search?q=' + encodeURIComponent(term)),
+  buildWorkerScript: (workerId) => buildExtractWorker(workerId, extract),
+  workerCount: cfg.workerCount,
+  workerStaggerMs: cfg.workerStaggerMs,
+  forceSerialSearch: cfg.forceSerialSearch,
+  cacheBustNav: cfg.cacheBustNav,
+  spaSearch: cfg.spaSearch,
+  };
+}
 
 // ── Lookup ───────────────────────────────────────────────────────────────────
 
 export function getStoreScripts(storeId: string): StoreScripts | null {
+  // Remote kill switch. Returning null makes the cart engine treat the store as
+  // unsupported (the same path as an unknown storeId), which surfaces the normal
+  // "store unavailable" UI. This is the escape hatch for a storefront that has
+  // changed so much our scripts would do harm rather than nothing — it disables a
+  // single store in minutes instead of waiting on App Store review.
+  //
+  // The Albertsons family shares one config entry, so the switch is checked
+  // against that shared key rather than each of the 15 banner ids.
+  const configKey = ALBERTSONS_FAMILY_IDS.includes(storeId) ? 'albertsons' : storeId;
+  if (!isStoreEnabled(configKey)) return null;
+
   switch (storeId) {
-    case 'heb':            return hebScripts;
+    case 'heb':            return getHebScripts();
     case 'walmart':        return getWalmartScripts();
     case 'aldi':           return getAldiScripts();
     case 'amazon':         return getAmazonFreshScripts();

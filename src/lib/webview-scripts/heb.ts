@@ -1,9 +1,40 @@
 // Injectable JavaScript strings for H-E-B WebView automation.
 // All scripts communicate back to React Native via window.ReactNativeWebView.postMessage.
+//
+// SELECTORS ARE REMOTE-CONFIGURABLE (see ../automation-config). The literals in
+// SEL_FALLBACKS ship in the binary; a config push overrides them without a
+// release. Selectors must be read inside a build FUNCTION — the remote config
+// arrives after this module is imported, so the script constants that carry
+// selectors are functions rather than template-literal consts.
+
+import { selectorsFor, storeConfig } from '../automation-config';
 
 export const HEB_URL = 'https://www.heb.com';
 export const HEB_LOGIN_URL = 'https://www.heb.com/my-account/login';
 export const HEB_CART_URL = 'https://www.heb.com/cart';
+
+const SELECTOR_KEY = 'heb';
+
+const SEL_FALLBACKS = {
+  title: '[data-qe-id="productTitle"]',
+  // HEB layers sponsored/pairing carousels over the real results; only genuine
+  // result tiles carry data-qe-id="productCard". See __hebFindCards below.
+  productCard: '[data-qe-id="productCard"]',
+  cardContainer: '[data-qe-id="productCardContainer"]',
+  searchGrid: '#search_product_grid',
+  legacyCard: '[data-component="product-card"], [data-qe-id="productCard"]',
+  searchHeader: '#searchGridHeader',
+  // Search UI. HEB opens search in a dialog on mobile, so the input is looked up
+  // modal-first with a page-level fallback — a frequent breakage point, hence
+  // every step of the chain is configurable.
+  searchOpen: 'button[aria-label="Open search"], button[aria-label*="search" i]:not([type="submit"])',
+  searchInputModal: 'dialog input[type="search"], [role="dialog"] input[type="search"], .modal input[type="search"], [class*="modal" i] input[type="search"]',
+  searchInput: 'input[type="search"], input[placeholder*="Search"], input[placeholder*="search"], input[name="search"], input[name="q"]',
+  searchSubmit: 'button[type="submit"], button[aria-label*="Search" i]:not([aria-label*="Open"])',
+};
+
+/** Live selectors as interpolatable JS literals (quotes included). */
+const sel = () => selectorsFor(SELECTOR_KEY, SEL_FALLBACKS);
 
 // ── Shared: find genuine search-result cards (skip carousels) ──────────────────
 //
@@ -19,16 +50,19 @@ export const HEB_CART_URL = 'https://www.heb.com/cart';
 // live inside the search grid (#search_product_grid / [data-qe-id="productCardContainer"]).
 // Select on that id, scoped to the grid, and fall back to the legacy combined
 // selector only if the page exposes no productCard ids at all (older DOM variant).
-const HEB_FIND_CARDS_FN = `
+const hebFindCardsFn = () => {
+  const s = sel();
+  return `
   function __hebFindCards() {
-    var grid = document.querySelector('[data-qe-id="productCardContainer"]')
-      || document.querySelector('#search_product_grid');
+    var grid = document.querySelector(${s.cardContainer})
+      || document.querySelector(${s.searchGrid});
     var scope = grid || document;
-    var real = Array.prototype.slice.call(scope.querySelectorAll('[data-qe-id="productCard"]'));
+    var real = Array.prototype.slice.call(scope.querySelectorAll(${s.productCard}));
     if (real.length > 0) return real;
-    return Array.prototype.slice.call(scope.querySelectorAll('[data-component="product-card"], [data-qe-id="productCard"]'));
+    return Array.prototype.slice.call(scope.querySelectorAll(${s.legacyCard}));
   }
 `;
+};
 
 // ── Shared: read only FRESH results (skip the previous search's stale cards) ────
 //
@@ -42,7 +76,9 @@ const HEB_FIND_CARDS_FN = `
 // the term in the URL. Falls back to whatever is present after gateMs (so an
 // unusual/missing header can't stall the flow) and stops entirely after maxMs.
 // Depends on __hebFindCards (interpolate HEB_FIND_CARDS_FN first).
-const HEB_WAIT_FRESH_FN = `
+const hebWaitFreshFn = () => {
+  const s = sel();
+  return `
   function __hebExpectedTerm() {
     try {
       var m = /[?&]q=([^&]*)/.exec(window.location.search || '');
@@ -54,7 +90,7 @@ const HEB_WAIT_FRESH_FN = `
   }
   function __hebHeaderFresh(expectedNorm) {
     if (!expectedNorm) return true; // no q param (e.g. a product page) — nothing to gate on
-    var header = document.querySelector('#searchGridHeader');
+    var header = document.querySelector(${s.searchHeader});
     var ht = __hebNorm(header ? header.textContent : '');
     return !!ht && ht.indexOf(expectedNorm) !== -1;
   }
@@ -72,6 +108,7 @@ const HEB_WAIT_FRESH_FN = `
     return { cards: cards, waitedMs: waited };
   }
 `;
+};
 
 // ── Login check ───────────────────────────────────────────────────────────────
 
@@ -179,7 +216,9 @@ export const CHECK_LOGIN_SCRIPT = `(async function() {
  * Extracts product candidates and reads preference options for applicable products.
  * Posts { type: 'SEARCH_RESULT', candidates: [...] }.
  */
-export const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
+export function buildExtractProductsScript(): string {
+  const s = sel();
+  return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
   // Suppress mobile keyboard throughout — any input that receives focus gets inputmode="none".
@@ -189,8 +228,8 @@ export const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
     }
   }
   document.addEventListener('focusin', __noKbd, true);
-${HEB_FIND_CARDS_FN}
-${HEB_WAIT_FRESH_FN}
+${hebFindCardsFn()}
+${hebWaitFreshFn()}
   // Poll for the product grid instead of a single 800ms check. A warm webview
   // (sequential flow) paints cards almost immediately, but a freshly-mounted
   // worker webview (parallel flow) needs several seconds on its first load to
@@ -204,7 +243,7 @@ ${HEB_WAIT_FRESH_FN}
   var waitedMs = __fresh.waitedMs;
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'poll_done', url: window.location.href, cardCount: cards.length, waitedMs: waitedMs }));
 
-  var TITLE_SEL = '[data-qe-id="productTitle"]';
+  var TITLE_SEL = ${s.title};
 
   if (cards.length === 0) {
     document.removeEventListener('focusin', __noKbd, true);
@@ -340,6 +379,7 @@ ${HEB_WAIT_FRESH_FN}
   document.removeEventListener('focusin', __noKbd, true);
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: candidates }));
 })();true;`;
+}
 
 // ── Add to cart ───────────────────────────────────────────────────────────────
 
@@ -356,6 +396,7 @@ export function buildAddToCartScript(
 ): string {
   const escapedName = JSON.stringify(productName);
   const escapedPref = preference ? JSON.stringify(preference) : 'null';
+  const s = sel();
   const weightTarget = (targetWeightLb != null && !Number.isNaN(targetWeightLb)) ? targetWeightLb : 'NaN';
 
   return `(async function() {
@@ -441,8 +482,8 @@ export function buildAddToCartScript(
     return true;
   }
 
-  var TITLE_SEL = '[data-qe-id="productTitle"]';
-${HEB_FIND_CARDS_FN}
+  var TITLE_SEL = ${s.title};
+${hebFindCardsFn()}
 
   // Product-specific add confirmation: HEB relabels a card's own Add button to
   // "N added" once the item is in the cart. Unlike the shared header badge, this
@@ -730,6 +771,7 @@ export function buildSearchAndAddScript(
 ): string {
   const escapedTerm = JSON.stringify(searchTerm);
   const escapedDropdown = dropdown ? JSON.stringify(dropdown) : 'null';
+  const s = sel();
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function __noKbd(e) {
@@ -770,9 +812,9 @@ export function buildSearchAndAddScript(
     return false;
   }
   var __cartBefore = -1;
-  var TITLE_SEL = '[data-qe-id="productTitle"]';
-${HEB_FIND_CARDS_FN}
-${HEB_WAIT_FRESH_FN}
+  var TITLE_SEL = ${s.title};
+${hebFindCardsFn()}
+${hebWaitFreshFn()}
 
   async function handleWeightDropdown(qty, scope) {
     // HEB "add by weight" items use a native <select name="addByWeight"> whose
@@ -1072,6 +1114,7 @@ ${HEB_WAIT_FRESH_FN}
  */
 export function buildSearchScript(term: string): string {
   const escaped = JSON.stringify(term);
+  const s = sel();
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   var term = ${escaped};
@@ -1091,14 +1134,14 @@ export function buildSearchScript(term: string): string {
 
   if (!alreadyOnResults) {
     // Open the search dialog by clicking the search icon button.
-    var openBtn = document.querySelector('button[aria-label="Open search"], button[aria-label*="search" i]:not([type="submit"])');
+    var openBtn = document.querySelector(${s.searchOpen});
     if (openBtn) { openBtn.click(); await wait(400); }
   }
 
   // Find the search input — prefer dialog/modal input first, then fall back to page-level.
-  var input = document.querySelector('dialog input[type="search"], [role="dialog"] input[type="search"], .modal input[type="search"], [class*="modal" i] input[type="search"]');
+  var input = document.querySelector(${s.searchInputModal});
   if (!input) {
-    input = document.querySelector('input[type="search"], input[placeholder*="Search"], input[placeholder*="search"], input[name="search"], input[name="q"]');
+    input = document.querySelector(${s.searchInput});
   }
 
   if (!input) { return; }
@@ -1118,7 +1161,7 @@ export function buildSearchScript(term: string): string {
   if (input.parentElement) submit = input.parentElement.querySelector('button[type="submit"]');
   if (!submit) {
     var container = input.closest('form') || input.closest('[role="search"]') || input.closest('div');
-    if (container) submit = container.querySelector('button[type="submit"], button[aria-label*="Search" i]:not([aria-label*="Open"])');
+    if (container) submit = container.querySelector(${s.searchSubmit});
   }
   if (submit) {
     submit.click();

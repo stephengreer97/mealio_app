@@ -7,6 +7,17 @@
 // Ported from ~/mealio_ext/content-albertsons-family.js — same verified selectors,
 // adapted to the StoreScripts interface used by the store registry.
 //
+// SELECTORS ARE REMOTE-CONFIGURABLE. The literals below are the fallbacks that
+// ship in the binary; the live values come from selectorsFor('albertsons', ...),
+// which layers a remote config push on top. When Albertsons renames a button we
+// publish a config version instead of shipping a build through App Store review.
+//
+// Two consequences for anyone editing this file:
+//   • Selectors must be read INSIDE a build function, never captured at module
+//     load — the remote config arrives after this module is imported.
+//   • `sel.x` interpolates a complete JS string literal (quotes included), so
+//     write `var ATC_SEL = ${sel.atc};` and never `'${sel.atc}'`.
+//
 // VERIFIED SELECTORS (confirmed on Albertsons platform 2026-02):
 //   Login detection:    span[data-qa="hdr-accnt-nm"]  (text = name OR "Sign in")
 //   Search input:       input[type="search"][name="q"]
@@ -18,6 +29,30 @@
 
 import type { StoreScripts } from './index';
 import { buildExtractWorker } from './worker-search';
+import { selectorsFor, storeConfig } from '../automation-config';
+
+// Every Albertsons banner runs the same storefront platform, so one selector set
+// covers all 15 brands and a single config push fixes them together.
+const SELECTOR_KEY = 'albertsons';
+
+// Compiled-in fallbacks. Kept in sync with BUNDLED_AUTOMATION_CONFIG so the
+// bundled config and this file can't silently disagree.
+const SEL_FALLBACKS = {
+  atc: 'button[aria-label^="Add 1 unit of"]',
+  bubble: 'button[data-qa="qty-stppr-bbl"]',
+  increment: 'button[data-qa="prdctincrmntr"]',
+  searchOpen: 'button[aria-label="search"]',
+  // Login detection is heuristic rather than the documented
+  // span[data-qa="hdr-accnt-nm"]: the platform ships several header variants and
+  // aria-label matching survives them. Both halves are configurable so a header
+  // redesign is a config push.
+  profileBtn: 'button[aria-label*="account" i], button[aria-label*="profile" i], a[aria-label*="account" i]',
+  headerEls: 'header button, header a, nav button, nav a, [role="banner"] button, [role="banner"] a',
+  card: 'li, article, [class*="ProductCard"], [class*="product-card"], [data-qa*="product"]',
+};
+
+/** Live selectors as interpolatable JS literals. Call inside a build function. */
+const sel = () => selectorsFor(SELECTOR_KEY, SEL_FALLBACKS);
 
 // ── Domain map ──────────────────────────────────────────────────────────────
 
@@ -58,6 +93,7 @@ export function albertsonsSearchQuery(name: string): string {
 // ── Login check ─────────────────────────────────────────────────────────────
 
 function buildCheckLoginScript(domain: string): string {
+  const s = sel();
   return `(async function() {
   if (window.__albLoginCheckActive) return;
   window.__albLoginCheckActive = true;
@@ -69,7 +105,7 @@ function buildCheckLoginScript(domain: string): string {
     // Poll for the profile button (up to 3s, usually < 1s).
     var profileBtn = null;
     for (var pi = 0; pi < 15; pi++) {
-      var candidates = document.querySelectorAll('button[aria-label*="account" i], button[aria-label*="profile" i], a[aria-label*="account" i]');
+      var candidates = document.querySelectorAll(${s.profileBtn});
       for (var ci = 0; ci < candidates.length; ci++) {
         var aria = (candidates[ci].getAttribute('aria-label') || '').toLowerCase();
         if (!aria.includes('close')) { profileBtn = candidates[ci]; break; }
@@ -78,7 +114,7 @@ function buildCheckLoginScript(domain: string): string {
       await wait(200);
     }
     if (!profileBtn) {
-      var headerEls = Array.from(document.querySelectorAll('header button, header a, nav button, nav a, [role="banner"] button, [role="banner"] a'));
+      var headerEls = Array.from(document.querySelectorAll(${s.headerEls}));
       for (var hi = 0; hi < headerEls.length; hi++) {
         var el = headerEls[hi];
         var aria = (el.getAttribute('aria-label') || '').toLowerCase();
@@ -216,6 +252,7 @@ function buildCheckLoginScript(domain: string): string {
 // ── Product extraction ──────────────────────────────────────────────────────
 
 function buildExtractProductsScript(): string {
+  const s = sel();
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
@@ -236,7 +273,7 @@ function buildExtractProductsScript(): string {
     return;
   }
 
-  var ATC_SEL = 'button[aria-label^="Add 1 unit of"]';
+  var ATC_SEL = ${s.atc};
 
   // Poll for ATC buttons, then wait for the result grid to SETTLE — the button
   // count must hold steady across 2 consecutive checks (300ms apart) before we
@@ -329,6 +366,7 @@ function buildAddToCartScript(
   qty: number,
 ): string {
   var escapedName = JSON.stringify(productName);
+  const s = sel();
 
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
@@ -343,9 +381,9 @@ function buildAddToCartScript(
 
   var TARGET_NAME = ${escapedName};
   var QTY = ${qty};
-  var ATC_SEL = 'button[aria-label^="Add 1 unit of"]';
-  var BUBBLE_SEL = 'button[data-qa="qty-stppr-bbl"]';
-  var INCREMENT_SEL = 'button[data-qa="prdctincrmntr"]';
+  var ATC_SEL = ${s.atc};
+  var BUBBLE_SEL = ${s.bubble};
+  var INCREMENT_SEL = ${s.increment};
 
   function normalizeForScoring(s) {
     return s.toLowerCase().replace(/[^\\w\\s]/g, ' ').replace(/\\s+/g, ' ').trim();
@@ -656,6 +694,7 @@ function buildAddToCartScript(
 // ── Search navigation ───────────────────────────────────────────────────────
 
 function buildSearchScript(domain: string) {
+  const s = sel();
   return function (term: string): string {
     // Search with the first 5 words only (Albertsons returns nothing for long
     // full-title queries). Scoring still uses the full name downstream.
@@ -675,7 +714,7 @@ function buildSearchScript(domain: string) {
   var searchUrl = 'https://www.${domain}/shop/search-results.html?q=' + encodeURIComponent(term);
 
   // Click the search icon button to reveal/focus the input
-  var openBtn = document.querySelector('button[aria-label="search"]');
+  var openBtn = document.querySelector(${s.searchOpen});
   if (openBtn) { openBtn.click(); await wait(300); }
 
   // Poll for the search input — the storefront hydrates async, and submitting
@@ -744,6 +783,7 @@ function buildSearchAndAddScriptFn(
   _dropdown: { type: string; selectedText: string; selectedValue: string } | null,
 ): string {
   var escapedTerm = JSON.stringify(searchTerm);
+  const s = sel();
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function __noKbd(e) {
@@ -769,9 +809,9 @@ function buildSearchAndAddScriptFn(
     }
   } catch (e) {}
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'saa_start', searchTerm: SEARCH_TERM, qty: QTY, url: location.href }));
-  var ATC_SEL = 'button[aria-label^="Add 1 unit of"]';
-  var BUBBLE_SEL = 'button[data-qa="qty-stppr-bbl"]';
-  var INCREMENT_SEL = 'button[data-qa="prdctincrmntr"]';
+  var ATC_SEL = ${s.atc};
+  var BUBBLE_SEL = ${s.bubble};
+  var INCREMENT_SEL = ${s.increment};
 
   var CRITICAL = new Set(['organic','grass','fed','free','range','cage','large','small','jumbo',
     'medium','extra','spicy','mild','hot','sweet','whole','skim','nonfat','lowfat',
@@ -1013,7 +1053,7 @@ function buildSearchAndAddScriptFn(
     });
   }
 
-  var CARD_SEL = 'li, article, [class*="ProductCard"], [class*="product-card"], [data-qa*="product"]';
+  var CARD_SEL = ${s.card};
   function cardOf(el) { return el ? el.closest(CARD_SEL) : null; }
 
   // The authoritative per-add signal: the quantity shown ON THIS PRODUCT CARD.
@@ -1288,6 +1328,10 @@ function buildSearchAndAddScriptFn(
 export function getScripts(storeId: string): StoreScripts {
   const domain = DOMAIN_MAP[storeId] || 'albertsons.com';
   const storeOrigin = `https://www.${domain}`;
+  // Read under the shared 'albertsons' key: every banner runs one storefront
+  // platform, so one config entry tunes all 15. URLs stay derived from the
+  // storeId — a per-banner URL override would need 15 entries to say one thing.
+  const cfg = storeConfig(SELECTOR_KEY);
 
   return {
     storeUrl: storeOrigin,
@@ -1313,7 +1357,12 @@ export function getScripts(storeId: string): StoreScripts {
     // WKWebView content process (shared memory budget). 3 staggered by 400ms is
     // proven safe and matches the low global default for anti-bot reasons (fewer
     // concurrent requests). Keeps parallel on (unlike ALDI/Wegmans forceSerialSearch).
-    workerCount: 3,
-    workerStaggerMs: 400,
+    // Remotely tunable: if this store starts tripping a WAF we can drop the
+    // concurrency or force serial without shipping a build.
+    workerCount: cfg.workerCount ?? 3,
+    workerStaggerMs: cfg.workerStaggerMs ?? 400,
+    forceSerialSearch: cfg.forceSerialSearch,
+    cacheBustNav: cfg.cacheBustNav,
+    spaSearch: cfg.spaSearch,
   };
 }

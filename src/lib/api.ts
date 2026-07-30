@@ -491,7 +491,15 @@ export const usage = {
     } catch { /* best-effort */ }
   },
 
-  logAutomationStart: async (data: { storeId: string; source: 'app'; mealCount?: number; itemsRequested?: number }): Promise<string | null> => {
+  logAutomationStart: async (data: {
+    storeId: string;
+    source: 'app';
+    mealCount?: number;
+    itemsRequested?: number;
+    configVersion?: number;
+    appVersion?: string;
+    platform?: 'ios' | 'android';
+  }): Promise<string | null> => {
     try {
       const r = await request<{ runId: string }>('/api/usage/automation', {
         method: 'POST',
@@ -509,6 +517,57 @@ export const usage = {
         body: JSON.stringify({ phase: 'complete', ...data }),
       });
     } catch { /* best-effort */ }
+  },
+
+  // Per-step funnel telemetry for one run. Batched by the caller (see
+  // automation-telemetry.ts); ingest is idempotent on (runId, seq), so a retry
+  // after a network blip can't double-count. Returns whether the batch landed so
+  // the caller knows to re-queue it.
+  logAutomationSteps: async (data: {
+    runId: string;
+    configVersion?: number;
+    appVersion?: string;
+    platform?: 'ios' | 'android';
+    steps: Array<{
+      seq: number;
+      step: string;
+      outcome: string;
+      durationMs?: number;
+      itemIndex?: number;
+      detail?: Record<string, unknown>;
+    }>;
+  }): Promise<boolean> => {
+    if (!data.runId || data.steps.length === 0) return true;
+    try {
+      // Shorter timeout than the default: telemetry must never hold a queue open
+      // long enough to matter to a cart run that's already finishing.
+      await request<{ ok: boolean }>('/api/usage/automation/steps', {
+        method: 'POST',
+        body: JSON.stringify(data),
+        timeoutMs: 10_000,
+      });
+      return true;
+    } catch (err) {
+      // 4xx means the batch is unacceptable and retrying won't help (bad runId,
+      // oversized); 5xx/timeout is worth another attempt.
+      const status = err instanceof ApiError ? err.status : 0;
+      return status >= 400 && status < 500;
+    }
+  },
+};
+
+// Remote automation config (selectors, URLs, timeouts, flags) for the WebView
+// cart engine. Returns null on any failure — the caller keeps its cached or
+// bundled config, so a config-server outage never blocks automation.
+export const automation = {
+  getConfig: async (): Promise<{ version: number; config: unknown } | null> => {
+    try {
+      const r = await request<{ version: number; config: unknown }>('/api/automation/config', {
+        method: 'GET',
+        timeoutMs: 10_000,
+      });
+      return r && typeof r.version === 'number' ? r : null;
+    } catch { return null; }
   },
 };
 
