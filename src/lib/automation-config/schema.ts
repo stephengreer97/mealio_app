@@ -121,6 +121,16 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
       loginUrl: 'https://www.heb.com/my-account/login',
       cartUrl: 'https://www.heb.com/cart',
       searchUrlTemplate: 'https://www.heb.com/search?q={term}',
+      // HEB's search route is an SPA re-render: landing on /search?q=<term> fires
+      // onLoadEnd a SECOND time for the SAME url a beat after the first, while the
+      // injected search+add script is still running. Without this flag the engine
+      // treats that second same-URL load as a script-killing reload and re-injects,
+      // spawning a duplicate SEARCH_AND_ADD_RESULT that over-advances searchIdxRef
+      // and skips an item (see WebViewCartSheet onLoadEnd `reinjectInflight`). In
+      // the sequential reconcile top-up this skipped past the last retry item into
+      // 'done', firing the after-cart snapshot while the search page was still up —
+      // so the snapshot counted the search results page and reported 0 items.
+      spaSearch: true,
       selectors: {
         // Product title inside a search-result card. Appeared in three separate
         // copies of the HEB scripts before this table existed.
