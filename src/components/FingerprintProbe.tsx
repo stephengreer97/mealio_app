@@ -165,7 +165,14 @@ export default function FingerprintProbe() {
     setDone(true);
   }, []);
 
-  if (!__DEV__ || done) return null;
+  // Android-only. Two reasons, and the first is a hard crash:
+  //   1. react-native-webview 13.15.0's visitSource treats any source URL with no
+  //      host as a FILE url and calls -[WKWebView loadFileURL:], so an about:blank
+  //      source on iOS throws "about:blank is not a file URL" and crashes the app
+  //      on launch. (Android's WebView loads about:blank fine.)
+  //   2. The probe's whole purpose is inspecting the Android emulator's spoofed
+  //      fingerprint; the shim no-ops on iOS, so there's nothing to measure here.
+  if (!__DEV__ || done || Platform.OS !== 'android') return null;
 
   return (
     <View pointerEvents="none" style={{ position: 'absolute', width: 1, height: 1, opacity: 0, left: -1000, top: -1000 }}>
