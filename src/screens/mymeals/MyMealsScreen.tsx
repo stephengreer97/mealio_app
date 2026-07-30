@@ -32,6 +32,7 @@ import KrogerCartReviewSheet from '../../components/KrogerCartReviewSheet';
 import WebViewCartSheet from '../../components/WebViewCartSheet';
 import ProductChooserSheet from '../../components/ProductChooserSheet';
 import { useCartJob } from '../../context/CartJobContext';
+import { useLoginPrewarm } from '../../context/LoginPrewarmContext';
 import { FEATURE_BACKGROUND_CART } from '../../constants/features';
 import IngredientEditor from '../../components/IngredientEditor';
 import PhotoPicker from '../../components/PhotoPicker';
@@ -72,6 +73,9 @@ export default function MyMealsScreen() {
 
   // Background add-to-cart job owner (root-level WebView engine).
   const cartJob = useCartJob();
+  // Silent login pre-warm: check the store login ahead of add-to-cart so the
+  // flow already knows whether to surface the login prompt.
+  const loginPrewarm = useLoginPrewarm();
 
   // Multi-select / Kroger cart
   const [selectedMealIds, setSelectedMealIds] = useState<Set<string>>(new Set());
@@ -363,16 +367,21 @@ export default function MyMealsScreen() {
         .filter((m) => !m.deletedAt && !seen.has(m.id) && seen.add(m.id))
         .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
       setAllMeals(active);
+      // Store with the most saved meals — used both to auto-select a landing
+      // store and to silently pre-warm its login (idea: check the store the user
+      // is most likely to add to before they ever tap add-to-cart).
+      const counts: Record<string, number> = {};
+      for (const m of active) if (m.storeId) counts[m.storeId] = (counts[m.storeId] ?? 0) + 1;
+      const topStore = STORES.reduce<{ id: string; count: number } | null>((best, s) => {
+        const c = counts[s.id] ?? 0;
+        return c > 0 && (!best || c > best.count) ? { id: s.id, count: c } : best;
+      }, null);
+      console.log('[Prewarm] MyMeals loaded — top store by meal count:', topStore?.id ?? '(none)');
+      if (topStore) loginPrewarm.checkStore(topStore.id);
       // Auto-select the store with the most meals (if current selection has none)
       setSelectedStore((prev) => {
         const hasMealsAtCurrent = active.some((m) => m.storeId === prev);
         if (hasMealsAtCurrent) return prev;
-        const counts: Record<string, number> = {};
-        for (const m of active) if (m.storeId) counts[m.storeId] = (counts[m.storeId] ?? 0) + 1;
-        const topStore = STORES.reduce<{ id: string; count: number } | null>((best, s) => {
-          const c = counts[s.id] ?? 0;
-          return c > 0 && (!best || c > best.count) ? { id: s.id, count: c } : best;
-        }, null);
         return topStore ? topStore.id : prev;
       });
     } catch (err: any) {
@@ -565,7 +574,7 @@ export default function MyMealsScreen() {
           <TouchableOpacity
             key={store.id}
             style={[styles.storeTab, selectedStore === store.id && styles.storeTabActive]}
-            onPress={() => { setSelectedStore(store.id); setSelectedMealIds(new Set()); }}
+            onPress={() => { console.log('[Prewarm] store tab tapped:', store.id); setSelectedStore(store.id); setSelectedMealIds(new Set()); loginPrewarm.checkStore(store.id); }}
           >
             <View style={[styles.storeDot, { backgroundColor: store.color }]} />
             <Text style={[styles.storeTabText, selectedStore === store.id && styles.storeTabTextActive]}>

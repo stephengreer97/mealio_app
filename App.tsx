@@ -13,10 +13,12 @@ import {
 import { Pacifico_400Regular } from '@expo-google-fonts/pacifico';
 import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider } from './src/context/AuthContext';
+import { LoginPrewarmProvider } from './src/context/LoginPrewarmContext';
 import { CartJobProvider } from './src/context/CartJobContext';
 import RootNavigator from './src/navigation/RootNavigator';
 import { installConsoleCapture } from './src/lib/logBuffer';
 import WebViewVersionProbe from './src/components/WebViewVersionProbe';
+import FingerprintProbe from './src/components/FingerprintProbe';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -40,13 +42,16 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <WebViewVersionProbe />
+      {__DEV__ && <FingerprintProbe />}
       <AuthProvider>
-        <CartJobProvider>
-          <NavigationContainer>
-            <StatusBar style="auto" />
-            <RootNavigator />
-          </NavigationContainer>
-        </CartJobProvider>
+        <LoginPrewarmProvider>
+          <CartJobProvider>
+            <NavigationContainer>
+              <StatusBar style="auto" />
+              <RootNavigator />
+            </NavigationContainer>
+          </CartJobProvider>
+        </LoginPrewarmProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

@@ -68,6 +68,57 @@ export function buildSearchAndAddWorker(workerId: number, addScript: string): st
 ${addScript}`;
 }
 
+/**
+ * Wraps a store's EXTRACT_PRODUCTS_SCRIPT for the PRE-SEARCH PARKING flow
+ * (FEATURE_PRESEARCH_ADD). Unlike buildExtractWorker (which posts a single
+ * WORKER_RESULT and is done) this installs a durable postMessage override that
+ * re-tags TWO phases of the worker's life onto the bridge:
+ *
+ *   1. Park phase — the extract script posts SEARCH_RESULT once the results page
+ *      has painted → re-emitted as WORKER_RESULT { phase: 'search', candidates }.
+ *      The worker then just sits on the loaded page.
+ *   2. Commit phase — later, the controller injects the store's
+ *      buildAddToCartScript into the SAME open page; its ADD_RESULT /
+ *      SEARCH_AND_ADD_RESULT is re-emitted as
+ *      WORKER_RESULT { phase: 'add', success, productName }.
+ *
+ * Each phase can post exactly once (independent guards), so the search park
+ * doesn't consume the add's slot and vice-versa.
+ */
+export function buildPresearchWorker(workerId: number, extractScript: string): string {
+  return `var WORKER_ID = ${workerId};
+(function() {
+  if (window.__mealioPresearchWrapped) return;
+  window.__mealioPresearchWrapped = true;
+  var postedSearch = false, postedAdd = false;
+  var rn = window.ReactNativeWebView;
+  if (!rn || !rn.postMessage) return;
+  var orig = rn.postMessage.bind(rn);
+  rn.postMessage = function(s) {
+    try {
+      var m = JSON.parse(s);
+      if (m && m.type === 'SEARCH_RESULT') {
+        if (postedSearch) return;
+        postedSearch = true;
+        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, phase: 'search', candidates: m.candidates || [], storeUnavailable: !!m.storeUnavailable }));
+        return;
+      }
+      if (m && (m.type === 'ADD_RESULT' || m.type === 'SEARCH_AND_ADD_RESULT')) {
+        if (postedAdd) return;
+        postedAdd = true;
+        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, phase: 'add', success: !!m.success, productName: m.productName || null, reason: m.reason || null, candidates: m.candidates || [], storeUnavailable: !!m.storeUnavailable }));
+        return;
+      }
+      if (m && (m.type === 'WORKER_DEBUG' || m.type === 'EXTRACT_DEBUG')) {
+        m.type = 'WORKER_DEBUG'; m.workerId = WORKER_ID; orig(JSON.stringify(m)); return;
+      }
+    } catch (e) {}
+    // Swallow other diagnostics to keep the bridge quiet under concurrency.
+  };
+})();
+${extractScript}`;
+}
+
 export function buildExtractWorker(workerId: number, extractScript: string): string {
   return `var WORKER_ID = ${workerId};
 (function() {

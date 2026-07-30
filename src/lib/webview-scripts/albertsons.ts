@@ -98,11 +98,74 @@ function buildCheckLoginScript(domain: string): string {
       text: profileBtn ? profileBtn.textContent.trim().slice(0, 40) : null
     }));
 
+    // Passive login markers (NO click) — hunting for a signal we can read on the
+    // cold homepage so the hidden probe doesn't need the fragile click+wait.
+    try {
+      var __cookieHints = (document.cookie || '').split(';')
+        .map(function(c) { return c.trim().split('=')[0]; })
+        .filter(function(k) { return /sign|login|auth|user|account|session|abs|guest/i.test(k); });
+      var __lsHints = [];
+      for (var __li = 0; __li < localStorage.length; __li++) {
+        var __k = localStorage.key(__li);
+        if (/sign|login|auth|user|account|session|profile|name|guest|loyal/i.test(__k)) __lsHints.push(__k);
+      }
+      var __bodyLc = document.body.innerText.slice(0, 4000).toLowerCase();
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'LOGIN_DEBUG', step: 'passive_markers',
+        acctAria: profileBtn ? (profileBtn.getAttribute('aria-label') || '') : null,
+        acctText: profileBtn ? (profileBtn.textContent || '').trim().slice(0, 60) : null,
+        bodyHasSignIn: /sign in|log in/.test(__bodyLc),
+        bodyHasSignOut: /sign out|log out/.test(__bodyLc),
+        cookieHints: __cookieHints.slice(0, 25),
+        lsHints: __lsHints.slice(0, 25)
+      }));
+    } catch (e) {}
+
     if (!profileBtn) {
       window.__albLoginCheckActive = false;
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false }));
       return;
     }
+
+    // ── Passive determination (no click) ──────────────────────────────────
+    // Logged-out state is universal: the account/header control is a sign-in
+    // CTA. So: a sign-in CTA present → logged out; an account control present
+    // with NO sign-in CTA anywhere in the header → logged in. Anything
+    // ambiguous falls through to the click check below. No user-specific text.
+    try {
+      var SIGNIN_RE = /sign\\s?in|log\\s?in|sign\\s?up|create account/i;
+      var acctName = ((profileBtn.getAttribute('aria-label') || '') + ' ' + (profileBtn.textContent || '')).trim();
+      var headerSignIn = Array.prototype.slice
+        .call(document.querySelectorAll('header a, header button, nav a, nav button, [role="banner"] a, [role="banner"] button'))
+        .some(function(el) {
+          var n = (el.getAttribute('aria-label') || '') + ' ' + (el.textContent || '');
+          return SIGNIN_RE.test(n);
+        });
+      var acctIsSignIn = SIGNIN_RE.test(acctName);
+      var acctIsMenu = /account\\s*menu|my\\s*account|account & lists|hi[, ]|welcome/i.test(acctName);
+      if (acctIsSignIn || headerSignIn) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'passive_decision', decided: 'loggedOut', acctName: acctName.slice(0, 60) }));
+        window.__albLoginCheckActive = false;
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false }));
+        for (var __pp = 0; __pp < 90; __pp++) {
+          await wait(2000);
+          var __pt = document.body.innerText.slice(0, 8000).toLowerCase();
+          if (__pt.includes('sign out') || __pt.includes('log out')) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_COMPLETE' }));
+            return;
+          }
+        }
+        return;
+      }
+      if (acctIsMenu) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'passive_decision', decided: 'loggedIn', acctName: acctName.slice(0, 60) }));
+        window.__albLoginCheckActive = false;
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }));
+        return;
+      }
+      // else: ambiguous → click check below.
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'passive_decision', decided: 'ambiguous_click_fallback', acctName: acctName.slice(0, 60) }));
+    } catch (e) {}
 
     // Click the profile icon. Two outcomes:
     // Logged in: side panel opens with "Sign Out" option
@@ -326,14 +389,21 @@ function buildAddToCartScript(
         // vary)". Score on the words shown BEFORE the ellipsis against the target;
         // trailing noise after "..." (like "(packaging may vary)") is never in the
         // real product name, so requiring it to match would wrongly reject the bubble.
-        var beforeEllipsis = cleaned.split(/\\.{3}|\\u2026/)[0];
-        var tWords = normalizeForScoring(productName).split(' ').filter(Boolean);
-        var fWords = normalizeForScoring(beforeEllipsis).split(' ').filter(Boolean);
-        if (fWords.length > 0) {
-          var hit = fWords.filter(function(w) { return tWords.indexOf(w) !== -1; }).length;
-          var pct = hit / fWords.length;
-          score = pct < 0.7 ? -1 : Math.round(pct * 100);
-        }
+        // Middle-truncation "prefix...suffix" — the store cuts the title in the
+        // middle (e.g. "PERDUE SIMPLY SMART ORGANIC Gl...east Tenders - 22 Oz").
+        // Anchor BOTH ends to the target deterministically instead of word-
+        // scoring the fragment: the target must start with the prefix and end
+        // with the suffix. (Prefix-only truncation with trailing packaging noise
+        // — "…Cream -...(packaging may vary)" — matches on the prefix alone.)
+        var __parts = cleaned.split(/\\.{3}|\\u2026/);
+        var __pre = normalizeForScoring(__parts[0]);
+        var __suf = normalizeForScoring(__parts[__parts.length - 1]);
+        var __t = normalizeForScoring(productName);
+        var __preOk = __pre.length >= 3 && __t.indexOf(__pre) === 0;
+        var __sufOk = __suf.length >= 3 && __t.length >= __suf.length && __t.lastIndexOf(__suf) === __t.length - __suf.length;
+        if (__preOk && __sufOk) score = 100;
+        else if (__preOk && (__suf.length < 3 || __t.indexOf(__suf) === -1)) score = 95;
+        else score = -1;
       } else {
         var targetWords = normalizeForScoring(productName).split(' ').filter(Boolean);
         var foundWords = normalizeForScoring(cleaned).split(' ').filter(Boolean);
@@ -647,9 +717,15 @@ function buildSearchScript(domain: string) {
     }
   }
 
-  // Fallback: input never appeared, value never stuck, or Enter didn't navigate
-  // to a real results page → navigate straight to the search URL (correct query).
-  if (!submitted || window.location.href.indexOf('search-results') === -1) {
+  // Fallback: input never appeared, value never stuck, Enter didn't navigate to a
+  // real results page, OR it navigated with an EMPTY/partial ?q= (Angular can
+  // submit before the model updates → the homepage carousel / irrelevant results)
+  // → navigate straight to the correct search URL.
+  var __cur = window.location.href;
+  var __onResults = __cur.indexOf('search-results') !== -1;
+  var __qm = __cur.match(/[?&]q=([^&]*)/);
+  var __hasQuery = !!(__qm && __qm[1] && decodeURIComponent(__qm[1]).trim().length > 0);
+  if (!submitted || !__onResults || !__hasQuery) {
     document.removeEventListener('focusin', __noKbd, true);
     window.location.href = searchUrl;
     return;
@@ -692,6 +768,7 @@ function buildSearchAndAddScriptFn(
       }
     }
   } catch (e) {}
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'saa_start', searchTerm: SEARCH_TERM, qty: QTY, url: location.href }));
   var ATC_SEL = 'button[aria-label^="Add 1 unit of"]';
   var BUBBLE_SEL = 'button[data-qa="qty-stppr-bbl"]';
   var INCREMENT_SEL = 'button[data-qa="prdctincrmntr"]';
@@ -778,14 +855,21 @@ function buildSearchAndAddScriptFn(
         // vary)". Score on the words shown BEFORE the ellipsis against the target;
         // trailing noise after "..." (like "(packaging may vary)") is never in the
         // real product name, so requiring it to match would wrongly reject the bubble.
-        var beforeEllipsis = cleaned.split(/\\.{3}|\\u2026/)[0];
-        var tWords = normalizeForScoring(productName).split(' ').filter(Boolean);
-        var fWords = normalizeForScoring(beforeEllipsis).split(' ').filter(Boolean);
-        if (fWords.length > 0) {
-          var hit = fWords.filter(function(w) { return tWords.indexOf(w) !== -1; }).length;
-          var pct = hit / fWords.length;
-          score = pct < 0.7 ? -1 : Math.round(pct * 100);
-        }
+        // Middle-truncation "prefix...suffix" — the store cuts the title in the
+        // middle (e.g. "PERDUE SIMPLY SMART ORGANIC Gl...east Tenders - 22 Oz").
+        // Anchor BOTH ends to the target deterministically instead of word-
+        // scoring the fragment: the target must start with the prefix and end
+        // with the suffix. (Prefix-only truncation with trailing packaging noise
+        // — "…Cream -...(packaging may vary)" — matches on the prefix alone.)
+        var __parts = cleaned.split(/\\.{3}|\\u2026/);
+        var __pre = normalizeForScoring(__parts[0]);
+        var __suf = normalizeForScoring(__parts[__parts.length - 1]);
+        var __t = normalizeForScoring(productName);
+        var __preOk = __pre.length >= 3 && __t.indexOf(__pre) === 0;
+        var __sufOk = __suf.length >= 3 && __t.length >= __suf.length && __t.lastIndexOf(__suf) === __t.length - __suf.length;
+        if (__preOk && __sufOk) score = 100;
+        else if (__preOk && (__suf.length < 3 || __t.indexOf(__suf) === -1)) score = 95;
+        else score = -1;
       } else {
         var targetWords = normalizeForScoring(productName).split(' ').filter(Boolean);
         var foundWords = normalizeForScoring(cleaned).split(' ').filter(Boolean);
@@ -898,6 +982,71 @@ function buildSearchAndAddScriptFn(
     });
   }
 
+  // PER-PRODUCT cart qty: read THIS product's quantity from its own in-cart
+  // stepper/bubble aria-label. Unlike the shared header count, this can't be
+  // spoofed by a concurrent worker's add — the reliable confirm signal.
+  function getProductCartQty(productName) {
+    var b = findBubbleForProduct(productName);
+    if (b) { var m = (b.getAttribute('aria-label') || '').match(/(\\d+)\\s*unit/i); if (m) return parseInt(m[1], 10); }
+    var inc = findIncrementForProduct(productName);
+    if (inc) {
+      var a = inc.getAttribute('aria-label') || '';
+      var m2 = a.match(/(\\d+)\\s*unit/i) || a.match(/Quantity\\s+(\\d+)/i);
+      if (m2) return parseInt(m2[1], 10);
+    }
+    return 0;
+  }
+
+  // Confirm an add by THIS product's own qty rising (its Add button turning into
+  // an "N in cart" stepper, or the stepper incrementing). Albertsons can be slow,
+  // so poll up to ~4.5s.
+  function waitForProductInCart(productName, prevQty) {
+    return new Promise(function(resolve) {
+      var elapsed = 0;
+      function tick() {
+        if (getProductCartQty(productName) > prevQty) { resolve(true); return; }
+        if (elapsed >= 4500) { resolve(false); return; }
+        elapsed += 200;
+        setTimeout(tick, 200);
+      }
+      tick();
+    });
+  }
+
+  var CARD_SEL = 'li, article, [class*="ProductCard"], [class*="product-card"], [data-qa*="product"]';
+  function cardOf(el) { return el ? el.closest(CARD_SEL) : null; }
+
+  // The authoritative per-add signal: the quantity shown ON THIS PRODUCT CARD.
+  // The card's "Add" turns into a stepper whose number only rises once the item
+  // is truly in the cart — immune to concurrency AND to name mismatches (we read
+  // the exact card we clicked, not one found by name).
+  function getCardQty(card) {
+    if (!card) return 0;
+    var b = card.querySelector('[data-qa="qty-stppr-bbl"]');
+    if (b) { var m = (b.getAttribute('aria-label') || '').match(/(\\d+)\\s*unit/i); if (m) return parseInt(m[1], 10); }
+    var inc = card.querySelector('[data-qa="prdctincrmntr"]');
+    if (inc) {
+      var a = inc.getAttribute('aria-label') || '';
+      var m2 = a.match(/(\\d+)\\s*unit/i) || a.match(/Quantity\\s+(\\d+)/i);
+      if (m2) return parseInt(m2[1], 10);
+    }
+    var qd = card.querySelector('[data-qa*="qty"], [data-qa*="Qty"], input[aria-label*="quantity" i]');
+    if (qd) { var t = (qd.value || qd.textContent || '').match(/\\d+/); if (t) return parseInt(t[0], 10); }
+    return 0;
+  }
+  function waitForCardQty(card, prevQty) {
+    return new Promise(function(resolve) {
+      var elapsed = 0;
+      function tick() {
+        if (getCardQty(card) > prevQty) { resolve(true); return; }
+        if (elapsed >= 4500) { resolve(false); return; }
+        elapsed += 200;
+        setTimeout(tick, 200);
+      }
+      tick();
+    });
+  }
+
   // Poll for ATC buttons, then wait for the result grid to SETTLE (count steady
   // across 2 consecutive 300ms checks) before scoring — see buildExtractProductsScript.
   // Up to ~9s (30 * 300ms).
@@ -913,6 +1062,56 @@ function buildSearchAndAddScriptFn(
     lastCount = allAtcBtns.length;
     await wait(300);
   }
+  // DOM snapshot at the poll boundary: if the ATC selector found nothing, this
+  // shows what buttons/cards ARE on the page so we can spot a changed selector.
+  try {
+    var __allBtns = Array.prototype.slice.call(document.querySelectorAll('button'));
+    var __addish = __allBtns
+      .filter(function(b) {
+        var a = (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-qa') || '');
+        return /add|unit|cart|increase|quantity/i.test(a);
+      })
+      .slice(0, 15)
+      .map(function(b) { return { aria: (b.getAttribute('aria-label') || '').slice(0, 90), qa: b.getAttribute('data-qa') || null }; });
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'EXTRACT_DEBUG', step: 'saa_poll_done',
+      atcCount: allAtcBtns.length, polls: poll, url: location.href,
+      totalButtons: __allBtns.length,
+      productCards: document.querySelectorAll('[class*="ProductCard"], [class*="product-card"], li[data-qa]').length,
+      bubbles: document.querySelectorAll(BUBBLE_SEL).length,
+      increments: document.querySelectorAll(INCREMENT_SEL).length,
+      addLikeButtons: __addish,
+    }));
+  } catch (e) {
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'saa_poll_done', atcCount: allAtcBtns.length, polls: poll, snapErr: String(e) }));
+  }
+
+  // Real-block detection: an app-download / "open in app" interstitial can cover
+  // the page so the ATC button can't be clicked, with NO HTTP error. If we see
+  // such a nudge in a visible on-top element, report it as a BLOCK (distinct
+  // from a plain missing item) so the flow surfaces it for the user to dismiss.
+  try {
+    var __NUDGE_RE = /download the app|open in( the)? app|get the app|continue (in|to)( the)? app|shop (in|on)( the)? app|use the app|app store|google play/i;
+    var __ov = Array.prototype.slice.call(document.querySelectorAll('div,section,aside,dialog,[role="dialog"]'));
+    var __nudge = null;
+    for (var __oi = 0; __oi < __ov.length && __oi < 4000; __oi++) {
+      var __e = __ov[__oi];
+      var __st = window.getComputedStyle(__e);
+      if (__st.display === 'none' || __st.visibility === 'hidden') continue;
+      if (__st.position !== 'fixed' && __st.position !== 'sticky' && __st.position !== 'absolute') continue;
+      var __t = __e.innerText || '';
+      if (__t.length === 0 || __t.length > 400) continue; // nudges are small; skip big content
+      if (__NUDGE_RE.test(__t)) {
+        var __r = __e.getBoundingClientRect();
+        if (__r.width > 40 && __r.height > 30) { __nudge = __t.trim().slice(0, 140); break; }
+      }
+    }
+    if (__nudge) {
+      document.removeEventListener('focusin', __noKbd, true);
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'blocked', blockedText: __nudge, candidates: [] }));
+      return;
+    }
+  } catch (e) {}
 
   // Find ATC buttons and score against search term
   var candidates = [];
@@ -932,19 +1131,30 @@ function buildSearchAndAddScriptFn(
     var card = btn.closest('li, article, [class*="ProductCard"], [class*="product-card"]');
     var imgEl = card ? card.querySelector('img') : null;
 
-    candidates.push({
-      productName: name,
-      imageUrl: imgEl ? imgEl.src : null,
-      outOfStock: oos,
-      preferences: null,
-      price: null
-    });
+    // Collect the store's first 8 displayed products for review suggestions...
+    if (candidates.length < 8) {
+      candidates.push({
+        productName: name,
+        imageUrl: imgEl ? imgEl.src : null,
+        outOfStock: oos,
+        preferences: null,
+        price: null
+      });
+    }
 
-    if (!bestName && scoreMatch(SEARCH_TERM, name) === 100 && !oos) {
+    // ...but keep scanning ALL results for an exact (normalized) name match to
+    // add — no fuzzy scoring. A different size/variant is not the chosen product;
+    // it stays a review suggestion. The exact match may be past the first 8.
+    if (!bestName && normalizeForScoring(name) === normalizeForScoring(SEARCH_TERM) && !oos) {
       bestAtcBtn = btn; bestAtcScore = 100; bestName = name;
     }
-    if (candidates.length >= 8) break;
   }
+  // Diagnostic: the raw candidate names (from each ATC button's aria-label) and
+  // their score vs the search term. Reveals truncated titles / why nothing hit 100.
+  window.ReactNativeWebView.postMessage(JSON.stringify({
+    type: 'EXTRACT_DEBUG', step: 'saa_candidates', searchTerm: SEARCH_TERM, bestName: bestName,
+    candidates: candidates.map(function(c) { return { name: c.productName, score: scoreMatch(SEARCH_TERM, c.productName), oos: c.outOfStock }; })
+  }));
 
   // The product may already be in the cart, shown as a collapsed bubble or an
   // open stepper INSTEAD of an "Add 1 unit of" button — so there may be no ATC
@@ -955,8 +1165,11 @@ function buildSearchAndAddScriptFn(
 
   // Give up only if there's no ATC button AND the item isn't already in the cart.
   if (!bestAtcBtn && !preExistingBubble && !preExistingIncrement) {
-    var surfaced = candidates.filter(__relevant);
-    var hasExactOos = candidates.some(function(c) { return scoreMatch(SEARCH_TERM, c.productName) === 100 && c.outOfStock; });
+    // No exact match to add → surface the store's OWN top results (in the order
+    // it displayed them), unfiltered, so the user can pick an alternative. No
+    // score-based filtering: we just show what the store showed.
+    var surfaced = candidates.slice(0, 8);
+    var hasExactOos = candidates.some(function(c) { return normalizeForScoring(c.productName) === normalizeForScoring(SEARCH_TERM) && c.outOfStock; });
     var reason = surfaced.length === 0 ? 'no_results' : hasExactOos ? 'out_of_stock' : 'low_confidence';
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: reason, candidates: surfaced }));
@@ -982,12 +1195,13 @@ function buildSearchAndAddScriptFn(
         for (var i = 0; i < QTY; i++) {
           var qtyBefore = getCartQty();
           var headerBefore = getHeaderCartCount();
+          var prodBefore = getProductCartQty(matchName);
           var incBtn = i === 0 ? preExistingIncrement : await pollForIncrement(matchName);
           if (!incBtn) break;
           incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
           await wait(100);
           incBtn.click();
-          var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
+          var confirmed = await waitForProductInCart(matchName, prodBefore);
           if (confirmed) actuallyClicked++;
         }
       } else {
@@ -997,12 +1211,13 @@ function buildSearchAndAddScriptFn(
         for (var i = 0; i < QTY; i++) {
           var qtyBefore = getCartQty();
           var headerBefore = getHeaderCartCount();
+          var prodBefore = getProductCartQty(matchName);
           var incBtn = await pollForIncrement(matchName);
           if (!incBtn) break;
           incBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
           await wait(100);
           incBtn.click();
-          var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
+          var confirmed = await waitForProductInCart(matchName, prodBefore);
           if (confirmed) actuallyClicked++;
         }
       }
@@ -1012,6 +1227,7 @@ function buildSearchAndAddScriptFn(
       for (var i = 0; i < QTY; i++) {
         var qtyBefore = getCartQty();
         var headerBefore = getHeaderCartCount();
+        var prodBefore = getProductCartQty(matchName);
         var buttonToClick;
         if (i === 0) {
           buttonToClick = bestAtcBtn;
@@ -1034,15 +1250,25 @@ function buildSearchAndAddScriptFn(
           if (!buttonToClick) break;
         }
         if (buttonToClick.disabled || buttonToClick.getAttribute('aria-disabled') === 'true') break;
+        // The product CARD holding this button — read its own qty as the confirm.
+        var cardEl = cardOf(buttonToClick);
+        var cardBefore = getCardQty(cardEl);
         buttonToClick.scrollIntoView({ behavior: 'instant', block: 'center' });
         await wait(100);
         buttonToClick.click();
-        // Confirm via the header cart count (the real cart), not the tile bubble.
-        var confirmed = await waitForCartConfirm(headerBefore, qtyBefore);
+        // Confirm via THIS card's own quantity rising (definitive per-add signal);
+        // fall back to the per-product read if the card wasn't resolvable.
+        var confirmed = cardEl
+          ? await waitForCardQty(cardEl, cardBefore)
+          : await waitForProductInCart(matchName, prodBefore);
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'ADD_DEBUG', step: 'click_confirmed_' + i,
-          confirmed: confirmed, qtyBefore: qtyBefore, qtyAfter: getCartQty(),
-          headerBefore: headerBefore, headerAfter: getHeaderCartCount()
+          confirmed: confirmed,
+          cardFound: !!cardEl, cardBefore: cardBefore, cardAfter: getCardQty(cardEl),
+          prodBefore: prodBefore, prodAfter: getProductCartQty(matchName),
+          headerBefore: headerBefore, headerAfter: getHeaderCartCount(),
+          // One-time DOM snapshot of the card so we can verify the qty selector.
+          cardHtml: (i === 0 && cardEl) ? cardEl.outerHTML.replace(/\\s+/g, ' ').slice(0, 700) : undefined
         }));
         if (confirmed) actuallyClicked++;
       }

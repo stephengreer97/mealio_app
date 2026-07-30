@@ -20,6 +20,7 @@ import { Colors } from '../constants/colors';
 import { Meal } from '../types';
 import { STORES } from '../constants/stores';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
+import { useLoginPrewarm } from '../context/LoginPrewarmContext';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
 import { WEBVIEW_FINGERPRINT_SHIM } from '../lib/webview-fingerprint-shim';
 import { usage } from '../lib/api';
@@ -29,10 +30,11 @@ import {
 } from '../lib/consolidateIngredients';
 import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
+import { usePresearchAddPool, PresearchItem } from '../lib/usePresearchAddPool';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
-import { buildSearchAndAddWorker } from '../lib/webview-scripts/worker-search';
-import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS } from '../constants/features';
-import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, findShortAddedItems, cartNameMatches, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { buildSearchAndAddWorker, buildPresearchWorker } from '../lib/webview-scripts/worker-search';
+import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS, FEATURE_PRESEARCH_ADD, ADD_COMMIT_JITTER_MS } from '../constants/features';
+import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, findShortAddedItems, findOverAddedItems, cartNameMatches, decodeHtmlEntities, normalizeName, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -196,6 +198,11 @@ export default function WebViewCartSheet({
   // aggressive bot defenses (e.g. Walmart/PerimeterX). No app-banner suppression:
   // that DOM/localStorage tampering tripped WAF blocks and was removed.
   const beforeContent = Platform.OS === 'android' ? WEBVIEW_FINGERPRINT_SHIM : undefined;
+
+  // Silent login pre-warm result (session cache). When we already know the user
+  // is logged OUT of this store, we skip the login_check round-trip and surface
+  // the login prompt immediately at add-to-cart time.
+  const loginPrewarm = useLoginPrewarm();
 
   const [step, _setStep] = useState<Step>('qty');
   const stepRef = useRef<Step>('qty');
@@ -409,6 +416,10 @@ export default function WebViewCartSheet({
   // and a one-shot arm so the after-snapshot re-adds the genuinely-missing items
   // (false positives from the shared cart counter) sequentially, exactly once.
   const parallelResultByIdxRef = useRef<Map<number, AddResult>>(new Map());
+  // The FULL intended add set (every item we tried to add, with expected qty),
+  // captured before the retry top-up narrows activeItemsRef to the retry subset.
+  // Used by the final cart check to flag over-adds / unintended additions.
+  const reconcileIntendedRef = useRef<{ name: string; expectedQty: number; isWeight: boolean }[]>([]);
   const parallelReconcileArmedRef = useRef(false);
   // Set when the reconcile probe finalized using its own cart read, so the
   // 'done' effect doesn't fire a redundant second after-probe.
@@ -501,6 +512,110 @@ export default function WebViewCartSheet({
     emptyResult: () => ({ success: false, productName: null, reason: 'timeout', candidates: [] }),
   });
 
+  // ── Pre-search parking pool (FEATURE_PRESEARCH_ADD) ─────────────────────────
+  // While the user is still on the qty screen and known-logged-in, workers park
+  // on their loaded results pages. On the add-to-cart tap we inject the existing
+  // buildSearchAndAddScript straight into each parked page (it operates on the
+  // already-loaded results, so no re-search), jittered so N adds don't fire in
+  // one burst. Deselected items are dropped; overflow rolls on as workers free.
+  const presearchWorkerRefs = useRef<(WebView | null)[]>(new Array(PARALLEL_ADD_WORKER_COUNT).fill(null));
+  const presearchStartedRef = useRef(false);
+  // Armed at the add-to-cart tap when parked workers exist: the normal
+  // login_check → before-snapshot flow still runs (so the cart baseline is
+  // captured and the reconcile is correct), and beginSearchFlow then commits the
+  // parked adds instead of spinning up the fused add pool. Entries carry each
+  // selected item's original index so the pool matches its parked worker.
+  const presearchCommitArmedRef = useRef(false);
+  const presearchCommitEntriesRef = useRef<PresearchItem<ConsolidatedIngredient>[]>([]);
+  // The cold slot (the main cart WebView, enlisted as a 4th add surface once it's
+  // done snapshotting). Index sits just past the parked workers.
+  const COLD_SLOT_IDX = PARALLEL_ADD_WORKER_COUNT;
+  const mainColdActiveRef = useRef(false);   // main is running a cold search+add
+  const mainColdSlotRef = useRef<number>(COLD_SLOT_IDX);
+  const mainColdItemRef = useRef<ConsolidatedIngredient | null>(null);
+  const mainColdInjectedRef = useRef(false);  // fused add injected for the current item
+  const presearchOnInjectAdd = useCallback((workerId: number, item: ConsolidatedIngredient) => {
+    const ref = presearchWorkerRefs.current[workerId];
+    const s = scriptsRef.current;
+    if (!ref || !s?.buildSearchAndAddScript) return;
+    const term = item.searchTerm ?? item.ingredientName;
+    const script = s.buildSearchAndAddScript(term, item.productQty, item.dropdown ?? null);
+    const jitter = ADD_COMMIT_JITTER_MS + Math.floor(Math.random() * ADD_COMMIT_JITTER_MS);
+    console.log(`[Cart ${ts()}]`, 'presearch commit: worker', workerId, 'term=', term, 'in', jitter, 'ms');
+    setTimeout(() => { presearchWorkerRefs.current[workerId]?.injectJavaScript(script); }, jitter);
+  }, []);
+  // Cold slot dispatch: point the main WebView at the overflow item's results
+  // page. The fused add is injected once it loads (see onLoadEnd's cold branch),
+  // and its result is fed back via onMessage → reportAdded.
+  const presearchOnColdDispatch = useCallback((slot: number, item: ConsolidatedIngredient) => {
+    const s = scriptsRef.current;
+    if (!s?.getSearchUrl) return; // no search URL → the pool's add timeout settles it
+    const term = item.searchTerm ?? item.ingredientName;
+    mainColdActiveRef.current = true;
+    mainColdSlotRef.current = slot;
+    mainColdItemRef.current = item;
+    mainColdInjectedRef.current = false;
+    const url = s.getSearchUrl(term);
+    console.log(`[Cart ${ts()}]`, 'presearch COLD (main webview) → search', term);
+    setWebviewUri(url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now());
+  }, []);
+  const presearchPool = usePresearchAddPool<ConsolidatedIngredient, AddResult>({
+    workerCount: PARALLEL_ADD_WORKER_COUNT,
+    coldWorkerCount: FEATURE_PRESEARCH_ADD ? 1 : 0,
+    searchTimeoutMs: 25_000,
+    addTimeoutMs: 35_000,
+    getUrl: (item) => {
+      const s = getStoreScripts(lockedStoreIdRef.current);
+      const term = item.searchTerm ?? item.ingredientName;
+      return s?.getSearchUrl ? s.getSearchUrl(term) : '';
+    },
+    emptyResult: () => ({ success: false, productName: null, reason: 'timeout', candidates: [] }),
+    onInjectAdd: presearchOnInjectAdd,
+    onColdDispatch: presearchOnColdDispatch,
+  });
+
+  // The cold slot is done (queue drained) → release the main WebView back to the
+  // cart engine for the reconcile. Cleared synchronously enough that the reconcile
+  // nav that follows finishParallelAdd isn't mistaken for a cold search page.
+  useEffect(() => {
+    if (mainColdActiveRef.current && !presearchPool.workerUris[COLD_SLOT_IDX]) {
+      mainColdActiveRef.current = false;
+    }
+  }, [presearchPool.workerUris, COLD_SLOT_IDX]);
+
+  const presearchScripts = useMemo(
+    () => parallelCfg && scripts?.extractProductsScript
+      ? new Array(PARALLEL_ADD_WORKER_COUNT).fill(0).map((_, i) => buildPresearchWorker(i, scripts.extractProductsScript))
+      : [],
+    [parallelCfg, scripts, PARALLEL_ADD_WORKER_COUNT],
+  );
+  const presearchSources = useMemo(
+    () => presearchPool.workerUris.map((uri) => ({ uri: uri || 'about:blank' })),
+    [presearchPool.workerUris],
+  );
+
+  const onPresearchWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
+    try {
+      const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type === 'WORKER_DEBUG') return;
+      if (msg.type === 'WORKER_RESULT') {
+        if (msg.phase === 'search') {
+          console.log(`[Cart ${ts()}]`, 'presearch PARKED w', workerId, 'candidates=', (msg.candidates ?? []).length);
+          presearchPool.reportSearched(workerId);
+        } else if (msg.phase === 'add') {
+          console.log(`[Cart ${ts()}]`, 'presearch ADD result w', workerId, 'success=', msg.success, 'product=', msg.productName);
+          if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
+          presearchPool.reportAdded(workerId, {
+            success: !!msg.success, productName: msg.productName ?? null,
+            reason: msg.reason ?? null, candidates: msg.candidates ?? [],
+          });
+        }
+      }
+    } catch (e) {
+      console.log(`[Cart ${ts()}]`, 'onPresearchWorkerMessage parse error w', workerId, e);
+    }
+  }, [presearchPool]);
+
   // Emit coarse status (incl. a determinate progress fraction) upward so the
   // provider can drive the floating bubble. No-op in modal mode.
   useEffect(() => {
@@ -544,6 +659,11 @@ export default function WebViewCartSheet({
     } else if (addPool.isActive) {
       // Parallel add: determinate, one tick per ingredient — capped at 85%.
       progress = addPool.total > 0 ? PARALLEL_ADD_SHARE * Math.min(1, addPool.completed / addPool.total) : null;
+    } else if (presearchPool.isCommitting) {
+      // Parked pre-search commit: same 0→85% ramp as the fused add pass (the
+      // reconcile top-up below then fills 85→100). Without this it would hit the
+      // parallelOriginalTotal branch and jump straight to 85%.
+      progress = presearchPool.total > 0 ? PARALLEL_ADD_SHARE * Math.min(1, presearchPool.completed / presearchPool.total) : null;
     } else if (parallelPool.isActive) {
       progress = null;
     } else if (parallelOriginalTotalRef.current > 0 && (step === 'searching' || step === 'adding')) {
@@ -557,7 +677,7 @@ export default function WebViewCartSheet({
       progress = Math.min(1, processedCount / total);
     }
     onStatusChange({ phase: step, kind: kindMap[step], label: labelMap[step], progress });
-  }, [step, searchingLabel, storeName, onStatusChange, processedCount, parallelPool.isActive, addPool.isActive, addPool.completed, addPool.total]);
+  }, [step, searchingLabel, storeName, onStatusChange, processedCount, parallelPool.isActive, addPool.isActive, addPool.completed, addPool.total, presearchPool.isCommitting, presearchPool.completed, presearchPool.total]);
 
   const workerScripts = useMemo(
     () => parallelCfg
@@ -734,11 +854,18 @@ export default function WebViewCartSheet({
     try {
       const msg = JSON.parse(event.nativeEvent.data);
       if (msg.type === 'WORKER_DEBUG') {
-        console.log(`[Cart ${ts()}]`, 'ADD WORKER_DEBUG w', workerId, JSON.stringify(msg).slice(0, 200));
+        // Diagnostic (saa_*) steps carry a full DOM snapshot — don't truncate
+        // those; keep the 200-char cap only for the noisy per-tick messages.
+        const isDiag = typeof msg.step === 'string' && msg.step.indexOf('saa_') === 0;
+        console.log(`[Cart ${ts()}]`, 'ADD WORKER_DEBUG w', workerId, isDiag ? JSON.stringify(msg) : JSON.stringify(msg).slice(0, 200));
         return;
       }
       if (msg.type === 'WORKER_RESULT') {
         console.log(`[Cart ${ts()}]`, 'ADD WORKER_RESULT w', workerId, 'success=', msg.success, 'product=', msg.productName, 'reason=', msg.reason ?? null, 'storeUnavailable=', !!msg.storeUnavailable);
+        // reason:'blocked' (app-nudge overlay) is recorded as a failed add here;
+        // the reconcile's serial retry re-detects the nudge and surfaces it (the
+        // serial SEARCH_AND_ADD_RESULT handler calls surfaceBlocker). Handling it
+        // here would forward-reference surfaceBlocker (defined later) → TDZ.
         if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
         addPool.reportResult(workerId, {
           success: !!msg.success, productName: msg.productName ?? null,
@@ -869,6 +996,7 @@ export default function WebViewCartSheet({
       parallelOriginalTotalRef.current = 0;
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
+      reconcileIntendedRef.current = [];
       setCartResultRows(null);
       setCartRowsTimedOut(false);
       if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
@@ -877,7 +1005,7 @@ export default function WebViewCartSheet({
       // Reset Wegmans parallel worker state. The hook clears its queue,
       // active flag, timers, and worker URIs in one call — workers unmount
       // because isActive flips to false.
-      parallelPool.reset(); addPool.reset();
+      parallelPool.reset(); addPool.reset(); presearchPool.reset(); presearchStartedRef.current = false; presearchCommitArmedRef.current = false; mainColdActiveRef.current = false; mainColdInjectedRef.current = false;
 
       // If any ingredient has no chosen product yet, skip the qty step and
       // auto-start the search/choose flow immediately.
@@ -890,11 +1018,16 @@ export default function WebViewCartSheet({
         activeItemsRef.current = active.length > 0 ? active : unchosen;
         console.log(`[Cart ${ts()}]`, 'auto-start: active=', activeItemsRef.current.length, activeItemsRef.current.map(i => i.ingredientName));
         searchIdxRef.current = 0;
-        setStep('login_check');
-        setSearchingLabel('Checking login…');
-        loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
-        navTo(scriptsRef.current!.storeUrl);
-        armLoginCheckTimeout();
+        if (loginPrewarm.getStatus(openStoreId) === 'loggedOut') {
+          console.log(`[Cart ${ts()}]`, 'prewarm: known logged out — surfacing login directly');
+          surfaceLoginDirect();
+        } else {
+          setStep('login_check');
+          setSearchingLabel('Checking login…');
+          loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
+          navTo(scriptsRef.current!.storeUrl);
+          armLoginCheckTimeout();
+        }
       } else {
         setStep('qty');
       }
@@ -998,11 +1131,68 @@ export default function WebViewCartSheet({
     }, LOGIN_CHECK_TIMEOUT_MS);
   }, []);
 
+  // Skip the login_check round-trip and jump straight to the login webview.
+  // Used when the silent pre-warm already told us the user is logged OUT of this
+  // store, so we surface the sign-in prompt immediately instead of loading the
+  // store page just to discover they're logged out. If the pre-warm was stale
+  // and they're actually signed in, the store redirects off the login URL and
+  // the 'login'-step onLoadEnd re-injects the check, which resumes automatically.
+  const surfaceLoginDirect = useCallback(() => {
+    setStep('login');
+    setSearchingLabel('Sign in to continue');
+    lastLoadEndUrlRef.current = '';
+    setWebviewUri(scriptsRef.current!.loginUrl);
+  }, [setStep]);
+
+  // Kick off pre-search parking while the user is still on the qty screen: the
+  // silent pre-warm says they're logged in, the store supports parallel workers,
+  // and every ingredient already has a chosen product (the regular add flow). A
+  // mixed/unchosen set goes through the choose flow instead, so we skip it there.
+  useEffect(() => {
+    if (!FEATURE_PRESEARCH_ADD) return;
+    if (step !== 'qty' || presearchStartedRef.current) return;
+    if (!parallelCfg) return;
+    if (loginPrewarm.getStatus(lockedStoreIdRef.current) !== 'loggedIn') return;
+    const chosen: PresearchItem<ConsolidatedIngredient>[] = items
+      .map((item, idx) => ({ idx, item }))
+      .filter((e) => !!e.item.searchTerm);
+    if (chosen.length === 0 || chosen.length !== items.length) return;
+    presearchStartedRef.current = true;
+    console.log(`[Cart ${ts()}]`, 'presearch: parking first', PARALLEL_ADD_WORKER_COUNT, 'of', chosen.length, 'chosen items');
+    presearchPool.start(chosen);
+    // loginPrewarm.statusVersion is in the deps so this re-runs the moment a slow
+    // store's login check resolves logged-in while the user is still on qty.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, items, parallelCfg, loginPrewarm.statusVersion]);
+
   const handleStartSearch = () => {
     const active = items.filter((it, i) => (checkedItems[i] ?? true) && (it.purchaseWeight != null || it.productQty > 0));
     if (active.length === 0) return;
     activeItemsRef.current = active;
     searchIdxRef.current = 0;
+    // Arm the parked-worker commit (if any). We still run the normal login +
+    // before-snapshot path below; only the add step changes (see beginSearchFlow).
+    if (FEATURE_PRESEARCH_ADD && presearchStartedRef.current) {
+      presearchCommitEntriesRef.current = items
+        .map((item, idx) => ({ idx, item }))
+        .filter((e) => (checkedItems[e.idx] ?? true) && (e.item.purchaseWeight != null || e.item.productQty > 0));
+      presearchCommitArmedRef.current = presearchCommitEntriesRef.current.length > 0;
+    }
+    const pre = loginPrewarm.getStatus(lockedStoreIdRef.current);
+    if (pre === 'loggedOut') {
+      console.log(`[Cart ${ts()}]`, 'prewarm: known logged out — surfacing login directly');
+      surfaceLoginDirect();
+      return;
+    }
+    if (pre === 'loggedIn') {
+      // The silent pre-warm already confirmed login — skip the login_check
+      // round-trip and go straight to the before-cart snapshot + search/add.
+      console.log(`[Cart ${ts()}]`, 'prewarm: known logged in — skipping login check, going straight to snapshot');
+      snapshotBeforeAndBeginSearch();
+      return;
+    }
+    // Login state unknown (probe still running, errored, or not started) — fall
+    // back to the live login check.
     setStep('login_check');
     setSearchingLabel('Checking login…');
     loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
@@ -1110,15 +1300,12 @@ export default function WebViewCartSheet({
     searchTimeoutRef.current = setTimeout(() => {
       searchTimeoutRef.current = null;
       inflightScriptRef.current = null;
-      // No SEARCH_RESULT/SEARCH_AND_ADD_RESULT at all → the store never let the
-      // script run. Count it; a run of these means Mealio is being blocked, not
-      // that this one item is missing, so surface the generic blocker.
+      // A bare search timeout means this item's results never painted → treat it
+      // as a failed/unfound item and advance. It does NOT indicate a block: a
+      // real block shows an HTTP error, a /blocked page, or a blocking overlay,
+      // all detected separately (BLOCKED_OVERLAY), so we no longer trip
+      // surfaceBlocker on consecutive search timeouts.
       consecutiveTimeoutsRef.current += 1;
-      if (consecutiveTimeoutsRef.current >= CONSECUTIVE_TIMEOUT_BLOCK) {
-        console.log(`[Cart ${ts()}]`, 'SEARCH timeout for', term, '—', consecutiveTimeoutsRef.current, 'in a row, surfacing blocker');
-        surfaceBlocker('no-progress');
-        return;
-      }
       console.log(`[Cart ${ts()}]`, 'SEARCH timeout for', term, '— treating as failed and advancing');
       if (item.searchTerm) {
         // Auto-add flow: also push a SearchResult with empty candidates so
@@ -1194,15 +1381,9 @@ export default function WebViewCartSheet({
     // wipe any pending queue/nav-intent, and advance.
     addTimeoutRef.current = setTimeout(() => {
       addTimeoutRef.current = null;
-      // No ADD_RESULT → the add script never ran. Same no-progress signal as the
-      // search path: a run of these means Mealio is blocked, not that this one
-      // product is unavailable.
+      // A bare add timeout → treat as a failed item and advance. Not a block
+      // signal (blocks are surfaced via HTTP error / /blocked / BLOCKED_OVERLAY).
       consecutiveTimeoutsRef.current += 1;
-      if (consecutiveTimeoutsRef.current >= CONSECUTIVE_TIMEOUT_BLOCK) {
-        console.log(`[Cart ${ts()}]`, 'ADD timeout for', item.productName, '—', consecutiveTimeoutsRef.current, 'in a row, surfacing blocker');
-        surfaceBlocker('no-progress');
-        return;
-      }
       console.log(`[Cart ${ts()}]`, 'ADD timeout for', item.productName, '— treating as failed and advancing');
       addResultsRef.current.push({ name: item.productName, success: false, reason: 'timeout' });
       loadQueueRef.current = [];
@@ -1217,6 +1398,26 @@ export default function WebViewCartSheet({
   // choose-flow ingredient and the store opts in, else the sequential WebView
   // flow). Extracted so the HEB cart-page before-probe can defer it until the
   // before-count lands.
+  // Commit the parked pre-search workers: inject the add into each already-open
+  // results page (jittered) instead of spinning up the fused add pool. Runs
+  // AFTER the before-cart snapshot, so finishParallelAdd reconciles against a
+  // real baseline. Results (keyed by original item index) are re-keyed to the
+  // dense active-item order finishParallelAdd expects.
+  const startPresearchCommit = useCallback(() => {
+    const entries = presearchCommitEntriesRef.current;
+    presearchCommitArmedRef.current = false;
+    parallelOriginalTotalRef.current = entries.length;
+    setStep('adding');
+    setSearchingLabel(`Adding ${entries.length} ingredients…`);
+    console.log(`[Cart ${ts()}]`, 'presearch: committing', entries.length, 'items into parked workers');
+    presearchPool.commit(entries, (resultsByItemsIdx) => {
+      const dense = new Map<number, AddResult>();
+      entries.forEach((e, pos) =>
+        dense.set(pos, resultsByItemsIdx.get(e.idx) ?? { success: false, productName: null, reason: 'timeout', candidates: [] }));
+      finishParallelAdd(dense);
+    });
+  }, [presearchPool, finishParallelAdd, setStep]);
+
   const beginSearchFlow = useCallback(() => {
     setStep('searching');
     const active = activeItemsRef.current;
@@ -1229,7 +1430,11 @@ export default function WebViewCartSheet({
     const s = getStoreScripts(lockedStoreIdRef.current);
     const canParallel = !!(s && s.getSearchUrl && s.buildWorkerScript && !s.forceSerialSearch);
     console.log(`[Cart ${ts()}]`, 'beginSearchFlow: parallel=', canParallel, 'allChoose=', allChoose, 'activeLen=', active.length, 'store=', lockedStoreIdRef.current);
-    if (canParallel && allChoose) {
+    if (canParallel && !allChoose && FEATURE_PRESEARCH_ADD && presearchCommitArmedRef.current) {
+      // Parked pre-search workers are ready — commit their adds instead of the
+      // fused pool. The before-snapshot already ran, so the reconcile is sound.
+      startPresearchCommit();
+    } else if (canParallel && allChoose) {
       startParallelSearch();
     } else if (canParallel && !allChoose && FEATURE_PARALLEL_ADD) {
       // Regular add flow through the parallel pool: each worker searches AND
@@ -1238,7 +1443,7 @@ export default function WebViewCartSheet({
     } else {
       navigateToSearchItem(0);
     }
-  }, [startParallelSearch, startParallelAdd, navigateToSearchItem]);
+  }, [startParallelSearch, startParallelAdd, navigateToSearchItem, startPresearchCommit]);
 
   // Snapshot the cart BEFORE any adds, then start the search. For cart-page
   // stores (HEB, Albertsons family) navigate to the cart URL, count there, and
@@ -1253,6 +1458,17 @@ export default function WebViewCartSheet({
     // Resolve the store from the ref: onMessage is created once (deps []) so the
     // lockedStoreId STATE it closes over is the pre-open value; the ref is current.
     const probeStoreId = lockedStoreIdRef.current;
+    // Fast path: a fresh cart baseline was pre-captured during the silent login
+    // check, so skip the cart round-trip entirely and go straight to the search.
+    const prewarmed = loginPrewarm.takePrewarmedCart(probeStoreId);
+    if (prewarmed) {
+      console.log(`[Cart ${ts()}]`, 'snapshotBefore: using PREWARMED baseline count=', prewarmed.count, 'lines=', prewarmed.items.length);
+      cartCountBeforeRef.current = prewarmed.count;
+      cartItemsBeforeRef.current = prewarmed.items;
+      if (prewarmed.url && !getCartPageUrl(probeStoreId)) capturedCartUrlRef.current = prewarmed.url;
+      beginSearchFlow();
+      return;
+    }
     const cartPageScript = buildCartPageCountScript(probeStoreId);
     const cartPageUrl = getCartPageUrl(probeStoreId);     // HEB / Albertsons: direct URL
     const openCartScript = buildOpenCartScript(probeStoreId); // Amazon: click the cart icon
@@ -1305,7 +1521,7 @@ export default function WebViewCartSheet({
       }
       beginSearchFlow();
     }
-  }, [beginSearchFlow]);
+  }, [beginSearchFlow, loginPrewarm]);
 
   // ── WebView events ───────────────────────────────────────────────────────
 
@@ -1319,6 +1535,17 @@ export default function WebViewCartSheet({
     // Only process pages for this store — ignore about:blank and other internal loads.
     if (!s || !url.includes(s.domain)) {
       console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'skipped: not store domain');
+      return;
+    }
+    // Cold-slot branch: the main WebView is acting as a 4th add surface — its
+    // results page just loaded, so inject the fused search+add (once) and let
+    // onMessage feed the result to the pool. Bypasses the normal cart-flow logic.
+    if (mainColdActiveRef.current && !mainColdInjectedRef.current && s.buildSearchAndAddScript && mainColdItemRef.current) {
+      mainColdInjectedRef.current = true;
+      const item = mainColdItemRef.current;
+      const term = item.searchTerm ?? item.ingredientName;
+      console.log(`[Cart ${ts()}]`, 'presearch COLD (main) onLoadEnd — injecting fused add for', term);
+      webviewRef.current?.injectJavaScript(s.buildSearchAndAddScript(term, item.productQty, item.dropdown ?? null));
       return;
     }
     // Walmart anti-bot redirect: /blocked?url=<encoded original>. We surface
@@ -1527,7 +1754,7 @@ export default function WebViewCartSheet({
     loadQueueRef.current = [];
     expectedNavUrlRef.current = '';
     inflightScriptRef.current = null;
-    parallelPool.reset(); addPool.reset();
+    parallelPool.reset(); addPool.reset(); presearchPool.reset(); presearchStartedRef.current = false; presearchCommitArmedRef.current = false; mainColdActiveRef.current = false; mainColdInjectedRef.current = false;
     robotChallengeResumeIdxRef.current = -1;
     consecutiveTimeoutsRef.current = 0;
     blockReasonRef.current = reason;
@@ -1576,7 +1803,7 @@ export default function WebViewCartSheet({
     freshStoreUnavailableRef.current = false;
     robotChallengeResumeIdxRef.current = -1;
     consecutiveTimeoutsRef.current = 0;
-    parallelPool.reset(); addPool.reset();
+    parallelPool.reset(); addPool.reset(); presearchPool.reset(); presearchStartedRef.current = false; presearchCommitArmedRef.current = false; mainColdActiveRef.current = false; mainColdInjectedRef.current = false;
     searchIdxRef.current = 0;
     onSearchPageRef.current = false;
     loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
@@ -1731,7 +1958,12 @@ export default function WebViewCartSheet({
             // shared pool — reserve exact-name matches first, then let a loose
             // match take only what's genuinely left over.
             const pool = addedRows.map((row) => ({ name: row.name, qty: row.qty }));
-            const norm = (s: string) => (s || '').trim().toLowerCase();
+            // Punctuation- and entity-insensitive so a reported title can reserve
+            // its OWN cart row in the exact pass before a loosely-similar sibling
+            // ("McCormick Ground Cumin" vs "…Gourmet Organic Ground Turmeric")
+            // can claim it in the loose pass. A stray comma/® otherwise sank the
+            // exact match and caused a spurious re-add (double add).
+            const norm = normalizeName;
             const claimQty = (reportedName: string, need: number, exactOnly: boolean): number => {
               let got = 0;
               for (const row of pool) {
@@ -1766,11 +1998,19 @@ export default function WebViewCartSheet({
               }
               toMatch.push({
                 item,
-                reportedName: (r && r.productName) || item.searchTerm || item.ingredientName,
+                reportedName: decodeHtmlEntities((r && r.productName) || item.searchTerm || item.ingredientName),
                 expectedQty: Math.max(1, item.productQty || 1),
                 claimed: 0,
               });
             });
+            // Snapshot the full intended set now, before the retry branch narrows
+            // activeItemsRef to the top-up subset — the final cart check uses it to
+            // spot units added beyond what any item intended.
+            reconcileIntendedRef.current = toMatch.map((m) => ({
+              name: m.reportedName,
+              expectedQty: m.expectedQty,
+              isWeight: m.item.purchaseWeight != null,
+            }));
             // Weight items first, confirmed by PRESENCE. A sold-by-weight line is
             // a single cart row at N lb regardless of the chosen poundage, so it
             // can't be count-compared (qty 3 lb ≠ 3 units). If a weight row matches
@@ -1826,7 +2066,18 @@ export default function WebViewCartSheet({
             setCartResultRows(rows);
             setTotalAdded(confirmed.length);
             setAddedNames(confirmed.map((x) => x.name));
-            setCartDeltaWarning(null);
+            // Safety net: flag any units in the cart that no intended item
+            // accounts for (a double-add or an unintended product), even when
+            // every intended item was confirmed.
+            const overAdds = findOverAddedItems(addedRows, reconcileIntendedRef.current);
+            if (overAdds.length > 0) {
+              const lockedName = STORES.find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
+              const list = overAdds.map((o) => (o.qty > 1 ? `${o.name} ×${o.qty}` : o.name)).join(', ');
+              console.log(`[Cart ${ts()}]`, 'reconcile: OVER-ADD detected', overAdds);
+              setCartDeltaWarning(`Cart check: your ${lockedName} cart has ${overAdds.reduce((n, o) => n + o.qty, 0)} item(s) Mealio didn't intend to add (${list}). Please review your cart.`);
+            } else {
+              setCartDeltaWarning(null);
+            }
             if (reviewFailures.length > 0) {
               setTotalFailed(reviewFailures.length);
               reconcileFinalizedRef.current = true;
@@ -1864,11 +2115,23 @@ export default function WebViewCartSheet({
             //                          qty check the parallel reconcile branch has.
             let missing: string[] = [];
             let shortAdds: string[] = [];
+            let overAdds: string[] = [];
             if (rows) {
               const active = activeItemsRef.current;
               const reportedAdded = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
               const addedRows = rows.filter((r) => r.added);
               missing = findUnaddedItems(reportedAdded, addedRows.map((r) => r.name));
+              // Over-add safety net against the FULL intended set (the parallel
+              // reconcile stored it before the retry subset narrowed activeItems;
+              // serial has no reconcile, so fall back to the live active set).
+              const intended = reconcileIntendedRef.current.length > 0
+                ? reconcileIntendedRef.current
+                : active.map((item) => ({
+                    name: item.searchTerm || item.ingredientName,
+                    expectedQty: Math.max(1, item.productQty || 1),
+                    isWeight: item.purchaseWeight != null,
+                  }));
+              overAdds = findOverAddedItems(addedRows, intended).map((o) => (o.qty > 1 ? `${o.name} ×${o.qty}` : o.name));
               // Only audit items we reported as added (failures already route to
               // review), skip sold-by-weight lines (one row at N lb, not count-
               // comparable), and skip fully-missing items (covered by `missing`).
@@ -1885,13 +2148,16 @@ export default function WebViewCartSheet({
                 );
               shortAdds = findShortAddedItems(addedRows, auditItems).map((s) => `${s.name} (${s.got} of ${s.expected})`);
             }
-            if (missing.length > 0 || shortAdds.length > 0) {
+            if (missing.length > 0 || shortAdds.length > 0 || overAdds.length > 0) {
               const parts: string[] = [];
               if (missing.length > 0) {
                 parts.push(`${missing.length} item${missing.length === 1 ? '' : 's'} may not have been added (${missing.join(', ')})`);
               }
               if (shortAdds.length > 0) {
                 parts.push(`${shortAdds.length} item${shortAdds.length === 1 ? '' : 's'} added below the requested quantity, which a store limit can cause (${shortAdds.join(', ')})`);
+              }
+              if (overAdds.length > 0) {
+                parts.push(`${overAdds.length} item${overAdds.length === 1 ? '' : 's'} added that Mealio didn't intend (${overAdds.join(', ')})`);
               }
               setCartDeltaWarning(`Cart check on your ${lockedName} cart: ${parts.join('; ')}. Please double-check your cart.`);
             } else if (before != null && count != null && expected > 0 && count - before < expected) {
@@ -1936,6 +2202,25 @@ export default function WebViewCartSheet({
         }
 
         if (msg.type === 'SEARCH_AND_ADD_RESULT') {
+          // Real block: the store served an app-download / interstitial nudge over
+          // the page (no HTTP error). Surface it so the user can dismiss it.
+          if (msg.reason === 'blocked') {
+            console.log(`[Cart ${ts()}]`, 'BLOCKED_OVERLAY detected:', msg.blockedText);
+            surfaceBlocker('nudge');
+            return;
+          }
+          // Cold-slot result: the main WebView added an overflow item as a 4th
+          // worker. Feed it to the pool (which pulls the next overflow item or
+          // frees the main for the reconcile) — never the serial-add bookkeeping.
+          if (mainColdActiveRef.current) {
+            console.log(`[Cart ${ts()}]`, 'presearch COLD result: success=', msg.success, 'product=', msg.productName);
+            if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
+            presearchPool.reportAdded(mainColdSlotRef.current, {
+              success: !!msg.success, productName: msg.productName ?? null,
+              reason: msg.reason ?? null, candidates: msg.candidates ?? [],
+            });
+            return;
+          }
           if (searchTimeoutRef.current) {
             clearTimeout(searchTimeoutRef.current);
             searchTimeoutRef.current = null;
@@ -2363,10 +2648,19 @@ export default function WebViewCartSheet({
   const browserVisible =
     step === 'login_check' || step === 'login' || step === 'searching' ||
     step === 'adding' || step === 'robot_challenge';
-  // Grid = the main WebView tiled alongside the live worker WebViews. Only while
-  // a worker pool is actually running; otherwise the single main WebView fills
-  // the region (login, login_check, sequential search/add, cart snapshot).
-  const gridMode = browserVisible && !!activeWorkerPool;
+  // Pre-search: any parked/committing worker has a live URI. The browser region
+  // stays mounted while these exist (even on the qty screen) so the parked pages
+  // survive the login_check + snapshot window; the tiles themselves are kept
+  // offscreen until the commit phase shows them live.
+  const presearchGrid = FEATURE_PRESEARCH_ADD && presearchPool.workerUris.some((u) => !!u);
+  const presearchCommitVisible = step === 'adding' && presearchPool.isCommitting;
+  // Parked worker tiles currently live (the cold slot is the main cell, not a tile).
+  const presearchParkedTilesLive = FEATURE_PRESEARCH_ADD
+    && presearchPool.workerUris.slice(0, PARALLEL_ADD_WORKER_COUNT).some((u) => !!u);
+  // Grid = the main WebView tiled alongside live worker WebViews. Only while a
+  // worker pool is running (or parked adds are committing WITH tiles to show);
+  // once only the cold slot (main) is left, the main fills the region full-size.
+  const gridMode = browserVisible && (!!activeWorkerPool || (presearchCommitVisible && presearchParkedTilesLive));
 
   // Tile sizing: fixed 2×2 so tiles hold their size and simply drop out of the
   // grid as workers finish (4→3→2→1). Worker WebViews render at a real 414×896
@@ -2388,6 +2682,8 @@ export default function WebViewCartSheet({
       total = parallelPool.total; idx = parallelPool.completed;
     } else if (step === 'adding' && addPool.isActive) {
       total = addPool.total; idx = addPool.completed;
+    } else if (step === 'adding' && presearchPool.isCommitting) {
+      total = presearchPool.total; idx = presearchPool.completed;
     } else {
       total = step === 'searching' ? activeItemsRef.current.length : addingItemsRef.current.length;
       idx = step === 'searching' ? searchIdxRef.current : addingIdxRef.current;
@@ -2425,7 +2721,7 @@ export default function WebViewCartSheet({
             single main WebView fills the region. While the user is in a panel
             step (review / searchResult / done) the region is hidden but the
             WebView keeps running behind it for the after-snapshot. */}
-        {step !== 'qty' && (
+        {(step !== 'qty' || presearchGrid) && (
         <View
           style={browserVisible ? styles.browserOuter : styles.webviewHidden}
           pointerEvents={browserVisible ? 'auto' : 'none'}
@@ -2477,41 +2773,58 @@ export default function WebViewCartSheet({
           >
             <View style={gridMode ? styles.gridWrap : styles.fullWrap}>
               {/* Main WebView cell — always the first child so it never remounts.
-                  Fills the region normally; becomes one tile in grid mode. */}
+                  Fills the region normally; becomes one tile in grid mode. Not
+                  mounted during qty (the region only renders then to keep the
+                  parked pre-search tiles alive). */}
+              {step !== 'qty' && (
               <View style={gridMode ? [styles.tile, { width: tileW, height: tileH }] : styles.fullCell}>
-                <WebView
-                  ref={webviewRef}
-                  source={{ uri: webviewUri }}
-                  // incognito  // TODO: uncomment to force fresh session (no stored cookies)
-                  style={{ flex: 1 }}
-                  onLoadEnd={onLoadEnd}
-                  onMessage={onMessage}
-                  onHttpError={onHttpError}
-                  onNavigationStateChange={onNavigationStateChange}
-                  onShouldStartLoadWithRequest={(request) => {
-                    // Block custom URL schemes that would open the native app.
-                    // Allow http/https and about: (used internally by the WebView for blank pages).
-                    return (
-                      request.url.startsWith('http://') ||
-                      request.url.startsWith('https://') ||
-                      request.url.startsWith('about:')
-                    );
-                  }}
-                  javaScriptEnabled
-                  domStorageEnabled
-                  sharedCookiesEnabled
-                  thirdPartyCookiesEnabled
-                  allowsInlineMediaPlayback
-                  mediaPlaybackRequiresUserAction={false}
-                  userAgent={getStoreWebViewUA()}
-                  injectedJavaScriptBeforeContentLoaded={beforeContent}
-                />
+                {/* Same wrapper structure in both modes so the WebView element
+                    (and its session) never remounts when it moves between the
+                    full-size interactive view and a scaled grid tile. In grid mode
+                    it renders at a real 414×896 phone viewport and scales down —
+                    without this the page paints into the small tile and looks
+                    zoomed in. Full-size mode is interactive (login / robot). */}
+                <View
+                  style={gridMode ? styles.tileClip : styles.fullCell}
+                  pointerEvents={gridMode ? 'none' : 'auto'}
+                >
+                  <View style={gridMode ? { width: 414, height: 896, transform: [{ scale: tileScale }] } : styles.fullCell}>
+                    <WebView
+                      ref={webviewRef}
+                      source={{ uri: webviewUri }}
+                      // incognito  // TODO: uncomment to force fresh session (no stored cookies)
+                      style={gridMode ? { width: 414, height: 896 } : { flex: 1 }}
+                      onLoadEnd={onLoadEnd}
+                      onMessage={onMessage}
+                      onHttpError={onHttpError}
+                      onNavigationStateChange={onNavigationStateChange}
+                      onShouldStartLoadWithRequest={(request) => {
+                        // Block custom URL schemes that would open the native app.
+                        // Allow http/https and about: (used internally by the WebView for blank pages).
+                        return (
+                          request.url.startsWith('http://') ||
+                          request.url.startsWith('https://') ||
+                          request.url.startsWith('about:')
+                        );
+                      }}
+                      javaScriptEnabled
+                      domStorageEnabled
+                      sharedCookiesEnabled
+                      thirdPartyCookiesEnabled
+                      allowsInlineMediaPlayback
+                      mediaPlaybackRequiresUserAction={false}
+                      userAgent={getStoreWebViewUA()}
+                      injectedJavaScriptBeforeContentLoaded={beforeContent}
+                    />
+                  </View>
+                </View>
                 {gridMode && (
                   <View style={styles.tileLabel} pointerEvents="none">
                     <Text style={styles.tileLabelText} numberOfLines={1}>{storeName}</Text>
                   </View>
                 )}
               </View>
+              )}
 
               {/* Live worker tiles — each a real 414×896 WebView scaled into the
                   tile. Rendered only for workers with an active URI, so a worker
@@ -2547,6 +2860,55 @@ export default function WebViewCartSheet({
                     <View style={styles.tileLabel} pointerEvents="none">
                       <Text style={styles.tileLabelText} numberOfLines={1}>{label}</Text>
                     </View>
+                  </View>
+                );
+              })}
+
+              {/* Pre-search parked worker tiles (FEATURE_PRESEARCH_ADD). Mounted
+                  continuously from the qty screen (parking) through the commit,
+                  so the loaded results page survives for the injected add — the
+                  WebView is always 414×896; only the wrapper (offscreen vs live
+                  tile) changes, so it never remounts. Shown live once committing. */}
+              {presearchGrid && presearchSources.map((src, i) => {
+                // Only the parked worker slots render as tiles; the cold slot is
+                // the main WebView (its own cell), not a separate tile.
+                if (i >= PARALLEL_ADD_WORKER_COUNT) return null;
+                if (!presearchPool.workerUris[i]) return null;
+                const item = presearchPool.workerItems[i];
+                const label = item ? (item.searchTerm ?? item.ingredientName) : '…';
+                return (
+                  <View
+                    key={'presearch-worker-' + i}
+                    style={presearchCommitVisible ? [styles.tile, { width: tileW, height: tileH }] : styles.presearchOffscreen}
+                  >
+                    <View style={styles.tileClip} pointerEvents="none">
+                      <View style={{ width: 414, height: 896, transform: [{ scale: presearchCommitVisible && tileScale > 0 ? tileScale : 1 }] }}>
+                        <WebView
+                          ref={(r) => { presearchWorkerRefs.current[i] = r; }}
+                          source={src}
+                          style={{ width: 414, height: 896 }}
+                          onMessage={(e) => onPresearchWorkerMessage(i, e)}
+                          onHttpError={onHttpError}
+                          onShouldStartLoadWithRequest={(request) => (
+                            request.url.startsWith('http://') ||
+                            request.url.startsWith('https://') ||
+                            request.url.startsWith('about:')
+                          )}
+                          javaScriptEnabled
+                          domStorageEnabled
+                          sharedCookiesEnabled
+                          thirdPartyCookiesEnabled
+                          userAgent={getStoreWebViewUA()}
+                          injectedJavaScriptBeforeContentLoaded={beforeContent}
+                          injectedJavaScript={presearchScripts[i]}
+                        />
+                      </View>
+                    </View>
+                    {presearchCommitVisible && (
+                      <View style={styles.tileLabel} pointerEvents="none">
+                        <Text style={styles.tileLabelText} numberOfLines={1}>{label}</Text>
+                      </View>
+                    )}
                   </View>
                 );
               })}
@@ -3266,6 +3628,11 @@ const styles = StyleSheet.create({
   close: { fontSize: 18, color: Colors.text3 },
 
   webviewHidden: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0, pointerEvents: 'none' as const },
+  // A parked pre-search worker while it's not being shown live: kept at a real
+  // 414×896 viewport (so the results page paints and can be added into) but
+  // pushed far offscreen and out of flow so it neither shows nor disturbs the
+  // main WebView's layout.
+  presearchOffscreen: { position: 'absolute', width: 414, height: 896, left: 0, top: 0, opacity: 0, transform: [{ translateX: 100000 }] },
   // Live-browser region (visible during every automation phase).
   browserOuter: {
     flex: 1,

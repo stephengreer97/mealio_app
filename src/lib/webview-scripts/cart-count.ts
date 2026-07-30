@@ -102,12 +102,46 @@ export interface CartRow {
  * green row (added qty). Added rows are listed first. Items that left the cart
  * during the run are omitted.
  */
+// Store cart pages sometimes emit product titles with HTML entities left
+// literal (e.g. a double-encoded "Chobani&reg;" whose text node is the string
+// "Chobani&reg;", not "Chobani®"). Left as-is they show as "&reg;" on the done
+// screen AND poison name matching (the entity tokenizes to a spurious "reg"
+// word). Decode the common ones plus any numeric entity. No DOM here (this runs
+// in RN as well as in-page), so it's a small explicit map.
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+  reg: '®', trade: '™', copy: '©', deg: '°', hellip: '…',
+  mdash: '—', ndash: '–', minus: '−', times: '×', frac12: '½', frac14: '¼', frac34: '¾',
+  rsquo: '’', lsquo: '‘', ldquo: '“', rdquo: '”', eacute: 'é', egrave: 'è',
+};
+export function decodeHtmlEntities(s: string): string {
+  if (!s || s.indexOf('&') === -1) return s;
+  return s.replace(/&(#x?[0-9a-f]+|[a-z][a-z0-9]*);/gi, (m, body: string) => {
+    if (body[0] === '#') {
+      const code = body[1] === 'x' || body[1] === 'X'
+        ? parseInt(body.slice(2), 16)
+        : parseInt(body.slice(1), 10);
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : m;
+    }
+    const hit = NAMED_ENTITIES[body.toLowerCase()];
+    return hit !== undefined ? hit : m;
+  });
+}
+
 function cartTokens(s: string): string[] {
-  return (s || '')
+  return decodeHtmlEntities(s || '')
     .toLowerCase()
     .replace(/[^a-z0-9 ]+/g, ' ')
     .split(/\s+/)
     .filter((t) => t.length >= 2);
+}
+
+/** Entity- and punctuation-insensitive normalization for EXACT name comparison.
+ *  "McCormick Gourmet, Organic…" and "McCormick Gourmet Organic…" collapse to the
+ *  same string so a product reliably matches its own cart row before a loosely
+ *  similar sibling can. */
+export function normalizeName(s: string): string {
+  return decodeHtmlEntities(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
 }
 
 /** Lenient match between a store cart title and a product name Mealio added.
@@ -158,14 +192,13 @@ export function findShortAddedItems(
   addedRows: CartRow[],
   audit: { name: string; expectedQty: number }[],
 ): ShortAdd[] {
-  const norm = (s: string) => (s || '').trim().toLowerCase();
   const pool = addedRows.map((row) => ({ name: row.name, qty: row.qty }));
   const claimQty = (reportedName: string, need: number, exactOnly: boolean): number => {
     let got = 0;
     for (const row of pool) {
       if (got >= need) break;
       if (row.qty <= 0) continue;
-      const match = exactOnly ? norm(row.name) === norm(reportedName) : cartNameMatches(row.name, reportedName);
+      const match = exactOnly ? normalizeName(row.name) === normalizeName(reportedName) : cartNameMatches(row.name, reportedName);
       if (match) { const take = Math.min(row.qty, need - got); row.qty -= take; got += take; }
     }
     return got;
@@ -181,7 +214,54 @@ export function findShortAddedItems(
     .map((s) => ({ name: s.name, got: s.got, expected: s.expected }));
 }
 
-export function diffCartItems(before: CartItem[], after: CartItem[]): CartRow[] {
+/**
+ * Units that landed in the cart this run that NO intended item accounts for —
+ * over-adds (a product added more times than requested) or an entirely
+ * unintended product. A safety net: even if a future bug re-adds something, the
+ * cart check surfaces it rather than trusting the run silently.
+ *
+ * Each intended item claims matching added units first (exact name, then loose,
+ * capped at its expected qty); whatever added units remain unclaimed are the
+ * overage. Weight lines are presence-based (one row regardless of poundage), so
+ * an intended weight item consumes at most one matching weight row.
+ */
+export function findOverAddedItems(
+  addedRows: CartRow[],
+  intended: { name: string; expectedQty: number; isWeight?: boolean }[],
+): { name: string; qty: number }[] {
+  const countPool = addedRows.filter((r) => !r.isWeight).map((r) => ({ name: r.name, qty: r.qty }));
+  const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false }));
+  const claim = (name: string, need: number, exactOnly: boolean): number => {
+    let got = 0;
+    for (const row of countPool) {
+      if (got >= need) break;
+      if (row.qty <= 0) continue;
+      const match = exactOnly ? normalizeName(row.name) === normalizeName(name) : cartNameMatches(row.name, name);
+      if (match) { const take = Math.min(row.qty, need - got); row.qty -= take; got += take; }
+    }
+    return got;
+  };
+  // Weight items consume one matching weight row by presence.
+  for (const it of intended.filter((i) => i.isWeight)) {
+    const w = weightPool.find((p) => !p.used && cartNameMatches(p.name, it.name));
+    if (w) w.used = true;
+  }
+  // Count items: exact pass then loose pass, capped at each item's expected qty,
+  // so a legitimately-requested unit never counts as overage.
+  const need = intended.filter((i) => !i.isWeight).map((i) => ({ name: i.name, left: Math.max(1, i.expectedQty || 1) }));
+  need.forEach((n) => { n.left -= claim(n.name, n.left, true); });
+  need.forEach((n) => { if (n.left > 0) n.left -= claim(n.name, n.left, false); });
+  const over: { name: string; qty: number }[] = [];
+  for (const row of countPool) if (row.qty > 0) over.push({ name: row.name, qty: row.qty });
+  for (const w of weightPool) if (!w.used) over.push({ name: w.name, qty: 1 });
+  return over;
+}
+
+export function diffCartItems(beforeRaw: CartItem[], afterRaw: CartItem[]): CartRow[] {
+  // Decode HTML entities up front so both the qty matching (by name) and the
+  // rendered rows use clean titles ("Chobani®", not "Chobani&reg;").
+  const before = beforeRaw.map((it) => ({ ...it, name: decodeHtmlEntities(it.name) }));
+  const after = afterRaw.map((it) => ({ ...it, name: decodeHtmlEntities(it.name) }));
   const beforeQty = new Map<string, number>();
   const beforeWeight = new Map<string, number>();
   for (const it of before) {
@@ -599,6 +679,7 @@ const HEB_CART_PAGE_SCRIPT = `(async function() {
 const ALBERTSONS_CART_PAGE_SCRIPT = `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
+  try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'alb_cart_start', url: location.href })); } catch (e) {}
   // Poll for cart line items to hydrate.
   var links = [];
   for (var i = 0; i < 25; i++) {
@@ -606,6 +687,7 @@ const ALBERTSONS_CART_PAGE_SCRIPT = `(async function() {
     if (links.length > 0) break;
     await wait(200);
   }
+  try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'alb_cart_poll_done', links: links.length, polls: i, bodyLen: (document.body.innerText || '').length })); } catch (e) {}
   var count = 0;
   var items = [];
   var seen = {};

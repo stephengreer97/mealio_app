@@ -97,27 +97,24 @@ export function CartJobProvider({ children }: { children: React.ReactNode }) {
   // Map status transitions to expand/collapse decisions.
   const handleStatus = useCallback((st: CartJobStatus) => {
     setStatus(st);
-    const prev = prevPhaseRef.current;
     prevPhaseRef.current = st.phase;
-    // Steps that need the user must be in the foreground.
+    // Steps that need the user must be in the foreground. Otherwise we leave the
+    // sheet as-is — the live browser grid stays visible through automation. The
+    // user chooses when to minimize to the bubble (see minimize()).
     if (st.kind === 'attention') {
       setExpanded(true);
-      return;
     }
-    // Collapse to the bubble only on the FIRST entry into search/add from a
-    // foreground phase (login / review) — not on every progress tick, so a
-    // manual peek (tapping the bubble) is not yanked closed.
-    const enteringWork =
-      (st.phase === 'searching' || st.phase === 'adding') &&
-      prev !== 'searching' &&
-      prev !== 'adding';
-    if (enteringWork) {
-      setExpanded(false);
-      // First time we go background this job: tell the user to stay in the app.
-      if (!noticeShownRef.current) {
-        noticeShownRef.current = true;
-        setShowKeepOpen(true);
-      }
+  }, []);
+
+  // Minimize the sheet to the floating bubble. When the user does this mid-run
+  // (search/add in flight), surface the one-time "keep the app open" notice,
+  // since a backgrounded in-app job can't survive the app being fully closed.
+  const minimize = useCallback(() => {
+    setExpanded(false);
+    const phase = prevPhaseRef.current;
+    if ((phase === 'searching' || phase === 'adding') && !noticeShownRef.current) {
+      noticeShownRef.current = true;
+      setShowKeepOpen(true);
     }
   }, []);
 
@@ -126,11 +123,11 @@ export function CartJobProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!job || !expanded) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      setExpanded(false);
+      minimize();
       return true;
     });
     return () => sub.remove();
-  }, [job, expanded]);
+  }, [job, expanded, minimize]);
 
   const value = useMemo<CartJobContextValue>(
     () => ({ startJob, closeJob, isActive: job !== null }),
@@ -154,7 +151,7 @@ export function CartJobProvider({ children }: { children: React.ReactNode }) {
           storeId={job.storeId}
           storeName={job.storeName}
           onClose={closeJob}
-          onMinimize={() => setExpanded(false)}
+          onMinimize={minimize}
           onStatusChange={handleStatus}
           onIngredientChosen={job.onIngredientChosen}
         />

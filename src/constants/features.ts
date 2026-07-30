@@ -21,3 +21,21 @@ export const FEATURE_PARALLEL_ADD = true;  // LOCAL pilot — uncommitted
 // cart counter). Kept low (was 5) to reduce the concurrent-request burst that
 // aggressive WAFs score as automation; the dispatch is also staggered + jittered.
 export const PARALLEL_ADD_WORKERS = 3;
+
+// Pre-search parking: while the user is still on the ingredients (qty) screen —
+// and the silent pre-warm says they're already logged in — spin the parallel
+// workers up early and PARK each on its loaded search-results page WITHOUT
+// adding. When the user taps add-to-cart we inject the add straight into the
+// already-open page, so the search latency is paid before the tap. Deselecting
+// an ingredient makes its worker abandon and pull the next queued one.
+//
+// This reshapes the WAF-tuned worker lifecycle (workers stay mounted across the
+// search→add boundary) and MUST be validated on a real Android device before it
+// ships. Default OFF: when off, add-to-cart runs the existing fused search+add
+// path unchanged.
+export const FEATURE_PRESEARCH_ADD = true;  // LOCAL device test (iPhone over Metro)
+
+// Randomized human-like delay before each parked worker commits its add, so N
+// adds don't fire in one machine-gun burst the instant the user taps. Base +
+// up to one base of jitter (≈0.5s average).
+export const ADD_COMMIT_JITTER_MS = 500;
