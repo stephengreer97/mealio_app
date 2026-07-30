@@ -1,5 +1,5 @@
 diff --git a/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt b/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt
-index 438ab6a..7f446be 100644
+index 438ab6a..ca76f6b 100644
 --- a/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt
 +++ b/node_modules/react-native-webview/android/src/main/java/com/reactnativecommunity/webview/RNCWebViewManagerImpl.kt
 @@ -17,6 +17,7 @@ import android.webkit.WebSettings
@@ -10,7 +10,38 @@ index 438ab6a..7f446be 100644
  import com.facebook.react.bridge.ReadableArray
  import com.facebook.react.bridge.ReadableMap
  import com.facebook.react.common.MapBuilder
-@@ -244,16 +245,49 @@ class RNCWebViewManagerImpl(private val newArch: Boolean = false) {
+@@ -83,6 +84,30 @@ class RNCWebViewManagerImpl(private val newArch: Boolean = false) {
+         settings.allowUniversalAccessFromFileURLs = false
+         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+ 
++        // Best-effort suppression of the X-Requested-With request header. Android
++        // WebView appends "X-Requested-With: <app package id>" to EVERY request
++        // (measured: "X-Requested-With: co.mealio.app"). Real Chrome never sends it
++        // and iOS WKWebView has no equivalent, so it identifies our traffic as an
++        // in-app Android WebView. An EMPTY allow-list asks for it to be sent to no
++        // origin.
++        //
++        // MEASURED 2026-07, IMPORTANT: this does NOT currently work. On WebView 145
++        // the header is still sent, because REQUESTED_WITH_HEADER_ALLOW_LIST reports
++        // unsupported (the API is deprecated) and the block below silently no-ops.
++        // Kept because it is free and may take effect on other WebView versions —
++        // but do NOT treat the header as suppressed. Note also that the header is
++        // NOT what causes H-E-B's 403: a curl request carrying this exact header
++        // returned 200 from the same IP. H-E-B blocks via Imperva ABP, which
++        // fingerprints in JS and issues a reese84 token; an emulator fingerprint
++        // yields a distrusted token and subsequent requests 403.
++        if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
++            try {
++                WebSettingsCompat.setRequestedWithHeaderOriginAllowList(settings, emptySet())
++            } catch (e: Exception) {
++                // Best-effort: leave the header rather than crash on odd builds.
++            }
++        }
++
+         // Fixes broken full-screen modals/galleries due to body height being 0.
+         webView.layoutParams = ViewGroup.LayoutParams(
+             ViewGroup.LayoutParams.MATCH_PARENT,
+@@ -244,16 +269,67 @@ class RNCWebViewManagerImpl(private val newArch: Boolean = false) {
  
      private fun setUserAgentString(viewWrapper: RNCWebViewWrapper) {
          val view = viewWrapper.webView
@@ -57,11 +88,29 @@ index 438ab6a..7f446be 100644
 +                UserAgentMetadata.BrandVersion.Builder()
 +                    .setBrand("Not:A-Brand").setMajorVersion("99").setFullVersion("99.0.0.0").build()
 +            )
++            // Device identity comes from the REAL device (android.os.Build), never
++            // from the UA string and never hardcoded. Chrome's reduced UA no longer
++            // carries a model or OS version at all (it is frozen to "Android 10; K"),
++            // so the high-entropy client hints are the ONLY place a storefront can
++            // learn the device — and real Chrome reports the true values there.
++            // Reading Build directly means this is correct on every device with no
++            // per-device table to maintain.
++            //
++            // architecture/bitness are left empty, which is what real mobile Chrome
++            // reports (and conveniently keeps the emulator's x86_64 from surfacing).
++            val model = Build.MODEL?.trim()?.takeIf { it.isNotEmpty() }
++            val platformVersion = Build.VERSION.RELEASE?.trim()
++                ?.takeIf { it.isNotEmpty() }
++                ?.split(".")?.plus(listOf("0", "0"))?.take(3)?.joinToString(".")
 +            val metadata = UserAgentMetadata.Builder()
 +                .setBrandVersionList(brands)
 +                .setFullVersion(full)
 +                .setPlatform("Android")
 +                .setMobile(true)
++                .apply {
++                    if (!model.isNullOrEmpty()) setModel(model)
++                    if (!platformVersion.isNullOrEmpty()) setPlatformVersion(platformVersion)
++                }
 +                .build()
 +            WebSettingsCompat.setUserAgentMetadata(settings, metadata)
 +        } catch (e: Exception) {

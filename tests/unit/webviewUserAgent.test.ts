@@ -1,50 +1,48 @@
 import {
-  androidReleaseFromApiLevel,
   buildAndroidUA,
   buildIosUA,
   ANDROID_CHROME_MAJOR,
 } from '../../src/lib/webview-user-agent-build';
 
-describe('androidReleaseFromApiLevel', () => {
-  it('maps known API levels to their Android release', () => {
-    expect(androidReleaseFromApiLevel(36)).toBe('16');
-    expect(androidReleaseFromApiLevel(35)).toBe('15');
-    expect(androidReleaseFromApiLevel(34)).toBe('14');
-    expect(androidReleaseFromApiLevel(33)).toBe('13');
-    expect(androidReleaseFromApiLevel(30)).toBe('11');
-    expect(androidReleaseFromApiLevel(29)).toBe('10');
-  });
-
-  it('maps both API 31 and 32 to Android 12', () => {
-    expect(androidReleaseFromApiLevel(31)).toBe('12');
-    expect(androidReleaseFromApiLevel(32)).toBe('12');
-  });
-
-  it('extends the (level - 20) rule to unmapped future API levels', () => {
-    expect(androidReleaseFromApiLevel(37)).toBe('17');
-    expect(androidReleaseFromApiLevel(40)).toBe('20');
-  });
-
-  it('floors API levels older than supported to the oldest known release', () => {
-    expect(androidReleaseFromApiLevel(21)).toBe('7');
-  });
-});
-
+// Chrome's UA reduction freezes the device-identifying parts of the Android UA to
+// the literals "Android 10" and "K" on EVERY device (per Chrome's docs), so the UA
+// is byte-identical everywhere and carries no device identity. The real model /
+// OS version travel in the high-entropy client hints, which the native
+// react-native-webview patch fills in from android.os.Build.
 describe('buildAndroidUA', () => {
-  it('embeds the dynamic Android release and the Chrome constant', () => {
-    const ua = buildAndroidUA(33);
-    expect(ua).toMatch(/^Mozilla\/5\.0 \(Linux; Android 13; Pixel 9\)/);
-    expect(ua).toContain(`Chrome/${ANDROID_CHROME_MAJOR}.0.0.0`);
-    expect(ua.endsWith('Mobile Safari/537.36')).toBe(true);
+  it('emits the frozen reduced-UA device identity, not the real device', () => {
+    const ua = buildAndroidUA(145);
+    expect(ua).toBe(
+      'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+        'Chrome/145.0.0.0 Mobile Safari/537.36',
+    );
   });
 
-  it('reflects different device OS versions', () => {
-    expect(buildAndroidUA(29)).toContain('Android 10;');
-    expect(buildAndroidUA(36)).toContain('Android 16;');
+  it('never leaks a real device model or OS version into the UA', () => {
+    const ua = buildAndroidUA(145);
+    expect(ua).not.toMatch(/Pixel|Galaxy|SM-|sdk_gphone|Android 1[1-9]|Android 2\d/);
   });
 
-  it('allows a Chrome major override', () => {
-    expect(buildAndroidUA(36, 140)).toContain('Chrome/140.0.0.0');
+  it('is identical across devices (no per-device input)', () => {
+    expect(buildAndroidUA(145)).toBe(buildAndroidUA(145));
+  });
+
+  it('defaults to the maintained Chrome major fallback', () => {
+    expect(buildAndroidUA()).toContain(`Chrome/${ANDROID_CHROME_MAJOR}.0.0.0`);
+  });
+
+  it('uses the runtime-detected Chrome major when given', () => {
+    expect(buildAndroidUA(140)).toContain('Chrome/140.0.0.0');
+    expect(buildAndroidUA(999)).toContain('Chrome/999.0.0.0');
+  });
+
+  it('falls back on a nonsense Chrome major instead of emitting garbage', () => {
+    expect(buildAndroidUA(0)).toContain(`Chrome/${ANDROID_CHROME_MAJOR}.0.0.0`);
+    expect(buildAndroidUA(NaN)).toContain(`Chrome/${ANDROID_CHROME_MAJOR}.0.0.0`);
+  });
+
+  it('ends with the real Chrome mobile suffix', () => {
+    expect(buildAndroidUA(145).endsWith('Mobile Safari/537.36')).toBe(true);
   });
 });
 

@@ -1,9 +1,10 @@
 // Per-platform User-Agent string for any WebView that loads real grocery
-// store pages. Must reflect the device's actual OS version — a stale UA (e.g.
-// hardcoded "iOS 17_0" on a phone running iOS 26.x, or "Android 16" on a phone
-// running Android 13) mismatches the TLS-handshake fingerprint and gets
-// flagged by aggressive WAFs (Imperva at HEB) as a spoofing automation client,
-// which then serves Access Denied before any client JS runs.
+// store pages. Nothing device-specific is hardcoded: on iOS the UA is built from
+// the live OS version, and on Android it deliberately carries no device identity
+// at all because that is what real Chrome does (UA reduction — see
+// webview-user-agent-build.ts). A stale or invented iOS version in the UA
+// mismatches the device and gets flagged by aggressive WAFs (Imperva at HEB) as a
+// spoofing automation client.
 //
 // Android-specific hazard: the native Chromium WebView broadcasts its REAL
 // Chromium major version in the Sec-CH-UA client-hint HTTP header on every
@@ -13,11 +14,11 @@
 // client hints, so it has no such second channel.) We therefore detect the real
 // major at runtime (WebViewVersionProbe reads the system WebView's default UA)
 // and build the store UA from it, so UA and Sec-CH-UA always agree. The
-// hardcoded ANDROID_CHROME_MAJOR is only a fallback for the brief window before
+// ANDROID_CHROME_MAJOR constant is only a fallback for the brief window before
 // the probe reports, and a floor if detection ever fails.
 //
-// The version mapping / UA construction lives in webview-user-agent-build.ts
-// (pure + unit-tested). This module is the Platform glue + runtime-version state.
+// UA construction lives in webview-user-agent-build.ts (pure + unit-tested).
+// This module is the Platform glue + runtime-version state.
 
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
@@ -57,12 +58,10 @@ export function getStoreWebViewUA(): string {
     // Platform.Version on iOS is the OS version string, e.g. "26.1".
     return buildIosUA(String(Platform.Version || '17.0'));
   }
-  // Platform.Version on Android is the numeric SDK API level (e.g. 36), not
-  // the OS version string — map it to the marketing release in the builder.
-  const apiLevel =
-    typeof Platform.Version === 'number'
-      ? Platform.Version
-      : parseInt(String(Platform.Version), 10) || 36;
-  const chromeMajor = runtimeAndroidChromeMajor ?? ANDROID_CHROME_MAJOR;
-  return buildAndroidUA(apiLevel, chromeMajor);
+  // Android: the UA carries no device identity at all (Chrome freezes it to
+  // "Android 10; K" — see webview-user-agent-build.ts), so the OS version and
+  // model are deliberately NOT read here. The real values reach the storefront
+  // through the high-entropy client hints that the native patch fills in from
+  // android.os.Build. The only runtime input is the WebView's real Chrome major.
+  return buildAndroidUA(runtimeAndroidChromeMajor ?? ANDROID_CHROME_MAJOR);
 }
