@@ -492,10 +492,15 @@ export const push = {
       body: JSON.stringify(data),
     }),
 
+  // Short timeout, unlike everything else here. Sign-out awaits this before it
+  // clears the session, so the default 30 s is 30 s of frozen UI for anyone who
+  // signs out with no connectivity. Failing fast is safe: the token is kept and
+  // the next launch retries it.
   unregister: (token: string) =>
     request<{ ok: true }>('/api/push/register', {
       method: 'DELETE',
       body: JSON.stringify({ token }),
+      timeoutMs: 8_000,
     }),
 };
 

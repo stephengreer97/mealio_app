@@ -130,8 +130,19 @@ async function fetchExpoToken(): Promise<string | null> {
  * used to have. The server can only tell "this device rotated" from "this user
  * added a second device" if we say so, and without that a rotation leaves the
  * old row live and every future send pays for a device that will never receive.
+ *
+ * The opt-out is checked HERE rather than at each caller, and that placement is
+ * the point: this is the only function in the app that can create a live
+ * push_tokens row, so it is the only place the check cannot be forgotten. It
+ * was forgotten once — the token rotation listener called straight into this
+ * and silently re-enrolled anyone whose token Expo happened to rotate after
+ * they turned notifications off, with the Account screen still reading "off".
+ * A caller that has just cleared the opt-out (enablePush) clears it before
+ * calling, so nothing legitimate is blocked.
  */
 async function registerToken(token: string): Promise<boolean> {
+  if (await isOptedOut()) return false;
+
   const previous = await SecureStore.getItemAsync(TOKEN_KEY).catch(() => null);
   try {
     await pushApi.register({
@@ -160,7 +171,18 @@ async function registerToken(token: string): Promise<boolean> {
  */
 export async function syncRegistration(): Promise<void> {
   if (!supportsRemotePush()) return;
-  if (await isOptedOut()) return;
+
+  // Before the opt-out gate, deliberately. A stored token plus an opt-out means
+  // the user asked us to stop and the unregister call never reached the server
+  // — offline, a 500, a timeout. Returning here without retrying is what made
+  // that permanent: the app reports "off", the server has never heard, and
+  // there is no other path back because the opt-out blocks this one. Launch is
+  // the only moment we are both signed in and online again.
+  if (await isOptedOut()) {
+    await unregisterDevice();
+    return;
+  }
+
   if ((await getPermission()) !== 'granted') return;
   const token = await fetchExpoToken();
   if (token) await registerToken(token);
@@ -194,6 +216,12 @@ export async function enablePush(): Promise<PushStatus> {
  * Turns notifications off from inside the app. Records the choice locally so a
  * still-granted OS permission does not silently re-enrol the device on the next
  * launch, and retires the token server-side so sends stop now.
+ *
+ * The local flag is written FIRST and never rolled back: if the network half
+ * fails, the user's choice is still recorded, registerToken() refuses to
+ * re-enrol on it, and syncRegistration() retries the server half every launch
+ * until it lands. The one thing that must not happen is the app reporting "off"
+ * while the server has never been told and nothing is left to tell it with.
  */
 export async function disablePush(): Promise<void> {
   await SecureStore.setItemAsync(OPT_OUT_KEY, '1').catch(() => {});
@@ -229,18 +257,26 @@ export async function requestAndRegister(): Promise<PushPermission> {
  * Stops sends to this device immediately, without waiting for a delivery
  * receipt to notice. Used by the Account toggle and by sign-out — a shared
  * phone must not keep receiving the previous account's notifications.
+ *
+ * Returns whether the server confirmed. False means the stored token was kept
+ * on purpose, for syncRegistration() to retry with on the next launch.
  */
-export async function unregisterDevice(): Promise<void> {
+export async function unregisterDevice(): Promise<boolean> {
   const token = await SecureStore.getItemAsync(TOKEN_KEY).catch(() => null);
-  if (!token) return;
+  if (!token) return true;
   try {
     await pushApi.unregister(token);
   } catch (err) {
+    // Keep the token. It is the only handle we have on the row that still has
+    // to be retired, and clearing it here is how an opt-out made offline used
+    // to be lost for good: the app said "off", the server kept sending, and
+    // nothing was left to retry with. syncRegistration() picks this up on the
+    // next launch.
     logger.warn('push_unregister_failed', String(err));
+    return false;
   }
-  // Cleared either way: this device's local claim on the token is gone, and a
-  // later syncRegistration() re-registers from scratch if permission is still on.
   await SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => {});
+  return true;
 }
 
 /**

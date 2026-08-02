@@ -47,6 +47,7 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { push as pushApi } from '../../src/lib/api';
 import {
+  addTokenRotationListener,
   disablePush,
   enablePush,
   getPushStatus,
@@ -55,6 +56,8 @@ import {
   syncRegistration,
   unregisterDevice,
 } from '../../src/lib/push';
+
+const TOKEN_KEY = 'mealio_push_token';
 
 const notifications = Notifications as jest.Mocked<typeof Notifications>;
 const api = pushApi as jest.Mocked<typeof pushApi>;
@@ -192,18 +195,30 @@ describe('syncRegistration', () => {
 });
 
 describe('enable / disable', () => {
-  it('asks the OS and registers on a grant', async () => {
-    setPermission('undetermined', true);
+  it('registers on a grant', async () => {
+    (notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'granted', canAskAgain: false });
     await expect(enablePush()).resolves.toBe('on');
     expect(notifications.requestPermissionsAsync).toHaveBeenCalledTimes(1);
     expect(api.register).toHaveBeenCalledTimes(1);
   });
 
   it('degrades to blocked on a denial without registering anything', async () => {
-    setPermission('undetermined', true);
     (notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'denied', canAskAgain: false });
     await expect(enablePush()).resolves.toBe('blocked');
     expect(api.register).not.toHaveBeenCalled();
+  });
+
+  it('asks the OS rather than trusting the permission it last read', async () => {
+    // getPermissionsAsync and the prompt's own result can disagree — the user
+    // may have changed it in Settings while the app was backgrounded. Pinning
+    // this because the original tests set getPermissionsAsync and asserted on
+    // the prompt, which requestAndRegister never consults: they passed in every
+    // permission state, including the ones they claimed to be about.
+    setPermission('denied', false);
+    (notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'granted', canAskAgain: false });
+
+    await expect(enablePush()).resolves.toBe('on');
+    expect(api.register).toHaveBeenCalledTimes(1);
   });
 
   it('retires the token and makes the opt-out stick across a relaunch', async () => {
@@ -229,5 +244,81 @@ describe('enable / disable', () => {
   it('unregisterDevice is a no-op when this device never registered', async () => {
     await unregisterDevice();
     expect(api.unregister).not.toHaveBeenCalled();
+  });
+});
+
+describe('an opt-out the server never heard', () => {
+  it('keeps the token when the unregister fails, instead of throwing away the only handle on the row', async () => {
+    await syncRegistration();
+    (api.unregister as jest.Mock).mockRejectedValueOnce(new Error('offline'));
+
+    await disablePush();
+
+    // The choice is recorded locally either way...
+    await expect(getPushStatus()).resolves.toBe('off');
+    // ...and the token survives, because it is what the retry needs.
+    expect(secureStore[TOKEN_KEY]).toBe('ExponentPushToken[new]');
+  });
+
+  it('retries on the next launch, ahead of the opt-out gate that used to strand it', async () => {
+    await syncRegistration();
+    (api.unregister as jest.Mock).mockRejectedValueOnce(new Error('offline'));
+    await disablePush();
+    (api.unregister as jest.Mock).mockClear();
+    (api.register as jest.Mock).mockClear();
+
+    await syncRegistration();   // next launch, back online
+
+    expect(api.unregister).toHaveBeenCalledWith('ExponentPushToken[new]');
+    // Retried, not re-enrolled: the opt-out still holds.
+    expect(api.register).not.toHaveBeenCalled();
+    expect(secureStore[TOKEN_KEY]).toBeUndefined();
+  });
+
+  it('stops retrying once the server has confirmed', async () => {
+    await syncRegistration();
+    await disablePush();
+    (api.unregister as jest.Mock).mockClear();
+
+    await syncRegistration();
+
+    expect(api.unregister).not.toHaveBeenCalled();
+  });
+});
+
+describe('token rotation', () => {
+  /** Fire the listener Expo would call when it hands over a new token. */
+  async function rotateTo(token: string) {
+    const listener = (notifications.addPushTokenListener as jest.Mock).mock.calls.at(-1)![0];
+    listener({ data: token });
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  it('registers the new token, carrying the old one so the row is replaced not duplicated', async () => {
+    await syncRegistration();
+    addTokenRotationListener();
+
+    await rotateTo('ExponentPushToken[rotated]');
+
+    expect(api.register).toHaveBeenLastCalledWith(expect.objectContaining({
+      token: 'ExponentPushToken[rotated]',
+      previousToken: 'ExponentPushToken[new]',
+    }));
+  });
+
+  it('does not re-enrol a user who turned notifications off', async () => {
+    // The listener is mounted unconditionally and for the life of the app, so
+    // a rotation after an opt-out used to re-register the device server-side
+    // with revoked_at cleared — receiving again while the Account screen still
+    // said "off". Nobody would ever see it happen.
+    await syncRegistration();
+    await disablePush();
+    addTokenRotationListener();
+    (api.register as jest.Mock).mockClear();
+
+    await rotateTo('ExponentPushToken[rotated]');
+
+    expect(api.register).not.toHaveBeenCalled();
+    await expect(getPushStatus()).resolves.toBe('off');
   });
 });

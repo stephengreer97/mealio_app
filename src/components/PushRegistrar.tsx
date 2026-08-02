@@ -23,18 +23,42 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Whether `target` is a route the navigator would actually accept right now.
+ *
+ * isReady() is necessary and not sufficient. Tabs are conditional on state that
+ * arrives after the container mounts — the Creator tab only exists once
+ * AuthContext's checkCreatorStatus() round trip resolves (MainTabs.tsx) — so on
+ * a cold start isReady() flips true while `Creator` is still missing, and a
+ * navigate() to it is dropped with no error. That is the common case for a
+ * notification tap and it is the payload type this whole feature exists for.
+ *
+ * Searches nested navigators: the tabs live inside RootNavigator's stack.
+ */
+function canNavigateTo(state: any, target: string): boolean {
+  if (!state) return false;
+  if (Array.isArray(state.routeNames) && state.routeNames.includes(target)) return true;
+  return (state.routes ?? []).some((r: any) => canNavigateTo(r.state, target));
+}
+
+/**
+ * ~6s of frames. Long enough to cover a cold start plus the creator-status
+ * request that decides whether the Creator tab exists at all; past that the tab
+ * is genuinely not coming, and silently leaving the user on the default screen
+ * beats both looping and a navigate() that goes nowhere.
+ */
+const ROUTE_WAIT_ATTEMPTS = 120;
+
+/**
  * Sends the tap somewhere sensible. A cold start can run this before the
- * navigator exists, so it retries on the next frame until the container is
- * ready rather than dropping the navigation.
+ * navigator exists — and before the target tab exists — so it retries on the
+ * next frame until the destination is actually reachable.
  */
 function openFromNotification(data: unknown, attempt = 0): void {
   const route = routeForNotification(data);
   if (!route) return;
 
-  if (!navigationRef.isReady()) {
-    // ~2s of frames. Beyond that the app is wedged for other reasons and
-    // silently landing on the default screen is better than looping.
-    if (attempt < 40) setTimeout(() => openFromNotification(data, attempt + 1), 50);
+  if (!navigationRef.isReady() || !canNavigateTo(navigationRef.getRootState(), route.target)) {
+    if (attempt < ROUTE_WAIT_ATTEMPTS) setTimeout(() => openFromNotification(data, attempt + 1), 50);
     return;
   }
 
