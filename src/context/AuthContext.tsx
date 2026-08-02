@@ -6,6 +6,7 @@ import { User } from '../types';
 import * as tokenStorage from '../lib/tokenStorage';
 import { auth, creators, usage } from '../lib/api';
 import { initPurchases, identifyUser, resetUser } from '../lib/purchases';
+import { unregisterDevice } from '../lib/push';
 
 interface AuthContextValue {
   user: User | null;
@@ -129,6 +130,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function logout() {
+    // Retire this device's push token first: a shared phone must not keep
+    // receiving the previous account's notifications, and once the access token
+    // is gone the unregister call can no longer authenticate.
+    await unregisterDevice().catch(() => {});
     try {
       await auth.logout();
     } catch {}

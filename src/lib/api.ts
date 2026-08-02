@@ -482,6 +482,23 @@ export const kroger = {
     }),
 };
 
+// Push notifications (MEAL-88). One row per device server-side, keyed on the
+// Expo token; `previousToken` is what turns a rotation into a replacement
+// instead of a second live device.
+export const push = {
+  register: (data: { token: string; platform?: string; deviceName?: string; previousToken?: string }) =>
+    request<{ ok: true }>('/api/push/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  unregister: (token: string) =>
+    request<{ ok: true }>('/api/push/register', {
+      method: 'DELETE',
+      body: JSON.stringify({ token }),
+    }),
+};
+
 // Usage analytics. All best-effort: a logging failure must never surface to the
 // caller or block an open / automation run.
 export const usage = {

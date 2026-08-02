@@ -35,6 +35,18 @@ export const PARALLEL_ADD_WORKERS = 3;
 // path unchanged.
 export const FEATURE_PRESEARCH_ADD = true;  // LOCAL device test (iPhone over Metro)
 
+// Push opt-in prompt in the Creator Portal (MEAL-88). The plumbing — permission,
+// token registration, rotation, tap routing — ships regardless; this flag only
+// controls whether creators are ASKED unprompted.
+//
+// OFF until there is something to deliver. iOS grants exactly one system prompt
+// per install, and asking before the creator draft queue (MEAL-89) can send
+// anything spends it on a promise we don't keep yet: the creators who say no are
+// unreachable for good. Notifications can still be turned on deliberately from
+// Account → Notifications, which is what makes the whole path testable today.
+// Flip to true in the same change that ships the first sender.
+export const FEATURE_PUSH_PROMPT = false;
+
 // Randomized human-like delay before each parked worker commits its add, so N
 // adds don't fire in one machine-gun burst the instant the user taps. Base +
 // up to one base of jitter (≈0.5s average).

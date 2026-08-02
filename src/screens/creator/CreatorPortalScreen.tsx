@@ -20,6 +20,7 @@ import { Colors, Radius } from '../../constants/colors';
 import { Creator, CreatorStats, PresetMeal, Ingredient } from '../../types';
 import { creators as creatorsApi } from '../../lib/api';
 import MealDetailSheet from '../../components/MealDetailSheet';
+import PushOptInCard from '../../components/PushOptInCard';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -204,6 +205,9 @@ export default function CreatorPortalScreen() {
         ListHeaderComponent={
           <>
             <Text style={styles.pageTitle}>Creator Portal</Text>
+
+            {/* Push opt-in soft ask. Self-hiding — see PushOptInCard. */}
+            <PushOptInCard />
 
             {creator && stats && (
               <>
