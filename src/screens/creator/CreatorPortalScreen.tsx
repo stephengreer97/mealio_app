@@ -27,6 +27,7 @@ import Input from '../../components/ui/Input';
 import IngredientEditor from '../../components/IngredientEditor';
 import TagPicker from '../../components/TagPicker';
 import { MAX_MEAL_TAGS } from '../../constants/tags';
+import { servesChangeError } from '../../constants/serves';
 
 export default function CreatorPortalScreen() {
   const [creator, setCreator] = useState<Creator | null>(null);
@@ -134,6 +135,16 @@ export default function CreatorPortalScreen() {
     });
     if (hasDupIngs) {
       Alert.alert('Error', 'Two or more ingredients have the same name. Please make each name unique.');
+      return;
+    }
+    // Checked here so the rule is stated before Save Meal is pressed rather than
+    // arriving as the server's sentence in an Alert afterwards. Only when this
+    // save is changing it: a meal published before the rule existed can carry
+    // "2 1/2 cups", and refusing to save a name correction because of a field
+    // the creator never opened is exactly what the route grandfathers against.
+    const servesProblem = servesChangeError(mealServes, (editingMeal as any)?.serves ?? null);
+    if (servesProblem) {
+      Alert.alert('Error', servesProblem);
       return;
     }
 
