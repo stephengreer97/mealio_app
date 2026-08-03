@@ -255,7 +255,7 @@ export default function ProductChooserSheet({
                 <Text style={styles.searchedName}>{(() => {
                   const ing = unchosenIngredients[pickIdx];
                   if (!ing) return current.ingredientName;
-                  if (!ing.unit || ing.unit === 'qty') return `${ing.ingredientName}, ${ing.qty ?? 1}`;
+                  if (!ing.unit || ing.unit === 'qty') return (ing.qty ?? 1) > 1 ? `${ing.ingredientName}, ${ing.qty}` : ing.ingredientName;
                   return `${ing.ingredientName}, ${ing.measure ?? ing.qty ?? ''} ${ing.unit}`.replace(/\s+/g, ' ').trim();
                 })()}</Text>
               </View>
