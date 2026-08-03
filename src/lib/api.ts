@@ -552,11 +552,20 @@ export interface CreatorDraft {
 }
 
 export const creatorDrafts = {
+  /**
+   * The queue, and how much of it there is.
+   *
+   * `waiting` and `drafts.length` are not the same number: the server reads at
+   * most 200 rows and counts all of them. The badge takes `waiting` — badging
+   * from the list rewrote a creator's 250 down to 200 the moment they opened
+   * the queue, before they had decided anything.
+   */
   list: () =>
-    request<{ drafts: CreatorDraft[]; totals: { waiting: number; flagged: number } }>(
-      '/api/creator/import-drafts',
-      { method: 'GET' },
-    ),
+    request<{
+      waiting: number;
+      drafts: CreatorDraft[];
+      totals: { waiting: number; showing: number; flagged: number };
+    }>('/api/creator/import-drafts', { method: 'GET' }),
 
   /**
    * Just the number, for the tab badge.

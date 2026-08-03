@@ -36,7 +36,8 @@ import { ALL_TAGS } from '../../constants/tags';
  *
  * Typed loosely rather than through the navigator's generics because this
  * screen is registered as a plain tab component and is rendered directly by
- * several tests. `openQueue` is the only thing read.
+ * several tests. `openQueue` opens the queue; `draftId` says which recipe the
+ * tap was about, and is handed to the queue as its opening position.
  */
 type PortalRoute = { params?: { openQueue?: boolean; draftId?: string } };
 type PortalNav = { setParams?: (params: { openQueue?: boolean; draftId?: string }) => void };
@@ -73,6 +74,10 @@ export default function CreatorPortalScreen({ route, navigation }: { route?: Por
   // Drafts waiting on this creator (MEAL-89).
   const { waiting, refresh: refreshDrafts } = useCreatorDrafts();
   const [queueOpen, setQueueOpen] = useState(false);
+  // Held here rather than read straight off `route.params` in the queue,
+  // because the params are cleared the moment they are consumed — see the
+  // effect below for why they have to be.
+  const [queueDraftId, setQueueDraftId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     loadData();
@@ -90,6 +95,7 @@ export default function CreatorPortalScreen({ route, navigation }: { route?: Por
    */
   useEffect(() => {
     if (!route?.params?.openQueue) return;
+    setQueueDraftId(route.params.draftId);
     setQueueOpen(true);
     // Consumed, so the param cannot open the queue a second time on its own —
     // and so tapping the SAME notification again does reopen it. Without the
@@ -252,7 +258,15 @@ export default function CreatorPortalScreen({ route, navigation }: { route?: Por
   if (queueOpen) {
     return (
       <SafeAreaView style={styles.safe}>
-        <CreatorReviewQueueScreen onClose={() => { setQueueOpen(false); void refreshDrafts(); }} />
+        <CreatorReviewQueueScreen
+          // The recipe the notification was about. Threaded from the push
+          // payload and then never read, so a tap that named one specific
+          // recipe landed on whatever the persisted cursor happened to point
+          // at — which on a queue of ten is nine times out of ten the wrong
+          // one, and looks right.
+          draftId={queueDraftId}
+          onClose={() => { setQueueOpen(false); setQueueDraftId(undefined); void refreshDrafts(); }}
+        />
       </SafeAreaView>
     );
   }

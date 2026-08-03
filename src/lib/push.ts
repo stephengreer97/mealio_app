@@ -314,6 +314,10 @@ export interface PushRoute {
    *
    * `draftId` is passed through from the payload, as it was before this screen
    * existed. Nothing on the server or in the payload contract had to change.
+   * It is what the queue opens on: for a while it was threaded this far and
+   * then never read, so a notification naming one recipe landed on whatever the
+   * persisted cursor pointed at — which looks right and, on a queue of ten,
+   * usually is not.
    */
   params?: { openQueue?: boolean; draftId?: string };
 }

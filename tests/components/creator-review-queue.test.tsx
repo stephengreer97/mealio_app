@@ -13,6 +13,7 @@
 
 import React from 'react';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { BackHandler } from 'react-native';
 
 // Native modules the screen draws with. Stubbed the way WebViewCartSheet's
 // tests stub them: `expo-asset` is not installed in this workspace, so
@@ -134,8 +135,22 @@ async function mount(onClose = jest.fn()) {
   return { ...view, onClose };
 }
 
+/**
+ * The hardware-Back handler the screen registers, captured at subscribe time.
+ *
+ * There is no way to press Android's Back from a test renderer, and
+ * `BackHandler.mockPressBack()` is not part of jest-expo's mock. Spying on the
+ * subscription and calling the handler is what actually exercises the rule.
+ */
+let backPress: (() => boolean) | null = null;
+
 beforeEach(() => {
   jest.clearAllMocks();
+  backPress = null;
+  jest.spyOn(BackHandler, 'addEventListener').mockImplementation(((event: string, handler: any) => {
+    if (event === 'hardwareBackPress') backPress = handler;
+    return { remove: jest.fn() };
+  }) as any);
   for (const k of Object.keys(secureStore)) delete secureStore[k];
   list.mockResolvedValue({ drafts: [draft('d1')], totals: { waiting: 1, flagged: 1 } });
   decide.mockResolvedValue({ done: 1, published: [{ id: 'm1', name: 'Best Guacamole' }], errors: [], waiting: 0 });
@@ -346,6 +361,21 @@ describe('keeping the tab badge honest', () => {
     // question (how many are left overall) and is the one the badge shows.
     expect(setWaiting).toHaveBeenLastCalledWith(1);
   });
+
+  it('takes the count the read returned, not the length of the page it returned', async () => {
+    // The read is capped at 200 rows and the count is not. Badging from the
+    // list rewrote a creator's 250 down to 200 the moment they opened the
+    // queue, with nothing decided, and the next decision put it back up.
+    list.mockResolvedValue({
+      waiting: 250,
+      drafts: [draft('d1'), draft('d2')],
+      totals: { waiting: 250, showing: 2, flagged: 2 },
+    });
+
+    await mount();
+
+    expect(setWaiting).toHaveBeenCalledWith(250);
+  });
 });
 
 // ── Never blocking ───────────────────────────────────────────────────────────
@@ -366,14 +396,108 @@ describe('nothing traps a creator here', () => {
     fireEvent.press(getByText('Back to your portal'));
   });
 
-  it('does not claim the queue is empty when the read simply failed', async () => {
-    // A failed read is not evidence that there is nothing waiting, so the badge
-    // is not zeroed on the way past.
+  it('says it could not look, rather than that there is nothing to look at', async () => {
+    // The badge deliberately keeps its last number on a failed read, which is
+    // right. The empty state then said "Nothing waiting — when we find a new
+    // recipe on your posts, it'll show up here", so the tab said 3, the portal
+    // card said 3, and this screen said none: one screenshot, two contradictory
+    // statements, and the reassuring one wrong.
     list.mockRejectedValue(new Error('offline'));
 
-    const { getByTestId } = await mount();
+    const { getByTestId, queryByTestId, queryByText } = await mount();
+
+    expect(getByTestId('creator-queue-unreadable')).toBeTruthy();
+    expect(queryByTestId('creator-queue-empty')).toBeNull();
+    expect(queryByText('Nothing waiting')).toBeNull();
+    // And the badge is left alone rather than zeroed by the failure.
+    expect(setWaiting).not.toHaveBeenCalled();
+  });
+
+  it('offers a retry that loads the queue for real', async () => {
+    list.mockRejectedValueOnce(new Error('offline'));
+
+    const { getByText, getByTestId } = await mount();
+    list.mockResolvedValue({ waiting: 1, drafts: [draft('d1')], totals: { waiting: 1, showing: 1, flagged: 1 } });
+
+    fireEvent.press(getByText('Try again'));
+    await act(async () => {});
+
+    expect(getByTestId('creator-review-queue')).toBeTruthy();
+  });
+
+  it('still says the queue is empty when it really is', async () => {
+    // The distinction only means anything if the empty case is unchanged.
+    list.mockResolvedValue({ waiting: 0, drafts: [], totals: { waiting: 0, showing: 0, flagged: 0 } });
+
+    const { getByTestId, getByText } = await mount();
 
     expect(getByTestId('creator-queue-empty')).toBeTruthy();
-    expect(setWaiting).not.toHaveBeenCalled();
+    expect(getByText('Nothing waiting')).toBeTruthy();
+  });
+});
+
+// ── Android's back button ────────────────────────────────────────────────────
+
+describe('hardware Back leaves the queue, not the app', () => {
+  it('closes the queue instead of falling through to the navigator', async () => {
+    // The queue is state inside the Creator tab rather than a route of its own
+    // — deliberately, so the tab bar stays on screen — which left React
+    // Navigation nothing to pop. Back went out of the tab, or out of the app
+    // entirely for a creator who arrived from a notification.
+    const { onClose } = await mount();
+
+    expect(backPress).not.toBeNull();
+    expect(backPress!()).toBe(true);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('backs out of the editor first, so corrections are not lost with the screen', async () => {
+    const { getByText, queryByTestId, onClose } = await mount();
+    fireEvent.press(getByText('Edit first'));
+    await act(async () => {});
+    expect(queryByTestId('draft-editor')).toBeTruthy();
+
+    await act(async () => { backPress!(); });
+
+    expect(queryByTestId('draft-editor')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+// ── A notification about one recipe ──────────────────────────────────────────
+
+describe('arriving from a notification that named a recipe', () => {
+  it('opens on that draft rather than on the remembered one', async () => {
+    // `draftId` was threaded from the push payload through `push.ts` and
+    // `MainTabsParamList` and then never read, so a tap about a specific recipe
+    // landed on whatever the persisted cursor pointed at — which looks right
+    // and is not.
+    secureStore['mealio_draft_cursor'] = 'd1';
+    list.mockResolvedValue({
+      waiting: 3,
+      drafts: [draft('d1'), draft('d2'), draft('d3')],
+      totals: { waiting: 3, showing: 3, flagged: 3 },
+    });
+
+    const view = render(<CreatorReviewQueueScreen onClose={jest.fn()} draftId="d3" />);
+    await act(async () => {});
+
+    expect(view.getByTestId('queue-position').props.children.join('')).toBe('3 of 3');
+  });
+
+  it('falls back to the remembered draft when the named one is already decided', async () => {
+    // Decided in a browser between the notification and the tap. Landing on
+    // nothing would be the worse answer.
+    secureStore['mealio_draft_cursor'] = 'd2';
+    list.mockResolvedValue({
+      waiting: 2,
+      drafts: [draft('d1'), draft('d2')],
+      totals: { waiting: 2, showing: 2, flagged: 2 },
+    });
+
+    const view = render(<CreatorReviewQueueScreen onClose={jest.fn()} draftId="gone" />);
+    await act(async () => {});
+
+    expect(view.getByTestId('queue-position').props.children.join('')).toBe('2 of 2');
   });
 });

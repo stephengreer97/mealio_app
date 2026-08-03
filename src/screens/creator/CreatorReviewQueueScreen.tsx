@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Linking, BackHandler } from 'react-native';
 import { Image } from 'expo-image';
 import { Feather } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
@@ -87,9 +87,20 @@ function measurementOf(ing: { ingredientName: string; qty: number; unit: string;
   return ing.measure ? `${ing.ingredientName}, ${ing.measure} ${ing.unit}` : `${ing.ingredientName}, ${ing.unit}`;
 }
 
-export default function CreatorReviewQueueScreen({ onClose }: { onClose: () => void }) {
+export default function CreatorReviewQueueScreen({ onClose, draftId }: { onClose: () => void; draftId?: string }) {
   const { setWaiting } = useCreatorDrafts();
   const [drafts, setDrafts] = useState<CreatorDraft[] | null>(null);
+  /**
+   * The read failed, as distinct from the queue being empty.
+   *
+   * `catch { setDrafts([]) }` made one out of the other, and the empty state
+   * then said "Nothing waiting — when we find a new recipe on your posts, it'll
+   * show up here." Meanwhile `CreatorDraftsContext` deliberately does *not*
+   * zero the badge on a failed read, which is right — so the tab said 3, the
+   * portal card said 3, and tapping through said there was nothing. One screen,
+   * two contradictory statements, and the reassuring one was wrong.
+   */
+  const [failed, setFailed] = useState(false);
   const [cursor, setCursor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<CreatorDraftBody | null>(null);
@@ -103,28 +114,60 @@ export default function CreatorReviewQueueScreen({ onClose }: { onClose: () => v
     return () => { mountedRef.current = false; };
   }, []);
 
+  /**
+   * Android's hardware Back leaves the queue, rather than the app.
+   *
+   * The queue is state inside the Creator tab and not a route of its own —
+   * deliberately, so the tab bar stays on screen — which means React Navigation
+   * has nothing to pop and Back fell through to the navigator: out of the tab,
+   * or straight out of the app for a creator who arrived from a notification.
+   * "Nothing traps anyone" has to include the button every Android user reaches
+   * for first.
+   */
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      // Back out of the editor before backing out of the queue: a creator
+      // mid-edit pressing Back means "stop editing", and losing the whole screen
+      // would lose their corrections with it.
+      if (editing) { setEditing(null); return true; }
+      onClose();
+      return true;
+    });
+    return () => sub.remove();
+  }, [editing, onClose]);
+
   const load = useCallback(async () => {
     try {
-      const [{ drafts: list }, saved] = await Promise.all([
+      const [{ drafts: list, waiting }, saved] = await Promise.all([
         creatorDrafts.list(),
         SecureStore.getItemAsync(CURSOR_KEY).catch(() => null),
       ]);
       if (!mountedRef.current) return;
 
       setDrafts(list);
-      setWaiting(list.length);
+      setFailed(false);
+      // The server's count, not the length of this list: the list is capped at
+      // 200 rows and the count is not, so badging from the list dropped a
+      // creator's 250 to 200 the moment they opened the queue.
+      setWaiting(typeof waiting === 'number' ? waiting : list.length);
 
-      // Resume where they were. A cursor naming a draft that is no longer
-      // pending — decided here, decided in a browser, taken back by an operator
-      // — falls back to the front rather than to an index that would now be a
-      // different recipe.
-      const resumed = saved && list.some((d) => d.id === saved) ? saved : (list[0]?.id ?? null);
+      // Resume where they were, unless a notification named a specific recipe —
+      // the tap was about that one, and landing on whatever the persisted
+      // cursor happens to point at is the version of this that wastes it. A
+      // cursor naming a draft that is no longer pending — decided here, decided
+      // in a browser, taken back by an operator — falls back to the front
+      // rather than to an index that would now be a different recipe.
+      const asked = draftId && list.some((d) => d.id === draftId) ? draftId : null;
+      const resumed = asked ?? (saved && list.some((d) => d.id === saved) ? saved : (list[0]?.id ?? null));
       setCursor(resumed);
       void rememberCursor(resumed);
     } catch {
-      if (mountedRef.current) setDrafts([]);
+      // Not an empty queue. The badge is left alone — `setWaiting` is not
+      // called — and the screen below says we could not look rather than that
+      // there is nothing to look at.
+      if (mountedRef.current) { setDrafts([]); setFailed(true); }
     }
-  }, [setWaiting]);
+  }, [setWaiting, draftId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -223,6 +266,25 @@ export default function CreatorReviewQueueScreen({ onClose }: { onClose: () => v
     return (
       <View style={styles.centre} testID="creator-queue-loading">
         <ActivityIndicator color={Colors.brand} />
+      </View>
+    );
+  }
+
+  // We could not look. Said plainly, because the badge that sent them here is
+  // still showing whatever it last heard: "3 recipes are ready for you" on the
+  // card behind, and "Nothing waiting" here, is a contradiction a creator has
+  // to resolve on their own — and the reassuring half is the wrong one.
+  if (failed) {
+    return (
+      <View style={styles.centre} testID="creator-queue-unreadable">
+        <Feather name="wifi-off" size={28} color={Colors.text3} />
+        <Text style={styles.emptyTitle}>We couldn’t load your queue</Text>
+        <Text style={styles.emptyBody}>
+          Something went wrong on the way, so we don’t know what’s waiting for you right now. Nothing has been
+          decided and nothing has been published.
+        </Text>
+        <Button label="Try again" size="sm" onPress={() => void load()} style={{ marginTop: 16 }} />
+        <Button label="Back to your portal" variant="secondary" size="sm" onPress={onClose} style={{ marginTop: 8 }} />
       </View>
     );
   }

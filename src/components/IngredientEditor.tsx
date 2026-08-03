@@ -13,7 +13,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Radius } from '../constants/colors';
 import { Ingredient } from '../types';
 
-const UNITS = ['Qty', 'cups', 'fl oz', 'g', 'kg', 'L', 'lb', 'mg', 'ml', 'oz', 'tbsp', 'tsp'];
+const UNITS = ['Qty', 'cups', 'fl oz', 'g', 'kg', 'L', 'lb', 'mg', 'ml', 'oz', 'tbsp', 'tsp',
+  // Units a cook writes that convert to nothing. Display only — the cart
+  // searches by name and counts packages with productQty — so carrying the word
+  // costs nothing and stops '3 cloves garlic' reading as 'garlic, 3', which
+  // told the cart to buy three heads of garlic. The server canonicalises to
+  // exactly this set, so a row that arrives with one of them used to show its
+  // unit correctly and then have no option to select: opening the picker was a
+  // one-way trip out of it.
+  'cloves', 'cans', 'bunches', 'sprigs', 'pinches', 'handfuls', 'grinds', 'slices'];
 
 interface IngredientForm {
   ingredientName: string;

@@ -75,6 +75,27 @@ jest.mock('../../src/components/PhotoPicker', () => () => null);
 
 import CreatorPortalScreen from '../../src/screens/creator/CreatorPortalScreen';
 
+/** One queued draft in the shape the server sends, enough for the queue to render it. */
+function queuedDraft(id: string) {
+  return {
+    id,
+    sourceUrl: 'https://chefsarah.test/guacamole',
+    draft: {
+      name: 'Best Guacamole', ingredients: [], recipe: null,
+      source: 'https://chefsarah.test/guacamole', story: null, photoUrl: null,
+      difficulty: null, tags: [], serves: null,
+    },
+    summary: { total: 1, verified: 1, needALook: 0 },
+    review: {
+      summaryText: '1 of 1 field verified.',
+      notices: {
+        name: null, recipe: null, story: null, photoUrl: null,
+        difficulty: null, tags: null, serves: null, ingredients: [],
+      },
+    },
+  };
+}
+
 async function mount(params?: { openQueue?: boolean; draftId?: string }) {
   const setParams = jest.fn();
   const view = render(<CreatorPortalScreen route={{ params }} navigation={{ setParams }} />);
@@ -141,6 +162,40 @@ describe('arriving from a notification', () => {
 
     expect(queryByTestId('open-draft-queue')).toBeNull();
     expect(mockList).toHaveBeenCalled();
+  });
+
+  it('hands the queue the recipe the tap was about', async () => {
+    // `draftId` was threaded from the push payload through `push.ts:327` and
+    // `MainTabsParamList` and then never read — `openQueue` was the only param
+    // this screen looked at. A notification saying "Best Guacamole is ready"
+    // therefore landed on whatever the persisted cursor pointed at, which on a
+    // queue of ten is usually the wrong recipe and always looks like the right
+    // one.
+    mockDraftsCtx.waiting = 3;
+    mockList.mockResolvedValue({
+      waiting: 3,
+      drafts: ['d1', 'd2', 'd3'].map(queuedDraft),
+      totals: { waiting: 3, showing: 3, flagged: 0 },
+    });
+
+    const { getByTestId } = await mount({ openQueue: true, draftId: 'd3' });
+
+    expect(getByTestId('queue-position').props.children.join('')).toBe('3 of 3');
+  });
+
+  it('opens on the front of the queue when the notification named nothing', async () => {
+    // The ordinary path — the portal card, and a push that just says how many
+    // are waiting — must not be changed by the one that names a recipe.
+    mockDraftsCtx.waiting = 3;
+    mockList.mockResolvedValue({
+      waiting: 3,
+      drafts: ['d1', 'd2', 'd3'].map(queuedDraft),
+      totals: { waiting: 3, showing: 3, flagged: 0 },
+    });
+
+    const { getByTestId } = await mount({ openQueue: true });
+
+    expect(getByTestId('queue-position').props.children.join('')).toBe('1 of 3');
   });
 
   it('consumes the param, so the same notification can open it again', async () => {
