@@ -25,7 +25,6 @@ import { getOffering, purchasePackage } from '../../lib/purchases';
 import { mergeChosenProduct, createMealSaveQueue } from '../../lib/saveChosenIngredient';
 import { useAuth } from '../../context/AuthContext';
 import { STORES, isKrogerBrand, isWebViewStore } from '../../constants/stores';
-import { ALL_TAGS } from '../../constants/tags';
 import MealCard from '../../components/MealCard';
 import MealDetailSheet from '../../components/MealDetailSheet';
 import KrogerCartReviewSheet from '../../components/KrogerCartReviewSheet';
@@ -38,7 +37,7 @@ import IngredientEditor from '../../components/IngredientEditor';
 import PhotoPicker from '../../components/PhotoPicker';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
-import Tag from '../../components/ui/Tag';
+import TagPicker from '../../components/TagPicker';
 
 const FREE_LIMIT = 3;
 
@@ -910,38 +909,17 @@ export default function MyMealsScreen() {
                 multiline
               />
 
-              {/* Tags */}
+              {/* Tags. The shared picker rather than a fourth hand-rolled copy:
+                  this one had no cap at all, so nine tags could be selected and
+                  `POST /api/meals` — which counts them now — would turn Create
+                  Meal into an error about a rule the form never mentioned. */}
               <Text style={styles.sectionLabel}>Tags</Text>
-              <TextInput
-                style={styles.tagSearchInput}
-                placeholder="Search tags…"
-                placeholderTextColor={Colors.text3}
-                value={tagSearch}
-                onChangeText={setTagSearch}
+              <TagPicker
+                selected={selectedTags}
+                onChange={setSelectedTags}
+                search={tagSearch}
+                onSearchChange={setTagSearch}
               />
-              <ScrollView
-                style={styles.tagScroll}
-                nestedScrollEnabled
-                showsVerticalScrollIndicator={false}
-              >
-                <View style={styles.tagsRow}>
-                  {(tagSearch.trim()
-                    ? ALL_TAGS.filter((t) => t.toLowerCase().includes(tagSearch.toLowerCase()))
-                    : ALL_TAGS
-                  ).map((tag) => (
-                    <Tag
-                      key={tag}
-                      label={tag}
-                      selected={selectedTags.includes(tag)}
-                      onPress={() =>
-                        setSelectedTags((prev) =>
-                          prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-                        )
-                      }
-                    />
-                  ))}
-                </View>
-              </ScrollView>
             </ScrollView>
 
             <View style={styles.modalFooter}>
@@ -1279,28 +1257,4 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     letterSpacing: 0,
   },
-  tagSearchInput: {
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.input,
-    backgroundColor: Colors.surfaceRaised,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: Colors.text1,
-    marginBottom: 8,
-    letterSpacing: 0,
-  },
-  tagScroll: {
-    maxHeight: 180,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.input,
-    backgroundColor: Colors.surfaceRaised,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    marginBottom: 8,
-  },
-  tagsRow: { flexDirection: 'row', flexWrap: 'wrap' },
 });
