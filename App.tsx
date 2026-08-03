@@ -16,9 +16,12 @@ import { AuthProvider } from './src/context/AuthContext';
 import { LoginPrewarmProvider } from './src/context/LoginPrewarmContext';
 import { CartJobProvider } from './src/context/CartJobContext';
 import RootNavigator from './src/navigation/RootNavigator';
+import { navigationRef } from './src/navigation/navigationRef';
 import { installConsoleCapture } from './src/lib/logBuffer';
 import WebViewVersionProbe from './src/components/WebViewVersionProbe';
 import FingerprintProbe from './src/components/FingerprintProbe';
+import PushRegistrar from './src/components/PushRegistrar';
+import { configureNotificationHandler } from './src/lib/push';
 import AutomationConfigLoader from './src/components/AutomationConfigLoader';
 
 SplashScreen.preventAutoHideAsync();
@@ -26,6 +29,11 @@ SplashScreen.preventAutoHideAsync();
 // Capture console output (redacted) into an in-memory ring buffer so users can
 // attach recent diagnostic logs to a bug report. Runs once, before anything logs.
 installConsoleCapture();
+
+// Decides how a notification arriving while the app is open is presented. Must
+// be set before any listener can fire, so it runs at module scope like the log
+// capture above rather than in an effect.
+configureNotificationHandler();
 
 export default function App() {
   const [fontsLoaded] = useFonts({
@@ -50,8 +58,9 @@ export default function App() {
         <AutomationConfigLoader />
         <LoginPrewarmProvider>
           <CartJobProvider>
-            <NavigationContainer>
+            <NavigationContainer ref={navigationRef}>
               <StatusBar style="auto" />
+              <PushRegistrar />
               <RootNavigator />
             </NavigationContainer>
           </CartJobProvider>

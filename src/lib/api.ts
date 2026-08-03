@@ -482,6 +482,28 @@ export const kroger = {
     }),
 };
 
+// Push notifications (MEAL-88). One row per device server-side, keyed on the
+// Expo token; `previousToken` is what turns a rotation into a replacement
+// instead of a second live device.
+export const push = {
+  register: (data: { token: string; platform?: string; deviceName?: string; previousToken?: string }) =>
+    request<{ ok: true }>('/api/push/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Short timeout, unlike everything else here. Sign-out awaits this before it
+  // clears the session, so the default 30 s is 30 s of frozen UI for anyone who
+  // signs out with no connectivity. Failing fast is safe: the token is kept and
+  // the next launch retries it.
+  unregister: (token: string) =>
+    request<{ ok: true }>('/api/push/register', {
+      method: 'DELETE',
+      body: JSON.stringify({ token }),
+      timeoutMs: 8_000,
+    }),
+};
+
 // Usage analytics. All best-effort: a logging failure must never surface to the
 // caller or block an open / automation run.
 export const usage = {

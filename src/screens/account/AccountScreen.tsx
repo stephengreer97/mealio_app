@@ -21,6 +21,7 @@ import { STORES } from '../../constants/stores';
 import { useAuth } from '../../context/AuthContext';
 import { auth as authApi, account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
 import * as tokenStorage from '../../lib/tokenStorage';
+import { getPushStatus, enablePush, disablePush, type PushStatus } from '../../lib/push';
 import { getAllOfferings, purchasePackage, restorePurchases, getActiveSubscriptionStore, getEntitlementDetails, getManagementURL, onEntitlementChange, ENTITLEMENT_ID, type EntitlementDetails } from '../../lib/purchases';
 import Purchases, { type PurchasesPackage } from 'react-native-purchases';
 import * as WebBrowser from 'expo-web-browser';
@@ -72,6 +73,10 @@ export default function AccountScreen() {
   const [uploading, setUploading] = useState(false);
   const [creatorProfile, setCreatorProfile] = useState<Creator | null>(null);
 
+  // Notifications (MEAL-88)
+  const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
+
   useEffect(() => {
     loadFollowing();
     loadDeletedMeals();
@@ -95,6 +100,35 @@ export default function AccountScreen() {
       return () => { mounted = false; unsubscribe(); };
     }, [])
   );
+
+  // Re-read on focus rather than once on mount: the only way out of "blocked" is
+  // the system Settings app, so the user comes back to this screen having
+  // changed the answer somewhere we can't observe.
+  useFocusEffect(
+    useCallback(() => {
+      let mounted = true;
+      getPushStatus().then((s) => { if (mounted) setPushStatus(s); });
+      return () => { mounted = false; };
+    }, [])
+  );
+
+  async function handleTogglePush() {
+    if (pushStatus === 'blocked') {
+      Linking.openSettings();
+      return;
+    }
+    setPushBusy(true);
+    try {
+      if (pushStatus === 'on') {
+        await disablePush();
+        setPushStatus('off');
+      } else {
+        setPushStatus(await enablePush());
+      }
+    } finally {
+      setPushBusy(false);
+    }
+  }
 
   async function loadOffering() {
     const pkgs = await getAllOfferings();
@@ -699,6 +733,32 @@ export default function AccountScreen() {
           )}
         </Card>
 
+        {/* Notifications — the always-available way in, for anyone who dismissed
+            or denied the in-app ask. Hidden entirely where remote push can't
+            work (Expo Go), since there'd be nothing to toggle. */}
+        {pushStatus && pushStatus !== 'unsupported' && (
+          <Card style={styles.card}>
+            <Text style={styles.cardTitle}>Notifications</Text>
+            <Text style={styles.pushDesc}>
+              {pushStatus === 'on'
+                ? "Push notifications are on. We'll only use them for things that need you — never marketing."
+                : pushStatus === 'blocked'
+                ? 'Notifications are turned off for Mealio in your device settings. Everything still works; you just get emails instead.'
+                : "Get notified when something needs your attention. Everything works without them — you'll get emails instead."}
+            </Text>
+            <Button
+              label={
+                pushStatus === 'on' ? 'Turn Off Notifications'
+                : pushStatus === 'blocked' ? 'Open Settings'
+                : 'Turn On Notifications'
+              }
+              variant="secondary"
+              onPress={handleTogglePush}
+              loading={pushBusy}
+            />
+          </Card>
+        )}
+
         {/* Change Password */}
         <Card style={styles.card}>
           <Text style={styles.cardTitle}>Change Password</Text>
@@ -992,6 +1052,7 @@ const styles = StyleSheet.create({
   storeLogoutHint: { fontSize: 12, color: Colors.text3, fontFamily: 'Inter_400Regular', marginTop: 6, marginBottom: 4, textAlign: 'center' },
   signOutBtn: { marginTop: 8 },
   krogerDesc: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2, marginBottom: 10, lineHeight: 19 },
+  pushDesc: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2, marginBottom: 10, lineHeight: 19 },
   krogerBrandNote: {
     backgroundColor: Colors.surface,
     borderRadius: 10,
