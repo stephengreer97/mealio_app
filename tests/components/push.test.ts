@@ -76,9 +76,21 @@ beforeEach(() => {
 });
 
 describe('routeForNotification', () => {
-  it('routes a creator draft to the Creator tab and carries the draft id (MEAL-89 seam)', () => {
+  it('opens the review queue for a creator draft, carrying the draft id', () => {
+    // A tap on "2 recipes ready" is an unambiguous intent, so it lands on the
+    // queue rather than merely on the Creator tab with the creator left to find
+    // what the notification was about (MEAL-89). It travels as a param on the
+    // tab, not as a route of its own, so the tab bar stays on screen — a
+    // creator who tapped by reflex is one touch from Discover.
     expect(routeForNotification({ type: 'creator_draft', draftId: 'd1' }))
-      .toEqual({ target: 'Creator', draftId: 'd1' });
+      .toEqual({ target: 'Creator', params: { openQueue: true, draftId: 'd1' } });
+  });
+
+  it('still opens the queue when the payload names no particular draft', () => {
+    // A batch notification says "2 recipes are ready", not which one. The queue
+    // is the destination either way.
+    expect(routeForNotification({ type: 'creator_draft' }))
+      .toEqual({ target: 'Creator', params: { openQueue: true, draftId: undefined } });
   });
 
   it('routes the other known payload types', () => {

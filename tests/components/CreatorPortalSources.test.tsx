@@ -39,6 +39,15 @@ jest.mock('react-native-keyboard-aware-scroll-view', () => {
 
 jest.mock('expo-web-browser', () => ({ openBrowserAsync: jest.fn(async () => ({ type: 'dismiss' })) }));
 
+// Since MEAL-89 the portal renders the review queue in place of itself, and the
+// queue reads this context — which reaches AuthContext and from there
+// `react-native-purchases`, an untransformed ESM module Jest cannot parse. The
+// links and YouTube cards are what is under test, so the context is stubbed the
+// same way `creator-portal-queue-entry.test.tsx` stubs it.
+jest.mock('../../src/context/CreatorDraftsContext', () => ({
+  useCreatorDrafts: () => ({ waiting: 0, refresh: jest.fn(), announce: jest.fn() }),
+}));
+
 jest.mock('../../src/components/MealDetailSheet', () => () => null);
 jest.mock('../../src/components/PublishedLinkSheet', () => () => null);
 jest.mock('../../src/components/PushOptInCard', () => () => null);
