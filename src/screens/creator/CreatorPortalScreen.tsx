@@ -23,6 +23,8 @@ import CreatorReviewQueueScreen from './CreatorReviewQueueScreen';
 import MealDetailSheet from '../../components/MealDetailSheet';
 import PushOptInCard from '../../components/PushOptInCard';
 import PublishedLinkSheet from '../../components/PublishedLinkSheet';
+import PlatformLinksCard from '../../components/PlatformLinksCard';
+import YouTubeConnectCard from '../../components/YouTubeConnectCard';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -396,6 +398,28 @@ export default function CreatorPortalScreen({ route, navigation }: { route?: Por
                     </Text>
                   </View>
                 )}
+              </>
+            )}
+
+            {/*
+              Where a creator publishes, and the one setting that lets Mealio
+              write back to it. Both are creator-owned decisions that had no
+              route at all in the app — an app-only creator could not move a link
+              that had changed, and could not say whether Mealio may edit their
+              YouTube descriptions.
+
+              Below the stats and above the meals: they are settings, not the
+              thing the screen is for. `onSaved` re-reads the row so the boxes
+              show the links as stored (normalised server-side) and the polled
+              sentence reflects an import the save may have just paused.
+
+              The YouTube card hides itself for a creator with no channel, so
+              nothing here decides that.
+            */}
+            {creator && (
+              <>
+                <PlatformLinksCard creator={creator} onSaved={loadData} />
+                <YouTubeConnectCard />
               </>
             )}
 

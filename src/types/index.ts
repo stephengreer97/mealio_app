@@ -82,6 +82,36 @@ export interface Creator {
   followers?: number;
   isFollowing?: boolean;
   createdAt?: string;
+  // The four places a creator publishes, and the two columns that say which one
+  // of them Mealio reads. Returned by `GET /api/creator/me` only — a creator
+  // looking at somebody else's profile gets none of these, so they are optional
+  // and absent rather than null on those responses.
+  websiteUrl?: string | null;
+  youtubeUrl?: string | null;
+  instagramUrl?: string | null;
+  tiktokUrl?: string | null;
+  /** One of the four sources, or 'none' — the off switch. Operator-set. */
+  primarySource?: string | null;
+  /** Whether anything is polled at all. Operator-set; a creator can only ever clear it. */
+  importOptIn?: boolean | null;
+}
+
+/**
+ * The creator's own view of their YouTube connection (`GET /api/creator/youtube`).
+ *
+ * `hasChannel` is the only thing that decides whether the card is shown at all,
+ * and it is broader than `connected`: a link the creator gave us says a channel
+ * exists even before a grant does.
+ */
+export interface YouTubeConnection {
+  hasChannel: boolean;
+  connected: boolean;
+  channel: { id: string | null; title: string | null } | null;
+  /** Non-null means the grant stopped working and has to be made again. */
+  brokenReason: string | null;
+  /** False on a grant made without the write scope — the append offer cannot be turned on. */
+  canWriteDescriptions: boolean;
+  appendOptIn: boolean;
 }
 
 // Profit share is based entirely on the creator's meal saves over a rolling

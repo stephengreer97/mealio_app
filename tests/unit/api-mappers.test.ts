@@ -202,6 +202,39 @@ describe('mapCreator', () => {
     expect(r.isFollowing).toBe(false);
   });
 
+  it('carries the four platform links and the two polling columns', () => {
+    // `GET /api/creator/me` is the only response that selects these, and the
+    // link editor (MEAL-94) is the only thing that reads them. Dropping them in
+    // the mapper — which is what happened before — showed a creator four empty
+    // boxes over links they had actually given us.
+    const r = mapCreator({
+      ...minimal,
+      website_url: 'https://chefsarah.test/',
+      youtube_url: 'https://youtube.com/@sarah',
+      instagram_url: null,
+      tiktok_url: null,
+      primary_source: 'website',
+      import_opt_in: true,
+    });
+    expect(r.websiteUrl).toBe('https://chefsarah.test/');
+    expect(r.youtubeUrl).toBe('https://youtube.com/@sarah');
+    expect(r.instagramUrl).toBe(null);
+    expect(r.tiktokUrl).toBe(null);
+    expect(r.primarySource).toBe('website');
+    expect(r.importOptIn).toBe(true);
+  });
+
+  it('leaves the links undefined on a response that does not carry them', () => {
+    // `?? null` here would turn "this endpoint does not return links" into "this
+    // creator has no links" — and the editor would then render four empty boxes
+    // and offer to save over the top of them. Every other creator endpoint
+    // (featured, following, by id) is one of those responses.
+    const r = mapCreator(minimal);
+    expect(r.websiteUrl).toBeUndefined();
+    expect(r.primarySource).toBeUndefined();
+    expect(r.importOptIn).toBeUndefined();
+  });
+
   it('defaults missing string fields to "" and missing optional fields to null', () => {
     const r = mapCreator(minimal);
     expect(r.userId).toBe('');
