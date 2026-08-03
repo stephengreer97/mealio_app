@@ -46,20 +46,40 @@ export default function TagPicker({
   tags = ALL_TAGS,
 }: TagPickerProps) {
   const query = search.trim().toLowerCase();
-  const filtered = query ? tags.filter((t) => t.toLowerCase().includes(query)) : tags;
+  // A chosen tag that no vocabulary lists still needs a chip, or it cannot be
+  // deselected — it is selected, invisible, and posted back on every save, which
+  // makes "deselect 2" an instruction with nothing to follow. Personal meals
+  // really do carry these: the web `my-meals` picker takes a custom tag.
+  const custom = selected.filter((t) => !tags.includes(t));
+  const pool = [...custom, ...tags];
+  const matching = query ? pool.filter((t) => t.toLowerCase().includes(query)) : pool;
+  // Chosen tags first, as every other picker in the product does. Otherwise the
+  // three that are actually on the meal are scattered through eighty-odd chips,
+  // and the way back under the cap is to find them.
+  const filtered = [
+    ...matching.filter((t) => selected.includes(t)),
+    ...matching.filter((t) => !selected.includes(t)),
+  ];
 
   // An edit can open on a meal published before the cap was enforced, so this
   // can be positive. Saying how many to drop is more use than saying "too many".
   const over = selected.length - max;
-  const full = selected.length >= max;
 
-  function toggle(tag: string) {
-    if (selected.includes(tag)) {
-      onChange(selected.filter((t) => t !== tag));
-      return;
-    }
-    if (full) return;
-    onChange([...selected, tag]);
+  /**
+   * The selection a press on `tag` would produce — and the *same* selection back
+   * when the press would do nothing.
+   *
+   * Asked once and used for both the press and the disabled state, so the cap is
+   * written in one place rather than copied into a `disabled` expression beside
+   * it. It used to be two: a `disabled` prop that stopped the press, and an
+   * `if (full) return` inside the handler. Only the first was reachable from a
+   * test — RNTL will not dispatch a press onto a disabled `TouchableOpacity` —
+   * so deleting the second left all 42 component tests green.
+   */
+  function nextFor(tag: string): string[] {
+    if (selected.includes(tag)) return selected.filter((t) => t !== tag);
+    if (selected.length >= max) return selected;
+    return [...selected, tag];
   }
 
   return (
@@ -83,14 +103,16 @@ export default function TagPicker({
       <ScrollView style={styles.scroll} nestedScrollEnabled showsVerticalScrollIndicator={false}>
         <View style={styles.row} testID="tag-picker">
           {filtered.map((tag) => {
-            const isSelected = selected.includes(tag);
+            const next = nextFor(tag);
+            // A chip whose press hands back the selection it already has is a
+            // chip with nothing to do, which is exactly what `disabled` means.
             return (
               <Tag
                 key={tag}
                 label={tag}
-                selected={isSelected}
-                disabled={!isSelected && full}
-                onPress={() => toggle(tag)}
+                selected={selected.includes(tag)}
+                disabled={next === selected}
+                onPress={() => onChange(next)}
               />
             );
           })}

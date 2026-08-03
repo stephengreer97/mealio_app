@@ -13,8 +13,9 @@
 
 import React, { useState } from 'react';
 import { Text } from 'react-native';
-import { render, fireEvent } from '@testing-library/react-native';
+import { render, fireEvent, act } from '@testing-library/react-native';
 import TagPicker from '../../src/components/TagPicker';
+import Tag from '../../src/components/ui/Tag';
 import { MAX_MEAL_TAGS } from '../../src/constants/tags';
 
 const TAGS = ['Mexican', 'No Cook', 'Vegan', 'Healthy', 'Snack'];
@@ -48,6 +49,22 @@ function selection(getByTestId: (id: string) => { props: { children: string } })
   const value = String(getByTestId('selection').props.children).replace('chosen:', '');
   return value ? value.split('|') : [];
 }
+
+/**
+ * The chips as the picker rendered them, read off `Tag` itself.
+ *
+ * Going through the component rather than the host tree is what lets a test
+ * call `onPress` past the `disabled` prop — RNTL will not dispatch a press onto
+ * a disabled `TouchableOpacity`, which is exactly why the handler's own cap
+ * check had no test.
+ */
+type Chip = { props: { label: string; disabled?: boolean; onPress: () => void } };
+const chips = (r: { UNSAFE_getAllByType: (t: unknown) => Chip[] }): Chip[] =>
+  r.UNSAFE_getAllByType(Tag);
+const chipLabels = (r: { UNSAFE_getAllByType: (t: unknown) => Chip[] }): string[] =>
+  chips(r).map((c) => c.props.label);
+const chipFor = (r: { UNSAFE_getAllByType: (t: unknown) => Chip[] }, label: string): Chip =>
+  chips(r).find((c) => c.props.label === label)!;
 
 describe('TagPicker — the cap', () => {
   it('the cap is three, the number the server publishes', () => {
@@ -89,6 +106,67 @@ describe('TagPicker — the cap', () => {
     fireEvent.press(getByText('Healthy'));
 
     expect(selection(getByTestId as never)).toEqual(['Mexican', 'Vegan', 'Healthy']);
+  });
+
+  /**
+   * The refusal itself, not the `disabled` prop that normally hides it.
+   *
+   * "refuses a fourth" above presses a chip the picker has already marked
+   * disabled, and RNTL will not dispatch a press onto a disabled
+   * `TouchableOpacity` — so that assertion passes through the prop and never
+   * reaches the decision behind it. Deleting the handler's own cap check used to
+   * leave all 42 component tests green.
+   *
+   * There is only one rule now: `disabled` is *derived* from what a press would
+   * produce. This calls `onPress` directly, past the prop, so the rule is
+   * asserted where it is actually made.
+   */
+  it('hands back the same selection when the press has nothing to do', () => {
+    const r = render(<Harness initial={['Mexican', 'No Cook', 'Vegan']} />);
+
+    const fourth = chipFor(r as never, 'Healthy');
+    expect(fourth.props.disabled).toBe(true);
+
+    // Past the disabled prop, straight at the handler. Wrapped in `act` so the
+    // state update this would cause actually flushes — without it the
+    // assertion would hold whether or not the press was refused.
+    act(() => fourth.props.onPress());
+
+    expect(selection(r.getByTestId as never)).toEqual(['Mexican', 'No Cook', 'Vegan']);
+  });
+
+  it('still removes when the press is a deselect, called the same way', () => {
+    // The other half: `onPress` is not inert in general, so the assertion above
+    // is the cap refusing rather than the handler being wired to nothing.
+    const r = render(<Harness initial={['Mexican', 'No Cook', 'Vegan']} />);
+
+    act(() => chipFor(r as never, 'No Cook').props.onPress());
+
+    expect(selection(r.getByTestId as never)).toEqual(['Mexican', 'Vegan']);
+  });
+});
+
+describe('TagPicker — which chips it shows', () => {
+  it('puts the chosen tags first, so the way back under the cap is in reach', () => {
+    // Over the cap every unchosen chip is inert, so the only chips worth
+    // reaching are the selected ones — and they were scattered through
+    // eighty-odd others in vocabulary order.
+    const r = render(<Harness initial={['Vegan', 'Snack']} />);
+
+    expect(chipLabels(r as never)).toEqual([
+      'Vegan', 'Snack', 'Mexican', 'No Cook', 'Healthy',
+    ]);
+  });
+
+  it('gives a chip to a chosen tag no vocabulary lists, so it can be deselected', () => {
+    // Personal meals carry custom tags — the web `my-meals` picker adds them.
+    // Without a chip such a tag is selected, invisible, and counted against the
+    // cap forever.
+    const r = render(<Harness initial={["Grandma's", 'Vegan']} />);
+
+    act(() => chipFor(r as never, "Grandma's").props.onPress());
+
+    expect(selection(r.getByTestId as never)).toEqual(['Vegan']);
   });
 });
 
