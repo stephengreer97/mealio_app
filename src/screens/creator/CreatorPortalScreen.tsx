@@ -20,6 +20,7 @@ import { Colors, Radius } from '../../constants/colors';
 import { Creator, CreatorStats, PresetMeal, Ingredient } from '../../types';
 import { creators as creatorsApi } from '../../lib/api';
 import MealDetailSheet from '../../components/MealDetailSheet';
+import PublishedLinkSheet from '../../components/PublishedLinkSheet';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -35,6 +36,8 @@ export default function CreatorPortalScreen() {
   const [earningsOpen, setEarningsOpen] = useState(false);
   const [viewingMeal, setViewingMeal] = useState<PresetMeal | null>(null);
   const [mealDetailVisible, setMealDetailVisible] = useState(false);
+  const [publishedMeal, setPublishedMeal] = useState<PresetMeal | null>(null);
+  const [publishedVisible, setPublishedVisible] = useState(false);
 
   // Form state
   const [formVisible, setFormVisible] = useState(false);
@@ -150,13 +153,21 @@ export default function CreatorPortalScreen() {
         photoUrl: finalPhotoUrl ?? undefined,
       };
 
+      let published: PresetMeal | null = null;
       if (editingMeal) {
         await creatorsApi.creatorMeals.update(editingMeal.id, data);
       } else {
-        await creatorsApi.creatorMeals.create(data);
+        published = await creatorsApi.creatorMeals.create(data);
       }
       setFormVisible(false);
       await loadData();
+      // A newly published meal is the one moment the creator can still edit the
+      // caption of the video it came from, so hand them the link right here.
+      // Wait for the form sheet to finish dismissing before opening another modal.
+      if (published) {
+        setPublishedMeal(published);
+        setTimeout(() => setPublishedVisible(true), 400);
+      }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not save meal');
     } finally {
@@ -337,6 +348,13 @@ export default function CreatorPortalScreen() {
         mode="view"
         onClose={() => setMealDetailVisible(false)}
         hideShare
+      />
+
+      {/* Share-your-link prompt, shown once right after publishing */}
+      <PublishedLinkSheet
+        visible={publishedVisible}
+        meal={publishedMeal}
+        onClose={() => { setPublishedVisible(false); setPublishedMeal(null); }}
       />
 
       {/* Meal form modal */}
