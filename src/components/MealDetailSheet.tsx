@@ -23,8 +23,7 @@ import Button from './ui/Button';
 import Input from './ui/Input';
 import IngredientEditor from './IngredientEditor';
 import PhotoPicker from './PhotoPicker';
-import Tag from './ui/Tag';
-import { ALL_TAGS } from '../constants/tags';
+import TagPicker from './TagPicker';
 import { STORES } from '../constants/stores';
 
 interface MealDetailSheetProps {
@@ -378,33 +377,20 @@ export default function MealDetailSheet({
                 multiline
               />
 
+              {/* The shared picker. This one had no cap either, and it is the
+                  edit form — so it opens on whatever the meal already carries,
+                  including the personal meals written before `PUT /api/meals/[id]`
+                  counted tags. The picker says how many to drop, and the route
+                  grandfathers a list this save does not change. Selected-first
+                  ordering and a chip for a custom tag came from here originally;
+                  `TagPicker` does both, so nothing is lost by the swap. */}
               <Text style={styles.fieldLabel}>Tags</Text>
-              <TextInput
-                style={styles.tagSearchInput}
-                placeholder="Search tags…"
-                placeholderTextColor={Colors.text3}
-                value={tagSearch}
-                onChangeText={setTagSearch}
+              <TagPicker
+                selected={selectedTags}
+                onChange={setSelectedTags}
+                search={tagSearch}
+                onSearchChange={setTagSearch}
               />
-              <ScrollView style={styles.tagScroll} nestedScrollEnabled showsVerticalScrollIndicator={false}>
-                <View style={styles.tagsRow}>
-                  {(tagSearch.trim()
-                    ? ALL_TAGS.filter((t) => t.toLowerCase().includes(tagSearch.toLowerCase()))
-                    : [...selectedTags, ...ALL_TAGS.filter((t) => !selectedTags.includes(t))]
-                  ).map((tag) => (
-                    <Tag
-                      key={tag}
-                      label={tag}
-                      selected={selectedTags.includes(tag)}
-                      onPress={() =>
-                        setSelectedTags((prev) =>
-                          prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-                        )
-                      }
-                    />
-                  ))}
-                </View>
-              </ScrollView>
 
               {(() => {
                 const namedIngredients = ingredients
@@ -738,16 +724,6 @@ const styles = StyleSheet.create({
   servesRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   servesText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text3 },
   diffLabelActive: { color: Colors.brand },
-  tagSearchInput: {
-    borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.input,
-    backgroundColor: Colors.surfaceRaised, paddingHorizontal: 12, paddingVertical: 8,
-    fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text1, marginBottom: 8, letterSpacing: 0,
-  },
-  tagScroll: {
-    maxHeight: 180, borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.input,
-    backgroundColor: Colors.surfaceRaised, paddingHorizontal: 8, paddingVertical: 6, marginBottom: 8,
-  },
-  tagsRow: { flexDirection: 'row', flexWrap: 'wrap' },
   // Store picker
   dropdown: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
