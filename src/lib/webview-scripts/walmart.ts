@@ -6,15 +6,30 @@
 
 import type { StoreScripts } from './index';
 import { buildExtractWorker } from './worker-search';
+import { selectorsFor, storeConfig, searchUrlFor } from '../automation-config';
 
 const WALMART_URL = 'https://www.walmart.com/grocery';
 const WALMART_LOGIN_URL = 'https://www.walmart.com/account/login';
 const WALMART_CART_URL = 'https://www.walmart.com/cart';
 const WALMART_DOMAIN = 'walmart.com';
 
-// ── Shared selector constants (used in multiple scripts) ────────────────────
-const CARD_SEL = '[data-automation-id="product"], [data-item-id]';
-const TITLE_SEL = '[data-automation-id="product-title"], [data-automation-id="name"]';
+const SELECTOR_KEY = 'walmart';
+
+// ── Shared selectors ────────────────────────────────────────────────────────
+// Compiled-in fallbacks; the live values come from the remote automation config
+// so a Walmart redesign is a config push rather than an App Store release. Must
+// be read INSIDE a build function — the remote config lands after module import,
+// so a module-scope capture would freeze these fallbacks forever. That is why the
+// script constants below are functions rather than template-literal consts.
+const SEL_FALLBACKS = {
+  card: '[data-automation-id="product"], [data-item-id]',
+  title: '[data-automation-id="product-title"], [data-automation-id="name"]',
+  addBtn: '[data-automation-id="add-to-cart"], button[aria-label*="Add to cart"]',
+  incBtn: '[data-testid="quantity-stepper-inc-button"]',
+};
+
+/** Live selectors as interpolatable JS literals (quotes included). */
+const sel = () => selectorsFor(SELECTOR_KEY, SEL_FALLBACKS);
 
 // ── Login check ─────────────────────────────────────────────────────────────
 
@@ -174,7 +189,12 @@ const CHECK_LOGIN_SCRIPT = `(async function() {
 // Pulls up to 8 product candidates from a Walmart search-results page.
 // Linear: wait for URL → wait for cards → walk each card → post.
 // Heavy step-named logging via type: 'EXTRACT_LOG'.
-const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
+//
+// A function rather than a const so its selectors are resolved when the script is
+// built (after the remote config has loaded), not at module import.
+function buildExtractProductsScript(): string {
+  const s = sel();
+  return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function log(step, extra) {
     var p = { type: 'EXTRACT_LOG', step: step };
@@ -187,10 +207,10 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
   }
   document.addEventListener('focusin', noKbd, true);
 
-  var CARD_SEL = '${CARD_SEL}';
-  var TITLE_SEL = '${TITLE_SEL}';
-  var ADD_BTN_SEL = '[data-automation-id="add-to-cart"], button[aria-label*="Add to cart"]';
-  var INC_BTN_SEL = '[data-testid="quantity-stepper-inc-button"]';
+  var CARD_SEL = ${s.card};
+  var TITLE_SEL = ${s.title};
+  var ADD_BTN_SEL = ${s.addBtn};
+  var INC_BTN_SEL = ${s.incBtn};
   var ITEM_STACK_ATTR = 'item-stack';
 
   // 1. Wait until the URL carries a ?q= search term.
@@ -318,6 +338,7 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
   document.removeEventListener('focusin', noKbd, true);
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: candidates }));
 })();true;`;
+}
 
 // ── Add to cart ─────────────────────────────────────────────────────────────
 
@@ -330,6 +351,7 @@ function buildAddToCartScript(
   qty: number,
 ): string {
   var escapedName = JSON.stringify(productName);
+  const s = sel();
 
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
@@ -346,10 +368,10 @@ function buildAddToCartScript(
 
   var TARGET_NAME = ${escapedName};
   var QTY = ${qty};
-  var CARD_SEL = '${CARD_SEL}';
-  var TITLE_SEL = '${TITLE_SEL}';
-  var ADD_BTN_SEL = '[data-automation-id="add-to-cart"], button[aria-label*="Add to cart"]';
-  var INC_BTN_SEL = '[data-testid="quantity-stepper-inc-button"]';
+  var CARD_SEL = ${s.card};
+  var TITLE_SEL = ${s.title};
+  var ADD_BTN_SEL = ${s.addBtn};
+  var INC_BTN_SEL = ${s.incBtn};
 
   log('start', { target: TARGET_NAME, qty: QTY, url: window.location.href });
 
@@ -463,6 +485,7 @@ function buildAddToCartScript(
 
 function buildSearchScript(term: string): string {
   var escaped = JSON.stringify(term);
+  const s = sel();
   // SPA search:
   //   1. Snapshot URL + first card title BEFORE submitting (so we can detect
   //      when the page has actually transitioned to the new search).
@@ -492,8 +515,8 @@ function buildSearchScript(term: string): string {
   var term = ${escaped};
   var encoded = encodeURIComponent(term);
   var targetUrl = 'https://www.walmart.com/search?q=' + encoded;
-  var CARD_SEL = '${CARD_SEL}';
-  var TITLE_SEL = '${TITLE_SEL}';
+  var CARD_SEL = ${s.card};
+  var TITLE_SEL = ${s.title};
   var ITEM_STACK_ATTR = 'item-stack';
 
   log('start', { term: term, from: window.location.href, to: targetUrl });
@@ -713,6 +736,7 @@ function buildSearchAndAddScript(
   _dropdown: { type: string; selectedText: string; selectedValue: string } | null,
 ): string {
   var escapedTerm = JSON.stringify(searchTerm);
+  const s = sel();
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function log(step, extra) {
@@ -728,10 +752,10 @@ function buildSearchAndAddScript(
 
   var SEARCH_TERM = ${escapedTerm};
   var QTY = ${qty};
-  var CARD_SEL = '${CARD_SEL}';
-  var TITLE_SEL = '${TITLE_SEL}';
-  var ADD_BTN_SEL = '[data-automation-id="add-to-cart"], button[aria-label*="Add to cart"]';
-  var INC_BTN_SEL = '[data-testid="quantity-stepper-inc-button"]';
+  var CARD_SEL = ${s.card};
+  var TITLE_SEL = ${s.title};
+  var ADD_BTN_SEL = ${s.addBtn};
+  var INC_BTN_SEL = ${s.incBtn};
 
   function getQ() {
     var m = window.location.href.match(/[?&]q=([^&]+)/);
@@ -942,26 +966,36 @@ function buildSearchAndAddScript(
 // ── Export ───────────────────────────────────────────────────────────────────
 
 export function getScripts(): StoreScripts {
+  const cfg = storeConfig(SELECTOR_KEY);
+  const fallbackSearchUrl = (term: string) =>
+    'https://www.walmart.com/search?q=' + encodeURIComponent(term);
+
   return {
-    storeUrl: WALMART_URL,
-    loginUrl: WALMART_LOGIN_URL,
-    cartUrl: WALMART_CART_URL,
+    storeUrl: cfg.storeUrl ?? WALMART_URL,
+    loginUrl: cfg.loginUrl ?? WALMART_LOGIN_URL,
+    cartUrl: cfg.cartUrl ?? WALMART_CART_URL,
     domain: WALMART_DOMAIN,
     isSearchUrl: (url: string) => url.includes('walmart.com/search'),
     isLoginSuccessUrl: (url: string) =>
       url.includes('walmart.com') && !url.includes('/account/login') && !url.includes('/sign-in'),
     checkLoginScript: CHECK_LOGIN_SCRIPT,
-    extractProductsScript: EXTRACT_PRODUCTS_SCRIPT,
+    extractProductsScript: buildExtractProductsScript(),
     buildAddToCartScript,
     buildSearchScript,
     buildSearchAndAddScript,
-    getSearchUrl: (term: string) => 'https://www.walmart.com/search?q=' + encodeURIComponent(term),
-    buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, EXTRACT_PRODUCTS_SCRIPT),
+    getSearchUrl: (term: string) => searchUrlFor(SELECTOR_KEY, term, fallbackSearchUrl(term)),
+    buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, buildExtractProductsScript()),
+    workerCount: cfg.workerCount,
+    workerStaggerMs: cfg.workerStaggerMs,
+    forceSerialSearch: cfg.forceSerialSearch,
+    cacheBustNav: cfg.cacheBustNav,
     // Walmart is an SPA: navigating to /search?q= fires onLoadEnd more than once
     // while the search-and-add script is still running. Without this, the inflight
     // re-injection runs a DUPLICATE search-and-add — which double-adds (then the
     // next item's nav race-cancels the cart POST so the item reverts to 0) and
     // overwrites the next item's result slot (skipping it). See aldi.ts.
-    spaSearch: true,
+    // Overridable, but the default stays true — only flip it if Walmart actually
+    // stops being an SPA, since turning it off reintroduces the double-add.
+    spaSearch: cfg.spaSearch ?? true,
   };
 }

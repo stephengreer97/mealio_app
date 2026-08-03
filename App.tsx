@@ -22,6 +22,7 @@ import WebViewVersionProbe from './src/components/WebViewVersionProbe';
 import FingerprintProbe from './src/components/FingerprintProbe';
 import PushRegistrar from './src/components/PushRegistrar';
 import { configureNotificationHandler } from './src/lib/push';
+import AutomationConfigLoader from './src/components/AutomationConfigLoader';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -52,6 +53,9 @@ export default function App() {
       <WebViewVersionProbe />
       {__DEV__ && <FingerprintProbe />}
       <AuthProvider>
+        {/* Inside AuthProvider (needs a token) but outside the cart tree, so the
+            remote store config is already in memory before any cart run starts. */}
+        <AutomationConfigLoader />
         <LoginPrewarmProvider>
           <CartJobProvider>
             <NavigationContainer ref={navigationRef}>

@@ -40,7 +40,27 @@ const SEARCH_INPUT_SEL = 'input[type="search"], input[placeholder*="earch" i]';
 // sessionStorage caches a positive ('in') detection across page bounces so a
 // late-killed observer doesn't lose its answer. 'out' is NEVER cached so that
 // post-login re-injections after the user signs in always re-check fresh.
-const CHECK_LOGIN_SCRIPT = `(function() {
+import { selectorsFor, storeConfig, searchUrlFor } from '../automation-config';
+
+const SELECTOR_KEY = 'wegmans';
+
+// Compiled-in selector fallbacks; the remote automation config overrides them so
+// a Wegmans redesign is a config push rather than an App Store release. Read only
+// inside a build function — the config loads after module import.
+const SEL_FALLBACKS = {
+  tile: 'div.component--product-tile',
+  name: 'h3[data-testid="-baseHeading"]',
+  addBtn: 'button.default-add-button',
+  incBtn: 'button.add-button',
+  searchInput: 'input[type="search"], input[placeholder*="earch" i]',
+};
+
+/** Live selectors as interpolatable JS literals (quotes included). */
+const sel = () => selectorsFor(SELECTOR_KEY, SEL_FALLBACKS);
+
+function buildCheckLoginScript(): string {
+  const s = sel();
+  return `(function() {
   if (window.__wegmansLoginPosted) return;
   if (window.__wegmansLoginObserver) {
     try { window.__wegmansLoginObserver.disconnect(); } catch(_) {}
@@ -134,10 +154,13 @@ const CHECK_LOGIN_SCRIPT = `(function() {
     post(readState());
   }, 8000);
 })();true;`;
+}
 
 // ── Product extraction ─────────────────────────────────────────────────────
 
-const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
+function buildExtractProductsScript(): string {
+  const s = sel();
+  return `(async function() {
   // Re-injection guard. The cart flow re-injects the inflight script on a
   // same-URL onLoadEnd — REQUIRED for Wegmans' SSO/MSAL reload (which lands in a
   // fresh JS context, so this flag is reset and the script re-runs). But the
@@ -157,8 +180,8 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
   }
   document.addEventListener('focusin', __noKbd, true);
 
-  var TILE_SEL = 'div.component--product-tile';
-  var NAME_SEL = 'h3[data-testid="-baseHeading"]';
+  var TILE_SEL = ${s.tile};
+  var NAME_SEL = ${s.name};
 
   function getFirstTileName() {
     var el = document.querySelector(TILE_SEL + ' ' + NAME_SEL);
@@ -254,6 +277,7 @@ const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: candidates }));
   } finally { window.__wegmansExtractActive = false; }
 })();true;`;
+}
 
 // ── Add to cart ────────────────────────────────────────────────────────────
 
@@ -269,6 +293,7 @@ function buildAddToCartScript(
 ): string {
   const escapedName = JSON.stringify(productName);
 
+  const s = sel();
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
@@ -282,10 +307,10 @@ function buildAddToCartScript(
 
   var TARGET_NAME = ${escapedName};
   var QTY = ${qty};
-  var TILE_SEL = 'div.component--product-tile';
-  var NAME_SEL = 'h3[data-testid="-baseHeading"]';
-  var ADD_BTN_SEL = 'button.default-add-button';
-  var INC_BTN_SEL = 'button.add-button';
+  var TILE_SEL = ${s.tile};
+  var NAME_SEL = ${s.name};
+  var ADD_BTN_SEL = ${s.addBtn};
+  var INC_BTN_SEL = ${s.incBtn};
 
   // Poll for target product tile instead of fixed wait
   var targetTile = null;
@@ -438,6 +463,7 @@ function buildAddToCartScript(
  */
 function buildSearchScript(term: string): string {
   const escaped = JSON.stringify(term);
+  const s = sel();
   return `(function() {
   // Wegmans's SPA lowercases the query value in the canonical URL — match
   // that so WebViewCartSheet's NAV_INTENT comparison succeeds.
@@ -470,6 +496,7 @@ function buildSearchAndAddScript(
   _dropdown: { type: string; selectedText: string; selectedValue: string } | null = null,
 ): string {
   const escapedTerm = JSON.stringify(searchTerm);
+  const s = sel();
   return `(async function() {
   // Idempotency guard: WebViewCartSheet may re-inject this script when an
   // onLoadEnd fires for the same URL while we're still in-flight (e.g.
@@ -491,11 +518,11 @@ function buildSearchAndAddScript(
 
   var SEARCH_TERM = ${escapedTerm};
   var QTY = ${qty};
-  var TILE_SEL = 'div.component--product-tile';
-  var NAME_SEL = 'h3[data-testid="-baseHeading"]';
-  var ADD_BTN_SEL = 'button.default-add-button';
-  var INC_BTN_SEL = 'button.add-button';
-  var SEARCH_INPUT_SEL = 'input[type="search"], input[placeholder*="earch" i]';
+  var TILE_SEL = ${s.tile};
+  var NAME_SEL = ${s.name};
+  var ADD_BTN_SEL = ${s.addBtn};
+  var INC_BTN_SEL = ${s.incBtn};
+  var SEARCH_INPUT_SEL = ${s.searchInput};
 
   // ── Helper: get product name from tile ─────────────────────────────────
   function getNameFromTile(tile) {
@@ -836,7 +863,9 @@ function buildSearchAndAddScript(
 //
 // Each worker is instantiated with its workerId baked into the script body.
 
-const WEGMANS_WORKER_EXTRACT_BODY = `
+function buildWegmansWorkerExtractBody(): string {
+  const s = sel();
+  return `
 (function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function dbg(payload) {
@@ -884,7 +913,7 @@ const WEGMANS_WORKER_EXTRACT_BODY = `
 
     // Poll for tiles. First page load on a worker has MSAL bootstrap so allow
     // up to 12s; subsequent loads on the same worker are faster.
-    var TILE_SEL = 'div.component--product-tile';
+    var TILE_SEL = ${s.tile};
     var tiles = [];
     var waitedMs = 0;
     for (var poll = 0; poll < 60; poll++) {
@@ -929,10 +958,11 @@ const WEGMANS_WORKER_EXTRACT_BODY = `
 })();
 true;
 `;
+}
 
 /** Returns injectedJavaScript for a single worker. The workerId is baked in. */
 export function buildWegmansWorkerScript(workerId: number): string {
-  return 'var WORKER_ID = ' + workerId + ';\n' + WEGMANS_WORKER_EXTRACT_BODY;
+  return 'var WORKER_ID = ' + workerId + ';\n' + buildWegmansWorkerExtractBody();
 }
 
 /** Returns the Wegmans warmup URL for a worker (loads homepage to bootstrap MSAL). */
@@ -948,31 +978,32 @@ export function getWegmansSearchUrl(query: string): string {
 // ── Export ──────────────────────────────────────────────────────────────────
 
 export function getScripts(): StoreScripts {
+  const cfg = storeConfig(SELECTOR_KEY);
   return {
-    storeUrl: WEGMANS_URL,
-    loginUrl: WEGMANS_LOGIN_URL,
-    cartUrl: WEGMANS_CART_URL,
+    storeUrl: cfg.storeUrl ?? WEGMANS_URL,
+    loginUrl: cfg.loginUrl ?? WEGMANS_LOGIN_URL,
+    cartUrl: cfg.cartUrl ?? WEGMANS_CART_URL,
     domain: WEGMANS_DOMAIN,
     isSearchUrl: (url: string) => url.includes('wegmans.com/search') || url.includes('wegmans.com/shop'),
     isLoginSuccessUrl: (url: string) =>
       url.includes('wegmans.com') && !url.includes('/sign-in') && !url.includes('/login'),
-    checkLoginScript: CHECK_LOGIN_SCRIPT,
-    extractProductsScript: EXTRACT_PRODUCTS_SCRIPT,
+    checkLoginScript: buildCheckLoginScript(),
+    extractProductsScript: buildExtractProductsScript(),
     buildAddToCartScript,
     buildSearchScript,
     buildSearchAndAddScript,
     // Wegmans ships its own purpose-built worker (MSAL bootstrap handling),
     // exposed here so the parallel pool is driven uniformly off StoreScripts.
-    getSearchUrl: getWegmansSearchUrl,
+    getSearchUrl: (term: string) => searchUrlFor(SELECTOR_KEY, term, getWegmansSearchUrl(term)),
     buildWorkerScript: buildWegmansWorkerScript,
     // Wegmans WAF 403s the concurrent worker searches — even 2 staggered workers
     // still blocked — so run searches SERIALLY (like ALDI). Also drop the `?_t=`
     // cache-buster on main-webview navs. workerCount/stagger are kept for if/when
     // the parallel path is retried. NOTE: no `spaSearch` — Wegmans relies on the
     // SSO/MSAL inflight re-injection.
-    forceSerialSearch: true,
-    cacheBustNav: false,
-    workerCount: 2,
-    workerStaggerMs: 400,
+    forceSerialSearch: cfg.forceSerialSearch ?? true,
+    cacheBustNav: cfg.cacheBustNav ?? false,
+    workerCount: cfg.workerCount ?? 2,
+    workerStaggerMs: cfg.workerStaggerMs ?? 400,
   };
 }

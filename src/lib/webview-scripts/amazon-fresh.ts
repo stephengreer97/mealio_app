@@ -19,7 +19,39 @@ const AMAZON_DOMAIN = 'amazon.com';
 
 // ── Login check ─────────────────────────────────────────────────────────────
 
-const CHECK_LOGIN_SCRIPT = `(async function() {
+import { selectorsFor, storeConfig, searchUrlFor } from '../automation-config';
+
+const SELECTOR_KEY = 'amazon';
+
+// Compiled-in selector fallbacks; the remote automation config overrides them so
+// an Amazon Fresh redesign is a config push rather than an App Store release.
+// Amazon serves TWO distinct search-result layouts (the Fresh "qs-widget" cards
+// and the generic search-result cards), so most selectors come in A/B pairs and
+// both must be configurable. Read only inside a build function.
+const SEL_FALLBACKS = {
+  cardA: '[data-csa-c-item-type="asin"]',
+  nameA: '.a-truncate-full.a-offscreen',
+  atcWrapperA: '.qs-atc-plus',
+  addBtnA: 'button[aria-label^="Add to Cart,"]',
+  stepperA: '[id^="qs-widget-stepper-"]',
+  qtyDisplayA: '.qs-widget-dropdown-flex-wrapper button[aria-label^="Current quantity"]',
+  incBtnA: '.qs-widget-increment-button-flex-wrapper input[aria-label^="Add "]',
+  cardB: '[data-component-type="s-search-result"]',
+  nameB: 'h2',
+  atcContainerB: 'span[data-action="fresh-add-to-cart"]',
+  stepperB: 'fieldset[data-a-component="stepper"]',
+  qtyDisplayB: 'span[data-a-selector="value"]',
+  incBtnB: 'button[data-action="a-stepper-increment"]',
+  atcBtnBMobile: 'button[aria-label="Add to cart"]',
+  incBtnBMobile: 'span[data-action="qs-widget-increment-decl"]',
+};
+
+/** Live selectors as interpolatable JS literals (quotes included). */
+const sel = () => selectorsFor(SELECTOR_KEY, SEL_FALLBACKS);
+
+function buildCheckLoginScript(): string {
+  const s = sel();
+  return `(async function() {
   if (window.__amazonLoginCheckActive) return;
   window.__amazonLoginCheckActive = true;
   try {
@@ -42,6 +74,7 @@ const CHECK_LOGIN_SCRIPT = `(async function() {
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false, error: String(e) }));
   }
 })();true;`;
+}
 
 // ── Product extraction ──────────────────────────────────────────────────────
 
@@ -51,7 +84,9 @@ const CHECK_LOGIN_SCRIPT = `(async function() {
 // tell this apart from a genuine per-item miss or an anti-bot block. The distinct
 // phrase (not just 0 products) also guards against a broken selector reading as
 // "no store".
-const FRESH_EMPTY_STATE_FN = `
+function buildFreshEmptyStateFn(): string {
+  const s = sel();
+  return `
   function __freshSlotText() {
     try {
       var slot = document.querySelector('.s-main-slot, .s-search-results, #search') || document.body;
@@ -71,9 +106,12 @@ const FRESH_EMPTY_STATE_FN = `
     } catch (e) { return false; }
   }
 `;
+}
 
-const EXTRACT_PRODUCTS_SCRIPT = `(async function() {
-${FRESH_EMPTY_STATE_FN}
+function buildExtractProductsScript(): string {
+  const s = sel();
+  return `(async function() {
+${buildFreshEmptyStateFn()}
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
   function __noKbd(e) {
@@ -85,11 +123,11 @@ ${FRESH_EMPTY_STATE_FN}
 
   // --- Selectors ---
   // Type A: Storefront carousel
-  var CARD_A = '[data-csa-c-item-type="asin"]';
-  var NAME_A = '.a-truncate-full.a-offscreen';
+  var CARD_A = ${s.cardA};
+  var NAME_A = ${s.nameA};
   // Type B: Search results
-  var CARD_B = '[data-component-type="s-search-result"]';
-  var NAME_B = 'h2';
+  var CARD_B = ${s.cardB};
+  var NAME_B = ${s.nameB};
 
   // --- Helpers ---
   function isGarbageName(text) {
@@ -304,6 +342,7 @@ ${FRESH_EMPTY_STATE_FN}
   document.removeEventListener('focusin', __noKbd, true);
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: candidates }));
 })();true;`;
+}
 
 // ── Add to cart ──────────────────────────────────────────────────────────────
 
@@ -314,6 +353,7 @@ function buildAddToCartScript(
 ): string {
   var escapedName = JSON.stringify(productName);
 
+  const s = sel();
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 ${buildCartConfirmFn(['#nav-cart-count'], '(\\d+)')}
@@ -329,22 +369,22 @@ ${buildCartConfirmFn(['#nav-cart-count'], '(\\d+)')}
   var QTY = ${qty};
 
   // --- Selectors ---
-  var CARD_A = '[data-csa-c-item-type="asin"]';
-  var NAME_A = '.a-truncate-full.a-offscreen';
-  var ATC_WRAPPER_A = '.qs-atc-plus';
-  var ADD_BTN_A = 'button[aria-label^="Add to Cart,"]';
-  var STEPPER_A = '[id^="qs-widget-stepper-"]';
-  var QTY_DISPLAY_A = '.qs-widget-dropdown-flex-wrapper button[aria-label^="Current quantity"]';
-  var INC_BTN_A = '.qs-widget-increment-button-flex-wrapper input[aria-label^="Add "]';
+  var CARD_A = ${s.cardA};
+  var NAME_A = ${s.nameA};
+  var ATC_WRAPPER_A = ${s.atcWrapperA};
+  var ADD_BTN_A = ${s.addBtnA};
+  var STEPPER_A = ${s.stepperA};
+  var QTY_DISPLAY_A = ${s.qtyDisplayA};
+  var INC_BTN_A = ${s.incBtnA};
 
-  var CARD_B = '[data-component-type="s-search-result"]';
-  var ATC_CONTAINER_B = 'span[data-action="fresh-add-to-cart"]';
-  var STEPPER_B = 'fieldset[data-a-component="stepper"]';
-  var QTY_DISPLAY_B = 'span[data-a-selector="value"]';
-  var INC_BTN_B = 'button[data-action="a-stepper-increment"]';
+  var CARD_B = ${s.cardB};
+  var ATC_CONTAINER_B = ${s.atcContainerB};
+  var STEPPER_B = ${s.stepperB};
+  var QTY_DISPLAY_B = ${s.qtyDisplayB};
+  var INC_BTN_B = ${s.incBtnB};
   // Mobile selectors (different DOM structure from desktop)
-  var ATC_BTN_B_MOBILE = 'button[aria-label="Add to cart"]';
-  var INC_BTN_B_MOBILE = 'span[data-action="qs-widget-increment-decl"]';
+  var ATC_BTN_B_MOBILE = ${s.atcBtnBMobile};
+  var INC_BTN_B_MOBILE = ${s.incBtnBMobile};
 
   function isGarbageName(text) {
     if (/^\\$[\\d]/.test(text)) return true;
@@ -864,6 +904,7 @@ ${buildCartConfirmFn(['#nav-cart-count'], '(\\d+)')}
 function buildSearchScript(term: string): string {
   var cleanTerm = term.replace(/^Sponsored Ad - /i, '');
   var escapedTerm = JSON.stringify(cleanTerm);
+  const s = sel();
   return `(async function() {
   var term = ${escapedTerm};
   var url = 'https://www.amazon.com/s?k=' + encodeURIComponent(term) + '&i=amazonfresh';
@@ -880,6 +921,7 @@ function buildSearchAndAddScript(
 ): string {
   var cleanSearchTerm = searchTerm.replace(/^Sponsored Ad - /i, '');
   var escapedTerm = JSON.stringify(cleanSearchTerm);
+  const s = sel();
   return `(async function() {
   // Run guard: Amazon SERPs fire onLoadEnd multiple times for the same URL, and
   // the sheet re-injects the inflight script on a same-URL fire (SSO-bootstrap
@@ -892,7 +934,7 @@ function buildSearchAndAddScript(
 
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 ${buildCartConfirmFn(['#nav-cart-count'], '(\\d+)')}
-${FRESH_EMPTY_STATE_FN}
+${buildFreshEmptyStateFn()}
   function __noKbd(e) {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
       e.target.setAttribute('inputmode', 'none');
@@ -904,22 +946,22 @@ ${FRESH_EMPTY_STATE_FN}
   var QTY = ${qty};
 
   // --- Selectors ---
-  var CARD_A = '[data-csa-c-item-type="asin"]';
-  var NAME_A = '.a-truncate-full.a-offscreen';
-  var ATC_WRAPPER_A = '.qs-atc-plus';
-  var ADD_BTN_A = 'button[aria-label^="Add to Cart,"]';
-  var STEPPER_A = '[id^="qs-widget-stepper-"]';
-  var QTY_DISPLAY_A = '.qs-widget-dropdown-flex-wrapper button[aria-label^="Current quantity"]';
-  var INC_BTN_A = '.qs-widget-increment-button-flex-wrapper input[aria-label^="Add "]';
+  var CARD_A = ${s.cardA};
+  var NAME_A = ${s.nameA};
+  var ATC_WRAPPER_A = ${s.atcWrapperA};
+  var ADD_BTN_A = ${s.addBtnA};
+  var STEPPER_A = ${s.stepperA};
+  var QTY_DISPLAY_A = ${s.qtyDisplayA};
+  var INC_BTN_A = ${s.incBtnA};
 
-  var CARD_B = '[data-component-type="s-search-result"]';
-  var ATC_CONTAINER_B = 'span[data-action="fresh-add-to-cart"]';
-  var STEPPER_B = 'fieldset[data-a-component="stepper"]';
-  var QTY_DISPLAY_B = 'span[data-a-selector="value"]';
-  var INC_BTN_B = 'button[data-action="a-stepper-increment"]';
+  var CARD_B = ${s.cardB};
+  var ATC_CONTAINER_B = ${s.atcContainerB};
+  var STEPPER_B = ${s.stepperB};
+  var QTY_DISPLAY_B = ${s.qtyDisplayB};
+  var INC_BTN_B = ${s.incBtnB};
   // Mobile selectors (different DOM structure from desktop)
-  var ATC_BTN_B_MOBILE = 'button[aria-label="Add to cart"]';
-  var INC_BTN_B_MOBILE = 'span[data-action="qs-widget-increment-decl"]';
+  var ATC_BTN_B_MOBILE = ${s.atcBtnBMobile};
+  var INC_BTN_B_MOBILE = ${s.incBtnBMobile};
 
   // --- CRITICAL_WORDS scoring (matches HEB pattern) ---
   var CRITICAL = new Set(['organic','grass','fed','free','range','cage','large','small','jumbo',
@@ -1522,10 +1564,11 @@ ${FRESH_EMPTY_STATE_FN}
 // ── Export ────────────────────────────────────────────────────────────────────
 
 export function getScripts() {
+  const cfg = storeConfig(SELECTOR_KEY);
   return {
-    storeUrl: AMAZON_URL,
-    loginUrl: AMAZON_LOGIN_URL,
-    cartUrl: AMAZON_CART_URL,
+    storeUrl: cfg.storeUrl ?? AMAZON_URL,
+    loginUrl: cfg.loginUrl ?? AMAZON_LOGIN_URL,
+    cartUrl: cfg.cartUrl ?? AMAZON_CART_URL,
     // The Amazon Shopping app's URL-carrying scheme opens the cart inside the app.
     // handleOpenCart tries this first, then falls back to the https cartUrl in the
     // browser if the app isn't installed. (Bare amazon:// / amzn:// don't work.)
@@ -1534,12 +1577,19 @@ export function getScripts() {
     isSearchUrl: (url: string) => url.includes('/s?') && url.includes('amazon.com'),
     isLoginSuccessUrl: (url: string) =>
       url.includes('amazon.com') && !url.includes('/ap/') && !url.includes('/ax/') && !url.includes('openid.'),
-    checkLoginScript: CHECK_LOGIN_SCRIPT,
-    extractProductsScript: EXTRACT_PRODUCTS_SCRIPT,
+    checkLoginScript: buildCheckLoginScript(),
+    extractProductsScript: buildExtractProductsScript(),
     buildAddToCartScript,
     buildSearchScript,
     buildSearchAndAddScript,
-    getSearchUrl: (term: string) => 'https://www.amazon.com/s?k=' + encodeURIComponent(term) + '&i=amazonfresh',
-    buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, EXTRACT_PRODUCTS_SCRIPT),
+    getSearchUrl: (term: string) =>
+      searchUrlFor(SELECTOR_KEY, term,
+        'https://www.amazon.com/s?k=' + encodeURIComponent(term) + '&i=amazonfresh'),
+    buildWorkerScript: (workerId: number) => buildExtractWorker(workerId, buildExtractProductsScript()),
+    workerCount: cfg.workerCount,
+    workerStaggerMs: cfg.workerStaggerMs,
+    forceSerialSearch: cfg.forceSerialSearch,
+    cacheBustNav: cfg.cacheBustNav,
+    spaSearch: cfg.spaSearch,
   };
 }

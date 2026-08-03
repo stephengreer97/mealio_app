@@ -34,6 +34,9 @@ import { usePresearchAddPool, PresearchItem } from '../lib/usePresearchAddPool';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
 import { buildSearchAndAddWorker, buildPresearchWorker } from '../lib/webview-scripts/worker-search';
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS, FEATURE_PRESEARCH_ADD, ADD_COMMIT_JITTER_MS } from '../constants/features';
+import Constants from 'expo-constants';
+import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
+import { AutomationTelemetry, createNoopTelemetry } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, findShortAddedItems, findOverAddedItems, cartNameMatches, decodeHtmlEntities, normalizeName, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
@@ -208,26 +211,78 @@ export default function WebViewCartSheet({
   const stepRef = useRef<Step>('qty');
   const setStep = useCallback((s: Step) => { stepRef.current = s; _setStep(s); }, []);
 
+  // ── Remote automation config ───────────────────────────────────────────────
+  // Timeouts, worker counts, and flags come from the remote config (bundled
+  // defaults until a push lands), so we can retune the engine against a store
+  // that has gotten slower — or throttle it against a WAF — without a release.
+  // Snapshotted once per open rather than read per use: a config refresh landing
+  // mid-run must not change a timeout the run already started measuring against.
+  const cfgTimeouts = useMemo(() => getAutomationConfig().timeouts, [visible]);
+  const cfgFlags = useMemo(() => getAutomationConfig().flags, [visible]);
+  const cfgTelemetry = useMemo(() => getAutomationConfig().telemetry, [visible]);
+
   // Usage analytics for the WebView automation run (best-effort). Covers both the
   // background (startJob) and direct (setWebViewCartVisible) entry paths since it
   // lives in the sheet. One run per visible open: started -> completed on 'done'.
   const automationRunIdRef = useRef<string | null>(null);
   const automationStartedRef = useRef(false);
   const automationCompletedRef = useRef(false);
+
+  // Per-step funnel telemetry (see lib/automation-telemetry.ts). A ref, not state,
+  // because the message handler records steps synchronously and must never wait a
+  // render to get a live recorder. Starts as a no-op so every call site can fire
+  // unconditionally — no null checks scattered through the engine.
+  const telemetryRef = useRef<AutomationTelemetry>(createNoopTelemetry());
+  /** Stable accessor for the recorder. Cheap enough to call on every step. */
+  const tel = useCallback(() => telemetryRef.current, []);
+
   useEffect(() => {
     if (visible) {
       if (!automationStartedRef.current) {
         automationStartedRef.current = true;
         usage
-          .logAutomationStart({ storeId, source: 'app', mealCount: meals.length })
-          .then((id) => { automationRunIdRef.current = id; });
+          .logAutomationStart({
+            storeId,
+            source: 'app',
+            mealCount: meals.length,
+            // Attribute the run to the config + build that produced it, so a
+            // confirm-rate regression is traceable to a specific config push.
+            configVersion: getConfigVersion(),
+            appVersion: Constants.expoConfig?.version ?? undefined,
+            platform: Platform.OS === 'ios' ? 'ios' : 'android',
+          })
+          .then((id) => {
+            automationRunIdRef.current = id;
+            // The recorder can only exist once the server has issued a runId —
+            // steps are keyed to it. Steps emitted before this lands are dropped
+            // by the no-op recorder, which is why login_check (the earliest step)
+            // is recorded on its RESULT rather than at its start.
+            if (id) {
+              telemetryRef.current = new AutomationTelemetry({
+                runId: id,
+                upload: usage.logAutomationSteps,
+                enabled: cfgTelemetry.enabled,
+                sampleRate: cfgTelemetry.sampleRate,
+                batchSize: cfgTelemetry.batchSize,
+                flushIntervalMs: cfgTelemetry.flushIntervalMs,
+                configVersion: getConfigVersion(),
+                appVersion: Constants.expoConfig?.version ?? undefined,
+                platform: Platform.OS === 'ios' ? 'ios' : 'android',
+              });
+            }
+          });
       }
     } else {
       automationStartedRef.current = false;
       automationCompletedRef.current = false;
       automationRunIdRef.current = null;
+      // Flush on close. The sheet closing is the normal end of a run, and the
+      // terminal steps are the most valuable rows in the funnel.
+      const prev = telemetryRef.current;
+      telemetryRef.current = createNoopTelemetry();
+      void prev.dispose();
     }
-  }, [visible, storeId, meals.length]);
+  }, [visible, storeId, meals.length, cfgTelemetry]);
 
   // Step: qty
   const [items, setItems] = useState<ConsolidatedIngredient[]>([]);
@@ -310,17 +365,17 @@ export default function WebViewCartSheet({
   // that never loads/counts can't wedge the run.
   const cartProbeBeginSearchRef = useRef<boolean>(false);
   const cartProbeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const CART_PROBE_TIMEOUT_MS = 10_000;
+  const CART_PROBE_TIMEOUT_MS = cfgTimeouts.cartProbeMs;
   // Safety net for the after/reconcile probe: if CART_COUNT never posts (a cart
   // page that loops or never hydrates), retry once then finalize so reconcile
   // can't wait forever.
   const cartProbeResultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cartProbeRetriedRef = useRef(false);
-  const CART_PROBE_RESULT_TIMEOUT_MS = 14_000;
+  const CART_PROBE_RESULT_TIMEOUT_MS = cfgTimeouts.cartProbeResultMs;
   // The done-screen breakdown spinner falls back to the plain list after this,
   // so a cart page that never loads/counts (e.g. Amazon's multi-hop cart) can't
   // hang on "Updating your … cart" forever.
-  const CART_ROWS_TIMEOUT_MS = 8_000;
+  const CART_ROWS_TIMEOUT_MS = cfgTimeouts.cartRowsMs;
   // Per-line cart contents captured by the before-probe, diffed against the
   // after-probe to render the done screen (added in green vs already-in-cart in
   // grey). Only populated for cart-page stores (HEB).
@@ -365,25 +420,25 @@ export default function WebViewCartSheet({
   // selectors broke, page never loaded, the search returned nothing addable)
   // leaves the user staring at the spinner forever.
   const addTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const ADD_TIMEOUT_MS = 10_000;
+  const ADD_TIMEOUT_MS = cfgTimeouts.addMs;
   // Same safety net for navigateToSearchItem — the search+add (combined) and
   // choose-product flows both go through it, and if buildSearchScript hangs
   // (bad selectors, SPA submit fails AND fallback nav fails, …) we'd otherwise
   // never advance. Cleared when SEARCH_RESULT or SEARCH_AND_ADD_RESULT arrives.
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const SEARCH_TIMEOUT_MS = 15_000;
+  const SEARCH_TIMEOUT_MS = cfgTimeouts.searchMs;
   // Safety net for the Review/Choose custom search. If the user-typed search
   // never posts a SEARCH_RESULT (page reload-loops, WAF re-challenge, SPA submit
   // swallowed), customSearching would stay true forever and every review button
   // is disabled — wedging the user with no way out but closing the sheet.
   const customSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const CUSTOM_SEARCH_TIMEOUT_MS = 15_000;
+  const CUSTOM_SEARCH_TIMEOUT_MS = cfgTimeouts.customSearchMs;
   // Same safety net for the login check. If CHECK_LOGIN never posts a
   // LOGIN_STATUS (page hung, WAF interstitial swallowed the script, store
   // changed its DOM), fall back to showing the login WebView — the same
   // behavior as an explicit "not logged in" — instead of spinning forever.
   const loginCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const LOGIN_CHECK_TIMEOUT_MS = 20_000;
+  const LOGIN_CHECK_TIMEOUT_MS = cfgTimeouts.loginCheckMs;
   // Tracks which search idx to resume from after a robot/captcha challenge
   // (Walmart redirects to /blocked when it suspects automation; user has to
   // press-and-hold to verify). -1 when no challenge in progress.
@@ -394,7 +449,7 @@ export default function WebViewCartSheet({
   // eating clicks, or the store is soft-blocking — so we surface the generic
   // blocker instead of silently failing every item. Reset by any real progress.
   const consecutiveTimeoutsRef = useRef(0);
-  const CONSECUTIVE_TIMEOUT_BLOCK = 2;
+  const CONSECUTIVE_TIMEOUT_BLOCK = cfgTimeouts.consecutiveTimeoutBlock;
   // Tracks which step we were in before a login redirect, so we can resume after login.
   const stepBeforeLoginRef = useRef<Step>('searching');
   const loginCheckActiveRef = useRef(false);
@@ -461,11 +516,11 @@ export default function WebViewCartSheet({
   // so the request pattern isn't a fixed metronome.
   const PARALLEL_WORKER_COUNT = scripts?.workerCount ?? 3;
   const PARALLEL_WORKER_STAGGER_MS = scripts?.workerStaggerMs ?? 400;
-  const PARALLEL_WORKER_TIMEOUT_MS = 20_000;
+  const PARALLEL_WORKER_TIMEOUT_MS = cfgTimeouts.parallelWorkerMs;
   // Parallel-ADD worker count: honor the per-store workerCount (a heavy store
   // like Albertsons crashed the iOS WKWebView content process with 5 concurrent
   // add WebViews), falling back to the global pilot default.
-  const PARALLEL_ADD_WORKER_COUNT = scripts?.workerCount ?? PARALLEL_ADD_WORKERS;
+  const PARALLEL_ADD_WORKER_COUNT = scripts?.workerCount ?? cfgFlags.parallelAddWorkers ?? PARALLEL_ADD_WORKERS;
   // A store opts into the worker-pool choose-product path by exposing BOTH
   // getSearchUrl and buildWorkerScript on its StoreScripts. Null otherwise →
   // sequential single-WebView flow. (WAF note: HEB/Walmart/Albertsons run 5
@@ -1092,7 +1147,14 @@ export default function WebViewCartSheet({
       totalAdded === 0 ? 'failed' : cartDeltaWarning ? 'partial' : 'success';
     const runId = automationRunIdRef.current;
     if (runId) usage.logAutomationComplete({ runId, itemsAdded: totalAdded, outcome });
-  }, [step, totalAdded, cartDeltaWarning]);
+    // Funnel: one terminal row per run, then flush. dispose() sends whatever is
+    // still buffered — without it a short run's steps would sit in the buffer
+    // until the flush interval and be lost if the app is backgrounded.
+    tel().record('run_summary', outcome === 'failed' ? 'error' : 'ok', {
+      detail: { outcome, itemsAdded: totalAdded, cartDeltaWarning: !!cartDeltaWarning },
+    });
+    void tel().flush();
+  }, [step, totalAdded, cartDeltaWarning, tel]);
 
   // Clear all safety timers on unmount. Without this, closing the sheet mid
   // login-check / search / add leaves a real setTimeout running that later
@@ -1306,6 +1368,10 @@ export default function WebViewCartSheet({
       // all detected separately (BLOCKED_OVERLAY), so we no longer trip
       // surfaceBlocker on consecutive search timeouts.
       consecutiveTimeoutsRef.current += 1;
+      // Funnel: 'timeout' is deliberately distinct from the 'empty' recorded on a
+      // SEARCH_RESULT with zero candidates. Empty means the store answered and
+      // had nothing; timeout means we never got an answer — different fixes.
+      tel().record('search', 'timeout', { durationMs: SEARCH_TIMEOUT_MS, itemIndex: searchIdxRef.current });
       console.log(`[Cart ${ts()}]`, 'SEARCH timeout for', term, '— treating as failed and advancing');
       if (item.searchTerm) {
         // Auto-add flow: also push a SearchResult with empty candidates so
@@ -1369,6 +1435,14 @@ export default function WebViewCartSheet({
     const item = itemsToAdd[idx];
     console.log(`[Cart ${ts()}]`, 'navigateToAddItem idx=', idx, 'searchTerm=', item.searchTerm, 'product=', item.productName, 'qty=', item.qty, 'pref=', item.preference?.text ?? null, 'onSearchPage=', onSearchPageRef.current);
     setSearchingLabel(`Adding ${item.productName}…`);
+    // Funnel: this row is the DENOMINATOR of confirmRate. It must be emitted at
+    // the moment the add is dispatched, not when it succeeds — otherwise a click
+    // that never produced any signal would vanish from the funnel entirely, and
+    // the confirm rate would flatter us by only counting adds we heard back about.
+    tel().record('add_click', 'ok', {
+      itemIndex: idx,
+      detail: { path: 'sequential', qty: item.qty, onSearchPage: onSearchPageRef.current },
+    });
     if (onSearchPageRef.current) {
       loadQueueRef.current = [scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null)];
       lastLoadEndUrlRef.current = '';
@@ -1384,6 +1458,11 @@ export default function WebViewCartSheet({
       // A bare add timeout → treat as a failed item and advance. Not a block
       // signal (blocks are surfaced via HTTP error / /blocked / BLOCKED_OVERLAY).
       consecutiveTimeoutsRef.current += 1;
+      // Funnel: a click that produced no confirmation signal at all. This is the
+      // failure the confirm-rate denominator is designed to expose.
+      tel().record('confirm', 'timeout', {
+        durationMs: ADD_TIMEOUT_MS, itemIndex: idx, detail: { attempt: 1, path: 'sequential' },
+      });
       console.log(`[Cart ${ts()}]`, 'ADD timeout for', item.productName, '— treating as failed and advancing');
       addResultsRef.current.push({ name: item.productName, success: false, reason: 'timeout' });
       loadQueueRef.current = [];
@@ -1758,6 +1837,9 @@ export default function WebViewCartSheet({
     robotChallengeResumeIdxRef.current = -1;
     consecutiveTimeoutsRef.current = 0;
     blockReasonRef.current = reason;
+    // Funnel: blockedRate per store. This is the signal that tells us a WAF
+    // posture changed before users start reporting it.
+    tel().record('blocked', 'blocked', { detail: { reason: String(reason) } });
     setBlockReason(reason);
     setStep('robot_challenge');
   }, [parallelPool, addPool, setStep]);
@@ -1864,6 +1946,10 @@ export default function WebViewCartSheet({
         }
 
         if (msg.type === 'LOGIN_STATUS') {
+          // Funnel: the login gate is the first place a run can silently stall.
+          // Recorded on the RESULT (not at injection) because the recorder only
+          // exists once the server has issued a runId.
+          tel().record('login_check', 'ok', { detail: { isLoggedIn: !!msg.isLoggedIn } });
           loginCheckActiveRef.current = false;
           if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
           if (msg.isLoggedIn) {
@@ -2038,6 +2124,16 @@ export default function WebViewCartSheet({
               }
             });
             console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm), 'review=', reviewFailures.length, reviewFailures.map((r) => `${r.term}:${r.reason}`));
+            // Funnel: the reconcile delta is the ground truth the workers' own
+            // reports are checked against. A retry count that climbs over time is
+            // the earliest signal that a store's confirm signal has drifted.
+            tel().record('reconcile', retryItems.length === 0 && reviewFailures.length === 0 ? 'ok' : 'error', {
+              detail: {
+                confirmed: confirmed.length,
+                retry: retryItems.length,
+                review: reviewFailures.length,
+              },
+            });
             // Surface definitive failures (out of stock / no results) in the
             // review queue. When there are also qty top-ups, the sequential retry
             // below finishes into the review step because searchResults is now
@@ -2233,6 +2329,15 @@ export default function WebViewCartSheet({
           const active = activeItemsRef.current;
           const item = active[idx];
           console.log(`[Cart ${ts()}]`, 'SEARCH_AND_ADD_RESULT idx=', idx, 'success=', msg.success, 'productName=', msg.productName);
+          // Funnel: the fused search+add path dispatches inside the injected
+          // script, so there is no separate click moment to hook on the RN side.
+          // Emit both halves here to keep the confirm-rate denominator complete —
+          // a fused add that failed still counts as an attempt.
+          tel().record('add_click', 'ok', { itemIndex: idx, detail: { path: 'fused' } });
+          tel().record('confirm', msg.success ? 'ok' : 'error', {
+            itemIndex: idx,
+            detail: { attempt: 1, path: 'fused', reason: msg.success ? undefined : String(msg.reason ?? 'unknown') },
+          });
           const nextIdx = idx + 1;
           searchIdxRef.current = nextIdx;
           if (item) {
@@ -2288,6 +2393,17 @@ export default function WebViewCartSheet({
           if (searchTimeoutRef.current) {
             clearTimeout(searchTimeoutRef.current);
             searchTimeoutRef.current = null;
+          }
+          // Funnel: a search that returns zero candidates is 'empty', not 'ok' —
+          // that distinction is what separates "the store has no match" from
+          // "our extractor's selectors broke", which look identical downstream.
+          {
+            const found = Array.isArray(msg.candidates) ? msg.candidates.length : 0;
+            tel().record('search', 'ok', { itemIndex: searchIdxRef.current });
+            tel().record('candidates', found > 0 ? 'ok' : 'empty', {
+              itemIndex: searchIdxRef.current,
+              detail: { count: found, storeUnavailable: !!msg.storeUnavailable },
+            });
           }
           // Store responded → progress. Clear the no-progress block counter.
           consecutiveTimeoutsRef.current = 0;
@@ -2390,6 +2506,13 @@ export default function WebViewCartSheet({
             clearTimeout(addTimeoutRef.current);
             addTimeoutRef.current = null;
           }
+          // Funnel: the headline reliability number. `confirm` is what the store
+          // actually evidenced, so a click that reported no success lands as
+          // 'error' with its reason — that's the row the dashboard divides by.
+          tel().record('confirm', msg.success ? 'ok' : 'error', {
+            itemIndex: addingIdxRef.current,
+            detail: { attempt: 1, reason: msg.success ? undefined : String(msg.reason ?? 'unknown'), path: 'sequential' },
+          });
           // Store responded → progress. Clear the no-progress block counter.
           consecutiveTimeoutsRef.current = 0;
           const idx = addingIdxRef.current;
