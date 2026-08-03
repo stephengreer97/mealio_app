@@ -20,9 +20,13 @@ const UNITS = ['qty', 'cups', 'fl oz', 'g', 'kg', 'L', 'lb', 'mg', 'ml', 'oz', '
   // only branch that inspects a unit is `unit === 'qty'`, which picks between
   // two display formats.
   //
-  // Kept in step with the same list in mealio_central. Without it, a meal
-  // imported on the web reads "3 cloves garlic" there and "garlic, 3" here,
-  // and opening the editor would quietly reset a unit the picker cannot show.
+  // Carrying the word costs nothing and stops "3 cloves garlic" reading as
+  // "garlic, 3", which told the cart to buy three heads of garlic. The server
+  // canonicalises to exactly this set, so a row arriving with one of them used
+  // to show its unit correctly and then have no option to select — opening the
+  // picker was a one-way trip out of it.
+  //
+  // Kept in step with the same list in mealio_central.
   'cloves', 'cans', 'bunches', 'sprigs', 'pinches', 'handfuls', 'grinds', 'slices'];
 
 interface IngredientForm {
