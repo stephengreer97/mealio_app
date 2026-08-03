@@ -5,16 +5,25 @@ import { Colors } from '../../constants/colors';
 interface TagProps {
   label: string;
   selected?: boolean;
+  /**
+   * Offered but not choosable right now — a tag beyond the cap on a picker that
+   * is already full. Faded rather than hidden: which tags exist should not
+   * change as you pick, or the list reflows under your thumb.
+   */
+  disabled?: boolean;
   onPress?: () => void;
   style?: ViewStyle;
 }
 
-export default function Tag({ label, selected, onPress, style }: TagProps) {
+export default function Tag({ label, selected, disabled, onPress, style }: TagProps) {
   return (
     <TouchableOpacity
-      style={[styles.tag, selected && styles.selected, style]}
+      style={[styles.tag, selected && styles.selected, disabled && styles.disabled, style]}
       onPress={onPress}
-      activeOpacity={onPress ? 0.7 : 1}
+      disabled={disabled}
+      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityState={{ selected, disabled }}
+      activeOpacity={onPress && !disabled ? 0.7 : 1}
     >
       <Text style={[styles.text, selected && styles.selectedText]}>{label}</Text>
     </TouchableOpacity>
@@ -35,6 +44,9 @@ const styles = StyleSheet.create({
   selected: {
     backgroundColor: Colors.brandLight,
     borderColor: Colors.brand,
+  },
+  disabled: {
+    opacity: 0.4,
   },
   text: {
     fontSize: 13,

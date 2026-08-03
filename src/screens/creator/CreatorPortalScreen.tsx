@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   FlatList,
   TouchableOpacity,
   Modal,
@@ -26,8 +25,8 @@ import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import IngredientEditor from '../../components/IngredientEditor';
-import Tag from '../../components/ui/Tag';
-import { ALL_TAGS } from '../../constants/tags';
+import TagPicker from '../../components/TagPicker';
+import { MAX_MEAL_TAGS } from '../../constants/tags';
 
 export default function CreatorPortalScreen() {
   const [creator, setCreator] = useState<Creator | null>(null);
@@ -202,10 +201,6 @@ export default function CreatorPortalScreen() {
       },
     ]);
   }
-
-  const filteredTags = tagSearch.trim()
-    ? ALL_TAGS.filter((t) => t.toLowerCase().includes(tagSearch.toLowerCase()))
-    : ALL_TAGS;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -465,34 +460,15 @@ export default function CreatorPortalScreen() {
               />
 
               {/* Tags */}
-              <Text style={styles.fieldLabel}>Tags</Text>
-              <TextInput
-                style={styles.tagSearchInput}
-                placeholder="Search tags…"
-                placeholderTextColor={Colors.text3}
-                value={tagSearch}
-                onChangeText={setTagSearch}
+              <Text style={styles.fieldLabel}>
+                Tags <Text style={styles.optional}>(up to {MAX_MEAL_TAGS})</Text>
+              </Text>
+              <TagPicker
+                selected={mealTags}
+                onChange={setMealTags}
+                search={tagSearch}
+                onSearchChange={setTagSearch}
               />
-              <ScrollView
-                style={styles.tagScroll}
-                nestedScrollEnabled
-                showsVerticalScrollIndicator={false}
-              >
-                <View style={styles.tagsRow}>
-                  {filteredTags.map((tag) => (
-                    <Tag
-                      key={tag}
-                      label={tag}
-                      selected={mealTags.includes(tag)}
-                      onPress={() =>
-                        setMealTags((prev) =>
-                          prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-                        )
-                      }
-                    />
-                  ))}
-                </View>
-              </ScrollView>
 
             <View style={styles.modalFooter}>
               <Button
@@ -670,31 +646,6 @@ const styles = StyleSheet.create({
   dotEmpty: { backgroundColor: Colors.border },
   diffLabel: { fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3 },
   diffLabelActive: { color: Colors.brand },
-  // Tags
-  tagSearchInput: {
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.input,
-    backgroundColor: Colors.surfaceRaised,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: Colors.text1,
-    marginBottom: 8,
-    letterSpacing: 0,
-  },
-  tagScroll: {
-    maxHeight: 180,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.input,
-    backgroundColor: Colors.surfaceRaised,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    marginBottom: 8,
-  },
-  tagsRow: { flexDirection: 'row', flexWrap: 'wrap' },
   modalFooter: {
     flexDirection: 'row',
     padding: 16,
