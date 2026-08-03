@@ -56,7 +56,7 @@ describe('a cook’s unit is selectable, not only displayable', () => {
     // unit too, which is why presence is counted rather than matched uniquely.
     fireEvent.press(getAllByText('cloves')[0]);
 
-    const measured = ['Qty', 'cups', 'fl oz', 'g', 'kg', 'L', 'lb', 'mg', 'ml', 'oz', 'tbsp', 'tsp'];
+    const measured = ['qty', 'cups', 'fl oz', 'g', 'kg', 'L', 'lb', 'mg', 'ml', 'oz', 'tbsp', 'tsp'];
     for (const unit of [...measured, ...COOK_UNITS]) {
       expect(queryAllByText(unit).length).toBeGreaterThan(0);
     }
@@ -89,7 +89,7 @@ describe('a cook’s unit is selectable, not only displayable', () => {
       { ingredientName: 'garlic', qty: 1, unit: 'qty', measure: null, searchTerm: null, productQty: 1 },
     ]);
 
-    fireEvent.press(getAllByText('Qty')[0]);
+    fireEvent.press(getAllByText('qty')[0]);
     fireEvent.press(getByText('cloves'));
 
     expect(onChange).toHaveBeenLastCalledWith([

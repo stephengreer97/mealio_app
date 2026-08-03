@@ -13,14 +13,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Radius } from '../constants/colors';
 import { Ingredient } from '../types';
 
-const UNITS = ['Qty', 'cups', 'fl oz', 'g', 'kg', 'L', 'lb', 'mg', 'ml', 'oz', 'tbsp', 'tsp',
-  // Units a cook writes that convert to nothing. Display only — the cart
-  // searches by name and counts packages with productQty — so carrying the word
-  // costs nothing and stops '3 cloves garlic' reading as 'garlic, 3', which
-  // told the cart to buy three heads of garlic. The server canonicalises to
-  // exactly this set, so a row that arrives with one of them used to show its
-  // unit correctly and then have no option to select: opening the picker was a
-  // one-way trip out of it.
+const UNITS = ['qty', 'cups', 'fl oz', 'g', 'kg', 'L', 'lb', 'mg', 'ml', 'oz', 'tbsp', 'tsp',
+  // Units a cook writes that convert to nothing, and never needed to. Display
+  // only: the store search uses searchTerm/ingredientName, the number of
+  // packages comes from productQty, and consolidation keys on searchTerm. The
+  // only branch that inspects a unit is `unit === 'qty'`, which picks between
+  // two display formats.
+  //
+  // Carrying the word costs nothing and stops "3 cloves garlic" reading as
+  // "garlic, 3", which told the cart to buy three heads of garlic. The server
+  // canonicalises to exactly this set, so a row arriving with one of them used
+  // to show its unit correctly and then have no option to select — opening the
+  // picker was a one-way trip out of it.
+  //
+  // Kept in step with the same list in mealio_central.
   'cloves', 'cans', 'bunches', 'sprigs', 'pinches', 'handfuls', 'grinds', 'slices'];
 
 interface IngredientForm {
@@ -34,15 +40,22 @@ interface IngredientForm {
 function toFormIng(ing: Ingredient): IngredientForm {
   return {
     ingredientName: ing.ingredientName,
-    measure: ing.unit === 'qty' ? String(ing.qty ?? 1) : (ing.measure ?? ''),
-    unit: ing.unit === 'qty' ? 'Qty' : ing.unit,
+    // Blank rather than "1" for a plain count. Every line the source never
+    // quantified — "salt to taste", "many grinds of black pepper" — arrives as
+    // a countable 1, and typing that into the box states an amount we read
+    // rather than one we defaulted to. `fromFormIng` parses an empty measure
+    // straight back to 1, so nothing changes on save.
+    measure: ing.unit === 'qty' ? ((ing.qty ?? 1) > 1 ? String(ing.qty) : '') : (ing.measure ?? ''),
+    // The picker's countable option is spelled the way the row stores it, so
+    // there is no longer a translation here.
+    unit: ing.unit ?? 'qty',
     searchTerm: ing.searchTerm ?? null,
     qty: ing.qty ?? 1,
   };
 }
 
 function fromFormIng(form: IngredientForm): Ingredient {
-  if (form.unit === 'Qty') {
+  if (form.unit === 'qty') {
     // Radix 10 so leading-zero input isn't parsed as octal. A qty of 0 isn't a
     // valid cart quantity, so an empty/NaN/0 measure defaults to 1.
     const parsed = parseInt(form.measure, 10);
@@ -125,7 +138,7 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
     const newForm: IngredientForm = {
       ingredientName: '',
       measure: '1',
-      unit: 'Qty',
+      unit: 'qty',
       searchTerm: null,
       qty: 1,
     };
@@ -153,10 +166,10 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
           />
           <TextInput
             style={styles.measureInput}
-            placeholder={form.unit === 'Qty' ? '1' : 'amt'}
+            placeholder={form.unit === 'qty' ? '1' : 'amt'}
             value={form.measure}
             onChangeText={(v) => updateField(index, 'measure', v)}
-            keyboardType={form.unit === 'Qty' ? 'numeric' : 'default'}
+            keyboardType={form.unit === 'qty' ? 'numeric' : 'default'}
             placeholderTextColor={Colors.text3}
           />
           <TouchableOpacity
