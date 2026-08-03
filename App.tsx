@@ -15,6 +15,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider } from './src/context/AuthContext';
 import { LoginPrewarmProvider } from './src/context/LoginPrewarmContext';
 import { CartJobProvider } from './src/context/CartJobContext';
+import { CreatorDraftsProvider } from './src/context/CreatorDraftsContext';
 import RootNavigator from './src/navigation/RootNavigator';
 import { navigationRef } from './src/navigation/navigationRef';
 import { installConsoleCapture } from './src/lib/logBuffer';
@@ -56,6 +57,10 @@ export default function App() {
         {/* Inside AuthProvider (needs a token) but outside the cart tree, so the
             remote store config is already in memory before any cart run starts. */}
         <AutomationConfigLoader />
+        {/* Inside AuthProvider (needs a user and a token) and outside the
+            navigator, because MainTabs reads the count to badge the Creator tab
+            and the review screen writes it back after a decision. */}
+        <CreatorDraftsProvider>
         <LoginPrewarmProvider>
           <CartJobProvider>
             <NavigationContainer ref={navigationRef}>
@@ -65,6 +70,7 @@ export default function App() {
             </NavigationContainer>
           </CartJobProvider>
         </LoginPrewarmProvider>
+        </CreatorDraftsProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

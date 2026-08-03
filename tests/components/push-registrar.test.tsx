@@ -97,7 +97,7 @@ describe('notification tap routing', () => {
     render(<PushRegistrar />);
     await tick(50);
 
-    expect(nav.navigate).toHaveBeenCalledWith('MyMeals');
+    expect(nav.navigate).toHaveBeenCalledWith('MyMeals', undefined);
   });
 
   it('waits for the Creator tab to appear before routing a creator_draft tap', async () => {
@@ -115,7 +115,10 @@ describe('notification tap routing', () => {
     nav.getRootState.mockReturnValue(rootStateWithTabs([...BASE_TABS, 'Creator']));
     await tick(100);
 
-    expect(nav.navigate).toHaveBeenCalledWith('Creator');
+    // With the params that open the review queue on arrival (MEAL-89), rather
+    // than landing on the portal and leaving the creator to find the thing the
+    // notification was about.
+    expect(nav.navigate).toHaveBeenCalledWith('Creator', { openQueue: true, draftId: 'd1' });
   });
 
   it('waits for the navigator itself, not just the route', async () => {
@@ -129,7 +132,7 @@ describe('notification tap routing', () => {
     nav.isReady.mockReturnValue(true);
     await tick(100);
 
-    expect(nav.navigate).toHaveBeenCalledWith('Discover');
+    expect(nav.navigate).toHaveBeenCalledWith('Discover', undefined);
   });
 
   it('gives up rather than looping when the tab never arrives', async () => {
