@@ -18,6 +18,8 @@ import PhotoPicker from '../../components/PhotoPicker';
 import { Colors, Radius } from '../../constants/colors';
 import { Creator, CreatorStats, PresetMeal, Ingredient } from '../../types';
 import { creators as creatorsApi } from '../../lib/api';
+import { useCreatorDrafts } from '../../context/CreatorDraftsContext';
+import CreatorReviewQueueScreen from './CreatorReviewQueueScreen';
 import MealDetailSheet from '../../components/MealDetailSheet';
 import PushOptInCard from '../../components/PushOptInCard';
 import PublishedLinkSheet from '../../components/PublishedLinkSheet';
@@ -29,7 +31,18 @@ import TagPicker from '../../components/TagPicker';
 import { MAX_MEAL_TAGS } from '../../constants/tags';
 import { servesChangeError } from '../../constants/serves';
 
-export default function CreatorPortalScreen() {
+/**
+ * The route params a notification tap arrives with (MEAL-89).
+ *
+ * Typed loosely rather than through the navigator's generics because this
+ * screen is registered as a plain tab component and is rendered directly by
+ * several tests. `openQueue` opens the queue; `draftId` says which recipe the
+ * tap was about, and is handed to the queue as its opening position.
+ */
+type PortalRoute = { params?: { openQueue?: boolean; draftId?: string } };
+type PortalNav = { setParams?: (params: { openQueue?: boolean; draftId?: string }) => void };
+
+export default function CreatorPortalScreen({ route, navigation }: { route?: PortalRoute; navigation?: PortalNav }) {
   const [creator, setCreator] = useState<Creator | null>(null);
   const [stats, setStats] = useState<CreatorStats | null>(null);
   const [meals, setMeals] = useState<PresetMeal[]>([]);
@@ -58,9 +71,40 @@ export default function CreatorPortalScreen() {
   const [saving, setSaving] = useState(false);
   const [pendingPhotoIsUrl, setPendingPhotoIsUrl] = useState(false);
 
+  // Drafts waiting on this creator (MEAL-89).
+  const { waiting, refresh: refreshDrafts } = useCreatorDrafts();
+  const [queueOpen, setQueueOpen] = useState(false);
+  // Held here rather than read straight off `route.params` in the queue,
+  // because the params are cleared the moment they are consumed — see the
+  // effect below for why they have to be.
+  const [queueDraftId, setQueueDraftId] = useState<string | undefined>(undefined);
+
   useEffect(() => {
     loadData();
   }, []);
+
+  /**
+   * A notification tap opens the queue directly — they tapped the thing that
+   * said "2 recipes ready", so the intent is unambiguous.
+   *
+   * Every OTHER way into this screen leaves the portal exactly as it was, with
+   * the count on the tab and a card at the top. That asymmetry is the whole
+   * revised design: a creator who opened the app to add a meal to their cart is
+   * never taken somewhere they did not ask to go, and even from a tap the tab
+   * bar stays on screen so leaving costs one touch.
+   */
+  useEffect(() => {
+    if (!route?.params?.openQueue) return;
+    setQueueDraftId(route.params.draftId);
+    setQueueOpen(true);
+    // Consumed, so the param cannot open the queue a second time on its own —
+    // and so tapping the SAME notification again does reopen it. Without the
+    // clear, a creator who opened the queue from a notification, closed it, and
+    // tapped that notification again would land on the portal with nothing
+    // happening: React Navigation hands over fresh params, but the values are
+    // identical and this effect would not run.
+    navigation?.setParams?.({ openQueue: false, draftId: undefined });
+  }, [route?.params?.openQueue, route?.params?.draftId]);
 
   async function loadData() {
     try {
@@ -213,6 +257,26 @@ export default function CreatorPortalScreen() {
     ]);
   }
 
+  // Rendered in place of the portal rather than over it. A Modal would cover
+  // the tab bar, and a creator who came to do something else has to be able to
+  // leave with one tap at any moment — including one who arrived from a
+  // notification and changed their mind.
+  if (queueOpen) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <CreatorReviewQueueScreen
+          // The recipe the notification was about. Threaded from the push
+          // payload and then never read, so a tap that named one specific
+          // recipe landed on whatever the persisted cursor happened to point
+          // at — which on a queue of ten is nine times out of ten the wrong
+          // one, and looks right.
+          draftId={queueDraftId}
+          onClose={() => { setQueueOpen(false); setQueueDraftId(undefined); void refreshDrafts(); }}
+        />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safe}>
       <FlatList
@@ -222,6 +286,35 @@ export default function CreatorPortalScreen() {
         ListHeaderComponent={
           <>
             <Text style={styles.pageTitle}>Creator Portal</Text>
+
+            {/*
+              Drafts waiting on this creator (MEAL-89). A card, not an
+              interruption: it is offered at the top of the portal and it is not
+              here at all when the queue is empty, so the portal never grows a
+              box to say there is nothing to do.
+            */}
+            {waiting > 0 && (
+              <TouchableOpacity
+                style={styles.draftsCard}
+                onPress={() => setQueueOpen(true)}
+                activeOpacity={0.85}
+                testID="open-draft-queue"
+              >
+                <Feather name="inbox" size={18} color={Colors.brand} style={{ marginRight: 10 }} />
+                <View style={{ flex: 1 }}>
+                  {/* The count, never a dot — "10" and "1" are different sizes
+                      of job and a creator deciding when to sit down needs to
+                      know which one this is. */}
+                  <Text style={styles.draftsTitle}>
+                    {waiting === 1 ? '1 recipe is ready for you' : `${waiting} recipes are ready for you`}
+                  </Text>
+                  <Text style={styles.draftsBody}>
+                    We read your posts and filled these in. Nothing is live until you approve it.
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={Colors.text3} />
+              </TouchableOpacity>
+            )}
 
             {/* Push opt-in soft ask. Self-hiding — see PushOptInCard. */}
             <PushOptInCard />
@@ -506,6 +599,17 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
   list: { padding: 16, paddingBottom: 40 },
   pageTitle: { fontSize: 28, fontFamily: 'Inter_700Bold', color: Colors.text1, marginBottom: 16 },
+
+  // Offered, not imposed: brand-tinted enough to be seen on the way past, not
+  // so loud it reads as an error a creator has to clear before doing anything.
+  draftsCard: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: Colors.brandLight, borderRadius: Radius.card,
+    borderWidth: 1, borderColor: Colors.border,
+    padding: 14, marginBottom: 12,
+  },
+  draftsTitle: { fontFamily: 'Inter_700Bold', fontSize: 14, color: Colors.text1 },
+  draftsBody: { fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.text2, marginTop: 2, lineHeight: 17 },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
   statCard: { flex: 1, minWidth: '45%', alignItems: 'center', padding: 16 },
   statValue: { fontSize: 28, fontFamily: 'Inter_700Bold', color: Colors.brand, marginBottom: 4 },
