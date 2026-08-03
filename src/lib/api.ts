@@ -482,6 +482,119 @@ export const kroger = {
     }),
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Creator draft review queue (MEAL-89)
+//
+// The poller extracts recipes from a creator's own posts and queues them; this
+// is how the app reads that queue and how a creator decides each one.
+//
+// Nothing here derives anything about a draft. Which fields are flagged, what
+// the callout says and which span of the source it quotes are all decided
+// server-side in `lib/import/draft-form.ts` and arrive already worded, because
+// a second copy of those rules in this repository would drift behind whatever
+// version of the app a creator happens to have installed — and the two would
+// then disagree about which fields we verified.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One flagged field, as the server worded it. Verified fields produce null. */
+export interface DraftNotice {
+  kind: 'adjusted' | 'unverified' | 'absent' | 'generated';
+  /** Leading sentence. Empty when the quote says it all. */
+  text: string;
+  /** Source span to quote, already truncated. */
+  evidence: string | null;
+}
+
+/** Index-aligned with the draft's own fields; `ingredients` with its rows. */
+export interface DraftNotices {
+  name: DraftNotice | null;
+  recipe: DraftNotice | null;
+  story: DraftNotice | null;
+  photoUrl: DraftNotice | null;
+  difficulty: DraftNotice | null;
+  tags: DraftNotice | null;
+  serves: DraftNotice | null;
+  ingredients: (DraftNotice | null)[];
+}
+
+export interface DraftIngredient {
+  ingredientName: string;
+  qty: number;
+  unit: string;
+  measure: string | null;
+  searchTerm?: string | null;
+  productQty?: number;
+}
+
+export interface CreatorDraftBody {
+  name: string;
+  ingredients: DraftIngredient[];
+  recipe: string | null;
+  source: string;
+  story: string | null;
+  photoUrl: string | null;
+  difficulty: number | null;
+  tags: string[];
+  serves: string | null;
+}
+
+export interface CreatorDraft {
+  id: string;
+  sourceUrl: string;
+  draft: CreatorDraftBody;
+  /** Counts, never a score — a "92% confident" badge is the anti-pattern. */
+  summary: { total: number; verified: number; needALook: number };
+  review: {
+    notices: DraftNotices;
+    /** "4 of 15 fields verified. 11 need a look." */
+    summaryText: string;
+  };
+}
+
+export const creatorDrafts = {
+  list: () =>
+    request<{ drafts: CreatorDraft[]; totals: { waiting: number; flagged: number } }>(
+      '/api/creator/import-drafts',
+      { method: 'GET' },
+    ),
+
+  /**
+   * Just the number, for the tab badge.
+   *
+   * Called on launch and on every foreground, so it is deliberately the cheap
+   * shape: the server answers it with a HEAD count and sends no recipes. It
+   * also answers 0 rather than failing for a user who is not a creator, so the
+   * caller never has to know before asking.
+   */
+  count: () =>
+    request<{ waiting: number }>('/api/creator/import-drafts?count=1', { method: 'GET' }),
+
+  /**
+   * Approve one draft, or decline one or several.
+   *
+   * `approve` takes exactly one id and the server refuses more. Bulk-approving
+   * unreviewed extractions is what the per-field checks exist to prevent, so
+   * there is no way to ask for it from here. Declining several is fine —
+   * nothing is published either way.
+   *
+   * Safe to retry. Every decision is a conditional write server-side, so a
+   * second tap on a slow connection publishes nothing new; it comes back with
+   * `done: 0` and an error saying it was already decided.
+   */
+  decide: (action: 'approve' | 'cancel', ids: string[]) =>
+    request<{ done: number; published: { id: string; name: string }[]; errors: string[]; waiting: number }>(
+      '/api/creator/import-drafts',
+      { method: 'POST', body: JSON.stringify({ action, ids }) },
+    ),
+
+  /** Fix a field without deciding the draft. It stays in the queue. */
+  edit: (id: string, draft: CreatorDraftBody) =>
+    request<{ draft: CreatorDraft }>('/api/creator/import-drafts', {
+      method: 'PATCH',
+      body: JSON.stringify({ id, draft }),
+    }),
+};
+
 // Push notifications (MEAL-88). One row per device server-side, keyed on the
 // Expo token; `previousToken` is what turns a rotation into a replacement
 // instead of a second live device.

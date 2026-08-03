@@ -304,13 +304,18 @@ export type PushTarget = 'Creator' | 'MyMeals' | 'Discover';
 export interface PushRoute {
   target: PushTarget;
   /**
-   * MEAL-89 SEAM. `creator_draft` notifications carry the draft id, and the
-   * review queue screen they should open does not exist yet. Until it does the
-   * tap lands on the Creator tab — the closest true destination — and the id is
-   * passed through so wiring the real screen is a change here and in the
-   * adapter, not a change to the payload contract or the server.
+   * Params to hand the target route.
+   *
+   * `creator_draft` opens the review queue directly (MEAL-89): the intent is
+   * unambiguous, because the creator tapped the thing that said "2 recipes
+   * ready". It travels as a param on the Creator tab rather than as a route of
+   * its own so the tab bar stays on screen — a creator who tapped by reflex
+   * while meaning to shop is one tap from Discover, and nothing traps them.
+   *
+   * `draftId` is passed through from the payload, as it was before this screen
+   * existed. Nothing on the server or in the payload contract had to change.
    */
-  draftId?: string;
+  params?: { openQueue?: boolean; draftId?: string };
 }
 
 export function routeForNotification(data: unknown): PushRoute | null {
@@ -319,9 +324,8 @@ export function routeForNotification(data: unknown): PushRoute | null {
   const draftId = typeof payload.draftId === 'string' ? payload.draftId : undefined;
 
   switch (payload.type) {
-    // MEAL-89: replace with the review-queue screen once it exists.
     case 'creator_draft':
-      return { target: 'Creator', draftId };
+      return { target: 'Creator', params: { openQueue: true, draftId } };
     case 'meal':
       return { target: 'MyMeals' };
     case 'broadcast':

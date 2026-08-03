@@ -62,10 +62,15 @@ function openFromNotification(data: unknown, attempt = 0): void {
     return;
   }
 
-  // MEAL-89 SEAM: `route.draftId` is carried but has nowhere to go until the
-  // review-queue screen exists. When it does, navigate to it here instead of
-  // the tab, and nothing on the server or in the payload has to change.
-  navigationRef.navigate(route.target);
+  // A `creator_draft` tap carries params that open the review queue on arrival
+  // (MEAL-89), rather than merely landing on the Creator tab and leaving the
+  // creator to find the thing the notification was about. Every other type
+  // navigates bare, as before.
+  //
+  // Cast because navigationRef is typed to MainTabsParamList, whose `Creator`
+  // entry is the only one that takes params; `navigate(name, params)` has no
+  // overload that accepts a union of a param-less and a param-taking route.
+  (navigationRef.navigate as (name: string, params?: object) => void)(route.target, route.params);
 }
 
 export default function PushRegistrar() {
