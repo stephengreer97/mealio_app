@@ -1,5 +1,5 @@
 import { getAccessToken, getRefreshToken, save, clear } from './tokenStorage';
-import { Meal, PresetMeal, Creator, CreatorStats, User, Ingredient } from '../types';
+import { Meal, PresetMeal, Creator, CreatorStats, User, Ingredient, YouTubeConnection } from '../types';
 import { normalizeIngredients } from './normalizeIngredients';
 import { mapMeal, mapPresetMeal, mapCreator } from './api-mappers';
 
@@ -325,6 +325,56 @@ export const creators = {
       method: 'PATCH',
       body: JSON.stringify({ photoUrl: data.photoUrl, bio: data.bio, displayName: data.displayName }),
     }),
+
+  /**
+   * The creator's four platform links (MEAL-94).
+   *
+   * Sent per-key: a request that mentions one link must not clear the other
+   * three, and the route reads a missing key as "not touched" and an empty
+   * string as "remove this". Those are different things, so the card sends all
+   * four boxes as strings and never `null`/`undefined` for one it means to keep.
+   *
+   * `notices` is the server's own prose about what the save did — most of all
+   * that touching the polled link paused importing. It is passed through
+   * untouched rather than re-worded here: this client is not in a position to
+   * know why the import stopped, and two clients inventing two sentences for one
+   * event is how the wording drifts. `importPaused` is the same fact stated as a
+   * fact, so the screen can stop claiming it is being polled without matching a
+   * string against prose.
+   */
+  updateLinks: (links: Record<string, string>) =>
+    request<{ ok: boolean; notices?: string[]; importPaused?: boolean }>('/api/creator/me', {
+      method: 'PATCH',
+      body: JSON.stringify({ links }),
+    }),
+
+  /**
+   * The YouTube connection and the append consent that hangs off it (MEAL-74/78).
+   *
+   * A separate route from `/api/creator/me` because the consent is not a profile
+   * field: turning it *on* is checked against a live grant with the write scope,
+   * and `assertAppendAllowed` on the server is the gate every append goes
+   * through. Nothing here is the enforcement.
+   */
+  youtube: {
+    status: () => request<YouTubeConnection>('/api/creator/youtube', { method: 'GET' }),
+
+    /**
+     * Turn the description-append consent on or off.
+     *
+     * Off works from every state there is, including a broken connection —
+     * a switch that can only be flipped one way is not revocation. On is
+     * refused by the route without a grant carrying the write scope, and that
+     * refusal is surfaced verbatim rather than pre-empted here.
+     */
+    setAppendOptIn: (appendOptIn: boolean) =>
+      request<{ ok: boolean; appendOptIn: boolean }>('/api/creator/youtube', {
+        method: 'PATCH',
+        body: JSON.stringify({ appendOptIn }),
+      }),
+
+    disconnect: () => request<{ ok: boolean }>('/api/creator/youtube', { method: 'DELETE' }),
+  },
 
   apply: (data: { displayName: string; handle: string; phone: string; findUs: string; photoUrl?: string }) =>
     request<any>('/api/creator/apply', {

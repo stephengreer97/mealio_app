@@ -54,6 +54,22 @@ export function mapPresetMeal(m: any): PresetMeal {
   };
 }
 
+/**
+ * A field that may legitimately be `null`, read without losing the difference
+ * between "absent" and "null".
+ *
+ * `a ?? b ?? null` is the right shape for a field that is either a value or
+ * missing, and the wrong one for a field whose `null` is itself the answer: a
+ * stored `null` and an endpoint that never sends the key come out identical. For
+ * the creator's platform links that distinction decides whether the editor shows
+ * "no link yet" or is looking at a response that does not carry links at all.
+ */
+function pick<T>(source: any, snake: string, camel: string): T | undefined {
+  if (source && snake in source) return source[snake];
+  if (source && camel in source) return source[camel];
+  return undefined;
+}
+
 export function mapCreator(c: any): Creator {
   return {
     id: c.id,
@@ -66,5 +82,16 @@ export function mapCreator(c: any): Creator {
     followers: c.followers ?? 0,
     isFollowing: c.is_following ?? c.isFollowing ?? false,
     createdAt: c.created_at ?? c.createdAt,
+    // Only `GET /api/creator/me` selects these; every other creator response
+    // (featured, following, by id) omits them entirely. Read by key presence
+    // rather than with `??`, which cannot tell "this endpoint does not return
+    // links" from "this creator has no links" — it collapses both to the same
+    // value, and the two mean opposite things to the link editor.
+    websiteUrl: pick(c, 'website_url', 'websiteUrl'),
+    youtubeUrl: pick(c, 'youtube_url', 'youtubeUrl'),
+    instagramUrl: pick(c, 'instagram_url', 'instagramUrl'),
+    tiktokUrl: pick(c, 'tiktok_url', 'tiktokUrl'),
+    primarySource: pick(c, 'primary_source', 'primarySource'),
+    importOptIn: pick(c, 'import_opt_in', 'importOptIn'),
   };
 }
