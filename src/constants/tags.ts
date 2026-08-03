@@ -16,5 +16,18 @@ export const ALL_TAGS = [
   'Quick Cleanup', 'Leftovers Good',
 ];
 
+/**
+ * How many tags one meal carries.
+ *
+ * This is a server rule, mirrored here the same way `ALL_TAGS` mirrors the
+ * vocabulary: `POST /api/creator/meals` refuses a list longer than this outright
+ * — it does not keep the first three — so a picker that let a creator choose a
+ * fourth would be offering something Save Meal cannot do.
+ *
+ * Three is also what the meal card renders. Before the server enforced it, a
+ * fourth tag was invisible on the card and still matched a Discover filter.
+ */
+export const MAX_MEAL_TAGS = 3;
+
 export const DIFFICULTY_LEVELS = [1, 2, 3, 4, 5] as const;
 export type DifficultyLevel = typeof DIFFICULTY_LEVELS[number];
