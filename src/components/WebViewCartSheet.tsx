@@ -3416,12 +3416,12 @@ export default function WebViewCartSheet({
                 )}
 
                 {isChoose ? (
-                  // Choose-product flow: "Qty to add to cart" + Back / Next→ / Save
+                  // Choose-product flow: "Qty for this meal" + Back / Next→ / Save
                   <>
                     <View style={{ borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 12, gap: 6 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Text style={{ fontSize: 13, fontFamily: 'Inter_500Medium', color: chooseQty === 0 ? '#ef4444' : Colors.text2 }}>
-                          Qty to add to cart
+                          Qty for this meal
                         </Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                           <TouchableOpacity
@@ -3445,7 +3445,7 @@ export default function WebViewCartSheet({
                         </Text>
                       )}
                       {chooseQty === 0 && typeof selectedSuggIdx === 'number' && (
-                        <Text style={styles.qtyHint}>Set a quantity above to add this to your cart.</Text>
+                        <Text style={styles.qtyHint}>Set how many this meal needs.</Text>
                       )}
                     </View>
                     <View style={{ flexDirection: 'row', gap: 8 }}>
