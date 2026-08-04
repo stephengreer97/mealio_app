@@ -16,6 +16,7 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../../constants/colors';
 import { shared as sharedApi, normalizeIngredients } from '../../lib/api';
+import { ingredientAmount } from '../../lib/formatMeasurement';
 import { useAuth } from '../../context/AuthContext';
 import { STORES } from '../../constants/stores';
 import { Ingredient } from '../../types';
@@ -194,13 +195,15 @@ export default function SharedMealScreen({ token, onClose }: Props) {
                 {/* Ingredients */}
                 <Text style={styles.sectionTitle}>Ingredients</Text>
                 {meal.ingredients.map((ing, idx) => {
-                  const qty = ing.qty > 1 ? `${ing.qty} ` : '';
-                  const measure = ing.measure ? `${ing.measure} ` : '';
+                  // One rule, shared with the meal sheet and the website. This
+                  // printed `qty` and `measure` side by side, which doubled up
+                  // whenever a row carried both.
+                  const amount = ingredientAmount(ing);
                   return (
                     <View key={idx} style={styles.ingredientRow}>
                       <View style={styles.bullet} />
                       <Text style={styles.ingredientText}>
-                        {qty}{measure}{ing.ingredientName}
+                        {amount ? `${amount} ` : ''}{ing.ingredientName}
                       </Text>
                     </View>
                   );
