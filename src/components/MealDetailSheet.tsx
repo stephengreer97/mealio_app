@@ -18,6 +18,7 @@ import { Image } from 'expo-image';
 import { Colors, Radius } from '../constants/colors';
 import { Meal, PresetMeal, Ingredient } from '../types';
 import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
+import { ingredientAmount } from '../lib/formatMeasurement';
 import { meals as mealsApi, images as imagesApi } from '../lib/api';
 import Button from './ui/Button';
 import Input from './ui/Input';
@@ -39,8 +40,12 @@ interface MealDetailSheetProps {
 }
 
 function fmtMeasurement(ing: Ingredient): string {
-  if (!ing.unit || ing.unit === 'qty') return (ing.qty ?? 1) > 1 ? `${ing.ingredientName}, ${ing.qty}` : ing.ingredientName;
-  return `${ing.ingredientName}, ${ing.measure ?? ing.qty ?? ''} ${ing.unit}`;
+  // The amount comes from `ingredientAmount`, which is the same rule the shared
+  // meal screen and the website use. This used to print `qty` unconditionally,
+  // so "salt to taste" — which arrives as a countable 1 like every unquantified
+  // line — read "Salt, 1".
+  const amount = ingredientAmount(ing);
+  return amount ? `${ing.ingredientName}, ${amount}` : ing.ingredientName;
 }
 
 function DifficultyDots({ level }: { level: number }) {
