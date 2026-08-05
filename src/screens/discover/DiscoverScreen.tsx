@@ -26,6 +26,8 @@ import MealDetailSheet from '../../components/MealDetailSheet';
 import CreatorProfileSheet from '../../components/CreatorProfileSheet';
 import StoreSelectorSheet from '../../components/StoreSelectorSheet';
 import FilterSheet, { FilterValues, EMPTY_FILTERS } from '../../components/FilterSheet';
+import WelcomeSheet from '../../components/WelcomeSheet';
+import { hasSeen, markSeen, FIRST_RUN_WELCOME } from '../../lib/firstRun';
 
 const LIMIT = 20;
 
@@ -70,10 +72,35 @@ export default function DiscoverScreen() {
   const [selectedCreator, setSelectedCreator] = useState<Creator | null>(null);
   const [creatorSheetVisible, setCreatorSheetVisible] = useState(false);
 
+  // First run: the pitch (MEAL-84). Discover is the front door for signed-in and
+  // signed-out users alike, and a grid of recipe photos never says that Mealio
+  // fills a grocery cart. Held until the first load finishes so it does not
+  // animate in over the splash screen, and shown once per device.
+  const [welcomeVisible, setWelcomeVisible] = useState(false);
+  const welcomeChecked = React.useRef(false);
+
   useEffect(() => {
     setLoading(true);
     loadData(0, true);
   }, [segment, filters]);
+
+  useEffect(() => {
+    if (loading || welcomeChecked.current) return;
+    welcomeChecked.current = true;
+    let cancelled = false;
+    (async () => {
+      if (!(await hasSeen(FIRST_RUN_WELCOME)) && !cancelled) setWelcomeVisible(true);
+    })();
+    return () => { cancelled = true; };
+  }, [loading]);
+
+  // Every exit from the sheet is this one: the ✕, the backdrop, the button, the
+  // Android back gesture. Marked seen on the way out rather than on the way in,
+  // so an app killed mid-pitch still gets to show it.
+  function dismissWelcome() {
+    setWelcomeVisible(false);
+    markSeen(FIRST_RUN_WELCOME);
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -355,6 +382,8 @@ export default function DiscoverScreen() {
           ) : null
         }
       />
+
+      <WelcomeSheet visible={welcomeVisible} onDismiss={dismissWelcome} />
 
       <FilterSheet
         visible={filterVisible}

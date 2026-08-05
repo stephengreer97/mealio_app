@@ -30,6 +30,8 @@ import MealDetailSheet from '../../components/MealDetailSheet';
 import KrogerCartReviewSheet from '../../components/KrogerCartReviewSheet';
 import WebViewCartSheet from '../../components/WebViewCartSheet';
 import ProductChooserSheet from '../../components/ProductChooserSheet';
+import ChooseProductsIntroSheet from '../../components/ChooseProductsIntroSheet';
+import { hasSeen, markSeen, FIRST_RUN_CHOOSE_PRODUCTS } from '../../lib/firstRun';
 import { useCartJob } from '../../context/CartJobContext';
 import { useLoginPrewarm } from '../../context/LoginPrewarmContext';
 import { FEATURE_BACKGROUND_CART } from '../../constants/features';
@@ -41,11 +43,15 @@ import TagPicker from '../../components/TagPicker';
 
 const FREE_LIMIT = 3;
 
-function hasUnchosenProducts(meal: Meal): boolean {
-  return meal.ingredients?.some((i: any) => {
+function unchosenIngredients(meal: Meal): any[] {
+  return (meal.ingredients ?? []).filter((i: any) => {
     const term = i.searchTerm ?? i.search_term ?? null;
     return term === null || term === undefined;
-  }) ?? false;
+  });
+}
+
+function hasUnchosenProducts(meal: Meal): boolean {
+  return unchosenIngredients(meal).length > 0;
 }
 
 export default function MyMealsScreen() {
@@ -90,6 +96,12 @@ export default function MyMealsScreen() {
   const [choosingMeal, setChoosingMeal] = useState<Meal | null>(null);
   const chooseQueueRef = useRef<string[]>([]);
   const pendingChooseMealRef = useRef<Meal | null>(null);
+
+  // First-run explainer for Choose Products (MEAL-84). Holds the run the user
+  // asked for until they have been told what it is; both stores' flows start
+  // from the same floating button, so both go through here.
+  const [introVisible, setIntroVisible] = useState(false);
+  const pendingRunRef = useRef<(() => void) | null>(null);
 
   // Kroger store picker
   const [krogerPickerVisible, setKrogerPickerVisible] = useState(false);
@@ -273,6 +285,30 @@ export default function MyMealsScreen() {
     if (mealsNeedingChoose.length === 0) return;
     chooseQueueRef.current = mealsNeedingChoose.slice(1).map((m) => m.id);
     handleChooseProducts(mealsNeedingChoose[0]);
+  }
+
+  // Run a choose-products flow, explaining it first the one time (MEAL-84).
+  // The explainer never blocks: its primary button runs `start` unchanged, and
+  // it is marked seen whichever way it is closed, so this is a detour exactly
+  // once per device and a straight-through call forever after.
+  async function withChooseIntro(start: () => void) {
+    if (await hasSeen(FIRST_RUN_CHOOSE_PRODUCTS)) { start(); return; }
+    pendingRunRef.current = start;
+    setIntroVisible(true);
+  }
+
+  function handleIntroStart() {
+    setIntroVisible(false);
+    markSeen(FIRST_RUN_CHOOSE_PRODUCTS);
+    const start = pendingRunRef.current;
+    pendingRunRef.current = null;
+    start?.();
+  }
+
+  function handleIntroCancel() {
+    setIntroVisible(false);
+    markSeen(FIRST_RUN_CHOOSE_PRODUCTS);
+    pendingRunRef.current = null;
   }
 
   // Free accounts keep their saved meals but lose cart automation / choose
@@ -534,7 +570,7 @@ export default function MyMealsScreen() {
           subtitle={item.author ?? undefined}
           selected={isCartEnabled ? selectedMealIds.has(item.id) : undefined}
           onView={isCartEnabled ? () => openMeal(item) : undefined}
-          warning={(isKroger || isWebView) && hasUnchosenProducts(item) ? 'Cannot add to cart until products have been chosen' : undefined}
+          warning={(isKroger || isWebView) && hasUnchosenProducts(item) ? 'Choose products once to add this to your cart' : undefined}
         />
         {next ? (
           <MealCard
@@ -544,7 +580,7 @@ export default function MyMealsScreen() {
             subtitle={next.author ?? undefined}
             selected={isCartEnabled ? selectedMealIds.has(next.id) : undefined}
             onView={isCartEnabled ? () => openMeal(next) : undefined}
-            warning={(isKroger || isWebView) && hasUnchosenProducts(next) ? 'Cannot add to cart until products have been chosen' : undefined}
+            warning={(isKroger || isWebView) && hasUnchosenProducts(next) ? 'Choose products once to add this to your cart' : undefined}
           />
         ) : (
           <View style={{ flex: 1, marginHorizontal: 4 }} />
@@ -627,8 +663,12 @@ export default function MyMealsScreen() {
                 <Ionicons name="restaurant-outline" size={56} color="#9ca3af" />
               </View>
               <Text style={styles.emptyTitle}>No meals yet</Text>
+              {/* The empty state used to describe filing, not shopping — it
+                  never mentioned the cart, which is the only reason to save a
+                  meal here at all (MEAL-84). */}
               <Text style={styles.emptyBody}>
-                Save meals from Discover or tap + to create your own.
+                Save meals from Discover or tap + to create your own. Pick the store you shop at,
+                and Mealio can put every ingredient into your cart there.
               </Text>
             </View>
           ) : null
@@ -655,7 +695,7 @@ export default function MyMealsScreen() {
           return (
             <TouchableOpacity
               style={[styles.floatingCart, { backgroundColor: selectedStore_?.color ?? Colors.brand }]}
-              onPress={needsChoose ? handleFloatingChooseProducts : handleCartButtonPress}
+              onPress={needsChoose ? () => withChooseIntro(handleFloatingChooseProducts) : handleCartButtonPress}
               activeOpacity={0.88}
             >
               <Ionicons name={needsChoose ? 'search' : 'cart'} size={18} color="#fff" />
@@ -675,18 +715,24 @@ export default function MyMealsScreen() {
             testID="floating-add-to-cart"
             style={[styles.floatingCart, { backgroundColor: selectedStore_?.color ?? Colors.brand }]}
             onPress={() => {
-              if (FEATURE_BACKGROUND_CART) {
-                cartJob.startJob({
-                  meals: selectedMeals,
-                  storeId: selectedStore,
-                  storeName: STORES.find((s) => s.id === selectedStore)?.name ?? 'Store',
-                  onIngredientChosen: handleIngredientChosen,
-                  onClose: () => setSelectedMealIds(new Set()),
-                });
-              } else {
-                setCartStoreId(selectedStore);
-                setWebViewCartVisible(true);
-              }
+              const start = () => {
+                if (FEATURE_BACKGROUND_CART) {
+                  cartJob.startJob({
+                    meals: selectedMeals,
+                    storeId: selectedStore,
+                    storeName: STORES.find((s) => s.id === selectedStore)?.name ?? 'Store',
+                    onIngredientChosen: handleIngredientChosen,
+                    onClose: () => setSelectedMealIds(new Set()),
+                  });
+                } else {
+                  setCartStoreId(selectedStore);
+                  setWebViewCartVisible(true);
+                }
+              };
+              // Same sheet opens either way; only a run that has choosing to do
+              // gets the explainer, since an add-to-cart run explains itself.
+              if (webViewNeedsChoose) withChooseIntro(start);
+              else start();
             }}
             activeOpacity={0.88}
           >
@@ -735,6 +781,15 @@ export default function MyMealsScreen() {
           onIngredientChosen={handleIngredientChosen}
         />
       )}
+
+      <ChooseProductsIntroSheet
+        visible={introVisible}
+        storeName={selectedStore_?.name ?? 'your store'}
+        ingredientCount={selectedMeals.reduce((n, m) => n + unchosenIngredients(m).length, 0)}
+        mealCount={selectedMeals.filter(hasUnchosenProducts).length}
+        onStart={handleIntroStart}
+        onCancel={handleIntroCancel}
+      />
 
       {choosingMeal && (
         <ProductChooserSheet

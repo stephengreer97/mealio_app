@@ -2728,8 +2728,13 @@ export default function WebViewCartSheet({
 
   // ── Title ────────────────────────────────────────────────────────────────
 
+  // A run where nothing has a chosen product yet is a Choose Products run: it
+  // saves matches and adds nothing. Titling its first screen "Add to Cart" is
+  // the exact confusion MEAL-84 is about — the setup reading as the shopping.
+  const isChooseRun = items.length > 0 && items.every((it) => !it.searchTerm);
+
   const titleMap: Record<Step, string> = {
-    qty: 'Add to Cart',
+    qty: isChooseRun ? 'Choose Products' : 'Add to Cart',
     login_check: 'Connecting…',
     login: `Log in to ${storeName}`,
     searching: currentReview?.isChoose ? 'Choosing Products…' : 'Finding Products…',
