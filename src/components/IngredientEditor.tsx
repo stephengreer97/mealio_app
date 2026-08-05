@@ -45,7 +45,12 @@ function toFormIng(ing: Ingredient): IngredientForm {
     // a countable 1, and typing that into the box states an amount we read
     // rather than one we defaulted to. `fromFormIng` parses an empty measure
     // straight back to 1, so nothing changes on save.
-    measure: ing.unit === 'qty' ? ((ing.qty ?? 1) > 1 ? String(ing.qty) : '') : (ing.measure ?? ''),
+    // `measure` first for countables too, now that it is what the card reads.
+    // The `qty` fallback is for rows written before that; without it a creator
+    // opening an older meal sees an empty box and saves the number away.
+    measure: ing.unit === 'qty'
+      ? ((ing.measure ?? '').trim() || ((ing.qty ?? 1) > 1 ? String(ing.qty) : ''))
+      : (ing.measure ?? ''),
     // The picker's countable option is spelled the way the row stores it, so
     // there is no longer a translation here.
     unit: ing.unit ?? 'qty',
