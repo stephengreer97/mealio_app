@@ -1,0 +1,143 @@
+- generic [active] [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - banner [ref=f1e3]:
+      - link "mealio/tracker" [ref=f1e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=f1e5]:
+        - link "Overview":
+          - /url: /
+        - link "Board":
+          - /url: /board
+        - link "All issues":
+          - /url: /issues
+        - link "Inbox":
+          - /url: /inbox
+        - link "Docs":
+          - /url: /docs
+      - generic [ref=f1e6]:
+        - link "+ Epic" [ref=f1e7] [cursor=pointer]:
+          - /url: /new?type=epic
+        - link "+ Issue" [ref=f1e8] [cursor=pointer]:
+          - /url: /new
+    - main [ref=f1e9]:
+      - paragraph [ref=f1e10]: Activity
+      - heading "Overview" [level=1] [ref=f1e11]
+      - generic [ref=f1e12]:
+        - generic [ref=f1e13]:
+          - generic "In progress" [ref=f1e14]
+          - generic [ref=f1e15]: "1"
+          - generic [ref=f1e16]: In progress
+        - generic [ref=f1e17]:
+          - generic "Blocked" [ref=f1e18]
+          - generic [ref=f1e19]: "0"
+          - generic [ref=f1e20]: Blocked
+        - generic [ref=f1e21]:
+          - generic "To do" [ref=f1e22]
+          - generic [ref=f1e23]: "33"
+          - generic [ref=f1e24]: To do
+        - generic [ref=f1e25]:
+          - generic "Backlog" [ref=f1e26]
+          - generic [ref=f1e27]: "1"
+          - generic [ref=f1e28]: Backlog
+        - generic [ref=f1e29]:
+          - generic "Done" [ref=f1e30]
+          - generic [ref=f1e31]: "3"
+          - generic [ref=f1e32]: Done
+      - generic [ref=f1e33]:
+        - paragraph [ref=f1e34]: Epics
+        - generic [ref=f1e35]:
+          - link "In progress MEAL-1 Make Product Search and Add to Cart Automation Bulletproof Epic 6 2/33 done 6%" [ref=f1e36] [cursor=pointer]:
+            - /url: /issue/MEAL-1
+            - generic [ref=f1e37]:
+              - generic "In progress" [ref=f1e38]
+              - generic [ref=f1e39]: MEAL-1
+              - generic [ref=f1e40]: Make Product Search and Add to Cart Automation Bulletproof
+              - generic [ref=f1e41]: Epic
+            - progressbar [ref=f1e42]
+            - generic [ref=f1e44]:
+              - generic [ref=f1e45]: 2/33 done
+              - generic [ref=f1e46]: 6%
+          - link "To do MEAL-36 Store catalog and selection at scale Epic 0 0/1 done 0%" [ref=f1e47] [cursor=pointer]:
+            - /url: /issue/MEAL-36
+            - generic [ref=f1e48]:
+              - generic "To do" [ref=f1e49]
+              - generic [ref=f1e50]: MEAL-36
+              - generic [ref=f1e51]: Store catalog and selection at scale
+              - generic [ref=f1e52]: Epic
+            - progressbar [ref=f1e53]
+            - generic [ref=f1e54]:
+              - generic [ref=f1e55]: 0/1 done
+              - generic [ref=f1e56]: 0%
+          - link "To do MEAL-37 Tracker — email notifications and reply-by-email Epic 100 1/2 done 100%" [ref=f1e57] [cursor=pointer]:
+            - /url: /issue/MEAL-37
+            - generic [ref=f1e58]:
+              - generic "To do" [ref=f1e59]
+              - generic [ref=f1e60]: MEAL-37
+              - generic [ref=f1e61]: Tracker — email notifications and reply-by-email
+              - generic [ref=f1e62]: Epic
+            - progressbar [ref=f1e63]
+            - generic [ref=f1e65]:
+              - generic [ref=f1e66]: 1/2 done
+              - generic [ref=f1e67]: 100%
+      - generic [ref=f1e68]:
+        - paragraph [ref=f1e69]: In flight
+        - link "In progress MEAL-1 Make Product Search and Add to Cart Automation Bulletproof XL Epic Priority P0" [ref=f1e71] [cursor=pointer]:
+          - /url: /issue/MEAL-1
+          - generic "In progress" [ref=f1e72]
+          - generic [ref=f1e73]: MEAL-1
+          - generic [ref=f1e74]: Make Product Search and Add to Cart Automation Bulletproof
+          - generic [ref=f1e75]: XL
+          - generic [ref=f1e76]: Epic
+          - generic "Priority P0" [ref=f1e77]
+      - generic [ref=f1e81]:
+        - paragraph [ref=f1e82]: Recently updated
+        - generic [ref=f1e83]:
+          - link "To do MEAL-37 Tracker — email notifications and reply-by-email 2m ago" [ref=f1e84] [cursor=pointer]:
+            - /url: /issue/MEAL-37
+            - generic "To do" [ref=f1e85]
+            - generic [ref=f1e86]: MEAL-37
+            - generic [ref=f1e87]: Tracker — email notifications and reply-by-email
+            - time [ref=f1e88]: 2m ago
+          - link "Cancelled MEAL-39 Reply to a notification email to post a comment 11m ago" [ref=f1e89] [cursor=pointer]:
+            - /url: /issue/MEAL-39
+            - generic "Cancelled" [ref=f1e90]
+            - generic [ref=f1e91]: MEAL-39
+            - generic [ref=f1e92]: Reply to a notification email to post a comment
+            - time [ref=f1e93]: 11m ago
+          - link "To do MEAL-35 Explore if sku/productId/price/nutrition can be read from GraphQL 31m ago" [ref=f1e94] [cursor=pointer]:
+            - /url: /issue/MEAL-35
+            - generic "To do" [ref=f1e95]
+            - generic [ref=f1e96]: MEAL-35
+            - generic [ref=f1e97]: Explore if sku/productId/price/nutrition can be read from GraphQL
+            - time [ref=f1e98]: 31m ago
+          - 'link "To do MEAL-13 HEB: replace DOM search extraction with __NEXT_DATA__ read 47m ago" [ref=f1e99] [cursor=pointer]':
+            - /url: /issue/MEAL-13
+            - generic "To do" [ref=f1e100]
+            - generic [ref=f1e101]: MEAL-13
+            - generic [ref=f1e102]: "HEB: replace DOM search extraction with __NEXT_DATA__ read"
+            - time [ref=f1e103]: 47m ago
+          - link "Done MEAL-38 Email Stephen when Claude comments 2h ago" [ref=f1e104] [cursor=pointer]:
+            - /url: /issue/MEAL-38
+            - generic "Done" [ref=f1e105]
+            - generic [ref=f1e106]: MEAL-38
+            - generic [ref=f1e107]: Email Stephen when Claude comments
+            - time [ref=f1e108]: 2h ago
+          - link "To do MEAL-23 Move the store catalog server-side 3h ago" [ref=f1e109] [cursor=pointer]:
+            - /url: /issue/MEAL-23
+            - generic "To do" [ref=f1e110]
+            - generic [ref=f1e111]: MEAL-23
+            - generic [ref=f1e112]: Move the store catalog server-side
+            - time [ref=f1e113]: 3h ago
+          - link "To do MEAL-36 Store catalog and selection at scale 3h ago" [ref=f1e114] [cursor=pointer]:
+            - /url: /issue/MEAL-36
+            - generic "To do" [ref=f1e115]
+            - generic [ref=f1e116]: MEAL-36
+            - generic [ref=f1e117]: Store catalog and selection at scale
+            - time [ref=f1e118]: 3h ago
+          - 'link "Done MEAL-34 DECISION: Instacart Developer Platform is not a path 4h ago" [ref=f1e119] [cursor=pointer]':
+            - /url: /issue/MEAL-34
+            - generic "Done" [ref=f1e120]
+            - generic [ref=f1e121]: MEAL-34
+            - generic [ref=f1e122]: "DECISION: Instacart Developer Platform is not a path"
+            - time [ref=f1e123]: 4h ago
+  - alert [ref=f1e124]

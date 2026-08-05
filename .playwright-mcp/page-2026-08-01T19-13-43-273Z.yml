@@ -1,0 +1,230 @@
+- generic [ref=f217e2]:
+  - generic [ref=f217e4]:
+    - generic [ref=f217e5]:
+      - link "Homepage" [ref=f217e6] [cursor=pointer]:
+        - /url: /?source=---top_nav_layout_nav-----------------------------------------
+      - combobox "search" [ref=f217e14]
+    - button "Get the Medium app" [ref=f217e16] [cursor=pointer]:
+      - generic [ref=f217e20]: Get app
+    - link [ref=f217e23] [cursor=pointer]:
+      - /url: /m/signin?operation=register&redirect=https%3A%2F%2Fmedium.com%2Fnew-story&source=---top_nav_layout_nav-----------------------new_post_topnav------------------
+    - generic [ref=f217e29]:
+      - paragraph [ref=f217e30]:
+        - button "Sign up" [ref=f217e32]
+      - paragraph [ref=f217e34]:
+        - link "Sign in" [ref=f217e36] [cursor=pointer]:
+          - /url: /m/signin?operation=login&redirect=https%3A%2F%2Fmedium.com%2F%40themontay%2Fdelicious-dorm-room-meals-budget-friendly-food-for-college-students-d094c8ecb688&source=post_page---top_nav_layout_nav-----------------------global_nav------------------
+    - button "user options menu" [ref=f217e41] [cursor=pointer]:
+      - img "Unknown user" [ref=f217e43]
+  - generic [ref=f217e47]:
+    - generic:
+      - dialog
+    - navigation "Table of contents":
+      - button "Table of contents" [ref=f217e48] [cursor=pointer]
+    - article [ref=f217e65]:
+      - generic [ref=f217e69]:
+        - generic [ref=f217e73]:
+          - 'button "Topic: College Students" [ref=f217e77]':
+            - generic [ref=f217e78] [cursor=pointer]: College Students
+          - 'button "Topic: Food Options" [ref=f217e85]':
+            - generic [ref=f217e86] [cursor=pointer]: Food Options
+          - 'button "Topic: Tight Budget" [ref=f217e93]':
+            - generic [ref=f217e94] [cursor=pointer]: Tight Budget
+        - generic [ref=f217e100]:
+          - generic [ref=f217e101]:
+            - 'heading "Delicious Dorm Room Meals: Budget-Friendly Food for College Students" [level=1] [ref=f217e102]'
+            - generic [ref=f217e105]:
+              - generic [ref=f217e106]:
+                - generic [ref=f217e107]:
+                  - link [ref=f217e111] [cursor=pointer]:
+                    - /url: /@themontay?source=post_page---byline--d094c8ecb688---------------------------------------
+                    - img "Monica Taylor" [ref=f217e114]
+                  - link "Monica Taylor" [ref=f217e123] [cursor=pointer]:
+                    - /url: /@themontay?source=post_page---byline--d094c8ecb688---------------------------------------
+                - generic [ref=f217e126]:
+                  - generic [ref=f217e127]: 7 min read
+                  - generic [ref=f217e128]: ·
+                  - generic [ref=f217e130]: Nov 29, 2023
+              - generic [ref=f217e131]:
+                - generic [ref=f217e133]:
+                  - generic [ref=f217e135]:
+                    - link [ref=f217e138] [cursor=pointer]:
+                      - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fvote%2Fp%2Fd094c8ecb688&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40themontay%2Fdelicious-dorm-room-meals-budget-friendly-food-for-college-students-d094c8ecb688&user=Monica+Taylor&userId=bf3c499147cd&source=---header_actions--d094c8ecb688---------------------clap_footer------------------
+                      - generic [ref=f217e141]:
+                        - img "clap"
+                    - paragraph [ref=f217e143]: "--"
+                  - button "responses" [ref=f217e148] [cursor=pointer]
+                  - generic [ref=f217e151]:
+                    - link [ref=f217e156] [cursor=pointer]:
+                      - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Frepost%2Fp%2Fd094c8ecb688&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40themontay%2Fdelicious-dorm-room-meals-budget-friendly-food-for-college-students-d094c8ecb688&user=Monica+Taylor&userId=bf3c499147cd&source=---header_actions--d094c8ecb688---------------------repost_header------------------
+                    - paragraph [ref=f217e163]: "--"
+                - generic [ref=f217e164]:
+                  - link [ref=f217e170] [cursor=pointer]:
+                    - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fbookmark%2Fp%2Fd094c8ecb688&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40themontay%2Fdelicious-dorm-room-meals-budget-friendly-food-for-college-students-d094c8ecb688&source=---header_actions--d094c8ecb688---------------------bookmark_footer------------------
+                    - img "Add to list bookmark button" [ref=f217e172]
+                  - link [ref=f217e181] [cursor=pointer]:
+                    - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2Fplans%3Fdimension%3Dpost_audio_button%26postId%3Dd094c8ecb688&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40themontay%2Fdelicious-dorm-room-meals-budget-friendly-food-for-college-students-d094c8ecb688&source=---header_actions--d094c8ecb688---------------------post_audio_button------------------
+                    - button "Listen" [ref=f217e185]
+                  - button "Share Post" [ref=f217e192] [cursor=pointer]
+          - paragraph [ref=f217e195]: Learn how to make tasty dishes in your dorm room without spending a fortune.
+          - figure [ref=f217e196]:
+            - button "Press enter or click to view image in full size delicious food" [ref=f217e197]:
+              - generic [ref=f217e198]: Press enter or click to view image in full size
+              - img "delicious food" [ref=f217e201]
+          - paragraph [ref=f217e202]: College life can be hectic, with busy schedules and limited funds. Finding affordable and convenient food options is a top priority for many college students. While the dining hall may offer some variety, it can get monotonous over time. Plus, who wants to make a full-blown meal after a long day of studying?
+          - paragraph [ref=f217e203]: In this article, we have curated a collection of quick and easy recipes that are perfect for college students on a tight budget. These recipes require minimal ingredients and can even be made in your dorm room. From classic comfort foods like macaroni and cheese to flavorful dishes like chicken wings and sloppy joes, there’s something for everyone.
+          - paragraph [ref=f217e204]: So put down that takeout menu and let’s dive into these delicious yet affordable recipes that will satisfy your cravings without breaking the bank.
+          - heading "Sloppy Joes II" [level=3] [ref=f217e205]
+          - paragraph [ref=f217e206]: "Let’s start with an all-time favorite: sloppy joes. This recipe is easy to make from scratch in just one skillet, and it tastes so much better than the canned version. With simple ingredients that you likely already have in your pantry, you’ll have dinner ready by the time you come home."
+          - paragraph [ref=f217e207]: Reviewers rave about this recipe being “much better than Manwich” and appreciate how fast it is to prepare with minimal ingredients. So why settle for mediocre when you can enjoy homemade sloppy joes that are both budget-friendly and delicious?
+          - heading "Simple Macaroni and Cheese" [level=3] [ref=f217e208]
+          - paragraph [ref=f217e209]: Say goodbye to boxed macaroni and cheese with this simple yet satisfying recipe. Made with just a handful of cheap pantry staples, this macaroni and cheese tastes like it came from a restaurant. And the best part? You only need one pot!
+          - paragraph [ref=f217e210]: While the recipe calls for elbow macaroni, feel free to use any pasta noodles you have on hand. It’s an excellent option when you’re craving comfort food but don’t want to spend hours cooking or cleaning up afterward.
+          - heading "Baked Chicken Wings" [level=3] [ref=f217e211]
+          - paragraph [ref=f217e212]: Craving some crispy chicken wings? Skip the takeout and save some money by making your own at home. This recipe for baked chicken wings is easy to follow and yields delicious results.
+          - paragraph [ref=f217e213]: With a few simple ingredients, you can achieve that perfect balance of tender meat and crispy skin. Customize the flavor by experimenting with different spices or sauces. Whether you prefer classic buffalo wings or a tangy BBQ twist, these homemade chicken wings are sure to satisfy your cravings.
+          - heading "Tatertot Casserole" [level=3] [ref=f217e214]
+          - paragraph [ref=f217e215]: Looking for a filling and easy casserole that won’t break the bank? Look no further than this tatertot casserole recipe. With just five ingredients, you can whip up a comforting meal in no time.
+          - paragraph [ref=f217e216]: The best part about casseroles is their versatility. You can vary the spices and ingredients each time you make it, keeping things interesting without straying too far from your budget. Give this tatertot casserole a try and discover a new go-to dish.
+          - heading "Shipwreck Dinner" [level=3] [ref=f217e217]
+          - paragraph [ref=f217e218]: Sometimes, all you need is a hot, filling meal that requires minimal effort. Enter shipwreck dinner — a one-pot wonder that’s perfect for busy nights when you don’t feel like chopping vegetables or spending hours in the kitchen.
+          - paragraph [ref=f217e219]: While it may not win any beauty contests, shipwreck dinner delivers on taste and convenience. The prep time is limited to how fast your can opener works, making it an ideal choice for college students on the go. Plus, with no chopping required (unless you want to), it’s hassle-free cooking at its finest.
+          - heading "Broccoli, Rice, Cheese, and Chicken Casserole" [level=3] [ref=f217e220]
+          - paragraph [ref=f217e221]: If you’re looking for a well-rounded meal that’s both delicious and affordable, this broccoli, rice, cheese, and chicken casserole fits the bill perfectly. With minimal prep time and under an hour of cooking time, you’ll have dinner on the table in no time.
+          - paragraph [ref=f217e222]: To save even more time and money, consider using a rotisserie chicken. Reviewers mention that this recipe makes a lot, so you’ll have leftovers for days. If you prefer smaller portions or want to avoid leftovers altogether, simply cut the recipe in half.
+          - heading "Baked Garlic Parmesan Chicken" [level=3] [ref=f217e223]
+          - paragraph [ref=f217e224]: Want a quick and easy main dish that’s bursting with flavor? This baked garlic parmesan chicken recipe is your answer. With just a few handy ingredients, you can create a delicious meal that’s perfect for busy college nights.
+          - figure [ref=f217e225]
+          - paragraph [ref=f217e228]: Reviewers love the simplicity of this recipe and how it yields great leftovers (if there are any left). The combination of garlic and parmesan adds a burst of flavor to the chicken, making it an instant favorite among college students on a tight budget.
+          - heading "Emily’s Excellent Taco Casserole" [level=3] [ref=f217e229]
+          - paragraph [ref=f217e230]: Taco Tuesday just got easier with this versatile taco casserole. While the recipe uses vegetarian chili, reviewers suggest using regular chili or shredded chicken for added protein and flavor.
+          - generic [ref=f217e231]:
+            - heading "Get Monica Taylor’s stories in your inbox" [level=2] [ref=f217e233]
+            - paragraph [ref=f217e235]: Join Medium for free to get updates from this writer.
+            - generic [ref=f217e236]:
+              - textbox "Enter your email" [ref=f217e240]
+              - button "Subscribe" [ref=f217e243]
+            - generic [ref=f217e245]:
+              - generic [ref=f217e246]:
+                - checkbox "Remember me for faster sign in" [checked]
+              - paragraph [ref=f217e251]: Remember me for faster sign in
+          - paragraph [ref=f217e252]: What sets this dish apart is how it transforms simple ingredients into something extraordinary. By layering your meat and veggies on rolls with cheese and broiling them in the oven until melty goodness ensues, you’ll have an elevated taco experience without breaking the bank.
+          - heading "Buttered Noodles" [level=3] [ref=f217e253]
+          - paragraph [ref=f217e254]: Sometimes simplicity is key when it comes to cooking on a tight budget. These buttered noodles fit the bill perfectly — quick, easy, and oh-so-comforting. With just four ingredients, you can whip up this classic dish in minutes.
+          - paragraph [ref=f217e255]: Reviewers rave about these noodles being down-home awesome. They reminisce about their moms making them growing up or relying on them as go-to meals during their college years. The versatility of these noodles allows for customization based on personal preferences or what’s available in your pantry at any given time.
+          - heading "Baked Chicken Nuggets" [level=3] [ref=f217e256]
+          - paragraph [ref=f217e257]: Who says indulging in chicken nuggets has to break the bank? With this recipe for baked chicken nuggets, you can enjoy a healthier version of this fast food favorite right at home.
+          - paragraph [ref=f217e258]: Reviewers praise these homemade chicken nuggets for their flavor and crispy texture. By making them yourself, you have control over the ingredients and can opt for leaner cuts of meat. So put down that drive-thru menu and give these baked chicken nuggets a try — you won’t be disappointed.
+          - heading "Grilled Peanut Butter and Jelly Sandwich" [level=3] [ref=f217e259]
+          - paragraph [ref=f217e260]: Take your traditional peanut butter and jelly sandwich to the next level by grilling it for a few minutes. This simple twist adds a delightful crunch and warmth to an already beloved classic.
+          - paragraph [ref=f217e261]: Reviewers suggest using crunchy peanut butter, cinnamon raisin bread, raspberry jam, or even marshmallow fluff for an extra fun flavor experience. Whether you’re craving something nostalgic or want to jazz up your lunch routine, this grilled PB&J sandwich is sure to hit the spot without breaking the bank.
+          - heading "Dorm Room Chili Mac" [level=3] [ref=f217e262]
+          - paragraph [ref=f217e263]: As a college student, quick and inexpensive meals are essential. This dorm room chili mac combines two college staples — chili and macaroni and cheese — for a hearty meal in one bowl.
+          - paragraph [ref=f217e264]: With minimal ingredients required (most of which you likely already have on hand), this dish is perfect for those times when you need to satisfy your hunger but don’t have much time or money.
+          - heading "Ramen Soup with Frozen Vegetables" [level=3] [ref=f217e265]
+          - paragraph [ref=f217e266]: Ramen noodles are known for being affordable and easy to prepare, but they lack nutritional value when eaten alone. Elevate your ramen game by adding frozen vegetables and chicken to create a heartier meal that’s still budget-friendly.
+          - paragraph [ref=f217e267]: Reviewers love how this recipe transforms humble ramen into a wholesome soup packed with flavor. By adding fresh veggies like spinach, you can boost the nutrient content and make it even more satisfying. Perfect for those times when you’re in a time crunch but still need to eat well.
+          - heading "Slow Cooker Buffalo Chicken Sandwiches" [level=3] [ref=f217e268]
+          - paragraph [ref=f217e269]: If you have a slow cooker, these five-ingredient buffalo chicken sandwiches are a must-try. With minimal effort required, you can enjoy the flavors of buffalo chicken wings in the form of a delicious sandwich.
+          - paragraph [ref=f217e270]: By utilizing your slow cooker, you can set it and forget it, allowing the flavors to meld together while you focus on other tasks. So if you’re craving something spicy and satisfying, give these slow cooker buffalo chicken sandwiches a go.
+          - heading "In Summary" [level=3] [ref=f217e271]
+          - paragraph [ref=f217e272]: Finding affordable and convenient food options for college students on a tight budget doesn’t have to be difficult. With these quick and easy recipes, you can enjoy homemade meals that rival takeout at a fraction of the cost.
+          - paragraph [ref=f217e273]: From classics like sloppy joes and macaroni and cheese to flavorful dishes like chicken wings and casseroles, there’s something for every palate. Whether you’re cooking in your dorm room or have access to a full kitchen, these recipes are designed with simplicity in mind.
+          - figure [ref=f217e274]:
+            - button "Press enter or click to view image in full size delicious food" [ref=f217e275]:
+              - generic [ref=f217e276]: Press enter or click to view image in full size
+              - img "delicious food" [ref=f217e279]
+          - paragraph [ref=f217e280]: So put on your apron, gather your ingredients, and get ready to impress yourself with delicious meals that won’t break the bank. Happy cooking!
+          - link [ref=f217e282] [cursor=pointer]:
+            - /url: /@themontay/exploring-the-world-of-comfort-foods-what-makes-comfort-foods-so-comforting-c6ab7faf590c?source=post_page-----d094c8ecb688---------------------------------------
+            - generic [ref=f217e284]:
+              - heading "Exploring the World of Comfort Foods What makes comfort foods so comforting?" [level=2] [ref=f217e285]
+              - heading "What makes comfort foods so comforting?" [level=3] [ref=f217e287]
+              - paragraph [ref=f217e289]: What makes comfort foods so comforting?medium.com
+          - heading "Sources" [level=3] [ref=f217e292]
+          - list [ref=f217e293]:
+            - listitem [ref=f217e294]:
+              - link "20 Tips For Eating Healthy Ish On A College Budget Chase Com" [ref=f217e295] [cursor=pointer]:
+                - /url: https://www.chase.com/personal/education/student/money-basics/eating-healthy-in-college
+            - listitem [ref=f217e296]:
+              - link "20 Cheap And Easy Meals For College Students Allrecipes" [ref=f217e297] [cursor=pointer]:
+                - /url: https://www.allrecipes.com/gallery/cheap-and-easy-meals-for-college-students/
+            - listitem [ref=f217e298]:
+              - link "I Planned A Week Of Healthy Meals On A Student Budget Eating Well" [ref=f217e299] [cursor=pointer]:
+                - /url: https://www.eatingwell.com/article/7651245/i-planned-a-week-of-healthy-meals-on-a-student-budget-get-my-plan-tips/
+    - generic [ref=f217e302]:
+      - link "College Students" [ref=f217e304] [cursor=pointer]:
+        - /url: /tag/college-students?source=post_page---footer_tags--d094c8ecb688---------------------------------------
+      - link "Food Options" [ref=f217e307] [cursor=pointer]:
+        - /url: /tag/food-options?source=post_page---footer_tags--d094c8ecb688---------------------------------------
+      - link "Tight Budget" [ref=f217e310] [cursor=pointer]:
+        - /url: /tag/tight-budget?source=post_page---footer_tags--d094c8ecb688---------------------------------------
+    - contentinfo [ref=f217e312]:
+      - generic [ref=f217e316]:
+        - generic [ref=f217e317]:
+          - generic [ref=f217e320]:
+            - link [ref=f217e323] [cursor=pointer]:
+              - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fvote%2Fp%2Fd094c8ecb688&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40themontay%2Fdelicious-dorm-room-meals-budget-friendly-food-for-college-students-d094c8ecb688&user=Monica+Taylor&userId=bf3c499147cd&source=---footer_actions--d094c8ecb688---------------------clap_footer------------------
+              - generic [ref=f217e326]:
+                - img "clap"
+            - paragraph [ref=f217e328]: "--"
+          - button "responses" [ref=f217e333] [cursor=pointer]
+          - generic [ref=f217e336]:
+            - link [ref=f217e341] [cursor=pointer]:
+              - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Frepost%2Fp%2Fd094c8ecb688&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40themontay%2Fdelicious-dorm-room-meals-budget-friendly-food-for-college-students-d094c8ecb688&user=Monica+Taylor&userId=bf3c499147cd&source=---footer_actions--d094c8ecb688---------------------repost_footer------------------
+            - paragraph [ref=f217e348]: "--"
+        - generic [ref=f217e349]:
+          - link [ref=f217e356] [cursor=pointer]:
+            - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fbookmark%2Fp%2Fd094c8ecb688&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40themontay%2Fdelicious-dorm-room-meals-budget-friendly-food-for-college-students-d094c8ecb688&source=---footer_actions--d094c8ecb688---------------------bookmark_footer------------------
+            - img "Add to list bookmark button" [ref=f217e358]
+          - button "Share Post" [ref=f217e366] [cursor=pointer]
+    - generic [ref=f217e372]:
+      - link [ref=f217e375] [cursor=pointer]:
+        - /url: /@themontay?source=post_page---post_author_info--d094c8ecb688---------------------------------------
+        - img "Monica Taylor" [ref=f217e377]
+      - generic [ref=f217e380]:
+        - link [ref=f217e381] [cursor=pointer]:
+          - /url: /@themontay?source=post_page---post_author_info--d094c8ecb688---------------------------------------
+          - heading "Written by Monica Taylor" [level=2] [ref=f217e382]
+        - generic [ref=f217e384]:
+          - link "8 followers" [ref=f217e387] [cursor=pointer]:
+            - /url: /@themontay/followers?source=post_page---post_author_info--d094c8ecb688---------------------------------------
+          - generic [ref=f217e388]:
+            - generic [ref=f217e389]: ·
+            - link "1 following" [ref=f217e390] [cursor=pointer]:
+              - /url: /@themontay/following?source=post_page---post_author_info--d094c8ecb688---------------------------------------
+        - paragraph [ref=f217e392]: I am your guide to a world of gourmet adventure. Whipping up culinary delights as a food enthusiast.
+    - generic [ref=f217e454]:
+      - link [ref=f217e456] [cursor=pointer]:
+        - /url: https://help.medium.com/hc/en-us?source=post_page-----d094c8ecb688---------------------------------------
+        - paragraph [ref=f217e457]: Help
+      - link [ref=f217e459] [cursor=pointer]:
+        - /url: https://status.medium.com/?source=post_page-----d094c8ecb688---------------------------------------
+        - paragraph [ref=f217e460]: Status
+      - link [ref=f217e462] [cursor=pointer]:
+        - /url: /about?autoplay=1&source=post_page-----d094c8ecb688---------------------------------------
+        - paragraph [ref=f217e463]: About
+      - link [ref=f217e465] [cursor=pointer]:
+        - /url: /jobs-at-medium/work-at-medium-959d1a85284e?source=post_page-----d094c8ecb688---------------------------------------
+        - paragraph [ref=f217e466]: Careers
+      - link [ref=f217e468] [cursor=pointer]:
+        - /url: mailto:pressinquiries@medium.com
+        - paragraph [ref=f217e469]: Press
+      - link [ref=f217e471] [cursor=pointer]:
+        - /url: https://blog.medium.com/?source=post_page-----d094c8ecb688---------------------------------------
+        - paragraph [ref=f217e472]: Blog
+      - link [ref=f217e474] [cursor=pointer]:
+        - /url: https://medium.com/store
+        - paragraph [ref=f217e475]: Store
+      - link [ref=f217e477] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-privacy-policy-f03bf92035c9?source=post_page-----d094c8ecb688---------------------------------------
+        - paragraph [ref=f217e478]: Privacy
+      - link [ref=f217e480] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-rules-30e5502c4eb4?source=post_page-----d094c8ecb688---------------------------------------
+        - paragraph [ref=f217e481]: Rules
+      - link [ref=f217e483] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-terms-of-service-9db0094a1e0f?source=post_page-----d094c8ecb688---------------------------------------
+        - paragraph [ref=f217e484]: Terms
+      - link [ref=f217e486] [cursor=pointer]:
+        - /url: https://speechify.com/medium?source=post_page-----d094c8ecb688---------------------------------------
+        - paragraph [ref=f217e487]: Text to speech

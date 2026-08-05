@@ -1,0 +1,503 @@
+- generic [active] [ref=f4e1]:
+  - generic [ref=f4e2]:
+    - banner [ref=f4e3]:
+      - link "mealio/tracker" [ref=f4e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=f4e5]:
+        - link "Overview" [ref=f4e6] [cursor=pointer]:
+          - /url: /
+        - link "Board" [ref=f4e7] [cursor=pointer]:
+          - /url: /board
+        - link "All issues" [ref=f4e8] [cursor=pointer]:
+          - /url: /issues
+        - link "Inbox" [ref=f4e9] [cursor=pointer]:
+          - /url: /inbox
+        - link "Docs" [ref=f4e10] [cursor=pointer]:
+          - /url: /docs
+      - generic [ref=f4e11]:
+        - link "+ Epic" [ref=f4e12] [cursor=pointer]:
+          - /url: /new?type=epic
+        - link "+ Issue" [ref=f4e13] [cursor=pointer]:
+          - /url: /new
+    - main [ref=f4e14]:
+      - generic [ref=f4e15]:
+        - generic [ref=f4e16]:
+          - generic [ref=f4e17]: MEAL-1
+          - generic [ref=f4e18]: Epic
+          - generic [ref=f4e19]:
+            - generic "In progress" [ref=f4e20]
+            - text: In progress
+          - generic "Priority P0" [ref=f4e21]
+        - heading "Make Product Search and Add to Cart Automation Bulletproof" [level=1] [ref=f4e25]
+        - generic [ref=f4e26]:
+          - link "automation" [ref=f4e27] [cursor=pointer]:
+            - /url: /issues?label=automation
+          - link "reliability" [ref=f4e28] [cursor=pointer]:
+            - /url: /issues?label=reliability
+        - generic [ref=f4e30]:
+          - heading "Why this epic exists" [level=2] [ref=f4e31]
+          - paragraph [ref=f4e32]:
+            - text: Cart automation
+            - emphasis [ref=f4e33]: is
+            - text: "the product. Meals, creators, discovery — all of it is upstream of one moment: the user taps add-to-cart and the ingredients land in their real cart at their real store. That moment is unreliable for five of our seven store families today, and we cannot currently say"
+            - strong [ref=f4e34]: how
+            - text: unreliable or
+            - strong [ref=f4e35]: where
+            - text: it breaks, because the per-step funnel we already emit is not aggregated anywhere.
+          - paragraph [ref=f4e36]: Two structural facts drive everything below.
+          - paragraph [ref=f4e37]:
+            - strong [ref=f4e38]: 1. We run one rail for five store families.
+            - text: "DOM automation is the most fragile integration that exists: it breaks on any markup change, it is fingerprintable by bot defenses, and it only ever gives us"
+            - emphasis [ref=f4e39]: inferential
+            - text: confirmation that an add succeeded (we watch a badge counter tick). Kroger runs on a public API and is flawless. That is not a coincidence — it is the whole thesis.
+          - paragraph [ref=f4e40]:
+            - strong [ref=f4e41]: 2. We maintain two implementations that drift apart.
+            - code [ref=f4e42]: mealio_app/src/lib/webview-scripts/
+            - text: (~6,000 lines) and
+            - code [ref=f4e43]: mealio_ext/content-*.js
+            - text: (~14,400 lines) each implement per-store automation independently. The app hot-patches selectors through remote config; the extension needs a Chrome Web Store review to ship the same fix. One breakage costs us twice and heals at two speeds.
+          - heading "Thesis" [level=2] [ref=f4e44]
+          - paragraph [ref=f4e45]: "Reliability here is not a bug-fix campaign. It comes from two things:"
+          - list [ref=f4e46]:
+            - listitem [ref=f4e47]:
+              - strong [ref=f4e48]: Climbing the rail ladder.
+              - text: Every store moves to the highest-fidelity integration available to it.
+            - listitem [ref=f4e49]:
+              - strong [ref=f4e50]: Closing the loop.
+              - text: measure → detect → heal → verify, running continuously, so breakage is caught by CI and remote config instead of by users.
+          - heading "The rail ladder" [level=2] [ref=f4e51]
+          - table [ref=f4e52]:
+            - rowgroup [ref=f4e53]:
+              - row [ref=f4e54]:
+                - columnheader "Rail" [ref=f4e55]
+                - columnheader "Fidelity" [ref=f4e56]
+                - columnheader "Where we are" [ref=f4e57]
+            - rowgroup [ref=f4e58]:
+              - row [ref=f4e59]:
+                - cell "1 · Sanctioned API" [ref=f4e60]
+                - cell "Highest" [ref=f4e61]
+                - cell "Kroger family ✅ · Walmart pending" [ref=f4e62]
+              - row [ref=f4e63]:
+                - cell "2 · Sanctioned cart link" [ref=f4e64]
+                - cell "Very high" [ref=f4e65]
+                - cell "Walmart affiliate ATC (untested), Amazon (likely dead)" [ref=f4e66]
+              - row [ref=f4e67]:
+                - cell "3 · In-page network layer" [ref=f4e68]
+                - cell "High" [ref=f4e69]
+                - cell [ref=f4e70]:
+                  - strong [ref=f4e71]: Target
+                  - text: for HEB, Albertsons, Instacart storefronts
+              - row [ref=f4e72]:
+                - cell "4 · DOM automation" [ref=f4e73]
+                - cell "Lowest" [ref=f4e74]
+                - cell "Everything else today" [ref=f4e75]
+          - paragraph [ref=f4e76]:
+            - strong [ref=f4e77]: Rail 3 is the central move.
+            - text: Inside the WebView we already trust,
+            - code [ref=f4e78]: fetch()
+            - text: the store's own JSON/GraphQL endpoints using the user's own session. Cookies and bot tokens are applied by the browser automatically — we never see or handle them. It eliminates selector drift, sponsored-carousel contamination, click races, and badge-count guessing in a single step, and it returns typed per-item confirmation so we know exactly
+            - emphasis [ref=f4e79]: which
+            - text: ingredient failed.
+          - paragraph [ref=f4e80]:
+            - text: "Note the distinction that makes this workable: we cannot"
+            - strong [ref=f4e81]: observe
+            - text: the store's network traffic from a React Native WebView (no CDP, no request log). We do not need to. We only need to
+            - strong [ref=f4e82]: originate
+            - text: requests, which
+            - code [ref=f4e83]: injectJavaScript
+            - text: already does. Discovering
+            - emphasis [ref=f4e84]: what
+            - text: to call is an offline, one-time activity on a dev machine with Playwright — never something the shipped app does.
+          - heading "Non-goals and hard constraints" [level=2] [ref=f4e85]
+          - list [ref=f4e86]:
+            - listitem [ref=f4e87]:
+              - strong [ref=f4e88]: Retail partnerships are not available at our size.
+              - text: Not a path; stop costing it.
+            - listitem [ref=f4e89]:
+              - strong [ref=f4e90]: The Instacart Developer Platform is off the table.
+              - text: All Instacart Storefront work in this epic is automation of the user's own session, exactly like any other store — not a sanctioned API, and it should not be described as one.
+            - listitem [ref=f4e91]:
+              - strong [ref=f4e92]: No first-party client impersonation.
+              - text: We will not use a retailer's own mobile OAuth
+              - code [ref=f4e93]: client_id
+              - text: or spoof their app's user agent. Automating a session the user opened themselves is one thing; asserting an identity that isn't ours to a security system is a materially different category of risk, and it is the single item here that would read badly in diligence.
+            - listitem [ref=f4e94]:
+              - strong [ref=f4e95]: No before-content DOM/localStorage tampering on iOS.
+              - text: We already learned this the expensive way — see the comment at
+              - code [ref=f4e96]: WebViewCartSheet.tsx:200
+              - text: . Patching
+              - code [ref=f4e97]: window.fetch
+              - text: to sniff the page's own requests is a canonical PerimeterX/Imperva fingerprint check. Discovery stays offline.
+          - heading "Phases" [level=2] [ref=f4e98]
+          - paragraph [ref=f4e99]:
+            - strong [ref=f4e100]: Phase 0 — See it.
+            - text: Aggregate the funnel we already emit, define the north-star metric, classify every failure.
+            - emphasis [ref=f4e101]: Nothing else in this epic should start first
+            - text: — without it, every priority call below is a guess.
+          - paragraph [ref=f4e102]:
+            - strong [ref=f4e103]: Phase 1 — Stop the bleeding.
+            - text: Nightly live canaries with remote auto-disable, so a broken store is caught by CI and switched off before users hit it. Graceful degradation so a failure is never a dead end.
+          - paragraph [ref=f4e104]:
+            - strong [ref=f4e105]: Phase 2 — Climb.
+            - text: Move HEB and Albertsons to rail 3. Cheaply test the rail-2 candidates and kill them fast if dead.
+          - paragraph [ref=f4e106]:
+            - strong [ref=f4e107]: Phase 3 — Consolidate and expand.
+            - text: One Instacart Storefront adapter — already ~80% built as
+            - code [ref=f4e108]: aldi.ts
+            - text: — covering ALDI, Publix, Sprouts, Costco, with a path to ~380 more storefronts. Server-driven store catalog. Bring the extension onto the app's remote config.
+          - paragraph [ref=f4e109]:
+            - strong [ref=f4e110]: Phase 4 — Match quality.
+            - text: Selector healing addresses only ~28% of automation failures industry-wide. Getting the
+            - emphasis [ref=f4e111]: right product
+            - text: is a separate discipline and needs its own evaluation harness.
+          - heading "Definition of done" [level=2] [ref=f4e112]
+          - list [ref=f4e113]:
+            - listitem [ref=f4e114]: Per-store, item-level cart success rate is on a dashboard and refreshed daily.
+            - listitem [ref=f4e115]: Every store family has a nightly canary that can disable it remotely, no release.
+            - listitem [ref=f4e116]: No store family runs on DOM automation where a network rail exists.
+            - listitem [ref=f4e117]: A failed add never dead-ends the user.
+            - listitem [ref=f4e118]: Selector and endpoint contracts live in exactly one place, shared by app and extension.
+        - generic [ref=f4e119]:
+          - generic [ref=f4e120]:
+            - paragraph [ref=f4e121]: Children
+            - generic [ref=f4e122]: 2/33 · 6%
+            - link "+ add ticket" [ref=f4e123] [cursor=pointer]:
+              - /url: /new?epic=MEAL-1
+          - progressbar [ref=f4e125]
+          - generic [ref=f4e127]:
+            - link "To do MEAL-2 Build the automation funnel dashboard M Task Priority P0" [ref=f4e128] [cursor=pointer]:
+              - /url: /issue/MEAL-2
+              - generic "To do" [ref=f4e129]
+              - generic [ref=f4e130]: MEAL-2
+              - generic [ref=f4e131]: Build the automation funnel dashboard
+              - generic [ref=f4e132]: M
+              - generic [ref=f4e133]: Task
+              - generic "Priority P0" [ref=f4e134]
+            - 'link "To do MEAL-3 Define and instrument the north-star metric: item-level cart success rate S Task Priority P0" [ref=f4e138] [cursor=pointer]':
+              - /url: /issue/MEAL-3
+              - generic "To do" [ref=f4e139]
+              - generic [ref=f4e140]: MEAL-3
+              - generic [ref=f4e141]: "Define and instrument the north-star metric: item-level cart success rate"
+              - generic [ref=f4e142]: S
+              - generic [ref=f4e143]: Task
+              - generic "Priority P0" [ref=f4e144]
+            - link "To do MEAL-4 Add a failure taxonomy with explicit error codes S Task Priority P0" [ref=f4e148] [cursor=pointer]:
+              - /url: /issue/MEAL-4
+              - generic "To do" [ref=f4e149]
+              - generic [ref=f4e150]: MEAL-4
+              - generic [ref=f4e151]: Add a failure taxonomy with explicit error codes
+              - generic [ref=f4e152]: S
+              - generic [ref=f4e153]: Task
+              - generic "Priority P0" [ref=f4e154]
+            - link "To do MEAL-5 Audit telemetry completeness and sampling S Task Priority P1" [ref=f4e158] [cursor=pointer]:
+              - /url: /issue/MEAL-5
+              - generic "To do" [ref=f4e159]
+              - generic [ref=f4e160]: MEAL-5
+              - generic [ref=f4e161]: Audit telemetry completeness and sampling
+              - generic [ref=f4e162]: S
+              - generic [ref=f4e163]: Task
+              - generic "Priority P1" [ref=f4e164]
+            - link "To do MEAL-6 Alert on per-store success-rate regressions S Task Priority P1" [ref=f4e168] [cursor=pointer]:
+              - /url: /issue/MEAL-6
+              - generic "To do" [ref=f4e169]
+              - generic [ref=f4e170]: MEAL-6
+              - generic [ref=f4e171]: Alert on per-store success-rate regressions
+              - generic [ref=f4e172]: S
+              - generic [ref=f4e173]: Task
+              - generic "Priority P1" [ref=f4e174]
+            - link "To do MEAL-7 Nightly live canary per store family in CI L Task Priority P0" [ref=f4e178] [cursor=pointer]:
+              - /url: /issue/MEAL-7
+              - generic "To do" [ref=f4e179]
+              - generic [ref=f4e180]: MEAL-7
+              - generic [ref=f4e181]: Nightly live canary per store family in CI
+              - generic [ref=f4e182]: L
+              - generic [ref=f4e183]: Task
+              - generic "Priority P0" [ref=f4e184]
+            - link "To do MEAL-8 Remote auto-disable when a canary fails M Task Priority P0" [ref=f4e188] [cursor=pointer]:
+              - /url: /issue/MEAL-8
+              - generic "To do" [ref=f4e189]
+              - generic [ref=f4e190]: MEAL-8
+              - generic [ref=f4e191]: Remote auto-disable when a canary fails
+              - generic [ref=f4e192]: M
+              - generic [ref=f4e193]: Task
+              - generic "Priority P0" [ref=f4e194]
+            - 'link "To do MEAL-9 Graceful degradation: never dead-end a failed add M Task Priority P0" [ref=f4e198] [cursor=pointer]':
+              - /url: /issue/MEAL-9
+              - generic "To do" [ref=f4e199]
+              - generic [ref=f4e200]: MEAL-9
+              - generic [ref=f4e201]: "Graceful degradation: never dead-end a failed add"
+              - generic [ref=f4e202]: M
+              - generic [ref=f4e203]: Task
+              - generic "Priority P0" [ref=f4e204]
+            - link "To do MEAL-10 Centralise WAF/challenge detection, backoff, and human handoff M Task Priority P1" [ref=f4e208] [cursor=pointer]:
+              - /url: /issue/MEAL-10
+              - generic "To do" [ref=f4e209]
+              - generic [ref=f4e210]: MEAL-10
+              - generic [ref=f4e211]: Centralise WAF/challenge detection, backoff, and human handoff
+              - generic [ref=f4e212]: M
+              - generic [ref=f4e213]: Task
+              - generic "Priority P1" [ref=f4e214]
+            - link "To do MEAL-11 Make cart reconciliation universal and measured M Task Priority P1" [ref=f4e218] [cursor=pointer]:
+              - /url: /issue/MEAL-11
+              - generic "To do" [ref=f4e219]
+              - generic [ref=f4e220]: MEAL-11
+              - generic [ref=f4e221]: Make cart reconciliation universal and measured
+              - generic [ref=f4e222]: M
+              - generic [ref=f4e223]: Task
+              - generic "Priority P1" [ref=f4e224]
+            - 'link "To do MEAL-12 SPIKE: does HEB accept full GraphQL queries, or only persisted hashes? XS Spike Priority P0" [ref=f4e228] [cursor=pointer]':
+              - /url: /issue/MEAL-12
+              - generic "To do" [ref=f4e229]
+              - generic [ref=f4e230]: MEAL-12
+              - generic [ref=f4e231]: "SPIKE: does HEB accept full GraphQL queries, or only persisted hashes?"
+              - generic [ref=f4e232]: XS
+              - generic [ref=f4e233]: Spike
+              - generic "Priority P0" [ref=f4e234]
+            - 'link "To do MEAL-13 HEB: replace DOM search extraction with __NEXT_DATA__ read M Task Priority P1" [ref=f4e238] [cursor=pointer]':
+              - /url: /issue/MEAL-13
+              - generic "To do" [ref=f4e239]
+              - generic [ref=f4e240]: MEAL-13
+              - generic [ref=f4e241]: "HEB: replace DOM search extraction with __NEXT_DATA__ read"
+              - generic [ref=f4e242]: M
+              - generic [ref=f4e243]: Task
+              - generic "Priority P1" [ref=f4e244]
+            - 'link "To do MEAL-14 HEB: per-SKU add confirmation via in-page cart query M Task Priority P1" [ref=f4e248] [cursor=pointer]':
+              - /url: /issue/MEAL-14
+              - generic "To do" [ref=f4e249]
+              - generic [ref=f4e250]: MEAL-14
+              - generic [ref=f4e251]: "HEB: per-SKU add confirmation via in-page cart query"
+              - generic [ref=f4e252]: M
+              - generic [ref=f4e253]: Task
+              - generic "Priority P1" [ref=f4e254]
+            - 'link "To do MEAL-15 SPIKE: Albertsons family in-page network rail feasibility S Spike Priority P1" [ref=f4e258] [cursor=pointer]':
+              - /url: /issue/MEAL-15
+              - generic "To do" [ref=f4e259]
+              - generic [ref=f4e260]: MEAL-15
+              - generic [ref=f4e261]: "SPIKE: Albertsons family in-page network rail feasibility"
+              - generic [ref=f4e262]: S
+              - generic [ref=f4e263]: Spike
+              - generic "Priority P1" [ref=f4e264]
+            - link "To do MEAL-16 Offline endpoint + hash discovery rig, publishing to remote config M Task Priority P1" [ref=f4e268] [cursor=pointer]:
+              - /url: /issue/MEAL-16
+              - generic "To do" [ref=f4e269]
+              - generic [ref=f4e270]: MEAL-16
+              - generic [ref=f4e271]: Offline endpoint + hash discovery rig, publishing to remote config
+              - generic [ref=f4e272]: M
+              - generic [ref=f4e273]: Task
+              - generic "Priority P1" [ref=f4e274]
+            - 'link "To do MEAL-17 SPIKE: Walmart affiliate add-to-cart URL XS Spike Priority P2" [ref=f4e278] [cursor=pointer]':
+              - /url: /issue/MEAL-17
+              - generic "To do" [ref=f4e279]
+              - generic [ref=f4e280]: MEAL-17
+              - generic [ref=f4e281]: "SPIKE: Walmart affiliate add-to-cart URL"
+              - generic [ref=f4e282]: XS
+              - generic [ref=f4e283]: Spike
+              - generic "Priority P2" [ref=f4e284]
+            - 'link "To do MEAL-18 SPIKE: Amazon Fresh cart URL — confirm dead, then close XS Spike Priority P3" [ref=f4e288] [cursor=pointer]':
+              - /url: /issue/MEAL-18
+              - generic "To do" [ref=f4e289]
+              - generic [ref=f4e290]: MEAL-18
+              - generic [ref=f4e291]: "SPIKE: Amazon Fresh cart URL — confirm dead, then close"
+              - generic [ref=f4e292]: XS
+              - generic [ref=f4e293]: Spike
+              - generic "Priority P3" [ref=f4e294]
+            - link "To do MEAL-19 Kroger API sometimes returns no results S Bug Priority P1" [ref=f4e298] [cursor=pointer]:
+              - /url: /issue/MEAL-19
+              - generic "To do" [ref=f4e299]
+              - generic [ref=f4e300]: MEAL-19
+              - generic [ref=f4e301]: Kroger API sometimes returns no results
+              - generic [ref=f4e302]: S
+              - generic [ref=f4e303]: Bug
+              - generic "Priority P1" [ref=f4e304]
+            - link "To do MEAL-20 Generalise aldi.ts into an Instacart Storefront platform adapter L Task Priority P1" [ref=f4e308] [cursor=pointer]:
+              - /url: /issue/MEAL-20
+              - generic "To do" [ref=f4e309]
+              - generic [ref=f4e310]: MEAL-20
+              - generic [ref=f4e311]: Generalise aldi.ts into an Instacart Storefront platform adapter
+              - generic [ref=f4e312]: L
+              - generic [ref=f4e313]: Task
+              - generic "Priority P1" [ref=f4e314]
+            - link "To do MEAL-21 Add a platform discriminator and selector inheritance to automation config M Task Priority P1" [ref=f4e318] [cursor=pointer]:
+              - /url: /issue/MEAL-21
+              - generic "To do" [ref=f4e319]
+              - generic [ref=f4e320]: MEAL-21
+              - generic [ref=f4e321]: Add a platform discriminator and selector inheritance to automation config
+              - generic [ref=f4e322]: M
+              - generic [ref=f4e323]: Task
+              - generic "Priority P1" [ref=f4e324]
+            - link "To do MEAL-22 Onboard Publix, Sprouts, and Costco onto the Instacart adapter M Task Priority P2" [ref=f4e328] [cursor=pointer]:
+              - /url: /issue/MEAL-22
+              - generic "To do" [ref=f4e329]
+              - generic [ref=f4e330]: MEAL-22
+              - generic [ref=f4e331]: Onboard Publix, Sprouts, and Costco onto the Instacart adapter
+              - generic [ref=f4e332]: M
+              - generic [ref=f4e333]: Task
+              - generic "Priority P2" [ref=f4e334]
+            - 'link "To do MEAL-24 Redesign store selection: zip-first, searchable, recents M Task Priority P2" [ref=f4e338] [cursor=pointer]':
+              - /url: /issue/MEAL-24
+              - generic "To do" [ref=f4e339]
+              - generic [ref=f4e340]: MEAL-24
+              - generic [ref=f4e341]: "Redesign store selection: zip-first, searchable, recents"
+              - generic [ref=f4e342]: M
+              - generic [ref=f4e343]: Task
+              - generic "Priority P2" [ref=f4e344]
+            - link "To do MEAL-25 Bring the browser extension onto the app remote automation config L Task Priority P1" [ref=f4e348] [cursor=pointer]:
+              - /url: /issue/MEAL-25
+              - generic "To do" [ref=f4e349]
+              - generic [ref=f4e350]: MEAL-25
+              - generic [ref=f4e351]: Bring the browser extension onto the app remote automation config
+              - generic [ref=f4e352]: L
+              - generic [ref=f4e353]: Task
+              - generic "Priority P1" [ref=f4e354]
+            - link "Backlog MEAL-26 Extract a shared automation-scripts package for app and extension XL Task Priority P3" [ref=f4e358] [cursor=pointer]:
+              - /url: /issue/MEAL-26
+              - generic "Backlog" [ref=f4e359]
+              - generic [ref=f4e360]: MEAL-26
+              - generic [ref=f4e361]: Extract a shared automation-scripts package for app and extension
+              - generic [ref=f4e362]: XL
+              - generic [ref=f4e363]: Task
+              - generic "Priority P3" [ref=f4e364]
+            - link "To do MEAL-27 Build a product-matching evaluation harness L Task Priority P1" [ref=f4e368] [cursor=pointer]:
+              - /url: /issue/MEAL-27
+              - generic "To do" [ref=f4e369]
+              - generic [ref=f4e370]: MEAL-27
+              - generic [ref=f4e371]: Build a product-matching evaluation harness
+              - generic [ref=f4e372]: L
+              - generic [ref=f4e373]: Task
+              - generic "Priority P1" [ref=f4e374]
+            - 'link "To do MEAL-28 Improve matching: size, unit, pack-count, brand, and weight normalisation L Task Priority P2" [ref=f4e378] [cursor=pointer]':
+              - /url: /issue/MEAL-28
+              - generic "To do" [ref=f4e379]
+              - generic [ref=f4e380]: MEAL-28
+              - generic [ref=f4e381]: "Improve matching: size, unit, pack-count, brand, and weight normalisation"
+              - generic [ref=f4e382]: L
+              - generic [ref=f4e383]: Task
+              - generic "Priority P2" [ref=f4e384]
+            - link "To do MEAL-29 Handle out-of-stock and unavailable items explicitly M Task Priority P2" [ref=f4e388] [cursor=pointer]:
+              - /url: /issue/MEAL-29
+              - generic "To do" [ref=f4e389]
+              - generic [ref=f4e390]: MEAL-29
+              - generic [ref=f4e391]: Handle out-of-stock and unavailable items explicitly
+              - generic [ref=f4e392]: M
+              - generic [ref=f4e393]: Task
+              - generic "Priority P2" [ref=f4e394]
+            - link "To do MEAL-30 Automate fixture regeneration and drift detection M Task Priority P1" [ref=f4e398] [cursor=pointer]:
+              - /url: /issue/MEAL-30
+              - generic "To do" [ref=f4e399]
+              - generic [ref=f4e400]: MEAL-30
+              - generic [ref=f4e401]: Automate fixture regeneration and drift detection
+              - generic [ref=f4e402]: M
+              - generic [ref=f4e403]: Task
+              - generic "Priority P1" [ref=f4e404]
+            - link "To do MEAL-31 Selector health probe in production runs S Task Priority P2" [ref=f4e408] [cursor=pointer]:
+              - /url: /issue/MEAL-31
+              - generic "To do" [ref=f4e409]
+              - generic [ref=f4e410]: MEAL-31
+              - generic [ref=f4e411]: Selector health probe in production runs
+              - generic [ref=f4e412]: S
+              - generic [ref=f4e413]: Task
+              - generic "Priority P2" [ref=f4e414]
+            - link "To do MEAL-32 Fingerprint hygiene audit across stores M Task Priority P2" [ref=f4e418] [cursor=pointer]:
+              - /url: /issue/MEAL-32
+              - generic "To do" [ref=f4e419]
+              - generic [ref=f4e420]: MEAL-32
+              - generic [ref=f4e421]: Fingerprint hygiene audit across stores
+              - generic [ref=f4e422]: M
+              - generic [ref=f4e423]: Task
+              - generic "Priority P2" [ref=f4e424]
+            - 'link "Done MEAL-33 DECISION: no first-party client impersonation XS Decision Priority P1" [ref=f4e428] [cursor=pointer]':
+              - /url: /issue/MEAL-33
+              - generic "Done" [ref=f4e429]
+              - generic [ref=f4e430]: MEAL-33
+              - generic [ref=f4e431]: "DECISION: no first-party client impersonation"
+              - generic [ref=f4e432]: XS
+              - generic [ref=f4e433]: Decision
+              - generic "Priority P1" [ref=f4e434]
+            - 'link "Done MEAL-34 DECISION: Instacart Developer Platform is not a path XS Decision Priority P2" [ref=f4e438] [cursor=pointer]':
+              - /url: /issue/MEAL-34
+              - generic "Done" [ref=f4e439]
+              - generic [ref=f4e440]: MEAL-34
+              - generic [ref=f4e441]: "DECISION: Instacart Developer Platform is not a path"
+              - generic [ref=f4e442]: XS
+              - generic [ref=f4e443]: Decision
+              - generic "Priority P2" [ref=f4e444]
+            - link "To do MEAL-35 Explore if sku/productId/price/nutrition can be read from GraphQL S Spike Priority P1" [ref=f4e448] [cursor=pointer]:
+              - /url: /issue/MEAL-35
+              - generic "To do" [ref=f4e449]
+              - generic [ref=f4e450]: MEAL-35
+              - generic [ref=f4e451]: Explore if sku/productId/price/nutrition can be read from GraphQL
+              - generic [ref=f4e452]: S
+              - generic [ref=f4e453]: Spike
+              - generic "Priority P1" [ref=f4e454]
+        - generic [ref=f4e458]:
+          - paragraph [ref=f4e459]: Comments (1)
+          - generic [ref=f4e461]:
+            - generic [ref=f4e462]:
+              - generic [ref=f4e463]: claude
+              - generic [ref=f4e464]: 4h ago
+            - paragraph [ref=f4e466]: Tracker deployed and verified against production. 34 issues seeded, TODO.md synced to /docs/todo.
+          - generic [ref=f4e467]:
+            - textbox "Comment… markdown supported. Say \"fix it\" and Claude will branch, implement, commit, and open a PR." [ref=f4e468]
+            - generic [ref=f4e469]:
+              - textbox [ref=f4e470]: stephen
+              - generic [ref=f4e471]: Claude picks this up from /api/inbox
+              - button "Comment" [ref=f4e472] [cursor=pointer]
+        - generic [ref=f4e473]:
+          - paragraph [ref=f4e474]: Activity
+          - generic [ref=f4e475]:
+            - generic [ref=f4e476]:
+              - generic [ref=f4e477]: 4h ago
+              - generic [ref=f4e478]: claude commented
+            - generic [ref=f4e479]:
+              - generic [ref=f4e480]: 4h ago
+              - generic [ref=f4e481]: claude moved backlog → in_progress
+            - generic [ref=f4e482]:
+              - generic [ref=f4e483]: 4h ago
+              - generic [ref=f4e484]: claude moved in_progress → backlog
+            - generic [ref=f4e485]:
+              - generic [ref=f4e486]: 4h ago
+              - generic [ref=f4e487]: claude created this epic
+      - complementary [ref=f4e488]:
+        - generic [ref=f4e489]:
+          - paragraph [ref=f4e490]: Status
+          - generic [ref=f4e491]:
+            - combobox [ref=f4e493]:
+              - option "Backlog"
+              - option "To do"
+              - option "In progress" [selected]
+              - option "Blocked"
+              - option "In review"
+              - option "Done"
+              - option "Cancelled"
+            - generic [ref=f4e494]:
+              - button "Close as done" [ref=f4e496] [cursor=pointer]
+              - button "Won’t do" [ref=f4e498] [cursor=pointer]
+        - generic [ref=f4e499]:
+          - generic [ref=f4e500]:
+            - generic [ref=f4e501]: Priority
+            - generic [ref=f4e502]: P0
+          - generic [ref=f4e503]:
+            - generic [ref=f4e504]: Estimate
+            - generic [ref=f4e505]: XL
+        - generic [ref=f4e506]:
+          - paragraph [ref=f4e507]: Git
+          - paragraph [ref=f4e508]: No branch yet.
+        - generic [ref=f4e509]:
+          - generic [ref=f4e510]:
+            - generic [ref=f4e511]: created
+            - generic [ref=f4e512]: 8/1/2026
+          - generic [ref=f4e513]:
+            - generic [ref=f4e514]: updated
+            - generic [ref=f4e515]: 4h ago
+          - generic [ref=f4e516]:
+            - generic [ref=f4e517]: started
+            - generic [ref=f4e518]: 4h ago
+        - generic [ref=f4e519]:
+          - paragraph [ref=f4e520]: Metadata
+          - generic [ref=f4e521]:
+            - generic [ref=f4e522]: north_star
+            - generic [ref=f4e523]: per-store item-level cart success rate
+          - generic [ref=f4e524]:
+            - generic [ref=f4e525]: rails_today
+            - generic [ref=f4e526]: Kroger=API, Walmart=pending, HEB/Albertsons/ALDI/Wegmans/Amazon=DOM
+  - alert [ref=f4e527]

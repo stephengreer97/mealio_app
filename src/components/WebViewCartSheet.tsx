@@ -28,6 +28,7 @@ import {
   ConsolidatedIngredient,
   consolidateIngredients,
 } from '../lib/consolidateIngredients';
+import { ingredientAmount } from '../lib/formatMeasurement';
 import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
 import { usePresearchAddPool, PresearchItem } from '../lib/usePresearchAddPool';
@@ -3075,13 +3076,17 @@ export default function WebViewCartSheet({
                         </Text>
                       ) : null}
                       {it.mealIngredients.map((mi, mIdx) => {
+                        // This meal's amount, not the consolidated entry's. The
+                        // entry carries whichever meal created it, so two meals
+                        // sharing chicken both used to claim the first one's
+                        // "2 lb" — on the one screen whose entire job is asking
+                        // how much to buy (MEAL-92).
                         const w = ingredientWeight(it);
-                        const isQty = it.unit.toLowerCase() === 'qty';
-                        const measurement = w
-                          ? weightLabelLb(w.lb)
-                          : (isQty ? `${mi.qty} qty` : `${it.measure} ${it.unit}`);
+                        const measurement = w ? weightLabelLb(w.lb) : ingredientAmount(mi);
                         return (
-                          <Text key={mIdx} style={styles.mealNames}>{mi.mealName} • {measurement}</Text>
+                          <Text key={mIdx} style={styles.mealNames}>
+                            {mi.mealName} calls for {measurement || `${mi.qty}`}
+                          </Text>
                         );
                       })}
                     </View>

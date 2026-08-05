@@ -1,0 +1,5 @@
+- generic [ref=e2]:
+  - paragraph [ref=e3]: Mealio Tracker
+  - generic [ref=e4]:
+    - textbox "passphrase" [active] [ref=e5]
+    - button "Enter" [ref=e6] [cursor=pointer]

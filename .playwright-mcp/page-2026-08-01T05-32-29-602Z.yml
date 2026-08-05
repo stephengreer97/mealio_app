@@ -1,0 +1,391 @@
+- generic [active] [ref=f3e1]:
+  - generic [ref=f3e2]:
+    - banner [ref=f3e3]:
+      - link "mealio/tracker" [ref=f3e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=f3e5]:
+        - link "Overview":
+          - /url: /
+        - link "Board":
+          - /url: /board
+        - link "All issues":
+          - /url: /issues
+        - link "Inbox":
+          - /url: /inbox
+        - link "Docs":
+          - /url: /docs
+      - generic [ref=f3e6]:
+        - link "+ Epic" [ref=f3e7] [cursor=pointer]:
+          - /url: /new?type=epic
+        - link "+ Issue" [ref=f3e8] [cursor=pointer]:
+          - /url: /new
+    - main [ref=f3e9]:
+      - paragraph [ref=f3e10]: Work in flight
+      - heading "Board" [level=1] [ref=f3e11]
+      - generic [ref=f3e12]:
+        - link "All" [ref=f3e13] [cursor=pointer]:
+          - /url: /board
+        - link "MEAL-1" [ref=f3e14] [cursor=pointer]:
+          - /url: /board?epic=MEAL-1
+        - link "MEAL-36" [ref=f3e15] [cursor=pointer]:
+          - /url: /board?epic=MEAL-36
+        - link "MEAL-37" [ref=f3e16] [cursor=pointer]:
+          - /url: /board?epic=MEAL-37
+      - generic [ref=f3e17]:
+        - generic [ref=f3e18]:
+          - generic [ref=f3e19]:
+            - generic [ref=f3e21]: Backlog
+            - generic [ref=f3e22]: "1"
+          - link "MEAL-26 Priority P3 Extract a shared automation-scripts package for app and extension phase-3 extension" [ref=f3e24] [cursor=pointer]:
+            - /url: /issue/MEAL-26
+            - generic [ref=f3e25]:
+              - generic [ref=f3e26]: MEAL-26
+              - generic "Priority P3" [ref=f3e28]
+            - generic [ref=f3e32]: Extract a shared automation-scripts package for app and extension
+            - generic [ref=f3e33]:
+              - generic [ref=f3e34]: phase-3
+              - generic [ref=f3e35]: extension
+        - generic [ref=f3e36]:
+          - generic [ref=f3e37]:
+            - generic [ref=f3e39]: To do
+            - generic [ref=f3e40]: "31"
+          - generic [ref=f3e41]:
+            - link "MEAL-2 Priority P0 Build the automation funnel dashboard phase-0 observability" [ref=f3e42] [cursor=pointer]:
+              - /url: /issue/MEAL-2
+              - generic [ref=f3e43]:
+                - generic [ref=f3e44]: MEAL-2
+                - generic "Priority P0" [ref=f3e46]
+              - generic [ref=f3e50]: Build the automation funnel dashboard
+              - generic [ref=f3e51]:
+                - generic [ref=f3e52]: phase-0
+                - generic [ref=f3e53]: observability
+            - 'link "MEAL-3 Priority P0 Define and instrument the north-star metric: item-level cart success rate phase-0 observability" [ref=f3e54] [cursor=pointer]':
+              - /url: /issue/MEAL-3
+              - generic [ref=f3e55]:
+                - generic [ref=f3e56]: MEAL-3
+                - generic "Priority P0" [ref=f3e58]
+              - generic [ref=f3e62]: "Define and instrument the north-star metric: item-level cart success rate"
+              - generic [ref=f3e63]:
+                - generic [ref=f3e64]: phase-0
+                - generic [ref=f3e65]: observability
+            - link "MEAL-4 Priority P0 Add a failure taxonomy with explicit error codes phase-0 observability" [ref=f3e66] [cursor=pointer]:
+              - /url: /issue/MEAL-4
+              - generic [ref=f3e67]:
+                - generic [ref=f3e68]: MEAL-4
+                - generic "Priority P0" [ref=f3e70]
+              - generic [ref=f3e74]: Add a failure taxonomy with explicit error codes
+              - generic [ref=f3e75]:
+                - generic [ref=f3e76]: phase-0
+                - generic [ref=f3e77]: observability
+            - link "MEAL-5 Priority P1 Audit telemetry completeness and sampling phase-0 observability" [ref=f3e78] [cursor=pointer]:
+              - /url: /issue/MEAL-5
+              - generic [ref=f3e79]:
+                - generic [ref=f3e80]: MEAL-5
+                - generic "Priority P1" [ref=f3e82]
+              - generic [ref=f3e86]: Audit telemetry completeness and sampling
+              - generic [ref=f3e87]:
+                - generic [ref=f3e88]: phase-0
+                - generic [ref=f3e89]: observability
+            - link "MEAL-6 Priority P1 Alert on per-store success-rate regressions phase-0 observability" [ref=f3e90] [cursor=pointer]:
+              - /url: /issue/MEAL-6
+              - generic [ref=f3e91]:
+                - generic [ref=f3e92]: MEAL-6
+                - generic "Priority P1" [ref=f3e94]
+              - generic [ref=f3e98]: Alert on per-store success-rate regressions
+              - generic [ref=f3e99]:
+                - generic [ref=f3e100]: phase-0
+                - generic [ref=f3e101]: observability
+            - link "MEAL-7 Priority P0 Nightly live canary per store family in CI phase-1 canary" [ref=f3e102] [cursor=pointer]:
+              - /url: /issue/MEAL-7
+              - generic [ref=f3e103]:
+                - generic [ref=f3e104]: MEAL-7
+                - generic "Priority P0" [ref=f3e106]
+              - generic [ref=f3e110]: Nightly live canary per store family in CI
+              - generic [ref=f3e111]:
+                - generic [ref=f3e112]: phase-1
+                - generic [ref=f3e113]: canary
+            - link "MEAL-8 Priority P0 Remote auto-disable when a canary fails phase-1 canary" [ref=f3e114] [cursor=pointer]:
+              - /url: /issue/MEAL-8
+              - generic [ref=f3e115]:
+                - generic [ref=f3e116]: MEAL-8
+                - generic "Priority P0" [ref=f3e118]
+              - generic [ref=f3e122]: Remote auto-disable when a canary fails
+              - generic [ref=f3e123]:
+                - generic [ref=f3e124]: phase-1
+                - generic [ref=f3e125]: canary
+            - 'link "MEAL-9 Priority P0 Graceful degradation: never dead-end a failed add phase-1 ux resilience" [ref=f3e126] [cursor=pointer]':
+              - /url: /issue/MEAL-9
+              - generic [ref=f3e127]:
+                - generic [ref=f3e128]: MEAL-9
+                - generic "Priority P0" [ref=f3e130]
+              - generic [ref=f3e134]: "Graceful degradation: never dead-end a failed add"
+              - generic [ref=f3e135]:
+                - generic [ref=f3e136]: phase-1
+                - generic [ref=f3e137]: ux
+                - generic [ref=f3e138]: resilience
+            - link "MEAL-10 Priority P1 Centralise WAF/challenge detection, backoff, and human handoff phase-1 resilience" [ref=f3e139] [cursor=pointer]:
+              - /url: /issue/MEAL-10
+              - generic [ref=f3e140]:
+                - generic [ref=f3e141]: MEAL-10
+                - generic "Priority P1" [ref=f3e143]
+              - generic [ref=f3e147]: Centralise WAF/challenge detection, backoff, and human handoff
+              - generic [ref=f3e148]:
+                - generic [ref=f3e149]: phase-1
+                - generic [ref=f3e150]: resilience
+            - link "MEAL-11 Priority P1 Make cart reconciliation universal and measured phase-1 resilience" [ref=f3e151] [cursor=pointer]:
+              - /url: /issue/MEAL-11
+              - generic [ref=f3e152]:
+                - generic [ref=f3e153]: MEAL-11
+                - generic "Priority P1" [ref=f3e155]
+              - generic [ref=f3e159]: Make cart reconciliation universal and measured
+              - generic [ref=f3e160]:
+                - generic [ref=f3e161]: phase-1
+                - generic [ref=f3e162]: resilience
+            - 'link "MEAL-12 Priority P0 SPIKE: does HEB accept full GraphQL queries, or only persisted hashes? phase-2 rail heb" [ref=f3e163] [cursor=pointer]':
+              - /url: /issue/MEAL-12
+              - generic [ref=f3e164]:
+                - generic [ref=f3e165]: MEAL-12
+                - generic "Priority P0" [ref=f3e167]
+              - generic [ref=f3e171]: "SPIKE: does HEB accept full GraphQL queries, or only persisted hashes?"
+              - generic [ref=f3e172]:
+                - generic [ref=f3e173]: phase-2
+                - generic [ref=f3e174]: rail
+                - generic [ref=f3e175]: heb
+            - 'link "MEAL-13 Priority P1 HEB: replace DOM search extraction with __NEXT_DATA__ read phase-2 rail heb" [ref=f3e176] [cursor=pointer]':
+              - /url: /issue/MEAL-13
+              - generic [ref=f3e177]:
+                - generic [ref=f3e178]: MEAL-13
+                - generic "Priority P1" [ref=f3e180]
+              - generic [ref=f3e184]: "HEB: replace DOM search extraction with __NEXT_DATA__ read"
+              - generic [ref=f3e185]:
+                - generic [ref=f3e186]: phase-2
+                - generic [ref=f3e187]: rail
+                - generic [ref=f3e188]: heb
+            - 'link "MEAL-14 Priority P1 HEB: per-SKU add confirmation via in-page cart query phase-2 rail heb" [ref=f3e189] [cursor=pointer]':
+              - /url: /issue/MEAL-14
+              - generic [ref=f3e190]:
+                - generic [ref=f3e191]: MEAL-14
+                - generic "Priority P1" [ref=f3e193]
+              - generic [ref=f3e197]: "HEB: per-SKU add confirmation via in-page cart query"
+              - generic [ref=f3e198]:
+                - generic [ref=f3e199]: phase-2
+                - generic [ref=f3e200]: rail
+                - generic [ref=f3e201]: heb
+            - 'link "MEAL-15 Priority P1 SPIKE: Albertsons family in-page network rail feasibility phase-2 rail albertsons" [ref=f3e202] [cursor=pointer]':
+              - /url: /issue/MEAL-15
+              - generic [ref=f3e203]:
+                - generic [ref=f3e204]: MEAL-15
+                - generic "Priority P1" [ref=f3e206]
+              - generic [ref=f3e210]: "SPIKE: Albertsons family in-page network rail feasibility"
+              - generic [ref=f3e211]:
+                - generic [ref=f3e212]: phase-2
+                - generic [ref=f3e213]: rail
+                - generic [ref=f3e214]: albertsons
+            - link "MEAL-16 Priority P1 Offline endpoint + hash discovery rig, publishing to remote config phase-2 rail canary" [ref=f3e215] [cursor=pointer]:
+              - /url: /issue/MEAL-16
+              - generic [ref=f3e216]:
+                - generic [ref=f3e217]: MEAL-16
+                - generic "Priority P1" [ref=f3e219]
+              - generic [ref=f3e223]: Offline endpoint + hash discovery rig, publishing to remote config
+              - generic [ref=f3e224]:
+                - generic [ref=f3e225]: phase-2
+                - generic [ref=f3e226]: rail
+                - generic [ref=f3e227]: canary
+            - 'link "MEAL-17 Priority P2 SPIKE: Walmart affiliate add-to-cart URL phase-2 rail walmart" [ref=f3e228] [cursor=pointer]':
+              - /url: /issue/MEAL-17
+              - generic [ref=f3e229]:
+                - generic [ref=f3e230]: MEAL-17
+                - generic "Priority P2" [ref=f3e232]
+              - generic [ref=f3e236]: "SPIKE: Walmart affiliate add-to-cart URL"
+              - generic [ref=f3e237]:
+                - generic [ref=f3e238]: phase-2
+                - generic [ref=f3e239]: rail
+                - generic [ref=f3e240]: walmart
+            - 'link "MEAL-18 Priority P3 SPIKE: Amazon Fresh cart URL — confirm dead, then close phase-2 rail amazon" [ref=f3e241] [cursor=pointer]':
+              - /url: /issue/MEAL-18
+              - generic [ref=f3e242]:
+                - generic [ref=f3e243]: MEAL-18
+                - generic "Priority P3" [ref=f3e245]
+              - generic [ref=f3e249]: "SPIKE: Amazon Fresh cart URL — confirm dead, then close"
+              - generic [ref=f3e250]:
+                - generic [ref=f3e251]: phase-2
+                - generic [ref=f3e252]: rail
+                - generic [ref=f3e253]: amazon
+            - link "MEAL-19 Priority P1 Kroger API sometimes returns no results phase-2 kroger" [ref=f3e254] [cursor=pointer]:
+              - /url: /issue/MEAL-19
+              - generic [ref=f3e255]:
+                - generic [ref=f3e256]: MEAL-19
+                - generic "Priority P1" [ref=f3e258]
+              - generic [ref=f3e262]: Kroger API sometimes returns no results
+              - generic [ref=f3e263]:
+                - generic [ref=f3e264]: phase-2
+                - generic [ref=f3e265]: kroger
+            - link "MEAL-20 Priority P1 Generalise aldi.ts into an Instacart Storefront platform adapter phase-3 instacart" [ref=f3e266] [cursor=pointer]:
+              - /url: /issue/MEAL-20
+              - generic [ref=f3e267]:
+                - generic [ref=f3e268]: MEAL-20
+                - generic "Priority P1" [ref=f3e270]
+              - generic [ref=f3e274]: Generalise aldi.ts into an Instacart Storefront platform adapter
+              - generic [ref=f3e275]:
+                - generic [ref=f3e276]: phase-3
+                - generic [ref=f3e277]: instacart
+            - link "MEAL-21 Priority P1 Add a platform discriminator and selector inheritance to automation config phase-3 instacart config" [ref=f3e278] [cursor=pointer]:
+              - /url: /issue/MEAL-21
+              - generic [ref=f3e279]:
+                - generic [ref=f3e280]: MEAL-21
+                - generic "Priority P1" [ref=f3e282]
+              - generic [ref=f3e286]: Add a platform discriminator and selector inheritance to automation config
+              - generic [ref=f3e287]:
+                - generic [ref=f3e288]: phase-3
+                - generic [ref=f3e289]: instacart
+                - generic [ref=f3e290]: config
+            - link "MEAL-22 Priority P2 Onboard Publix, Sprouts, and Costco onto the Instacart adapter phase-3 instacart growth" [ref=f3e291] [cursor=pointer]:
+              - /url: /issue/MEAL-22
+              - generic [ref=f3e292]:
+                - generic [ref=f3e293]: MEAL-22
+                - generic "Priority P2" [ref=f3e295]
+              - generic [ref=f3e299]: Onboard Publix, Sprouts, and Costco onto the Instacart adapter
+              - generic [ref=f3e300]:
+                - generic [ref=f3e301]: phase-3
+                - generic [ref=f3e302]: instacart
+                - generic [ref=f3e303]: growth
+            - link "MEAL-23 Priority P2 Move the store catalog server-side phase-3 config ux" [ref=f3e304] [cursor=pointer]:
+              - /url: /issue/MEAL-23
+              - generic [ref=f3e305]:
+                - generic [ref=f3e306]: MEAL-23
+                - generic "Priority P2" [ref=f3e308]
+              - generic [ref=f3e312]: Move the store catalog server-side
+              - generic [ref=f3e313]:
+                - generic [ref=f3e314]: phase-3
+                - generic [ref=f3e315]: config
+                - generic [ref=f3e316]: ux
+            - 'link "MEAL-24 Priority P2 Redesign store selection: zip-first, searchable, recents phase-3 ux" [ref=f3e317] [cursor=pointer]':
+              - /url: /issue/MEAL-24
+              - generic [ref=f3e318]:
+                - generic [ref=f3e319]: MEAL-24
+                - generic "Priority P2" [ref=f3e321]
+              - generic [ref=f3e325]: "Redesign store selection: zip-first, searchable, recents"
+              - generic [ref=f3e326]:
+                - generic [ref=f3e327]: phase-3
+                - generic [ref=f3e328]: ux
+            - link "MEAL-25 Priority P1 Bring the browser extension onto the app remote automation config phase-3 extension config" [ref=f3e329] [cursor=pointer]:
+              - /url: /issue/MEAL-25
+              - generic [ref=f3e330]:
+                - generic [ref=f3e331]: MEAL-25
+                - generic "Priority P1" [ref=f3e333]
+              - generic [ref=f3e337]: Bring the browser extension onto the app remote automation config
+              - generic [ref=f3e338]:
+                - generic [ref=f3e339]: phase-3
+                - generic [ref=f3e340]: extension
+                - generic [ref=f3e341]: config
+            - link "MEAL-27 Priority P1 Build a product-matching evaluation harness phase-4 matching" [ref=f3e342] [cursor=pointer]:
+              - /url: /issue/MEAL-27
+              - generic [ref=f3e343]:
+                - generic [ref=f3e344]: MEAL-27
+                - generic "Priority P1" [ref=f3e346]
+              - generic [ref=f3e350]: Build a product-matching evaluation harness
+              - generic [ref=f3e351]:
+                - generic [ref=f3e352]: phase-4
+                - generic [ref=f3e353]: matching
+            - 'link "MEAL-28 Priority P2 Improve matching: size, unit, pack-count, brand, and weight normalisation phase-4 matching" [ref=f3e354] [cursor=pointer]':
+              - /url: /issue/MEAL-28
+              - generic [ref=f3e355]:
+                - generic [ref=f3e356]: MEAL-28
+                - generic "Priority P2" [ref=f3e358]
+              - generic [ref=f3e362]: "Improve matching: size, unit, pack-count, brand, and weight normalisation"
+              - generic [ref=f3e363]:
+                - generic [ref=f3e364]: phase-4
+                - generic [ref=f3e365]: matching
+            - link "MEAL-29 Priority P2 Handle out-of-stock and unavailable items explicitly phase-4 matching ux" [ref=f3e366] [cursor=pointer]:
+              - /url: /issue/MEAL-29
+              - generic [ref=f3e367]:
+                - generic [ref=f3e368]: MEAL-29
+                - generic "Priority P2" [ref=f3e370]
+              - generic [ref=f3e374]: Handle out-of-stock and unavailable items explicitly
+              - generic [ref=f3e375]:
+                - generic [ref=f3e376]: phase-4
+                - generic [ref=f3e377]: matching
+                - generic [ref=f3e378]: ux
+            - link "MEAL-30 Priority P1 Automate fixture regeneration and drift detection phase-1 canary" [ref=f3e379] [cursor=pointer]:
+              - /url: /issue/MEAL-30
+              - generic [ref=f3e380]:
+                - generic [ref=f3e381]: MEAL-30
+                - generic "Priority P1" [ref=f3e383]
+              - generic [ref=f3e387]: Automate fixture regeneration and drift detection
+              - generic [ref=f3e388]:
+                - generic [ref=f3e389]: phase-1
+                - generic [ref=f3e390]: canary
+            - link "MEAL-31 Priority P2 Selector health probe in production runs phase-1 observability" [ref=f3e391] [cursor=pointer]:
+              - /url: /issue/MEAL-31
+              - generic [ref=f3e392]:
+                - generic [ref=f3e393]: MEAL-31
+                - generic "Priority P2" [ref=f3e395]
+              - generic [ref=f3e399]: Selector health probe in production runs
+              - generic [ref=f3e400]:
+                - generic [ref=f3e401]: phase-1
+                - generic [ref=f3e402]: observability
+            - link "MEAL-32 Priority P2 Fingerprint hygiene audit across stores phase-1 resilience" [ref=f3e403] [cursor=pointer]:
+              - /url: /issue/MEAL-32
+              - generic [ref=f3e404]:
+                - generic [ref=f3e405]: MEAL-32
+                - generic "Priority P2" [ref=f3e407]
+              - generic [ref=f3e411]: Fingerprint hygiene audit across stores
+              - generic [ref=f3e412]:
+                - generic [ref=f3e413]: phase-1
+                - generic [ref=f3e414]: resilience
+            - link "MEAL-35 Priority P1 Explore if sku/productId/price/nutrition can be read from GraphQL phase-2 rail heb" [ref=f3e415] [cursor=pointer]:
+              - /url: /issue/MEAL-35
+              - generic [ref=f3e416]:
+                - generic [ref=f3e417]: MEAL-35
+                - generic "Priority P1" [ref=f3e419]
+              - generic [ref=f3e423]: Explore if sku/productId/price/nutrition can be read from GraphQL
+              - generic [ref=f3e424]:
+                - generic [ref=f3e425]: phase-2
+                - generic [ref=f3e426]: rail
+                - generic [ref=f3e427]: heb
+        - generic [ref=f3e428]:
+          - generic [ref=f3e429]:
+            - generic [ref=f3e431]: In progress
+            - generic [ref=f3e432]: "0"
+          - generic [ref=f3e433]: —
+        - generic [ref=f3e435]:
+          - generic [ref=f3e436]:
+            - generic [ref=f3e438]: Blocked
+            - generic [ref=f3e439]: "0"
+          - generic [ref=f3e440]: —
+        - generic [ref=f3e442]:
+          - generic [ref=f3e443]:
+            - generic [ref=f3e445]: In review
+            - generic [ref=f3e446]: "0"
+          - generic [ref=f3e447]: —
+        - generic [ref=f3e449]:
+          - generic [ref=f3e450]:
+            - generic [ref=f3e452]: Done
+            - generic [ref=f3e453]: "3"
+          - generic [ref=f3e454]:
+            - 'link "MEAL-33 Priority P1 DECISION: no first-party client impersonation legal architecture" [ref=f3e455] [cursor=pointer]':
+              - /url: /issue/MEAL-33
+              - generic [ref=f3e456]:
+                - generic [ref=f3e457]: MEAL-33
+                - generic "Priority P1" [ref=f3e459]
+              - generic [ref=f3e463]: "DECISION: no first-party client impersonation"
+              - generic [ref=f3e464]:
+                - generic [ref=f3e465]: legal
+                - generic [ref=f3e466]: architecture
+            - 'link "MEAL-34 Priority P2 DECISION: Instacart Developer Platform is not a path architecture" [ref=f3e467] [cursor=pointer]':
+              - /url: /issue/MEAL-34
+              - generic [ref=f3e468]:
+                - generic [ref=f3e469]: MEAL-34
+                - generic "Priority P2" [ref=f3e471]
+              - generic [ref=f3e475]: "DECISION: Instacart Developer Platform is not a path"
+              - generic [ref=f3e476]: architecture
+            - link "MEAL-38 Priority P2 Email Stephen when Claude comments tracker email" [ref=f3e478] [cursor=pointer]:
+              - /url: /issue/MEAL-38
+              - generic [ref=f3e479]:
+                - generic [ref=f3e480]: MEAL-38
+                - generic "Priority P2" [ref=f3e482]
+              - generic [ref=f3e486]: Email Stephen when Claude comments
+              - generic [ref=f3e487]:
+                - generic [ref=f3e488]: tracker
+                - generic [ref=f3e489]: email
+  - alert [ref=f3e490]

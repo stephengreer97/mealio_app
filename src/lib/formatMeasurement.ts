@@ -1,4 +1,4 @@
-import type { Ingredient } from '../types';
+
 
 /**
  * The amount to print beside an ingredient, or '' when the source gave none.
@@ -18,7 +18,20 @@ import type { Ingredient } from '../types';
  * amount in `qty` with `measure` null (MEAL-103); without it "12 corn tortillas"
  * would read "corn tortillas" until that migration lands. It can go once it has.
  */
-export function ingredientAmount(ing: Ingredient): string {
+/**
+ * The three fields the amount is read from.
+ *
+ * Structural rather than `Ingredient`, because the qty step reads a *per-meal*
+ * entry — `{ mealName, qty, measure, unit }` off a consolidated row — which is
+ * not an ingredient and has no name of its own. Both callers hold these three.
+ */
+export interface Measurable {
+  measure?: string | null;
+  unit?: string | null;
+  qty?: number | null;
+}
+
+export function ingredientAmount(ing: Measurable): string {
   const measure = (ing.measure ?? '').toString().trim();
 
   if (!ing.unit || ing.unit === 'qty') {

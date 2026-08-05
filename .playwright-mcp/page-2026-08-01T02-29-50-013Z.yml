@@ -1,0 +1,232 @@
+- generic [active] [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - banner [ref=f1e3]:
+      - link "mealio/tracker" [ref=f1e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=f1e5]:
+        - link "Overview" [ref=f1e6] [cursor=pointer]:
+          - /url: /
+        - link "Board" [ref=f1e7] [cursor=pointer]:
+          - /url: /board
+        - link "All issues" [ref=f1e8] [cursor=pointer]:
+          - /url: /issues
+        - link "Inbox" [ref=f1e9] [cursor=pointer]:
+          - /url: /inbox
+        - link "Docs" [ref=f1e10] [cursor=pointer]:
+          - /url: /docs
+      - generic [ref=f1e11]:
+        - link "+ Epic" [ref=f1e12] [cursor=pointer]:
+          - /url: /new?type=epic
+        - link "+ Issue" [ref=f1e13] [cursor=pointer]:
+          - /url: /new
+    - main [ref=f1e14]:
+      - generic [ref=f1e15]:
+        - link "← MEAL-1 · Make Product Search and Add to Cart Automation Bulletproof" [ref=f1e16] [cursor=pointer]:
+          - /url: /issue/MEAL-1
+        - generic [ref=f1e17]:
+          - generic [ref=f1e18]: MEAL-35
+          - generic [ref=f1e19]: Spike
+          - generic [ref=f1e20]:
+            - generic "To do" [ref=f1e203]
+            - text: To do
+          - generic "Priority P1" [ref=f1e22]
+          - generic [ref=f1e184]: awaiting claude
+        - heading "Explore if sku/productId/price/nutrition can be read from GraphQL" [level=1] [ref=f1e26]
+        - generic [ref=f1e27]:
+          - link "phase-2" [ref=f1e28] [cursor=pointer]:
+            - /url: /issues?label=phase-2
+          - link "rail" [ref=f1e29] [cursor=pointer]:
+            - /url: /issues?label=rail
+          - link "heb" [ref=f1e30] [cursor=pointer]:
+            - /url: /issues?label=heb
+          - link "research" [ref=f1e31] [cursor=pointer]:
+            - /url: /issues?label=research
+        - generic [ref=f1e33]:
+          - heading "Question" [level=2] [ref=f1e34]
+          - paragraph [ref=f1e35]:
+            - text: When we read HEB's embedded
+            - code [ref=f1e36]: __NEXT_DATA__
+            - text: "(MEAL-13) instead of scraping product tiles, which fields actually come back? Specifically:"
+          - table [ref=f1e37]:
+            - rowgroup [ref=f1e38]:
+              - row [ref=f1e39]:
+                - columnheader "Field" [ref=f1e40]
+                - columnheader "Why it matters" [ref=f1e41]
+            - rowgroup [ref=f1e42]:
+              - row [ref=f1e43]:
+                - cell [ref=f1e44]:
+                  - code [ref=f1e45]: productId
+                  - text: /
+                  - code [ref=f1e46]: skuId
+                - cell [ref=f1e47]:
+                  - strong [ref=f1e48]: Required
+                  - text: by MEAL-14 — per-SKU cart confirmation is impossible without them
+              - row [ref=f1e49]:
+                - cell [ref=f1e50]:
+                  - code [ref=f1e51]: price
+                - cell "Lets us show cart cost before the user commits, and improves match scoring on size" [ref=f1e52]
+              - row [ref=f1e53]:
+                - cell [ref=f1e54]:
+                  - code [ref=f1e55]: nutrition
+                - cell "Would unlock features well beyond cart automation" [ref=f1e56]
+              - row [ref=f1e57]:
+                - cell "availability / inventory" [ref=f1e58]
+                - cell "Feeds MEAL-29's out-of-stock handling" [ref=f1e59]
+          - heading "Why it's worth a spike" [level=2] [ref=f1e60]
+          - paragraph [ref=f1e61]: The DOM path only ever gave us what was rendered — name, a price string, an image. If the JSON payload carries structured product data, we get it for free the moment MEAL-13 lands, at zero extra request cost. Nutrition in particular is the kind of thing that is expensive to source and might already be sitting in a payload we are about to start parsing anyway.
+          - heading "Approach" [level=2] [ref=f1e62]
+          - list [ref=f1e63]:
+            - listitem [ref=f1e64]:
+              - text: "Offline, with Playwright: capture"
+              - code [ref=f1e65]: __NEXT_DATA__
+              - text: from a HEB search page and a product-detail page, logged in and logged out.
+            - listitem [ref=f1e66]: Dump the full shape of one product node; do not stop at the fields we expect.
+            - listitem [ref=f1e67]: Check the product-detail payload separately — search results are often trimmed.
+            - listitem [ref=f1e68]: Record which fields need auth to appear.
+          - heading "Acceptance" [level=2] [ref=f1e69]
+          - list [ref=f1e70]:
+            - listitem [ref=f1e71]: A written field inventory for search vs product-detail nodes.
+            - listitem [ref=f1e72]:
+              - text: Explicit yes/no on
+              - code [ref=f1e73]: productId
+              - text: ","
+              - code [ref=f1e74]: skuId
+              - text: ","
+              - code [ref=f1e75]: price
+              - text: ","
+              - code [ref=f1e76]: nutrition
+              - text: ", availability."
+            - listitem [ref=f1e77]: If nutrition is present, file a follow-up — that is a product conversation, not an automation one.
+          - heading "Notes" [level=2] [ref=f1e78]
+          - paragraph [ref=f1e79]: Blocked behind nothing, but only worth doing alongside MEAL-13 since it reads the same payload. Do them together.
+        - generic [ref=f1e80]:
+          - paragraph [ref=f1e81]: Comments (3)
+          - generic [ref=f1e82]:
+            - generic [ref=f1e83]:
+              - generic [ref=f1e84]:
+                - generic [ref=f1e85]: stephen
+                - generic [ref=f1e86]: 4m ago
+              - paragraph [ref=f1e88]: This matters for MEAL-13 — if nutrition is in the payload we get it for free. Please fix it.
+            - generic [ref=f1e89]:
+              - generic [ref=f1e90]:
+                - generic [ref=f1e91]: claude
+                - generic [ref=f1e92]: 3m ago
+              - generic [ref=f1e93]:
+                - paragraph [ref=f1e94]:
+                  - text: Triaged. Reclassified as a
+                  - strong [ref=f1e95]: spike
+                  - text: (p1, S) under MEAL-1 and written up with a field inventory to produce.
+                - paragraph [ref=f1e96]:
+                  - text: "On your point about nutrition — agreed, and I have made it explicit in the acceptance criteria. Worth flagging though: if nutrition"
+                  - emphasis [ref=f1e97]: is
+                  - text: in the payload, that is a product conversation rather than an automation one, so I have asked for a follow-up ticket rather than scope-creeping this spike.
+                - paragraph [ref=f1e98]:
+                  - text: "One correction to the framing: this should not run before MEAL-13, it should run"
+                  - strong [ref=f1e99]: with
+                  - text: it. Both read the same
+                  - code [ref=f1e100]: __NEXT_DATA__
+                  - text: payload, so capturing it once and inventorying every field costs almost nothing extra, whereas doing them separately means two Playwright sessions against a bot-defended site.
+                - paragraph [ref=f1e101]: No code change needed here yet, so nothing to branch for — this is a research ticket.
+            - generic [ref=f1e185]:
+              - generic [ref=f1e186]:
+                - generic [ref=f1e187]: stephen
+                - generic [ref=f1e188]: just now
+              - paragraph [ref=f1e190]: Verifying the comment form end-to-end from the browser. Agreed on running this alongside MEAL-13.
+          - generic [ref=f1e102]:
+            - textbox "Comment… markdown supported. Say \"fix it\" and Claude will branch, implement, commit, and open a PR." [ref=f1e103]
+            - generic [ref=f1e104]:
+              - textbox [ref=f1e105]: stephen
+              - generic [ref=f1e106]: Claude picks this up from /api/inbox
+              - button "Comment" [ref=f1e107] [cursor=pointer]
+        - generic [ref=f1e108]:
+          - paragraph [ref=f1e109]: Activity
+          - generic [ref=f1e110]:
+            - generic [ref=f1e204]:
+              - generic [ref=f1e205]: just now
+              - generic [ref=f1e206]: stephen moved done → todo
+            - generic [ref=f1e195]:
+              - generic [ref=f1e196]: just now
+              - generic [ref=f1e197]: stephen moved todo → done
+            - generic [ref=f1e191]:
+              - generic [ref=f1e192]: just now
+              - generic [ref=f1e193]: stephen commented
+            - generic [ref=f1e111]:
+              - generic [ref=f1e112]: 3m ago
+              - generic [ref=f1e113]: claude commented
+            - generic [ref=f1e114]:
+              - generic [ref=f1e115]: 3m ago
+              - generic [ref=f1e116]: claude changed type
+            - generic [ref=f1e117]:
+              - generic [ref=f1e118]: 3m ago
+              - generic [ref=f1e119]: claude changed estimate
+            - generic [ref=f1e120]:
+              - generic [ref=f1e121]: 3m ago
+              - generic [ref=f1e122]: claude changed parent_key
+            - generic [ref=f1e123]:
+              - generic [ref=f1e124]: 3m ago
+              - generic [ref=f1e125]: claude changed priority
+            - generic [ref=f1e126]:
+              - generic [ref=f1e127]: 3m ago
+              - generic [ref=f1e128]: claude moved backlog → todo
+            - generic [ref=f1e129]:
+              - generic [ref=f1e130]: 4m ago
+              - generic [ref=f1e131]: stephen commented
+            - generic [ref=f1e132]:
+              - generic [ref=f1e133]: 4m ago
+              - generic [ref=f1e134]: claude created this task
+      - complementary [ref=f1e135]:
+        - generic [ref=f1e136]:
+          - paragraph [ref=f1e137]: Status
+          - generic [ref=f1e138]:
+            - combobox [ref=f1e140]:
+              - option "Backlog"
+              - option "To do" [selected]
+              - option "In progress"
+              - option "Blocked"
+              - option "In review"
+              - option "Done"
+              - option "Cancelled"
+            - generic [ref=f1e207]:
+              - button "Close as done" [ref=f1e209] [cursor=pointer]
+              - button "Won’t do" [ref=f1e211] [cursor=pointer]
+        - generic [ref=f1e146]:
+          - generic [ref=f1e147]:
+            - generic [ref=f1e148]: Priority
+            - generic [ref=f1e149]: P1
+          - generic [ref=f1e150]:
+            - generic [ref=f1e151]: Estimate
+            - generic [ref=f1e152]: S
+          - generic [ref=f1e153]:
+            - generic [ref=f1e154]: epic
+            - generic [ref=f1e212]:
+              - combobox [ref=f1e213]:
+                - option "— no epic —"
+                - option "MEAL-1 · Make Product Search and Add to Cart Auto" [selected]
+              - generic [ref=f1e214]:
+                - button "Link" [ref=f1e215] [cursor=pointer]
+                - button "Cancel" [ref=f1e216] [cursor=pointer]
+        - generic [ref=f1e159]:
+          - paragraph [ref=f1e160]: Git
+          - paragraph [ref=f1e161]: No branch yet.
+        - generic [ref=f1e162]:
+          - generic [ref=f1e163]:
+            - generic [ref=f1e164]: created
+            - generic [ref=f1e165]: 8/1/2026
+          - generic [ref=f1e166]:
+            - generic [ref=f1e167]: updated
+            - generic [ref=f1e168]: just now
+        - generic [ref=f1e169]:
+          - paragraph [ref=f1e170]: Metadata
+          - generic [ref=f1e171]:
+            - generic [ref=f1e172]: source
+            - generic [ref=f1e173]: request
+          - generic [ref=f1e174]:
+            - generic [ref=f1e175]: related
+            - generic [ref=f1e176]: MEAL-13, MEAL-14, MEAL-29
+          - generic [ref=f1e177]:
+            - generic [ref=f1e178]: triaged
+            - generic [ref=f1e179]: "true"
+          - generic [ref=f1e180]:
+            - generic [ref=f1e181]: requested_by
+            - generic [ref=f1e182]: stephen
+  - alert [ref=f1e183]

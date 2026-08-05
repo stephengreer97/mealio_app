@@ -1,0 +1,456 @@
+- generic [ref=f210e2]:
+  - generic [ref=f210e4]:
+    - generic [ref=f210e5]:
+      - link "Homepage" [ref=f210e6] [cursor=pointer]:
+        - /url: /?source=---top_nav_layout_nav-----------------------------------------
+      - combobox "search" [ref=f210e14]
+    - button "Get the Medium app" [ref=f210e16] [cursor=pointer]:
+      - generic [ref=f210e20]: Get app
+    - link [ref=f210e23] [cursor=pointer]:
+      - /url: /m/signin?operation=register&redirect=https%3A%2F%2Fmedium.com%2Fnew-story&source=---top_nav_layout_nav-----------------------new_post_topnav------------------
+    - generic [ref=f210e29]:
+      - paragraph [ref=f210e30]:
+        - button "Sign up" [ref=f210e32]
+      - paragraph [ref=f210e34]:
+        - link "Sign in" [ref=f210e36] [cursor=pointer]:
+          - /url: /m/signin?operation=login&redirect=https%3A%2F%2Fmedium.com%2F%40amazingbusinessnow%2Ffresh-blackberry-chia-jam-cfddf909ce98&source=post_page---top_nav_layout_nav-----------------------global_nav------------------
+    - button "user options menu" [ref=f210e41] [cursor=pointer]:
+      - img "Unknown user" [ref=f210e43]
+  - generic [ref=f210e47]:
+    - generic:
+      - dialog
+    - navigation "Table of contents":
+      - button "Table of contents" [ref=f210e48] [cursor=pointer]
+    - article [ref=f210e65]:
+      - generic [ref=f210e69]:
+        - generic [ref=f210e73]:
+          - 'button "Topic: Cooking Recipes" [ref=f210e77]':
+            - generic [ref=f210e78] [cursor=pointer]: Cooking Recipes
+          - 'button "Topic: Cookbooks" [ref=f210e85]':
+            - generic [ref=f210e86] [cursor=pointer]: Cookbooks
+          - 'button "Topic: Cooking" [ref=f210e93]':
+            - generic [ref=f210e94] [cursor=pointer]: Cooking
+          - 'button "Topic: Dinner Recipe" [ref=f210e101]':
+            - generic [ref=f210e102] [cursor=pointer]: Dinner Recipe
+          - 'button "Topic: Dinner" [ref=f210e109]':
+            - generic [ref=f210e110] [cursor=pointer]: Dinner
+        - generic [ref=f210e116]:
+          - generic [ref=f210e117]:
+            - heading "Fresh Blackberry Chia Jam" [level=1] [ref=f210e118]
+            - generic [ref=f210e121]:
+              - generic [ref=f210e122]:
+                - generic [ref=f210e123]:
+                  - link [ref=f210e128] [cursor=pointer]:
+                    - /url: /@amazingbusinessnow?source=post_page---byline--cfddf909ce98---------------------------------------
+                    - img "Amazing Business" [ref=f210e131]
+                  - link "Amazing Business" [ref=f210e141] [cursor=pointer]:
+                    - /url: /@amazingbusinessnow?source=post_page---byline--cfddf909ce98---------------------------------------
+                - generic [ref=f210e144]:
+                  - generic [ref=f210e145]: 11 min read
+                  - generic [ref=f210e146]: ·
+                  - generic [ref=f210e148]: Sep 10, 2023
+              - generic [ref=f210e149]:
+                - generic [ref=f210e151]:
+                  - generic [ref=f210e153]:
+                    - link [ref=f210e156] [cursor=pointer]:
+                      - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fvote%2Fp%2Fcfddf909ce98&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40amazingbusinessnow%2Ffresh-blackberry-chia-jam-cfddf909ce98&user=Amazing+Business&userId=f25c070e3acb&source=---header_actions--cfddf909ce98---------------------clap_footer------------------
+                      - generic [ref=f210e159]:
+                        - img "clap"
+                    - paragraph [ref=f210e161]: "--"
+                  - button "responses" [ref=f210e166] [cursor=pointer]
+                  - generic [ref=f210e169]:
+                    - link [ref=f210e174] [cursor=pointer]:
+                      - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Frepost%2Fp%2Fcfddf909ce98&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40amazingbusinessnow%2Ffresh-blackberry-chia-jam-cfddf909ce98&user=Amazing+Business&userId=f25c070e3acb&source=---header_actions--cfddf909ce98---------------------repost_header------------------
+                    - paragraph [ref=f210e181]: "--"
+                - generic [ref=f210e182]:
+                  - link [ref=f210e188] [cursor=pointer]:
+                    - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fbookmark%2Fp%2Fcfddf909ce98&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40amazingbusinessnow%2Ffresh-blackberry-chia-jam-cfddf909ce98&source=---header_actions--cfddf909ce98---------------------bookmark_footer------------------
+                    - img "Add to list bookmark button" [ref=f210e190]
+                  - link [ref=f210e199] [cursor=pointer]:
+                    - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2Fplans%3Fdimension%3Dpost_audio_button%26postId%3Dcfddf909ce98&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40amazingbusinessnow%2Ffresh-blackberry-chia-jam-cfddf909ce98&source=---header_actions--cfddf909ce98---------------------post_audio_button------------------
+                    - button "Listen" [ref=f210e203]
+                  - button "Share Post" [ref=f210e210] [cursor=pointer]
+          - figure [ref=f210e213]:
+            - button "Press enter or click to view image in full size" [ref=f210e214]
+          - heading "Fresh Blackberry Chia Jam" [level=2] [ref=f210e218]
+          - paragraph [ref=f210e219]: August 29, 2023
+          - figure [ref=f210e220]:
+            - button "Press enter or click to view image in full size" [ref=f210e221]
+          - paragraph [ref=f210e225]:
+            - link "Jump to Recipe" [ref=f210e226] [cursor=pointer]:
+              - /url: https://joymakersandco.com/fresh-blackberry-chia-jam/#recipe
+            - link "Print Recipe" [ref=f210e227] [cursor=pointer]:
+              - /url: https://joymakersandco.com/wprm_print/4266
+          - paragraph [ref=f210e228]: 5/5 — (4 votes)
+          - paragraph [ref=f210e229]:
+            - text: In a world brimming with artificial sweeteners and overly processed options, there’s something almost reassuring about making your own sauces, jams, and jellies. Bursting with the sweet flavors of summer, this
+            - strong [ref=f210e230]: Fresh Blackberry Chia Jam
+            - text: is a new staple in my refrigerator. It’s amazing how a few simple steps and whole ingredients can transform these berries into a spread that is SO crave worthy.
+          - figure [ref=f210e231]
+          - heading "Yes! You can have jam without water bath canning!" [level=2] [ref=f210e234]
+          - paragraph [ref=f210e235]: "Chia jam, a game changing alternative to traditional water bath canning that’s as easy as it is delicious. Picture this: no elaborate sterilization, no fussing with canning equipment, and definitely no sweating over a bubbling pot of boiling water. This is like the laid-back cousin of traditional jam-making."
+          - paragraph [ref=f210e236]: With just a few simple steps, a few cups of berries, a handful of chia seeds, and a touch of lemon & honey and you too can whip up a batch of homemade jam. Say goodbye to complex processes and hello to a jam making session that’s all about ease, flavor, and the gratification of stirring up something so delicious and easy that you thought the only way was store-bought!
+          - figure [ref=f210e237]
+          - heading "Chia Jam vs. Freezer Jam" [level=2] [ref=f210e240]
+          - paragraph [ref=f210e241]: Let’s dive into the world of simple jam-making, the ease of this quick recipe versus traditional freezer jam. Imagine crafting your favorite fruity concoctions without the fuss of stovetop cooking or the hassle of canning. Chia jam harnesses the natural gelling power of chia seeds, turning your favorite fruits into yummy spreads with minimal effort. In contrast, freezer jam relies on pectin and a short stint in the freezer to set. While both methods offer simplicity, chia jam’s magic lies in its hands-off approach and healthful benefits. So, if you’re seeking a quick and nutritious way to enjoy a homemade version without the traditional rigamarole, chia jam is your ticket to the fast-track.
+          - figure [ref=f210e242]
+        - separator [ref=f210e245]
+        - generic [ref=f210e251]:
+          - 'heading "What You’ll Need: Crafting Simple Jam" [level=2] [ref=f210e252]'
+          - paragraph [ref=f210e253]:
+            - strong [ref=f210e254]: Blender-
+            - text: I use my Vitamix, but you do not need anything special or high-powered. Since you are only pulsing the ingredients together a few times until your desired consistency, a food processor will also give you great results.
+          - paragraph [ref=f210e255]:
+            - strong [ref=f210e256]: Fresh Blackberries-
+            - text: In season is always best and I have found that I can always find some decent fresh blackberries at my local grocery store. Though frozen can generally be great quality for
+            - emphasis [ref=f210e257]: some
+            - text: recipes, they will hold
+            - emphasis [ref=f210e258]: far
+            - text: too much water for this one and I do not recommend it. Using fresh allows for a better, brighter color as well as flavor and texture.
+          - paragraph [ref=f210e259]: I’ve made a lot of chia jam over the last few years, but blackberries really are the STAR of the show! They are a beautiful dark shade of purple, sweet, and delicious, making them some of nature’s best. Loaded with vitamins C and K which support a healthy immune system and bone strength. Watch out for this little gem, fiber is their secret weapon, helping digestion. Plus, blackberries are rich in antioxidants, which fight oxidative stress and the everyday wear & tear our bodies face.
+          - paragraph [ref=f210e260]:
+            - strong [ref=f210e261]: Honey-
+            - text: Now, let’s address the sweetness factor. Many traditional recipes are FILLED with refined sugars that offer a momentary spike in energy followed by a crash. Enter unrefined sugars and honey — a more wholesome and sustainable approach to sweetness. Aside from its golden sweetness, quality honey can have distinctive flavors depending on where the bees find their nectar.
+          - paragraph [ref=f210e262]: Those flavors blend beautifully in the berry puree without overpowering them, like the bolder taste of some other natural sweeteners might do. It also acts as a natural preservative, packed with antioxidants, vitamins, minerals, and potential allergy-fighting properties when sourced locally. As an unrefined sweetener, it has a lower glycemic index and helps to regulate blood sugar levels. It also has natural enzymes and antibacterial properties. Pretty amazing stuff!
+          - paragraph [ref=f210e263]:
+            - strong [ref=f210e264]: Lemon-
+            - text: Fresh lemon juice, a zesty ally in the world of jam making, plays a big role in perfecting blackberry jam. Its tangy and bright juice not only makes flavors pop, but also serves as another natural preservative, helping the longevity whether you store it in the fridge to be eaten throughout the week, or the freezer for a rainy day.
+          - paragraph [ref=f210e265]: The acidity in lemon juice brings out the full palate of blackberries, while balancing their sweetness with a tart twist. Making this simple concoction beautifully balanced. Even though it is just 2 tablespoons, don’t skip it and make sure you use fresh if you can.
+          - paragraph [ref=f210e266]:
+            - strong [ref=f210e267]: Chia Seeds-
+            - text: Chia seeds, those tiny powerhouses of nutrition, are a little force of nature. It that can effortlessly transform your fruit puree into the perfect spreadable texture. When added to liquids, they work their magic, creating something that quickly thickens without the need for prolonged cooking or excessive amounts of heavily processed white sugar.
+          - paragraph [ref=f210e268]: Their natural gelling properties bind the ingredients together, simplifying the jam-making process breeze. They also pack a punch with an extra boost of health benefits, omega-3 fatty acids, and antioxidants into your jam, a sure-fire and tasty shortcut to a healthy jar of goodness.
+          - paragraph [ref=f210e269]:
+            - strong [ref=f210e270]: "Canning Funnel:"
+            - emphasis [ref=f210e271]: (optional)
+            - text: This is a special funnel with a large opening, perfect for pouring liquids into containers or jars.
+          - paragraph [ref=f210e272]:
+            - strong [ref=f210e273]: Jelly Jars & Lids-
+            - text: You will need about 3–8 ounce jelly jars for a single batch of this recipe. If you double it like I typically do, you will need about 6 jars. One goes in the fridge for the week and the rest in the freezer. As far as the lids, regular canning lids work just fine, but I prefer the plastic screw on type specifically made for canning jars. I find mine at Walmart, but you can also find them on Amazon. Just be sure to buy the right size, they come in either regular or wide mouth, depending on the jar you are using.
+          - paragraph [ref=f210e274]:
+            - strong [ref=f210e275]:
+              - emphasis [ref=f210e276]: "TIP:"
+            - emphasis [ref=f210e277]: Be sure to label your lids before placing in the freezer.
+          - paragraph [ref=f210e278]:
+            - strong [ref=f210e279]: Medium Stockpot-
+            - text: You can even simmer this in your instant pot on SAUTE mode!
+          - figure [ref=f210e280]
+          - figure [ref=f210e283]
+          - figure [ref=f210e286]
+        - separator [ref=f210e289]
+        - generic [ref=f210e295]:
+          - heading "How to store fresh jams" [level=2] [ref=f210e296]
+          - paragraph [ref=f210e297]: Storing your homemade chia jam is a breeze, and it’s all about keeping things simple. Once it has reached that perfect, spreadable consistency, let it cool down to room temperature. Then, transfer into clean, airtight jars — mason jars work like a charm. Pop those jars into the fridge, and your jam will happily hang out for up to two weeks.
+          - paragraph [ref=f210e298]: Batch cooking and freezing it in jars is like bottling up summer until you’re ready to savor its fruity goodness. Once your jam is done simmering, turn off the heat and stir in the chia seeds. Carefully ladle it into clean jelly jars or air-tight containers. Let it cool to room temperature, lable the lids and freeze for 3–6 months. Your future self will thank you for making a little extra.
+          - paragraph [ref=f210e299]: If you’re feeling extra ambitious, you can also freeze it in ice cube trays for those jam cravings that strike unexpectedly. So whether you’re layering it on toast, swirling it into yogurt, or even dolloping it on pancakes, your chia jam is ready to dress up your breakfast or snack whenever you are.
+          - paragraph [ref=f210e300]: Same as before, turn off the heat, add the chia seeds. Then let it cool in the pot before spooning into ice-cube trays. Once they’re frozen solid, transfer the jam cubes into a zip-top bag and stash them back in the freezer. When a craving hits, just grab a cube or two, and your chia jam will be ready to defrost.
+        - separator [ref=f210e301]
+        - generic [ref=f210e307]:
+          - heading "Ways to serve Fresh Blackberry Chia Jam" [level=2] [ref=f210e308]
+          - paragraph [ref=f210e309]: Serving up blackberries is as easy as pie (or jam, in this case). Spread it lavishly on warm toast for a breakfast that feels like a cozy hug from your kitchen. Want to add some pizzazz to your yogurt or oatmeal? A dollop of this is your ticket to a burst of berry goodness in every spoonful. The possibilities are endless — so go ahead, get creative, and let it shine as bright as the flavors!
+          - paragraph [ref=f210e310]:
+            - link [ref=f210e311] [cursor=pointer]:
+              - /url: https://joymakersandco.com/bread-machine-master-butter-dough/
+              - strong [ref=f210e312]: Toast
+          - paragraph [ref=f210e313]:
+            - strong [ref=f210e314]: Biscuits
+          - paragraph [ref=f210e315]:
+            - link [ref=f210e316] [cursor=pointer]:
+              - /url: https://joymakersandco.com/overnight-sourdough-belgian-waffles/
+              - strong [ref=f210e317]: Waffles
+          - paragraph [ref=f210e318]:
+            - link [ref=f210e319] [cursor=pointer]:
+              - /url: https://joymakersandco.com/easy-buttermilk-buckwheat-pancakes/
+              - strong [ref=f210e320]: Pancakes
+          - paragraph [ref=f210e321]:
+            - strong [ref=f210e322]: Peanut Butter & Jelly
+          - paragraph [ref=f210e323]:
+            - strong [ref=f210e324]: Yogurt
+          - paragraph [ref=f210e325]:
+            - strong [ref=f210e326]: Smoothies
+          - paragraph [ref=f210e327]:
+            - strong [ref=f210e328]: Ice-Cream
+          - paragraph [ref=f210e329]:
+            - link [ref=f210e330] [cursor=pointer]:
+              - /url: https://thesassybarn.com/2021/06/11/turn-jam-into-syrup/
+              - strong [ref=f210e331]: Sauce or Syrup
+          - generic [ref=f210e332]:
+            - heading "Get Amazing Business’s stories in your inbox" [level=2] [ref=f210e334]
+            - paragraph [ref=f210e336]: Join Medium for free to get updates from this writer.
+            - generic [ref=f210e337]:
+              - textbox "Enter your email" [ref=f210e341]
+              - button "Subscribe" [ref=f210e344]
+            - generic [ref=f210e346]:
+              - generic [ref=f210e347]:
+                - checkbox "Remember me for faster sign in" [checked]
+              - paragraph [ref=f210e352]: Remember me for faster sign in
+          - paragraph [ref=f210e353]:
+            - strong [ref=f210e354]: Thumbprint Cookies
+          - figure [ref=f210e355]
+        - separator [ref=f210e358]
+        - generic [ref=f210e364]:
+          - generic [ref=f210e365]: As you stand before your jar of freshly made jam, you're holding a jar of more than just ingredients. It's full of intention, love for yourself and the important people in your life. Each spoonful is a reminder that the path to nourishment doesn't have to be complicated. By choosing whole foods, harnessing the power of chia seeds, and embracing the sweetness of unrefined sugars, you're savoring a culinary journey that's as delightful for your taste buds as it is for your well-being. So, whether you're spreading it on toast, swirling it into yogurt, or gifting it to someone special, remember that health starts with a frame of mind and what you put in your body.
+          - heading "If you try this Fresh Blackberry Chia Jam or any of my other recipes tag me on Instagram @joymakersandco, I’d love to see what you make!" [level=2] [ref=f210e367]
+          - heading [level=2] [ref=f210e368]:
+            - link "joymakersandco" [ref=f210e369] [cursor=pointer]:
+              - /url: https://www.instagram.com/joymakersandco/
+          - paragraph [ref=f210e370]:
+            - text: Load More
+            - link "Follow on Instagram" [ref=f210e371] [cursor=pointer]:
+              - /url: https://www.instagram.com/joymakersandco/
+          - figure [ref=f210e372]
+          - heading "Fresh Blackberry Chia Jam" [level=2] [ref=f210e375]
+          - figure [ref=f210e376]
+          - paragraph [ref=f210e379]: joymakersandco
+          - paragraph [ref=f210e380]:
+            - text: In a world brimming with artificial sweeteners and overly processed options, there’s something almost reassuring about making your own sauces, jams, and jellies. Bursting with the sweet flavors of summer, this
+            - strong [ref=f210e381]: Fresh Blackberry Chia Jam
+            - text: is a new staple in my refrigerator. I can’t get enough of it on
+            - link "toast" [ref=f210e382] [cursor=pointer]:
+              - /url: https://joymakersandco.com/bread-machine-master-butter-dough/
+            - text: ", buttery biscuits, or waffles. It’s amazing how a few simple steps and whole ingredients can transform these berries into a spread that is SO crave worthy."
+          - paragraph [ref=f210e383]: 5 from 2 votes
+          - paragraph [ref=f210e384]:
+            - link "Print Recipe" [ref=f210e385] [cursor=pointer]:
+              - /url: https://joymakersandco.com/wprm_print/4266
+            - link "Pin Recipe" [ref=f210e386] [cursor=pointer]:
+              - /url: https://www.pinterest.com/pin/create/bookmarklet/?url=https%3A%2F%2Fjoymakersandco.com%2Ffresh-blackberry-chia-jam%2F&media=https%3A%2F%2Fi0.wp.com%2Fjoymakersandco.com%2Fwp-content%2Fuploads%2F2023%2F08%2Fimg_4106.jpg%3Ffit%3D3024%252C3024%26ssl%3D1&description=Fresh+Blackberry+Chia+Jam&is_video=false
+          - paragraph [ref=f210e387]: PREP TIME5minutes mins
+          - paragraph [ref=f210e388]: COOK TIME10minutes mins
+          - paragraph [ref=f210e389]: TOTAL TIME15minutes mins
+          - paragraph [ref=f210e390]: COURSEBreakfast, Dessert, Lunch, Pantry Staple, Snack
+          - paragraph [ref=f210e391]: CUISINEAmerican
+          - paragraph [ref=f210e392]:
+            - text: SERVINGS
+            - link "15" [ref=f210e393] [cursor=pointer]:
+              - /url: https://joymakersandco.com/fresh-blackberry-chia-jam/#
+          - paragraph [ref=f210e394]: CALORIES82 kcal
+          - heading "EQUIPMENT" [level=2] [ref=f210e395]
+          - list [ref=f210e396]:
+            - listitem [ref=f210e397]: 1 Medium Stockpot or Instant Pot with SAUTE mode
+            - listitem [ref=f210e398]: 3 8 ounce Jelly Jars or other air-tight containers
+            - listitem [ref=f210e399]: 1 Canning Funnel
+            - listitem [ref=f210e400]: 1 Blender or Food Processor
+            - listitem [ref=f210e401]: 1 Digital Gram Scale optional
+          - heading "INGREDIENTS" [level=2] [ref=f210e402]
+          - heading "US CustomaryMetric" [level=2] [ref=f210e403]
+          - heading "1x2x3x" [level=2] [ref=f210e404]
+          - list [ref=f210e405]:
+            - listitem [ref=f210e406]: 4 cups fresh blackberries
+            - listitem [ref=f210e407]: 3/4 cup honey, can reduce to taste if needed.
+            - listitem [ref=f210e408]: 2 T fresh lemon juice
+            - listitem [ref=f210e409]: 1/4 cup chia seeds
+          - heading "INSTRUCTIONS" [level=2] [ref=f210e410]
+          - list [ref=f210e411]:
+            - listitem [ref=f210e412]: Place the blackberries, honey, and lemon juice into your blender or food processor.
+            - listitem [ref=f210e413]:
+              - text: Pulse several times until you reach the consistency you desire. Do not fully blend unless you want a VERY smooth jam.
+              - strong [ref=f210e414]: "NOTE:"
+              - text: The color will be lighter and less vibrant if you blend it until smooth vs. pulsing.
+            - listitem [ref=f210e415]:
+              - text: Pour the puree into your medium stockpot or instant pot on SAUTE mode (
+              - emphasis [ref=f210e416]: be careful to adjust heat on the instant pot as needed, this works in a pinch if your stove top is unavailable
+              - text: )
+            - listitem [ref=f210e417]: Simmer to a light boil, stirring frequently to prevent burning. When it reaches the boil, lower the heat to medium-low to low and gently simmer & stir for 8–10 minutes.
+            - listitem [ref=f210e418]: When it is done cooking, turn off the heat and stir in the chia seeds. Pour into the prepared jars while hot and set aside to cool before placing the lids on and refrigerating and/or freezing. (see notes below)
+          - heading "NOTES" [level=2] [ref=f210e419]
+          - paragraph [ref=f210e420]:
+            - text: Nutritional values and servings are estimates only.
+            - strong [ref=f210e421]: "How to freeze:"
+            - text: Storing your homemade chia jam is a breeze, and it’s all about keeping things simple. Once your chia jam has reached that perfect, spreadable consistency, let it cool down to room temperature. Then, transfer it into clean, airtight jars — mason jars work like a charm. Pop those jars into the fridge, and your chia jam will happily hang out for up to two weeks.Freezing your homemade chia jam in jars is like bottling up summer until you’re ready to savor its fruity goodness. Once your jam is done simmering, turn off the heat and stir in the chia seeds. Carefully ladle it into clean jelly jars or air-tight containers. Let it cool to room temperature, lable the lids and freeze for 3–6 months. Your future self will thank you for making a little extra.If you’re feeling extra ambitious, you can also freeze it in ice cube trays for those jam cravings that strike unexpectedly. So whether you’re layering it on toast, swirling it into yogurt, or even dolloping it on pancakes, your chia jam is ready to dress up your breakfast or snack whenever you are.Same as before, turn off the heat, add the chia seeds. Then let it cool in the pot before spooning into ice-cube trays. Once they’re frozen solid, transfer the jam cubes into a zip-top bag and stash them back in the freezer. When a jam craving hits, just grab a cube or two, and your chia jam will be ready to defrost.
+            - strong [ref=f210e422]: "How to serve:"
+            - text: Serving up blackberries is as easy as pie (or jam, in this case). Spread it lavishly on warm toast for a breakfast that feels like a cozy hug from your kitchen. Want to add some pizzazz to your yogurt or oatmeal? A dollop of this is your ticket to a burst of berry goodness in every spoonful. The possibilities are endless — so go ahead, get creative, and let it shine as bright as the flavors!
+            - link [ref=f210e423] [cursor=pointer]:
+              - /url: https://joymakersandco.com/bread-machine-master-butter-dough/
+              - strong [ref=f210e424]: Toast
+            - strong [ref=f210e425]: Biscuits
+            - link [ref=f210e426] [cursor=pointer]:
+              - /url: https://joymakersandco.com/overnight-sourdough-belgian-waffles/
+              - strong [ref=f210e427]: Waffles
+            - link [ref=f210e428] [cursor=pointer]:
+              - /url: https://joymakersandco.com/easy-buttermilk-buckwheat-pancakes/
+              - strong [ref=f210e429]: Pancakes
+            - strong [ref=f210e430]: Peanut Butter & JellyYogurtSmoothiesIce-Cream
+            - link [ref=f210e431] [cursor=pointer]:
+              - /url: https://thesassybarn.com/2021/06/11/turn-jam-into-syrup/
+              - strong [ref=f210e432]: Sauce or Syrup
+            - strong [ref=f210e433]: for Sweet Tea
+            - strong [ref=f210e434]: or LemonadeThumbprint Cookies
+          - heading "NUTRITION" [level=2] [ref=f210e435]
+          - paragraph [ref=f210e436]: "Calories: 82kcalCarbohydrates: 19gProtein: 1gFat: 1gSaturated Fat: 0.1gPolyunsaturated Fat: 1gMonounsaturated Fat: 0.1gTrans Fat: 0.004gSodium: 2mgPotassium: 85mgFiber: 3gSugar: 16gVitamin A: 84IUVitamin C: 9mgCalcium: 30mgIron: 1mg"
+          - paragraph [ref=f210e437]: KEYWORDbatch cooking, blackberry jam, blackberry recipes, chia jam, easy chia jam, easy jam recipe, healthy jam, paleo chia jam, paleo jam, unrefined sugar free recipes
+          - paragraph [ref=f210e438]:
+            - strong [ref=f210e439]: Tried this recipe?
+            - link "Let us know" [ref=f210e440] [cursor=pointer]:
+              - /url: https://joymakersandco.com/fresh-blackberry-chia-jam/#comment
+            - text: how it was!
+          - heading "Share this:" [level=2] [ref=f210e441]
+          - list [ref=f210e442]:
+            - listitem [ref=f210e443]:
+              - link "Twitter" [ref=f210e444] [cursor=pointer]:
+                - /url: https://joymakersandco.com/fresh-blackberry-chia-jam/?share=twitter&nb=1
+            - listitem [ref=f210e445]:
+              - link "Facebook" [ref=f210e446] [cursor=pointer]:
+                - /url: https://joymakersandco.com/fresh-blackberry-chia-jam/?share=facebook&nb=1
+          - heading "Like this:" [level=2] [ref=f210e447]
+          - paragraph [ref=f210e448]: joymakersandco
+          - paragraph [ref=f210e449]:
+            - link "4 ingredient recipes" [ref=f210e450] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/4-ingredient-recipes/
+            - text: ","
+            - link "batch cooking" [ref=f210e451] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/batch-cooking/
+            - text: ","
+            - link "batch cooking jam recipe" [ref=f210e452] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/batch-cooking-jam-recipe/
+            - text: ","
+            - link "berry jam" [ref=f210e453] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/berry-jam/
+            - text: ","
+            - link "blackberry jam" [ref=f210e454] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/blackberry-jam/
+            - text: ","
+            - link "blackberry lemon" [ref=f210e455] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/blackberry-lemon/
+            - text: ","
+            - link "chia jam" [ref=f210e456] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/chia-jam/
+            - text: ","
+            - link "chia jam vs. freezer jam" [ref=f210e457] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/chia-jam-vs-freezer-jam/
+            - text: ","
+            - link "diy jam recipe" [ref=f210e458] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/diy-jam-recipe/
+            - text: ","
+            - link "easy jam recipe" [ref=f210e459] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/easy-jam-recipe/
+            - text: ","
+            - link "Fresh Blackberry Chia Jam" [ref=f210e460] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/fresh-blackberry-chia-jam/
+            - text: ","
+            - link "gluten free recipes" [ref=f210e461] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/gluten-free-recipes/
+            - text: ","
+            - link "healthy jam" [ref=f210e462] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/healthy-jam/
+            - text: ","
+            - link "how to make jam" [ref=f210e463] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/how-to-make-jam/
+            - text: ","
+            - link "instant pot jam" [ref=f210e464] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/instant-pot-jam/
+            - text: ","
+            - link "jam making tips" [ref=f210e465] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/jam-making-tips/
+            - text: ","
+            - link "paleo jam" [ref=f210e466] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/paleo-jam/
+            - text: ","
+            - link "paleo thumbprint cookies" [ref=f210e467] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/paleo-thumbprint-cookies/
+            - text: ","
+            - link "pancake toppings" [ref=f210e468] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/pancake-toppings/
+            - text: ","
+            - link "simple ingredient recipes" [ref=f210e469] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/simple-ingredient-recipes/
+            - text: ","
+            - link "smoothie hacks" [ref=f210e470] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/smoothie-hacks/
+            - text: ","
+            - link "the health benefits of chia seeds" [ref=f210e471] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/the-health-benefits-of-chia-seeds/
+            - text: ","
+            - link "the health benefits of honey" [ref=f210e472] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/the-health-benefits-of-honey/
+            - text: ","
+            - link "thumbprint cookies" [ref=f210e473] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/thumbprint-cookies/
+            - text: ","
+            - link "unrefined sugar recipes" [ref=f210e474] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/unrefined-sugar-recipes/
+            - text: ","
+            - link "urban homesteader tips" [ref=f210e475] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/urban-homesteader-tips/
+            - text: ","
+            - link "waffle toppings" [ref=f210e476] [cursor=pointer]:
+              - /url: https://joymakersandco.com/tag/waffle-toppings/
+    - generic [ref=f210e479]:
+      - link "Cooking Recipes" [ref=f210e481] [cursor=pointer]:
+        - /url: /tag/cooking-recipes?source=post_page---footer_tags--cfddf909ce98---------------------------------------
+      - link "Cookbooks" [ref=f210e484] [cursor=pointer]:
+        - /url: /tag/cookbooks?source=post_page---footer_tags--cfddf909ce98---------------------------------------
+      - link "Cooking" [ref=f210e487] [cursor=pointer]:
+        - /url: /tag/cooking?source=post_page---footer_tags--cfddf909ce98---------------------------------------
+      - link "Dinner Recipe" [ref=f210e490] [cursor=pointer]:
+        - /url: /tag/dinner-recipe?source=post_page---footer_tags--cfddf909ce98---------------------------------------
+      - link "Dinner" [ref=f210e493] [cursor=pointer]:
+        - /url: /tag/dinner?source=post_page---footer_tags--cfddf909ce98---------------------------------------
+    - contentinfo [ref=f210e495]:
+      - generic [ref=f210e499]:
+        - generic [ref=f210e500]:
+          - generic [ref=f210e503]:
+            - link [ref=f210e506] [cursor=pointer]:
+              - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fvote%2Fp%2Fcfddf909ce98&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40amazingbusinessnow%2Ffresh-blackberry-chia-jam-cfddf909ce98&user=Amazing+Business&userId=f25c070e3acb&source=---footer_actions--cfddf909ce98---------------------clap_footer------------------
+              - generic [ref=f210e509]:
+                - img "clap"
+            - paragraph [ref=f210e511]: "--"
+          - button "responses" [ref=f210e516] [cursor=pointer]
+          - generic [ref=f210e519]:
+            - link [ref=f210e524] [cursor=pointer]:
+              - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Frepost%2Fp%2Fcfddf909ce98&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40amazingbusinessnow%2Ffresh-blackberry-chia-jam-cfddf909ce98&user=Amazing+Business&userId=f25c070e3acb&source=---footer_actions--cfddf909ce98---------------------repost_footer------------------
+            - paragraph [ref=f210e531]: "--"
+        - generic [ref=f210e532]:
+          - link [ref=f210e539] [cursor=pointer]:
+            - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fbookmark%2Fp%2Fcfddf909ce98&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40amazingbusinessnow%2Ffresh-blackberry-chia-jam-cfddf909ce98&source=---footer_actions--cfddf909ce98---------------------bookmark_footer------------------
+            - img "Add to list bookmark button" [ref=f210e541]
+          - button "Share Post" [ref=f210e549] [cursor=pointer]
+    - generic [ref=f210e555]:
+      - link [ref=f210e558] [cursor=pointer]:
+        - /url: /@amazingbusinessnow?source=post_page---post_author_info--cfddf909ce98---------------------------------------
+        - img "Amazing Business" [ref=f210e560]
+      - generic [ref=f210e563]:
+        - link [ref=f210e564] [cursor=pointer]:
+          - /url: /@amazingbusinessnow?source=post_page---post_author_info--cfddf909ce98---------------------------------------
+          - heading "Written by Amazing Business" [level=2] [ref=f210e565]
+        - generic [ref=f210e567]:
+          - link "15 followers" [ref=f210e570] [cursor=pointer]:
+            - /url: /@amazingbusinessnow/followers?source=post_page---post_author_info--cfddf909ce98---------------------------------------
+          - generic [ref=f210e571]:
+            - generic [ref=f210e572]: ·
+            - link "2 following" [ref=f210e573] [cursor=pointer]:
+              - /url: /@amazingbusinessnow/following?source=post_page---post_author_info--cfddf909ce98---------------------------------------
+    - generic [ref=f210e635]:
+      - link [ref=f210e637] [cursor=pointer]:
+        - /url: https://help.medium.com/hc/en-us?source=post_page-----cfddf909ce98---------------------------------------
+        - paragraph [ref=f210e638]: Help
+      - link [ref=f210e640] [cursor=pointer]:
+        - /url: https://status.medium.com/?source=post_page-----cfddf909ce98---------------------------------------
+        - paragraph [ref=f210e641]: Status
+      - link [ref=f210e643] [cursor=pointer]:
+        - /url: /about?autoplay=1&source=post_page-----cfddf909ce98---------------------------------------
+        - paragraph [ref=f210e644]: About
+      - link [ref=f210e646] [cursor=pointer]:
+        - /url: /jobs-at-medium/work-at-medium-959d1a85284e?source=post_page-----cfddf909ce98---------------------------------------
+        - paragraph [ref=f210e647]: Careers
+      - link [ref=f210e649] [cursor=pointer]:
+        - /url: mailto:pressinquiries@medium.com
+        - paragraph [ref=f210e650]: Press
+      - link [ref=f210e652] [cursor=pointer]:
+        - /url: https://blog.medium.com/?source=post_page-----cfddf909ce98---------------------------------------
+        - paragraph [ref=f210e653]: Blog
+      - link [ref=f210e655] [cursor=pointer]:
+        - /url: https://medium.com/store
+        - paragraph [ref=f210e656]: Store
+      - link [ref=f210e658] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-privacy-policy-f03bf92035c9?source=post_page-----cfddf909ce98---------------------------------------
+        - paragraph [ref=f210e659]: Privacy
+      - link [ref=f210e661] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-rules-30e5502c4eb4?source=post_page-----cfddf909ce98---------------------------------------
+        - paragraph [ref=f210e662]: Rules
+      - link [ref=f210e664] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-terms-of-service-9db0094a1e0f?source=post_page-----cfddf909ce98---------------------------------------
+        - paragraph [ref=f210e665]: Terms
+      - link [ref=f210e667] [cursor=pointer]:
+        - /url: https://speechify.com/medium?source=post_page-----cfddf909ce98---------------------------------------
+        - paragraph [ref=f210e668]: Text to speech

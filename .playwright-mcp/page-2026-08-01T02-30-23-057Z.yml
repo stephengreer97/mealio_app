@@ -1,0 +1,62 @@
+- generic [active] [ref=f2e1]:
+  - generic [ref=f2e2]:
+    - banner [ref=f2e3]:
+      - link "mealio/tracker" [ref=f2e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=f2e5]:
+        - link "Overview" [ref=f2e6] [cursor=pointer]:
+          - /url: /
+        - link "Board" [ref=f2e7] [cursor=pointer]:
+          - /url: /board
+        - link "All issues" [ref=f2e8] [cursor=pointer]:
+          - /url: /issues
+        - link "Inbox" [ref=f2e9] [cursor=pointer]:
+          - /url: /inbox
+        - link "Docs" [ref=f2e10] [cursor=pointer]:
+          - /url: /docs
+      - generic [ref=f2e11]:
+        - link "+ Epic" [ref=f2e12] [cursor=pointer]:
+          - /url: /new?type=epic
+        - link "+ Issue" [ref=f2e13] [cursor=pointer]:
+          - /url: /new
+    - main [ref=f2e14]:
+      - paragraph [ref=f2e15]: Create
+      - heading "New epic" [level=1] [ref=f2e16]
+      - generic [ref=f2e17]:
+        - generic [ref=f2e18]:
+          - generic [ref=f2e19]:
+            - generic [ref=f2e20]: Type
+            - combobox "Type" [ref=f2e21]:
+              - option "Epic" [selected]
+              - option "Task"
+              - option "Bug"
+              - option "Spike"
+              - option "Chore"
+              - option "Decision"
+          - generic [ref=f2e22]:
+            - generic [ref=f2e23]: Priority
+            - combobox "Priority" [ref=f2e24]:
+              - option "P0"
+              - option "P1"
+              - option "P2" [selected]
+              - option "P3"
+          - generic [ref=f2e25]:
+            - generic [ref=f2e26]: Estimate
+            - textbox "Estimate" [ref=f2e27]:
+              - /placeholder: S / M / L
+        - generic [ref=f2e28]:
+          - generic [ref=f2e29]: Title
+          - textbox "Title" [ref=f2e30]:
+            - /placeholder: What needs to happen
+        - generic [ref=f2e31]:
+          - generic [ref=f2e32]: Description — markdown
+          - textbox "Description — markdown" [ref=f2e33]:
+            - /placeholder: Context, approach, acceptance criteria…
+        - generic [ref=f2e35]:
+          - generic [ref=f2e36]: Labels — comma separated
+          - textbox "Labels — comma separated" [ref=f2e37]:
+            - /placeholder: automation, reliability
+        - generic [ref=f2e38]:
+          - button "Create" [ref=f2e39] [cursor=pointer]
+          - generic [ref=f2e40]: Epics collect tickets; link them from the ticket or here.
+  - alert [ref=f2e41]

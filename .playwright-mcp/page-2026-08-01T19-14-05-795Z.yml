@@ -1,0 +1,386 @@
+- generic [ref=f235e3]:
+  - region "top of page" [active]
+  - button "Skip to Main Content"
+  - link "wix This website was built on Wix. Create yours today. Get Started" [ref=f235e5] [cursor=pointer]:
+    - /url: https://www.wix.com/lpviral/enviral?utm_campaign=vir_wixad_live&adsVersion=banner_2024&orig_msid=aa99f552-cce6-4d9b-96f0-a304175f7068&orig_msid=fcd5a869-5540-4986-a134-a2003ff8764a&adsVersion=banner_2024
+    - generic [ref=f235e6]:
+      - generic [ref=f235e7]:
+        - img "wix" [ref=f235e10]
+        - text: This website was built on Wix. Create yours today.
+      - generic [ref=f235e15]: Get Started
+  - generic [ref=f235e22]:
+    - banner [ref=f235e23]:
+      - generic [ref=f235e27]:
+        - generic:
+          - generic:
+            - link [ref=f235e30] [cursor=pointer]:
+              - /url: http://www.thefoodietakesflight.com
+              - img "header-final.png" [ref=f235e31]
+            - navigation "Site" [ref=f235e42]:
+              - list [ref=f235e43]:
+                - listitem [ref=f235e44] [cursor=pointer]:
+                  - link [ref=f235e45]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf
+                    - paragraph [ref=f235e48]: HOME
+                - listitem [ref=f235e49] [cursor=pointer]:
+                  - link [ref=f235e50]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf/recipe-ebook
+                    - paragraph [ref=f235e53]: MY EBOOK
+                  - button "More MY EBOOK pages" [ref=f235e54]
+                - listitem [ref=f235e57] [cursor=pointer]:
+                  - link [ref=f235e58]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf/blog
+                    - paragraph [ref=f235e61]: BLOG
+                  - button "More BLOG pages" [ref=f235e62]
+                - listitem [ref=f235e65] [cursor=pointer]:
+                  - link [ref=f235e66]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf/essentials
+                    - paragraph [ref=f235e69]: ESSENTIALS
+                - listitem [ref=f235e70] [cursor=pointer]:
+                  - link [ref=f235e71]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf/about
+                    - paragraph [ref=f235e74]: ABOUT
+                - listitem [ref=f235e75] [cursor=pointer]:
+                  - link [ref=f235e76]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf/work-with-me
+                    - paragraph [ref=f235e79]: WORK WITH ME
+                  - button "More WORK WITH ME pages" [ref=f235e80]
+                - listitem [ref=f235e83] [cursor=pointer]:
+                  - paragraph [ref=f235e87]: More
+            - list "Social Bar" [ref=f235e89]:
+              - listitem [ref=f235e90]:
+                - link "YouTube" [ref=f235e91] [cursor=pointer]:
+                  - /url: https://www.youtube.com/channel/UCkXdahh-G5hZo5QbYvJqB8Q/
+                  - img "YouTube" [ref=f235e92]
+              - listitem [ref=f235e93]:
+                - link "Facebook - Grey Circle" [ref=f235e94] [cursor=pointer]:
+                  - /url: https://www.facebook.com/thefoodietakesflight/
+                  - img "Facebook - Grey Circle" [ref=f235e95]
+              - listitem [ref=f235e96]:
+                - link "Instagram" [ref=f235e97] [cursor=pointer]:
+                  - /url: https://instagram.com/thefoodietakesflight
+                  - img "Instagram" [ref=f235e98]
+              - listitem [ref=f235e99]:
+                - link "Pinterest" [ref=f235e100] [cursor=pointer]:
+                  - /url: https://www.pinterest.com/thefoodietakesflight
+                  - img "Pinterest" [ref=f235e101]
+            - iframe [ref=f235e103]:
+              
+    - main [ref=f235e105]:
+      - generic [ref=f235e117]:
+        - generic [ref=f235e119]:
+          - navigation "Blog" [ref=f235e120]:
+            - list [ref=f235e121] [cursor=pointer]:
+              - listitem [ref=f235e122]:
+                - link "All Posts" [ref=f235e123]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog
+              - listitem [ref=f235e124]:
+                - link "Savoury Dishes" [ref=f235e125]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/savoury
+              - listitem [ref=f235e126]:
+                - link "Sweets and Desserts" [ref=f235e127]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/sweets/desserts
+              - listitem [ref=f235e128]:
+                - link "Sauces and Dips" [ref=f235e129]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/sauces/dips
+              - listitem [ref=f235e130]:
+                - link "Tofu Dishes" [ref=f235e131]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/tofu-dishes
+              - listitem [ref=f235e132]:
+                - link "Filipino Food" [ref=f235e133]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/filipino-food
+              - listitem [ref=f235e134]:
+                - link "Finger Food" [ref=f235e135]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/finger-food
+              - listitem [ref=f235e136]:
+                - link "All Recipes" [ref=f235e137]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/all-recipes
+              - listitem [ref=f235e138]:
+                - link "Lifestyle and Travel" [ref=f235e139]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/lifestyle-and-travel
+              - listitem [ref=f235e140]:
+                - link "Favorite Tofu Recipes" [ref=f235e141]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/favorite-tofu-recipes
+              - listitem [ref=f235e142]:
+                - link "Cauliflower Recipes" [ref=f235e143]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/cauliflower-recipes
+              - listitem [ref=f235e144]:
+                - link "Asian Recipes" [ref=f235e145]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/asian-recipes
+              - listitem [ref=f235e146]:
+                - link "Sides and Snacks" [ref=f235e147]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/sides-and-snacks
+              - listitem [ref=f235e148]:
+                - link "Holiday Recipes" [ref=f235e149]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/holiday-recipes
+              - listitem [ref=f235e150]:
+                - link "Pantry Recipes" [ref=f235e151]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/pantry-recipes
+              - listitem [ref=f235e152]:
+                - link "Pantry-Friendly Recipes" [ref=f235e153]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/pantry-friendly-recipes
+              - listitem [ref=f235e154]:
+                - link "Pasta and Noodle Recipes" [ref=f235e155]:
+                  - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/pasta-and-noodle-recipes
+          - button "Search" [ref=f235e159]
+        - generic [ref=f235e163]:
+          - article [ref=f235e167]:
+            - generic [ref=f235e168]:
+              - generic [ref=f235e171]:
+                - heading "Chinese-Style Bolognese (Vegan Pasta Recipe)" [level=1] [ref=f235e173]
+                - generic [ref=f235e174]:
+                  - list [ref=f235e175]:
+                    - listitem [ref=f235e176]:
+                      - 'img "Writer: Jeeca Uy" [ref=f235e179]'
+                      - link "Jeeca Uy" [ref=f235e180] [cursor=pointer]:
+                        - /url: https://foodietakesflight.wixsite.com/tftf/profile/foodietakesflight/profile
+                    - listitem [ref=f235e181]: ·Apr 10, 2020
+                    - listitem [ref=f235e182]: ·2 min read
+                  - button "More actions" [ref=f235e184] [cursor=pointer]
+              - generic [ref=f235e193]:
+                - paragraph [ref=f235e195]:
+                  - generic [ref=f235e196]: I love pasta but also love asian noodle recipes, so this Chinese-style Bolognese was born!
+                - figure [ref=f235e201]:
+                  - generic [ref=f235e202]:
+                    - button "Expand image"
+                - paragraph [ref=f235e207]:
+                  - generic [ref=f235e208]: It’s satisfyingly saucy, rich, and perfectly umami too. This recipe also uses pantry-friendly ingredients with some that you can opt not to use. Hope you enjoy this one! 🍝
+                - paragraph [ref=f235e214]:
+                  - generic [ref=f235e215]: Get the recipe below!
+                - figure [ref=f235e220]:
+                  - generic [ref=f235e221]:
+                    - button "Expand image"
+                - paragraph [ref=f235e226]:
+                  - generic [ref=f235e227]:
+                    - generic [ref=f235e228]: If you make this recipe, please tag me on my
+                    - link "Facebook" [ref=f235e229] [cursor=pointer]:
+                      - /url: https://www.facebook.com/thefoodietakesflight/
+                    - generic [ref=f235e230]: or
+                    - link "Instagram" [ref=f235e231] [cursor=pointer]:
+                      - /url: https://www.instagram.com/thefoodietakesflight/
+                    - generic [ref=f235e233]:
+                      - text: and use the hashtag
+                      - link "#thefoodietakesflight" [ref=f235e234] [cursor=pointer]:
+                        - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/thefoodietakesflight
+                      - text: :)
+                - figure [ref=f235e238]:
+                  - generic [ref=f235e239]:
+                    - button "Expand image"
+                - paragraph [ref=f235e244]:
+                  - generic [ref=f235e245]:
+                    - generic [ref=f235e246]: Are you looking for more delicious, vegan recipes? Check out my latest
+                    - link "Vegan Kitchen eBook" [ref=f235e247] [cursor=pointer]:
+                      - /url: https://payhip.com/b/M59f
+                    - generic [ref=f235e248]: ", that has over 95 recipes (and a whole section for Asian recipes!) that are packed with flavour and made with simple and easily accessible ingredients! Also, two trees (instead of 1!) will be planted for every download of my eBook through non-profit organisation"
+                    - link "One Tree Planted" [ref=f235e249] [cursor=pointer]:
+                      - /url: https://onetreeplanted.org/
+                    - generic [ref=f235e251]: .🌲
+                - paragraph [ref=f235e256]:
+                  - generic [ref=f235e257]:
+                    - generic [ref=f235e258]: Find out more about my reforestation initiatives
+                    - link "here" [ref=f235e259] [cursor=pointer]:
+                      - /url: https://www.thefoodietakesflight.com/reforestation
+                    - generic [ref=f235e262]: .
+                - figure [ref=f235e266]:
+                  - link "Expand image" [ref=f235e267] [cursor=pointer]:
+                    - /url: https://payhip.com/b/M59f
+                    - generic [ref=f235e268]:
+                      - button "Expand image"
+                - separator [ref=f235e275]
+                - heading "Chinese-Style Bolognese" [level=2] [ref=f235e280]:
+                  - strong [ref=f235e282]:
+                    - generic [ref=f235e283]: Chinese-Style Bolognese
+                - paragraph [ref=f235e285]:
+                  - generic [ref=f235e286]: Good for 2-3 servings
+                - heading [level=2] [ref=f235e288]:
+                  - strong [ref=f235e290]: Ingredients
+                - paragraph [ref=f235e292]:
+                  - generic [ref=f235e293]:
+                    - text: 200g dry spaghetti or other pasta of choice 2 cloves garlic, minced 1 small onion, diced Chopped leeks, plus more for garnishing (optional) 1 small red bell pepper, diced (optional) 2 tbsp
+                    - link "sesame oil" [ref=f235e294] [cursor=pointer]:
+                      - /url: https://amzn.to/2YxWsZJ
+                    - text: Pinch of salt, or to taste 1 cup rehydrated
+                    - link "TVP" [ref=f235e296] [cursor=pointer]:
+                      - /url: https://amzn.to/2soeKRm
+                    - text: (
+                    - link "textured vegetable protein" [ref=f235e298] [cursor=pointer]:
+                      - /url: https://amzn.to/2soeKRm
+                    - text: ), can be subbed with cooked lentils or minced mushrooms*
+                    - link "Sesame seeds" [ref=f235e300] [cursor=pointer]:
+                      - /url: https://amzn.to/341CYhf
+                    - text: ", for topping"
+                    - strong [ref=f235e302]: "Notes:"
+                - paragraph [ref=f235e304]:
+                  - generic [ref=f235e305]: "*I used 1/2 cup dried TVP and soaked them in hot water for at least 10 minutes before squeezing out the excess liquid."
+                - paragraph [ref=f235e307]:
+                  - generic [ref=f235e308]: "*Mushrooms like button, shiitake, oyster would work well!"
+                - paragraph [ref=f235e310]:
+                  - generic [ref=f235e311]:
+                    - strong [ref=f235e312]: Sauce
+                    - text: 1/4 cup
+                    - link "soy sauce" [ref=f235e313] [cursor=pointer]:
+                      - /url: https://amzn.to/2RyGHAf
+                    - text: 1 cup water 1 1/2 tbsp
+                    - link "hoisin sauce" [ref=f235e315] [cursor=pointer]:
+                      - /url: https://amzn.to/2DYTcNu
+                    - text: "* 3 tbsp sugar, adjust according to desired sweetness (I used coconut sugar) 1 tbsp"
+                    - link "sesame oil" [ref=f235e317] [cursor=pointer]:
+                      - /url: https://amzn.to/2YxWsZJ
+                    - text: 2 tsp
+                    - link "sriracha" [ref=f235e319] [cursor=pointer]:
+                      - /url: https://amzn.to/2s7LwFU
+                    - text: ", adjust according to desired spice (optional) 1/4 tsp pepper 1 tbsp cornstarch + 2 tbsp room temp. water, mixed into a slurry"
+                - paragraph [ref=f235e325]:
+                  - strong [ref=f235e327]: "*Note:"
+                - paragraph [ref=f235e329]:
+                  - generic [ref=f235e330]: "If you don’t have hoisin sauce, feel free to sub with:"
+                - paragraph [ref=f235e332]:
+                  - generic [ref=f235e333]: Option 1 - 1 tbsp tomato ketchup mixed with 1/2 tbsp soy sauce and a adjust the sugar in the sauce mix.
+                - paragraph [ref=f235e335]:
+                  - generic [ref=f235e336]:
+                    - text: Option 2 - equal amount (1 1/2 tbsp) teriyaki sauce (Check out my
+                    - link "homemade recipe here" [ref=f235e337] [cursor=pointer]:
+                      - /url: https://www.thefoodietakesflight.com/post/2018/04/27/easy-teriyaki-fried-rice-with-homemade-teriyaki-sauce
+                    - text: )
+                - heading [level=2] [ref=f235e340]:
+                  - strong [ref=f235e342]: Steps
+                - list [ref=f235e344]:
+                  - listitem [level=1] [ref=f235e345]:
+                    - paragraph [ref=f235e346]:
+                      - generic [ref=f235e347]: Mix all the sauce ingredients in a bowl, except the cornstarch slurry. Feel free to adjust seasoning depending on desired taste. Set aside.
+                  - listitem [level=1] [ref=f235e348]:
+                    - paragraph [ref=f235e349]:
+                      - generic [ref=f235e350]: Heat a pot with water. Cook pasta until chewy or al dente.
+                  - listitem [level=1] [ref=f235e351]:
+                    - paragraph [ref=f235e352]:
+                      - generic [ref=f235e353]: While pasta is cooking, heat a pan. Add in 2 tbsp sesame oil. Once hot, sauté the onion and leeks (if using). Add in the garlic and bell peppers (if using) then sauté until tender. Add in the TVP/lentils/mushrooms then sauté for 2-3 minutes.
+                  - listitem [level=1] [ref=f235e354]:
+                    - paragraph [ref=f235e355]:
+                      - generic [ref=f235e356]: Pour in the sauce and leave to simmer over medium heat.
+                  - listitem [level=1] [ref=f235e357]:
+                    - paragraph [ref=f235e358]:
+                      - generic [ref=f235e359]: Once the sauce boils, add in the cornstarch slurry. Continuously mix until the sauce starts to thicken.
+                  - listitem [level=1] [ref=f235e360]:
+                    - paragraph [ref=f235e361]:
+                      - generic [ref=f235e362]: Add in the spaghetti and cook until it has absorbed some of the sauce. Season with a pinch of salt, or more as needed. Mix then turn off heat.
+                  - listitem [level=1] [ref=f235e363]:
+                    - paragraph [ref=f235e364]:
+                      - generic [ref=f235e365]: Top with some leeks and sesame seeds, if desired. Enjoy while hot!
+                - separator [ref=f235e369]
+                - figure [ref=f235e376]:
+                  - generic [ref=f235e377]:
+                    - button "Expand image"
+                - figure [ref=f235e384]:
+                  - generic [ref=f235e385]:
+                    - button "Expand image"
+                - figure [ref=f235e392]:
+                  - generic [ref=f235e393]:
+                    - button "Expand image"
+                - separator [ref=f235e400]
+                - paragraph [ref=f235e405]:
+                  - generic [ref=f235e408]:
+                    - link "#asian" [ref=f235e409] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/asian
+                    - link "#asianfood" [ref=f235e410] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/asianfood
+                    - link "#noodles" [ref=f235e411] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/noodles
+                    - link "#pasta" [ref=f235e412] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/pasta
+                    - link "#comforting" [ref=f235e413] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/comforting
+                    - link "#chinesefood" [ref=f235e414] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/chinesefood
+                    - link "#bolognese" [ref=f235e415] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/bolognese
+                    - link "#manila" [ref=f235e416] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/manila
+                    - link "#philippines" [ref=f235e417] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/philippines
+                    - link "#vegan" [ref=f235e418] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/vegan
+                    - link "#veganrecipe" [ref=f235e419] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/veganrecipe
+                    - link "#easyrecipe" [ref=f235e420] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/easyrecipe
+                    - link "#plantbased" [ref=f235e421] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/plantbased
+                    - link "#plantbasedrecipe" [ref=f235e422] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/plantbasedrecipe
+                    - link "#easyveganrecipe" [ref=f235e423] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/easyveganrecipe
+                    - link "#easyrecipe" [ref=f235e424] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/hashtags/easyrecipe
+              - generic [ref=f235e427]:
+                - list "Post categories" [ref=f235e429]:
+                  - listitem [ref=f235e430]:
+                    - link "Savoury Dishes" [ref=f235e431] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/savoury
+                  - listitem [ref=f235e432]:
+                    - text: ·
+                    - link "All Recipes" [ref=f235e433] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/all-recipes
+                  - listitem [ref=f235e434]:
+                    - text: ·
+                    - link "Asian Recipes" [ref=f235e435] [cursor=pointer]:
+                      - /url: https://foodietakesflight.wixsite.com/tftf/blog/categories/asian-recipes
+                - generic [ref=f235e438]:
+                  - button "Share via Facebook" [ref=f235e440] [cursor=pointer]:
+                    - img "Facebook" [ref=f235e441]
+                  - button "Share via X (Twitter)" [ref=f235e445] [cursor=pointer]:
+                    - img "X" [ref=f235e446]
+                  - button "Share via LinkedIn" [ref=f235e450] [cursor=pointer]:
+                    - img "LinkedIn" [ref=f235e451]
+                  - button "Share via link" [ref=f235e456] [cursor=pointer]
+          - generic [ref=f235e466]:
+            - generic [ref=f235e467]:
+              - heading "Recent Posts" [level=2] [ref=f235e468]
+              - link "See All" [ref=f235e469] [cursor=pointer]:
+                - /url: https://foodietakesflight.wixsite.com/tftf/blog
+            - generic [ref=f235e471]:
+              - article [ref=f235e472]:
+                - generic [ref=f235e473]:
+                  - link "Vegan Hakka-Style Stuffed Tofu" [ref=f235e474] [cursor=pointer]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf/post/vegan-hakka-style-stuffed-tofu
+                  - link "Vegan Hakka-Style Stuffed Tofu" [ref=f235e479] [cursor=pointer]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf/post/vegan-hakka-style-stuffed-tofu
+              - article [ref=f235e485]:
+                - generic [ref=f235e486]:
+                  - link "Stir-Fried Flat Rice Noodles (Hofan)" [ref=f235e487] [cursor=pointer]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf/post/stir-fried-flat-rice-noodles-hofan
+                  - link "Stir-Fried Flat Rice Noodles (Hofan)" [ref=f235e492] [cursor=pointer]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf/post/stir-fried-flat-rice-noodles-hofan
+              - article [ref=f235e498]:
+                - generic [ref=f235e499]:
+                  - link "Homemade Fresh Flat Rice Noodles" [ref=f235e500] [cursor=pointer]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf/post/homemade-fresh-flat-rice-noodles
+                  - link "Homemade Fresh Flat Rice Noodles" [ref=f235e505] [cursor=pointer]:
+                    - /url: https://foodietakesflight.wixsite.com/tftf/post/homemade-fresh-flat-rice-noodles
+    - contentinfo [ref=f235e511]:
+      - generic [ref=f235e515]:
+        - generic:
+          - generic:
+            - iframe [ref=f235e517]:
+              
+            - generic:
+              - generic:
+                - generic:
+                  - list "Social Bar" [ref=f235e520]:
+                    - listitem [ref=f235e521]:
+                      - link "YouTube" [ref=f235e522] [cursor=pointer]:
+                        - /url: https://www.youtube.com/channel/UCkXdahh-G5hZo5QbYvJqB8Q/
+                        - img "YouTube" [ref=f235e523]
+                    - listitem [ref=f235e524]:
+                      - link "Facebook - Grey Circle" [ref=f235e525] [cursor=pointer]:
+                        - /url: https://www.facebook.com/thefoodietakesflight/
+                        - img "Facebook - Grey Circle" [ref=f235e526]
+                    - listitem [ref=f235e527]:
+                      - link "Instagram" [ref=f235e528] [cursor=pointer]:
+                        - /url: https://instagram.com/thefoodietakesflight
+                        - img "Instagram" [ref=f235e529]
+                    - listitem [ref=f235e530]:
+                      - link "Pinterest" [ref=f235e531] [cursor=pointer]:
+                        - /url: https://www.pinterest.com/thefoodietakesflight
+                        - img "Pinterest" [ref=f235e532]
+                  - heading "thefoodietakesflight" [level=2] [ref=f235e533]
+  - region "bottom of page"

@@ -1,0 +1,84 @@
+- generic [active] [ref=f12e1]:
+  - generic [ref=f12e4]:
+    - paragraph [ref=f12e5]: Your recipes
+    - heading "Sync your content with Mealio" [level=2] [ref=f12e6]
+    - paragraph [ref=f12e7]:
+      - text: Tell Mealio where you publish and we will keep watching it.
+      - strong [ref=f12e8]: Whatever you post from then on syncs automatically and comes back to you as a draft to review
+      - text: — you read it, change anything you like, and nothing goes live under your name until you say so.
+    - generic [ref=f12e9]: Where you publish
+    - combobox "Where you publish" [ref=f12e10]:
+      - option "Website or blog" [selected]
+      - option "YouTube"
+      - option "Instagram — not available yet" [disabled]
+      - option "TikTok"
+      - option "Nothing — don’t sync anything"
+    - paragraph [ref=f12e11]: One at a time. If you post the same recipe to two places, syncing both would send it to you twice.
+    - paragraph [ref=f12e13]:
+      - generic [ref=f12e14]: "Instagram:"
+      - text: Instagram is waiting on Meta’s app review. Until they approve Mealio, Instagram hands us nothing at all from your account, so there would be nothing to sync.
+    - generic [ref=f12e15]:
+      - generic [ref=f12e16]: Your website or blog
+      - paragraph [ref=f12e17]: Paste the address and press Save. Mealio reads a few of your recent posts to check it can actually pull recipes out of them — that takes a few seconds, and it is better to find out now than after months of nothing arriving.
+      - generic [ref=f12e18]:
+        - textbox "Your website or blog" [ref=f12e19]:
+          - /placeholder: chefsarah.com
+          - text: https://chefsarah.test/
+        - button "Save" [ref=f12e20] [cursor=pointer]
+    - paragraph [ref=f12e21]: Mealio is watching your Website now. New posts arrive in your review queue as drafts — nothing is published until you approve it, and you can stop it any time by choosing another source above, or “Nothing”.
+    - generic [ref=f12e22]:
+      - heading "What you have already posted" [level=3] [ref=f12e23]
+      - paragraph [ref=f12e24]:
+        - text: "Syncing starts from today:"
+        - strong [ref=f12e25]: nothing you posted before now is imported on its own
+        - text: . Tick anything from your back catalogue you would like as a draft too — up to 100 at a time.
+      - generic [ref=f12e26]:
+        - generic [ref=f12e27]: 0 of 100 chosen
+        - button "Tick the 7 newest" [ref=f12e28] [cursor=pointer]
+      - generic [ref=f12e29]:
+        - generic [ref=f12e30] [cursor=pointer]:
+          - checkbox "Weeknight chilli with a very long title that keeps going and going to test wrapping behaviour" [ref=f12e31]
+          - generic [ref=f12e32]:
+            - generic [ref=f12e33]: Weeknight chilli with a very long title that keeps going and going to test wrapping behaviour
+            - generic [ref=f12e34]: 12/31/2025
+        - generic [ref=f12e35] [cursor=pointer]:
+          - checkbox "Guacamole" [ref=f12e36]
+          - generic [ref=f12e37]:
+            - generic [ref=f12e38]: Guacamole
+            - generic [ref=f12e39]: 12/31/2025
+          - generic [ref=f12e40]: Already in
+        - generic [ref=f12e41] [cursor=pointer]:
+          - checkbox "Slow-roast lamb shoulder with anchovy and rosemary" [ref=f12e42]
+          - generic [ref=f12e43]:
+            - generic [ref=f12e44]: Slow-roast lamb shoulder with anchovy and rosemary
+            - generic [ref=f12e45]: 12/31/2025
+        - generic [ref=f12e46] [cursor=pointer]:
+          - checkbox "Sourdough focaccia" [ref=f12e47]
+          - generic [ref=f12e48]:
+            - generic [ref=f12e49]: Sourdough focaccia
+            - generic [ref=f12e50]: 12/31/2025
+        - generic [ref=f12e51] [cursor=pointer]:
+          - checkbox "Thai green curry" [ref=f12e52]
+          - generic [ref=f12e53]:
+            - generic [ref=f12e54]: Thai green curry
+            - generic [ref=f12e55]: 12/31/2025
+        - generic [ref=f12e56] [cursor=pointer]:
+          - checkbox "Chocolate olive oil cake" [ref=f12e57]
+          - generic [ref=f12e58]:
+            - generic [ref=f12e59]: Chocolate olive oil cake
+            - generic [ref=f12e60]: 12/31/2025
+        - generic [ref=f12e61] [cursor=pointer]:
+          - checkbox "Roast chicken" [ref=f12e62]
+          - generic [ref=f12e63]:
+            - generic [ref=f12e64]: Roast chicken
+            - generic [ref=f12e65]: 12/31/2025
+        - generic [ref=f12e66] [cursor=pointer]:
+          - checkbox "Miso aubergine" [ref=f12e67]
+          - generic [ref=f12e68]:
+            - generic [ref=f12e69]: Miso aubergine
+            - generic [ref=f12e70]: 12/31/2025
+      - generic [ref=f12e71]:
+        - button "Import posts" [disabled] [ref=f12e72]
+        - generic [ref=f12e73]: These arrive as drafts too. Nothing is published without you.
+  - button "Open Next.js Dev Tools" [ref=f12e79] [cursor=pointer]
+  - alert [ref=f12e83]

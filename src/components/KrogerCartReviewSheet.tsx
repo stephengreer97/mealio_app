@@ -16,6 +16,7 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
 import { Meal, Ingredient } from '../types';
+import { ingredientAmount } from '../lib/formatMeasurement';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
 import { STORES } from '../constants/stores';
 
@@ -500,11 +501,14 @@ export default function KrogerCartReviewSheet({
                         {it.searchTerm ?? it.ingredientName}
                       </Text>
                       {it.mealIngredients.map((mi, mIdx) => {
-                        const isQty = it.unit.toLowerCase() === 'qty';
-                        const measurement = isQty ? `${mi.qty} qty` : `${it.measure} ${it.unit}`;
+                        // Per meal, for the reason in WebViewCartSheet: the
+                        // consolidated entry's measure belongs to whichever meal
+                        // created it, so every other meal sharing the ingredient
+                        // was shown an amount that was not its own (MEAL-92).
+                        const measurement = ingredientAmount(mi);
                         return (
                           <Text key={mIdx} style={styles.mealNames}>
-                            {mi.mealName} • {measurement}
+                            {mi.mealName} calls for {measurement || `${mi.qty}`}
                           </Text>
                         );
                       })}
