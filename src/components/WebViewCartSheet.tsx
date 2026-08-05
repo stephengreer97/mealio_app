@@ -38,7 +38,8 @@ import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS, FEATURE_PRESEARCH_ADD, ADD_
 import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { AutomationTelemetry, createNoopTelemetry } from '../lib/automation-telemetry';
-import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, findUnaddedItems, findShortAddedItems, findOverAddedItems, cartNameMatches, decodeHtmlEntities, normalizeName, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { auditCartAfterRun, isWeightPriced, reconcileFromWorkerReports, reconcileParallelAdd, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -148,6 +149,12 @@ const ANTI_BOT_STATUSES = [403, 429, 503];
 // Extra downward offset (px) for the floating preview's default rest in the Review
 // Ingredients flow so it doesn't sit too high vs Choose Product. Tune on-device.
 const REVIEW_PREVIEW_Y_OFFSET = 28;
+
+// Cart-check copy for one over-added product: bare name, or "name ×N" when more
+// than one unclaimed unit of it landed.
+function overAddLabel(o: OverAdd): string {
+  return o.qty > 1 ? `${o.name} ×${o.qty}` : o.name;
+}
 
 // onHttpError fires for subresources too (images, XHR, assets). Only a top-level
 // page load on the store domain should be treated as a block — filter the rest.
@@ -1124,7 +1131,7 @@ export default function WebViewCartSheet({
   const toggleAll = () => setCheckedItems((prev) => prev.map(() => !allChecked));
   // A dropdown-weight item is active whenever it has a chosen weight; stepper
   // and normal items need productQty > 0.
-  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && (it.purchaseWeight != null || it.productQty > 0)).length;
+  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && (isWeightPriced(it) || it.productQty > 0)).length;
 
   // Cart snapshot AFTER the run. Only fires when the before-snapshot succeeded
   // and something was reported added. For cart-page stores (HEB) navigate the
@@ -1229,7 +1236,7 @@ export default function WebViewCartSheet({
   }, [step, items, parallelCfg, loginPrewarm.statusVersion]);
 
   const handleStartSearch = () => {
-    const active = items.filter((it, i) => (checkedItems[i] ?? true) && (it.purchaseWeight != null || it.productQty > 0));
+    const active = items.filter((it, i) => (checkedItems[i] ?? true) && (isWeightPriced(it) || it.productQty > 0));
     if (active.length === 0) return;
     activeItemsRef.current = active;
     searchIdxRef.current = 0;
@@ -1238,7 +1245,7 @@ export default function WebViewCartSheet({
     if (FEATURE_PRESEARCH_ADD && presearchStartedRef.current) {
       presearchCommitEntriesRef.current = items
         .map((item, idx) => ({ idx, item }))
-        .filter((e) => (checkedItems[e.idx] ?? true) && (e.item.purchaseWeight != null || e.item.productQty > 0));
+        .filter((e) => (checkedItems[e.idx] ?? true) && (isWeightPriced(e.item) || e.item.productQty > 0));
       presearchCommitArmedRef.current = presearchCommitEntriesRef.current.length > 0;
     }
     const pre = loginPrewarm.getStatus(lockedStoreIdRef.current);
@@ -1331,7 +1338,7 @@ export default function WebViewCartSheet({
       // dropdown so the add selects the option closest to the saved lb amount
       // (the store's increments can differ / change). Falls back to the normal
       // preference dropdown for everything else.
-      const addDropdown = item.purchaseWeight != null
+      const addDropdown = isWeightPriced(item)
         ? { type: 'weight', selectedText: `${item.purchaseWeight} lb`, selectedValue: String(item.purchaseWeight) }
         : (item.dropdown ?? null);
       const script = scriptsRef.current!.buildSearchAndAddScript(term, item.productQty, addDropdown);
@@ -2009,121 +2016,47 @@ export default function WebViewCartSheet({
             }
             const reconResults = parallelResultByIdxRef.current;
             const active = activeItemsRef.current;
+            const attempts: AttemptedAdd[] = active.map((item, idx) => ({
+              ...toIntendedItem(item),
+              report: reconResults.get(idx) ?? null,
+            }));
             if (!rows) {
               // Can't diff per-item (header-badge store) → trust the worker
               // results. Parallel add is HEB-only today (a per-item cart store),
               // so this is just a safety fallback.
-              const wins = active
-                .map((item, idx) => { const r = reconResults.get(idx); return r && r.success ? { name: r.productName || item.searchTerm || item.ingredientName, success: true } : null; })
-                .filter((x): x is { name: string; success: boolean } => x !== null);
-              const lost = active
-                .filter((item, idx) => { const r = reconResults.get(idx); return !(r && r.success); })
-                .map((item) => item.searchTerm || item.ingredientName);
-              addResultsRef.current = wins;
+              const { confirmed: wins, failed: lost } = reconcileFromWorkerReports(attempts);
+              addResultsRef.current = wins.map((w) => ({ name: w.name, success: true }));
               setTotalAdded(wins.length);
-              setTotalFailed(active.length - wins.length);
-              setAddedNames(wins.map((x) => x.name));
-              setFailedNames(lost);
+              setTotalFailed(lost.length);
+              setAddedNames(wins.map((w) => w.name));
+              setFailedNames(lost.map((l) => l.name));
               reconcileFinalizedRef.current = true;
               setStep('done');
               return;
             }
-            // Qty-aware reconcile: compare each item's EXPECTED quantity against
-            // the quantity that actually landed in the cart (sum of matching added
-            // rows). A product present but short (added ×1 when ×2 was wanted)
-            // gets topped up by the shortfall — not just fully-missing items.
-            const addedRows = rows.filter((r) => r.added);
-            const retryItems: ConsolidatedIngredient[] = [];
-            const confirmed: { name: string; success: boolean }[] = [];
-            const reviewFailures: SearchResult[] = [];
-
-            // Attribute each added cart unit to a SINGLE item. Summing every
-            // name-matching row per item double-counts when two distinct products
-            // have near-identical names (e.g. "…Dried Chile Ancho Peppers, 4 oz"
-            // vs "…Guajillo Peppers, 4 oz"): each pepper's name matches both rows,
-            // so a 1-of-2 shortfall looks fully stocked. Instead, consume from a
-            // shared pool — reserve exact-name matches first, then let a loose
-            // match take only what's genuinely left over.
-            const pool = addedRows.map((row) => ({ name: row.name, qty: row.qty }));
-            // Punctuation- and entity-insensitive so a reported title can reserve
-            // its OWN cart row in the exact pass before a loosely-similar sibling
-            // ("McCormick Ground Cumin" vs "…Gourmet Organic Ground Turmeric")
-            // can claim it in the loose pass. A stray comma/® otherwise sank the
-            // exact match and caused a spurious re-add (double add).
-            const norm = normalizeName;
-            const claimQty = (reportedName: string, need: number, exactOnly: boolean): number => {
-              let got = 0;
-              for (const row of pool) {
-                if (got >= need) break;
-                if (row.qty <= 0) continue;
-                const match = exactOnly ? norm(row.name) === norm(reportedName) : cartNameMatches(row.name, reportedName);
-                if (match) { const take = Math.min(row.qty, need - got); row.qty -= take; got += take; }
-              }
-              return got;
-            };
-
-            // Resolve each item's identity up front, routing definitive failures
-            // out so they don't consume pool units. An out-of-stock / no-results
-            // item is genuinely not in the cart, so it must NOT be qty-matched
-            // (productName is null; the search term loosely collides with a
-            // sibling's row) nor blindly retried — route it to review so the user
-            // can pick an alternative or skip, like the serial add path.
-            const toMatch: { item: ConsolidatedIngredient; reportedName: string; expectedQty: number; claimed: number; confirmedWeight?: boolean }[] = [];
-            active.forEach((item, idx) => {
-              const r = reconResults.get(idx);
-              if (r && !r.success && (r.reason === 'out_of_stock' || r.reason === 'no_results')) {
-                reviewFailures.push({
-                  term: item.searchTerm || item.ingredientName,
-                  candidates: r.candidates ?? [],
-                  mealIngredients: item.mealIngredients,
-                  unit: item.unit,
-                  measure: item.measure,
-                  reason: r.reason,
-                  isChoose: false,
-                });
-                return;
-              }
-              toMatch.push({
-                item,
-                reportedName: decodeHtmlEntities((r && r.productName) || item.searchTerm || item.ingredientName),
-                expectedQty: Math.max(1, item.productQty || 1),
-                claimed: 0,
-              });
+            const outcome = reconcileParallelAdd(attempts, rows.filter((r) => r.added));
+            const confirmed = outcome.confirmed.map((c) => ({ name: c.name, success: true }));
+            // Re-add only the missing units; re-adding the full qty would
+            // over-add the units that already landed.
+            const retryItems: ConsolidatedIngredient[] = outcome.topUps.map(
+              (t) => ({ ...active[t.index], productQty: t.shortfall }),
+            );
+            const reviewFailures: SearchResult[] = outcome.definiteFailures.map((f) => {
+              const item = active[f.index];
+              return {
+                term: item.searchTerm || item.ingredientName,
+                candidates: reconResults.get(f.index)?.candidates ?? [],
+                mealIngredients: item.mealIngredients,
+                unit: item.unit,
+                measure: item.measure,
+                reason: f.reason,
+                isChoose: false,
+              };
             });
-            // Snapshot the full intended set now, before the retry branch narrows
-            // activeItemsRef to the top-up subset — the final cart check uses it to
-            // spot units added beyond what any item intended.
-            reconcileIntendedRef.current = toMatch.map((m) => ({
-              name: m.reportedName,
-              expectedQty: m.expectedQty,
-              isWeight: m.item.purchaseWeight != null,
-            }));
-            // Weight items first, confirmed by PRESENCE. A sold-by-weight line is
-            // a single cart row at N lb regardless of the chosen poundage, so it
-            // can't be count-compared (qty 3 lb ≠ 3 units). If a weight row matches
-            // by name, it's confirmed; consume it from the pool so a sibling can't
-            // claim it. (rows already tag weight lines via the cart snapshot.)
-            const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false }));
-            toMatch.forEach((m) => {
-              if (m.confirmedWeight) return;
-              const w = weightPool.find((p) => !p.used && cartNameMatches(p.name, m.reportedName));
-              if (w) { w.used = true; m.confirmedWeight = true; }
-            });
-            // Pass 1: every item reserves its exact-name units. Pass 2: items still
-            // short take loose matches from whatever remains unclaimed.
-            toMatch.forEach((m) => { if (!m.confirmedWeight) m.claimed = claimQty(m.reportedName, m.expectedQty, true); });
-            toMatch.forEach((m) => { if (!m.confirmedWeight && m.claimed < m.expectedQty) m.claimed += claimQty(m.reportedName, m.expectedQty - m.claimed, false); });
-            toMatch.forEach((m) => {
-              if (m.confirmedWeight) { confirmed.push({ name: m.reportedName, success: true }); return; }
-              const shortfall = m.expectedQty - m.claimed;
-              if (shortfall <= 0) {
-                confirmed.push({ name: m.reportedName, success: true });
-              } else {
-                // Re-add only the missing units; re-adding the full qty would
-                // over-add the units that already landed.
-                retryItems.push({ ...m.item, productQty: shortfall });
-              }
-            });
+            // Keep the full intended set: the retry branch below narrows
+            // activeItemsRef to the top-up subset, and the final cart check needs
+            // the whole set to spot units no item intended.
+            reconcileIntendedRef.current = outcome.intended;
             console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm), 'review=', reviewFailures.length, reviewFailures.map((r) => `${r.term}:${r.reason}`));
             // Funnel: the reconcile delta is the ground truth the workers' own
             // reports are checked against. A retry count that climbs over time is
@@ -2166,12 +2099,11 @@ export default function WebViewCartSheet({
             // Safety net: flag any units in the cart that no intended item
             // accounts for (a double-add or an unintended product), even when
             // every intended item was confirmed.
-            const overAdds = findOverAddedItems(addedRows, reconcileIntendedRef.current);
-            if (overAdds.length > 0) {
+            if (outcome.overAdds.length > 0) {
               const lockedName = STORES.find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
-              const list = overAdds.map((o) => (o.qty > 1 ? `${o.name} ×${o.qty}` : o.name)).join(', ');
-              console.log(`[Cart ${ts()}]`, 'reconcile: OVER-ADD detected', overAdds);
-              setCartDeltaWarning(`Cart check: your ${lockedName} cart has ${overAdds.reduce((n, o) => n + o.qty, 0)} item(s) Mealio didn't intend to add (${list}). Please review your cart.`);
+              const list = outcome.overAdds.map(overAddLabel).join(', ');
+              console.log(`[Cart ${ts()}]`, 'reconcile: OVER-ADD detected', outcome.overAdds);
+              setCartDeltaWarning(`Cart check: your ${lockedName} cart has ${outcome.overAddUnits} item(s) Mealio didn't intend to add (${list}). Please review your cart.`);
             } else {
               setCartDeltaWarning(null);
             }
@@ -2189,8 +2121,6 @@ export default function WebViewCartSheet({
             setStep('done');
             return;
           } else if (phase === 'after') {
-            const before = cartCountBeforeRef.current;
-            const expected = addResultsRef.current.filter((r) => r.success).length;
             // Name the warning after the LOCKED store (source of truth), so the
             // text can't drift from the brand the cart actually ran on.
             const lockedName = STORES.find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
@@ -2202,65 +2132,31 @@ export default function WebViewCartSheet({
               rows = diffCartItems(cartItemsBeforeRef.current, msg.items);
               setCartResultRows(rows);
             }
-            // When we have per-item cart data, audit each product Mealio reported
-            // as added against what actually landed in the cart:
-            //   • absent entirely   → silent miss (name present in report, no cart row)
-            //   • present but short  → fewer units than requested (e.g. a store
-            //                          per-item cap accepted 2 of 3). The serial
-            //                          path used to only check presence, so a short
-            //                          add slipped through silently — this is the
-            //                          qty check the parallel reconcile branch has.
-            let missing: string[] = [];
-            let shortAdds: string[] = [];
-            let overAdds: string[] = [];
-            if (rows) {
-              const active = activeItemsRef.current;
-              const reportedAdded = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
-              const addedRows = rows.filter((r) => r.added);
-              missing = findUnaddedItems(reportedAdded, addedRows.map((r) => r.name));
-              // Over-add safety net against the FULL intended set (the parallel
-              // reconcile stored it before the retry subset narrowed activeItems;
-              // serial has no reconcile, so fall back to the live active set).
-              const intended = reconcileIntendedRef.current.length > 0
-                ? reconcileIntendedRef.current
-                : active.map((item) => ({
-                    name: item.searchTerm || item.ingredientName,
-                    expectedQty: Math.max(1, item.productQty || 1),
-                    isWeight: item.purchaseWeight != null,
-                  }));
-              overAdds = findOverAddedItems(addedRows, intended).map((o) => (o.qty > 1 ? `${o.name} ×${o.qty}` : o.name));
-              // Only audit items we reported as added (failures already route to
-              // review), skip sold-by-weight lines (one row at N lb, not count-
-              // comparable), and skip fully-missing items (covered by `missing`).
-              const auditItems = active
-                .map((item) => ({
-                  name: item.searchTerm || item.ingredientName,
-                  expectedQty: Math.max(1, item.productQty || 1),
-                  isWeight: item.purchaseWeight != null,
-                }))
-                .filter((a) =>
-                  !a.isWeight
-                  && reportedAdded.some((n) => cartNameMatches(a.name, n))
-                  && !missing.some((n) => cartNameMatches(a.name, n)),
-                );
-              shortAdds = findShortAddedItems(addedRows, auditItems).map((s) => `${s.name} (${s.got} of ${s.expected})`);
-            }
-            if (missing.length > 0 || shortAdds.length > 0 || overAdds.length > 0) {
+            const findings = auditCartAfterRun({
+              rows,
+              reportedAdded: addResultsRef.current.filter((r) => r.success).map((r) => r.name),
+              active: activeItemsRef.current.map(toIntendedItem),
+              reconcileIntended: reconcileIntendedRef.current,
+              countBefore: cartCountBeforeRef.current,
+              countAfter: count,
+            });
+            const { missing, short, over, countShortfall } = findings;
+            if (missing.length > 0 || short.length > 0 || over.length > 0) {
               const parts: string[] = [];
               if (missing.length > 0) {
                 parts.push(`${missing.length} item${missing.length === 1 ? '' : 's'} may not have been added (${missing.join(', ')})`);
               }
-              if (shortAdds.length > 0) {
-                parts.push(`${shortAdds.length} item${shortAdds.length === 1 ? '' : 's'} added below the requested quantity, which a store limit can cause (${shortAdds.join(', ')})`);
+              if (short.length > 0) {
+                parts.push(`${short.length} item${short.length === 1 ? '' : 's'} added below the requested quantity, which a store limit can cause (${short.map((s) => `${s.name} (${s.got} of ${s.expected})`).join(', ')})`);
               }
-              if (overAdds.length > 0) {
-                parts.push(`${overAdds.length} item${overAdds.length === 1 ? '' : 's'} added that Mealio didn't intend (${overAdds.join(', ')})`);
+              if (over.length > 0) {
+                parts.push(`${over.length} item${over.length === 1 ? '' : 's'} added that Mealio didn't intend (${over.map(overAddLabel).join(', ')})`);
               }
               setCartDeltaWarning(`Cart check on your ${lockedName} cart: ${parts.join('; ')}. Please double-check your cart.`);
-            } else if (before != null && count != null && expected > 0 && count - before < expected) {
+            } else if (countShortfall) {
               // No per-item data (header-badge stores) or names didn't resolve —
               // fall back to the count-shortfall message.
-              const delta = Math.max(count - before, 0);
+              const { delta, expected } = countShortfall;
               setCartDeltaWarning(
                 `Cart check: ${lockedName} shows ${delta} new item${delta === 1 ? '' : 's'} in the cart, but ${expected} ${expected === 1 ? 'was' : 'were'} reported added. Please double-check your cart.`
               );

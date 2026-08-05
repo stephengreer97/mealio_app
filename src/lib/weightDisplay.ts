@@ -14,6 +14,8 @@
 // Distinguish by which field is set: purchaseWeight ⇒ dropdown, weightStep-only
 // ⇒ stepper.
 
+import { isWeightPriced } from './cart-reconcile';
+
 export interface WeightIngredientFields {
   purchaseWeight?: number | null;
   weightStep?: number | null;
@@ -33,7 +35,10 @@ export interface WeightInfo {
 /** Returns weight display info for a sold-by-weight ingredient, or null if it's
  *  a normal (count-based) item. */
 export function ingredientWeight(ing: WeightIngredientFields): WeightInfo | null {
-  if (ing.purchaseWeight != null) {
+  // Through `isWeightPriced` rather than an inline `!= null`, so "sold by
+  // weight" has one definition. MEAL-3 needs the same predicate for the
+  // north-star metric, and a second copy here is how the two would drift.
+  if (isWeightPriced(ing)) {
     return { lb: ing.purchaseWeight, step: ing.weightStep ?? 0.25, mode: 'dropdown' };
   }
   if (ing.weightStep != null) {
