@@ -31,6 +31,32 @@ export interface Measurable {
   qty?: number | null;
 }
 
+/**
+ * Units that inflect, and the singular the card should say.
+ *
+ * Storage keeps the plural — one token per unit — which is a storage decision
+ * that used to show through as "1/4 cups tahini" and "1 cans tomatoes". Mirrors
+ * `SINGULAR_UNITS` in mealio_central's `lib/import/ingredients.ts`; the two are
+ * a pair and drift between them is a card that reads differently on each
+ * platform for the same meal.
+ */
+const SINGULAR: Record<string, string> = {
+  cups: 'cup', cloves: 'clove', cans: 'can', bunches: 'bunch', sprigs: 'sprig',
+  pinches: 'pinch', handfuls: 'handful', grinds: 'grind', slices: 'slice', thumbs: 'thumb',
+};
+
+/**
+ * How a unit is spelled beside this amount.
+ *
+ * Singular for exactly one, and for a bare fraction: a cook writes "1/2 cup",
+ * never "1/2 cups". A string test rather than a parse, so "1 1/2" — which is
+ * more than one — keeps its plural.
+ */
+function unitLabel(unit: string, amount: string): string {
+  const one = amount === '1' || /^\d+\s*\/\s*\d+$/.test(amount);
+  return one ? (SINGULAR[unit] ?? unit) : unit;
+}
+
 export function ingredientAmount(ing: Measurable): string {
   const measure = (ing.measure ?? '').toString().trim();
 
@@ -42,5 +68,5 @@ export function ingredientAmount(ing: Measurable): string {
   // and never had an amount — so the unit prints alone rather than borrowing the
   // product count, which would say "1 handful" where the recipe said "a".
   const amount = measure || ((ing.qty ?? 1) > 1 ? String(ing.qty) : '');
-  return amount ? `${amount} ${ing.unit}` : ing.unit;
+  return amount ? `${amount} ${unitLabel(ing.unit, amount)}` : unitLabel(ing.unit, '1');
 }
