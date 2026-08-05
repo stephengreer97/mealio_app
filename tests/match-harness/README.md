@@ -88,14 +88,37 @@ pair-level numbers as the sensitive ones and precision@1 as a coarse alarm.
 
 ```
 store           queries  pairs   P@1          accept-match   abstain-ok   pair-P   pair-R
-heb                6     182  100.0% 5/5      0.0% 0/6      n/a         35.9%   88.1%
+heb                6     182  100.0% 5/5      0.0% 0/6      n/a         26.2%   84.4%
 walmart            3      85   66.7% 2/3     33.3% 1/3      n/a         49.2%   96.9%
 albertsons         3      74   50.0% 1/2      0.0% 0/2      1/1         52.1%   96.2%
 aldi *             2      38  100.0% 2/2    100.0% 2/2      n/a         80.0%   92.3%
 amazon-fresh       3      61  100.0% 2/2      0.0% 0/2      1/1         56.7%  100.0%
 wegmans            3      29  100.0% 2/2    100.0% 2/2      1/1         36.4%  100.0%
-ALL               20     469   87.5% 14/16   29.4% 5/17     3/3         45.2%   93.4%
+ALL               20     469   87.5% 14/16   29.4% 5/17     3/3         40.7%   92.7%
 ```
+
+### Three things the headline numbers do not say
+
+**`abstain-ok 3/3` passes for the wrong reason.** Two of the three unanswerable
+queries score **99** at the top — amazon-fresh "seasonal" leads with Flonase
+nasal spray, wegmans "seasonal" with a Kentucky Bourbon Seasonal Ale. They
+abstain only because the auto-add gate is `=== 100`, not because the scorer
+recognised there was nothing to buy. Relax that gate to `>= 90` — the exact
+change argued for below — and abstain-ok drops to 1/3. **A gate change and a
+ranking change therefore have to land together**, and the harness will say so.
+
+**precision@1 excludes total misses from its denominator.** heb's "HEB season
+chicken thighs for fajitas" is answerable (2 of 19 products are acceptable) but
+scores 0 on everything, so it leaves the denominator entirely: 16, not 17. Read
+the other way — counting a query with an acceptable answer that we ranked
+nowhere as a miss — the headline 87.5% is **82.4%**.
+
+**Five of six stores have no ranking step at all.** heb, walmart, wegmans and
+amazon-fresh take the *first* card scoring exactly 100; albertsons requires
+`>= 100` from its own local scorer. Only aldi runs a max-score loop. So P@1 here
+measures a ranker that no shipped store code actually contains — it describes
+what `_scoring.ts` *would* do if a store ranked, which is the thing to fix, but
+it is not a measurement of today's behaviour.
 
 What the baseline says:
 
@@ -121,11 +144,32 @@ What the baseline says:
    match to sort it out. That is the shape of a matcher tuned for recall.
 
 4. **`_scoring.ts` no longer describes what ALDI runs.** The header comment says
-   the store copies must stay byte-identical; `aldi.ts` has its own `scoreOne`
-   (a 0.3 overlap floor, −5 per extra candidate word, a critical-word penalty
-   instead of a hard veto) and calls it with the arguments reversed. Its row is
-   `_scoring.ts` measured on ALDI's pages, not ALDI's live match quality — hence
-   the asterisk. The other five stores' copies were checked and are identical.
+   the store copies must stay byte-identical; `aldi.ts` has its own `scoreOne` —
+   a 0.3 overlap floor, −5 per extra candidate word, and a ±15 critical-word
+   penalty instead of a hard veto, plus a `COMMON` stopword set with no
+   counterpart in `_scoring.ts`. Its row is `_scoring.ts` measured on ALDI's
+   pages, not ALDI's live match quality — hence the asterisk.
+
+   Over all 469 pairs the two disagree on 427 (lower on 377, higher on 50):
+   ALDI is *stricter* on long product names, because the per-word penalty
+   dominates, but *more permissive* at the match-at-all gate. On ALDI's own 38
+   pairs `_scoring` accepts 15 and `aldi` accepts 18. On both ALDI queries the
+   top pick is the same product either way, so this is a consistency defect
+   rather than a live outage.
+
+   **Its parameter order is a signature difference, not a bug — and that makes
+   the obvious fix dangerous.** `aldi`'s `scoreOne(nf, nt)` reads its *second*
+   parameter as the query, so the call site `scoreMatch(name, SEARCH_TERM)`
+   produces the same orientation as `_scoring`'s `scoreMatch(query, candidate)`.
+   Dropping in the shared `scoreOne` without also flipping that call site to
+   `scoreMatch(SEARCH_TERM, name)` would silently invert the comparison and make
+   ALDI worse than it is today.
+
+   The other five stores' `scoreOne`/`scoreMatch` copies are byte-identical to
+   each other and agree with `_scoring.ts` on all 469 pairs. Note that this is a
+   claim about that pair of functions only: `albertsons.ts` additionally carries
+   two *other* local scorers (`normalizeForScoring` / `scoreProductName`, 0.7
+   floor, −10 per extra word) used for cart-bubble and add-to-cart matching.
 
 ## What the corpus can and cannot see
 
@@ -134,13 +178,21 @@ Checked by mutating `_scoring.ts` and re-running:
 | Change to `_scoring.ts` | Harness reaction |
 | --- | --- |
 | Extra-word penalty (`−5` per candidate word absent from the query) | **Detected.** Overall P@1 87.5% → 93.8%; walmart 66.7% → 100%, albertsons 50% → 100%, heb 100% → 80%. |
-| Word-overlap floor 0.7 → 0.9 | **Invisible.** Every metric identical. |
+| Word-overlap floor 0.7 → **anything up to and including 1.0** | **Invisible.** Every metric identical. |
 | `CRITICAL_WORDS` veto removed entirely | **Invisible.** Every metric identical. |
 
-The last two are a real blind spot, not a bug in the harness. Almost every
-scored pair here has *all* the query's words present (`p = 1.0`), so the floor
-never binds between 0.7 and 0.9; and only two of the twenty queries contain a
-critical word at all, in both cases on a query where the exact match wins anyway.
+The last two are a real blind spot, not a bug in the harness, and it is wider
+than "0.9 happens not to bind". The overlap distribution is **strictly bimodal**:
+309 pairs sit at exactly `p = 1.0`, 157 sit below 0.7, and **nothing at all sits
+in between**. So *every* floor in `(0.7, 1.0]` is unobservable here — this corpus
+cannot tell today's fuzzy matcher apart from one that demands every query word.
+Loosening the floor IS caught (0.7 → 0.5 moves pair-P 45.2 → 40.4); tightening it
+is not, at any value.
+
+The veto is structurally unreachable rather than merely untested: it fires on 9
+of 469 pairs, all of which already score 0 on overlap, and the only two queries
+containing a critical word are exact matches where `na === nb` returns 100 before
+the veto is consulted.
 Ranking changes are caught; threshold and veto changes are not. Closing that
 needs queries carrying the attributes the veto exists for — "organic milk",
 "boneless skinless chicken thighs", "unsalted butter", "large eggs" — which is

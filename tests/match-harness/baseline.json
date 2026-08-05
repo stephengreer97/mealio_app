@@ -8,7 +8,7 @@
       "answerableQueries": 6,
       "unanswerableQueries": 0,
       "pairs": 182,
-      "acceptablePairs": 59,
+      "acceptablePairs": 45,
       "precisionAt1": 1,
       "precisionAt1Numerator": 5,
       "precisionAt1Denominator": 5,
@@ -16,8 +16,8 @@
       "acceptableMatchNumerator": 0,
       "abstainCorrect": null,
       "abstainDenominator": 0,
-      "pairPrecision": 0.3586206896551724,
-      "pairRecall": 0.8813559322033898
+      "pairPrecision": 0.2620689655172414,
+      "pairRecall": 0.8444444444444444
     },
     "walmart": {
       "usesSharedScorer": true,
@@ -110,7 +110,7 @@
     "answerableQueries": 17,
     "unanswerableQueries": 3,
     "pairs": 469,
-    "acceptablePairs": 151,
+    "acceptablePairs": 137,
     "precisionAt1": 0.875,
     "precisionAt1Numerator": 14,
     "precisionAt1Denominator": 16,
@@ -118,7 +118,7 @@
     "acceptableMatchNumerator": 5,
     "abstainCorrect": 3,
     "abstainDenominator": 3,
-    "pairPrecision": 0.4519230769230769,
-    "pairRecall": 0.9337748344370861
+    "pairPrecision": 0.40705128205128205,
+    "pairRecall": 0.927007299270073
   }
 }
