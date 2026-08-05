@@ -37,7 +37,7 @@ import { buildSearchAndAddWorker, buildPresearchWorker } from '../lib/webview-sc
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS, FEATURE_PRESEARCH_ADD, ADD_COMMIT_JITTER_MS } from '../constants/features';
 import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
-import { AutomationTelemetry, createNoopTelemetry } from '../lib/automation-telemetry';
+import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { auditCartAfterRun, isWeightPriced, reconcileFromWorkerReports, reconcileParallelAdd, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
@@ -1158,9 +1158,21 @@ export default function WebViewCartSheet({
     // Funnel: one terminal row per run, then flush. dispose() sends whatever is
     // still buffered — without it a short run's steps would sit in the buffer
     // until the flush interval and be lost if the app is backgrounded.
-    tel().record('run_summary', outcome === 'failed' ? 'error' : 'ok', {
-      detail: { outcome, itemsAdded: totalAdded, cartDeltaWarning: !!cartDeltaWarning },
-    });
+    const summaryDetail = { outcome, itemsAdded: totalAdded, cartDeltaWarning: !!cartDeltaWarning };
+    if (outcome === 'failed') {
+      // The run has no failure of its own — it failed because its steps did, so
+      // it reports whichever code dominated them. A run that added nothing while
+      // recording no coded failure at all is the parallel add path, whose workers
+      // report through the pool and emit no step rows: confirm_failed is the only
+      // thing still true there (adds were dispatched, nothing evidenced landing).
+      const dominant = tel().dominantFailureCode();
+      tel().record('run_summary', 'error', {
+        detail: { ...summaryDetail, codeSource: dominant ? 'dominant' : 'fallback' },
+        code: dominant ?? 'confirm_failed',
+      });
+    } else {
+      tel().record('run_summary', 'ok', { detail: summaryDetail });
+    }
     void tel().flush();
   }, [step, totalAdded, cartDeltaWarning, tel]);
 
@@ -1188,6 +1200,13 @@ export default function WebViewCartSheet({
       loginCheckTimeoutRef.current = null;
       if (stepRef.current !== 'login_check') return;
       console.log(`[Cart ${ts()}]`, 'LOGIN CHECK timeout — no LOGIN_STATUS, falling back to login webview');
+      // Funnel: the missing half of login_check, which otherwise only ever
+      // records the answer it got. 'timeout' rather than 'auth_required' because
+      // login state is exactly what we failed to determine — the fallback shows
+      // the login webview, but that's a guess, not a finding.
+      tel().record('login_check', 'timeout', {
+        durationMs: LOGIN_CHECK_TIMEOUT_MS, code: 'timeout',
+      });
       loginCheckActiveRef.current = false;
       // Mirror the LOGIN_STATUS:false branch: show the webview so the user
       // can log in (or see whatever the store is actually displaying).
@@ -1208,6 +1227,12 @@ export default function WebViewCartSheet({
   // and they're actually signed in, the store redirects off the login URL and
   // the 'login'-step onLoadEnd re-injects the check, which resumes automatically.
   const surfaceLoginDirect = useCallback(() => {
+    // Funnel: the run stops at the login gate without ever running a login_check,
+    // so without this row it would simply disappear from the funnel between the
+    // tap and the first search. Same code as the two live logged-out detections.
+    tel().record('login_check', 'error', {
+      detail: { source: 'prewarm' }, code: 'auth_required',
+    });
     setStep('login');
     setSearchingLabel('Sign in to continue');
     lastLoadEndUrlRef.current = '';
@@ -1379,7 +1404,12 @@ export default function WebViewCartSheet({
       // Funnel: 'timeout' is deliberately distinct from the 'empty' recorded on a
       // SEARCH_RESULT with zero candidates. Empty means the store answered and
       // had nothing; timeout means we never got an answer — different fixes.
-      tel().record('search', 'timeout', { durationMs: SEARCH_TIMEOUT_MS, itemIndex: searchIdxRef.current });
+      // 'timeout' and not 'nav_failed': the WebView can't tell a navigation that
+      // never completed from a page that loaded and never answered, so the
+      // budget is the only thing we can honestly say was exceeded.
+      tel().record('search', 'timeout', {
+        durationMs: SEARCH_TIMEOUT_MS, itemIndex: searchIdxRef.current, code: 'timeout',
+      });
       console.log(`[Cart ${ts()}]`, 'SEARCH timeout for', term, '— treating as failed and advancing');
       if (item.searchTerm) {
         // Auto-add flow: also push a SearchResult with empty candidates so
@@ -1470,6 +1500,7 @@ export default function WebViewCartSheet({
       // failure the confirm-rate denominator is designed to expose.
       tel().record('confirm', 'timeout', {
         durationMs: ADD_TIMEOUT_MS, itemIndex: idx, detail: { attempt: 1, path: 'sequential' },
+        code: 'timeout',
       });
       console.log(`[Cart ${ts()}]`, 'ADD timeout for', item.productName, '— treating as failed and advancing');
       addResultsRef.current.push({ name: item.productName, success: false, reason: 'timeout' });
@@ -1685,6 +1716,12 @@ export default function WebViewCartSheet({
         : /\/login|\/sign-in|\/signin/i.test(url);
       if (onLoginPage) {
         console.log(`[Cart ${ts()}]`, 'onLoadEnd login page during login_check — showing login immediately');
+        // Funnel: a redirect to the store's sign-in page IS the answer the check
+        // script never got to post, so record it as the login_check failure it is
+        // rather than letting the run vanish from the funnel here.
+        tel().record('login_check', 'error', {
+          detail: { source: 'login_redirect' }, code: 'auth_required',
+        });
         if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
         loginCheckActiveRef.current = false;
         loadQueueRef.current = [];
@@ -1847,7 +1884,9 @@ export default function WebViewCartSheet({
     blockReasonRef.current = reason;
     // Funnel: blockedRate per store. This is the signal that tells us a WAF
     // posture changed before users start reporting it.
-    tel().record('blocked', 'blocked', { detail: { reason: String(reason) } });
+    tel().record('blocked', 'blocked', {
+      detail: { reason: String(reason) }, code: blockFailureCode(String(reason)),
+    });
     setBlockReason(reason);
     setStep('robot_challenge');
   }, [parallelPool, addPool, setStep]);
@@ -2061,13 +2100,28 @@ export default function WebViewCartSheet({
             // Funnel: the reconcile delta is the ground truth the workers' own
             // reports are checked against. A retry count that climbs over time is
             // the earliest signal that a store's confirm signal has drifted.
-            tel().record('reconcile', retryItems.length === 0 && reviewFailures.length === 0 ? 'ok' : 'error', {
-              detail: {
-                confirmed: confirmed.length,
-                retry: retryItems.length,
-                review: reviewFailures.length,
-              },
-            });
+            const reconcileDetail = {
+              confirmed: confirmed.length,
+              retry: retryItems.length,
+              review: reviewFailures.length,
+            };
+            if (retryItems.length === 0 && reviewFailures.length === 0) {
+              tel().record('reconcile', 'ok', { detail: reconcileDetail });
+            } else {
+              // A top-up means the cart is short of what the workers claimed —
+              // that's the confirmation rail being wrong, and it outranks the
+              // review pile because it's the part we got wrong ourselves. With no
+              // top-ups the row reflects the review failures, which reconcile only
+              // ever routes here for out_of_stock / no_results.
+              tel().record('reconcile', 'error', {
+                detail: reconcileDetail,
+                code: retryItems.length > 0
+                  ? 'confirm_failed'
+                  : reviewFailures.every((r) => r.reason === 'no_results')
+                    ? 'no_candidates'
+                    : 'match_rejected',
+              });
+            }
             // Surface definitive failures (out of stock / no results) in the
             // review queue. When there are also qty top-ups, the sequential retry
             // below finishes into the review step because searchResults is now
@@ -2231,10 +2285,16 @@ export default function WebViewCartSheet({
           // Emit both halves here to keep the confirm-rate denominator complete —
           // a fused add that failed still counts as an attempt.
           tel().record('add_click', 'ok', { itemIndex: idx, detail: { path: 'fused' } });
-          tel().record('confirm', msg.success ? 'ok' : 'error', {
-            itemIndex: idx,
-            detail: { attempt: 1, path: 'fused', reason: msg.success ? undefined : String(msg.reason ?? 'unknown') },
-          });
+          if (msg.success) {
+            tel().record('confirm', 'ok', { itemIndex: idx, detail: { attempt: 1, path: 'fused' } });
+          } else {
+            const failReason = String(msg.reason ?? 'unknown');
+            tel().record('confirm', 'error', {
+              itemIndex: idx,
+              detail: { attempt: 1, path: 'fused', reason: failReason },
+              code: addFailureCode(failReason),
+            });
+          }
           const nextIdx = idx + 1;
           searchIdxRef.current = nextIdx;
           if (item) {
@@ -2296,11 +2356,15 @@ export default function WebViewCartSheet({
           // "our extractor's selectors broke", which look identical downstream.
           {
             const found = Array.isArray(msg.candidates) ? msg.candidates.length : 0;
+            const candidatesDetail = { count: found, storeUnavailable: !!msg.storeUnavailable };
             tel().record('search', 'ok', { itemIndex: searchIdxRef.current });
-            tel().record('candidates', found > 0 ? 'ok' : 'empty', {
-              itemIndex: searchIdxRef.current,
-              detail: { count: found, storeUnavailable: !!msg.storeUnavailable },
-            });
+            if (found > 0) {
+              tel().record('candidates', 'ok', { itemIndex: searchIdxRef.current, detail: candidatesDetail });
+            } else {
+              tel().record('candidates', 'empty', {
+                itemIndex: searchIdxRef.current, detail: candidatesDetail, code: 'no_candidates',
+              });
+            }
           }
           // Store responded → progress. Clear the no-progress block counter.
           consecutiveTimeoutsRef.current = 0;
@@ -2406,10 +2470,18 @@ export default function WebViewCartSheet({
           // Funnel: the headline reliability number. `confirm` is what the store
           // actually evidenced, so a click that reported no success lands as
           // 'error' with its reason — that's the row the dashboard divides by.
-          tel().record('confirm', msg.success ? 'ok' : 'error', {
-            itemIndex: addingIdxRef.current,
-            detail: { attempt: 1, reason: msg.success ? undefined : String(msg.reason ?? 'unknown'), path: 'sequential' },
-          });
+          if (msg.success) {
+            tel().record('confirm', 'ok', {
+              itemIndex: addingIdxRef.current, detail: { attempt: 1, path: 'sequential' },
+            });
+          } else {
+            const failReason = String(msg.reason ?? 'unknown');
+            tel().record('confirm', 'error', {
+              itemIndex: addingIdxRef.current,
+              detail: { attempt: 1, reason: failReason, path: 'sequential' },
+              code: addFailureCode(failReason),
+            });
+          }
           // Store responded → progress. Clear the no-progress block counter.
           consecutiveTimeoutsRef.current = 0;
           const idx = addingIdxRef.current;
