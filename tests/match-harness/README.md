@@ -127,6 +127,25 @@ What the baseline says:
    `_scoring.ts` measured on ALDI's pages, not ALDI's live match quality — hence
    the asterisk. The other five stores' copies were checked and are identical.
 
+## What the corpus can and cannot see
+
+Checked by mutating `_scoring.ts` and re-running:
+
+| Change to `_scoring.ts` | Harness reaction |
+| --- | --- |
+| Extra-word penalty (`−5` per candidate word absent from the query) | **Detected.** Overall P@1 87.5% → 93.8%; walmart 66.7% → 100%, albertsons 50% → 100%, heb 100% → 80%. |
+| Word-overlap floor 0.7 → 0.9 | **Invisible.** Every metric identical. |
+| `CRITICAL_WORDS` veto removed entirely | **Invisible.** Every metric identical. |
+
+The last two are a real blind spot, not a bug in the harness. Almost every
+scored pair here has *all* the query's words present (`p = 1.0`), so the floor
+never binds between 0.7 and 0.9; and only two of the twenty queries contain a
+critical word at all, in both cases on a query where the exact match wins anyway.
+Ranking changes are caught; threshold and veto changes are not. Closing that
+needs queries carrying the attributes the veto exists for — "organic milk",
+"boneless skinless chicken thighs", "unsalted butter", "large eggs" — which is
+another argument for the extra capture sessions above.
+
 ## Labelling
 
 `labels.json` carries the rubric, the per-query notes, and a `debatable` list of
