@@ -21,7 +21,8 @@ result. See "The constraint that actually binds" below before sequencing MEAL-13
 
 - **Endpoint:** `https://www.heb.com/graphql` (POST)
 - Discovered from `__NEXT_DATA__.runtimeConfig.graphqlUrl = "/graphql"`, present in
-  every committed fixture under `tests/fixtures/heb/` and confirmed live.
+  12 of the 14 committed fixtures under `tests/fixtures/heb/` — the two exceptions
+  are trimmed fixtures carrying no `__NEXT_DATA__` at all — and confirmed live.
 - The storefront is a Next.js app, `appName: "WebPlatform-Solar (Production)"`,
   using Apollo Client (`window.__APOLLO_STATE__` is present).
 
@@ -181,17 +182,31 @@ query AddOnsCart($orderId: String!) {
         ageVerificationR...
 ```
 
-`ShopNavigation` and the APQ link machinery both live in `_app-<hash>.js`. So the
+`ShopNavigation` and the APQ link machinery both live in `_app-<hash>.js`, but the
+documents are spread across chunks — `AddOnsCart`, for one, is in `1419-<hash>.js`,
+so any extraction job has to walk every `script[src]` rather than just the app
+bundle. So the
 schema-discovery job for MEAL-16 is **"extract query documents from a JS bundle"**,
 not "reverse-engineer a schema blind". That is a static, offline, repeatable job
 against a file we can download — no live session needed at all.
 
 This is also *why* full queries work: H-E-B uses **stock Apollo APQ**, where the
 client holds the real document and falls back to sending it whenever the server
-answers `PersistedQueryNotFound`. Accepting full queries isn't an oversight, it's a
-load-bearing part of the flow they've deployed. That makes it unlikely to be
-switched off casually — a safelist would break their own clients on every deploy
-until the cache warmed.
+answers `PersistedQueryNotFound`.
+
+It is tempting to go further and argue this is *structurally* safe — that a safelist
+would break H-E-B's own storefront on every deploy until the cache warmed, so they
+can never enable one. **The evidence here does not support that**, and Test 3 is why.
+A hash registered by Test 2 was not found afterwards, while `ShopNavigation`'s hash
+is recognised. Read one way that is a multi-node gateway with no shared APQ cache,
+and the full-query fallback is load-bearing. Read the other way it is a **build-time
+persisted-query manifest with no runtime registration** — in which case their own
+client never needs the fallback and safelisting could be switched on tomorrow at no
+cost to them. These measurements cannot tell the two apart.
+
+Treat full-query acceptance as **true today**, not as guaranteed. The practical
+consequence is in the rail design: keep sending hashes possible, so a swap back is a
+config change rather than a rewrite.
 
 ---
 
@@ -251,11 +266,14 @@ Being precise, because downstream sequencing depends on it:
    is not "measured". This is the one gap that needs a logged-in session.
 2. **Mutations specifically** may carry extra requirements (a CSRF token, an
    order/cart id, store-context headers) independent of the persisted-query question.
-3. **Durability.** One measurement, one day. H-E-B could enable safelisting later.
-   The mitigating factor is the argument above: stock APQ *depends* on the full-query
-   fallback, so disabling it would break their own storefront.
-4. **Rate limiting / ABP behaviour under sustained programmatic load** is untested.
-   A handful of probes is not a rail doing 30 adds.
+3. **Durability.** One measurement, one day. H-E-B could enable safelisting later,
+   and — see the Test 3 discussion above — nothing measured here rules that out.
+4. **Rate limiting / ABP behaviour under sustained programmatic load** is untested,
+   and this is the largest unknown on the list rather than the smallest. A handful
+   of anonymous probes is not a rail doing 30 authenticated adds; ABP profiles
+   behaviour, not just tokens. It is also the failure mode that would surface late
+   and expensively, so measure it before MEAL-13/14 commit to a rail shape — at
+   least as early as the authenticated probe in gap 1.
 
 ### Closing gap 1 — ready-to-run, needs a human
 
@@ -266,10 +284,20 @@ along):
 
 ```js
 // Confirm an AUTHENTICATED operation also accepts a full query string.
-// 1. Find a real authenticated document in the bundle:
-const src = [...document.querySelectorAll('script[src]')].find(s => /_app-/.test(s.src)).src;
-const js  = await (await fetch(src)).text();
-const i   = js.indexOf('query AddOnsCart');          // or any authed op you prefer
+// 1. Find a real authenticated document in the bundle.
+//    Search EVERY chunk, not just _app-*.js: `ShopNavigation` happens to live
+//    there, but `AddOnsCart` is in 1419-<hash>.js. Searching one chunk gives
+//    indexOf === -1, and the brace scan below then slices an empty string and
+//    posts `query: ""` — a silent failure that reads as a syntax error from
+//    the server rather than as "the extraction did not find anything".
+const OP = 'query AddOnsCart';                        // or any authed op you prefer
+let js = '', i = -1;
+for (const s of document.querySelectorAll('script[src]')) {
+  const text = await (await fetch(s.src)).text();
+  const at = text.indexOf(OP);
+  if (at >= 0) { js = text; i = at; console.log('found in', s.src); break; }
+}
+if (i < 0) throw new Error(`${OP} not found in any chunk — pick another authed operation.`);
 let d = 0, started = false, end = i;
 for (let j = i; j < js.length; j++) {
   const c = js[j];
@@ -277,6 +305,7 @@ for (let j = i; j < js.length; j++) {
   else if (c === '}') { d--; if (started && d === 0) { end = j + 1; break; } }
 }
 const q = js.slice(i, end).replace(/\\n/g, '\n').replace(/\\"/g, '"');
+if (!q.trim().startsWith('query')) throw new Error('Extraction failed — do not send this.');
 console.log(q);                                       // eyeball the document + its variables
 
 // 2. Send it as a FULL QUERY with no persistedQuery extension:
@@ -293,11 +322,18 @@ console.log(r.status, (await r.text()).slice(0, 600));
 
 **How to read the result:**
 
+Read the **body**, not the status code. A validation error comes back as HTTP 400 and
+is still a *success* for this question: the gateway could only have produced it by
+parsing our query text.
+
 | Response | Meaning |
 |---|---|
 | `200` + a `data` object | Confirmed — authed ops accept full queries. Gap closed; hashes are irrelevant to us everywhere. |
+| `400` + an error naming a *field or variable* (`Cannot query field "…"`, unknown `orderId`) | **Also success.** The gateway parsed and executed our text; only the arguments were wrong. Fix the variables and re-run if you want a clean 200. |
 | `PersistedQueryNotSupported` / "query not allowed" / "not in safelist" | Safelisting is enforced *for authenticated operations only*. Surprising, but decisive — MEAL-16 becomes mandatory. |
-| A GraphQL error naming a *field or variable* (e.g. unknown `orderId`) | **This still counts as success for MEAL-12** — the gateway parsed and executed our query text; only the arguments were wrong. Fix the variables and re-run. |
+| `PersistedQueryNotFound` | You left an `extensions.persistedQuery` block in the body. Remove it — this probe must send text only. |
+| A **syntax error**, or an error about an empty query | The extraction failed, not the gateway. The guards above should have thrown first; check what `console.log(q)` printed. Nothing has been learned either way. |
+| `401` with `x-iinfo` / `incidentId` | Imperva blocked you. You are not on a heb.com tab, or the ABP token is stale — reload the page and retry. |
 | `401` with `x-iinfo` / `incidentId` | Imperva blocked it, no GraphQL involved. Not an answer — retry from a properly-loaded heb.com tab. |
 
 The same read applies if a mutation is used instead; substitute a real cart mutation
@@ -309,10 +345,11 @@ document and expect to have to supply a valid cart/order id.
 
 ### MEAL-13 / MEAL-14 (the network rail)
 
-- **Hash rotation is off the risk register.** No hash tracking, no re-scraping hashes
-  each deploy, no "hashes went stale again" maintenance class. Send the query text.
-  This removes the single most-cited fragility of the network rail, exactly as the
-  ticket hoped.
+- **Hash rotation is off the risk register, today.** No hash tracking, no re-scraping
+  hashes each deploy, no "hashes went stale again" maintenance class. Send the query
+  text. This removes the single most-cited fragility of the network rail, exactly as
+  the ticket hoped — but build the rail so that sending a hash instead is a config
+  change rather than a rewrite. See the durability caveat above.
 - **Query text still drifts**, just far more slowly and far more visibly. Fields get
   renamed on a schema change, not on every redeploy, and a broken field produces a
   named GraphQL error instead of an opaque 404 — much better diagnostics than a
