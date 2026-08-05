@@ -1,0 +1,410 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-01T17:30:00.000Z",
+  "title": "Design System: Mealio",
+  "extensions": {
+    "colorMeta": {
+      "brand": {
+        "role": "primary",
+        "displayName": "Signal Red",
+        "canonical": "#DD0031",
+        "tonalRamp": [
+          "oklch(20% 0.09 18)",
+          "oklch(30% 0.14 18)",
+          "oklch(40% 0.19 18)",
+          "oklch(50% 0.23 18)",
+          "oklch(57% 0.24 18)",
+          "oklch(68% 0.19 18)",
+          "oklch(82% 0.10 18)",
+          "oklch(95% 0.03 18)"
+        ]
+      },
+      "brand-dark": {
+        "role": "primary",
+        "displayName": "Pressed Red",
+        "canonical": "#B5002A",
+        "tonalRamp": [
+          "oklch(18% 0.08 17)",
+          "oklch(27% 0.13 17)",
+          "oklch(36% 0.17 17)",
+          "oklch(45% 0.20 17)",
+          "oklch(54% 0.21 17)",
+          "oklch(66% 0.17 17)",
+          "oklch(81% 0.09 17)",
+          "oklch(94% 0.03 17)"
+        ]
+      },
+      "brand-light": {
+        "role": "primary",
+        "displayName": "Blush",
+        "canonical": "#FFF0F2",
+        "tonalRamp": [
+          "oklch(22% 0.03 12)",
+          "oklch(34% 0.04 12)",
+          "oklch(46% 0.04 12)",
+          "oklch(58% 0.04 12)",
+          "oklch(70% 0.03 12)",
+          "oklch(82% 0.02 12)",
+          "oklch(91% 0.015 12)",
+          "oklch(96% 0.01 12)"
+        ]
+      },
+      "bg": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "#FAFAF9",
+        "tonalRamp": [
+          "oklch(18% 0.002 90)",
+          "oklch(30% 0.002 90)",
+          "oklch(42% 0.003 90)",
+          "oklch(54% 0.003 90)",
+          "oklch(66% 0.003 90)",
+          "oklch(78% 0.003 90)",
+          "oklch(89% 0.003 90)",
+          "oklch(98% 0.002 90)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Countertop",
+        "canonical": "#F4F3F1",
+        "tonalRamp": [
+          "oklch(18% 0.004 85)",
+          "oklch(30% 0.005 85)",
+          "oklch(42% 0.005 85)",
+          "oklch(54% 0.006 85)",
+          "oklch(66% 0.006 85)",
+          "oklch(78% 0.006 85)",
+          "oklch(88% 0.005 85)",
+          "oklch(96% 0.004 85)"
+        ]
+      },
+      "surface-raised": {
+        "role": "neutral",
+        "displayName": "Card White",
+        "canonical": "#FFFFFF",
+        "tonalRamp": [
+          "oklch(18% 0 0)",
+          "oklch(30% 0 0)",
+          "oklch(42% 0 0)",
+          "oklch(54% 0 0)",
+          "oklch(66% 0 0)",
+          "oklch(78% 0 0)",
+          "oklch(90% 0 0)",
+          "oklch(100% 0 0)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#E8E6E2",
+        "tonalRamp": [
+          "oklch(19% 0.005 85)",
+          "oklch(31% 0.006 85)",
+          "oklch(43% 0.007 85)",
+          "oklch(55% 0.008 85)",
+          "oklch(67% 0.008 85)",
+          "oklch(79% 0.008 85)",
+          "oklch(92% 0.007 85)",
+          "oklch(97% 0.004 85)"
+        ]
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "Hairline Strong",
+        "canonical": "#D1CEC8",
+        "tonalRamp": [
+          "oklch(20% 0.008 82)",
+          "oklch(32% 0.010 82)",
+          "oklch(44% 0.012 82)",
+          "oklch(56% 0.013 82)",
+          "oklch(68% 0.013 82)",
+          "oklch(85% 0.012 82)",
+          "oklch(93% 0.008 82)",
+          "oklch(97% 0.005 82)"
+        ]
+      },
+      "text-primary": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#18181B",
+        "tonalRamp": [
+          "oklch(16% 0.005 286)",
+          "oklch(28% 0.006 286)",
+          "oklch(40% 0.007 286)",
+          "oklch(52% 0.008 286)",
+          "oklch(64% 0.008 286)",
+          "oklch(76% 0.007 286)",
+          "oklch(88% 0.005 286)",
+          "oklch(96% 0.003 286)"
+        ]
+      },
+      "text-secondary": {
+        "role": "neutral",
+        "displayName": "Ink Muted",
+        "canonical": "#52525B",
+        "tonalRamp": [
+          "oklch(18% 0.006 286)",
+          "oklch(30% 0.008 286)",
+          "oklch(42% 0.010 286)",
+          "oklch(54% 0.011 286)",
+          "oklch(66% 0.010 286)",
+          "oklch(78% 0.008 286)",
+          "oklch(89% 0.006 286)",
+          "oklch(96% 0.003 286)"
+        ]
+      },
+      "text-tertiary": {
+        "role": "neutral",
+        "displayName": "Ink Faint",
+        "canonical": "#A1A1AA",
+        "tonalRamp": [
+          "oklch(20% 0.005 286)",
+          "oklch(32% 0.007 286)",
+          "oklch(44% 0.008 286)",
+          "oklch(56% 0.009 286)",
+          "oklch(70% 0.009 286)",
+          "oklch(82% 0.007 286)",
+          "oklch(91% 0.005 286)",
+          "oklch(97% 0.003 286)"
+        ]
+      },
+      "success": {
+        "role": "tertiary",
+        "displayName": "Confirmed Green",
+        "canonical": "#16A34A",
+        "tonalRamp": [
+          "oklch(22% 0.06 150)",
+          "oklch(33% 0.09 150)",
+          "oklch(44% 0.12 150)",
+          "oklch(55% 0.15 150)",
+          "oklch(63% 0.16 150)",
+          "oklch(75% 0.12 150)",
+          "oklch(87% 0.07 150)",
+          "oklch(96% 0.02 150)"
+        ]
+      },
+      "error": {
+        "role": "tertiary",
+        "displayName": "Alert Red",
+        "canonical": "#DC2626",
+        "tonalRamp": [
+          "oklch(21% 0.08 27)",
+          "oklch(32% 0.12 27)",
+          "oklch(43% 0.16 27)",
+          "oklch(53% 0.19 27)",
+          "oklch(60% 0.21 27)",
+          "oklch(72% 0.16 27)",
+          "oklch(85% 0.09 27)",
+          "oklch(96% 0.02 27)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The Mealio wordmark only — login and the Discover header. Two usages in the entire app. Under active replacement (MEAL-66); documented as incumbent state, not as an invariant."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Screen titles and the top of a sheet."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Section headers, card titles, button labels, selected row states."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "The workhorse — ingredient names, descriptions, list content. 14px is the single most-used size in the app."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Metadata, chips, field labels, timestamps, helper text."
+      }
+    },
+    "shadows": [
+      {
+        "name": "floating",
+        "value": "0 2px 6px rgba(0, 0, 0, 0.22)",
+        "purpose": "The only shadow the system needs. For elements that hover over unrelated app content — the draggable cart-status bubble and the floating product preview. Android equivalent: elevation 8."
+      }
+    ],
+    "motion": [
+      {
+        "name": "sheet-slide",
+        "value": "native slide transition (Modal animationType=\"slide\")",
+        "purpose": "How every task-shaped surface arrives and leaves. Six sheets use it; it is the app's primary transition."
+      },
+      {
+        "name": "press-opacity",
+        "value": "activeOpacity 0.7",
+        "purpose": "Default touch feedback on rows, chips, and icon buttons. 0.8 on large photographic targets like the meal card, where 0.7 dims the image too far."
+      },
+      {
+        "name": "progress-sweep",
+        "value": "1000ms linear, looping",
+        "purpose": "The cart-status bubble's progress ring during a running automation job. Linear and slow on purpose — a long, fallible operation should not be animated urgently."
+      },
+      {
+        "name": "bubble-settle",
+        "value": "Animated.spring",
+        "purpose": "The cart-status bubble snapping to rest after a drag. The only spring in the system."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "phone",
+        "value": "single-column, full-bleed vertical scroll; 16px screen gutters"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single action a screen exists for. One per screen — see The One Tap Rule.",
+      "html": "<button class=\"ds-btn-primary\">Add to cart</button>",
+      "css": ".ds-btn-primary { background: #DD0031; color: #FFFFFF; font-family: Inter, system-ui, sans-serif; font-size: 16px; font-weight: 600; padding: 12px 20px; border: none; border-radius: 12px; cursor: pointer; transition: background 0.15s ease, opacity 0.15s ease; } .ds-btn-primary:hover { background: #B5002A; } .ds-btn-primary:focus-visible { outline: 2px solid #DD0031; outline-offset: 2px; } .ds-btn-primary:active { background: #B5002A; } .ds-btn-primary:disabled { opacity: 0.5; cursor: default; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "The default for everything that is not the one action. Countertop fill with a hairline border.",
+      "html": "<button class=\"ds-btn-secondary\">Not now</button>",
+      "css": ".ds-btn-secondary { background: #F4F3F1; color: #18181B; font-family: Inter, system-ui, sans-serif; font-size: 16px; font-weight: 600; padding: 12px 20px; border: 1px solid #E8E6E2; border-radius: 12px; cursor: pointer; transition: background 0.15s ease; } .ds-btn-secondary:hover { background: #E8E6E2; } .ds-btn-secondary:focus-visible { outline: 2px solid #DD0031; outline-offset: 2px; } .ds-btn-secondary:disabled { opacity: 0.5; cursor: default; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Tertiary actions inside dense rows, where a filled button would shout.",
+      "html": "<button class=\"ds-btn-ghost\">Skip this ingredient</button>",
+      "css": ".ds-btn-ghost { background: transparent; color: #DD0031; font-family: Inter, system-ui, sans-serif; font-size: 16px; font-weight: 600; padding: 12px 20px; border: none; border-radius: 12px; cursor: pointer; transition: background 0.15s ease; } .ds-btn-ghost:hover { background: #FFF0F2; } .ds-btn-ghost:focus-visible { outline: 2px solid #DD0031; outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Label above, Card White fill, hairline border. Text is 16px specifically to stop iOS zooming on focus.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-field-label\">Email</span><input class=\"ds-input\" type=\"email\" placeholder=\"you@example.com\" /></label>",
+      "css": ".ds-field { display: block; } .ds-field-label { display: block; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 500; color: #52525B; margin-bottom: 6px; } .ds-input { width: 100%; background: #FFFFFF; color: #18181B; font-family: Inter, system-ui, sans-serif; font-size: 16px; font-weight: 400; padding: 12px 14px; border: 1px solid #E8E6E2; border-radius: 10px; transition: border-color 0.15s ease; } .ds-input::placeholder { color: #A1A1AA; } .ds-input:focus { outline: none; border-color: #DD0031; } .ds-input:focus-visible { outline: 2px solid #DD0031; outline-offset: 1px; }"
+    },
+    {
+      "name": "Text Field — Error",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Errors are drawn on the border and stated below. The fill never changes.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-field-label\">Email</span><input class=\"ds-input ds-input-error\" type=\"email\" value=\"not-an-email\" /><span class=\"ds-field-error\">Enter a valid email address.</span></label>",
+      "css": ".ds-field { display: block; } .ds-field-label { display: block; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 500; color: #52525B; margin-bottom: 6px; } .ds-input { width: 100%; background: #FFFFFF; color: #18181B; font-family: Inter, system-ui, sans-serif; font-size: 16px; padding: 12px 14px; border: 1px solid #E8E6E2; border-radius: 10px; } .ds-input-error { border-color: #DC2626; } .ds-field-error { display: block; font-family: Inter, system-ui, sans-serif; font-size: 12px; color: #DC2626; margin-top: 4px; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The resting container. Flat and bordered — no shadow, per The Countertop Rule.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-title\">Weeknight Chicken Thighs</div><div class=\"ds-card-body\">12 ingredients &middot; 35 min</div></div>",
+      "css": ".ds-card { background: #FFFFFF; border: 1px solid #E8E6E2; border-radius: 16px; padding: 16px; } .ds-card-title { font-family: Inter, system-ui, sans-serif; font-size: 16px; font-weight: 600; color: #18181B; margin-bottom: 4px; } .ds-card-body { font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 400; color: #52525B; }"
+    },
+    {
+      "name": "Tag",
+      "kind": "chip",
+      "refersTo": "tag",
+      "description": "Unselected filter chip. Countertop fill, hairline border, pill radius.",
+      "html": "<button class=\"ds-tag\">Vegetarian</button>",
+      "css": ".ds-tag { background: #F4F3F1; color: #52525B; font-family: Inter, system-ui, sans-serif; font-size: 13px; font-weight: 400; padding: 6px 12px; border: 1px solid #E8E6E2; border-radius: 20px; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; } .ds-tag:hover { border-color: #D1CEC8; } .ds-tag:focus-visible { outline: 2px solid #DD0031; outline-offset: 2px; }"
+    },
+    {
+      "name": "Tag — Selected",
+      "kind": "chip",
+      "refersTo": "tag-selected",
+      "description": "Selection is signalled three ways at once — fill, border, and weight — because chips are small and often scanned peripherally.",
+      "html": "<button class=\"ds-tag-selected\" aria-pressed=\"true\">Vegetarian</button>",
+      "css": ".ds-tag-selected { background: #FFF0F2; color: #DD0031; font-family: Inter, system-ui, sans-serif; font-size: 13px; font-weight: 500; padding: 6px 12px; border: 1px solid #DD0031; border-radius: 20px; cursor: pointer; } .ds-tag-selected:focus-visible { outline: 2px solid #DD0031; outline-offset: 2px; }"
+    },
+    {
+      "name": "Cart Status Bubble",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "Signature component. A draggable puck reporting a running cart job over arbitrary content — the sole reason the shadow vocabulary exists.",
+      "html": "<div class=\"ds-bubble\"><svg class=\"ds-bubble-ring\" viewBox=\"0 0 56 56\" aria-hidden=\"true\"><circle cx=\"28\" cy=\"28\" r=\"25\" fill=\"none\" stroke=\"#E8E6E2\" stroke-width=\"3\"/><circle cx=\"28\" cy=\"28\" r=\"25\" fill=\"none\" stroke=\"#DD0031\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-dasharray=\"157\" stroke-dashoffset=\"55\" transform=\"rotate(-90 28 28)\"/></svg><span class=\"ds-bubble-count\">7/12</span></div>",
+      "css": ".ds-bubble { position: relative; width: 56px; height: 56px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 2px 6px rgba(0,0,0,0.22); display: flex; align-items: center; justify-content: center; cursor: grab; } .ds-bubble:active { cursor: grabbing; } .ds-bubble-ring { position: absolute; inset: 0; width: 56px; height: 56px; } .ds-bubble-count { font-family: Inter, system-ui, sans-serif; font-size: 12px; font-weight: 600; color: #18181B; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Countertop",
+    "overview": "A clean warm surface where the work happens. The interface is the counter, not the meal — it stays level, unhurried, and out of the way so the food can lead. Every chrome decision is made by asking what can recede. The one hot red in the system is the single live appliance in the room: you notice it because nothing else is competing.\n\nThis resolves what looks like a tension in the brief and isn't one. Mealio should feel calm and appetizing at the same time, and those pull against each other only if you try to make the chrome appetizing. It isn't the chrome's job. Warmth lives in the neutrals and appetite lives in the photography; the frame around them stays quiet. That division is load-bearing — a screen that gets more energetic by adding colour to its own furniture has broken the world, not extended it.\n\nThe system is also built for an unusual, slow scene. Add-to-cart runs live against a real grocery site, in the user's own session, and it can take minutes, hit a login wall, or partially succeed while the user watches. A design that shouts during a two-minute wait becomes exhausting. Calm here is not a style preference; it is what makes a long, fallible operation tolerable to sit through.",
+    "keyCharacteristics": [
+      "Warm paper surfaces, cool ink — a three-step warm neutral stack under a Zinc text ramp",
+      "One accent, used rarely and only where a decision is being asked for",
+      "A single type family (Inter) doing all the work, at five deliberate roles",
+      "Flat resting surfaces with hairline borders; shadow is reserved for things that genuinely float",
+      "Radius that grows with the element, from 10px inputs up to fully rounded pills",
+      "Modal sheets, not stacked screens, as the dominant navigation move"
+    ],
+    "rules": [
+      {
+        "name": "The One Tap Rule",
+        "body": "Signal Red appears on exactly one element per screen: the single action the user is there to take. If a second red thing appears, one of them is wrong. This is what lets the eye find the button without the button being large.",
+        "section": "colors"
+      },
+      {
+        "name": "The Warm Paper, Cool Ink Rule",
+        "body": "Surfaces are warm-shifted (#FAFAF9 → #F4F3F1 → #E8E6E2 → #D1CEC8); text is cool-shifted Zinc (#18181B → #52525B → #A1A1AA). The slight opposition is what gives the neutrals their newsprint quality. Never substitute a pure grey for a surface or a warm brown for text.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Reds Rule",
+        "body": "#DD0031 means act. #DC2626 means something is wrong. They are close enough to be confused and must never be used interchangeably.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Family Rule",
+        "body": "Inter does everything except the wordmark. Weight and size carry hierarchy; a new typeface never does. Adding a second text face to solve an emphasis problem is a failure to use the five weights already loaded.",
+        "section": "typography"
+      },
+      {
+        "name": "The Five Roles Rule",
+        "body": "Display, Headline, Title, Body, Label. Reach for a role, not a number. The codebase currently contains nine distinct sizes between 11px and 20px, which is drift rather than a scale — new work picks a role and stays in it.",
+        "section": "typography"
+      },
+      {
+        "name": "The Countertop Rule",
+        "body": "A surface at rest is flat and bordered. Shadow means floating above the app, not slightly important. If an element cannot be dragged or does not overlay unrelated content, it gets a hairline, not a shadow.",
+        "section": "elevation"
+      },
+      {
+        "name": "The One Depth Cue Rule",
+        "body": "Border or shadow, never both on the same element. Doubling them reads as heavy rather than raised.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Softening Ladder Rule",
+        "body": "Radius grows with the element: 8 → 10 → 12 → 16 → pill. A 16px radius on a 32px-tall control is wrong in this system, and so is a 4px radius on a card.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do put Signal Red on exactly one element per screen — the action the user came to take.",
+      "Do build depth from the three-step neutral stack (#F4F3F1 → #FAFAF9 → #FFFFFF) plus a 1px Hairline.",
+      "Do reach for one of the five type roles rather than inventing a size. Weight and size carry hierarchy; a second typeface never does.",
+      "Do keep input text at 16px, always. Smaller values make iOS zoom the page on focus.",
+      "Do present task-shaped surfaces as pageSheet modals with a slide transition, and dismiss them on Android hardware back.",
+      "Do let ingredient and reconcile lists stay dense. The user is auditing a list and needs many rows visible at once.",
+      "Do scale radius with the element: 8 → 10 → 12 → 16 → pill.",
+      "Do render a Countertop-filled placeholder with a 🍽️ glyph when a meal has no photo, never an empty frame."
+    ],
+    "donts": [
+      "Don't use Signal Red (#DD0031) and Alert Red (#DC2626) interchangeably. One means act; the other means something is wrong.",
+      "Don't put a border and a shadow on the same element. The Card primitive does this today and it is the thing this document is correcting.",
+      "Don't add a shadow to anything that can't be dragged or doesn't overlay unrelated content.",
+      "Don't introduce a second text family to solve an emphasis problem — five Inter weights are already loaded.",
+      "Don't substitute a pure grey for a warm surface, or a warm brown for the cool Zinc text ramp.",
+      "Don't make the chrome appetizing. Warmth belongs to the neutrals and appetite to the photography; the frame stays quiet.",
+      "Don't add new sizes between 11px and 20px. Nine already exist there, which is drift, not a scale.",
+      "Don't use a 2px border for emphasis. Reach for Hairline Strong or a fill instead.",
+      "Don't treat the Pacifico wordmark as an invariant — it is the incumbent state and is being replaced (MEAL-66). The Inter body system is the durable part."
+    ]
+  }
+}

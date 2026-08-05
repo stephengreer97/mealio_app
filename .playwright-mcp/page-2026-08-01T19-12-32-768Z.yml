@@ -1,0 +1,495 @@
+- generic [active] [ref=e1]:
+  - link "Skip to content" [ref=e2] [cursor=pointer]:
+    - /url: "#content"
+  - generic [ref=e4]:
+    - navigation [ref=e5]:
+      - generic [ref=e6]:
+        - button "site navigation button" [expanded] [ref=e7]
+        - button "search 101 Cookbooks button" [ref=e11]
+      - link "101 Cookbooks logo" [ref=e16] [cursor=pointer]:
+        - /url: https://www.101cookbooks.com/
+        - img "101 Cookbooks logo" [ref=e17]
+      - generic [ref=e19]:
+        - link "Join / Log in+":
+          - /url: /login.html?redirect_to=%2Fone-bowl-banana-bread%2F
+      - text: + + + + +
+    - main [ref=e23]:
+      - article [ref=e24]:
+        - generic [ref=e25]:
+          - heading "One Bowl Banana Bread" [level=1] [ref=e26]
+          - generic [ref=e27]:
+            - heading "The best, most simple, one-bowl banana bread I know. Perfect if you're craving classic banana bread flavor and texture, but want as little mess, drama, and equipment as possible." [level=2] [ref=e28]
+            - generic [ref=e29]:
+              - link "jump arrow" [ref=e31] [cursor=pointer]:
+                - /url: "#recipe"
+                - img "jump arrow" [ref=e32]
+              - link "Jump to Recipe" [ref=e38] [cursor=pointer]:
+                - /url: "#recipe"
+          - img "One Bowl Banana Bread" [ref=e41]
+        - generic [ref=e42]:
+          - paragraph [ref=e43]: Give this banana bread recipe a go! It's perfect if you're craving classic banana bread flavor and texture, but want as little mess, drama, and equipment as possible. Quite honestly, it's the best, simple, one-bowl banana bread I know. No mixer, a single bowl, classic flavor, and a moist and tender crumb. If you have three ripe bananas on hand, chances are good you have the rest of the ingredients as well. Let's do this!
+          - paragraph [ref=e44]:
+            - img "One Bowl Banana Bread Recipe" [ref=e45]
+          - heading "My Favorite Banana Bread" [level=2] [ref=e46]
+          - paragraph [ref=e47]:
+            - text: What you'll get here is a straight-ahead, classic banana bread, with a hint of a wholesome twist. I like my baked goods to have a rustic touch to them, which is why I like to use some whole wheat flour and brown sugar here. Consequently, it makes your banana bread more nutritious, moist, extra special, and delicious (when compared to versions with white sugar and white flour).
+            - img "Banana Bread Ingredients" [ref=e48]
+          - heading "Inspiration" [level=2] [ref=e49]
+          - paragraph [ref=e50]:
+            - text: This particular banana bread recipe evolved into its current lazy-day state from
+            - link "this Melissa Clark gem" [ref=e51] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/archives/lemony-olive-oil-banana-bread-recipe.html
+            - text: . I skipped any add-ins for simplicity's sake here, and would recommend a
+            - emphasis [ref=e52]: banana-only
+            - text: first pass. See how you like it, and then play around with some of my suggested variations (below) on a future pass.
+          - heading "Tips" [level=2] [ref=e53]
+          - paragraph [ref=e54]: My pro tips are few. Number one, use extra-ripe bananas. I love the sweetness and depth of flavor they bring to the banana bread. Number two? Don't over mash your banana in the beginning, leave them a quite bit chunky. You want some of those chunks to remain until the end. They tend to really break down as you're stirring in ingredients. Lastly, avoid over baking. Moist banana bread is the goal.
+          - paragraph [ref=e55]:
+            - img "One Bowl Banana Bread Recipe" [ref=e56]
+          - heading "Variations" [level=2] [ref=e57]
+          - paragraph [ref=e58]:
+            - strong [ref=e59]: "Add-ins:"
+            - text: What you see here (above) is a classic, banana bread. No add-ins. No chunks. That said, don't let me stop you if you like the base recipe, and want to add in a couple of handfuls of toasted walnuts, chocolate chunks, or some citrus zests, herbs, or toasted coconut. You can also play around with simple glazes.
+            - strong [ref=e60]: Brown butter
+            - text: ": On occasion, I like to brown the butter in this recipe before using it. So good."
+            - strong [ref=e61]: Toppings
+            - text: ": You can finish your banana bread a bunch of different ways. There's the basic, no-frills version pictured directly above. Another idea? Press half a banana lengthwise into the batter before baking. Sprinkle generously with brown sugar and bake. You can see this version in the lead photo."
+          - 'heading "Watch: One Bowl Banana Bread Video" [level=2] [ref=e62]'
+          - paragraph [ref=e63]:
+            - text: Also(!), if you like this, I'd be willing to bet you'll also like these banana-packed
+            - link "Buttermilk Berry Muffins" [ref=e64] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/archives/buttermilk-berry-muffins-recipe.html
+            - text: ", or this"
+            - link "Lemony Olive Oil Banana Bread" [ref=e65] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/lemony-olive-oil-banana-bread-recipe/
+            - text: .
+          - generic [ref=e67]:
+            - generic [ref=e68]:
+              - generic [ref=e69]:
+                - generic [ref=e70]: 101 Cookbooks Membership
+                - paragraph [ref=e73]: "Premium Ad-Free membership includes: -Ad-free content -Print-friendly recipes -Spice / Herb / Flower / Zest recipe collection PDF -Weeknight Express recipe collection PDF -Surprise bonuses throughout the year"
+              - link "Sign up here!" [ref=e75] [cursor=pointer]:
+                - /url: /membership-account/membership-checkout.html?level=1#pmpro_level_cost
+            - generic [ref=e76]:
+              - link [ref=e78] [cursor=pointer]:
+                - /url: /membership-account/membership-checkout.html?level=1#pmpro_level_cost
+                - img "spice herb flower zest" [ref=e79]
+              - link [ref=e81] [cursor=pointer]:
+                - /url: /membership-account/membership-checkout.html?level=1#pmpro_level_cost
+                - img "weeknight express" [ref=e82]
+          - generic [ref=e83]:
+            - generic [ref=e84]: "browse more:"
+            - link "banana Recipes" [ref=e86] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/banana
+            - link "whole wheat flour Recipes" [ref=e88] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/whole-wheat-flour
+            - link "Baking Recipes" [ref=e90] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/baked_goods
+        - generic [ref=e93]:
+          - generic [ref=e94]:
+            - heading "One Bowl Banana Bread" [level=2] [ref=e95]
+            - generic [ref=e96]:
+              - generic [ref=e97]:
+                - generic [ref=e99]:
+                  - button "Rate this recipe 1 out of 5 stars" [ref=e100] [cursor=pointer]
+                  - button "Rate this recipe 2 out of 5 stars" [ref=e104] [cursor=pointer]
+                  - button "Rate this recipe 3 out of 5 stars" [ref=e108] [cursor=pointer]
+                  - button "Rate this recipe 4 out of 5 stars" [ref=e112] [cursor=pointer]
+                  - button "Rate this recipe 5 out of 5 stars" [ref=e116] [cursor=pointer]
+                  - generic [ref=e120]: 4.28 from 80 votes
+                - generic [ref=e121]:
+                  - link "Join to Print":
+                    - /url: /membership-account/membership-checkout.html?level=1
+              - paragraph [ref=e129]: I tend to have leftover coconut milk on hand, so that is what I use here (along with coconut oil). They both compliment banana beautifully, but I offer up a range of easy, everyday substitutions in the ingredient list if you don't have either of those on hand.
+              - generic [ref=e130]: Ingredients
+              - list [ref=e133]:
+                - listitem [ref=e134]: 1 1/2 cups / 12 oz / 340 g mashed RIPE bananas (~3 bananas)
+                - listitem [ref=e135]: 1/3 cup / 80 ml melted coconut oil or melted butter
+                - listitem [ref=e136]: 3/4 cup / 4.5 oz / 125 g dark muscovado or dark brown sugar
+                - listitem [ref=e137]: 1/4 cup / 60 ml full-fat coconut milk or yogurt, or sour cream
+                - listitem [ref=e138]: 2 large eggs lightly beaten
+                - listitem [ref=e139]: 1 teaspoon vanilla extract
+                - listitem [ref=e140]: 1 cup / 4.5 oz / 125g all-purpose flour
+                - listitem [ref=e141]: 1 cup / 5 oz / 140g whole wheat flour
+                - listitem [ref=e142]: 3/4 teaspoon baking soda
+                - listitem [ref=e143]: 1/2 teaspoon fine grain sea salt
+              - generic [ref=e144]:
+                - generic [ref=e145]: Instructions
+                - list [ref=e147]:
+                  - listitem [ref=e148]:
+                    - paragraph [ref=e150]: Preheat the oven to 350°F, and place a rack in the center. Oil a 9-by 5-inch (23 x 13 cm) loaf pan, or equivalent.
+                - generic [ref=e151]:
+                  - generic [ref=e152]: Make the Batter
+                  - list [ref=e153]:
+                    - listitem [ref=e154]:
+                      - paragraph [ref=e156]: Next, place the mashed bananas in a large bowl. Stir in the coconut oil, and then the brown sugar and coconut milk. Add the eggs and vanilla, and stir until well combined. Add the flours, baking soda, and salt (sprinkling the baking soda and salt across the surface of the batter), and mix just until the batter combines, avoid over-mixing.
+                - generic [ref=e157]:
+                  - generic [ref=e158]: Bake and Cool
+                  - list [ref=e159]:
+                    - listitem [ref=e160]:
+                      - paragraph [ref=e162]: Pour the batter into the prepared pan and bake until golden brown, about 50 minutes. Transfer the pan to a wire rack to cool in the pan for 10 minutes, then turn the loaf out of the pan to cool completely. Slice, and enjoy!
+              - generic [ref=e163]:
+                - generic [ref=e164]:
+                  - generic [ref=e165]: Serves
+                  - generic [ref=e166]: "10"
+                - generic [ref=e167]:
+                  - generic [ref=e168]: Prep Time
+                  - generic [ref=e169]: 10 mins
+                - generic [ref=e170]:
+                  - generic [ref=e171]: Cook Time
+                  - generic [ref=e172]: 50 mins
+                - generic [ref=e173]:
+                  - generic [ref=e174]: Total Time
+                  - generic [ref=e175]: 1 hr
+              - generic [ref=e177]:
+                - generic [ref=e178]:
+                  - generic [ref=e179]:
+                    - link "Join to PRINT":
+                      - /url: /membership-account/membership-checkout.html?level=1
+                  - link [ref=e189] [cursor=pointer]:
+                    - /url: "#noochinfo"
+                  - generic [ref=e192]:
+                    - link "October 31, 2019 - permament link to this entry" [ref=e193] [cursor=pointer]:
+                      - /url: https://www.101cookbooks.com/one-bowl-banana-bread/
+                      - text: October 31, 2019
+                    - link "permament link to this entry" [ref=e194] [cursor=pointer]:
+                      - /url: https://www.101cookbooks.com/one-bowl-banana-bread/
+                      - img "permalink icon" [ref=e195]
+                - generic:
+                  - tablist:
+                    - tab
+            - generic [ref=e198]:
+              - link "101 Cookbooks on Instagram link" [ref=e200] [cursor=pointer]:
+                - /url: https://www.instagram.com/heidijswanson/
+                - img "instagram icon" [ref=e201]
+              - generic [ref=e204]:
+                - text: If you make this recipe, I'd love to see it - tag it
+                - link "#101cookbooks" [ref=e205] [cursor=pointer]:
+                  - /url: https://www.instagram.com/heidijswanson/
+                - text: on Instagram!
+          - generic [ref=e206]:
+            - generic [ref=e209]:
+              - generic [ref=e210]:
+                - img "Available!" [ref=e211]
+                - generic [ref=e216]:
+                  - generic [ref=e217]:
+                    - link "AMAZON" [ref=e219] [cursor=pointer]:
+                      - /url: https://www.amazon.com/Super-Natural-Simple-Whole-Food-Vegetarian/dp/198485688X/
+                    - link "INDIEBOUND" [ref=e221] [cursor=pointer]:
+                      - /url: https://www.indiebound.org/book/9781984856883
+                  - generic [ref=e222]:
+                    - link "BARNES & NOBLE" [ref=e224] [cursor=pointer]:
+                      - /url: https://www.barnesandnoble.com/w/super-natural-simple-heidi-swanson/1137252520
+                    - link "BOOKSHOP.ORG" [ref=e226] [cursor=pointer]:
+                      - /url: https://bookshop.org/books/super-natural-simple-whole-food-vegetarian-recipes-for-real-life-a-cookbook/9781984856883
+                  - generic [ref=e228]:
+                    - text: Also - pre-order in
+                    - link "AUS" [ref=e229] [cursor=pointer]:
+                      - /url: https://www.booktopia.com.au/super-natural-simple-heidi-swanson/book/9781743797242.html
+                    - text: "&"
+                    - link "UK" [ref=e230] [cursor=pointer]:
+                      - /url: https://www.amazon.co.uk/Super-Natural-Simple-Vegetarian-Recipes/dp/1743797249
+                    - text: "!"
+              - link [ref=e233] [cursor=pointer]:
+                - /url: https://www.heidiswanson.com/super-natural-simple
+                - img "weeknight express" [ref=e234]
+            - generic [ref=e235]:
+              - link [ref=e237] [cursor=pointer]:
+                - /url: https://www.instagram.com/heidijswanson/
+                - img "101cookbooks social icon" [ref=e238]
+              - generic [ref=e239]: Join my newsletter! Weekly recipes and inspirations.
+              - generic [ref=e240]:
+                - generic [ref=e241]: "Follow Me:"
+                - link "Instagram" [ref=e243] [cursor=pointer]:
+                  - /url: https://www.instagram.com/heidijswanson/
+                - link "TikTok" [ref=e245] [cursor=pointer]:
+                  - /url: https://www.tiktok.com/@heidijswanson/
+                - link "Facebook" [ref=e247] [cursor=pointer]:
+                  - /url: https://www.facebook.com/101cookbooks
+                - link "Pinterest" [ref=e249] [cursor=pointer]:
+                  - /url: https://www.pinterest.com/heidiswanson/
+      - generic [ref=e250]:
+        - heading "Related Recipes" [level=3] [ref=e251]
+        - generic [ref=e252]:
+          - link [ref=e254] [cursor=pointer]:
+            - /url: https://www.101cookbooks.com/lemony-olive-oil-banana-bread-recipe/
+            - img "Lemony Olive Oil Banana Bread" [ref=e255]
+          - generic [ref=e256]:
+            - heading [level=4] [ref=e257]:
+              - link "Lemony Olive Oil Banana Bread" [ref=e258] [cursor=pointer]:
+                - /url: https://www.101cookbooks.com/lemony-olive-oil-banana-bread-recipe/
+            - paragraph [ref=e259]: Certain adventures call for the perfect banana bread, and this was one of them. A moist, ridiculously good banana bread recipe. A banana bread that is chocolate studded, lemon kissed, and made with whole wheat flour (and olive oil) - from Melissa Clark's new book.
+        - generic [ref=e260]:
+          - link [ref=e262] [cursor=pointer]:
+            - /url: https://www.101cookbooks.com/healthier-one-bowl-baking-recipes/
+            - img "Nine Healthier One-bowl Baking Recipes" [ref=e263]
+          - generic [ref=e264]:
+            - heading [level=4] [ref=e265]:
+              - link "Nine Healthier One-bowl Baking Recipes" [ref=e266] [cursor=pointer]:
+                - /url: https://www.101cookbooks.com/healthier-one-bowl-baking-recipes/
+            - paragraph [ref=e267]: One bowl baking is the best. These recipes tend to use whole-grain flours, minimal refined sugar, and a single bowl. The frosting bowl doesn't count ;)...
+        - generic [ref=e268]:
+          - link [ref=e270] [cursor=pointer]:
+            - /url: https://www.101cookbooks.com/no-bake-chocolate-cake-recipe/
+            - img "An Incredible No Bake Chocolate Cake" [ref=e271]
+          - generic [ref=e272]:
+            - heading [level=4] [ref=e273]:
+              - link "An Incredible No Bake Chocolate Cake" [ref=e274] [cursor=pointer]:
+                - /url: https://www.101cookbooks.com/no-bake-chocolate-cake-recipe/
+            - paragraph [ref=e275]: The easiest chocolate cake you'll ever make. And it's always a huge hit. It's the sort of easy dessert perfect for summer, and entertaining, because you don't need to heat your oven.
+        - generic [ref=e276]:
+          - link [ref=e278] [cursor=pointer]:
+            - /url: https://www.101cookbooks.com/buttermilk-berry-muffin-recipe/
+            - img "Buttermilk Berry Muffins" [ref=e279]
+          - generic [ref=e280]:
+            - heading [level=4] [ref=e281]:
+              - link "Buttermilk Berry Muffins" [ref=e282] [cursor=pointer]:
+                - /url: https://www.101cookbooks.com/buttermilk-berry-muffin-recipe/
+            - paragraph [ref=e283]: Beautiful buttermilk muffins - berry-streaked with sugar-sparkled tops, big flavor, and buttermilk-tender texture.
+        - generic [ref=e284]:
+          - link [ref=e286] [cursor=pointer]:
+            - /url: https://www.101cookbooks.com/easy-little-bread-recipe/
+            - img "Easy Little Bread" [ref=e287]
+          - generic [ref=e288]:
+            - heading [level=4] [ref=e289]:
+              - link "Easy Little Bread" [ref=e290] [cursor=pointer]:
+                - /url: https://www.101cookbooks.com/easy-little-bread-recipe/
+            - paragraph [ref=e291]: The simple, easy little bread you should make right this minute - yeast-based, farm-style, made from rolled oats and a blend of all-purpose and whole wheat flours.
+      - generic [ref=e292]:
+        - heading "Post Your Comment" [level=4] [ref=e294]
+        - generic [ref=e296]:
+          - generic [ref=e297]:
+            - generic [ref=e298]: your comment
+            - textbox "your comment" [ref=e299]:
+              - /placeholder: YOUR COMMENT
+          - generic [ref=e300]:
+            - generic [ref=e301]: Recipe Rating
+            - group "Recipe Rating" [ref=e303]:
+              - radio "Don't rate this recipe" [checked] [ref=e305] [cursor=pointer]
+              - radio "Rate this recipe 1 out of 5 stars" [ref=e306] [cursor=pointer]
+              - radio "Rate this recipe 2 out of 5 stars" [ref=e307] [cursor=pointer]
+              - radio "Rate this recipe 3 out of 5 stars" [ref=e308] [cursor=pointer]
+              - radio "Rate this recipe 4 out of 5 stars" [ref=e309] [cursor=pointer]
+              - radio "Rate this recipe 5 out of 5 stars" [ref=e310] [cursor=pointer]
+          - generic [ref=e311]:
+            - generic [ref=e312]: your name
+            - textbox "your name" [ref=e313]:
+              - /placeholder: NAME
+          - generic [ref=e314]:
+            - generic [ref=e315]: your email
+            - textbox "your email" [ref=e316]:
+              - /placeholder: EMAIL (not shown)
+          - generic [ref=e317]:
+            - generic [ref=e318]: your website
+            - textbox "your website" [ref=e319]:
+              - /placeholder: YOUR WEBSITE
+          - paragraph [ref=e320]:
+            - button "Comment" [ref=e321]
+        - heading "Comments" [level=4] [ref=e323]
+        - generic [ref=e324]:
+          - generic [ref=e325]:
+            - article [ref=e326]:
+              - generic [ref=e327]:
+                - paragraph [ref=e328]: I love this recipe. It has been my go-to banana bread recipe for years. I normally use melted butter and yogurt instead of the coconut products and add cinnamon and nutmeg. It’s always delicious.
+                - paragraph [ref=e329]:
+                  - text: Just recently when I went to make it I realized that I was out of whole wheat flour so I looked through what I had on hand and saw that a bag of Bob’s Red Mill buckwheat flour suggested swapping half the wheat flour in a recipe with the buckwheat for a “unique nutlike flavor.” Going with the nut vibe, I used a half cup of the buckwheat and a half cup of almond flour along with the one cup of AP flour. I was worried that the almond flour might make the bread a bit dry, so I also added one tablespoon of almond milk. I also added chocolate chips. It came out great! I would 10/10 try this combo again.
+                  - img "5 stars" [ref=e330]
+                - paragraph
+                - generic [ref=e331]: Julie
+            - list [ref=e332]:
+              - article [ref=e333]:
+                - generic [ref=e334]:
+                  - paragraph [ref=e335]: Julie! Thanks so much for your notes. I love this swap and it sounds absolutely delicious. Thanks for reporting back!
+                  - paragraph
+                  - generic [ref=e336]: Heidi Swanson
+            - article [ref=e337]:
+              - generic [ref=e338]:
+                - paragraph [ref=e339]:
+                  - text: Happy new year, Heidi! I made this bread, but with some substitutions and additions based on what I had on hand, and to make it edible for a family member who has Alpha-Gal syndrome (and therefore can’t have any mammal-sourced dairy). Used half all-purpose and half pastry flour, substituted one 5.4-oz. can (2/3 cup) of coconut cream for the coconut oil and milk, and added two tablespoons of molasses (to compensate for not having dark brown sugar). Because I had slightly less banana than needed, I added about 1/4 cup of leftover pumpkin puree. I also added 1/2 cup of sprouted, salted pecans and walnuts. I was concerned that the coconut cream might not provide enough fat, but the resulting bread is delicious. It’s very moist (but not wet), and I couldn’t taste either the coconut or pumpkin. That said, I had to bake it for over an hour (perhaps just because of my oven, and the heavy stainless steel loaf pan I was using). I would use the coconut cream again for this recipe.
+                  - img "5 stars" [ref=e340]
+                - paragraph
+                - generic [ref=e341]: Lilian
+            - list [ref=e342]:
+              - article [ref=e343]:
+                - generic [ref=e344]:
+                  - paragraph [ref=e345]: Sounds great Lilian!
+                  - paragraph
+                  - generic [ref=e346]: Heidi Swanson
+            - article [ref=e347]:
+              - generic [ref=e348]:
+                - paragraph [ref=e349]:
+                  - text: I made the coconut oil/coconut milk version and it was incredible. Mine took a little over 60 minutes. Well worth the wait. YUM.
+                  - img "5 stars" [ref=e350]
+                - paragraph
+                - generic [ref=e351]: Amy
+            - list [ref=e352]:
+              - article [ref=e353]:
+                - generic [ref=e354]:
+                  - paragraph [ref=e355]: Thanks Amy!
+                  - paragraph
+                  - generic [ref=e356]: Heidi Swanson
+            - article [ref=e357]:
+              - generic [ref=e358]:
+                - paragraph [ref=e359]:
+                  - text: I made this banana bread only with whole wheat flour and it turned out so beautiful! It’s so simple yet tasty. This will be my go-to banana bread recipe! X
+                  - img "5 stars" [ref=e360]
+                - paragraph
+                - generic [ref=e361]: Reina
+            - article [ref=e362]:
+              - generic [ref=e363]:
+                - paragraph [ref=e364]:
+                  - text: this has to be my 20th time making this recipe – i constantly come back to it. a great way to use leftover coconut milk & smoothie bananas that didn’t make it into smoothies in time. your recipes are consistently my favorite Heidi ! thank you for keeping it simple & tasty 🙂
+                  - img "5 stars" [ref=e365]
+                - paragraph
+                - generic [ref=e366]: alyssa
+            - list [ref=e367]:
+              - article [ref=e368]:
+                - generic [ref=e369]:
+                  - paragraph [ref=e370]: Thanks Alyssa! 🙂
+                  - paragraph
+                  - generic [ref=e371]: Heidi Swanson
+            - article [ref=e372]:
+              - generic [ref=e373]:
+                - paragraph [ref=e374]:
+                  - text: I am making a 2nd loaf with toasted coconut as we speak. Great recipe! Thank you for sharing. I a looking up a passionfruit glaze to try out on top or on the side. Will let you know how it turns out. thanks again.
+                  - img "5 stars" [ref=e375]
+                - paragraph
+                - generic [ref=e376]: Xena Ferrario
+            - article [ref=e377]:
+              - generic [ref=e378]:
+                - paragraph [ref=e379]:
+                  - text: I’ve made my fair share of banana bread, and I have to say, this one is super tasty. Will work this into my rotation!
+                  - img "5 stars" [ref=e380]
+                - paragraph
+                - generic [ref=e381]: Maurizio
+          - generic [ref=e382]: Show all 41 Comments +
+          - heading "More Recipes" [level=4] [ref=e385]
+          - generic [ref=e386]:
+            - link "Whole Grain" [ref=e388] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/whole_grain_recipes
+            - link "WFPB" [ref=e390] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/wfpb
+            - link "Vegetarian Recipes" [ref=e392] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/vegetarian_recipes
+            - link "Vegan Recipes" [ref=e394] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/vegan-recipes/
+            - link "Soup Recipes" [ref=e396] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/soup-recipes/
+            - link "Side Dishes" [ref=e398] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/sides
+            - link "Sandwiches" [ref=e400] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/sandwiches
+            - link "Salads" [ref=e402] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/salad-recipes/
+            - link "Pasta Recipes" [ref=e404] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/pasta-recipes/
+            - link "Quick" [ref=e406] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/quick_recipes
+            - link "Main Course" [ref=e408] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/main_courses
+            - link "Instant Pot" [ref=e410] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/instant_pot_recipes
+            - link "Holiday" [ref=e412] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/holiday_recipes
+            - link "High Protein" [ref=e414] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/high_protein_recipes
+            - link "Gluten Free" [ref=e416] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/gluten_free_recipes
+            - link "Drinks" [ref=e418] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/drink_recipes
+            - link "Dinner Ideas" [ref=e420] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/dinner_ideas
+            - link "Desserts" [ref=e422] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/desserts
+            - link "Cookies" [ref=e424] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/cookie-recipes/
+            - link "Chocolate" [ref=e426] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/chocolate_recipes
+            - link "Breakfast" [ref=e428] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/breakfast_brunch
+            - link "Baking" [ref=e430] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/baked_goods
+            - link "Appetizers" [ref=e432] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/appetizers
+            - link "Camping Recipes" [ref=e434] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/camping-recipes/
+          - generic [ref=e435]:
+            - link [ref=e437] [cursor=pointer]:
+              - /url: https://www.instagram.com/heidijswanson/
+              - img "101cookbooks social icon" [ref=e438]
+            - generic [ref=e439]: Join my newsletter! Weekly recipes and inspirations.
+            - generic [ref=e440]:
+              - generic [ref=e441]: "Follow Me:"
+              - link "Instagram" [ref=e443] [cursor=pointer]:
+                - /url: https://www.instagram.com/heidijswanson/
+              - link "TikTok" [ref=e445] [cursor=pointer]:
+                - /url: https://www.tiktok.com/@heidijswanson/
+              - link "Facebook" [ref=e447] [cursor=pointer]:
+                - /url: https://www.facebook.com/101cookbooks
+              - link "Pinterest" [ref=e449] [cursor=pointer]:
+                - /url: https://www.pinterest.com/heidiswanson/
+          - heading "Popular Ingredients" [level=4] [ref=e450]
+          - generic [ref=e451]:
+            - link "avocado" [ref=e453] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/avocado
+            - link "egg" [ref=e455] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/egg
+            - link "herb" [ref=e457] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/herb
+            - link "kale" [ref=e459] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/kale
+            - link "lemon" [ref=e461] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/lemon
+            - link "lentil" [ref=e463] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/lentil
+            - link "quinoa" [ref=e465] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/how-to-cook-quinoa/
+            - link "pasta" [ref=e467] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/pasta-recipes/
+            - link "tomato" [ref=e469] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/tomato
+            - link "turmeric" [ref=e471] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/turmeric
+            - link "yogurt" [ref=e473] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/yogurt
+            - link "zucchini" [ref=e475] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/zucchini/
+            - link "arugula" [ref=e477] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/arugula
+            - link "asparagus" [ref=e479] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/asparagus
+            - link "basil" [ref=e481] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/basil
+            - link "broccoli" [ref=e483] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/broccoli
+            - link "bean" [ref=e485] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/best-bean-recipes/
+            - link "cauliflower" [ref=e487] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/cauliflower
+            - link "chickpea" [ref=e489] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/chickpea-recipes/
+            - link "chocolate" [ref=e491] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/chocolate
+            - link "curry" [ref=e493] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/curry
+            - link "tempeh" [ref=e495] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/tempeh
+            - link "tofu" [ref=e497] [cursor=pointer]:
+              - /url: https://www.101cookbooks.com/ingredient/tofu
+            - link "ALL" [ref=e499] [cursor=pointer]:
+              - /url: /ingredient.html
+          - generic [ref=e502]:
+            - paragraph [ref=e503]: © 101 Cookbooks 2026
+            - paragraph [ref=e504]:
+              - text: Use of this site constitutes acceptance of its
+              - link "User Agreement" [ref=e505] [cursor=pointer]:
+                - /url: https://www.101cookbooks.com/useragreement.html
+              - text: and
+              - link "Privacy Policy" [ref=e506] [cursor=pointer]:
+                - /url: https://www.101cookbooks.com/privacy.html
+              - text: and
+              - link "Fulfillment Policy" [ref=e507] [cursor=pointer]:
+                - /url: https://www.101cookbooks.com/fulfillment-policy.html
+              - text: .
+            - paragraph [ref=e508]: 101 Cookbooks is a participant in the Amazon Services LLC Associates Program, an affiliate advertising program designed to provide a means for sites to earn advertising fees by advertising and linking to amazon.com. Any clickable link to amazon.com on the site is an affiliate link.
+  - text: ✕

@@ -21,7 +21,16 @@ export interface ConsolidatedIngredient {
   weightStep?: number | null;
   mealIds: string[];
   mealNames: string[];
-  mealIngredients: Array<{ mealId: string; mealName: string; qty: number }>;
+  /**
+   * What each meal asks for, per meal.
+   *
+   * `measure` and `unit` are in here rather than only on the entry because the
+   * entry's pair is whichever meal happened to create it — every later meal
+   * merges in and its own amount was dropped. Two meals sharing chicken then
+   * both claimed the first one's "2 lb", on the one screen whose entire job is
+   * asking how much to buy.
+   */
+  mealIngredients: Array<{ mealId: string; mealName: string; qty: number; measure: string | null; unit: string }>;
 }
 
 export function normIngName(ing: any): string {
@@ -75,7 +84,7 @@ export function consolidateIngredients(
         if (existing) {
           existing.qty += qty;
         } else {
-          e.mealIngredients.push({ mealId: meal.id, mealName: meal.name, qty });
+          e.mealIngredients.push({ mealId: meal.id, mealName: meal.name, qty, measure: ing.measure ?? null, unit: ing.unit ?? 'qty' });
           e.mealIds.push(meal.id);
           e.mealNames.push(meal.name);
         }
@@ -91,7 +100,7 @@ export function consolidateIngredients(
           weightStep: ing.weightStep ?? null,
           mealIds: [meal.id],
           mealNames: [meal.name],
-          mealIngredients: [{ mealId: meal.id, mealName: meal.name, qty }],
+          mealIngredients: [{ mealId: meal.id, mealName: meal.name, qty, measure: ing.measure ?? null, unit: ing.unit ?? 'qty' }],
         });
       }
     }

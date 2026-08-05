@@ -1,0 +1,262 @@
+- generic [ref=f212e2]:
+  - generic [ref=f212e4]:
+    - generic [ref=f212e5]:
+      - link "Homepage" [ref=f212e6] [cursor=pointer]:
+        - /url: /?source=---top_nav_layout_nav-----------------------------------------
+      - combobox "search" [ref=f212e14]
+    - button "Get the Medium app" [ref=f212e16] [cursor=pointer]:
+      - generic [ref=f212e20]: Get app
+    - link [ref=f212e23] [cursor=pointer]:
+      - /url: /m/signin?operation=register&redirect=https%3A%2F%2Fmedium.com%2Fnew-story&source=---top_nav_layout_nav-----------------------new_post_topnav------------------
+    - generic [ref=f212e29]:
+      - paragraph [ref=f212e30]:
+        - button "Sign up" [ref=f212e32]
+      - paragraph [ref=f212e34]:
+        - link "Sign in" [ref=f212e36] [cursor=pointer]:
+          - /url: /m/signin?operation=login&redirect=https%3A%2F%2Fmedium.com%2F%40bonitamckensie%2Fhummus-for-gout-balancing-taste-and-health-f048d7fe5cc3&source=post_page---top_nav_layout_nav-----------------------global_nav------------------
+    - button "user options menu" [ref=f212e41] [cursor=pointer]:
+      - img "Unknown user" [ref=f212e43]
+  - generic [ref=f212e47]:
+    - generic:
+      - dialog
+    - navigation "Table of contents":
+      - button "Table of contents" [ref=f212e48] [cursor=pointer]
+    - article [ref=f212e54]:
+      - generic [ref=f212e58]:
+        - generic [ref=f212e62]:
+          - 'button "Topic: Is Hummus Bad For Gout" [ref=f212e66]':
+            - generic [ref=f212e67] [cursor=pointer]: Is Hummus Bad For Gout
+          - 'button "Topic: Chickpeas And Gout" [ref=f212e74]':
+            - generic [ref=f212e75] [cursor=pointer]: Chickpeas And Gout
+        - generic [ref=f212e81]:
+          - 'heading "Hummus for Gout: Balancing Taste and Health" [level=1] [ref=f212e83]'
+          - generic [ref=f212e84]:
+            - heading "Introduction to Gout and Hummus" [level=2] [ref=f212e85]
+            - generic [ref=f212e88]:
+              - generic [ref=f212e89]:
+                - generic [ref=f212e90]:
+                  - link [ref=f212e94] [cursor=pointer]:
+                    - /url: /@bonitamckensie?source=post_page---byline--f048d7fe5cc3---------------------------------------
+                    - img "Bonitamckensie" [ref=f212e97]
+                  - link "Bonitamckensie" [ref=f212e106] [cursor=pointer]:
+                    - /url: /@bonitamckensie?source=post_page---byline--f048d7fe5cc3---------------------------------------
+                - generic [ref=f212e109]:
+                  - generic [ref=f212e110]: 5 min read
+                  - generic [ref=f212e111]: ·
+                  - generic [ref=f212e113]: Jul 24, 2024
+              - generic [ref=f212e114]:
+                - generic [ref=f212e116]:
+                  - generic [ref=f212e118]:
+                    - link [ref=f212e121] [cursor=pointer]:
+                      - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fvote%2Fp%2Ff048d7fe5cc3&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40bonitamckensie%2Fhummus-for-gout-balancing-taste-and-health-f048d7fe5cc3&user=Bonitamckensie&userId=8a786f389a04&source=---header_actions--f048d7fe5cc3---------------------clap_footer------------------
+                      - generic [ref=f212e124]:
+                        - img "clap"
+                    - paragraph [ref=f212e126]: "--"
+                  - button "responses" [ref=f212e131] [cursor=pointer]
+                  - generic [ref=f212e134]:
+                    - link [ref=f212e139] [cursor=pointer]:
+                      - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Frepost%2Fp%2Ff048d7fe5cc3&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40bonitamckensie%2Fhummus-for-gout-balancing-taste-and-health-f048d7fe5cc3&user=Bonitamckensie&userId=8a786f389a04&source=---header_actions--f048d7fe5cc3---------------------repost_header------------------
+                    - paragraph [ref=f212e146]: "--"
+                - generic [ref=f212e147]:
+                  - link [ref=f212e153] [cursor=pointer]:
+                    - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fbookmark%2Fp%2Ff048d7fe5cc3&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40bonitamckensie%2Fhummus-for-gout-balancing-taste-and-health-f048d7fe5cc3&source=---header_actions--f048d7fe5cc3---------------------bookmark_footer------------------
+                    - img "Add to list bookmark button" [ref=f212e155]
+                  - link [ref=f212e164] [cursor=pointer]:
+                    - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2Fplans%3Fdimension%3Dpost_audio_button%26postId%3Df048d7fe5cc3&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40bonitamckensie%2Fhummus-for-gout-balancing-taste-and-health-f048d7fe5cc3&source=---header_actions--f048d7fe5cc3---------------------post_audio_button------------------
+                    - button "Listen" [ref=f212e168]
+                  - button "Share Post" [ref=f212e175] [cursor=pointer]
+          - paragraph [ref=f212e178]: If you’re dealing with gout, you know how important it is to watch what you eat. But does that mean saying goodbye to your favorite Mediterranean dip? Let’s dive into the world of gout and explore whether hummus can be a friend or foe in managing this painful condition.
+          - paragraph [ref=f212e179]: — -
+          - paragraph [ref=f212e180]:
+            - strong [ref=f212e181]:
+              - emphasis [ref=f212e182]: Imagine a life without gout flare-ups
+            - text: . It’s possible with this
+            - link "revolutionary gut-health approach" [ref=f212e183] [cursor=pointer]:
+              - /url: https://tinyurl.com/end-of-gout-pat2-XOL11P6
+            - text: that’s helping sufferers find lasting relief. Learn how simple changes could lead to a pain-free future and reduced risk of related health issues.
+          - figure [ref=f212e184]:
+            - button "Press enter or click to view image in full size" [ref=f212e185]
+          - paragraph [ref=f212e189]: — -
+          - paragraph [ref=f212e190]: Gout is a form of arthritis caused by the buildup of uric acid crystals in your joints, often affecting the big toe. It can cause sudden, severe attacks of pain, swelling, and redness. While medication plays a crucial role in treatment, diet is also a key player in managing gout symptoms.
+          - paragraph [ref=f212e191]: Hummus, a creamy blend of chickpeas, tahini, olive oil, lemon juice, and garlic, has gained popularity as a healthy snack. But where does it fit in a gout-friendly diet? Let’s find out!
+          - heading "The Role of Diet in Gout Management" [level=3] [ref=f212e192]
+          - paragraph [ref=f212e193]: Before we dive into hummus specifically, it’s important to understand how diet affects gout. The food we eat can significantly impact uric acid levels in our body, which is the root cause of gout flare-ups.
+          - paragraph [ref=f212e194]:
+            - strong [ref=f212e195]: Understanding Purines and Uric Acid
+          - paragraph [ref=f212e196]: Purines are natural substances found in many foods. When our body breaks down purines, it produces uric acid. For most people, this isn’t a problem. But for those with gout, excess uric acid can form those painful crystals in the joints.
+          - paragraph [ref=f212e197]:
+            - strong [ref=f212e198]: Foods to Avoid for Gout
+          - paragraph [ref=f212e199]: "To manage gout, it’s crucial to limit foods high in purines. These include:"
+          - list [ref=f212e200]:
+            - listitem [ref=f212e201]: Red meat and organ meats
+            - listitem [ref=f212e202]: Certain seafood like sardines, anchovies, and shellfish
+            - listitem [ref=f212e203]: Alcohol, especially beer
+            - listitem [ref=f212e204]: Sugary drinks and processed foods
+          - paragraph [ref=f212e205]:
+            - strong [ref=f212e206]: Foods That May Help Manage Gout
+          - paragraph [ref=f212e207]: "On the flip side, some foods may help lower uric acid levels or reduce inflammation:"
+          - list [ref=f212e208]:
+            - listitem [ref=f212e209]: Low-fat dairy products
+            - listitem [ref=f212e210]: Cherries and other low-sugar fruits
+            - listitem [ref=f212e211]: Vegetables (yes, even the high-purine ones are generally okay!)
+            - listitem [ref=f212e212]: Whole grains
+          - 'heading "Hummus and Gout: Pros and Cons" [level=3] [ref=f212e213]'
+          - paragraph [ref=f212e214]: "Now, let’s get to the heart of the matter: how does hummus stack up for gout sufferers?"
+          - paragraph [ref=f212e215]:
+            - strong [ref=f212e216]: Benefits of Hummus for Gout
+          - paragraph [ref=f212e217]: "Good news! Hummus has several qualities that make it a potentially good choice for those managing gout:"
+          - list [ref=f212e218]:
+            - listitem [ref=f212e219]: "Low in purines: Chickpeas, the main ingredient in hummus, are relatively low in purines compared to animal proteins."
+            - listitem [ref=f212e220]: "Plant-based protein source: Getting more of your protein from plants can help manage gout."
+            - listitem [ref=f212e221]: "High in fiber: Fiber can help your body eliminate uric acid more efficiently."
+          - paragraph [ref=f212e222]: Dr. Sarah, a board-certified rheumatologist with 10 years of experience, notes, “Many of my gout patients find that incorporating plant-based proteins like hummus into their diet helps them manage their symptoms better.”
+          - paragraph [ref=f212e223]:
+            - strong [ref=f212e224]: Potential Drawbacks of Hummus for Gout
+          - paragraph [ref=f212e225]: "However, there are a few considerations to keep in mind:"
+          - paragraph [ref=f212e226]: — -
+          - generic [ref=f212e227]:
+            - heading "Get Bonitamckensie’s stories in your inbox" [level=2] [ref=f212e229]
+            - paragraph [ref=f212e231]: Join Medium for free to get updates from this writer.
+            - generic [ref=f212e232]:
+              - textbox "Enter your email" [ref=f212e236]
+              - button "Subscribe" [ref=f212e239]
+            - generic [ref=f212e241]:
+              - generic [ref=f212e242]:
+                - checkbox "Remember me for faster sign in" [checked]
+              - paragraph [ref=f212e247]: Remember me for faster sign in
+          - paragraph [ref=f212e248]:
+            - strong [ref=f212e249]:
+              - emphasis [ref=f212e250]: Gout doesn’t have to control your life
+            - text: . Explore the
+            - link "game-changing strategy" [ref=f212e251] [cursor=pointer]:
+              - /url: https://tinyurl.com/end-of-gout-pat2-XOL11P6
+            - text: that’s giving hope to thousands. This scientifically-supported method targets gout’s root cause, offering a path to long-term relief and improved overall health.
+          - figure [ref=f212e252]:
+            - button "Press enter or click to view image in full size" [ref=f212e253]
+          - paragraph [ref=f212e257]: — -
+          - list [ref=f212e258]:
+            - listitem [ref=f212e259]: "Chickpeas and purine content: While lower than animal sources, chickpeas do contain some purines."
+            - listitem [ref=f212e260]: "Sodium content: Some store-bought hummus can be high in sodium, which isn’t ideal for gout management."
+            - listitem [ref=f212e261]: "Oxalate content: Chickpeas are high in oxalates, which could be a concern for those prone to kidney stones."
+          - paragraph [ref=f212e262]:
+            - strong [ref=f212e263]: Moderation and Portion Control
+          - paragraph [ref=f212e264]: As with many foods, the key with hummus is moderation. A small serving of hummus (about 2–3 tablespoons) can be a healthy part of a gout-friendly diet for most people.
+          - heading "Tips for Incorporating Hummus into a Gout-Friendly Diet" [level=3] [ref=f212e265]
+          - paragraph [ref=f212e266]: "If you’re ready to give hummus a try, here are some tips to make it work for your gout management plan:"
+          - paragraph [ref=f212e267]:
+            - strong [ref=f212e268]: Homemade vs. Store-Bought Hummus
+          - paragraph [ref=f212e269]: "Making your own hummus allows you to control the ingredients, especially the sodium content. Try this simple recipe: blend chickpeas, a little tahini, lemon juice, garlic, and a drizzle of olive oil. Add water to reach your desired consistency."
+          - paragraph [ref=f212e270]:
+            - strong [ref=f212e271]: Serving Size Recommendations
+          - paragraph [ref=f212e272]: Stick to about 1/4 cup (4 tablespoons) of hummus per serving. This gives you the benefits without overdoing it on calories or purines.
+          - paragraph [ref=f212e273]:
+            - strong [ref=f212e274]: Pairing Hummus with Low-Purine Foods
+          - paragraph [ref=f212e275]: Enjoy your hummus with raw veggies like carrots, celery, or bell peppers. These are low in purines and add extra nutrients to your snack.
+          - paragraph [ref=f212e276]:
+            - strong [ref=f212e277]: Alternatives to Traditional Hummus
+          - paragraph [ref=f212e278]: If you’re concerned about the purine content in chickpeas, try alternatives like almond hummus or vegetable-based dips. These can provide similar nutrition with potentially even lower purine content.
+          - paragraph [ref=f212e279]: Remember, everyone’s gout triggers can be different. As Dr. Sarah advises, “It’s crucial to pay attention to how your body responds to different foods. Keep a food diary and discuss any concerns with your rheumatologist.”
+          - paragraph [ref=f212e280]:
+            - emphasis [ref=f212e281]: "Disclaimer: This article is for informational purposes only and does not constitute medical advice. Always consult with a qualified healthcare professional before making significant changes to your diet, especially if you have gout or other health conditions."
+          - heading "Frequently Asked Questions" [level=3] [ref=f212e282]
+          - paragraph [ref=f212e283]:
+            - strong [ref=f212e284]: 1. Can hummus cause gout flare-ups?
+          - paragraph [ref=f212e285]: For most people with gout, moderate consumption of hummus is unlikely to trigger a flare-up. However, individual responses can vary, so monitor your symptoms and consult your doctor if you have concerns.
+          - paragraph [ref=f212e286]:
+            - strong [ref=f212e287]: 2. Is hummus safe for people with kidney stones?
+          - paragraph [ref=f212e288]: Chickpeas are high in oxalates, which can contribute to kidney stone formation in susceptible individuals. If you have a history of kidney stones, talk to your healthcare provider about including hummus in your diet.
+          - paragraph [ref=f212e289]:
+            - strong [ref=f212e290]: 3. How much hummus is too much for gout patients?
+          - paragraph [ref=f212e291]: While there’s no one-size-fits-all answer, limiting hummus to about 1/4 cup (4 tablespoons) per serving and not eating it daily is a good rule of thumb for most gout patients.
+          - paragraph [ref=f212e292]:
+            - strong [ref=f212e293]: 4. Can I eat hummus during a gout flare-up?
+          - paragraph [ref=f212e294]: During a flare-up, it’s best to stick to foods you know don’t trigger your symptoms. If hummus hasn’t caused problems in the past, a small amount should be okay, but focus on anti-inflammatory foods and stay hydrated.
+          - paragraph [ref=f212e295]:
+            - strong [ref=f212e296]: 5. Are there any hummus ingredients that gout patients should avoid?
+          - paragraph [ref=f212e297]: Some store-bought hummus may contain additives or preservatives that could potentially aggravate gout. Always check labels and consider making your own hummus to control ingredients.
+          - paragraph [ref=f212e298]:
+            - strong [ref=f212e299]: 6. Can hummus help lower uric acid levels?
+          - paragraph [ref=f212e300]: While hummus itself doesn’t directly lower uric acid, its high fiber content and plant-based protein can support overall gout management when part of a balanced diet.
+          - paragraph [ref=f212e301]: — -
+          - paragraph [ref=f212e302]:
+            - strong [ref=f212e303]:
+              - emphasis [ref=f212e304]: Imagine a life without gout flare-ups
+            - text: . It’s possible with this
+            - link "revolutionary gut-health approach" [ref=f212e305] [cursor=pointer]:
+              - /url: https://tinyurl.com/end-of-gout-pat2-XOL11P6
+            - text: that’s helping sufferers find lasting relief. Learn how simple changes could lead to a pain-free future and reduced risk of related health issues.
+          - figure [ref=f212e306]:
+            - button "Press enter or click to view image in full size" [ref=f212e307]
+          - paragraph [ref=f212e311]: — -
+    - generic [ref=f212e314]:
+      - link "Is Hummus Bad For Gout" [ref=f212e316] [cursor=pointer]:
+        - /url: /tag/is-hummus-bad-for-gout?source=post_page---footer_tags--f048d7fe5cc3---------------------------------------
+      - link "Chickpeas And Gout" [ref=f212e319] [cursor=pointer]:
+        - /url: /tag/chickpeas-and-gout?source=post_page---footer_tags--f048d7fe5cc3---------------------------------------
+    - contentinfo [ref=f212e321]:
+      - generic [ref=f212e325]:
+        - generic [ref=f212e326]:
+          - generic [ref=f212e329]:
+            - link [ref=f212e332] [cursor=pointer]:
+              - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fvote%2Fp%2Ff048d7fe5cc3&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40bonitamckensie%2Fhummus-for-gout-balancing-taste-and-health-f048d7fe5cc3&user=Bonitamckensie&userId=8a786f389a04&source=---footer_actions--f048d7fe5cc3---------------------clap_footer------------------
+              - generic [ref=f212e335]:
+                - img "clap"
+            - paragraph [ref=f212e337]: "--"
+          - button "responses" [ref=f212e342] [cursor=pointer]
+          - generic [ref=f212e345]:
+            - link [ref=f212e350] [cursor=pointer]:
+              - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Frepost%2Fp%2Ff048d7fe5cc3&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40bonitamckensie%2Fhummus-for-gout-balancing-taste-and-health-f048d7fe5cc3&user=Bonitamckensie&userId=8a786f389a04&source=---footer_actions--f048d7fe5cc3---------------------repost_footer------------------
+            - paragraph [ref=f212e357]: "--"
+        - generic [ref=f212e358]:
+          - link [ref=f212e365] [cursor=pointer]:
+            - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fbookmark%2Fp%2Ff048d7fe5cc3&operation=register&redirect=https%3A%2F%2Fmedium.com%2F%40bonitamckensie%2Fhummus-for-gout-balancing-taste-and-health-f048d7fe5cc3&source=---footer_actions--f048d7fe5cc3---------------------bookmark_footer------------------
+            - img "Add to list bookmark button" [ref=f212e367]
+          - button "Share Post" [ref=f212e375] [cursor=pointer]
+    - generic [ref=f212e381]:
+      - link [ref=f212e384] [cursor=pointer]:
+        - /url: /@bonitamckensie?source=post_page---post_author_info--f048d7fe5cc3---------------------------------------
+        - img "Bonitamckensie" [ref=f212e386]
+      - generic [ref=f212e389]:
+        - link [ref=f212e390] [cursor=pointer]:
+          - /url: /@bonitamckensie?source=post_page---post_author_info--f048d7fe5cc3---------------------------------------
+          - heading "Written by Bonitamckensie" [level=2] [ref=f212e391]
+        - generic [ref=f212e393]:
+          - generic [ref=f212e394]: 0 followers
+          - generic [ref=f212e395]:
+            - generic [ref=f212e396]: ·
+            - link "1 following" [ref=f212e397] [cursor=pointer]:
+              - /url: /@bonitamckensie/following?source=post_page---post_author_info--f048d7fe5cc3---------------------------------------
+    - generic [ref=f212e459]:
+      - link [ref=f212e461] [cursor=pointer]:
+        - /url: https://help.medium.com/hc/en-us?source=post_page-----f048d7fe5cc3---------------------------------------
+        - paragraph [ref=f212e462]: Help
+      - link [ref=f212e464] [cursor=pointer]:
+        - /url: https://status.medium.com/?source=post_page-----f048d7fe5cc3---------------------------------------
+        - paragraph [ref=f212e465]: Status
+      - link [ref=f212e467] [cursor=pointer]:
+        - /url: /about?autoplay=1&source=post_page-----f048d7fe5cc3---------------------------------------
+        - paragraph [ref=f212e468]: About
+      - link [ref=f212e470] [cursor=pointer]:
+        - /url: /jobs-at-medium/work-at-medium-959d1a85284e?source=post_page-----f048d7fe5cc3---------------------------------------
+        - paragraph [ref=f212e471]: Careers
+      - link [ref=f212e473] [cursor=pointer]:
+        - /url: mailto:pressinquiries@medium.com
+        - paragraph [ref=f212e474]: Press
+      - link [ref=f212e476] [cursor=pointer]:
+        - /url: https://blog.medium.com/?source=post_page-----f048d7fe5cc3---------------------------------------
+        - paragraph [ref=f212e477]: Blog
+      - link [ref=f212e479] [cursor=pointer]:
+        - /url: https://medium.com/store
+        - paragraph [ref=f212e480]: Store
+      - link [ref=f212e482] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-privacy-policy-f03bf92035c9?source=post_page-----f048d7fe5cc3---------------------------------------
+        - paragraph [ref=f212e483]: Privacy
+      - link [ref=f212e485] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-rules-30e5502c4eb4?source=post_page-----f048d7fe5cc3---------------------------------------
+        - paragraph [ref=f212e486]: Rules
+      - link [ref=f212e488] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-terms-of-service-9db0094a1e0f?source=post_page-----f048d7fe5cc3---------------------------------------
+        - paragraph [ref=f212e489]: Terms
+      - link [ref=f212e491] [cursor=pointer]:
+        - /url: https://speechify.com/medium?source=post_page-----f048d7fe5cc3---------------------------------------
+        - paragraph [ref=f212e492]: Text to speech

@@ -1,0 +1,215 @@
+- generic [active] [ref=f249e1]:
+  - generic [ref=f249e2]:
+    - banner [ref=f249e3]:
+      - generic [ref=f249e4]:
+        - button "Mealio home" [ref=f249e6] [cursor=pointer]:
+          - generic [ref=f249e7]: M
+          - text: ealio
+        - button "Menu" [ref=f249e9] [cursor=pointer]
+    - generic [ref=f249e13]:
+      - generic [ref=f249e15]:
+        - generic [ref=f249e23]:
+          - generic [ref=f249e24]:
+            - paragraph [ref=f249e25]: Creator Portal
+            - heading "Kate" [level=1] [ref=f249e26]
+          - button "Edit Profile" [ref=f249e27] [cursor=pointer]
+        - paragraph [ref=f249e28]: Add a bio, website, and profile link to make your creator page shine.
+      - button "Publish New Meal" [ref=f249e29] [cursor=pointer]
+      - generic [ref=f249e32]:
+        - generic [ref=f249e33]:
+          - heading "Publish a New Meal" [level=3] [ref=f249e34]
+          - button [ref=f249e35] [cursor=pointer]
+        - generic [ref=f249e39]:
+          - generic [ref=f249e41]:
+            - paragraph [ref=f249e43]: Start from a link
+            - paragraph [ref=f249e44]: Paste a recipe you have already published and we'll fill this form in. Anything we couldn't check against the page gets flagged, with the wording we read from it. You can change all of it.
+            - generic [ref=f249e45]:
+              - textbox "Recipe link to import" [disabled] [ref=f249e46]:
+                - /placeholder: https://yourblog.com/your-recipe
+                - text: https://cookieandkate.com/best-guacamole-recipe
+              - button "Reading…" [disabled] [ref=f249e220]
+            - status [ref=f249e221]:
+              - paragraph [ref=f249e223]: "Reading cookieandkate.com — fetching the page, then pulling the recipe out of it. This can take up to a minute. Carry on filling the form in if you like: anything you type while we read stays exactly as you typed it."
+          - generic [ref=f249e48]:
+            - generic [ref=f249e49]:
+              - generic [ref=f249e50]: Meal Name *
+              - textbox "e.g. Spicy Chicken Ramen" [ref=f249e51]
+            - generic [ref=f249e52]:
+              - generic [ref=f249e53]: Recipe URL (optional)
+              - textbox "https://yourblog.com/recipe" [ref=f249e54]
+            - generic [ref=f249e55]:
+              - generic [ref=f249e56]: Photo (optional)
+              - generic [ref=f249e57]:
+                - button "Choose photo" [ref=f249e58] [cursor=pointer]
+                - button "Generate photo" [disabled] [ref=f249e59]
+            - generic [ref=f249e60]:
+              - generic [ref=f249e61]: Difficulty (optional)
+              - generic [ref=f249e62]:
+                - button "1" [ref=f249e63] [cursor=pointer]
+                - button "2" [ref=f249e64] [cursor=pointer]
+                - button "3" [ref=f249e65] [cursor=pointer]
+                - button "4" [ref=f249e66] [cursor=pointer]
+                - button "5" [ref=f249e67] [cursor=pointer]
+            - generic [ref=f249e68]:
+              - generic [ref=f249e69]: Serves (optional)
+              - textbox "e.g. 4 or 2-4" [ref=f249e70]
+            - generic [ref=f249e71]:
+              - generic [ref=f249e72]: Story (optional)
+              - textbox "The story behind the meal or a simple one liner. e.g. Perfect for a summer BBQ Great budget-friendly weeknight dinner High protein, low carb – great for meal prep" [ref=f249e73]:
+                - /placeholder: "The story behind the meal or a simple one liner. e.g.\nPerfect for a summer BBQ\nGreat budget-friendly weeknight dinner\nHigh protein, low carb – great for meal prep"
+            - generic [ref=f249e74]:
+              - generic [ref=f249e75]: Measurements *
+              - generic [ref=f249e76]:
+                - text: Name each ingredient as it would appear in a grocery store search — specific enough to find the right product, but generic enough to work across stores.
+                - generic [ref=f249e77]:
+                  - generic [ref=f249e78]: ✓ "Chicken Stock" · "Garlic" · "Rotisserie Chicken"
+                  - generic [ref=f249e79]: ✗ "Walmart Bananas" · "Fresh Herbs"
+              - generic [ref=f249e82]:
+                - textbox "Ingredient name" [ref=f249e83]
+                - spinbutton "1" [ref=f249e84]
+                - combobox [ref=f249e85]:
+                  - option "Qty" [selected]
+                  - option "cups"
+                  - option "fl oz"
+                  - option "g"
+                  - option "kg"
+                  - option "L"
+                  - option "lb"
+                  - option "mg"
+                  - option "ml"
+                  - option "oz"
+                  - option "tbsp"
+                  - option "tsp"
+              - button "+ Add ingredient" [ref=f249e86] [cursor=pointer]
+            - generic [ref=f249e87]:
+              - generic [ref=f249e88]: Recipe Instructions (optional)
+              - textbox "1. Boil 4 cups of water... 2. Add 200g of noodles..." [ref=f249e89]:
+                - /placeholder: "1. Boil 4 cups of water...\n2. Add 200g of noodles..."
+            - generic [ref=f249e90]:
+              - generic [ref=f249e91]: Tags (up to 3)
+              - generic [ref=f249e93]:
+                - textbox "Search tags…" [ref=f249e94]
+                - generic [ref=f249e95]:
+                  - button "Under 10 Min" [ref=f249e96] [cursor=pointer]
+                  - button "Under 30 Min" [ref=f249e97] [cursor=pointer]
+                  - button "Under 45 Min" [ref=f249e98] [cursor=pointer]
+                  - button "Over 1 Hour" [ref=f249e99] [cursor=pointer]
+                  - button "One Pot" [ref=f249e100] [cursor=pointer]
+                  - button "Sheet Pan" [ref=f249e101] [cursor=pointer]
+                  - button "Slow Cooker" [ref=f249e102] [cursor=pointer]
+                  - button "Air Fryer" [ref=f249e103] [cursor=pointer]
+                  - button "Grilled" [ref=f249e104] [cursor=pointer]
+                  - button "No Cook" [ref=f249e105] [cursor=pointer]
+                  - button "Instant Pot" [ref=f249e106] [cursor=pointer]
+                  - button "Baked" [ref=f249e107] [cursor=pointer]
+                  - button "Stovetop" [ref=f249e108] [cursor=pointer]
+                  - button "Deep Fried" [ref=f249e109] [cursor=pointer]
+                  - button "Steamed" [ref=f249e110] [cursor=pointer]
+                  - button "Breakfast" [ref=f249e111] [cursor=pointer]
+                  - button "Brunch" [ref=f249e112] [cursor=pointer]
+                  - button "Lunch" [ref=f249e113] [cursor=pointer]
+                  - button "Dinner" [ref=f249e114] [cursor=pointer]
+                  - button "Snack" [ref=f249e115] [cursor=pointer]
+                  - button "Dessert" [ref=f249e116] [cursor=pointer]
+                  - button "Side Dish" [ref=f249e117] [cursor=pointer]
+                  - button "Appetizer" [ref=f249e118] [cursor=pointer]
+                  - button "Soup" [ref=f249e119] [cursor=pointer]
+                  - button "Salad" [ref=f249e120] [cursor=pointer]
+                  - button "Sandwich" [ref=f249e121] [cursor=pointer]
+                  - button "Wrap" [ref=f249e122] [cursor=pointer]
+                  - button "Pasta" [ref=f249e123] [cursor=pointer]
+                  - button "Tacos" [ref=f249e124] [cursor=pointer]
+                  - button "Pizza" [ref=f249e125] [cursor=pointer]
+                  - button "Burger" [ref=f249e126] [cursor=pointer]
+                  - button "Stir Fry" [ref=f249e127] [cursor=pointer]
+                  - button "Smoothie" [ref=f249e128] [cursor=pointer]
+                  - button "Bowl" [ref=f249e129] [cursor=pointer]
+                  - button "Healthy" [ref=f249e130] [cursor=pointer]
+                  - button "Keto" [ref=f249e131] [cursor=pointer]
+                  - button "Low Carb" [ref=f249e132] [cursor=pointer]
+                  - button "High Protein" [ref=f249e133] [cursor=pointer]
+                  - button "Vegetarian" [ref=f249e134] [cursor=pointer]
+                  - button "Vegan" [ref=f249e135] [cursor=pointer]
+                  - button "Gluten-Free" [ref=f249e136] [cursor=pointer]
+                  - button "Dairy-Free" [ref=f249e137] [cursor=pointer]
+                  - button "Paleo" [ref=f249e138] [cursor=pointer]
+                  - button "Low Calorie" [ref=f249e139] [cursor=pointer]
+                  - button "High Fiber" [ref=f249e140] [cursor=pointer]
+                  - button "Whole30" [ref=f249e141] [cursor=pointer]
+                  - button "Mediterranean" [ref=f249e142] [cursor=pointer]
+                  - button "Low Sodium" [ref=f249e143] [cursor=pointer]
+                  - button "Nut-Free" [ref=f249e144] [cursor=pointer]
+                  - button "Sugar-Free" [ref=f249e145] [cursor=pointer]
+                  - button "Low Fat" [ref=f249e146] [cursor=pointer]
+                  - button "Chicken" [ref=f249e147] [cursor=pointer]
+                  - button "Beef" [ref=f249e148] [cursor=pointer]
+                  - button "Pork" [ref=f249e149] [cursor=pointer]
+                  - button "Seafood" [ref=f249e150] [cursor=pointer]
+                  - button "Fish" [ref=f249e151] [cursor=pointer]
+                  - button "Turkey" [ref=f249e152] [cursor=pointer]
+                  - button "Tofu" [ref=f249e153] [cursor=pointer]
+                  - button "Eggs" [ref=f249e154] [cursor=pointer]
+                  - button "Lamb" [ref=f249e155] [cursor=pointer]
+                  - button "American" [ref=f249e156] [cursor=pointer]
+                  - button "Mexican" [ref=f249e157] [cursor=pointer]
+                  - button "Italian" [ref=f249e158] [cursor=pointer]
+                  - button "Asian" [ref=f249e159] [cursor=pointer]
+                  - button "Indian" [ref=f249e160] [cursor=pointer]
+                  - button "Thai" [ref=f249e161] [cursor=pointer]
+                  - button "Japanese" [ref=f249e162] [cursor=pointer]
+                  - button "Chinese" [ref=f249e163] [cursor=pointer]
+                  - button "Korean" [ref=f249e164] [cursor=pointer]
+                  - button "Greek" [ref=f249e165] [cursor=pointer]
+                  - button "French" [ref=f249e166] [cursor=pointer]
+                  - button "Middle Eastern" [ref=f249e167] [cursor=pointer]
+                  - button "Southern" [ref=f249e168] [cursor=pointer]
+                  - button "Tex-Mex" [ref=f249e169] [cursor=pointer]
+                  - button "BBQ" [ref=f249e170] [cursor=pointer]
+                  - button "Meal Prep" [ref=f249e171] [cursor=pointer]
+                  - button "Budget Friendly" [ref=f249e172] [cursor=pointer]
+                  - button "5 Ingredients" [ref=f249e173] [cursor=pointer]
+                  - button "Family Friendly" [ref=f249e174] [cursor=pointer]
+                  - button "Date Night" [ref=f249e175] [cursor=pointer]
+                  - button "Comfort Food" [ref=f249e176] [cursor=pointer]
+                  - button "Kid Friendly" [ref=f249e177] [cursor=pointer]
+                  - button "Game Day" [ref=f249e178] [cursor=pointer]
+                  - button "Freezer Friendly" [ref=f249e179] [cursor=pointer]
+                  - button "Make Ahead" [ref=f249e180] [cursor=pointer]
+                  - button "Quick Cleanup" [ref=f249e181] [cursor=pointer]
+                  - button "Leftovers Good" [ref=f249e182] [cursor=pointer]
+            - generic [ref=f249e183]:
+              - button "Publish Meal" [ref=f249e184] [cursor=pointer]
+              - button "Cancel" [ref=f249e185] [cursor=pointer]
+      - generic [ref=f249e186]:
+        - heading "Published Meals" [level=3] [ref=f249e187]
+        - generic [ref=f249e188]:
+          - generic [ref=f249e189]: 🍽️
+          - paragraph [ref=f249e190]: No meals published yet. Hit the button above to get started!
+  - contentinfo [ref=f249e191]:
+    - generic [ref=f249e192]:
+      - generic [ref=f249e193]:
+        - generic [ref=f249e194]:
+          - generic [ref=f249e195]: Mealio
+          - paragraph [ref=f249e196]: Shop meals, we'll fill the cart.
+        - generic [ref=f249e197]:
+          - paragraph [ref=f249e198]: Product
+          - navigation [ref=f249e199]:
+            - link "Discover Meals" [ref=f249e200] [cursor=pointer]:
+              - /url: /discover
+            - link "Pricing" [ref=f249e201] [cursor=pointer]:
+              - /url: /pricing
+            - link "Help & FAQ" [ref=f249e202] [cursor=pointer]:
+              - /url: /help
+            - link "Become a Creator" [ref=f249e203] [cursor=pointer]:
+              - /url: /creator/apply
+      - generic [ref=f249e204]:
+        - paragraph [ref=f249e205]: © 2026 Mealio. All rights reserved.
+        - navigation [ref=f249e206]:
+          - link "Privacy" [ref=f249e207] [cursor=pointer]:
+            - /url: /privacy
+          - link "Terms" [ref=f249e208] [cursor=pointer]:
+            - /url: /terms
+          - link "Contact" [ref=f249e209] [cursor=pointer]:
+            - /url: mailto:contact@mealio.co
+  - button "Open Next.js Dev Tools" [ref=f249e215] [cursor=pointer]
+  - alert [ref=f249e219]

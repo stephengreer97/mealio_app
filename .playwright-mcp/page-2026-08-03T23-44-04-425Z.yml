@@ -1,0 +1,72 @@
+- generic [ref=f3e4]:
+  - generic [ref=f3e5]:
+    - heading "Manual sync" [level=2] [ref=f3e6]
+    - generic [ref=f3e7]: 2 YouTube quota units spent on this screen, of 10,000/day
+  - paragraph [ref=f3e8]:
+    - text: Imports run on behalf of the creator you pick and land in
+    - strong [ref=f3e9]: Review
+    - text: as drafts — nothing goes live until somebody opens the meal card there and approves it. Listing a catalog is free; running a selection is not.
+  - button "Creator Chef Sarah Change" [ref=f3e12] [cursor=pointer]:
+    - generic [ref=f3e13]: ✓
+    - generic [ref=f3e14]: Creator
+    - generic [ref=f3e15]: Chef Sarah
+    - generic [ref=f3e16]: Change
+  - generic [ref=f3e18]:
+    - button "Where from YouTube · 8 listed Change" [ref=f3e19] [cursor=pointer]:
+      - generic [ref=f3e20]: ✓
+      - generic [ref=f3e21]: Where from
+      - generic [ref=f3e22]: YouTube · 8 listed
+      - generic [ref=f3e23]: Change
+    - generic [ref=f3e24]:
+      - generic [ref=f3e25] [cursor=pointer]:
+        - radio "One link" [checked] [ref=f3e26]
+        - text: One link
+      - generic [ref=f3e27] [cursor=pointer]:
+        - radio "Pick from their catalog" [ref=f3e28]
+        - text: Pick from their catalog
+  - button "Choose what to import 7 of 8 selected Change" [ref=f3e31] [cursor=pointer]:
+    - generic [ref=f3e32]: ✓
+    - generic [ref=f3e33]: Choose what to import
+    - generic [ref=f3e34]: 7 of 8 selected
+    - generic [ref=f3e35]: Change
+  - generic [ref=f3e36]:
+    - generic [ref=f3e37]:
+      - generic [ref=f3e38]: "4"
+      - generic [ref=f3e39]: Run it
+    - generic [ref=f3e40]:
+      - generic [ref=f3e41]: 7 selected · about $0.11
+      - button "Sync selection" [ref=f3e42] [cursor=pointer]
+    - paragraph [ref=f3e43]: Chef Sarah is emailed when you approve a draft in Review, listing what went live and how to edit or unpublish it. Nothing is sent for a sync on its own.
+  - generic [ref=f3e44]:
+    - generic [ref=f3e45]:
+      - heading "Run finished" [level=3] [ref=f3e46]
+      - generic [ref=f3e47]: $0.0670 spent
+    - paragraph [ref=f3e48]:
+      - text: Selected 4 · queued for review
+      - strong [ref=f3e49]: "1"
+      - text: · 1 dropped by the gate (not a recipe) · 1 already imported · 1 failed
+    - paragraph [ref=f3e50]:
+      - text: Nothing is live yet. 1 draft is waiting in
+      - strong [ref=f3e51]: Review
+      - text: · 2 fields flagged for a look.
+    - generic [ref=f3e52]:
+      - generic [ref=f3e53]:
+        - generic [ref=f3e54]: For review
+        - generic [ref=f3e55]: Sheet-pan chicken
+        - generic [ref=f3e56]: 2 flagged
+      - generic [ref=f3e57]:
+        - generic [ref=f3e58]: Not a recipe
+        - generic [ref=f3e59]:
+          - text: Weeknight recipe number 1
+          - generic [ref=f3e60]: "Not a recipe: a photo diary of a kitchen."
+      - generic [ref=f3e61]:
+        - generic [ref=f3e62]: Failed
+        - generic [ref=f3e63]:
+          - text: Weeknight recipe number 4
+          - generic [ref=f3e64]: The site took too long to answer.
+        - button "Retry" [ref=f3e65] [cursor=pointer]
+  - generic [ref=f3e67]:
+    - button "Add the Mealio link to their videos Show" [ref=f3e68] [cursor=pointer]:
+      - generic [ref=f3e69]: Add the Mealio link to their videos
+      - generic [ref=f3e70]: Show
+    - button "Check what can be linked" [ref=f3e71] [cursor=pointer]

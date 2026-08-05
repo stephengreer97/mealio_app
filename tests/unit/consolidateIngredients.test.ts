@@ -72,9 +72,12 @@ describe('consolidateIngredients', () => {
     expect(result[0].productQty).toBe(3);
     expect(result[0].mealIds).toEqual(['m1', 'm2']);
     expect(result[0].mealNames).toEqual(['Tacos', 'Burritos']);
+    // Each meal carries its own measure and unit (MEAL-92). The entry's pair
+    // belongs to whichever meal created it, so the qty step used to show every
+    // later meal the first one's amount.
     expect(result[0].mealIngredients).toEqual([
-      { mealId: 'm1', mealName: 'Tacos', qty: 1 },
-      { mealId: 'm2', mealName: 'Burritos', qty: 2 },
+      { mealId: 'm1', mealName: 'Tacos', qty: 1, measure: null, unit: 'qty' },
+      { mealId: 'm2', mealName: 'Burritos', qty: 2, measure: null, unit: 'qty' },
     ]);
   });
 
@@ -89,7 +92,7 @@ describe('consolidateIngredients', () => {
     expect(result[0].productQty).toBe(3);
     // Inside one meal the per-meal row must be summed, not duplicated.
     expect(result[0].mealIngredients).toEqual([
-      { mealId: 'm1', mealName: 'Tacos', qty: 3 },
+      { mealId: 'm1', mealName: 'Tacos', qty: 3, measure: null, unit: 'qty' },
     ]);
     expect(result[0].mealIds).toEqual(['m1']);
   });
@@ -232,5 +235,27 @@ describe('consolidateIngredients', () => {
     expect(result).toHaveLength(1);
     expect(result[0].productQty).toBe(5);
     expect(result[0].ingredientName).toBe('Tortillas');
+  });
+});
+
+describe('per-meal amounts on the qty step (MEAL-92)', () => {
+  it('keeps each meal’s own amount when two meals share an ingredient', () => {
+    // The bug: `measure`/`unit` were set once, by whichever meal created the
+    // entry, and every later meal merged in with its own amount discarded. Both
+    // lines then claimed the first meal's — on the screen whose only question is
+    // how much to buy.
+    const result = consolidateIngredients([
+      meal('m1', 'Chicken Alfredo', [
+        { ingredientName: 'Chicken', searchTerm: 'chicken', productQty: 1, measure: '2', unit: 'lb' },
+      ]),
+      meal('m2', 'Chicken Tacos', [
+        { ingredientName: 'Chicken', searchTerm: 'chicken', productQty: 1, measure: '0.5', unit: 'lb' },
+      ]),
+    ] as any);
+
+    expect(result[0].mealIngredients).toEqual([
+      { mealId: 'm1', mealName: 'Chicken Alfredo', qty: 1, measure: '2', unit: 'lb' },
+      { mealId: 'm2', mealName: 'Chicken Tacos', qty: 1, measure: '0.5', unit: 'lb' },
+    ]);
   });
 });

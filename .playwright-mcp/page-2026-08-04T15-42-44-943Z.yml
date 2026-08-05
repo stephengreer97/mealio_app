@@ -1,0 +1,31 @@
+- generic [active] [ref=f2e1]:
+  - generic [ref=f2e4]:
+    - heading "3 recipes are waiting for you" [level=2] [ref=f2e5]
+    - paragraph [ref=f2e6]: 2 of the ones below have something worth checking, and they are first.
+    - generic [ref=f2e7]:
+      - heading "Worth a look first" [level=3] [ref=f2e8]
+      - paragraph [ref=f2e9]: Something in these did not match the page we read. The row says how many fields, and the notes beside the card say which.
+      - generic [ref=f2e10]:
+        - button "Best Guacamole with Charred Spring Onion and Toasted Pepitas cookieandkate.com · 8 ingredients 10 to check" [ref=f2e12] [cursor=pointer]:
+          - generic [ref=f2e13]:
+            - generic [ref=f2e14]: Best Guacamole with Charred Spring Onion and Toasted Pepitas
+            - generic [ref=f2e15]: cookieandkate.com · 8 ingredients
+          - generic [ref=f2e16]: 10 to check
+          - generic [ref=f2e17]: ▸
+        - button "Eight-Tag Enchiladas cookieandkate.com · 8 ingredients 10 to check" [ref=f2e19] [cursor=pointer]:
+          - generic [ref=f2e20]:
+            - generic [ref=f2e21]: Eight-Tag Enchiladas
+            - generic [ref=f2e22]: cookieandkate.com · 8 ingredients
+          - generic [ref=f2e23]: 10 to check
+          - generic [ref=f2e24]: ▸
+    - generic [ref=f2e25]:
+      - heading "Everything checked out" [level=3] [ref=f2e26]
+      - paragraph [ref=f2e27]: Every field we filled matched the page we read. Still yours to read before it goes out.
+      - button "Black Bean Soup cookieandkate.com · 8 ingredients all verified" [ref=f2e30] [cursor=pointer]:
+        - generic [ref=f2e31]:
+          - generic [ref=f2e32]: Black Bean Soup
+          - generic [ref=f2e33]: cookieandkate.com · 8 ingredients
+        - generic [ref=f2e34]: all verified
+        - generic [ref=f2e35]: ▸
+  - button "Open Next.js Dev Tools" [ref=f2e41] [cursor=pointer]
+  - alert [ref=f2e45]

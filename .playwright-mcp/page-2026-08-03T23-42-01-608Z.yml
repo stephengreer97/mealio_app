@@ -1,0 +1,692 @@
+- generic [ref=e2]:
+  - heading "1 · Nothing chosen" [level=3] [ref=e3]
+  - generic [ref=e6]:
+    - heading "Manual sync" [level=2] [ref=e8]
+    - paragraph [ref=e9]:
+      - text: Imports run on behalf of the creator you pick and land in
+      - strong [ref=e10]: Review
+      - text: as drafts — nothing goes live until somebody opens the meal card there and approves it. Listing a catalog is free; running a selection is not.
+    - generic [ref=e11]:
+      - button "Creator Nobody chosen yet Hide" [expanded] [ref=e13] [cursor=pointer]:
+        - generic [ref=e14]: "1"
+        - generic [ref=e15]: Creator
+        - generic [ref=e16]: Nobody chosen yet
+        - generic [ref=e17]: Hide
+      - combobox "Creator" [ref=e19] [cursor=pointer]:
+        - option "Choose a creator…" [selected]
+        - option "Chef Sarah"
+        - option "Chef Ben"
+    - generic [ref=e21]:
+      - generic [ref=e22]:
+        - generic [ref=e23]: ✓
+        - generic [ref=e24]: Where from
+      - generic [ref=e25]:
+        - generic [ref=e26] [cursor=pointer]:
+          - radio "One link" [ref=e27]
+          - text: One link
+        - generic [ref=e28] [cursor=pointer]:
+          - radio "Pick from their catalog" [ref=e29]
+          - text: Pick from their catalog
+    - button "The link Nothing pasted yet Open" [ref=e32] [cursor=pointer]:
+      - generic [ref=e33]: "3"
+      - generic [ref=e34]: The link
+      - generic [ref=e35]: Nothing pasted yet
+      - generic [ref=e36]: Open
+    - generic [ref=e37]:
+      - generic [ref=e38]:
+        - generic [ref=e39]: "4"
+        - generic [ref=e40]: Run it
+      - button "Sync this link" [disabled] [ref=e42] [cursor=pointer]
+      - paragraph [ref=e43]: The creator is emailed when you approve a draft in Review, listing what went live and how to edit or unpublish it. Nothing is sent for a sync on its own.
+  - heading "2 · Creator chosen, link mode" [level=3] [ref=e44]
+  - generic [ref=e47]:
+    - heading "Manual sync" [level=2] [ref=e49]
+    - paragraph [ref=e50]:
+      - text: Imports run on behalf of the creator you pick and land in
+      - strong [ref=e51]: Review
+      - text: as drafts — nothing goes live until somebody opens the meal card there and approves it. Listing a catalog is free; running a selection is not.
+    - button "Creator Chef Sarah Change" [ref=e54] [cursor=pointer]:
+      - generic [ref=e55]: ✓
+      - generic [ref=e56]: Creator
+      - generic [ref=e57]: Chef Sarah
+      - generic [ref=e58]: Change
+    - generic [ref=e60]:
+      - generic [ref=e61]:
+        - generic [ref=e62]: ✓
+        - generic [ref=e63]: Where from
+      - generic [ref=e64]:
+        - generic [ref=e65] [cursor=pointer]:
+          - radio "One link" [ref=e66]
+          - text: One link
+        - generic [ref=e67] [cursor=pointer]:
+          - radio "Pick from their catalog" [ref=e68]
+          - text: Pick from their catalog
+    - generic [ref=e69]:
+      - button "The link Nothing pasted yet Hide" [expanded] [ref=e71] [cursor=pointer]:
+        - generic [ref=e72]: "3"
+        - generic [ref=e73]: The link
+        - generic [ref=e74]: Nothing pasted yet
+        - generic [ref=e75]: Hide
+      - generic [ref=e77]:
+        - textbox "Recipe link" [ref=e78]:
+          - /placeholder: https://theirblog.com/the-recipe
+        - paragraph [ref=e79]: 1 selected · about $0.02 · the gate still runs, so a page that is not a recipe is dropped.
+    - generic [ref=e80]:
+      - generic [ref=e81]:
+        - generic [ref=e82]: "4"
+        - generic [ref=e83]: Run it
+      - button "Sync this link" [disabled] [ref=e85] [cursor=pointer]
+      - paragraph [ref=e86]: Chef Sarah is emailed when you approve a draft in Review, listing what went live and how to edit or unpublish it. Nothing is sent for a sync on its own.
+    - generic [ref=e88]:
+      - button "Add the Mealio link to their videos Show" [ref=e89] [cursor=pointer]:
+        - generic [ref=e90]: Add the Mealio link to their videos
+        - generic [ref=e91]: Show
+      - button "Check what can be linked" [ref=e92] [cursor=pointer]
+  - heading "3 · Catalogue mode, choosing a source" [level=3] [ref=e93]
+  - generic [ref=e96]:
+    - heading "Manual sync" [level=2] [ref=e98]
+    - paragraph [ref=e99]:
+      - text: Imports run on behalf of the creator you pick and land in
+      - strong [ref=e100]: Review
+      - text: as drafts — nothing goes live until somebody opens the meal card there and approves it. Listing a catalog is free; running a selection is not.
+    - button "Creator Chef Sarah Change" [ref=e103] [cursor=pointer]:
+      - generic [ref=e104]: ✓
+      - generic [ref=e105]: Creator
+      - generic [ref=e106]: Chef Sarah
+      - generic [ref=e107]: Change
+    - generic [ref=e108]:
+      - generic [ref=e109]:
+        - button "Where from YouTube · not listed yet Hide" [expanded] [ref=e110] [cursor=pointer]:
+          - generic [ref=e111]: "2"
+          - generic [ref=e112]: Where from
+          - generic [ref=e113]: YouTube · not listed yet
+          - generic [ref=e114]: Hide
+        - generic [ref=e115]:
+          - generic [ref=e116] [cursor=pointer]:
+            - radio "One link" [ref=e117]
+            - text: One link
+          - generic [ref=e118] [cursor=pointer]:
+            - radio "Pick from their catalog" [ref=e119]
+            - text: Pick from their catalog
+      - generic [ref=e121]:
+        - combobox "Source" [ref=e122] [cursor=pointer]:
+          - option "Website" [selected]
+          - option "YouTube"
+          - option "Instagram" [disabled]
+          - option "TikTok" [disabled]
+        - button "List what they publish" [ref=e123] [cursor=pointer]
+        - generic [ref=e124]: Reads the feed only — no pages are fetched and no model is called.
+    - button "Choose what to import 0 of 0 selected Open" [ref=e127] [cursor=pointer]:
+      - generic [ref=e128]: "3"
+      - generic [ref=e129]: Choose what to import
+      - generic [ref=e130]: 0 of 0 selected
+      - generic [ref=e131]: Open
+    - generic [ref=e132]:
+      - generic [ref=e133]:
+        - generic [ref=e134]: "4"
+        - generic [ref=e135]: Run it
+      - generic [ref=e136]:
+        - generic [ref=e137]: 0 selected · about $0.00
+        - button "Sync selection" [disabled] [ref=e138] [cursor=pointer]
+      - paragraph [ref=e139]: Chef Sarah is emailed when you approve a draft in Review, listing what went live and how to edit or unpublish it. Nothing is sent for a sync on its own.
+    - generic [ref=e141]:
+      - button "Add the Mealio link to their videos Show" [ref=e142] [cursor=pointer]:
+        - generic [ref=e143]: Add the Mealio link to their videos
+        - generic [ref=e144]: Show
+      - button "Check what can be linked" [ref=e145] [cursor=pointer]
+  - heading "4 · Checklist" [level=3] [ref=e146]
+  - generic [ref=e149]:
+    - generic [ref=e150]:
+      - heading "Manual sync" [level=2] [ref=e151]
+      - generic [ref=e152]: 2 YouTube quota units spent on this screen, of 10,000/day
+    - paragraph [ref=e153]:
+      - text: Imports run on behalf of the creator you pick and land in
+      - strong [ref=e154]: Review
+      - text: as drafts — nothing goes live until somebody opens the meal card there and approves it. Listing a catalog is free; running a selection is not.
+    - button "Creator Chef Sarah Change" [ref=e157] [cursor=pointer]:
+      - generic [ref=e158]: ✓
+      - generic [ref=e159]: Creator
+      - generic [ref=e160]: Chef Sarah
+      - generic [ref=e161]: Change
+    - generic [ref=e163]:
+      - button "Where from YouTube · 8 listed Change" [ref=e164] [cursor=pointer]:
+        - generic [ref=e165]: ✓
+        - generic [ref=e166]: Where from
+        - generic [ref=e167]: YouTube · 8 listed
+        - generic [ref=e168]: Change
+      - generic [ref=e169]:
+        - generic [ref=e170] [cursor=pointer]:
+          - radio "One link" [ref=e171]
+          - text: One link
+        - generic [ref=e172] [cursor=pointer]:
+          - radio "Pick from their catalog" [ref=e173]
+          - text: Pick from their catalog
+    - generic [ref=e174]:
+      - generic [ref=e175]:
+        - button "Choose what to import 0 of 8 selected Hide" [expanded] [ref=e176] [cursor=pointer]:
+          - generic [ref=e177]: "3"
+          - generic [ref=e178]: Choose what to import
+          - generic [ref=e179]: 0 of 8 selected
+          - generic [ref=e180]: Hide
+        - generic [ref=e181]:
+          - button "Select all not yet imported (7)" [ref=e182] [cursor=pointer]
+          - button "Clear selection" [ref=e183] [cursor=pointer]
+      - generic [ref=e185]:
+        - generic [ref=e186]:
+          - heading "8 items published" [level=3] [ref=e187]
+          - link "https://chefsarah.test/feed" [ref=e188] [cursor=pointer]:
+            - /url: https://chefsarah.test/feed
+        - generic [ref=e189]:
+          - generic [ref=e190] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 0" [ref=e191]
+            - generic [ref=e192]:
+              - text: Weeknight recipe number 0
+              - generic [ref=e193]: 7/29/2026 · https://www.youtube.com/watch?v=video0000000
+          - generic [ref=e194] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 1" [ref=e195]
+            - generic [ref=e196]:
+              - text: Weeknight recipe number 1
+              - generic [ref=e197]: 7/29/2026 · https://www.youtube.com/watch?v=video0000001
+          - generic [ref=e198] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 2" [ref=e199]
+            - generic [ref=e200]:
+              - text: Weeknight recipe number 2
+              - generic [ref=e201]: 7/29/2026 · https://www.youtube.com/watch?v=video0000002
+            - generic [ref=e202]: Already imported
+          - generic [ref=e203] [cursor=pointer]:
+            - checkbox "A kitchen tour with a rather long title that will need to be truncated somewhere" [ref=e204]
+            - generic [ref=e205]:
+              - text: A kitchen tour with a rather long title that will need to be truncated somewhere
+              - generic [ref=e206]: 7/29/2026 · https://www.youtube.com/watch?v=video0000003
+          - generic [ref=e207] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 4" [ref=e208]
+            - generic [ref=e209]:
+              - text: Weeknight recipe number 4
+              - generic [ref=e210]: 7/29/2026 · https://www.youtube.com/watch?v=video0000004
+          - generic [ref=e211] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 5" [ref=e212]
+            - generic [ref=e213]:
+              - text: Weeknight recipe number 5
+              - generic [ref=e214]: 7/29/2026 · https://www.youtube.com/watch?v=video0000005
+          - generic [ref=e215] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 6" [ref=e216]
+            - generic [ref=e217]:
+              - text: Weeknight recipe number 6
+              - generic [ref=e218]: 7/29/2026 · https://www.youtube.com/watch?v=video0000006
+          - generic [ref=e219] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 7" [ref=e220]
+            - generic [ref=e221]:
+              - text: Weeknight recipe number 7
+              - generic [ref=e222]: 7/29/2026 · https://www.youtube.com/watch?v=video0000007
+        - generic [ref=e223]:
+          - button "Load 50 more" [ref=e224] [cursor=pointer]
+          - generic [ref=e225]: There is more back catalogue than this. Each page costs 1–2 quota units and your selection is kept.
+    - generic [ref=e226]:
+      - generic [ref=e227]:
+        - generic [ref=e228]: "4"
+        - generic [ref=e229]: Run it
+      - generic [ref=e230]:
+        - generic [ref=e231]: 0 selected · about $0.00
+        - button "Sync selection" [disabled] [ref=e232] [cursor=pointer]
+      - paragraph [ref=e233]: Chef Sarah is emailed when you approve a draft in Review, listing what went live and how to edit or unpublish it. Nothing is sent for a sync on its own.
+    - generic [ref=e235]:
+      - button "Add the Mealio link to their videos Show" [ref=e236] [cursor=pointer]:
+        - generic [ref=e237]: Add the Mealio link to their videos
+        - generic [ref=e238]: Show
+      - button "Check what can be linked" [ref=e239] [cursor=pointer]
+  - heading "5 · Selection made" [level=3] [ref=e240]
+  - generic [ref=e243]:
+    - generic [ref=e244]:
+      - heading "Manual sync" [level=2] [ref=e245]
+      - generic [ref=e246]: 2 YouTube quota units spent on this screen, of 10,000/day
+    - paragraph [ref=e247]:
+      - text: Imports run on behalf of the creator you pick and land in
+      - strong [ref=e248]: Review
+      - text: as drafts — nothing goes live until somebody opens the meal card there and approves it. Listing a catalog is free; running a selection is not.
+    - button "Creator Chef Sarah Change" [ref=e251] [cursor=pointer]:
+      - generic [ref=e252]: ✓
+      - generic [ref=e253]: Creator
+      - generic [ref=e254]: Chef Sarah
+      - generic [ref=e255]: Change
+    - generic [ref=e257]:
+      - button "Where from YouTube · 8 listed Change" [ref=e258] [cursor=pointer]:
+        - generic [ref=e259]: ✓
+        - generic [ref=e260]: Where from
+        - generic [ref=e261]: YouTube · 8 listed
+        - generic [ref=e262]: Change
+      - generic [ref=e263]:
+        - generic [ref=e264] [cursor=pointer]:
+          - radio "One link" [ref=e265]
+          - text: One link
+        - generic [ref=e266] [cursor=pointer]:
+          - radio "Pick from their catalog" [ref=e267]
+          - text: Pick from their catalog
+    - generic [ref=e268]:
+      - generic [ref=e269]:
+        - button "Choose what to import 7 of 8 selected Hide" [expanded] [ref=e270] [cursor=pointer]:
+          - generic [ref=e271]: "3"
+          - generic [ref=e272]: Choose what to import
+          - generic [ref=e273]: 7 of 8 selected
+          - generic [ref=e274]: Hide
+        - generic [ref=e275]:
+          - button "Select all not yet imported (7)" [ref=e276] [cursor=pointer]
+          - button "Clear selection" [ref=e277] [cursor=pointer]
+      - generic [ref=e279]:
+        - generic [ref=e280]:
+          - heading "8 items published" [level=3] [ref=e281]
+          - link "https://chefsarah.test/feed" [ref=e282] [cursor=pointer]:
+            - /url: https://chefsarah.test/feed
+        - generic [ref=e283]:
+          - generic [ref=e284] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 0" [ref=e285]
+            - generic [ref=e286]:
+              - text: Weeknight recipe number 0
+              - generic [ref=e287]: 7/29/2026 · https://www.youtube.com/watch?v=video0000000
+          - generic [ref=e288] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 1" [ref=e289]
+            - generic [ref=e290]:
+              - text: Weeknight recipe number 1
+              - generic [ref=e291]: 7/29/2026 · https://www.youtube.com/watch?v=video0000001
+          - generic [ref=e292] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 2" [ref=e293]
+            - generic [ref=e294]:
+              - text: Weeknight recipe number 2
+              - generic [ref=e295]: 7/29/2026 · https://www.youtube.com/watch?v=video0000002
+            - generic [ref=e296]: Already imported
+          - generic [ref=e297] [cursor=pointer]:
+            - checkbox "A kitchen tour with a rather long title that will need to be truncated somewhere" [ref=e298]
+            - generic [ref=e299]:
+              - text: A kitchen tour with a rather long title that will need to be truncated somewhere
+              - generic [ref=e300]: 7/29/2026 · https://www.youtube.com/watch?v=video0000003
+          - generic [ref=e301] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 4" [ref=e302]
+            - generic [ref=e303]:
+              - text: Weeknight recipe number 4
+              - generic [ref=e304]: 7/29/2026 · https://www.youtube.com/watch?v=video0000004
+          - generic [ref=e305] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 5" [ref=e306]
+            - generic [ref=e307]:
+              - text: Weeknight recipe number 5
+              - generic [ref=e308]: 7/29/2026 · https://www.youtube.com/watch?v=video0000005
+          - generic [ref=e309] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 6" [ref=e310]
+            - generic [ref=e311]:
+              - text: Weeknight recipe number 6
+              - generic [ref=e312]: 7/29/2026 · https://www.youtube.com/watch?v=video0000006
+          - generic [ref=e313] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 7" [ref=e314]
+            - generic [ref=e315]:
+              - text: Weeknight recipe number 7
+              - generic [ref=e316]: 7/29/2026 · https://www.youtube.com/watch?v=video0000007
+        - generic [ref=e317]:
+          - button "Load 50 more" [ref=e318] [cursor=pointer]
+          - generic [ref=e319]: There is more back catalogue than this. Each page costs 1–2 quota units and your selection is kept.
+    - generic [ref=e320]:
+      - generic [ref=e321]:
+        - generic [ref=e322]: "4"
+        - generic [ref=e323]: Run it
+      - generic [ref=e324]:
+        - generic [ref=e325]: 7 selected · about $0.11
+        - button "Sync selection" [ref=e326] [cursor=pointer]
+      - paragraph [ref=e327]: Chef Sarah is emailed when you approve a draft in Review, listing what went live and how to edit or unpublish it. Nothing is sent for a sync on its own.
+    - generic [ref=e329]:
+      - button "Add the Mealio link to their videos Show" [ref=e330] [cursor=pointer]:
+        - generic [ref=e331]: Add the Mealio link to their videos
+        - generic [ref=e332]: Show
+      - button "Check what can be linked" [ref=e333] [cursor=pointer]
+  - heading "6 · Run finished" [level=3] [ref=e334]
+  - generic [ref=e337]:
+    - generic [ref=e338]:
+      - heading "Manual sync" [level=2] [ref=e339]
+      - generic [ref=e340]: 2 YouTube quota units spent on this screen, of 10,000/day
+    - paragraph [ref=e341]:
+      - text: Imports run on behalf of the creator you pick and land in
+      - strong [ref=e342]: Review
+      - text: as drafts — nothing goes live until somebody opens the meal card there and approves it. Listing a catalog is free; running a selection is not.
+    - button "Creator Chef Sarah Change" [ref=e345] [cursor=pointer]:
+      - generic [ref=e346]: ✓
+      - generic [ref=e347]: Creator
+      - generic [ref=e348]: Chef Sarah
+      - generic [ref=e349]: Change
+    - generic [ref=e351]:
+      - button "Where from YouTube · 8 listed Change" [ref=e352] [cursor=pointer]:
+        - generic [ref=e353]: ✓
+        - generic [ref=e354]: Where from
+        - generic [ref=e355]: YouTube · 8 listed
+        - generic [ref=e356]: Change
+      - generic [ref=e357]:
+        - generic [ref=e358] [cursor=pointer]:
+          - radio "One link" [ref=e359]
+          - text: One link
+        - generic [ref=e360] [cursor=pointer]:
+          - radio "Pick from their catalog" [ref=e361]
+          - text: Pick from their catalog
+    - generic [ref=e362]:
+      - generic [ref=e363]:
+        - button "Choose what to import 7 of 8 selected Hide" [expanded] [ref=e364] [cursor=pointer]:
+          - generic [ref=e365]: "3"
+          - generic [ref=e366]: Choose what to import
+          - generic [ref=e367]: 7 of 8 selected
+          - generic [ref=e368]: Hide
+        - generic [ref=e369]:
+          - button "Select all not yet imported (7)" [ref=e370] [cursor=pointer]
+          - button "Clear selection" [ref=e371] [cursor=pointer]
+      - generic [ref=e373]:
+        - generic [ref=e374]:
+          - heading "8 items published" [level=3] [ref=e375]
+          - link "https://chefsarah.test/feed" [ref=e376] [cursor=pointer]:
+            - /url: https://chefsarah.test/feed
+        - generic [ref=e377]:
+          - generic [ref=e378] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 0" [ref=e379]
+            - generic [ref=e380]:
+              - text: Weeknight recipe number 0
+              - generic [ref=e381]: 7/29/2026 · https://www.youtube.com/watch?v=video0000000
+          - generic [ref=e382] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 1" [ref=e383]
+            - generic [ref=e384]:
+              - text: Weeknight recipe number 1
+              - generic [ref=e385]: 7/29/2026 · https://www.youtube.com/watch?v=video0000001
+          - generic [ref=e386] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 2" [ref=e387]
+            - generic [ref=e388]:
+              - text: Weeknight recipe number 2
+              - generic [ref=e389]: 7/29/2026 · https://www.youtube.com/watch?v=video0000002
+            - generic [ref=e390]: Already imported
+          - generic [ref=e391] [cursor=pointer]:
+            - checkbox "A kitchen tour with a rather long title that will need to be truncated somewhere" [ref=e392]
+            - generic [ref=e393]:
+              - text: A kitchen tour with a rather long title that will need to be truncated somewhere
+              - generic [ref=e394]: 7/29/2026 · https://www.youtube.com/watch?v=video0000003
+          - generic [ref=e395] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 4" [ref=e396]
+            - generic [ref=e397]:
+              - text: Weeknight recipe number 4
+              - generic [ref=e398]: 7/29/2026 · https://www.youtube.com/watch?v=video0000004
+          - generic [ref=e399] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 5" [ref=e400]
+            - generic [ref=e401]:
+              - text: Weeknight recipe number 5
+              - generic [ref=e402]: 7/29/2026 · https://www.youtube.com/watch?v=video0000005
+          - generic [ref=e403] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 6" [ref=e404]
+            - generic [ref=e405]:
+              - text: Weeknight recipe number 6
+              - generic [ref=e406]: 7/29/2026 · https://www.youtube.com/watch?v=video0000006
+          - generic [ref=e407] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 7" [ref=e408]
+            - generic [ref=e409]:
+              - text: Weeknight recipe number 7
+              - generic [ref=e410]: 7/29/2026 · https://www.youtube.com/watch?v=video0000007
+        - generic [ref=e411]:
+          - button "Load 50 more" [ref=e412] [cursor=pointer]
+          - generic [ref=e413]: There is more back catalogue than this. Each page costs 1–2 quota units and your selection is kept.
+    - generic [ref=e414]:
+      - generic [ref=e415]:
+        - generic [ref=e416]: "4"
+        - generic [ref=e417]: Run it
+      - generic [ref=e418]:
+        - generic [ref=e419]: 7 selected · about $0.11
+        - button "Sync selection" [ref=e420] [cursor=pointer]
+      - paragraph [ref=e421]: Chef Sarah is emailed when you approve a draft in Review, listing what went live and how to edit or unpublish it. Nothing is sent for a sync on its own.
+    - generic [ref=e422]:
+      - generic [ref=e423]:
+        - heading "Run finished" [level=3] [ref=e424]
+        - generic [ref=e425]: $0.0670 spent
+      - paragraph [ref=e426]:
+        - text: Selected 4 · queued for review
+        - strong [ref=e427]: "1"
+        - text: · 1 dropped by the gate (not a recipe) · 1 already imported · 1 failed
+      - paragraph [ref=e428]:
+        - text: Nothing is live yet. 1 draft is waiting in
+        - strong [ref=e429]: Review
+        - text: · 2 fields flagged for a look.
+      - generic [ref=e430]:
+        - generic [ref=e431]:
+          - generic [ref=e432]: For review
+          - generic [ref=e433]: Sheet-pan chicken
+          - generic [ref=e434]: 2 flagged
+        - generic [ref=e435]:
+          - generic [ref=e436]: Not a recipe
+          - generic [ref=e437]:
+            - text: Weeknight recipe number 1
+            - generic [ref=e438]: "Not a recipe: a photo diary of a kitchen."
+        - generic [ref=e439]:
+          - generic [ref=e440]: Failed
+          - generic [ref=e441]:
+            - text: Weeknight recipe number 4
+            - generic [ref=e442]: The site took too long to answer.
+          - button "Retry" [ref=e443] [cursor=pointer]
+    - generic [ref=e445]:
+      - button "Add the Mealio link to their videos Show" [ref=e446] [cursor=pointer]:
+        - generic [ref=e447]: Add the Mealio link to their videos
+        - generic [ref=e448]: Show
+      - button "Check what can be linked" [ref=e449] [cursor=pointer]
+  - heading "7 · Append offer open" [level=3] [ref=e450]
+  - generic [ref=e453]:
+    - generic [ref=e454]:
+      - heading "Manual sync" [level=2] [ref=e455]
+      - generic [ref=e456]: 2 YouTube quota units spent on this screen, of 10,000/day
+    - paragraph [ref=e457]:
+      - text: Imports run on behalf of the creator you pick and land in
+      - strong [ref=e458]: Review
+      - text: as drafts — nothing goes live until somebody opens the meal card there and approves it. Listing a catalog is free; running a selection is not.
+    - button "Creator Chef Sarah Change" [ref=e461] [cursor=pointer]:
+      - generic [ref=e462]: ✓
+      - generic [ref=e463]: Creator
+      - generic [ref=e464]: Chef Sarah
+      - generic [ref=e465]: Change
+    - generic [ref=e467]:
+      - button "Where from YouTube · 8 listed Change" [ref=e468] [cursor=pointer]:
+        - generic [ref=e469]: ✓
+        - generic [ref=e470]: Where from
+        - generic [ref=e471]: YouTube · 8 listed
+        - generic [ref=e472]: Change
+      - generic [ref=e473]:
+        - generic [ref=e474] [cursor=pointer]:
+          - radio "One link" [ref=e475]
+          - text: One link
+        - generic [ref=e476] [cursor=pointer]:
+          - radio "Pick from their catalog" [ref=e477]
+          - text: Pick from their catalog
+    - generic [ref=e478]:
+      - generic [ref=e479]:
+        - button "Choose what to import 7 of 8 selected Hide" [expanded] [ref=e480] [cursor=pointer]:
+          - generic [ref=e481]: "3"
+          - generic [ref=e482]: Choose what to import
+          - generic [ref=e483]: 7 of 8 selected
+          - generic [ref=e484]: Hide
+        - generic [ref=e485]:
+          - button "Select all not yet imported (7)" [ref=e486] [cursor=pointer]
+          - button "Clear selection" [ref=e487] [cursor=pointer]
+      - generic [ref=e489]:
+        - generic [ref=e490]:
+          - heading "8 items published" [level=3] [ref=e491]
+          - link "https://chefsarah.test/feed" [ref=e492] [cursor=pointer]:
+            - /url: https://chefsarah.test/feed
+        - generic [ref=e493]:
+          - generic [ref=e494] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 0" [ref=e495]
+            - generic [ref=e496]:
+              - text: Weeknight recipe number 0
+              - generic [ref=e497]: 7/29/2026 · https://www.youtube.com/watch?v=video0000000
+          - generic [ref=e498] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 1" [ref=e499]
+            - generic [ref=e500]:
+              - text: Weeknight recipe number 1
+              - generic [ref=e501]: 7/29/2026 · https://www.youtube.com/watch?v=video0000001
+          - generic [ref=e502] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 2" [ref=e503]
+            - generic [ref=e504]:
+              - text: Weeknight recipe number 2
+              - generic [ref=e505]: 7/29/2026 · https://www.youtube.com/watch?v=video0000002
+            - generic [ref=e506]: Already imported
+          - generic [ref=e507] [cursor=pointer]:
+            - checkbox "A kitchen tour with a rather long title that will need to be truncated somewhere" [ref=e508]
+            - generic [ref=e509]:
+              - text: A kitchen tour with a rather long title that will need to be truncated somewhere
+              - generic [ref=e510]: 7/29/2026 · https://www.youtube.com/watch?v=video0000003
+          - generic [ref=e511] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 4" [ref=e512]
+            - generic [ref=e513]:
+              - text: Weeknight recipe number 4
+              - generic [ref=e514]: 7/29/2026 · https://www.youtube.com/watch?v=video0000004
+          - generic [ref=e515] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 5" [ref=e516]
+            - generic [ref=e517]:
+              - text: Weeknight recipe number 5
+              - generic [ref=e518]: 7/29/2026 · https://www.youtube.com/watch?v=video0000005
+          - generic [ref=e519] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 6" [ref=e520]
+            - generic [ref=e521]:
+              - text: Weeknight recipe number 6
+              - generic [ref=e522]: 7/29/2026 · https://www.youtube.com/watch?v=video0000006
+          - generic [ref=e523] [cursor=pointer]:
+            - checkbox "Weeknight recipe number 7" [ref=e524]
+            - generic [ref=e525]:
+              - text: Weeknight recipe number 7
+              - generic [ref=e526]: 7/29/2026 · https://www.youtube.com/watch?v=video0000007
+        - generic [ref=e527]:
+          - button "Load 50 more" [ref=e528] [cursor=pointer]
+          - generic [ref=e529]: There is more back catalogue than this. Each page costs 1–2 quota units and your selection is kept.
+    - generic [ref=e530]:
+      - generic [ref=e531]:
+        - generic [ref=e532]: "4"
+        - generic [ref=e533]: Run it
+      - generic [ref=e534]:
+        - generic [ref=e535]: 7 selected · about $0.11
+        - button "Sync selection" [ref=e536] [cursor=pointer]
+      - paragraph [ref=e537]: Chef Sarah is emailed when you approve a draft in Review, listing what went live and how to edit or unpublish it. Nothing is sent for a sync on its own.
+    - generic [ref=e538]:
+      - generic [ref=e539]:
+        - heading "Run finished" [level=3] [ref=e540]
+        - generic [ref=e541]: $0.0670 spent
+      - paragraph [ref=e542]:
+        - text: Selected 4 · queued for review
+        - strong [ref=e543]: "1"
+        - text: · 1 dropped by the gate (not a recipe) · 1 already imported · 1 failed
+      - paragraph [ref=e544]:
+        - text: Nothing is live yet. 1 draft is waiting in
+        - strong [ref=e545]: Review
+        - text: · 2 fields flagged for a look.
+      - generic [ref=e546]:
+        - generic [ref=e547]:
+          - generic [ref=e548]: For review
+          - generic [ref=e549]: Sheet-pan chicken
+          - generic [ref=e550]: 2 flagged
+        - generic [ref=e551]:
+          - generic [ref=e552]: Not a recipe
+          - generic [ref=e553]:
+            - text: Weeknight recipe number 1
+            - generic [ref=e554]: "Not a recipe: a photo diary of a kitchen."
+        - generic [ref=e555]:
+          - generic [ref=e556]: Failed
+          - generic [ref=e557]:
+            - text: Weeknight recipe number 4
+            - generic [ref=e558]: The site took too long to answer.
+          - button "Retry" [ref=e559] [cursor=pointer]
+    - generic [ref=e560]:
+      - generic [ref=e561]:
+        - button "Add the Mealio link to their videos Hide" [expanded] [ref=e562] [cursor=pointer]:
+          - generic [ref=e563]: Add the Mealio link to their videos
+          - generic [ref=e564]: Hide
+        - button "Reload" [ref=e565] [cursor=pointer]
+      - paragraph [ref=e566]:
+        - text: Only meals we imported
+        - emphasis [ref=e567]: from one of their videos
+        - text: are offered, and only when the creator has turned on description editing. Adding a link twice does nothing. Turning consent off stops future writes — it does not remove links already added, because we cannot un-tell a viewer.
+      - paragraph [ref=e568]: Showing the 1 most recently approved. This creator has more, and there is no way to reach them from here yet — link these, then reload.
+      - generic [ref=e570]:
+        - generic [ref=e571]:
+          - text: Sheet-pan chicken
+          - generic [ref=e572]: https://www.youtube.com/watch?v=video0000000 → https://mealio.co/meal/p/m1
+        - button "Append the Mealio link for Sheet-pan chicken" [ref=e573] [cursor=pointer]: Append link
+  - heading "8 · Creator step reopened mid-flow" [level=3] [ref=e574]
+  - generic [ref=e577]:
+    - generic [ref=e578]:
+      - heading "Manual sync" [level=2] [ref=e579]
+      - generic [ref=e580]: 2 YouTube quota units spent on this screen, of 10,000/day
+    - paragraph [ref=e581]:
+      - text: Imports run on behalf of the creator you pick and land in
+      - strong [ref=e582]: Review
+      - text: as drafts — nothing goes live until somebody opens the meal card there and approves it. Listing a catalog is free; running a selection is not.
+    - generic [ref=e583]:
+      - button "Creator Chef Sarah Hide" [expanded] [ref=e585] [cursor=pointer]:
+        - generic [ref=e586]: "1"
+        - generic [ref=e587]: Creator
+        - generic [ref=e588]: Chef Sarah
+        - generic [ref=e589]: Hide
+      - combobox "Creator" [ref=e591] [cursor=pointer]:
+        - option "Choose a creator…" [selected]
+        - option "Chef Sarah"
+        - option "Chef Ben"
+    - generic [ref=e593]:
+      - button "Where from YouTube · 8 listed Change" [ref=e594] [cursor=pointer]:
+        - generic [ref=e595]: ✓
+        - generic [ref=e596]: Where from
+        - generic [ref=e597]: YouTube · 8 listed
+        - generic [ref=e598]: Change
+      - generic [ref=e599]:
+        - generic [ref=e600] [cursor=pointer]:
+          - radio "One link" [checked] [ref=e601]
+          - text: One link
+        - generic [ref=e602] [cursor=pointer]:
+          - radio "Pick from their catalog" [ref=e603]
+          - text: Pick from their catalog
+    - button "Choose what to import 7 of 8 selected Change" [ref=e606] [cursor=pointer]:
+      - generic [ref=e607]: ✓
+      - generic [ref=e608]: Choose what to import
+      - generic [ref=e609]: 7 of 8 selected
+      - generic [ref=e610]: Change
+    - generic [ref=e611]:
+      - generic [ref=e612]:
+        - generic [ref=e613]: "4"
+        - generic [ref=e614]: Run it
+      - generic [ref=e615]:
+        - generic [ref=e616]: 7 selected · about $0.11
+        - button "Sync selection" [ref=e617] [cursor=pointer]
+      - paragraph [ref=e618]: Chef Sarah is emailed when you approve a draft in Review, listing what went live and how to edit or unpublish it. Nothing is sent for a sync on its own.
+    - generic [ref=e619]:
+      - generic [ref=e620]:
+        - heading "Run finished" [level=3] [ref=e621]
+        - generic [ref=e622]: $0.0670 spent
+      - paragraph [ref=e623]:
+        - text: Selected 4 · queued for review
+        - strong [ref=e624]: "1"
+        - text: · 1 dropped by the gate (not a recipe) · 1 already imported · 1 failed
+      - paragraph [ref=e625]:
+        - text: Nothing is live yet. 1 draft is waiting in
+        - strong [ref=e626]: Review
+        - text: · 2 fields flagged for a look.
+      - generic [ref=e627]:
+        - generic [ref=e628]:
+          - generic [ref=e629]: For review
+          - generic [ref=e630]: Sheet-pan chicken
+          - generic [ref=e631]: 2 flagged
+        - generic [ref=e632]:
+          - generic [ref=e633]: Not a recipe
+          - generic [ref=e634]:
+            - text: Weeknight recipe number 1
+            - generic [ref=e635]: "Not a recipe: a photo diary of a kitchen."
+        - generic [ref=e636]:
+          - generic [ref=e637]: Failed
+          - generic [ref=e638]:
+            - text: Weeknight recipe number 4
+            - generic [ref=e639]: The site took too long to answer.
+          - button "Retry" [ref=e640] [cursor=pointer]
+    - generic [ref=e641]:
+      - generic [ref=e642]:
+        - button "Add the Mealio link to their videos Hide" [expanded] [ref=e643] [cursor=pointer]:
+          - generic [ref=e644]: Add the Mealio link to their videos
+          - generic [ref=e645]: Hide
+        - button "Reload" [ref=e646] [cursor=pointer]
+      - paragraph [ref=e647]:
+        - text: Only meals we imported
+        - emphasis [ref=e648]: from one of their videos
+        - text: are offered, and only when the creator has turned on description editing. Adding a link twice does nothing. Turning consent off stops future writes — it does not remove links already added, because we cannot un-tell a viewer.
+      - paragraph [ref=e649]: Showing the 1 most recently approved. This creator has more, and there is no way to reach them from here yet — link these, then reload.
+      - generic [ref=e651]:
+        - generic [ref=e652]:
+          - text: Sheet-pan chicken
+          - generic [ref=e653]: https://www.youtube.com/watch?v=video0000000 → https://mealio.co/meal/p/m1
+        - button "Append the Mealio link for Sheet-pan chicken" [ref=e654] [cursor=pointer]: Append link

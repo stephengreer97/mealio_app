@@ -1,0 +1,214 @@
+- generic [ref=f203e2]:
+  - generic [ref=f203e4]:
+    - generic [ref=f203e5]:
+      - link "Homepage" [ref=f203e6] [cursor=pointer]:
+        - /url: /?source=---top_nav_layout_nav-----------------------------------------
+      - combobox "search" [ref=f203e14]
+    - button "Get the Medium app" [ref=f203e16] [cursor=pointer]:
+      - generic [ref=f203e20]: Get app
+    - link [ref=f203e23] [cursor=pointer]:
+      - /url: /m/signin?operation=register&redirect=https%3A%2F%2Fmedium.com%2Fnew-story&source=---top_nav_layout_nav-----------------------new_post_topnav------------------
+    - generic [ref=f203e29]:
+      - paragraph [ref=f203e30]:
+        - button "Sign up" [ref=f203e32]
+      - paragraph [ref=f203e34]:
+        - link "Sign in" [ref=f203e36] [cursor=pointer]:
+          - /url: /m/signin?operation=login&redirect=https%3A%2F%2Fmedium.com%2Fglobal-dish%2Fa-pizza-fit-for-a-queen-c6845a576772&source=post_page---top_nav_layout_nav-----------------------global_nav------------------
+    - button "user options menu" [ref=f203e41] [cursor=pointer]:
+      - img "Unknown user" [ref=f203e43]
+  - generic [ref=f203e47]:
+    - link [ref=f203e55] [cursor=pointer]:
+      - /url: https://medium.com/global-dish?source=post_page---publication_nav-2c42442b7a2c-c6845a576772---------------------------------------
+      - heading "Global Dish" [level=2] [ref=f203e56]
+    - article [ref=f203e59]:
+      - generic [ref=f203e63]:
+        - generic [ref=f203e67]:
+          - 'button "Topic: From The Kitchen" [ref=f203e71]':
+            - generic [ref=f203e72] [cursor=pointer]: From The Kitchen
+          - 'button "Topic: Basil" [ref=f203e79]':
+            - generic [ref=f203e80] [cursor=pointer]: Basil
+          - 'button "Topic: Margherita Pizza" [ref=f203e87]':
+            - generic [ref=f203e88] [cursor=pointer]: Margherita Pizza
+          - 'button "Topic: Mozzarella" [ref=f203e95]':
+            - generic [ref=f203e96] [cursor=pointer]: Mozzarella
+          - 'button "Topic: Napoletana" [ref=f203e103]':
+            - generic [ref=f203e104] [cursor=pointer]: Napoletana
+        - generic [ref=f203e110]:
+          - generic [ref=f203e111]:
+            - heading "A Pizza Fit for a Queen" [level=1] [ref=f203e112]
+            - generic [ref=f203e115]:
+              - generic [ref=f203e116]:
+                - generic [ref=f203e117]:
+                  - link [ref=f203e122] [cursor=pointer]:
+                    - /url: /@GlobalDish?source=post_page---byline--c6845a576772---------------------------------------
+                    - img "Stephanie Arsenault" [ref=f203e125]
+                  - link "Stephanie Arsenault" [ref=f203e135] [cursor=pointer]:
+                    - /url: /@GlobalDish?source=post_page---byline--c6845a576772---------------------------------------
+                - generic [ref=f203e138]:
+                  - generic [ref=f203e139]: 4 min read
+                  - generic [ref=f203e140]: ·
+                  - generic [ref=f203e142]: Feb 11, 2011
+              - generic [ref=f203e143]:
+                - generic [ref=f203e145]:
+                  - generic [ref=f203e147]:
+                    - link [ref=f203e150] [cursor=pointer]:
+                      - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fvote%2Fglobal-dish%2Fc6845a576772&operation=register&redirect=https%3A%2F%2Fmedium.com%2Fglobal-dish%2Fa-pizza-fit-for-a-queen-c6845a576772&user=Stephanie+Arsenault&userId=428b87dcb671&source=---header_actions--c6845a576772---------------------clap_footer------------------
+                      - generic [ref=f203e153]:
+                        - img "clap"
+                    - paragraph [ref=f203e155]: "--"
+                  - button "responses" [ref=f203e160] [cursor=pointer]
+                  - link [ref=f203e168] [cursor=pointer]:
+                    - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Frepost%2Fp%2Fc6845a576772&operation=register&redirect=https%3A%2F%2Fmedium.com%2Fglobal-dish%2Fa-pizza-fit-for-a-queen-c6845a576772&user=Stephanie+Arsenault&userId=428b87dcb671&source=---header_actions--c6845a576772---------------------repost_header------------------
+                - generic [ref=f203e174]:
+                  - link [ref=f203e180] [cursor=pointer]:
+                    - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fbookmark%2Fp%2Fc6845a576772&operation=register&redirect=https%3A%2F%2Fmedium.com%2Fglobal-dish%2Fa-pizza-fit-for-a-queen-c6845a576772&source=---header_actions--c6845a576772---------------------bookmark_footer------------------
+                    - img "Add to list bookmark button" [ref=f203e182]
+                  - link [ref=f203e191] [cursor=pointer]:
+                    - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2Fplans%3Fdimension%3Dpost_audio_button%26postId%3Dc6845a576772&operation=register&redirect=https%3A%2F%2Fmedium.com%2Fglobal-dish%2Fa-pizza-fit-for-a-queen-c6845a576772&source=---header_actions--c6845a576772---------------------post_audio_button------------------
+                    - button "Listen" [ref=f203e195]
+                  - button "Share Post" [ref=f203e202] [cursor=pointer]
+          - figure [ref=f203e205]
+          - paragraph [ref=f203e208]: If it’s good enough for a Queen, it’s good enough for me.
+          - paragraph [ref=f203e209]:
+            - text: I’m talking about the crisp, chewy crust; the tangy, pure sauce; the rich, smooth mozzarella; and best of all — the strong, inimitable flavour of fresh basil leaves. These are the ingredients that make up
+            - strong [ref=f203e210]: Margherita Pizza
+            - text: ", a pizza created for the Queen of Savoy in the late 19th century."
+          - paragraph [ref=f203e211]: Pizza was around before then, and has changed greatly since, but in my eyes (and according to my tastebuds) it reached perfection with the Margherita.
+          - paragraph [ref=f203e212]:
+            - text: Without a wood-fired oven and a special type of dough, as specified by the
+            - link [ref=f203e213] [cursor=pointer]:
+              - /url: http://www.pizzanapoletana.org/eng_chisiamo.php
+              - emphasis [ref=f203e214]: Associazione Vera Pizza Napoletana
+            - text: ", it’s tough to make true"
+            - emphasis [ref=f203e215]: Naploetana
+            - text: Margherita pizza. But you can do your best to get as close to it as possible, with a regular oven and homemade dough.
+          - paragraph [ref=f203e216]:
+            - text: The recipe below has been adapted from one featured on
+            - emphasis [ref=f203e217]: Emeril Lagasse’s
+            - link [ref=f203e218] [cursor=pointer]:
+              - /url: http://www.foodnetwork.com/recipes/emeril-lagasse/pizza-margherita-recipe/index.html
+              - emphasis [ref=f203e219]: The Essence of Emeril.
+            - text: It’s a great recipe that is easy to make (but isn’t quick — be sure to factor in about an hour and a half for prep time), and turns out great when using it for Margherita pizza. The crust ends up being quite thin and crispy; all that is missing is the unmistakable slight char that a wood oven provides.
+          - figure [ref=f203e220]
+          - paragraph [ref=f203e223]:
+            - strong [ref=f203e224]:
+              - emphasis [ref=f203e225]: What’s your favourite kind of pizza? Do you make it at home or prefer to go out? Favourite toppings?
+          - figure [ref=f203e226]
+          - paragraph [ref=f203e229]:
+            - strong [ref=f203e230]:
+              - text: Basic Pizza Dough
+              - emphasis [ref=f203e231]: Adapted from
+            - link [ref=f203e232] [cursor=pointer]:
+              - /url: http://www.foodnetwork.com/recipes/emeril-lagasse/pizza-margherita-recipe/index.html
+              - strong [ref=f203e233]:
+                - emphasis [ref=f203e234]: Emeril Lagasse
+            - strong [ref=f203e235]: Makes 2–12” thin crust pizzas
+          - paragraph [ref=f203e236]:
+            - strong [ref=f203e237]: "Ingredients:"
+            - text: 1 cup warm water1 package (or 2 ¼ teaspoons) active dry yeast1 ½ teaspoons sea salt1 ½ tablespoons extra virgin olive oil2 ½ cups all purpose flour
+          - paragraph [ref=f203e238]:
+            - strong [ref=f203e239]: "Instructions:"
+            - text: 1) In a large bowl stir water, yeast, and salt together. Let sit for 5–10 minutes, or until the mixture begins to foam.
+          - paragraph [ref=f203e240]: 2) Add oil and 2 cups flour and stir. If using an electric mixer, use dough hook attachment and mix on low. Otherwise, turn the mixture out onto a lightly floured surface and begin to knead, until smooth and elastic. With either method, add more flour as necessary (the dough should not be sticky).
+          - paragraph [ref=f203e241]: 3) Shape the dough into a ball and place in a large, oiled bowl. Toss a few times to coat and cover with a damp towel. Place in a warm, draft free spot (in the oven with the door closed and the light on works well), and let rise for about an hour, or until doubled in size.
+          - paragraph [ref=f203e242]: 4) Preheat oven to 500 degrees Fahrenheit and lightly oil two pizza pans (or cookie sheets if you want even thinner crust). Divide the dough into two equal sized portions and form into balls. Place them on one of the prepared baking sheets and cover with the damp towel; let sit for 15 minutes.
+          - paragraph [ref=f203e243]: 5) Transfer the portions of dough to a floured surface and, one at a time, roll them out to fit the prepared pans (dough should be between 1/8 inch and ¼ inch in thickness).
+          - figure [ref=f203e244]
+          - paragraph [ref=f203e247]:
+            - strong [ref=f203e248]: "To Make Margherita Pizza:"
+            - text: Cover the rolled out dough with strained tomatoes (find them near the canned tomatoes at the grocery store — usually in tall glass jars), leaving a border of 1 inch around the edges, and then drizzle with first cold press extra virgin olive oil. Scatter fresh, shredded basil leaves (you’ll need about 20 for two pizzas. Reserve a few extras for garnish once the pizzas are cooked), and slices of mozzarella (use buffalo mozzarella, if possible — otherwise use a ball of good quality mozzarella). Cook in preheated oven, one at a time, for 8–10 minutes or until crust begins to brown slightly and cheese is bubbling. Garnish with fresh basil and serve immediately.
+          - figure [ref=f203e249]
+    - generic [ref=f203e254]:
+      - link "From The Kitchen" [ref=f203e256] [cursor=pointer]:
+        - /url: /tag/from-the-kitchen?source=post_page---footer_tags--c6845a576772---------------------------------------
+      - link "Basil" [ref=f203e259] [cursor=pointer]:
+        - /url: /tag/basil?source=post_page---footer_tags--c6845a576772---------------------------------------
+      - link "Margherita Pizza" [ref=f203e262] [cursor=pointer]:
+        - /url: /tag/margherita-pizza?source=post_page---footer_tags--c6845a576772---------------------------------------
+      - link "Mozzarella" [ref=f203e265] [cursor=pointer]:
+        - /url: /tag/mozzarella?source=post_page---footer_tags--c6845a576772---------------------------------------
+      - link "Napoletana" [ref=f203e268] [cursor=pointer]:
+        - /url: /tag/napoletana?source=post_page---footer_tags--c6845a576772---------------------------------------
+    - contentinfo [ref=f203e270]:
+      - generic [ref=f203e274]:
+        - generic [ref=f203e275]:
+          - generic [ref=f203e278]:
+            - link [ref=f203e281] [cursor=pointer]:
+              - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fvote%2Fglobal-dish%2Fc6845a576772&operation=register&redirect=https%3A%2F%2Fmedium.com%2Fglobal-dish%2Fa-pizza-fit-for-a-queen-c6845a576772&user=Stephanie+Arsenault&userId=428b87dcb671&source=---footer_actions--c6845a576772---------------------clap_footer------------------
+              - generic [ref=f203e284]:
+                - img "clap"
+            - paragraph [ref=f203e286]: "--"
+          - button "responses" [ref=f203e291] [cursor=pointer]
+          - link [ref=f203e299] [cursor=pointer]:
+            - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Frepost%2Fp%2Fc6845a576772&operation=register&redirect=https%3A%2F%2Fmedium.com%2Fglobal-dish%2Fa-pizza-fit-for-a-queen-c6845a576772&user=Stephanie+Arsenault&userId=428b87dcb671&source=---footer_actions--c6845a576772---------------------repost_footer------------------
+        - generic [ref=f203e305]:
+          - link [ref=f203e312] [cursor=pointer]:
+            - /url: /m/signin?actionUrl=https%3A%2F%2Fmedium.com%2F_%2Fbookmark%2Fp%2Fc6845a576772&operation=register&redirect=https%3A%2F%2Fmedium.com%2Fglobal-dish%2Fa-pizza-fit-for-a-queen-c6845a576772&source=---footer_actions--c6845a576772---------------------bookmark_footer------------------
+            - img "Add to list bookmark button" [ref=f203e314]
+          - button "Share Post" [ref=f203e322] [cursor=pointer]
+    - generic [ref=f203e327]:
+      - generic [ref=f203e329]:
+        - link [ref=f203e332] [cursor=pointer]:
+          - /url: https://medium.com/global-dish?source=post_page---post_publication_info--c6845a576772---------------------------------------
+          - img "Global Dish" [ref=f203e334]
+        - generic [ref=f203e337]:
+          - link [ref=f203e338] [cursor=pointer]:
+            - /url: https://medium.com/global-dish?source=post_page---post_publication_info--c6845a576772---------------------------------------
+            - heading "Published in Global Dish" [level=2] [ref=f203e339]
+          - generic [ref=f203e341]:
+            - link "3 followers" [ref=f203e344] [cursor=pointer]:
+              - /url: /global-dish/followers?source=post_page---post_publication_info--c6845a576772---------------------------------------
+            - generic [ref=f203e345]:
+              - generic [ref=f203e346]: ·
+              - link "Last published Jul 28, 2016" [ref=f203e347] [cursor=pointer]:
+                - /url: /global-dish/simple-things-salmon-and-fettuccini-in-20-84d25ccc22f1?source=post_page---post_publication_info--c6845a576772---------------------------------------
+          - paragraph [ref=f203e349]: By Stephanie Arsenault
+      - generic [ref=f203e350]:
+        - link [ref=f203e353] [cursor=pointer]:
+          - /url: /@GlobalDish?source=post_page---post_author_info--c6845a576772---------------------------------------
+          - img "Stephanie Arsenault" [ref=f203e355]
+        - generic [ref=f203e358]:
+          - link [ref=f203e359] [cursor=pointer]:
+            - /url: /@GlobalDish?source=post_page---post_author_info--c6845a576772---------------------------------------
+            - heading "Written by Stephanie Arsenault" [level=2] [ref=f203e360]
+          - generic [ref=f203e362]:
+            - link "6 followers" [ref=f203e365] [cursor=pointer]:
+              - /url: /@GlobalDish/followers?source=post_page---post_author_info--c6845a576772---------------------------------------
+            - generic [ref=f203e366]:
+              - generic [ref=f203e367]: ·
+              - link "2 following" [ref=f203e368] [cursor=pointer]:
+                - /url: /@GlobalDish/following?source=post_page---post_author_info--c6845a576772---------------------------------------
+    - generic [ref=f203e430]:
+      - link [ref=f203e432] [cursor=pointer]:
+        - /url: https://help.medium.com/hc/en-us?source=post_page-----c6845a576772---------------------------------------
+        - paragraph [ref=f203e433]: Help
+      - link [ref=f203e435] [cursor=pointer]:
+        - /url: https://status.medium.com/?source=post_page-----c6845a576772---------------------------------------
+        - paragraph [ref=f203e436]: Status
+      - link [ref=f203e438] [cursor=pointer]:
+        - /url: /about?autoplay=1&source=post_page-----c6845a576772---------------------------------------
+        - paragraph [ref=f203e439]: About
+      - link [ref=f203e441] [cursor=pointer]:
+        - /url: /jobs-at-medium/work-at-medium-959d1a85284e?source=post_page-----c6845a576772---------------------------------------
+        - paragraph [ref=f203e442]: Careers
+      - link [ref=f203e444] [cursor=pointer]:
+        - /url: mailto:pressinquiries@medium.com
+        - paragraph [ref=f203e445]: Press
+      - link [ref=f203e447] [cursor=pointer]:
+        - /url: https://blog.medium.com/?source=post_page-----c6845a576772---------------------------------------
+        - paragraph [ref=f203e448]: Blog
+      - link [ref=f203e450] [cursor=pointer]:
+        - /url: https://medium.com/store
+        - paragraph [ref=f203e451]: Store
+      - link [ref=f203e453] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-privacy-policy-f03bf92035c9?source=post_page-----c6845a576772---------------------------------------
+        - paragraph [ref=f203e454]: Privacy
+      - link [ref=f203e456] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-rules-30e5502c4eb4?source=post_page-----c6845a576772---------------------------------------
+        - paragraph [ref=f203e457]: Rules
+      - link [ref=f203e459] [cursor=pointer]:
+        - /url: https://policy.medium.com/medium-terms-of-service-9db0094a1e0f?source=post_page-----c6845a576772---------------------------------------
+        - paragraph [ref=f203e460]: Terms
+      - link [ref=f203e462] [cursor=pointer]:
+        - /url: https://speechify.com/medium?source=post_page-----c6845a576772---------------------------------------
+        - paragraph [ref=f203e463]: Text to speech
