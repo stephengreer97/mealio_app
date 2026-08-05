@@ -1,8 +1,14 @@
+import fs from 'fs';
+import path from 'path';
 import {
   AutomationTelemetry,
+  ADD_REASON_CODES,
+  addFailureCode,
+  blockFailureCode,
   createNoopTelemetry,
   sanitizeDetail,
   StepRecord,
+  STEP_FAILURE_CODES,
 } from '../../src/lib/automation-telemetry';
 
 // The property that matters most here is "telemetry can never break a cart run":
@@ -113,7 +119,7 @@ describe('AutomationTelemetry recording', () => {
     const t = make({ upload: up.fn });
     t.record('login_check', 'ok');
     t.record('search', 'ok');
-    t.record('confirm', 'error');
+    t.record('confirm', 'error', { code: 'confirm_failed' });
     await t.flush();
     expect(up.all.map((s) => s.seq)).toEqual([0, 1, 2]);
     expect(up.all.map((s) => s.step)).toEqual(['login_check', 'search', 'confirm']);
@@ -177,6 +183,153 @@ describe('AutomationTelemetry recording', () => {
   });
 });
 
+describe('failure codes', () => {
+  // The dashboard groups on the raw string, so a renamed or mistyped code
+  // silently splits a metric's history rather than failing anywhere visible.
+  it('exposes exactly the eight agreed codes', () => {
+    expect([...STEP_FAILURE_CODES]).toEqual([
+      'selector_miss', 'waf_block', 'auth_required', 'no_candidates',
+      'match_rejected', 'confirm_failed', 'timeout', 'nav_failed',
+    ]);
+  });
+
+  it('maps the reasons this table was written against', () => {
+    const expected: Record<string, string> = {
+      no_results: 'no_candidates',
+      low_confidence: 'match_rejected',
+      out_of_stock: 'match_rejected',
+      needs_weight: 'match_rejected',
+      not_found: 'selector_miss',
+      no_button: 'selector_miss',
+      no_modal: 'selector_miss',
+      no_row: 'selector_miss',
+      no_trigger: 'selector_miss',
+      stepper_not_found: 'selector_miss',
+      pref_required: 'selector_miss',
+      cart_not_incremented: 'confirm_failed',
+      not_confirmed: 'confirm_failed',
+      click_failed: 'confirm_failed',
+      blocked: 'waf_block',
+      timeout: 'timeout',
+    };
+    for (const [reason, code] of Object.entries(expected)) {
+      expect(addFailureCode(reason)).toBe(code);
+    }
+  });
+
+  /**
+   * The drift detector the table above cannot be.
+   *
+   * That test restates `ADD_REASON_CODES` by hand, so it passes forever no
+   * matter what the store scripts start emitting — which is exactly how
+   * `partial` and `error` reached `addFailureCode` unmapped and rode the
+   * fallback into `confirm_failed`. This one reads the scripts.
+   *
+   * Reasons are extracted from `reason: '...'` literals. Not every hit is a
+   * result reason — the scripts also put `reason` on `log()` diagnostics — so
+   * those are listed explicitly rather than pattern-matched, because a rule
+   * loose enough to exclude them by shape would also exclude real ones.
+   */
+  it('has a code for every reason the store scripts actually emit', () => {
+    const dir = path.join(__dirname, '../../src/lib/webview-scripts');
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.ts'));
+
+    /**
+     * Literals the line scan picks up that are not add-result reasons:
+     * `reason` fields on log/diagnostic payloads, and unrelated strings that
+     * happen to share a line with one. Listed rather than pattern-matched — a
+     * rule loose enough to exclude these by shape would exclude real reasons.
+     */
+    const IGNORED = new Set([
+      'no_target', 'healthy', 'small_confirmed',   // log/diagnostic payloads
+      'add', 'cards_ready', 'no_best', 'skip_submit_method', // co-located, not reasons
+    ]);
+
+    const found = new Map<string, string>();
+    for (const file of files) {
+      const src = fs.readFileSync(path.join(dir, file), 'utf8');
+      // Line-scoped rather than `reason:\s*'x'`: `partial` — the reason that
+      // motivated this test — is emitted from inside a ternary
+      // (`walmart.ts:479`), so a pattern anchored to the property name misses
+      // exactly the case this exists to catch. Any single-quoted snake_case
+      // literal on a line mentioning `reason` is a candidate instead, which
+      // over-collects and is corrected by the ignore lists below. A ternary
+      // split across lines would still slip through; nothing in these scripts
+      // does that today.
+      for (const line of src.split('\n')) {
+        if (!/\breason\b/.test(line)) continue;
+        for (const m of line.matchAll(/'([a-z][a-z_]*)'/g)) {
+          if (!IGNORED.has(m[1])) found.set(m[1], file);
+        }
+      }
+    }
+
+    expect(found.size).toBeGreaterThan(0); // the scan itself must not silently find nothing
+
+    const unmapped = [...found.entries()]
+      .filter(([reason]) => !(reason in ADD_REASON_CODES))
+      .map(([reason, file]) => `${reason} (${file})`);
+
+    expect(unmapped).toEqual([]);
+  });
+
+  it('falls back to confirm_failed for unknown and missing reasons', () => {
+    // A script reason we have not mapped yet must not be attributed to a
+    // selector or a scorer on no evidence: the add WAS dispatched, so the only
+    // safe claim is that nothing evidenced it landing.
+    expect(addFailureCode('unknown')).toBe('confirm_failed');
+    expect(addFailureCode('some_new_store_reason')).toBe('confirm_failed');
+    expect(addFailureCode(null)).toBe('confirm_failed');
+    expect(addFailureCode(undefined)).toBe('confirm_failed');
+  });
+
+  it('separates the Fresh store-picker block from a real robot wall', () => {
+    expect(blockFailureCode('http-403')).toBe('waf_block');
+    expect(blockFailureCode('nudge')).toBe('waf_block');
+    expect(blockFailureCode('fresh-no-store')).toBe('auth_required');
+  });
+
+  it('sends the code as a top-level field, only on failing rows', async () => {
+    const up = okUpload();
+    const t = make({ upload: up.fn });
+    t.record('candidates', 'empty', { code: 'no_candidates' });
+    t.record('search', 'ok');
+    await t.flush();
+    expect(up.all[0].code).toBe('no_candidates');
+    expect('code' in up.all[1]).toBe(false);
+  });
+
+  it('reports the dominant code for the run, ties going to the first seen', () => {
+    const t = make();
+    expect(t.dominantFailureCode()).toBeUndefined();
+    t.record('confirm', 'error', { code: 'selector_miss' });
+    t.record('confirm', 'error', { code: 'confirm_failed' });
+    expect(t.dominantFailureCode()).toBe('selector_miss');
+    t.record('confirm', 'error', { code: 'confirm_failed' });
+    expect(t.dominantFailureCode()).toBe('confirm_failed');
+  });
+
+  it('keeps the run tally past a flush and past buffer trimming', async () => {
+    // run_summary is recorded last, after the buffer has been flushed several
+    // times over — the tally must not live in the buffer.
+    const up = okUpload();
+    const t = make({ upload: up.fn });
+    t.record('confirm', 'error', { code: 'waf_block' });
+    await t.flush();
+    for (let i = 0; i < 600; i++) t.record('search', 'ok');
+    expect(t.dominantFailureCode()).toBe('waf_block');
+  });
+
+  it('carries a code through startTimer', async () => {
+    const up = okUpload();
+    const t = make({ upload: up.fn });
+    t.startTimer('search', 1)('timeout', { term: 'cumin' }, 'timeout');
+    await t.flush();
+    expect(up.all[0].code).toBe('timeout');
+    expect(up.all[0].outcome).toBe('timeout');
+  });
+});
+
 describe('AutomationTelemetry startTimer', () => {
   it('records elapsed time on settle', async () => {
     const up = okUpload();
@@ -197,7 +350,7 @@ describe('AutomationTelemetry startTimer', () => {
     const t = make({ upload: up.fn });
     const done = t.startTimer('confirm');
     done('ok');
-    done('timeout');
+    done('timeout', undefined, 'timeout');
     await t.flush();
     expect(up.all.length).toBe(1);
     expect(up.all[0].outcome).toBe('ok');

@@ -726,6 +726,10 @@ export const usage = {
       seq: number;
       step: string;
       outcome: string;
+      /** Failure taxonomy code; set on every non-ok terminal step. Additive to
+       *  the existing payload — older ingests simply ignore it. See
+       *  STEP_FAILURE_CODES in automation-telemetry.ts. */
+      code?: string;
       durationMs?: number;
       itemIndex?: number;
       detail?: Record<string, unknown>;
