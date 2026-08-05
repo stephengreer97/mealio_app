@@ -7,9 +7,9 @@
 // reuses that script verbatim and only re-tags its output as a WORKER_RESULT
 // carrying the worker's id — so we don't duplicate per-store extraction logic.
 //
-// Wegmans and ALDI predate this and ship their own purpose-built worker
-// scripts (buildWegmansWorkerScript / buildAldiWorkerScript); those stay as
-// is. New stores use this wrapper.
+// Wegmans and the Instacart Storefront banners predate this and ship their own
+// purpose-built worker scripts (buildWegmansWorkerScript /
+// buildInstacartWorkerScript); those stay as is. New stores use this wrapper.
 
 /**
  * Wraps a store's EXTRACT_PRODUCTS_SCRIPT so it runs as a pool worker.

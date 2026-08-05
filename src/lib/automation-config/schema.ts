@@ -150,6 +150,10 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
         incBtn: '[data-testid="quantity-stepper-inc-button"]',
       },
     },
+    // ALDI runs on Instacart Storefront, driven by the shared adapter in
+    // webview-scripts/instacart.ts. Unlike the Albertsons family below, each
+    // Instacart banner gets its OWN entry here: they are separate retailers
+    // whose markup can drift apart, so each is kill-switched and tuned alone.
     aldi: {
       enabled: true,
       // ALDI's anti-bot trips on both the synthetic cache-buster query and the

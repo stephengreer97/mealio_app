@@ -9,7 +9,7 @@ import {
 } from './heb';
 import { getScripts as getWalmartScripts } from './walmart';
 import { getScripts as getAlbertsonsScripts, ALBERTSONS_FAMILY_IDS } from './albertsons';
-import { getScripts as getAldiScripts } from './aldi';
+import { getInstacartScriptsFor, INSTACART_STORE_IDS } from './instacart';
 import { getScripts as getAmazonFreshScripts } from './amazon-fresh';
 import { getScripts as getWegmansScripts } from './wegmans';
 import { getScripts as getMockStoreScripts, MOCK_STORE_ENABLED } from './mockstore';
@@ -142,10 +142,15 @@ export function getStoreScripts(storeId: string): StoreScripts | null {
   const configKey = ALBERTSONS_FAMILY_IDS.includes(storeId) ? 'albertsons' : storeId;
   if (!isStoreEnabled(configKey)) return null;
 
+  // Instacart Storefront banners (ALDI, and any future tenant) are served by one
+  // parameterized adapter, so a new banner is a registry entry rather than a case
+  // here. Each keeps its own config key — unlike the Albertsons family, these are
+  // separate retailers whose selectors can drift apart.
+  if (INSTACART_STORE_IDS.includes(storeId)) return getInstacartScriptsFor(storeId);
+
   switch (storeId) {
     case 'heb':            return getHebScripts();
     case 'walmart':        return getWalmartScripts();
-    case 'aldi':           return getAldiScripts();
     case 'amazon':         return getAmazonFreshScripts();
     case 'wegmans':        return getWegmansScripts();
     // Dev/e2e only: the deterministic mock store for Maestro. Returns null in

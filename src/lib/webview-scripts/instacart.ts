@@ -1,47 +1,126 @@
-// Injectable JavaScript strings for ALDI WebView automation.
+// Injectable JavaScript strings for Instacart Storefront WebView automation.
 // All scripts communicate back to React Native via window.ReactNativeWebView.postMessage.
 //
-// ALDI now runs on the Instacart platform. DOM reference:
-//   Store URL:          https://www.aldi.us/store/aldi/storefront
-//   Search URL:         https://www.aldi.us/store/aldi/s?k={term} (Instacart pattern; /search was retired)
+// WHAT THIS FILE IS
+// Instacart white-labels one storefront app to many grocery banners. This module
+// is that platform's adapter, parameterized by an InstacartTenant — the banner's
+// origin, its /store/{slug}/ path segment, and its cookie domain. It began life
+// as aldi.ts (ALDI moved onto the platform in its Q1 2026 relaunch) and was
+// generalised in place, so every injected script below is the exact text that
+// drove ALDI before the extraction.
+//
+// HOW MANY STOREFRONTS HAVE ACTUALLY RUN THROUGH IT: one.
+// ALDI is the only tenant in INSTACART_TENANTS and the only banner we hold
+// captured HTML for. MEAL-20 records that aldi.us, delivery.publix.com and
+// shop.sprouts.com return 200 for the same /store/{slug}/s?k= route, but a
+// matching URL contract is not a matching DOM. Nothing here is verified against
+// a second banner, and the selectors below are ALDI observations — treat them as
+// the platform's *likely* shape, not its confirmed one, until someone captures
+// fixtures for another storefront (see tests/fixtures/README.md).
+//
+// DOM reference (observed on ALDI, 2026):
+//   Store URL:          {origin}/store/{slug}/storefront
+//   Search URL:         {origin}/store/{slug}/s?k={term} (Instacart pattern; /search was retired)
 //   Add to cart button: button[aria-label^="Add 1 "] (name in aria-label)
-//   Product card link:  a[href*="/store/aldi/products/"]
+//   Product card link:  a[href*="/store/{slug}/products/"]
 //   Increment button:   button[aria-label^="Increment quantity"]
 //   Decrement button:   button[aria-label^="Decrement quantity"]
 //   Cart quantity:      [data-testid="item-quantity"] or similar counter element
+//
+// A NOTE ON THE PRODUCT-NAME SCORER BELOW
+// buildSearchAndAddScript inlines its OWN scoring implementation, which has
+// drifted from src/lib/webview-scripts/_scoring.ts (0.3 overlap floor vs 0.7, a
+// ±15 critical-word penalty vs a hard veto, −5 per extra candidate word, and a
+// COMMON stopword set with no counterpart there). The two disagree on 427 of 469
+// real pairs. That divergence is DELIBERATELY PRESERVED here: reconciling it
+// changes which product ALDI adds to a cart and is not this adapter's business.
+// Read the note above buildSearchAndAddScript() before touching it — there is an
+// argument-order trap that makes a naive swap silently invert the comparison.
 
-const ALDI_URL       = 'https://www.aldi.us';
-const ALDI_LOGIN_URL = 'https://www.aldi.us';  // Instacart storefront — login via hamburger menu
-const ALDI_CART_URL  = 'https://www.aldi.us';
-const ALDI_DOMAIN    = 'aldi.us';
+import type { StoreScripts } from './index';
+import { selectorsFor, storeConfig, searchUrlFor } from '../automation-config';
+
+// ── Tenant model ──────────────────────────────────────────────────────────────
+
+/**
+ * One grocery banner running on Instacart Storefront.
+ *
+ * Adding a storefront is a new entry in INSTACART_TENANTS plus a
+ * BUNDLED_AUTOMATION_CONFIG entry under the same `storeId`, plus captured
+ * fixtures to prove the DOM actually matches. No new code path.
+ */
+export interface InstacartTenant {
+  /** Store id from constants/stores.ts. Doubles as the automation-config and
+   *  selector key, so each banner is tunable on its own from a config push. */
+  storeId: string;
+  /** Origin with scheme, no trailing slash. e.g. 'https://www.aldi.us' */
+  origin: string;
+  /** The banner's path segment in /store/{slug}/…. e.g. 'aldi' */
+  slug: string;
+  /** Cookie / navigation domain, used to recognise this banner's URLs. */
+  domain: string;
+  /** Selector fallbacks layered over the platform defaults, for a banner whose
+   *  markup diverges. Remote config still overrides whatever lands here. */
+  selectorOverrides?: Record<string, string>;
+  /** Regex alternation proving the Main Menu belongs to a signed-OUT session.
+   *  Parameterized because login is where banners diverge most (membership
+   *  gates, SSO), even though search/add/confirm are shared. */
+  signedOutWords?: string;
+  /** Regex alternation proving a signed-IN session. */
+  signedInWords?: string;
+  /** Compiled-in defaults for the runtime knobs. Remote config overrides them. */
+  forceSerialSearch?: boolean;
+  workerCount?: number;
+  workerStaggerMs?: number;
+  cacheBustNav?: boolean;
+}
+
+/** Platform-wide selector fallbacks, with the tenant's slug woven in.
+ *  The remote automation config overrides these, so a platform redesign is a
+ *  config push rather than an App Store release. */
+function selFallbacks(t: InstacartTenant): Record<string, string> {
+  return {
+    atc: 'button[aria-label^="Add 1 "]',
+    inc: 'button[aria-label^="Increment quantity"], button[aria-label^="Increase quantity"]',
+    qtyBubble: 'button[aria-label^="Quantity:"]',
+    cardLink: `a[href*="/store/${t.slug}/products/"]`,
+    menu: '[role="dialog"][aria-label="Main Menu"]',
+    hamburger: '[data-testid="hamburger-coachmark-button"], button[aria-label="Main Menu"]',
+    ...t.selectorOverrides,
+  };
+}
+
+/** Live selectors as interpolatable JS literals (quotes included).
+ *  Call inside a build function — the remote config loads after this module is
+ *  imported, so a module-scope capture would freeze the fallbacks forever. */
+const sel = (t: InstacartTenant) => selectorsFor(t.storeId, selFallbacks(t));
+
+/** The `{origin}/store/{slug}/s?k=` prefix every search URL is built from. */
+function searchPrefix(t: InstacartTenant): string {
+  return `${t.origin}/store/${t.slug}/s?k=`;
+}
+
+/** Name of the window guard that stops a re-injected login check from
+ *  double-driving the Main Menu. Per-tenant so two banners in one WebView
+ *  session cannot share (and clobber) one flag. */
+function loginFlag(t: InstacartTenant): string {
+  return `__${t.storeId}LoginCheckActive`;
+}
+
+const DEFAULT_SIGNED_OUT_WORDS = 'sign in|log in|register|create account';
+const DEFAULT_SIGNED_IN_WORDS =
+  'buy it again|saved recipes|sign out|log out|your account|account settings';
 
 // ── Login check ───────────────────────────────────────────────────────────────
 
-import { selectorsFor, storeConfig, searchUrlFor } from '../automation-config';
-
-const SELECTOR_KEY = 'aldi';
-
-// Compiled-in selector fallbacks; the remote automation config overrides them so
-// an ALDI/Instacart redesign is a config push rather than an App Store release.
-// Read only inside a build function — the config loads after module import, so a
-// module-scope capture would freeze these fallbacks forever.
-const SEL_FALLBACKS = {
-  atc: 'button[aria-label^="Add 1 "]',
-  inc: 'button[aria-label^="Increment quantity"], button[aria-label^="Increase quantity"]',
-  qtyBubble: 'button[aria-label^="Quantity:"]',
-  cardLink: 'a[href*="/store/aldi/products/"]',
-  menu: '[role="dialog"][aria-label="Main Menu"]',
-  hamburger: '[data-testid="hamburger-coachmark-button"], button[aria-label="Main Menu"]',
-};
-
-/** Live selectors as interpolatable JS literals (quotes included). */
-const sel = () => selectorsFor(SELECTOR_KEY, SEL_FALLBACKS);
-
-function buildCheckLoginScript(): string {
-  const s = sel();
+function buildCheckLoginScript(t: InstacartTenant): string {
+  const s = sel(t);
+  const FLAG = loginFlag(t);
+  const outWords = t.signedOutWords ?? DEFAULT_SIGNED_OUT_WORDS;
+  const inWords = t.signedInWords ?? DEFAULT_SIGNED_IN_WORDS;
   return `(async function() {
-  if (window.__aldiLoginCheckActive) return;
-  window.__aldiLoginCheckActive = true;
+  if (window.${FLAG}) return;
+  window.${FLAG} = true;
   try {
     function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
@@ -83,10 +162,10 @@ function buildCheckLoginScript(): string {
     // Positive proof of logged-OUT: the sign-in CTA. Checked FIRST and treated
     // as decisive, so we never falsely claim logged-in while it's still
     // rendering (the menu mounts before its contents populate).
-    var SIGNED_OUT_RE = /sign in|log in|register|create account/;
+    var SIGNED_OUT_RE = /${outWords}/;
     // Positive proof of logged-IN: personalized menu entries that only exist for
     // a signed-in account (plus the account/sign-out controls when present).
-    var SIGNED_IN_RE = /buy it again|saved recipes|sign out|log out|your account|account settings/;
+    var SIGNED_IN_RE = /${inWords}/;
 
     // Open the menu and decide login state. The menu's contents render AFTER the
     // dialog mounts, so an early read can miss the "Sign in" CTA and look
@@ -126,14 +205,14 @@ function buildCheckLoginScript(): string {
     if (isLoggedIn) {
       // Close the menu so the upcoming search isn't blocked by the modal.
       closeMenu();
-      window.__aldiLoginCheckActive = false;
+      window.${FLAG} = false;
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }));
       return;
     }
 
     // Not logged in (or inconclusive) — leave the menu open so the user sees
     // "Sign In" when the webview becomes visible, then post the status. Keep
-    // __aldiLoginCheckActive set so a reinject (reinjectLoginCheckOnNav) during
+    // ${FLAG} set so a reinject (reinjectLoginCheckOnNav) during
     // the poll is suppressed and can't double-drive the menu.
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false }));
 
@@ -148,14 +227,14 @@ function buildCheckLoginScript(): string {
       if (other && other.offsetParent !== null) continue;
       if (await evaluateMenu() === 'in') {
         closeMenu();
-        window.__aldiLoginCheckActive = false;
+        window.${FLAG} = false;
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_COMPLETE' }));
         return;
       }
     }
-    window.__aldiLoginCheckActive = false;
+    window.${FLAG} = false;
   } catch(e) {
-    window.__aldiLoginCheckActive = false;
+    window.${FLAG} = false;
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false, error: String(e) }));
   }
 })();true;`;
@@ -168,8 +247,8 @@ function buildCheckLoginScript(): string {
  * Extracts product candidates from "Add 1 item" buttons.
  * Posts { type: 'SEARCH_RESULT', candidates: [...] }.
  */
-function buildExtractProductsScript(): string {
-  const s = sel();
+function buildExtractProductsScript(t: InstacartTenant): string {
+  const s = sel(t);
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
@@ -243,7 +322,7 @@ function buildExtractProductsScript(): string {
       var alt = img.getAttribute('alt').trim();
       if (alt.length > 2 && !/placeholder|logo|banner/i.test(alt)) return alt;
     }
-    // Fall back to URL slug: /store/aldi/products/12345-product-name-size
+    // Fall back to URL slug: /store/${t.slug}/products/12345-product-name-size
     var link = card.querySelector(CARD_LINK_SEL);
     if (link) {
       var href = link.getAttribute('href') || '';
@@ -287,13 +366,14 @@ function buildExtractProductsScript(): string {
 // ── Add to cart ───────────────────────────────────────────────────────────────
 
 function buildAddToCartScript(
+  t: InstacartTenant,
   productName: string,
   _preference: { text: string } | null,
   qty: number,
 ): string {
   const escapedName = JSON.stringify(productName);
 
-  const s = sel();
+  const s = sel(t);
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
@@ -405,9 +485,9 @@ function buildAddToCartScript(
 
 // ── Search navigation ─────────────────────────────────────────────────────────
 
-function buildSearchScript(term: string): string {
+function buildSearchScript(t: InstacartTenant, term: string): string {
   const escaped = JSON.stringify(term);
-  const s = sel();
+  const s = sel(t);
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   var term = ${escaped};
@@ -447,7 +527,7 @@ function buildSearchScript(term: string): string {
 
   if (!searchInput) {
     // Last resort: URL navigation.
-    window.location.href = 'https://www.aldi.us/store/aldi/s?k=' + encodeURIComponent(term);
+    window.location.href = '${searchPrefix(t)}' + encodeURIComponent(term);
     return;
   }
 
@@ -498,14 +578,37 @@ function buildSearchScript(term: string): string {
 }
 
 // ── Search + auto-add ─────────────────────────────────────────────────────────
+//
+// DO NOT REPLACE THE INLINE SCORER BELOW WITH _scoring.ts.
+//
+// The scoreOne/scoreMatch pair inside this template is NOT the shared scorer in
+// src/lib/webview-scripts/_scoring.ts, and the difference is not an oversight:
+//
+//   • overlap floor 0.3 here vs 0.7 there
+//   • missing/extra critical words cost ±15 here vs a hard veto (return 0) there
+//   • −5 per extra candidate word here; no such term there
+//   • a COMMON stopword set here with no counterpart there
+//
+// Measured over 469 real product/query pairs the two disagree on 427. Swapping
+// in the shared function would change which product lands in a customer's cart
+// on every one of those, so it is a product decision, not a cleanup.
+//
+// If you ever do reconcile them, note the ARGUMENT ORDER. This scoreOne(nf, nt)
+// reads its SECOND parameter as the query and is called as scoreMatch(name,
+// SEARCH_TERM); _scoring.ts's scoreMatch(a, b) scores candidate `b` against
+// term `a`. The orientations agree only because both the function and its call
+// site are written this way. Substituting the shared function without also
+// flipping the call site silently inverts the comparison — and it will still
+// return plausible-looking numbers, so nothing will fail loudly.
 
 function buildSearchAndAddScript(
+  t: InstacartTenant,
   searchTerm: string,
   qty: number,
   _dropdown: { type: string; selectedText: string; selectedValue: string } | null,
 ): string {
   const escapedTerm = JSON.stringify(searchTerm);
-  const s = sel();
+  const s = sel(t);
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function __noKbd(e) {
@@ -573,7 +676,7 @@ function buildSearchAndAddScript(
       }));
     });
   } else {
-    window.location.href = 'https://www.aldi.us/store/aldi/s?k=' + encodeURIComponent(SEARCH_TERM);
+    window.location.href = '${searchPrefix(t)}' + encodeURIComponent(SEARCH_TERM);
   }
 
   // Wait for fresh search results (stale detection via card links, up to 10s).
@@ -818,13 +921,16 @@ function buildSearchAndAddScript(
 //
 // Mirrors the Wegmans 5-worker pool (see wegmans.ts buildWegmansWorkerScript
 // and useParallelSearchPool): each hidden worker WebView loads a search URL
-// from getAldiSearchUrl, and this injected script extracts up to 8 product
+// from getInstacartSearchUrl, and this injected script extracts up to 8 product
 // candidates and posts WORKER_RESULT with the baked-in workerId. Unlike the
 // sequential buildExtractProductsScript(), every dispatch is a fresh page load,
 // so no stale-tile detection is needed.
+//
+// Note this path is built but NOT used for ALDI at runtime: forceSerialSearch is
+// on because the platform's anti-bot 403s the concurrent burst. See getScripts().
 
-function buildAldiWorkerExtractBody(): string {
-  const s = sel();
+function buildWorkerExtractBody(t: InstacartTenant): string {
+  const s = sel(t);
   return `(function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function dbg(obj) {
@@ -877,7 +983,7 @@ function buildAldiWorkerExtractBody(): string {
     return null;
   }
 
-  // Query comes from the search URL (/store/aldi/s?k=...). No query means a
+  // Query comes from the search URL (/store/${t.slug}/s?k=...). No query means a
   // warmup/initial load — stay silent so the pool doesn't record a result.
   var query = '';
   try {
@@ -932,56 +1038,103 @@ true;
 }
 
 /** Returns injectedJavaScript for a single worker. The workerId is baked in. */
-export function buildAldiWorkerScript(workerId: number): string {
-  return 'var WORKER_ID = ' + workerId + ';\n' + buildAldiWorkerExtractBody();
+export function buildInstacartWorkerScript(t: InstacartTenant, workerId: number): string {
+  return 'var WORKER_ID = ' + workerId + ';\n' + buildWorkerExtractBody(t);
 }
 
-/** Returns the ALDI (Instacart) search URL for a given query. */
-export function getAldiSearchUrl(query: string): string {
-  return 'https://www.aldi.us/store/aldi/s?k=' + encodeURIComponent(query);
+/** Returns the Instacart search-results URL for a query on this tenant. */
+export function getInstacartSearchUrl(t: InstacartTenant, query: string): string {
+  return searchPrefix(t) + encodeURIComponent(query);
 }
 
-// ── Public interface ──────────────────────────────────────────────────────────
+// ── Tenant registry ───────────────────────────────────────────────────────────
 
-export function getScripts() {
-  const cfg = storeConfig(SELECTOR_KEY);
-  return {
-    storeUrl: cfg.storeUrl ?? ALDI_URL,
-    loginUrl: cfg.loginUrl ?? ALDI_LOGIN_URL,
-    cartUrl: cfg.cartUrl ?? ALDI_CART_URL,
-    domain: ALDI_DOMAIN,
-    isSearchUrl: function(url: string) {
-      // Instacart search bar is available on any store page, not just /search.
-      // Returning true skips the storefront reload and injects search directly.
-      return url.includes('aldi.us/store/');
-    },
-    isLoginSuccessUrl: function() { return false; },
-    // Instacart reloads the storefront after sign-in. Re-run the login check on
-    // that nav so an already-completed login is detected (the background poll in
-    // buildCheckLoginScript() is the fallback for SPA logins with no full reload).
-    reinjectLoginCheckOnNav: true,
-    checkLoginScript: buildCheckLoginScript(),
-    extractProductsScript: buildExtractProductsScript(),
-    buildAddToCartScript: buildAddToCartScript,
-    buildSearchScript: buildSearchScript,
-    buildSearchAndAddScript: buildSearchAndAddScript,
-    getSearchUrl: (term: string) => searchUrlFor(SELECTOR_KEY, term, getAldiSearchUrl(term)),
-    buildWorkerScript: buildAldiWorkerScript,
+/**
+ * Every banner we drive on Instacart Storefront, keyed by storeId.
+ *
+ * ADDING ONE is three things and no new code:
+ *   1. An entry here — origin, slug, domain, and any knob whose default differs.
+ *   2. A `stores.<storeId>` entry in BUNDLED_AUTOMATION_CONFIG (schema.ts) so the
+ *      banner is kill-switchable and its selectors are pushable. Omitting it is
+ *      survivable — selFallbacks() below still yields working selectors — but the
+ *      banner then has no remote escape hatch, which is not a state to ship in.
+ *   3. Captured fixtures under tests/fixtures/<storeId>/ and a spec modelled on
+ *      tests/fixture-tests/aldi.spec.ts.
+ *
+ * Step 3 is the one that cannot be skipped. The URL contract being identical
+ * across banners (MEAL-20's evidence) says nothing about the DOM, and every
+ * selector in selFallbacks() was read off ALDI. A banner added without fixtures
+ * is a guess, not a supported store.
+ */
+export const INSTACART_TENANTS: Record<string, InstacartTenant> = {
+  aldi: {
+    storeId: 'aldi',
+    origin: 'https://www.aldi.us',
+    slug: 'aldi',
+    domain: 'aldi.us',
     // ALDI (Instacart) anti-bot 403s on concurrent worker requests — confirmed
     // 2026-06-17 that 5 parallel workers still 403 even with the cache-buster
     // removed, so concurrency itself is a trigger. Run searches SERIALLY.
     // workerCount / stagger are kept for if/when the parallel path is retried.
     // Remotely tunable: if ALDI ever stops 403-ing concurrent searches we can
     // re-enable the parallel path with a config push instead of a release.
-    forceSerialSearch: cfg.forceSerialSearch ?? true,
-    workerCount: cfg.workerCount ?? 3,
-    workerStaggerMs: cfg.workerStaggerMs ?? 400,
+    forceSerialSearch: true,
+    workerCount: 3,
+    workerStaggerMs: 400,
     // The anti-bot 403s on the `?_t=` cache-buster query (it lands right on the
     // blocked storefront request). Navigate to the clean URL instead.
-    cacheBustNav: cfg.cacheBustNav ?? false,
+    cacheBustNav: false,
+  },
+};
+
+/** Store ids served by this adapter. */
+export const INSTACART_STORE_IDS: string[] = Object.keys(INSTACART_TENANTS);
+
+// ── Public interface ──────────────────────────────────────────────────────────
+
+export function getInstacartScripts(t: InstacartTenant): StoreScripts {
+  // Per-banner config key: unlike the Albertsons family (one shared entry for 15
+  // brands), Instacart banners are separate retailers whose selectors can drift
+  // apart, so each is tuned and kill-switched on its own.
+  const cfg = storeConfig(t.storeId);
+  return {
+    storeUrl: cfg.storeUrl ?? t.origin,
+    loginUrl: cfg.loginUrl ?? t.origin,  // login is via the hamburger menu, not a page
+    cartUrl: cfg.cartUrl ?? t.origin,    // no dedicated cart page; it's a side panel
+    domain: t.domain,
+    isSearchUrl: function(url: string) {
+      // Instacart search bar is available on any store page, not just /search.
+      // Returning true skips the storefront reload and injects search directly.
+      return url.includes(t.domain + '/store/');
+    },
+    isLoginSuccessUrl: function() { return false; },
+    // Instacart reloads the storefront after sign-in. Re-run the login check on
+    // that nav so an already-completed login is detected (the background poll in
+    // buildCheckLoginScript() is the fallback for SPA logins with no full reload).
+    reinjectLoginCheckOnNav: true,
+    checkLoginScript: buildCheckLoginScript(t),
+    extractProductsScript: buildExtractProductsScript(t),
+    buildAddToCartScript: (productName, preference, qty) =>
+      buildAddToCartScript(t, productName, preference, qty),
+    buildSearchScript: (term) => buildSearchScript(t, term),
+    buildSearchAndAddScript: (term, qty, dropdown) =>
+      buildSearchAndAddScript(t, term, qty, dropdown),
+    getSearchUrl: (term: string) =>
+      searchUrlFor(t.storeId, term, getInstacartSearchUrl(t, term)),
+    buildWorkerScript: (workerId: number) => buildInstacartWorkerScript(t, workerId),
+    forceSerialSearch: cfg.forceSerialSearch ?? t.forceSerialSearch ?? true,
+    workerCount: cfg.workerCount ?? t.workerCount ?? 3,
+    workerStaggerMs: cfg.workerStaggerMs ?? t.workerStaggerMs ?? 400,
+    cacheBustNav: cfg.cacheBustNav ?? t.cacheBustNav ?? false,
     // Instacart SPA: search is a pushState route change (no reload), so the same
     // search page fires onLoadEnd multiple times while the add script is still
     // running. Suppress inflight re-injection so we don't double-add / skip items.
     spaSearch: true,
   };
+}
+
+/** Scripts for a storeId served by this adapter, or null if it isn't one. */
+export function getInstacartScriptsFor(storeId: string): StoreScripts | null {
+  const t = INSTACART_TENANTS[storeId];
+  return t ? getInstacartScripts(t) : null;
 }
