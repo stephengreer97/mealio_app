@@ -1228,10 +1228,26 @@ export default function WebViewCartSheet({
   // the 'login'-step onLoadEnd re-injects the check, which resumes automatically.
   const surfaceLoginDirect = useCallback(() => {
     // Funnel: the run stops at the login gate without ever running a login_check,
-    // so without this row it would simply disappear from the funnel between the
-    // tap and the first search. Same code as the two live logged-out detections.
-    tel().record('login_check', 'error', {
-      detail: { source: 'prewarm' }, code: 'auth_required',
+    // so without this row it would disappear from the funnel between the tap and
+    // the first search.
+    //
+    // `ok`, not a failure, and this is the model all three logged-out paths use:
+    // the OUTCOME describes whether we determined the login state, and
+    // `isLoggedIn` in the detail says what we determined. Recording this one as
+    // `error`/`auth_required` while the mainline LOGIN_STATUS answer below
+    // records `ok` would split one real-world condition — user is signed out,
+    // login WebView shown — across two outcomes, and would leave
+    // `auth_required` counting only the paths that lose the race.
+    //
+    // Known limit: this fires from two call sites and only one of them has a
+    // recorder yet. The auto-start path inside the `[visible]` effect runs in
+    // the same commit phase as mount, while the recorder is installed in the
+    // `.then()` of `logAutomationStart` — so a prewarm row from there is
+    // dropped by the no-op recorder. Fixing that means queueing pre-runId
+    // steps, which is its own change; until then `source: 'prewarm'` undercounts
+    // and must not be read as a total.
+    tel().record('login_check', 'ok', {
+      detail: { isLoggedIn: false, source: 'prewarm' },
     });
     setStep('login');
     setSearchingLabel('Sign in to continue');
@@ -1717,10 +1733,12 @@ export default function WebViewCartSheet({
       if (onLoginPage) {
         console.log(`[Cart ${ts()}]`, 'onLoadEnd login page during login_check — showing login immediately');
         // Funnel: a redirect to the store's sign-in page IS the answer the check
-        // script never got to post, so record it as the login_check failure it is
-        // rather than letting the run vanish from the funnel here.
-        tel().record('login_check', 'error', {
-          detail: { source: 'login_redirect' }, code: 'auth_required',
+        // script never got to post — so it is a successful determination, not a
+        // failed check, and it records `ok` like the LOGIN_STATUS path. See the
+        // note on `surfaceLoginDirect`: outcome says whether we found out,
+        // `isLoggedIn` says what we found out.
+        tel().record('login_check', 'ok', {
+          detail: { isLoggedIn: false, source: 'login_redirect' },
         });
         if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
         loginCheckActiveRef.current = false;
@@ -1996,7 +2014,7 @@ export default function WebViewCartSheet({
           // Funnel: the login gate is the first place a run can silently stall.
           // Recorded on the RESULT (not at injection) because the recorder only
           // exists once the server has issued a runId.
-          tel().record('login_check', 'ok', { detail: { isLoggedIn: !!msg.isLoggedIn } });
+          tel().record('login_check', 'ok', { detail: { isLoggedIn: !!msg.isLoggedIn, source: 'status' } });
           loginCheckActiveRef.current = false;
           if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
           if (msg.isLoggedIn) {

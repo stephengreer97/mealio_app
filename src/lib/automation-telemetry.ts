@@ -107,7 +107,7 @@ export type FailureOutcome = Exclude<StepOutcome, 'ok' | 'skipped'>;
  *     add path the candidates were already extracted once for that term, so a
  *     miss now points at the page/selectors, not at the search.
  */
-const ADD_REASON_CODES: Record<string, StepFailureCode> = {
+export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   no_results: 'no_candidates',
   low_confidence: 'match_rejected',
   out_of_stock: 'match_rejected',
@@ -124,6 +124,21 @@ const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   click_failed: 'confirm_failed',
   blocked: 'waf_block',
   timeout: 'timeout',
+  // The add landed, just short of the quantity asked for (Walmart, both the
+  // ADD_RESULT and the fused SEARCH_AND_ADD_RESULT paths: `success` is
+  // `added === QTY`, so 1-of-2 arrives here as a failure). It is the one reason
+  // in this table where the cart demonstrably DID move, which makes the
+  // `confirm_failed` fallback the worst available fit — "no evidence it landed"
+  // is the opposite of what happened. Filed under match_rejected because the
+  // fix family is the same: we could not get the units we wanted for this item.
+  partial: 'match_rejected',
+  // A store script threw and its catch reported out (ALDI's search-and-add).
+  // Not a confirm failure — nothing was confirmed because nothing completed —
+  // but there is no `script_error` code and adding one is a schema change the
+  // extension would have to agree to. `confirm_failed` explicitly, so that at
+  // least it is a decision on the record rather than the fallback silently
+  // swallowing an exception class.
+  error: 'confirm_failed',
 };
 
 /**

@@ -1,5 +1,8 @@
+import fs from 'fs';
+import path from 'path';
 import {
   AutomationTelemetry,
+  ADD_REASON_CODES,
   addFailureCode,
   blockFailureCode,
   createNoopTelemetry,
@@ -190,7 +193,7 @@ describe('failure codes', () => {
     ]);
   });
 
-  it('maps every reason a store script can report', () => {
+  it('maps the reasons this table was written against', () => {
     const expected: Record<string, string> = {
       no_results: 'no_candidates',
       low_confidence: 'match_rejected',
@@ -212,6 +215,62 @@ describe('failure codes', () => {
     for (const [reason, code] of Object.entries(expected)) {
       expect(addFailureCode(reason)).toBe(code);
     }
+  });
+
+  /**
+   * The drift detector the table above cannot be.
+   *
+   * That test restates `ADD_REASON_CODES` by hand, so it passes forever no
+   * matter what the store scripts start emitting — which is exactly how
+   * `partial` and `error` reached `addFailureCode` unmapped and rode the
+   * fallback into `confirm_failed`. This one reads the scripts.
+   *
+   * Reasons are extracted from `reason: '...'` literals. Not every hit is a
+   * result reason — the scripts also put `reason` on `log()` diagnostics — so
+   * those are listed explicitly rather than pattern-matched, because a rule
+   * loose enough to exclude them by shape would also exclude real ones.
+   */
+  it('has a code for every reason the store scripts actually emit', () => {
+    const dir = path.join(__dirname, '../../src/lib/webview-scripts');
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.ts'));
+
+    /**
+     * Literals the line scan picks up that are not add-result reasons:
+     * `reason` fields on log/diagnostic payloads, and unrelated strings that
+     * happen to share a line with one. Listed rather than pattern-matched — a
+     * rule loose enough to exclude these by shape would exclude real reasons.
+     */
+    const IGNORED = new Set([
+      'no_target', 'healthy', 'small_confirmed',   // log/diagnostic payloads
+      'add', 'cards_ready', 'no_best', 'skip_submit_method', // co-located, not reasons
+    ]);
+
+    const found = new Map<string, string>();
+    for (const file of files) {
+      const src = fs.readFileSync(path.join(dir, file), 'utf8');
+      // Line-scoped rather than `reason:\s*'x'`: `partial` — the reason that
+      // motivated this test — is emitted from inside a ternary
+      // (`walmart.ts:479`), so a pattern anchored to the property name misses
+      // exactly the case this exists to catch. Any single-quoted snake_case
+      // literal on a line mentioning `reason` is a candidate instead, which
+      // over-collects and is corrected by the ignore lists below. A ternary
+      // split across lines would still slip through; nothing in these scripts
+      // does that today.
+      for (const line of src.split('\n')) {
+        if (!/\breason\b/.test(line)) continue;
+        for (const m of line.matchAll(/'([a-z][a-z_]*)'/g)) {
+          if (!IGNORED.has(m[1])) found.set(m[1], file);
+        }
+      }
+    }
+
+    expect(found.size).toBeGreaterThan(0); // the scan itself must not silently find nothing
+
+    const unmapped = [...found.entries()]
+      .filter(([reason]) => !(reason in ADD_REASON_CODES))
+      .map(([reason, file]) => `${reason} (${file})`);
+
+    expect(unmapped).toEqual([]);
   });
 
   it('falls back to confirm_failed for unknown and missing reasons', () => {
