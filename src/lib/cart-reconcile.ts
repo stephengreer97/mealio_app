@@ -51,7 +51,9 @@ export interface WeightPricedFields {
  * NO purchaseWeight: their source of truth is productQty, so they reconcile as
  * ordinary count items and are deliberately NOT weight-priced here.
  */
-export function isWeightPriced(item: WeightPricedFields): boolean {
+export function isWeightPriced<T extends WeightPricedFields>(
+  item: T,
+): item is T & { purchaseWeight: number } {
   return item.purchaseWeight != null;
 }
 

@@ -99,6 +99,23 @@ const RECONCILE_CASES: ReconcileCase[] = [
     overAdds: [],
   },
   {
+    // The same two peppers with the row's true owner LAST. This is what pins
+    // the exact-before-loose pass order: with the owner first, both orderings
+    // agree and the property is invisible. Here they diverge — a loose-first
+    // pass lets guajillo claim the ancho row, so ancho is topped up and
+    // re-added while guajillo is never bought at all.
+    name: 'near-identical siblings, row owner LAST — the exact match still wins its row over an earlier loose one',
+    attempts: [
+      attempt('guajillo chiles', 1, { success: true, productName: 'El Guapo Whole Dried Guajillo Peppers, 4 oz' }),
+      attempt('ancho chiles', 1, { success: true, productName: 'El Guapo Dried Chile Ancho Peppers, 4 oz' }),
+    ],
+    addedRows: [row('El Guapo Dried Chile Ancho Peppers, 4 oz', 1)],
+    confirmed: ['El Guapo Dried Chile Ancho Peppers, 4 oz'],
+    topUps: [{ index: 0, shortfall: 1 }],
+    definiteFailures: [],
+    overAdds: [],
+  },
+  {
     name: 'entity-mangled title still reserves its own row exactly (a stray ® used to sink the exact match and cause a re-add)',
     attempts: [attempt('greek yogurt', 1, { success: true, productName: 'Chobani&reg; Non-Fat Plain Greek Yogurt 32oz' })],
     addedRows: [row('Chobani® Non-Fat Plain Greek Yogurt 32oz', 1)],
