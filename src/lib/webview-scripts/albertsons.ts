@@ -107,12 +107,30 @@ export function albertsonsSearchQuery(name: string): string {
 //      posted isLoggedIn:false — 3008ms spent to reach a WRONG answer that
 //      SilentLoginProbe latches for good. We now post no verdict at all from an
 //      auth URL and let the landing page decide.
-//   2. sessionStorage positive cache. A run that already concluded "logged in"
-//      records it, so the post-redirect re-injection answers in ~1ms instead of
-//      redoing the detection. Copied deliberately from the Wegmans check, which
-//      solves the identical MSAL bounce — including the rule that 'out' is NEVER
-//      cached, since caching it would defeat reinjectLoginCheckOnNav (the whole
-//      mechanism by which we notice the user finishing a sign-in).
+//   2. sessionStorage cache, consulted ONLY when detection is inconclusive.
+//      A run that concluded "logged in" records it; a later injection reads it
+//      just when this page has no account control at all (an SSO landing page
+//      whose header has not hydrated), where detection would otherwise poll the
+//      full 3s and post a wrong isLoggedIn:false.
+//
+//      It is NOT a fast path ahead of detection, and that placement is the whole
+//      point. As an unconditional fast path it produced a stale positive that
+//      nothing could clear: after a session expiry or a store-side auth bounce
+//      the page comes back signed out, the header plainly reads "Sign In", and
+//      the cache still answered true forever. SilentLoginProbe latches, so it
+//      never asked again; WebViewCartSheet does NOT latch (it shows the login
+//      step on a later LOGIN_STATUS:false), so the login UI simply never
+//      appeared and every add failed silently against a signed-out session.
+//      Live detection now always wins when it can see the header; the cache only
+//      breaks ties. Cost of that ordering, measured on logged-in-home.html:
+//      ~20-30ms of passive detection, versus the ~1ms cache read. The ~5s the
+//      cache was credited with was the interstitial's dead poll, and defence 1
+//      already removes that.
+//
+//      'out' is still never written (caching it would defeat
+//      reinjectLoginCheckOnNav, the mechanism by which we notice the user
+//      finishing a sign-in) — but a negative verdict now REMOVES any cached
+//      positive, so a contradicted 'in' cannot outlive the run that disproved it.
 //   3. __albLoginPosted latch. Terminal, unlike __albLoginCheckActive (which is
 //      cleared before the background poll starts). Without it, a same-context
 //      re-injection both re-runs the detection and stacks a second 3-minute
@@ -137,16 +155,25 @@ function buildCheckLoginScript(domain: string): string {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
   // The single terminal exit. Declared OUTSIDE the try so the catch below can
-  // call it without relying on Annex B block-function hoisting. Caches a
-  // positive BEFORE postMessage so that if the SSO bounce navigates away before
-  // RN receives the message, the next injection's fast path still has the answer.
+  // call it without relying on Annex B block-function hoisting. Writes the cache
+  // BEFORE postMessage so that if the SSO bounce navigates away before RN
+  // receives the message, the next injection still has the answer.
+  //
+  // A negative CLEARS the cached positive rather than writing 'out'. Writing
+  // 'out' would defeat reinjectLoginCheckOnNav; leaving a stale 'in' in place
+  // would let a verdict we have just disproved answer for the rest of the
+  // WebView's life.
   function postStatus(isLoggedIn, error) {
     if (window.__albLoginPosted) return;
     window.__albLoginPosted = true;
     window.__albLoginCheckActive = false;
-    if (isLoggedIn) {
-      try { sessionStorage.setItem('mealio_albertsons_login_state', 'in'); } catch(_) {}
-    }
+    try {
+      if (isLoggedIn) {
+        sessionStorage.setItem('mealio_albertsons_login_state', 'in');
+      } else {
+        sessionStorage.removeItem('mealio_albertsons_login_state');
+      }
+    } catch(_) {}
     var payload = { type: 'LOGIN_STATUS', isLoggedIn: isLoggedIn };
     if (error) payload.error = error;
     window.ReactNativeWebView.postMessage(JSON.stringify(payload));
@@ -155,16 +182,10 @@ function buildCheckLoginScript(domain: string): string {
   try {
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'start', url: window.location.href }));
 
-    // Fast path: an earlier injection in this WebView session already concluded
-    // logged-in. Answer immediately rather than re-running detection after the
-    // SSO round-trip.
-    try {
-      if (sessionStorage.getItem('mealio_albertsons_login_state') === 'in') {
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'passive_decision', decided: 'loggedIn', via: 'sessionStorage' }));
-        postStatus(true);
-        return;
-      }
-    } catch(_) {}
+    // NOTE: the sessionStorage read used to sit HERE, ahead of detection. It is
+    // now in the !profileBtn branch below. See the header comment: as a fast
+    // path it answered "logged in" against a header that read "Sign In", and no
+    // re-scan could ever correct it. Do not move it back up.
 
     // Poll for the profile button (up to 3s, usually < 1s).
     var profileBtn = null;
@@ -207,6 +228,20 @@ function buildCheckLoginScript(domain: string): string {
     // behind a debug flag rather than back on the critical path.
 
     if (!profileBtn) {
+      // Detection is INCONCLUSIVE — three seconds of polling and this page has
+      // no account control at all. That is the SSO landing page before its
+      // header hydrates. Only here do we defer to what an earlier injection in
+      // this session concluded, because the alternative is posting a false that
+      // SilentLoginProbe latches for good. A header we CAN read always wins over
+      // the cache; a header we cannot read is the one case where the cache is
+      // better evidence than anything on this page.
+      try {
+        if (sessionStorage.getItem('mealio_albertsons_login_state') === 'in') {
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'passive_decision', decided: 'loggedIn', via: 'sessionStorage' }));
+          postStatus(true);
+          return;
+        }
+      } catch(_) {}
       postStatus(false);
       return;
     }
@@ -216,11 +251,40 @@ function buildCheckLoginScript(domain: string): string {
     // CTA. So: a sign-in CTA present → logged out; an account control present
     // with NO sign-in CTA anywhere in the header → logged in. Anything
     // ambiguous falls through to the click check below. No user-specific text.
+    //
+    // WHAT THIS RULE ACTUALLY DECIDES ON, and where it is thin:
+    //
+    //   • acctIsSignIn is evaluated before acctIsMenu, and it reads the SAME
+    //     span the logged-in case reads. Albertsons reuses one span for both
+    //     states — in logged-in-home.html span[data-qa="hdr-accnt-nm"] holds the
+    //     user's name while still carrying the class
+    //     'menu-nav__profile-button-sign-in-up dst-sign-in-up'. Set that span's
+    //     text to "Sign in" and this rule decides loggedOut, correctly. So the
+    //     signed-out half is NOT unevidenced — it is one span away from the
+    //     capture we have, and tests/fixture-tests/albertsons.spec.ts asserts it.
+    //
+    //   • The reachable risk is NOT the signed-out state. It is any state where
+    //     that span is EMPTY, because nothing waits for it. The poll above waits
+    //     for the ELEMENT; acctIsMenu then matches on aria-label="Account menu",
+    //     which is static markup present regardless of auth state. Pre-hydration,
+    //     mid-render, or a slow auth bootstrap therefore reach 'loggedIn' in
+    //     single-digit ms with no user in sight.
+    //
+    //   • headerSignIn is the only independent second signal, and it is weaker
+    //     than it looks: on the real capture Albertsons ships NO <header>, <nav>
+    //     or [role="banner"] at all — the account control lives in a
+    //     <div role="navigation" aria-label="Account and Cart">. The selector
+    //     below therefore includes [role="navigation"]; without it the branch
+    //     matched zero elements and was pure decoration. It is deliberately NOT
+    //     widened to the whole document: logged-in-home.html contains nine
+    //     sign-in/create-account controls inside hidden dialogs (#menu,
+    //     #signin-dropdown, the <sign-in> form component), so a document-wide
+    //     scan would post loggedOut for a signed-in user.
     try {
       var SIGNIN_RE = /sign\\s?in|log\\s?in|sign\\s?up|create account/i;
       var acctName = ((profileBtn.getAttribute('aria-label') || '') + ' ' + (profileBtn.textContent || '')).trim();
       var headerSignIn = Array.prototype.slice
-        .call(document.querySelectorAll('header a, header button, nav a, nav button, [role="banner"] a, [role="banner"] button'))
+        .call(document.querySelectorAll('header a, header button, nav a, nav button, [role="banner"] a, [role="banner"] button, [role="navigation"] a, [role="navigation"] button'))
         .some(function(el) {
           var n = (el.getAttribute('aria-label') || '') + ' ' + (el.textContent || '');
           return SIGNIN_RE.test(n);
