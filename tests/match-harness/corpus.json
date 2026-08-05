@@ -1,0 +1,683 @@
+{
+  "generatedBy": "npm run match-harness:build (tests/match-harness/build-corpus.ts)",
+  "stores": {
+    "heb": [
+      {
+        "query": "HEB season chicken thighs for fajitas",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-out-of-stock.html"
+        ],
+        "products": [
+          "H-E-B Seasoned Chicken Thighs for Fajitas - Texas-Size Pack, Avg. 3.85 lbs",
+          "H-E-B Seasoned Boneless Skinless Chicken Thighs for Fajitas, Avg. 2.2 lbs",
+          "H-E-B Fully Cooked Frozen Seasoned Chicken Thigh Fajitas, 12 oz",
+          "H-E-B Seasoned Spicy Boneless Skinless Chicken Thighs for Fajitas, Avg. 2.2 lbs",
+          "H-E-B Orange Pepper Seasoned Chicken Thigh For Fajitas, Avg. 2.1 lbs",
+          "H-E-B Fully Cooked Frozen Seasoned Chicken Thigh Fajitas - Texas-Size Pack, 26 oz",
+          "H-E-B Mi Tienda Seasoned Diced Chicken Thighs for Tacos - Pollo Casero, Avg. 1.7 lbs",
+          "H-E-B Mi Tienda Seasoned Diced Chicken Thighs for Tacos - Pollo Chile Verde, Avg. 1.7 lbs",
+          "H-E-B Meat Market Seasoned Chicken Thighs & Ginger Soy Sauce, Avg. 1.8 lbs",
+          "H-E-B Seasoned Chicken Breast Fajitas, Avg. 2.1 lbs",
+          "H-E-B Seasoned Chicken Breast for Fajitas, Avg. 3.95 lbs",
+          "H-E-B Fully Cooked Seasoned Chicken Breast Fajitas, 16 oz",
+          "H-E-B Fully Cooked Frozen Seasoned Chicken Breast Fajitas, 12 oz",
+          "H-E-B Fully Cooked Frozen Seasoned Chicken Breast Fajitas - Texas-Size Pack, 26 oz",
+          "H-E-B Natural Seasoned Bone-in Chicken Thighs (Sold Hot), Avg. 1.25 lbs",
+          "H-E-B Dinner Starter - Seasoned Diced Chicken Thighs for Lettuce Wraps, Avg. 1.42 lbs",
+          "H-E-B Texas Originals Chicken Fajita Seasoning Spice Blend - Texas-Size Pack, 26 oz",
+          "H-E-B Texas Originals Chicken Fajita Seasoning Spice Blend, 5.75 oz",
+          "H-E-B Mi Tienda Seasoned Diced Chicken Thighs for Tacos - Pollo Guajillo, Avg. 1.64 lbs"
+        ]
+      },
+      {
+        "query": "sour cream",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-product-in-cart.html",
+          "search-results-sour-cream.html",
+          "search-results-stepper-open.html"
+        ],
+        "products": [
+          "H-E-B Regular Sour Cream, 16 oz",
+          "H-E-B Regular Sour Cream, 8 oz",
+          "H-E-B Regular Sour Cream, 24 oz",
+          "Daisy Squeeze Sour Cream , 14 oz",
+          "Daisy Sour Cream, 16 oz",
+          "Daisy Sour Cream, 8 oz",
+          "Hill Country Fare Regular Sour Cream, 16 oz",
+          "H-E-B Light Sour Cream, 16 oz",
+          "Daisy Squeeze Light Sour Cream, 14 oz",
+          "H-E-B Light Sour Cream, 8 oz",
+          "Daisy Sour Cream, 24 oz",
+          "Daisy Sour Cream, 3 lb",
+          "H-E-B Mi Tienda Squeezable Crema Agria Mexican-Style Sour Cream, 13 oz",
+          "H-E-B Light Sour Cream, 24 oz",
+          "Cacique Crema Mexicana Agria Sour Cream, 15 oz",
+          "H-E-B Mi Tienda Crema Agria Mexican-Style Sour Cream, 16 oz",
+          "Daisy Light Sour Cream, 16 oz",
+          "Cacique Crema Mexicana Table Cream, 15 oz",
+          "La Vaquita Crema Mexicana Sour Cream, 8 fl oz",
+          "Daisy Light Sour Cream, 8 oz",
+          "H-E-B Mi Tienda Squeezable Crema Agria Salvadorean-Style Sour Cream, 13 oz",
+          "LALA Crema Mexicana Sour Cream, 16 oz",
+          "Nortenita Creamy Mexican Blend Crema, 8.1 oz",
+          "La Vaquita Crema Salvadoreña Sour Cream, 16 fl oz",
+          "Forager Project Organic Dairy Free Sour Cream, 12 oz",
+          "La Vaquita Crema Salvadoreña Sour Cream, 8 fl oz",
+          "Mamá Lycha Crema Salvadoreña Sour Cream, 30 oz",
+          "Mamá Lycha Crema Hondureña Sour Cream, 14 oz",
+          "Mamá Lycha Crema Salvadorena Sour Cream, 14 oz",
+          "La Vaquita Fresh Salvadorian Sour Cream, 15 oz",
+          "La Vaquita Crema Mexicana Sour Cream, 15 fl oz",
+          "Heluva Good! French Onion Sour Cream Dip, 12 oz",
+          "Daisy Sour Cream Creamy Ranch Dip, 16 oz",
+          "La Vaquita Crema Hondureña Sour Cream, 16 fl oz",
+          "Daisy Sour Cream French Onion Dip, 16 oz",
+          "Kite Hill Dairy Free Almond & Coconut Milk Sour Cream, 8 oz",
+          "Quest Crispy Protein Chips Sour Cream & Onion - 11g Protein, 4 oz",
+          "Hill Country Fare Light Sour Cream, 16 oz"
+        ]
+      },
+      {
+        "query": "mission flour tortillas",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-tortillas.html"
+        ],
+        "products": [
+          "Mission Super Soft Flour Tortillas, Fajita Size, 20 ct",
+          "Mission Soft & Fluffy Homestyle Flour Tortillas, Soft Taco Size, 10 ct",
+          "Mission Super Soft Flour Tortillas, Street Taco Size, 12 ct",
+          "Mission Soft & Fluffy Homestyle Flour Tortillas, Soft Taco Size, 22 ct",
+          "Mission Super Soft Flour Tortillas, Fajita Size, 40 ct",
+          "Mission Soft & Fluffy Homestyle Flour Tortillas, Fajita Size, 16 ct",
+          "Mission Super Soft Flour Tortillas, Fajita Grande Size, 10 ct",
+          "Mission Carb Balance Flour Tortillas, Soft Taco Size, 8 ct",
+          "Mission Super Soft Flour Tortillas, Burrito Size, 8 ct",
+          "Mission Zero Net Carbs Original Flour Tortillas, Soft Taco Size, 8 ct",
+          "Mission Wraps - Garden Spinach Herb, 6 ct",
+          "Mission Gluten Free Original Flour Tortillas, Soft Taco Size, 6 ct",
+          "Mission Carb Balance Spinach & Herb Flour Tortillas, Soft Taco Size, 8 ct",
+          "Mission Wraps - Sundried Tomato Basil, 6 ct",
+          "Mission Butter Flour Tortillas, Street Taco Size, 10 ct",
+          "Mission Carb Balance Chipotle Flour Tortillas, Fajita Size, 8 ct",
+          "Mission Zero Net Carbs Original Flour Tortillas, Street Taco Size, 14 ct",
+          "Mission Carb Balance Whole Wheat Flour Tortillas, Fajita Size, 8 ct",
+          "Mission Carb Balance Flour Tortillas, Fajita Size, 8 ct",
+          "Mission Carb Balance Flour Tortillas, Burrito Size, 6 ct",
+          "Mission Zero Net Carbs Sundried Tomato Basil Flour Tortillas, Street Taco Size, 14 ct",
+          "Mission Zero Net Carbs Sriracha Ranch Flour Tortillas, Street Taco Size, 14 ct"
+        ]
+      },
+      {
+        "query": "bulk coffee",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-weight-dropdown-closed.html",
+          "search-results-weight-dropdown-open.html"
+        ],
+        "products": [
+          "CAFE Olé by H-E-B Houston Blend Medium Roast Whole Bean Coffee, 2 lbs",
+          "CAFE Olé by H-E-B Panama Medium Roast Whole Bean Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Sumatra Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Dark Roast Espresso Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Hawaiian Blend Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Costa Rican Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Taste of Austin Medium Roast Whole Bean Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Dark Roast Decaf Espresso Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Moka Java Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Ethiopian Yirgacheffe Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Columbian Supremo Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Breakfast Blend Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Irish Cream Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Cinnamon Hazelnut Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Bavarian Hazelnut Medium Roast Whole Bean Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Dark Roast French Roast Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Texas Pecan Medium Roast Whole Bean Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast French Vanilla Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Vanilla Almond Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Mexican Altura Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Snickernut Cookie Medium Roast Whole Bean Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Houston Blend Medium Roast Whole Bean Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Decaf Breakfast Blend Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Taste of the Hill Country Medium Roast Whole Bean Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Rio Grande Especial Medium Roast Whole Bean Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Taste of San Antonio Medium Roast Whole Bean Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Medium Roast Decaf Columbian Supremo Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Decaf Bavarian Hazelnut Medium Roast Whole Bean Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Whole Bean Dark Roast Decaf French Roast Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Decaf Texas Pecan Medium Roast Whole Bean Bulk Coffee, lb",
+          "CAFE Olé by H-E-B Decaf Taste of San Antonio Medium Roast Whole Bean Bulk Coffee, lb",
+          "Donut Shop Original Coffee, lb",
+          "Fara Coffee Nicaraguan Organic Coffee, 1 lb",
+          "Fara Coffee Signature Roast Coffee, 1 lb",
+          "Fara Coffee Indonesian Whole Bean Coffee, 1 lb",
+          "Fara Coffee Breakfast Blend Coffee, 1 lb",
+          "Donut Shop Dark Coffee, Sold by the Pound",
+          "Fara Coffee Nicaraguan Decaf Organic Whole Bean Coffee, 1 lb",
+          "CAFE Olé by H-E-B Texas Pecan Medium Roast Whole Bean Coffee, 2 lbs",
+          "CAFE Olé by H-E-B Taste of San Antonio Medium Roast Whole Bean Coffee, 2 lbs"
+        ]
+      },
+      {
+        "query": "avocado",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-with-preferences.html"
+        ],
+        "products": [
+          "Fresh Large Hass Avocado, Each",
+          "H-E-B Avocado Oil No-Stick Cooking Spray, 5 oz",
+          "BetterBody Foods Avocado Oil, 16.9 oz",
+          "H-E-B Fresh Guacamole - Mild, 15 oz",
+          "Fresh Small Hass Avocado, Each",
+          "H-E-B Fresh Hass Avocados, 5 ct",
+          "Fresh Jumbo Hass Avocado, Each",
+          "H-E-B Fresh Mini Hass Avocados, 6 ct",
+          "H-E-B Organics Fresh Hass Avocados, 3 ct bag",
+          "WHOLLY Avocado Smashed Avocado Minis, 6 ct, 12 oz",
+          "H-E-B Fresh Avocado Spread, 15 oz",
+          "H-E-B Fresh Avocado Spread, 7 oz",
+          "H-E-B Avocado Oil - Texas-Size Pack, 51 oz",
+          "Fresh Tropical Avocado, Each",
+          "Chosen Foods Classic Avocado Oil Mayo, 12 oz",
+          "Cabo Fresh Avocado Now, 12 oz",
+          "Chick-fil-A Avocado Lime Ranch Dressing (Sold Cold), 12 fl oz",
+          "H-E-B Chopped Salad Bowl - Avocado Ranch, Each",
+          "Dole Chopped Salad Kit - Avocado Ranch, Each",
+          "Pitaya Foods Organic Avocado Bite Sized Pieces, 12 oz",
+          "Herdez Avocado Hot Sauce, 5 oz",
+          "Progressive Prepworks Avocado Keeper, Each",
+          "Ottavio Avocado Oil, 8.5 oz",
+          "H-E-B Avocado Oil Cooking Spray - Texas Size, 13 oz",
+          "Primal Kitchen Avocado Oil Mayo, 12 oz",
+          "Primal Kitchen Ranch Dressing With Avocado Oil, 8 oz",
+          "Chosen Foods Avocado Oil, 16.9 oz",
+          "Chosen Foods Avocado Oil Spray, 13.5 oz",
+          "Country Crock Dairy Free Plant Butter Sticks with Avocado Oil, 16 oz",
+          "Chosen Foods 100% Pure Avocado Oil, 25.4 oz",
+          "Ottavio Avocado Oil, 25.5 oz",
+          "MU Kitchen Scrub Sponge - Avocado, Each",
+          "Ottavio Avocado Oil, 101 oz",
+          "Mantova Avocado Oil, 17 oz",
+          "Primal Kitchen Avocado Oil Mayonnaise, 17 oz",
+          "Ottavio Avocado Oil Spray, 13.5 oz",
+          "OXO SoftWorks 3-in-1 Avocado Slicer, Each",
+          "Chosen Foods Avocado Oil, 42.3 oz",
+          "Marianne's Organic Avocado Oil, 16.9 oz",
+          "Marianne's Classic Avocado Oil, 16.9 oz",
+          "Ottavio Organic Avocado Oil, 17 oz",
+          "Ottavio Organic Avocado Oil, 25.5 oz",
+          "Chosen Foods 100% Pure Organic Avocado Oil, 33.8 oz",
+          "Primal Kitchen Pure Avocado Oil, 16.9 oz",
+          "Kerrygold Irish Butter With Avocado Oil, 7.5 oz",
+          "Vigo Creamy Avocado Lime Rice, 8 oz",
+          "Marianne's Classic Avocado Oil Spray, 4.7 oz",
+          "Ottavio Organic Avocado Oil Spray, 5 oz",
+          "Chosen Foods Avocado Oil Shortening, 16 oz",
+          "Wish-Bone Avocado Ranch Dressing, 15 oz",
+          "Ottavio Chili Flavored Avocado Oil, 8.5 oz",
+          "Briannas Avocado Oil Herb Vinaigrette, 10 oz",
+          "H-E-B Sushiya Avocado Spring Roll, 4 pc",
+          "Core Kitchen Avocado & Lemon Sink Strainers, 2 pk",
+          "EuroPastry Avocado Flavored Brioche Hamburger Buns, 7.05 oz",
+          "La Tourangelle Extra Virgin Avocado Oil, 8.45 oz",
+          "H-E-B Sushiya Avocado Maki Sushi Roll, 10 pc",
+          "Chosen Foods Extra Virgin Avocado Oil, 16.9 oz",
+          "H-E-B Sushiya Salmon Avocado Sushi Roll, 10 pc",
+          "Skinnygirl Classic Caesar with Avocado Oil Dressing, 11.5 oz"
+        ]
+      },
+      {
+        "query": "yogurt",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-yogurt-pairings-carousel.html"
+        ],
+        "products": [
+          "H-E-B 17g Protein Whole Milk Greek Yogurt - Plain, 32 oz",
+          "Hill Country Fare Blended Vanilla Low-Fat Yogurt, 32 oz",
+          "Fage Total 0% Nonfat Plain Greek Yogurt, 32 oz"
+        ]
+      }
+    ],
+    "walmart": [
+      {
+        "query": "butterball gluten-free oven roasted turkey breast, deli-sliced",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-out-of-stock.html"
+        ],
+        "products": [
+          "Butterball Gluten-Free Oven Roasted Turkey Breast, Deli-Sliced",
+          "Prima Della Oven Roasted Turkey Breast, Pre-Sliced",
+          "Great Value Oven Roasted Turkey Breast Lunchmeat, 16 oz, Plastic Tub, Refrigerated",
+          "Hormel Natural Choice Oven Roasted Turkey Deli Lunchmeat, Double Pack 14 oz Resealable Package",
+          "Oscar Mayer Deli Fresh Oven Roasted Turkey Breast, 16 oz Family Pack",
+          "Hillshire Farm Ultra Thin Sliced Oven Roasted Turkey Breast Lunchmeat, 22 oz Plastic Tub, Refrigerated",
+          "Oscar Mayer Deli Fresh Oven Roasted Turkey Breast, 9 oz Pack",
+          "Hillshire Farm Ultra Thin Oven Roasted Turkey Breast Lunchmeat, 16 oz Plastic Tub, Refrigerated",
+          "Great Value Oven Roasted Turkey Breast Lunchmeat, 9 oz Plastic Resealable Tub",
+          "Hillshire Farm Ultra Thin Oven Roasted Turkey Breast Lunchmeat, 9 oz Plastic Tub, Refrigerated"
+        ]
+      },
+      {
+        "query": "sour cream",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-product-in-cart.html",
+          "search-results-sour-cream.html",
+          "search-results-stepper-open.html"
+        ],
+        "products": [
+          "Daisy Sour Cream Creamy Ranch Dip, 16 oz Tub (Refrigerated)",
+          "Daisy Sour Cream French Onion Dip, 16 oz Tub (Refrigerated)",
+          "La Vaquita Crema Salvadorena, Sour Cream, 15 oz Resealable Plastic Bottle (Refrigerated Dairy)",
+          "Great Value All Natural Sour Cream, 8 oz",
+          "Daisy Pure and Natural Sour Cream, 14 oz Pouch (Refrigerated)",
+          "La Vaquita Crema Mexicana, Fresh Dairy Cream, 8 oz Resealable Plastic Bottle",
+          "Great Value Original Sour Cream, 16 oz Tub",
+          "Daisy Pure and Natural Sour Cream, 16 oz (1 lb) Tub (Refrigerated)",
+          "Daisy Pure and Natural Sour Cream, 8 oz Tub (Refrigerated)",
+          "Great Value Original Sour Cream, 24 oz Tub",
+          "Great Value Light Sour Cream, 16 oz Tub",
+          "Daisy Pure and Natural Sour Cream, 24 oz (1.5 lb) Tub (Refrigerated)",
+          "Daisy Pure and Natural Light Squeeze Sour Cream, 50% Less Fat, 14 oz Pouch (Refrigerated)",
+          "Daisy Pure and Natural Light Sour Cream, 50% Less Fat, 16 oz (1 lb) Tub (Refrigerated)",
+          "Daisy Pure and Natural Light Sour Cream, 50% Less Fat, 8 oz Tub (Refrigerated)",
+          "Daisy Pure and Natural Sour Cream, 48 oz (3 lb) Tub (Refrigerated)",
+          "Cacique Crema Mexicana Agria, Sour Cream, 15 oz Jar (Refrigerated)",
+          "LALA Crema Mexicana Sour Cream, Refrigerated, 24 oz Tub",
+          "LALA Crema Mexicana Refrigerated Pourable Sour Cream Topping, 15 oz. Tub",
+          "Cacique Crema Salvadorena Sour Cream, 15 oz Jar (Refrigerated)",
+          "M. Lycha Chorizo Salvadoreño (Fully Cooked) 12/14 oz",
+          "Chobani Non-Fat Greek Yogurt Plain 32 oz + Daisy Sour Cream 14 oz Squeeze Pouch Bundle",
+          "Daisy Pure and Natural Sour Cream, 16 Ounce -- 12 per case.",
+          "Green Valley Organic Lactose Free Sour Cream, 12 Ounce -- 6 per case.",
+          "Z Natural Foods Sour Cream Powder, Rich Cream Powder with Long Shelf Life, Perfect for Baked Items, Dips, and Dishes, Non-GMO, Gluten-Free, Kosher",
+          "Hoosier Hill Farm Sour Cream Powder, 2 lb Jar",
+          "Doritos Cool Sour Cream & Chive Dip 280g, British Import (Pack of 2)",
+          "Cultures for Health Creme Fraiche Starter Culture, DIY Rich Sour Cream",
+          "Great Value Original Sour Cream, 48 oz",
+          "Great Value Sour Cream 8 Oz",
+          "Lala Sour Cream 24 Oz",
+          "LALA Salvadorian Crema Refrigerated Pourable Sour Cream Topping, 15 oz Tub",
+          "Cacique Crema Mexicana Table Cream, 15 oz Jar (Refrigerated)",
+          "(2 pack) Ziyad Merchandise",
+          "Nestle Media Crema Neutral Flavor Heavy Table Dairy Cream, 7.6 fl oz Can",
+          "Alouette Creme Fraiche, 4.5 lb, Pack of 2",
+          "Great Value Cream Cheese Brick, 8 oz Block",
+          "La Bonne Vie Creme Fraiche, 7.5OZ, 12 Pack",
+          "Healthier Comforts Organic Heavy Cream Powder 7oz | Kosher, Gluten Free, Non-GMO, and Keto Friendly | Long Lasting, Easy Sauces, Baking | Made in the USA"
+        ]
+      },
+      {
+        "query": "mission flour tortillas",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-tortillas.html"
+        ],
+        "products": [
+          "Siete Foods Grain Free Almond Flour Tortillas, 7oz., 8 Count",
+          "Siete Foods Grain Free Cassava Flour Tortillas, 7oz., 8 Count",
+          "Mission Super Soft Flour Tortillas, Soft Taco Size, 10 Count",
+          "Mission Super Soft Flour Tortillas, Fajita Size, 20 Count",
+          "Mission Super Soft Flour Tortillas, Burrito Size, 8 Count",
+          "Mission Super Soft Flour Tortillas, Soft Taco Size, 20 Count",
+          "Mission Soft & Fluffy Homestyle Flour Tortillas, Soft Taco Size, 22 Count",
+          "Mission Soft & Fluffy Homestyle Flour Tortillas, Soft Taco Size, 10 Count",
+          "Mission Soft & Fluffy Homestyle Flour Tortillas, Fajita Size, 16 Count",
+          "Mission Super Soft Flour Tortillas, Street Tacos Size, 12 Count",
+          "Mission Super Soft Flour Tortillas, Fajita Grande Size, 10 Count",
+          "Mission Carb Balance Flour Tortillas, Soft Taco Size, 8 Count",
+          "Mission Carb Balance Flour Tortillas, Fajita Size, 8 Count",
+          "Mission Carb Balance Flour Tortillas, Burrito Size, 6 Count",
+          "Mission Zero Net Carbs Original Flour Tortillas, Street Tacos Size, 14 Count",
+          "Mission Zero Net Carbs Original Flour Tortillas, Soft Taco Size, 8 Count",
+          "Mission Super Soft Whole Wheat Flour Tortillas, Soft Taco Size, 10 Count",
+          "Mission Carb Balance Spinach & Herb Flour Tortillas, Soft Taco Size, 8 Count",
+          "Mission Zero Net Carbs Sundried Tomato Basil Flour Tortillas, Street Tacos Size, 14 Count",
+          "Mission Super Soft Flour Tortillas, Fajita Size, 40 Count",
+          "Mission Carb Balance Whole Wheat Flour Tortillas, Soft Taco Size, 8 Count",
+          "Mission Carb Balance Whole Wheat Flour Tortillas, Fajita Size, 8 Count",
+          "Mission Super Soft Flour Tortillas, Burrito Size, 16 Count, 40 oz",
+          "Mission Super Soft Flour Tortillas, Burrito Size, 8 Count, 20 oz",
+          "Mission Super Soft Flour Tortillas, Fajita Size, 20 Count, 23 oz",
+          "Mission Flour Tortillas Large Burrito (16 ct.) (pack of 2)",
+          "Mission Butter Flavored Tortillas, Fajita Size, 10 Count",
+          "Mission Zero Net Flour Tortillas - 0g Net Carbs - Keto Certified - 8.0\" Soft Taco , 11.29 oz,  8 Count",
+          "Mission Carb Balance Chipotle Flour Tortillas, Fajita Size, 8 Count",
+          "Mission 6 Inch Fajita Flour Tortillas, 20 Count - 2 Pack",
+          "Mission Street Tacos Flour Tortillas - 4.5\", 11 oz, 12 Count - 2 Packs",
+          "Mission 8\" Soft Taco Flour Tortilla, 17.5 Ounce",
+          "Mission Burrito Flour Tortillas, Large Size, 16 Count, Trans Fat Free",
+          "Mission Super Soft Whole Wheat Flour Tortillas, Soft Taco Size, 10 Count 16 oz.",
+          "Mission Soft Taco Flour Tortillas, Medium Size, 10 Count, Trans Fat Free",
+          "Mission Burrito Flour Tortillas, Large Size, 8 Count, Trans Fat Free"
+        ]
+      }
+    ],
+    "albertsons": [
+      {
+        "query": "Samuel Adams winter white ale",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-out-of-stock.html"
+        ],
+        "products": [
+          "Samuel Adams Summer Ale Seasonal Beer Bottles - 12-12 Fl. Oz.",
+          "Samuel Adams Beers of Summer Seasonal Variety Beer Cans - 12-12 Fl. Oz.",
+          "Samuel Adams Summer Ale Seasonal Beer Bottles - 6-12 Fl. Oz.",
+          "Samuel Adams Cherry Wheat Beer - 6-12 Fl. Oz.",
+          "Samuel Adams Porch Rocker Lemon Radler Seasonal Beer Bottles - 6-12 Fl. Oz."
+        ]
+      },
+      {
+        "query": "sour cream",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-product-in-cart.html",
+          "search-results-stepper-open.html"
+        ],
+        "products": [
+          "Herr's Sour Cream & Onion Chips - 13 OZ",
+          "Herrs Dip Onion Sour Cream Jar - 8.5 Oz",
+          "Sour Cream & Onion Kettle - 7.5 OZ",
+          "Lays Potato Chips Sour Cream & Onion - 7.75 Oz",
+          "Lucerne Sour Cream - 16 Oz",
+          "Lucerne Sour Cream - 24 Oz",
+          "Lucerne Sour Cream Light - 16 Oz",
+          "Breakstones Sour Cream - 16 Oz",
+          "Daisy Sour Cream Pure & Natural Squeeze - 14 Oz",
+          "Daisy Sour Cream Pure & Natural - 8 Oz",
+          "Daisy Sour Cream Light 50% Less Fat - 16 Oz",
+          "Daisy Sour Cream Pure & Natural - 24 Oz",
+          "Daisy Sour Cream Light - 8 Oz",
+          "Daisy Light Squezze Sour Cream - 14 Oz",
+          "Daisy Sour Cream Pure & Natural - 48 Oz",
+          "Lucerne Sour Cream - 8 Oz",
+          "Lactaid Sour Cream - 16 Oz",
+          "Daisy Sour Cream French Onion Dip - 16 Oz",
+          "Daisy Sour Cream Ranch Dip - 16 Oz",
+          "Herr's Sour Cream And Onion Chips - 7.75 Oz",
+          "Breakstones All Natural Sour Cream - 8 Oz",
+          "Nancys Organic Sour Cream Cultured - 16 Oz",
+          "Pep Farm Goldfish Sour Cream & Onion 4.8oz - 4.8 OZ",
+          "Lays Sour Cream & Onion 2.5oz - 2.5 OZ",
+          "Utz Dip Sour Cream & Onion - 8.5 Oz",
+          "Pringles Mingles Puffed Snacks Cheddar and Sour Cream Cheese Puffs - 5.5 Oz",
+          "Land O Lakes Heavy Whipping Cream - 1 Quart",
+          "Signature Select Ripple Cheddar & Sour Cream Potato Chips 8 Oz - 8 OZ",
+          "Lucerne Heavy Whipping Cream - 16 Fl. Oz. (packaging may vary)"
+        ]
+      },
+      {
+        "query": "tortillas",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-tortillas.html"
+        ],
+        "products": [
+          "Herrs Bite Size Tortilla Chips - 12 Oz",
+          "Tostitos Tortilla Chips Restaurant Style Hint Of Lime - 11 OZ",
+          "Tostitos Tortilla Chips Scoops - 10 Oz",
+          "Tostitos Cantina Tortilla Chips Traditional, 11 Oz - 11 OZ",
+          "Mission Super Soft Flour Tortillas Soft Taco Size - 10 Count",
+          "La Banderita Tortillas Flour Large Soft Taco Bag 10 Count - 16 Oz",
+          "Mission Super Soft Flour Tortillas Fajita Size - 20 Count",
+          "Mission Super Soft Flour Tortillas Burrito Size - 8 Count",
+          "Signature SELECT Burrito Style Flour Tortillas 8 Count - 19.2 Oz",
+          "Signature SELECT  Soft Taco Style Flour Tortillas 10 Count - 15.5 Oz",
+          "Tostitos Scoops Original Party Size Tortilla Chips - 14.5 Oz",
+          "Tostitos Cantina Tortilla Chips Thin & Crispy, 8 Oz - 8 OZ",
+          "Mission Super Soft Whole Wheat Flour Tortillas Soft Taco Size - 10 Count",
+          "Mission Super Soft White Corn Tortillas - 30 Count",
+          "Mission Carb Balance Flour Tortillas Soft Taco Size - 8 Count",
+          "Mission Carb Balance Spinach & Herb Flour Tortillas - Soft Taco Size - 8 Count",
+          "Mission Carb Balance Whole Wheat Flour Tortillas - Burrito Size - 6 Count",
+          "La Banderita Tortillas Corn Bag 30 Count - 27.5 Oz",
+          "Mission Carb Balance Whole Wheat Flour Tortillas - Soft Taco Size - 8 Count",
+          "Goya Tortillas Flour Burritos Bag 8 Count - 20 Oz",
+          "Tostitos Tortilla Chips Bite Size Rounds - 12 OZ",
+          "Tostitos Original Restaurant Tortilla Chips  - 12 Oz",
+          "Tostitos Tortilla Chips Restaurant Style - 17 Oz",
+          "Tostitos Tortilla Chips Salsa Verde - 11 OZ",
+          "Doritos Tortilla Chips Nacho Cheese - 9.25 Oz",
+          "Signature SELECT Fajita Flour Tortillas Size 10 Count - 10 Oz",
+          "Mission Carb Balance Flour Tortillas Burrito Size - 6 Count",
+          "Mission Super Soft Flour Tortillas Soft Taco Size - 20 Count",
+          "Doritos Tortilla Chips Spicy Nacho - 9.25 OZ",
+          "Doritos Tortilla Chips Spicy Sweet Chili - 9.25 OZ",
+          "Signature SELECT White Corn Taco Shells Box 12 Count - 4.8 Oz",
+          "Signature SELECT Fajita Flour Tortillas Size 20 Count - 26 Oz",
+          "La Banderita 10 Inch Burrito Tortilla 8 Count - 20 Oz",
+          "Calidad White Corn Tortilla Chips - 11 Oz",
+          "Mission Carb Balance Sundried Tomato Basil Tortilla Wraps - 8 Count",
+          "Mission Super Soft Flour Tortillas Burrito Size - 16 Count",
+          "Tostitos Hint Of Lime - 17 Oz",
+          "Signature SELECT White Corn Tortillas 30 Count - 25 Oz",
+          "Doritos Late Night Loaded Taco - 9 Oz",
+          "Mission Super Soft Yellow Corn Tortillas - 30 Count"
+        ]
+      }
+    ],
+    "aldi": [
+      {
+        "query": "sour cream",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-product-in-cart.html",
+          "search-results-stepper-open.html"
+        ],
+        "products": [
+          "Friendly Farms Sour Cream",
+          "Friendly Farms Light Sour Cream",
+          "Doritos Nacho Cheese Tortilla Chips",
+          "Frito Lay Flavor Mix Variety Pack, 18ct",
+          "Sun Chips Harvest Cheddar Whole Grain Sun Chips",
+          "Friendly Farms Regular Cottage Cheese",
+          "Happy Farms Cream Cheese",
+          "Specially Selected Sliced Sourdough Round",
+          "Happy Farms Whipped Cream Cheese",
+          "Friendly Farms Heavy Whipping Cream",
+          "Cacique Crema Mexicana",
+          "Clancy's Hint of Lime Tortilla Chips",
+          "Clancy's Restaurant Style Tortilla Chips",
+          "Clancy's Nacho Tortilla Chips",
+          "Clancy's Cheddar and Sour Cream Ridged Potato Chip",
+          "Friendly Farms Low Fat Cottage Cheese",
+          "Clancy's Original Corn Chips",
+          "Friendly Farms Dairy Free Heavy Whipping Cream"
+        ]
+      },
+      {
+        "query": "tortillas",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-tortillas.html"
+        ],
+        "products": [
+          "EggLife Original Egg White Wrap",
+          "Pueblo Lindo Flour Tortillas",
+          "Doritos Nacho Cheese Tortilla Chips",
+          "Sun Chips Harvest Cheddar Whole Grain Sun Chips",
+          "Frito Lay Flavor Mix Variety Pack, 18ct",
+          "Pueblo Lindo Fajita Flour Tortillas, 20 ct",
+          "Pueblo Lindo Burrito Tortillas",
+          "L'oven Fresh Low Carb Tortillas",
+          "Pueblo Lindo Yellow Corn Tortillas",
+          "Pueblo Lindo 6\" Corn Tortillas",
+          "La Banderita Family Pack Flour Tortillas",
+          "La Banderita Soft Taco Tortillas",
+          "La Abuela 6.5\" Refrigerated Flour Tortillas",
+          "La Banderita Burrito Grande",
+          "La Banderita Yellow Corn Tortillas-30 ct",
+          "La Banderita White Corn Tortillas-80 ct",
+          "La Banderita White Corn Tortillas-30 ct",
+          "Ole Xtreme Wellness Hi-Fiber Low Carb Tortilla",
+          "L'oven Fresh Spinach Wraps",
+          "Clancy's Texas Seasoned Tortilla Chips"
+        ]
+      }
+    ],
+    "amazon-fresh": [
+      {
+        "query": "seasonal",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-out-of-stock.html"
+        ],
+        "products": [
+          "Vital Farms Organic Pasture-Raised Large Eggs 12ct",
+          "Lawry’s Seasoned Salt, No MSG Added, Kosher Certified, Staple, Versatile, All-Purpose Seasoning to Shake on Beef, Pork, or Poultry, 8 oz",
+          "Large Organic Hass Avocado",
+          "365 by Whole Foods Market, Organic Rainbow Baby Carrots, Cut & Peeled, 12 oz",
+          "Toonie Moonie Organic Vanilla Marshmallow Creme",
+          "Scrub Daddy Dye Free Sponge Daddy 3 Count, 3 CT",
+          "Organic Strawberries, 1 Lb",
+          "365 by Whole Foods Market, Pumpkin Spice Pancake & Waffle Mix, 20 Ounce",
+          "Tru Fru, Frozen Strawberries White And Milk Chocolate, 8 Ounce",
+          "Celestial Seasonings Herbal Tea, Cinnamon Apple Spice, 20 Count",
+          "Celestial Seasonings Sleepytime Extra Herbal Tea, 20 Tea Bags Box",
+          "Flonase Allergy Relief Nasal Spray Fluticasone Propionate, 24 Hour Non Drowsy Allergy Medicine, Metered Nasal Spray - 72 Sprays - Fall and Seasonal Allergy Relief",
+          "Amazon Grocery, Seasonal Fruit Salad, 20 Oz",
+          "Wonderful Halos Mandarins, Sweet, Seedless, Easy Peel Mandarin Oranges - Healthy Food, Fresh Fruit, 3lb Bag",
+          "Yellow Dragonfruit",
+          "Navel Orange",
+          "Flonase Allergy Relief Nasal Spray, 24 Hour Non Drowsy Allergy Medicine, Metered Nasal Spray - 144 Sprays- Fall and Seasonal Allergy Relief",
+          "UNREAL Dark Chocolate Caramel Peanut Nougat Bars (1 Bag), 70% Organic Ingredients, Fair Trade, Non-GMO, No Corn Syrup, Sugar Alcohols, Soy, 3.4oz",
+          "Garden of Life Organics Oil of Oregano Seasonal Drops 1fl oz (30 mL) Liquid, Concentrated Plant Based Immune Support - Alcohol-Free, Organic, Non-GMO, Vegan & Gluten Free Herbal Supplements",
+          "365 by Whole Foods Market, Ice Cream Sandwiches Organic 6 Count, 21.9 Fl Oz",
+          "ALEXIA FOODS Roasted Garlic And Black Pepper Potato Puffs, 19 OZ"
+        ]
+      },
+      {
+        "query": "sour cream",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-product-in-cart.html",
+          "search-results-stepper-open.html"
+        ],
+        "products": [
+          "Daisy Sour Cream Pouch, 14 OZ",
+          "DAISY Sour Cream 8 Ounce",
+          "Daisy Sour Cream, 16 OZ",
+          "Amazon Grocery, Original Sour Cream,16 Oz",
+          "Daisy Daisy Light Squeeze Sour Cream, 14 Ounce, 14 OZ",
+          "Good Culture Organic Sour Cream, 16 OZ",
+          "Organic Valley Organic Regular Sour Cream, 16 Oz",
+          "365 by Whole Foods Market, Sour Cream Organic, 16 Ounce",
+          "Daisy Light Sour Cream, 16 OZ",
+          "Amazon Grocery, Original Sour Cream, 8 Oz",
+          "Daisy, Regular Sour Cream, 24 oz",
+          "Daisy Sour Cream Creamy Ranch Dip, 16 OZ",
+          "365 by Whole Foods Market, Organic Low-Fat Sour Cream, 16 oz",
+          "Organic Valley, Cream Heavy Whipping Ultra-Pasturized Organic, 16 Fl Oz",
+          "Daisy Sour Cream French Onion Dip, 16 OZ",
+          "Vermont Creamery, Crème Fraîche, 8 oz"
+        ]
+      },
+      {
+        "query": "mission flour tortillas",
+        "queryProvenance": "page",
+        "fixtures": [
+          "search-results-tortillas.html"
+        ],
+        "products": [
+          "Mission Soft Taco Flour Tortillas, Medium Size, 10 Count, Trans Fat Free",
+          "Mission Burrito Flour Tortillas, Large Size, 8 Count, Trans Fat Free",
+          "Mission Soft Taco Flour Tortillas, Small Size, 20 Count, Trans Fat Free",
+          "Mission Fajita Flour Tortillas, Small Size, 20 Count, Trans Fat Free",
+          "Siete, Cassava Grain Free Flour Tortillas. Vegan, Paleo and Gluten Free Tortillas. (1-Pack, 8 Tortillas)",
+          "Mission Soft Taco Homestyle Flour Tortillas, Medium Size, 10 Count",
+          "Mission Street Taco Flour Tortillas, Mini Soft Taco Size, 12 Count",
+          "Mission Fajita Grande Flour Tortillas, Large Size, 10 Count",
+          "Mission Carb Balance Flour Tortillas, Burrito Size, 6 Count",
+          "Mission Carb Balance Soft Taco Flour Tortillas, 8 Count, Low Carb, Keto, High Fiber, No Sugar",
+          "Mission Fajita Homestyle Flour Tortillas, Large Size, 16 Count",
+          "Siete, Chickpea Flour Tortillas, 7 Oz",
+          "Siete, Almond Flour Tortillas, 7 Ounce (Pack of 1), 8 ct (Frozen)",
+          "Old El Paso, Flour Tortillas for Burritos, Meal Prep, 8 Ct, 11 oz",
+          "Guerrero, Caseras Fajita Flour Tortillas, Trans Fat Free, Authentic, Small Size, 20 Count",
+          "Mission White Corn Tortillas, Small Soft Taco Size, 30 Count, Gluten Free, Trans Fat Free",
+          "Guerrero, Riquisimas Soft Taco Flour Tortillas, Trans Fat Free, Authentic, Medium Size, 10 Count",
+          "Mission Carb Balance Flour Tortillas, Fajita Size, 8 Count",
+          "Mission Foods, Zero Net Carb Flour Tortilla",
+          "egglife, Roasted Garlic & Herb Egg White Wrap - (6 Count) - Refrigerated, Flourless, Gluten Free Wraps - Low Carb Tortilla Alternative",
+          "Mission Soft Taco Whole Wheat Tortillas, Medium Size, 10 Count, Whole Grain",
+          "Old El Paso, Flour Tortillas for Soft Tacos and Fajitas, Meal Prep, 10 Ct, 8.2 oz",
+          "Mission Carb Balance Chipotle Flour Tortillas, Fajita Size, 8 Count",
+          "Mission Carb Balance Soft Taco Whole Wheat Tortillas, Medium Size, 8 Count, Low Carb, Keto, Whole Grains, High Fiber, No Sugar"
+        ]
+      }
+    ],
+    "wegmans": [
+      {
+        "query": "seasonal",
+        "queryProvenance": "capture-config",
+        "fixtures": [
+          "search-results-out-of-stock.html"
+        ],
+        "products": [
+          "Kentucky Bourbon Seasonal Ale 4/12oz bottles"
+        ]
+      },
+      {
+        "query": "wegmans sour cream",
+        "queryProvenance": "capture-config",
+        "fixtures": [
+          "search-results-product-in-cart.html",
+          "search-results-sour-cream.html",
+          "search-results-stepper-open.html"
+        ],
+        "products": [
+          "Wegmans Sour Cream Cookies, 8 Pack",
+          "Wegmans Sour Cream",
+          "Wegmans Sour Cream & Onion Flavored Potato Chips",
+          "Wegmans Light Sour Cream",
+          "Wegmans Sour Cream & Onion Flavored Baked Potato Crisps",
+          "Wegmans Organic Sour Cream",
+          "Wegmans Sour Cream, FAMILY PACK",
+          "Wegmans Frozen Sour Cream & Chive Pierogies",
+          "Wegmans Sour Cream & Onion Wavy Potato Chips",
+          "Wegmans Organic Extra Firm Tofu",
+          "Wegmans Classic Original Hummus",
+          "Wegmans Tzatziki Dip",
+          "Wegmans Organic Super Firm Tofu",
+          "Wegmans Organic Firm Tofu",
+          "Wegmans Classic Original Hummus, FAMILY PACK",
+          "Wegmans Roasted Red Pepper Hummus",
+          "Wegmans Classic Original Hummus Topped with Chickpeas, Sesame Seeds & Roasted Garlic",
+          "Wegmans Caramelized Onion Hummus",
+          "Wegmans Organic Original Hummus",
+          "Wegmans Roasted Pine Nuts Hummus Topped with Roasted Pine Nuts",
+          "Wegmans Baba Ghanouj",
+          "Wegmans Everything Bagel Seasoned Hummus",
+          "Wegmans Cilantro Jalapeno Hummus",
+          "Wegmans Roasted Garlic Hummus, FAMILY PACK",
+          "Wegmans Olive Hummus Topped with Kalamata and Green Olives",
+          "Wegmans Medium Salsa",
+          "Wegmans Roasted Garlic Hummus"
+        ]
+      },
+      {
+        "query": "la banderita burrito grande flour tortillas, extra large",
+        "queryProvenance": "capture-config",
+        "fixtures": [
+          "search-results-tortillas.html"
+        ],
+        "products": [
+          "La Banderita Burrito Grande Flour Tortillas, Extra Large"
+        ]
+      }
+    ]
+  },
+  "excluded": {
+    "heb/search-results-stale-hoisin.html": "Deliberately stale capture: the page title is a \"cilantro\" search but the single tile is Lee Kum Kee Hoisin Sauce left over from the previous query. The query→result link is broken by design (it exists to test staleness detection), so it is not a labellable retrieval.",
+    "walmart/search-results-with-variants.html": "A product detail page, not a search page — its 23 tiles are \"similar items\" carousels with no query behind them.",
+    "amazon-fresh/search-results-qty-error.html": "Hand-trimmed 2KB fragment holding a \"Quantity not updated\" error string, no products.",
+    "albertsons/search-results-collapsed-bubble.html": "Hand-trimmed 1KB fragment of a single qty bubble, no product tiles.",
+    "wegmans/_synthetic-tile.html": "Synthetic tile authored for a selector test — not a real store response."
+  }
+}

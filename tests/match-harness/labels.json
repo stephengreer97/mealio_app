@@ -1,0 +1,304 @@
+{
+  "$schema": "see README.md — rubric, and how to edit this file",
+  "rubric": [
+    "A product is ACCEPTABLE for a query if a shopper who wrote that line on a meal plan would",
+    "be satisfied to find it in their cart. Applied as:",
+    "1. It must be the food the query names. Sour-cream-flavoured chips are not sour cream.",
+    "2. Brand is free when the query names none, and BINDING when it names one.",
+    "3. Size, count, packaging and multipack are free unless the query names one.",
+    "4. An attribute in the query is binding: \"flour\" excludes corn, \"light\" excludes regular.",
+    "5. An attribute NOT in the query that changes what the food is, or how it eats, makes the",
+    "   product unacceptable: light/low-fat, lactose-free, gluten-free, low-carb, whole wheat,",
+    "   flavoured, dairy-free. Organic is the deliberate exception — it is the same food.",
+    "6. Where a call is genuinely debatable, the conservative (unacceptable) reading wins.",
+    "See \"debatable\" below for the calls that could reasonably go the other way."
+  ],
+  "debatable": [
+    "Light / low-fat sour cream for an unqualified \"sour cream\": marked UNACCEPTABLE. Arguable — the meal still works, and the store shelves them together.",
+    "Mexican/Salvadoran crema for \"sour cream\": marked UNACCEPTABLE even where the store title says \"Sour Cream\". Crema is thinner and saltier.",
+    "Organic for an unqualified query: marked ACCEPTABLE. It is the same food, but it costs the shopper more than they asked to spend.",
+    "Whole wheat / Carb Balance / Zero Net Carbs tortillas for \"tortillas\": marked UNACCEPTABLE. They are tortillas, and the meal would work.",
+    "Corn tortillas for an unqualified \"tortillas\": marked ACCEPTABLE. A recipe usually means one or the other, but the query does not say which.",
+    "Greek yogurt for \"yogurt\" (heb|yogurt): marked ACCEPTABLE for the plain whole-milk one. Different texture from regular yogurt.",
+    "Case packs (\"12 per case\") for a single-tub query: marked UNACCEPTABLE.",
+    "Lactaid sour cream: marked UNACCEPTABLE as a dietary variant, though it is the same food to most shoppers.",
+    "Pre-packaged 1 lb / 2 lb coffee bags for \"bulk coffee\": marked UNACCEPTABLE. Only true sold-by-weight items counted.",
+    "\"H-E-B Orange Pepper Seasoned Chicken Thigh For Fajitas\" and the Spicy variant: marked UNACCEPTABLE as unrequested flavours of the searched product."
+  ],
+  "queries": {
+    "heb|HEB season chicken thighs for fajitas": {
+      "reviewedProductCount": 19,
+      "productsFingerprint": "8898f596b6f4",
+      "acceptable": [
+        "H-E-B Seasoned Chicken Thighs for Fajitas - Texas-Size Pack, Avg. 3.85 lbs",
+        "H-E-B Seasoned Boneless Skinless Chicken Thighs for Fajitas, Avg. 2.2 lbs"
+      ],
+      "notes": "A mistyped product-name search (\"season\" for \"Seasoned\") from the search-and-add flow. Acceptable = the raw H-E-B seasoned chicken-thigh fajita meat. Excluded: the Spicy and Orange Pepper flavour variants (unrequested flavour), the fully-cooked/frozen versions (a different product), everything made from breast rather than thigh, and the diced taco/lettuce-wrap packs."
+    },
+    "heb|sour cream": {
+      "reviewedProductCount": 38,
+      "productsFingerprint": "724875a2771a",
+      "acceptable": [
+        "H-E-B Regular Sour Cream, 16 oz",
+        "H-E-B Regular Sour Cream, 8 oz",
+        "H-E-B Regular Sour Cream, 24 oz",
+        "Daisy Squeeze Sour Cream , 14 oz",
+        "Daisy Sour Cream, 16 oz",
+        "Daisy Sour Cream, 8 oz",
+        "Hill Country Fare Regular Sour Cream, 16 oz",
+        "Daisy Sour Cream, 24 oz",
+        "Daisy Sour Cream, 3 lb"
+      ],
+      "notes": "Plain full-fat sour cream, any brand or size. Light/low-fat excluded. Mexican and Salvadoran crema excluded — it is a thinner, saltier product even where the store titles it \"Sour Cream\". Dips, powders, chips and dairy-free analogues excluded."
+    },
+    "heb|mission flour tortillas": {
+      "reviewedProductCount": 22,
+      "productsFingerprint": "10adb823e89e",
+      "acceptable": [
+        "Mission Super Soft Flour Tortillas, Fajita Size, 20 ct",
+        "Mission Soft & Fluffy Homestyle Flour Tortillas, Soft Taco Size, 10 ct",
+        "Mission Super Soft Flour Tortillas, Street Taco Size, 12 ct",
+        "Mission Soft & Fluffy Homestyle Flour Tortillas, Soft Taco Size, 22 ct",
+        "Mission Super Soft Flour Tortillas, Fajita Size, 40 ct",
+        "Mission Soft & Fluffy Homestyle Flour Tortillas, Fajita Size, 16 ct",
+        "Mission Super Soft Flour Tortillas, Fajita Grande Size, 10 ct",
+        "Mission Super Soft Flour Tortillas, Burrito Size, 8 ct"
+      ],
+      "notes": "Brand is binding: Mission only. Plain flour tortillas of any size/count. Carb Balance, Zero Net Carbs, Gluten Free, Butter, spinach/tomato wraps excluded as unrequested variants."
+    },
+    "heb|bulk coffee": {
+      "reviewedProductCount": 40,
+      "productsFingerprint": "7558eb8a2c97",
+      "acceptable": [
+        "CAFE Olé by H-E-B Panama Medium Roast Whole Bean Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Whole Bean Medium Roast Sumatra Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Whole Bean Dark Roast Espresso Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Whole Bean Medium Roast Hawaiian Blend Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Whole Bean Medium Roast Costa Rican Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Taste of Austin Medium Roast Whole Bean Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Whole Bean Medium Roast Moka Java Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Whole Bean Medium Roast Ethiopian Yirgacheffe Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Whole Bean Medium Roast Columbian Supremo Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Whole Bean Medium Roast Breakfast Blend Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Whole Bean Dark Roast French Roast Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Whole Bean Medium Roast Mexican Altura Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Houston Blend Medium Roast Whole Bean Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Taste of the Hill Country Medium Roast Whole Bean Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Rio Grande Especial Medium Roast Whole Bean Bulk Coffee, lb",
+        "CAFE Olé by H-E-B Taste of San Antonio Medium Roast Whole Bean Bulk Coffee, lb",
+        "Donut Shop Original Coffee, lb",
+        "Donut Shop Dark Coffee, Sold by the Pound"
+      ],
+      "notes": "Acceptable = coffee actually sold by weight from the bulk bin — HEB marks those with a \", lb\" / \"Sold by the Pound\" suffix and a weight dropdown. Pre-packaged 1 lb and 2 lb bags excluded even though the weight matches. Roast and ORIGIN are not constrained (Sumatra, Breakfast Blend, French Roast and the Texas regional blends all stay): a roast or an origin is not an added flavour, and a shopper who wrote \"bulk coffee\" would take any of them. Added FLAVOURS (Irish Cream, hazelnut, pecan, vanilla, cinnamon, Snickernut) and DECAF are excluded, per rubric rule 5 and debatable item #10, which rejects flavoured chicken on exactly these grounds. The earlier note said flavour and decaf were unconstrained, which contradicted both — corrected 2026-08-05 on review."
+    },
+    "heb|avocado": {
+      "reviewedProductCount": 60,
+      "productsFingerprint": "2876549b09cc",
+      "acceptable": [
+        "Fresh Large Hass Avocado, Each",
+        "Fresh Small Hass Avocado, Each",
+        "H-E-B Fresh Hass Avocados, 5 ct",
+        "Fresh Jumbo Hass Avocado, Each",
+        "H-E-B Fresh Mini Hass Avocados, 6 ct",
+        "H-E-B Organics Fresh Hass Avocados, 3 ct bag",
+        "Fresh Tropical Avocado, Each"
+      ],
+      "notes": "Whole fresh avocados of any size or count, Hass or tropical, organic included. Excluded: avocado oil, guacamole, avocado spread, frozen avocado pieces, sushi, and the kitchen gadgets that share the word."
+    },
+    "heb|yogurt": {
+      "reviewedProductCount": 3,
+      "productsFingerprint": "7b5b3727e01e",
+      "acceptable": [
+        "H-E-B 17g Protein Whole Milk Greek Yogurt - Plain, 32 oz"
+      ],
+      "notes": "Only 3 tiles survive in this trimmed fixture. Plain full-fat yogurt is acceptable; the vanilla-flavoured low-fat and the 0% nonfat are not."
+    },
+    "walmart|butterball gluten-free oven roasted turkey breast, deli-sliced": {
+      "reviewedProductCount": 10,
+      "productsFingerprint": "28b1037b40b9",
+      "acceptable": [
+        "Butterball Gluten-Free Oven Roasted Turkey Breast, Deli-Sliced"
+      ],
+      "notes": "A full product name, i.e. the search-and-add flow re-finding an item the user already picked. Only that exact product is acceptable — another brand of oven-roasted turkey is not what they chose."
+    },
+    "walmart|sour cream": {
+      "reviewedProductCount": 39,
+      "productsFingerprint": "90a17320aac9",
+      "acceptable": [
+        "Great Value All Natural Sour Cream, 8 oz",
+        "Daisy Pure and Natural Sour Cream, 14 oz Pouch (Refrigerated)",
+        "Great Value Original Sour Cream, 16 oz Tub",
+        "Daisy Pure and Natural Sour Cream, 16 oz (1 lb) Tub (Refrigerated)",
+        "Daisy Pure and Natural Sour Cream, 8 oz Tub (Refrigerated)",
+        "Great Value Original Sour Cream, 24 oz Tub",
+        "Daisy Pure and Natural Sour Cream, 24 oz (1.5 lb) Tub (Refrigerated)",
+        "Daisy Pure and Natural Sour Cream, 48 oz (3 lb) Tub (Refrigerated)",
+        "Great Value Original Sour Cream, 48 oz",
+        "Great Value Sour Cream 8 Oz",
+        "Lala Sour Cream 24 Oz"
+      ],
+      "notes": "Same rubric as heb|sour cream. \"Lala Sour Cream 24 Oz\" is accepted on the title as written; the LALA items that say \"Crema Mexicana\" are not. The 12-per-case pack is excluded — a shopper buying one tub of sour cream did not ask for a case."
+    },
+    "walmart|mission flour tortillas": {
+      "reviewedProductCount": 36,
+      "productsFingerprint": "7c357a94244f",
+      "acceptable": [
+        "Mission Super Soft Flour Tortillas, Soft Taco Size, 10 Count",
+        "Mission Super Soft Flour Tortillas, Fajita Size, 20 Count",
+        "Mission Super Soft Flour Tortillas, Burrito Size, 8 Count",
+        "Mission Super Soft Flour Tortillas, Soft Taco Size, 20 Count",
+        "Mission Soft & Fluffy Homestyle Flour Tortillas, Soft Taco Size, 22 Count",
+        "Mission Soft & Fluffy Homestyle Flour Tortillas, Soft Taco Size, 10 Count",
+        "Mission Soft & Fluffy Homestyle Flour Tortillas, Fajita Size, 16 Count",
+        "Mission Super Soft Flour Tortillas, Street Tacos Size, 12 Count",
+        "Mission Super Soft Flour Tortillas, Fajita Grande Size, 10 Count",
+        "Mission Super Soft Flour Tortillas, Fajita Size, 40 Count",
+        "Mission Super Soft Flour Tortillas, Burrito Size, 16 Count, 40 oz",
+        "Mission Super Soft Flour Tortillas, Burrito Size, 8 Count, 20 oz",
+        "Mission Super Soft Flour Tortillas, Fajita Size, 20 Count, 23 oz",
+        "Mission Flour Tortillas Large Burrito (16 ct.) (pack of 2)",
+        "Mission 6 Inch Fajita Flour Tortillas, 20 Count - 2 Pack",
+        "Mission Street Tacos Flour Tortillas - 4.5\", 11 oz, 12 Count - 2 Packs",
+        "Mission 8\" Soft Taco Flour Tortilla, 17.5 Ounce",
+        "Mission Burrito Flour Tortillas, Large Size, 16 Count, Trans Fat Free",
+        "Mission Soft Taco Flour Tortillas, Medium Size, 10 Count, Trans Fat Free",
+        "Mission Burrito Flour Tortillas, Large Size, 8 Count, Trans Fat Free"
+      ],
+      "notes": "Mission-brand plain flour tortillas, any size, count or multipack. Siete excluded (wrong brand). Carb Balance / Zero Net Carbs / Whole Wheat / Butter Flavored / Chipotle excluded."
+    },
+    "albertsons|Samuel Adams winter white ale": {
+      "reviewedProductCount": 5,
+      "productsFingerprint": "299af90ae39e",
+      "acceptable": [],
+      "notes": "UNANSWERABLE BY DESIGN. The out-of-stock fixture was captured by searching for a beer that the store does not carry; all five results are different Samuel Adams products. No product is acceptable, so this query only measures whether the scorer correctly declines to pick."
+    },
+    "albertsons|sour cream": {
+      "reviewedProductCount": 29,
+      "productsFingerprint": "480b5bec6f1f",
+      "acceptable": [
+        "Lucerne Sour Cream - 16 Oz",
+        "Lucerne Sour Cream - 24 Oz",
+        "Breakstones Sour Cream - 16 Oz",
+        "Daisy Sour Cream Pure & Natural Squeeze - 14 Oz",
+        "Daisy Sour Cream Pure & Natural - 8 Oz",
+        "Daisy Sour Cream Pure & Natural - 24 Oz",
+        "Daisy Sour Cream Pure & Natural - 48 Oz",
+        "Lucerne Sour Cream - 8 Oz",
+        "Breakstones All Natural Sour Cream - 8 Oz",
+        "Nancys Organic Sour Cream Cultured - 16 Oz"
+      ],
+      "notes": "Same rubric as heb|sour cream. Lactaid (lactose-free) excluded as an unrequested dietary variant; Nancy's Organic accepted (organic is still plain sour cream)."
+    },
+    "albertsons|tortillas": {
+      "reviewedProductCount": 40,
+      "productsFingerprint": "164f4ca98847",
+      "acceptable": [
+        "Mission Super Soft Flour Tortillas Soft Taco Size - 10 Count",
+        "La Banderita Tortillas Flour Large Soft Taco Bag 10 Count - 16 Oz",
+        "Mission Super Soft Flour Tortillas Fajita Size - 20 Count",
+        "Mission Super Soft Flour Tortillas Burrito Size - 8 Count",
+        "Signature SELECT Burrito Style Flour Tortillas 8 Count - 19.2 Oz",
+        "Signature SELECT  Soft Taco Style Flour Tortillas 10 Count - 15.5 Oz",
+        "Mission Super Soft White Corn Tortillas - 30 Count",
+        "La Banderita Tortillas Corn Bag 30 Count - 27.5 Oz",
+        "Goya Tortillas Flour Burritos Bag 8 Count - 20 Oz",
+        "Signature SELECT Fajita Flour Tortillas Size 10 Count - 10 Oz",
+        "Mission Super Soft Flour Tortillas Soft Taco Size - 20 Count",
+        "Signature SELECT Fajita Flour Tortillas Size 20 Count - 26 Oz",
+        "La Banderita 10 Inch Burrito Tortilla 8 Count - 20 Oz",
+        "Mission Super Soft Flour Tortillas Burrito Size - 16 Count",
+        "Signature SELECT White Corn Tortillas 30 Count - 25 Oz",
+        "Mission Super Soft Yellow Corn Tortillas - 30 Count"
+      ],
+      "notes": "Unqualified \"tortillas\" — flour or corn both acceptable, any brand, since the query constrains neither. Tortilla chips, taco shells, and flavoured/low-carb wraps excluded."
+    },
+    "aldi|sour cream": {
+      "reviewedProductCount": 18,
+      "productsFingerprint": "d17ea5df051b",
+      "acceptable": [
+        "Friendly Farms Sour Cream"
+      ],
+      "notes": "ALDI carries one plain sour cream (Friendly Farms). The Light version and Cacique Crema Mexicana are excluded; the rest of the page is chips, cottage cheese and cream cheese."
+    },
+    "aldi|tortillas": {
+      "reviewedProductCount": 20,
+      "productsFingerprint": "1f28e6c8681f",
+      "acceptable": [
+        "Pueblo Lindo Flour Tortillas",
+        "Pueblo Lindo Fajita Flour Tortillas, 20 ct",
+        "Pueblo Lindo Burrito Tortillas",
+        "Pueblo Lindo Yellow Corn Tortillas",
+        "Pueblo Lindo 6\" Corn Tortillas",
+        "La Banderita Family Pack Flour Tortillas",
+        "La Banderita Soft Taco Tortillas",
+        "La Abuela 6.5\" Refrigerated Flour Tortillas",
+        "La Banderita Burrito Grande",
+        "La Banderita Yellow Corn Tortillas-30 ct",
+        "La Banderita White Corn Tortillas-80 ct",
+        "La Banderita White Corn Tortillas-30 ct"
+      ],
+      "notes": "Unqualified \"tortillas\", flour or corn. \"La Banderita Burrito Grande\" is accepted — it is a burrito tortilla, the word \"tortilla\" is just missing from the title. Low-carb, hi-fiber, egg-white and spinach wraps excluded."
+    },
+    "amazon-fresh|seasonal": {
+      "reviewedProductCount": 21,
+      "productsFingerprint": "701c986fd60e",
+      "acceptable": [],
+      "notes": "UNANSWERABLE BY DESIGN. \"seasonal\" is the probe the capture script uses to find an out-of-stock tile, not an ingredient. No product is acceptable; the query measures whether the scorer declines to pick."
+    },
+    "amazon-fresh|sour cream": {
+      "reviewedProductCount": 16,
+      "productsFingerprint": "51e80bf27250",
+      "acceptable": [
+        "Daisy Sour Cream Pouch, 14 OZ",
+        "DAISY Sour Cream 8 Ounce",
+        "Daisy Sour Cream, 16 OZ",
+        "Amazon Grocery, Original Sour Cream,16 Oz",
+        "Good Culture Organic Sour Cream, 16 OZ",
+        "Organic Valley Organic Regular Sour Cream, 16 Oz",
+        "365 by Whole Foods Market, Sour Cream Organic, 16 Ounce",
+        "Amazon Grocery, Original Sour Cream, 8 Oz",
+        "Daisy, Regular Sour Cream, 24 oz"
+      ],
+      "notes": "Same rubric as heb|sour cream. Organic and store-brand accepted; light/low-fat, dips, heavy whipping cream and crème fraîche excluded."
+    },
+    "amazon-fresh|mission flour tortillas": {
+      "reviewedProductCount": 24,
+      "productsFingerprint": "0af77a441ed1",
+      "acceptable": [
+        "Mission Soft Taco Flour Tortillas, Medium Size, 10 Count, Trans Fat Free",
+        "Mission Burrito Flour Tortillas, Large Size, 8 Count, Trans Fat Free",
+        "Mission Soft Taco Flour Tortillas, Small Size, 20 Count, Trans Fat Free",
+        "Mission Fajita Flour Tortillas, Small Size, 20 Count, Trans Fat Free",
+        "Mission Soft Taco Homestyle Flour Tortillas, Medium Size, 10 Count",
+        "Mission Street Taco Flour Tortillas, Mini Soft Taco Size, 12 Count",
+        "Mission Fajita Grande Flour Tortillas, Large Size, 10 Count",
+        "Mission Fajita Homestyle Flour Tortillas, Large Size, 16 Count"
+      ],
+      "notes": "Mission-brand plain flour tortillas only. Mission White Corn excluded — the query says flour. Siete, Guerrero, Old El Paso, egglife excluded as wrong brand."
+    },
+    "wegmans|seasonal": {
+      "reviewedProductCount": 1,
+      "productsFingerprint": "2d24733d2b97",
+      "acceptable": [],
+      "notes": "UNANSWERABLE BY DESIGN, as amazon-fresh|seasonal. The single result is a beer."
+    },
+    "wegmans|wegmans sour cream": {
+      "reviewedProductCount": 27,
+      "productsFingerprint": "d07ee95b9b42",
+      "acceptable": [
+        "Wegmans Sour Cream",
+        "Wegmans Organic Sour Cream",
+        "Wegmans Sour Cream, FAMILY PACK"
+      ],
+      "notes": "Brand is binding (Wegmans) and so is the food. The store pads this result page with hummus and tofu, which is genuine store behaviour, not an extraction artefact. Light excluded; Organic and the FAMILY PACK size accepted."
+    },
+    "wegmans|la banderita burrito grande flour tortillas, extra large": {
+      "reviewedProductCount": 1,
+      "productsFingerprint": "aef2d3affc35",
+      "acceptable": [
+        "La Banderita Burrito Grande Flour Tortillas, Extra Large"
+      ],
+      "notes": "A full product name from the search-and-add flow; the one result is that exact product."
+    }
+  }
+}

@@ -11,6 +11,8 @@
     "test:unit": "jest tests/unit",
     "test:fixtures": "jest tests/fixture-tests",
     "test:live": "MEALIO_RUN_LIVE_TESTS=1 jest tests/live",
+    "match-harness": "tsx tests/match-harness/score.ts",
+    "match-harness:build": "tsx tests/match-harness/build-corpus.ts",
     "capture": "tsx tests/fixture-runners/capture-fixtures.ts",
     "capture:server": "tsx tests/fixture-runners/capture-server.ts",
     "postinstall": "patch-package"
