@@ -29,6 +29,7 @@
 
 import type { StoreScripts } from './index';
 import { buildExtractWorker } from './worker-search';
+import { AUTH_REDIRECT_URL_PATTERN } from './auth-urls';
 import { selectorsFor, storeConfig } from '../automation-config';
 
 // Every Albertsons banner runs the same storefront platform, so one selector set
@@ -92,15 +93,78 @@ export function albertsonsSearchQuery(name: string): string {
 
 // ── Login check ─────────────────────────────────────────────────────────────
 
+// Why this check is injected more than once per cart open, and what that costs:
+//
+// Albertsons bounces the storefront through …/bin/safeway/unified/sso/authorize
+// ?code=… and straight back (~5s). Both injection sites re-inject on every page
+// load, so without a guard the whole detection runs again on the landing page —
+// the ~5s the ticket (MEAL-42) calls "paying it twice".
+//
+// Three defences, in order of how much they save:
+//
+//   1. Bail on the interstitial. The authorize page has no site header, so the
+//      old script polled the full 3s for an account control, found none, and
+//      posted isLoggedIn:false — 3008ms spent to reach a WRONG answer that
+//      SilentLoginProbe latches for good. We now post no verdict at all from an
+//      auth URL and let the landing page decide.
+//   2. sessionStorage positive cache. A run that already concluded "logged in"
+//      records it, so the post-redirect re-injection answers in ~1ms instead of
+//      redoing the detection. Copied deliberately from the Wegmans check, which
+//      solves the identical MSAL bounce — including the rule that 'out' is NEVER
+//      cached, since caching it would defeat reinjectLoginCheckOnNav (the whole
+//      mechanism by which we notice the user finishing a sign-in).
+//   3. __albLoginPosted latch. Terminal, unlike __albLoginCheckActive (which is
+//      cleared before the background poll starts). Without it, a same-context
+//      re-injection both re-runs the detection and stacks a second 3-minute
+//      LOGIN_COMPLETE poll on top of the first.
 function buildCheckLoginScript(domain: string): string {
   const s = sel();
   return `(async function() {
+  // Terminal latch — survives re-injection within this JS context. A page
+  // reload clears it (that's intended: post-login re-checks must run fresh).
+  if (window.__albLoginPosted) return;
   if (window.__albLoginCheckActive) return;
-  window.__albLoginCheckActive = true;
-  try {
-    function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
+  // Never speak from an intermediate auth/SSO page. Kept in sync with the
+  // native-side skip in WebViewCartSheet/SilentLoginProbe via auth-urls.ts.
+  if (new RegExp(${JSON.stringify(AUTH_REDIRECT_URL_PATTERN)}).test(window.location.href)) {
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'skip_auth_redirect', url: window.location.href }));
+    return;
+  }
+
+  window.__albLoginCheckActive = true;
+
+  function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+
+  // The single terminal exit. Declared OUTSIDE the try so the catch below can
+  // call it without relying on Annex B block-function hoisting. Caches a
+  // positive BEFORE postMessage so that if the SSO bounce navigates away before
+  // RN receives the message, the next injection's fast path still has the answer.
+  function postStatus(isLoggedIn, error) {
+    if (window.__albLoginPosted) return;
+    window.__albLoginPosted = true;
+    window.__albLoginCheckActive = false;
+    if (isLoggedIn) {
+      try { sessionStorage.setItem('mealio_albertsons_login_state', 'in'); } catch(_) {}
+    }
+    var payload = { type: 'LOGIN_STATUS', isLoggedIn: isLoggedIn };
+    if (error) payload.error = error;
+    window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+  }
+
+  try {
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'start', url: window.location.href }));
+
+    // Fast path: an earlier injection in this WebView session already concluded
+    // logged-in. Answer immediately rather than re-running detection after the
+    // SSO round-trip.
+    try {
+      if (sessionStorage.getItem('mealio_albertsons_login_state') === 'in') {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'passive_decision', decided: 'loggedIn', via: 'sessionStorage' }));
+        postStatus(true);
+        return;
+      }
+    } catch(_) {}
 
     // Poll for the profile button (up to 3s, usually < 1s).
     var profileBtn = null;
@@ -134,32 +198,16 @@ function buildCheckLoginScript(domain: string): string {
       text: profileBtn ? profileBtn.textContent.trim().slice(0, 40) : null
     }));
 
-    // Passive login markers (NO click) — hunting for a signal we can read on the
-    // cold homepage so the hidden probe doesn't need the fragile click+wait.
-    try {
-      var __cookieHints = (document.cookie || '').split(';')
-        .map(function(c) { return c.trim().split('=')[0]; })
-        .filter(function(k) { return /sign|login|auth|user|account|session|abs|guest/i.test(k); });
-      var __lsHints = [];
-      for (var __li = 0; __li < localStorage.length; __li++) {
-        var __k = localStorage.key(__li);
-        if (/sign|login|auth|user|account|session|profile|name|guest|loyal/i.test(__k)) __lsHints.push(__k);
-      }
-      var __bodyLc = document.body.innerText.slice(0, 4000).toLowerCase();
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'LOGIN_DEBUG', step: 'passive_markers',
-        acctAria: profileBtn ? (profileBtn.getAttribute('aria-label') || '') : null,
-        acctText: profileBtn ? (profileBtn.textContent || '').trim().slice(0, 60) : null,
-        bodyHasSignIn: /sign in|log in/.test(__bodyLc),
-        bodyHasSignOut: /sign out|log out/.test(__bodyLc),
-        cookieHints: __cookieHints.slice(0, 25),
-        lsHints: __lsHints.slice(0, 25)
-      }));
-    } catch (e) {}
+    // NOTE: a 'passive_markers' diagnostic used to sit here — it dumped cookie
+    // names, every localStorage key, and document.body.innerText.slice(0, 4000)
+    // on EVERY run. It existed to hunt for the passive marker that the decision
+    // below now uses, so it was pure instrumentation left on the hot path, and
+    // the innerText read forces a full layout flush of a ~1.5MB homepage DOM
+    // before we're allowed to answer. Removed. If you need it again, put it
+    // behind a debug flag rather than back on the critical path.
 
     if (!profileBtn) {
-      window.__albLoginCheckActive = false;
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false }));
+      postStatus(false);
       return;
     }
 
@@ -181,8 +229,7 @@ function buildCheckLoginScript(domain: string): string {
       var acctIsMenu = /account\\s*menu|my\\s*account|account & lists|hi[, ]|welcome/i.test(acctName);
       if (acctIsSignIn || headerSignIn) {
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'passive_decision', decided: 'loggedOut', acctName: acctName.slice(0, 60) }));
-        window.__albLoginCheckActive = false;
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false }));
+        postStatus(false);
         for (var __pp = 0; __pp < 90; __pp++) {
           await wait(2000);
           var __pt = document.body.innerText.slice(0, 8000).toLowerCase();
@@ -195,8 +242,7 @@ function buildCheckLoginScript(domain: string): string {
       }
       if (acctIsMenu) {
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'passive_decision', decided: 'loggedIn', acctName: acctName.slice(0, 60) }));
-        window.__albLoginCheckActive = false;
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }));
+        postStatus(true);
         return;
       }
       // else: ambiguous → click check below.
@@ -207,30 +253,40 @@ function buildCheckLoginScript(domain: string): string {
     // Logged in: side panel opens with "Sign Out" option
     // Not logged in: sign-in form/page appears
     profileBtn.click();
-    await wait(1500);
 
-    // Check if body text contains "sign out" — only appears in the logged-in panel.
-    var bodyText = document.body.innerText.slice(0, 8000).toLowerCase();
-    var isLoggedIn = bodyText.includes('sign out') || bodyText.includes('log out');
+    // Wait for the flyout on the panel's own schedule instead of a flat 1500ms.
+    // Identical terminal condition ("sign out"/"log out" in body text) — we just
+    // stop asking the moment it's true, which is typically the first or second
+    // tick. Still gives up at 1500ms, so a panel that never renders behaves
+    // exactly as before. 250ms steps rather than something tighter because each
+    // read is an innerText call, and innerText flushes layout on a very large
+    // DOM; 6 reads is the point where polling stays cheaper than the wait it
+    // replaces.
+    var isLoggedIn = false;
+    var panelTicks = 0;
+    for (var wi = 0; wi < 6; wi++) {
+      await wait(250);
+      panelTicks++;
+      var bodyText = document.body.innerText.slice(0, 8000).toLowerCase();
+      if (bodyText.includes('sign out') || bodyText.includes('log out')) { isLoggedIn = true; break; }
+    }
 
     window.ReactNativeWebView.postMessage(JSON.stringify({
       type: 'LOGIN_DEBUG', step: 'after_click',
-      isLoggedIn: isLoggedIn
+      isLoggedIn: isLoggedIn, waitedMs: panelTicks * 250
     }));
 
     if (isLoggedIn) {
-      // Close the side panel and proceed.
+      // Answer FIRST, then tidy up: closing the panel is housekeeping for the
+      // search that follows, and the caller shouldn't wait 300ms to hear it.
+      postStatus(true);
       document.body.click();
-      await wait(300);
-      window.__albLoginCheckActive = false;
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }));
       return;
     }
 
     // Not logged in — post status so the webview becomes visible,
     // then poll in the background for login completion.
-    window.__albLoginCheckActive = false;
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false }));
+    postStatus(false);
 
     // Background poll: check every 2s for up to 3 minutes.
     // When user completes login, the page updates and "sign out" appears.
@@ -244,7 +300,7 @@ function buildCheckLoginScript(domain: string): string {
     }
   } catch(e) {
     window.__albLoginCheckActive = false;
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: false, error: String(e) }));
+    postStatus(false, String(e));
   }
 })();true;`;
 }

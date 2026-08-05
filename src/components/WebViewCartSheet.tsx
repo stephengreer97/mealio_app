@@ -20,6 +20,7 @@ import { Colors } from '../constants/colors';
 import { Meal } from '../types';
 import { STORES } from '../constants/stores';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
+import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
 import { useLoginPrewarm } from '../context/LoginPrewarmContext';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
 import { WEBVIEW_FINGERPRINT_SHIM } from '../lib/webview-fingerprint-shim';
@@ -1688,8 +1689,9 @@ export default function WebViewCartSheet({
       }
     }
     // Skip intermediate auth/SSO redirect pages — scripts injected here get killed
-    // when the page redirects to the final destination.
-    if (/\/sso\/|\/authorize[?/]|\/oidc\/|\/oauth[?/]|\/callback[?/]|\/authcallback\/|\/secur\/|\/frontdoor|\/RemoteAccessAuth|\/CIAM_/.test(url)) {
+    // when the page redirects to the final destination. Shared with
+    // SilentLoginProbe and the injected check scripts via auth-urls.ts.
+    if (isAuthRedirectUrl(url)) {
       console.log(`[Cart ${ts()}]`, 'onLoadEnd skipping auth redirect page');
       // Clear dedup so the next page load (post-login destination) triggers re-injection.
       lastLoadEndUrlRef.current = '';

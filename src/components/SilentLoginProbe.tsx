@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import WebView, { WebViewMessageEvent } from 'react-native-webview';
 import { getStoreScripts } from '../lib/webview-scripts';
+import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
 import { WEBVIEW_FINGERPRINT_SHIM } from '../lib/webview-fingerprint-shim';
 import {
@@ -28,7 +29,9 @@ import {
 // Reports exactly once via onResult (with an optional cart) or onError.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Login check: generous (Albertsons' click-based check can take 5–15s live).
+// Login check: generous. Kept at 20s as a safety net for a cold, heavy homepage
+// even though the Albertsons check itself is now passive (MEAL-42) rather than
+// the old click-and-wait that ran 5–15s.
 const LOGIN_TIMEOUT_MS = 20000;
 // Cart pre-capture: bounded separately; a miss just means no baseline (we still
 // report logged-in), so we don't want it to hang the queue.
@@ -140,14 +143,26 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onLoadEnd = useCallback(() => {
+  const onLoadEnd = useCallback((e: any) => {
     if (resolvedRef.current || !scripts) return;
+    const url = e?.nativeEvent?.url ?? '';
     if (phaseRef.current === 'login') {
       if (!timeoutRef.current) {
         armTimeout(LOGIN_TIMEOUT_MS, () => {
           console.log('[Prewarm] probe', storeId, 'timed out — no LOGIN_STATUS');
           finish('error');
         });
+      }
+      // Don't check on an intermediate auth/SSO page. Albertsons bounces through
+      // …/sso/authorize?code=… on the way to the storefront; that page carries no
+      // site header, so the check finds no account control, burns its full 3s
+      // poll, and posts isLoggedIn:false — which reportLogin/finish below latch
+      // permanently, showing a login wall to an already-signed-in user. Wait for
+      // the redirect to land instead; onLoadEnd fires again for the real page.
+      // (WebViewCartSheet has skipped these URLs for a while; the probe never did.)
+      if (isAuthRedirectUrl(url)) {
+        console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — skipping auth redirect page', url);
+        return;
       }
       // Re-inject on every load so a login/SSO redirect chain still gets checked
       // once it settles on the store page. Idempotent; posts once it has an answer.
