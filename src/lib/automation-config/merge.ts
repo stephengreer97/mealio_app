@@ -172,7 +172,8 @@ function mergeStore(
       case 'enabled':
       case 'forceSerialSearch':
       case 'cacheBustNav':
-      case 'spaSearch': {
+      case 'spaSearch':
+      case 'nextDataSearch': {
         const b = takeBoolean(path, value, warnings);
         if (b !== undefined) target[key] = b;
         break;

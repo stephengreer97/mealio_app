@@ -64,6 +64,12 @@ interface Candidate {
    *  dropdown, in order. Increments differ per product, so this drives the
    *  weight chooser + add (qty = the Nth option). */
   weightOptions?: number[];
+  /** Store's own product id, when the extractor can see one. Present on HEB
+   *  candidates read from __NEXT_DATA__ (MEAL-13); the DOM scrapers have no id in
+   *  the card markup and leave both of these undefined. Needed by MEAL-14. */
+  productId?: string | null;
+  /** Store's SKU id, same availability caveat as productId. */
+  skuId?: string | null;
 }
 
 interface SearchResult {
@@ -2430,7 +2436,14 @@ export default function WebViewCartSheet({
           // "our extractor's selectors broke", which look identical downstream.
           {
             const found = Array.isArray(msg.candidates) ? msg.candidates.length : 0;
-            const candidatesDetail = { count: found, storeUnavailable: !!msg.storeUnavailable };
+            // `source` says which extractor produced these ('next_data' | 'dom' on
+            // HEB, absent elsewhere). Recorded so the two can be compared in the
+            // funnel while MEAL-13's flag is rolling out.
+            const candidatesDetail = {
+              count: found,
+              storeUnavailable: !!msg.storeUnavailable,
+              source: msg.source ?? null,
+            };
             tel().record('search', 'ok', { itemIndex: searchIdxRef.current });
             if (found > 0) {
               tel().record('candidates', 'ok', { itemIndex: searchIdxRef.current, detail: candidatesDetail });

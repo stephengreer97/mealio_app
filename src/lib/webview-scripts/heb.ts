@@ -36,6 +36,18 @@ const SEL_FALLBACKS = {
 /** Live selectors as interpolatable JS literals (quotes included). */
 const sel = () => selectorsFor(SELECTOR_KEY, SEL_FALLBACKS);
 
+/**
+ * MEAL-13 flag: read candidates from `__NEXT_DATA__` instead of the DOM.
+ *
+ * Read through a FUNCTION for the same reason the selectors are (see the module
+ * header): the remote config lands after this module is imported, so a
+ * module-level const would freeze whatever the bundled default was at import
+ * time and a config push could never turn this on.
+ *
+ * Default false — the DOM extractor is the shipped, known-good path.
+ */
+const nextDataEnabled = () => storeConfig(SELECTOR_KEY).nextDataSearch === true;
+
 // ── Shared: find genuine search-result cards (skip carousels) ──────────────────
 //
 // HEB's search page layers several "product-card" components on top of the real
@@ -106,6 +118,199 @@ const hebWaitFreshFn = () => {
       waited += 200;
     }
     return { cards: cards, waitedMs: waited };
+  }
+`;
+};
+
+// ── Shared: read candidates out of __NEXT_DATA__ (MEAL-13) ────────────────────
+//
+// HEB is a Next.js app and ships the server-rendered search result set as JSON in
+// <script id="__NEXT_DATA__">. The list lives at
+//
+//   props.pageProps.layout.visualComponents[]  → the entry with
+//   __typename === 'SearchGridV2' (id 'searchGridV2:<uuid>')  → .items[]
+//
+// and on a search page that grid is the ONLY visual component: the "perfect
+// pairings" entity carousel and the sponsored two-panel rail that both render
+// data-component="product-card" in the DOM are client-fetched and appear nowhere
+// in this payload. So the contamination __hebFindCards() exists to filter out
+// cannot happen here — verified against every committed search fixture.
+//
+// WHAT THIS IS NOT: a replacement for the DOM. Three verified ways the payload is
+// not usable, each of which returns a reason and sends the caller back to
+// __hebFindCards():
+//
+//   1. ABSENT. Trimmed fixtures (and, presumably, some real renders) carry no
+//      __NEXT_DATA__ at all.
+//   2. STALE. __NEXT_DATA__ is the payload of the page's INITIAL server render and
+//      is NOT rewritten by an in-page SPA search. HEB runs with spaSearch: true, so
+//      after a client-side search the JSON still describes the PREVIOUS query while
+//      the DOM shows the current one. tests/fixtures/heb/search-results-out-of-
+//      stock.html is exactly this: the DOM is a "HEB season chicken thighs for
+//      fajitas" page whose __NEXT_DATA__ still says searchTerm "seasonal". We
+//      therefore require the payload's own search term to match the term in the
+//      URL, and treat any mismatch as stale.
+//   3. EMPTY. A grid with zero items is indistinguishable from a payload we failed
+//      to understand, so it is not trusted over a DOM read.
+//
+// Depends on __hebExpectedTerm/__hebNorm (interpolate HEB_WAIT_FRESH_FN first).
+const hebNextDataFn = () => {
+  const s = sel();
+  return `
+  function __hebNextDataGrid(nd) {
+    var vcs = nd && nd.props && nd.props.pageProps && nd.props.pageProps.layout
+      && nd.props.pageProps.layout.visualComponents;
+    if (!vcs || !vcs.length) return null;
+    for (var i = 0; i < vcs.length; i++) {
+      var c = vcs[i];
+      if (!c) continue;
+      // Match on __typename, with the id prefix as a second signal in case the
+      // GraphQL typename is renamed but the component id keeps its shape.
+      if (c.__typename === 'SearchGridV2') return c;
+      if (typeof c.id === 'string' && c.id.indexOf('searchGridV2:') === 0) return c;
+    }
+    return null;
+  }
+
+  // The name HEB's own ProductTitle component renders: the decoded display name,
+  // plus the SKU's customer-friendly size when the name doesn't already end with
+  // it. decodedDisplayName usually carries the size ("H-E-B Regular Sour Cream,
+  // 16 oz") but for each-priced produce it does not ("Fresh Large Hass Avocado"
+  // + size "Each" → the card reads "Fresh Large Hass Avocado, Each"). Getting
+  // this exactly right is not cosmetic: scoreMatch needs === 100 and the add
+  // scripts locate the card by comparing this string to the tile's title text.
+  function __hebNextDataName(item, sku) {
+    var name = item.decodedDisplayName || item.fullDisplayName || item.displayName || null;
+    if (!name) return null;
+    var size = sku && sku.customerFriendlySize;
+    if (size && name.slice(-String(size).length) !== String(size)) name = name + ', ' + size;
+    return name;
+  }
+
+  // The card's <img> requests the first carousel rendition at 360px; reproduce that
+  // exact URL so a JSON candidate is byte-identical to a DOM one — pinned by the
+  // DOM-vs-JSON fixture test.
+  //
+  // The MEDIUM fallback below is for the 7-of-336 fixture items that carry no
+  // carousel renditions, and is NOT verified against a card: all 7 sit either in a
+  // fixture whose DOM shows a different search or past the 8-candidate cap, so what
+  // HEB's own <img> uses for them is unknown. It is a different URL form (a
+  // prd-medium .jpg), so treat it as "an image of this product", not "the card's
+  // image"; imageUrl is display-only and never matched on.
+  function __hebNextDataImage(item) {
+    var car = item.carouselImageUrls;
+    if (car && car.length > 0 && typeof car[0] === 'string') return car[0] + '?hei=360&wid=360';
+    var imgs = item.productImageUrls || [];
+    for (var i = 0; i < imgs.length; i++) { if (imgs[i] && imgs[i].size === 'MEDIUM') return imgs[i].url || null; }
+    return imgs.length > 0 ? (imgs[0].url || null) : null;
+  }
+
+  // Prices are quoted per shopping context (ONLINE vs CURBSIDE, which differ by a
+  // few percent). The card shows the one for the session's own context, so pick by
+  // shoppingContext ("CURBSIDE_DELIVERY" → "CURBSIDE") and fall back to ONLINE.
+  // salePrice is what the tile displays; listPrice is the struck-through original.
+  function __hebNextDataPrice(item, sku) {
+    var cps = (sku && sku.contextPrices) || [];
+    if (!cps.length) return null;
+    var want = String(item.shoppingContext || '').split('_')[0];
+    var pick = null;
+    for (var i = 0; i < cps.length; i++) { if (cps[i] && cps[i].context === want) { pick = cps[i]; break; } }
+    if (!pick) for (var j = 0; j < cps.length; j++) { if (cps[j] && cps[j].context === 'ONLINE') { pick = cps[j]; break; } }
+    if (!pick) pick = cps[0];
+    var p = pick && (pick.salePrice || pick.listPrice);
+    var f = p && p.formattedAmount;
+    return (typeof f === 'string' && /\\d/.test(f)) ? f : null;
+  }
+
+  // Returns { candidates, why, gridItems }. candidates is null unless the payload was
+  // present, understood, for THIS search, and non-empty; "why" names the failure so
+  // the funnel can tell "HEB changed the JSON" from "the store has no match". It is
+  // deliberately NOT called "reason" — that name belongs to add-result reasons,
+  // which are required to have a telemetry code each (the taxonomy guard in
+  // tests/unit/automationTelemetry.test.ts scans these scripts for them).
+  function __hebNextDataCandidates(limit) {
+    var el = document.getElementById('__NEXT_DATA__');
+    if (!el) return { candidates: null, why: 'no_next_data' };
+    var nd = null;
+    try { nd = JSON.parse(el.textContent || 'null'); } catch (e) { return { candidates: null, why: 'parse_error' }; }
+    if (!nd) return { candidates: null, why: 'parse_error' };
+
+    var grid = __hebNextDataGrid(nd);
+    if (!grid) return { candidates: null, why: 'no_grid' };
+
+    // Freshness gate — see note 2 in the header comment. The term in the URL is
+    // the primary signal (it changes the instant an SPA search starts, which is
+    // exactly when the payload goes stale); the echoed <h1> is the fallback for a
+    // /search render that carries no q param. With NEITHER available we cannot
+    // prove the payload belongs to this search, so we decline to use it rather
+    // than risk serving the previous query's products.
+    //
+    // This is deliberately an equality test, not a contains: if HEB relaxes or
+    // spell-corrects the query, its searchTerm won't equal ours and we fall back
+    // to the DOM. Losing the fast path is fine; serving another search is not.
+    var expected = __hebNorm(__hebExpectedTerm());
+    var headerEl = document.querySelector(${s.searchHeader});
+    if (!expected) expected = __hebNorm(headerEl ? headerEl.textContent : '');
+    var embedded = __hebNorm(
+      (nd.props && nd.props.pageProps && nd.props.pageProps.searchTerm)
+      || (nd.query && nd.query.q) || ''
+    );
+    if (!expected) return { candidates: null, why: 'unverifiable', embeddedTerm: embedded };
+    if (embedded !== expected) {
+      return { candidates: null, why: 'stale', embeddedTerm: embedded, expectedTerm: expected };
+    }
+
+    var items = grid.items || [];
+    var out = [];
+    var seen = new Set();
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (!it || (it.__typename && it.__typename !== 'Product')) continue;
+      var sku = (it.SKUs || [])[0] || null;
+      var name = __hebNextDataName(it, sku);
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+
+      var wopts = [];
+      var wsi = (sku && sku.weightSelectionIncrements) || [];
+      for (var w = 0; w < wsi.length; w++) {
+        var wv = parseFloat(wsi[w]);
+        if (wv > 0) wopts.push(wv);
+      }
+
+      var prefs = null;
+      var ppl = it.purchasePreferenceList;
+      if (ppl && ppl.purchasePreferences && ppl.purchasePreferences.length > 0) {
+        prefs = [];
+        for (var p = 0; p < ppl.purchasePreferences.length; p++) {
+          var t = ppl.purchasePreferences[p] && ppl.purchasePreferences[p].text;
+          // Same {text, value} pair the DOM path builds from a modal row label —
+          // the add scripts match a row by comparing against .text.
+          if (t) prefs.push({ text: String(t).trim(), value: String(t).trim() });
+        }
+        if (prefs.length === 0) prefs = null;
+      }
+
+      out.push({
+        productName: name,
+        imageUrl: __hebNextDataImage(it),
+        // inventoryState is the payload's own stock verdict; the DOM equivalent is
+        // the Add button reading "Out of stock"/"Notify me".
+        outOfStock: !!(it.inventory && it.inventory.inventoryState !== 'IN_STOCK'),
+        preferences: prefs,
+        price: __hebNextDataPrice(it, sku),
+        isWeightItem: wopts.length > 0,
+        weightOptions: wopts,
+        // MEAL-14 wants these addressable; only this path can supply them (the
+        // card markup carries no id), so they are optional on the candidate.
+        productId: it.id != null ? String(it.id) : null,
+        skuId: sku && sku.id != null ? String(sku.id) : null,
+      });
+      if (limit > 0 && out.length >= limit) break;
+    }
+
+    if (out.length === 0) return { candidates: null, why: 'empty', gridItems: items.length };
+    return { candidates: out, why: 'ok', gridItems: items.length };
   }
 `;
 };
@@ -214,7 +419,12 @@ export const CHECK_LOGIN_SCRIPT = `(async function() {
 /**
  * Injected after navigating to a HEB search results page.
  * Extracts product candidates and reads preference options for applicable products.
- * Posts { type: 'SEARCH_RESULT', candidates: [...] }.
+ * Posts { type: 'SEARCH_RESULT', candidates: [...], source: 'next_data' | 'dom' }.
+ *
+ * Two extractors, one output shape. With `nextDataSearch` pushed on, the embedded
+ * __NEXT_DATA__ payload is read first (MEAL-13) and the DOM scrape runs only if
+ * that payload is absent, unparseable, stale, or empty. `source` rides on every
+ * SEARCH_RESULT so the two can be compared in telemetry before the DOM path goes.
  */
 export function buildExtractProductsScript(): string {
   const s = sel();
@@ -230,6 +440,26 @@ export function buildExtractProductsScript(): string {
   document.addEventListener('focusin', __noKbd, true);
 ${hebFindCardsFn()}
 ${hebWaitFreshFn()}
+${hebNextDataFn()}
+  // MEAL-13 fast path: the search result set is already in the page as JSON, so
+  // when the flag is on there is nothing to poll for and no carousel to filter.
+  // Any reason it can't be trusted falls through to the DOM extractor below.
+  if (${nextDataEnabled()}) {
+    var __nd = __hebNextDataCandidates(8);
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'EXTRACT_DEBUG', step: 'next_data', ndReason: __nd.why,
+      count: __nd.candidates ? __nd.candidates.length : 0, gridItems: __nd.gridItems || 0,
+      embeddedTerm: __nd.embeddedTerm, expectedTerm: __nd.expectedTerm, url: window.location.href
+    }));
+    if (__nd.candidates) {
+      document.removeEventListener('focusin', __noKbd, true);
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'SEARCH_RESULT', candidates: __nd.candidates, source: 'next_data'
+      }));
+      return;
+    }
+  }
+
   // Poll for the product grid instead of a single 800ms check. A warm webview
   // (sequential flow) paints cards almost immediately, but a freshly-mounted
   // worker webview (parallel flow) needs several seconds on its first load to
@@ -247,7 +477,7 @@ ${hebWaitFreshFn()}
 
   if (cards.length === 0) {
     document.removeEventListener('focusin', __noKbd, true);
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: [] }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: [], source: 'dom' }));
     return;
   }
 
@@ -377,7 +607,7 @@ ${hebWaitFreshFn()}
   }
 
   document.removeEventListener('focusin', __noKbd, true);
-  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: candidates }));
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: candidates, source: 'dom' }));
 })();true;`;
 }
 
