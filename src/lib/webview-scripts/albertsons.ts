@@ -30,14 +30,20 @@
 import type { StoreScripts } from './index';
 import { buildExtractWorker } from './worker-search';
 import { AUTH_REDIRECT_URL_PATTERN } from './auth-urls';
-import { selectorsFor, storeConfig } from '../automation-config';
+import { selectorsFor, storeConfig, PlatformId } from '../automation-config';
 
 // Every Albertsons banner runs the same storefront platform, so one selector set
 // covers all 15 brands and a single config push fixes them together.
 const SELECTOR_KEY = 'albertsons';
 
-// Compiled-in fallbacks. Kept in sync with BUNDLED_AUTOMATION_CONFIG so the
-// bundled config and this file can't silently disagree.
+// The sharing is now STRUCTURAL, not just conventional: the live selectors come
+// from platforms.albertsons in the automation config (MEAL-21), so a push there
+// reaches every banner even if someone later gives one its own store entry.
+const PLATFORM: PlatformId = 'albertsons';
+
+// Compiled-in fallbacks. Kept in sync with BUNDLED_AUTOMATION_CONFIG's
+// platforms.albertsons table so the bundled config and this file can't silently
+// disagree.
 const SEL_FALLBACKS = {
   atc: 'button[aria-label^="Add 1 unit of"]',
   bubble: 'button[data-qa="qty-stppr-bbl"]',
@@ -53,7 +59,7 @@ const SEL_FALLBACKS = {
 };
 
 /** Live selectors as interpolatable JS literals. Call inside a build function. */
-const sel = () => selectorsFor(SELECTOR_KEY, SEL_FALLBACKS);
+const sel = () => selectorsFor(SELECTOR_KEY, SEL_FALLBACKS, PLATFORM);
 
 // ── Domain map ──────────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 import { mergeAutomationConfig } from '../../src/lib/automation-config/merge';
-import { BUNDLED_AUTOMATION_CONFIG } from '../../src/lib/automation-config/schema';
+import { BUNDLED_AUTOMATION_CONFIG, PLATFORM_IDS } from '../../src/lib/automation-config/schema';
 
 // merge.ts is the trust boundary for config that arrives over the network and
 // then (a) drives timers and (b) gets interpolated into JavaScript injected into a
@@ -23,7 +23,13 @@ describe('mergeAutomationConfig', () => {
 
   it('never mutates the bundled config', () => {
     const before = JSON.parse(JSON.stringify(BUNDLED_AUTOMATION_CONFIG));
-    mergeAutomationConfig({ timeouts: { addMs: 30_000 }, stores: { heb: { selectors: { title: '.x' } } } });
+    mergeAutomationConfig({
+      timeouts: { addMs: 30_000 },
+      stores: { heb: { selectors: { title: '.x' } } },
+      // The platform table is SHARED by every banner on it, so a merge that
+      // mutated the bundled copy would leak across into later reads.
+      platforms: { instacart: { selectors: { atc: '.x' } } },
+    });
     expect(BUNDLED_AUTOMATION_CONFIG).toEqual(before);
   });
 
@@ -87,6 +93,27 @@ describe('mergeAutomationConfig', () => {
   });
 
   describe('selector safety (these values get interpolated into injected JS)', () => {
+    // The same gate is applied at BOTH levels a selector can be published at. A
+    // platform-level value reaches every store on the platform, so it is checked
+    // identically to a store-level one — the wider blast radius must not come with
+    // a looser gate. Each case below runs twice, once per site.
+    const sites = [
+      {
+        label: 'store-level',
+        path: 'stores.walmart.selectors.addBtn',
+        push: (v: unknown) => ({ stores: { walmart: { selectors: { addBtn: v } } } }),
+        read: (c: typeof BUNDLED_AUTOMATION_CONFIG) => c.stores.walmart.selectors!.addBtn,
+        bundled: BUNDLED_AUTOMATION_CONFIG.stores.walmart.selectors!.addBtn,
+      },
+      {
+        label: 'platform-level',
+        path: 'platforms.albertsons.selectors.atc',
+        push: (v: unknown) => ({ platforms: { albertsons: { selectors: { atc: v } } } }),
+        read: (c: typeof BUNDLED_AUTOMATION_CONFIG) => c.platforms.albertsons.selectors!.atc,
+        bundled: BUNDLED_AUTOMATION_CONFIG.platforms.albertsons.selectors!.atc,
+      },
+    ];
+
     const badSelectors: Array<[string, string]> = [
       ['single quote', "button[aria-label='x']"],
       ['double quote', 'button[aria-label="x"] "'],
@@ -100,24 +127,38 @@ describe('mergeAutomationConfig', () => {
       ['whitespace only', '   '],
     ];
 
-    for (const [name, value] of badSelectors) {
-      it(`rejects a selector containing ${name}`, () => {
-        const { config, warnings } = mergeAutomationConfig({
-          stores: { albertsons: { selectors: { atc: value } } },
+    for (const site of sites) {
+      describe(site.label, () => {
+        for (const [name, value] of badSelectors) {
+          it(`rejects a selector containing ${name}`, () => {
+            const { config, warnings } = mergeAutomationConfig(site.push(value));
+            expect(site.read(config)).toBe(site.bundled);
+            expect(warnings.join()).toMatch(/unsafe or empty selector/);
+            // The warning must name the exact path, or an operator cannot tell a
+            // refused platform push from a refused store push.
+            expect(warnings.join()).toContain(site.path);
+          });
+        }
+
+        it('accepts an ordinary attribute selector without quotes', () => {
+          const { config, warnings } = mergeAutomationConfig(
+            site.push('button[aria-label^=Add], .new-atc-class'),
+          );
+          expect(site.read(config)).toBe('button[aria-label^=Add], .new-atc-class');
+          expect(warnings).toEqual([]);
         });
-        expect(config.stores.albertsons.selectors!.atc)
-          .toBe(BUNDLED_AUTOMATION_CONFIG.stores.albertsons.selectors!.atc);
-        expect(warnings.join()).toMatch(/unsafe or empty selector/);
+
+        it('rejects a selector far over the length cap', () => {
+          const { config } = mergeAutomationConfig(site.push('.a'.repeat(400)));
+          expect(site.read(config)).toBe(site.bundled);
+        });
+
+        it('rejects a non-string value', () => {
+          const { config } = mergeAutomationConfig(site.push(42));
+          expect(site.read(config)).toBe(site.bundled);
+        });
       });
     }
-
-    it('accepts an ordinary attribute selector without quotes', () => {
-      const { config, warnings } = mergeAutomationConfig({
-        stores: { albertsons: { selectors: { atc: 'button[aria-label^=Add], .new-atc-class' } } },
-      });
-      expect(config.stores.albertsons.selectors!.atc).toBe('button[aria-label^=Add], .new-atc-class');
-      expect(warnings).toEqual([]);
-    });
 
     it('accepts a brand-new selector key', () => {
       // Lets us stage a selector for markup the current build doesn't reference
@@ -128,12 +169,11 @@ describe('mergeAutomationConfig', () => {
       expect(config.stores.albertsons.selectors!.futureThing).toBe('.thing');
     });
 
-    it('rejects a selector far over the length cap', () => {
+    it('accepts a brand-new selector key at platform level too', () => {
       const { config } = mergeAutomationConfig({
-        stores: { albertsons: { selectors: { atc: '.a'.repeat(400) } } },
+        platforms: { instacart: { selectors: { futureThing: '.thing' } } },
       });
-      expect(config.stores.albertsons.selectors!.atc)
-        .toBe(BUNDLED_AUTOMATION_CONFIG.stores.albertsons.selectors!.atc);
+      expect(config.platforms.instacart.selectors!.futureThing).toBe('.thing');
     });
   });
 
@@ -207,6 +247,139 @@ describe('mergeAutomationConfig', () => {
       const { config, warnings } = mergeAutomationConfig({ stores: [1, 2] });
       expect(config.stores).toEqual(BUNDLED_AUTOMATION_CONFIG.stores);
       expect(warnings.join()).toMatch(/stores.*expected an object/);
+    });
+  });
+
+  // ── MEAL-21: the platform discriminator ────────────────────────────────────
+  describe('stores.<id>.platform', () => {
+    it('accepts every platform this build knows', () => {
+      for (const platform of PLATFORM_IDS) {
+        const { config, warnings } = mergeAutomationConfig({ stores: { heb: { platform } } });
+        expect(config.stores.heb.platform).toBe(platform);
+        expect(warnings).toEqual([]);
+      }
+    });
+
+    it('refuses an UNRECOGNISED platform and leaves the bundled one in force', () => {
+      // The older-app-meets-newer-config case. A build that predates a platform
+      // must keep the inheritance it already had, not be pushed off it: refusing
+      // means ALDI stays on 'instacart' and keeps resolving those selectors.
+      const { config, warnings } = mergeAutomationConfig({
+        stores: { aldi: { platform: 'shipt' } },
+      });
+      expect(config.stores.aldi.platform).toBe('instacart');
+      expect(config.platforms.instacart.selectors!.atc)
+        .toBe(BUNDLED_AUTOMATION_CONFIG.platforms.instacart.selectors!.atc);
+      expect(warnings.join()).toMatch(/stores\.aldi\.platform: not a known platform/);
+    });
+
+    it('refuses a non-string platform', () => {
+      for (const bad of [42, true, null, {}, ['instacart']]) {
+        const { config, warnings } = mergeAutomationConfig({ stores: { aldi: { platform: bad } } });
+        expect(config.stores.aldi.platform).toBe('instacart');
+        expect(warnings.join()).toMatch(/not a known platform/);
+      }
+    });
+
+    it('a refused platform does not block valid siblings in the same entry', () => {
+      const { config } = mergeAutomationConfig({
+        stores: { aldi: { platform: 'nope', enabled: false } },
+      });
+      expect(config.stores.aldi.platform).toBe('instacart'); // refused
+      expect(config.stores.aldi.enabled).toBe(false);        // applied
+    });
+
+    it('can classify a store the bundle has never heard of', () => {
+      // The point of the field: pre-stage a banner so it inherits the platform
+      // table before the release that adds its adapter.
+      const { config, warnings } = mergeAutomationConfig({
+        stores: { publix: { platform: 'instacart' } },
+      });
+      expect(config.stores.publix).toEqual({ platform: 'instacart' });
+      expect(warnings).toEqual([]);
+    });
+  });
+
+  describe('the platforms section', () => {
+    it('applies a platform-level selector without touching any store entry', () => {
+      const { config, warnings } = mergeAutomationConfig({
+        platforms: { instacart: { selectors: { atc: '.platform-wide-atc' } } },
+      });
+      expect(config.platforms.instacart.selectors!.atc).toBe('.platform-wide-atc');
+      // Sibling keys in the same platform table survive.
+      expect(config.platforms.instacart.selectors!.inc)
+        .toBe(BUNDLED_AUTOMATION_CONFIG.platforms.instacart.selectors!.inc);
+      // And the store's own table is untouched — inheritance, not replacement.
+      expect(config.stores.aldi.selectors).toEqual(BUNDLED_AUTOMATION_CONFIG.stores.aldi.selectors);
+      expect(warnings).toEqual([]);
+    });
+
+    it('refuses an unknown platform id rather than banking a dead table', () => {
+      // Asymmetric with stores on purpose: nothing can attach to it, because
+      // stores.<id>.platform refuses the same unknown value.
+      const { config, warnings } = mergeAutomationConfig({
+        platforms: { shipt: { selectors: { atc: '.x' } } },
+      });
+      expect(config.platforms.shipt).toBeUndefined();
+      expect(config.platforms).toEqual(BUNDLED_AUTOMATION_CONFIG.platforms);
+      expect(warnings.join()).toMatch(/platforms\.shipt: not a known platform/);
+    });
+
+    it('configures a known platform that ships with no bundled table', () => {
+      // 'kroger' has no table in the binary; a push can still stage one.
+      const { config, warnings } = mergeAutomationConfig({
+        platforms: { kroger: { selectors: { atc: '.kroger-atc' } } },
+      });
+      expect(config.platforms.kroger.selectors!.atc).toBe('.kroger-atc');
+      expect(warnings).toEqual([]);
+    });
+
+    it('refuses a non-selector key at platform level', () => {
+      // A kill switch or URL here would take out every banner on the platform at
+      // once. Those stay per-store by design.
+      const { config, warnings } = mergeAutomationConfig({
+        platforms: { instacart: { enabled: false, storeUrl: 'https://evil.example' } },
+      });
+      expect((config.platforms.instacart as Record<string, unknown>).enabled).toBeUndefined();
+      expect((config.platforms.instacart as Record<string, unknown>).storeUrl).toBeUndefined();
+      expect(warnings.join()).toMatch(/platforms\.instacart\.enabled: unknown key/);
+      expect(warnings.join()).toMatch(/platforms\.instacart\.storeUrl: unknown key/);
+    });
+
+    it('ignores a non-object platform entry', () => {
+      const { config, warnings } = mergeAutomationConfig({ platforms: { instacart: 'nope' } });
+      expect(config.platforms.instacart).toEqual(BUNDLED_AUTOMATION_CONFIG.platforms.instacart);
+      expect(warnings.join()).toMatch(/platforms\.instacart: expected an object/);
+    });
+
+    it('ignores a non-object platforms section', () => {
+      const { config, warnings } = mergeAutomationConfig({ platforms: [1, 2] });
+      expect(config.platforms).toEqual(BUNDLED_AUTOMATION_CONFIG.platforms);
+      expect(warnings.join()).toMatch(/platforms: expected an object/);
+    });
+
+    it('ignores a platform selector table over the per-table cap', () => {
+      const selectors = Object.fromEntries(
+        Array.from({ length: 61 }, (_, i) => [`k${i}`, `.sel-${i}`]),
+      );
+      const { config, warnings } = mergeAutomationConfig({ platforms: { instacart: { selectors } } });
+      expect(config.platforms.instacart.selectors)
+        .toEqual(BUNDLED_AUTOMATION_CONFIG.platforms.instacart.selectors);
+      expect(warnings.join()).toMatch(/exceeds 60/);
+    });
+
+    it('ignores an oversized platforms section instead of warning per junk key', () => {
+      const platforms = Object.fromEntries(
+        Array.from({ length: 13 }, (_, i) => [`p${i}`, { selectors: { atc: '.x' } }]),
+      );
+      const { config, warnings } = mergeAutomationConfig({ platforms });
+      expect(config.platforms).toEqual(BUNDLED_AUTOMATION_CONFIG.platforms);
+      expect(warnings).toEqual(['platforms: 13 entries exceeds 12 — ignored']);
+    });
+
+    it('platforms is no longer an unknown top-level section', () => {
+      const { warnings } = mergeAutomationConfig({ platforms: {} });
+      expect(warnings).toEqual([]);
     });
   });
 
