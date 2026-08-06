@@ -9,6 +9,7 @@ import {
   __resetAutomationConfigForTests,
 } from '../../src/lib/automation-config';
 import { buildCartPageCountScript } from '../../src/lib/webview-scripts/cart-count';
+import { buildPresearchWorker } from '../../src/lib/webview-scripts/worker-search';
 import { storeFixtures } from './_helpers';
 import { FixtureRunner } from '../fixture-runners/runScript';
 
@@ -395,20 +396,149 @@ describe('HEB MEAL-13: the DOM extractor is still the fallback', () => {
     { url: 'https://www.heb.com/search?q=HEB%20season%20chicken%20thighs%20for%20fajitas' },
   );
 
-  // Nothing to check freshness against (no q in the URL, no echoed header) means we
-  // cannot prove the payload is for this search, so it goes unused. Same fixture,
-  // loaded with no URL: the header still disagrees, but this pins the "decline
-  // rather than guess" behavior at the gate's own level.
+  // No q in the URL means nothing independent to check the payload against, so it
+  // goes unused — even though this fixture's <h1> and payload agree.
+  //
+  // The <h1> is not an acceptable substitute, which is why it is not consulted:
+  // during an SPA search the h1 and the payload lag TOGETHER (the h1 still shows
+  // the previous term until the new results render, and the previous term is
+  // exactly what the payload holds), so "they agree" is not evidence of freshness.
+  // The DOM path can gate on the h1 because it POLLS it against the URL term; with
+  // no URL term there is nothing to poll against.
   itWithFixture(
     'search-results-sour-cream.html',
-    'uses the echoed header when the URL carries no search term',
+    'declines the payload when the URL carries no search term',
     async (runner) => {
-      // No `url` option → window.location has no ?q=. The <h1> "sour cream" is the
-      // only signal, and it agrees with the payload, so the JSON path is used.
+      // No `url` option → window.location has no ?q=.
       const result = await runExtractor(runner, await extractScriptWithNextData());
-      expect(result.source).toBe('next_data');
+      const dbg = runner.messagesOfType('EXTRACT_DEBUG').find((m) => m.step === 'next_data');
+      expect(dbg?.ndReason).toBe('unverifiable');
+      expect(result.source).toBe('dom');
+      // Still answers, off the DOM.
       expect(result.candidates[0].productName).toBe('H-E-B Regular Sour Cream, 16 oz');
     },
+  );
+
+  // What the h1 fallback actually let through, kept as the regression. This is the
+  // stale-payload fixture again — DOM showing chicken thighs, payload describing an
+  // earlier "seasonal" search — loaded with no q and with its h1 rewritten to the
+  // payload's term, which is what an SPA search looks like mid-flight. Trusting the
+  // h1 here served Morton Season-All for a chicken-thighs search with
+  // `why: 'ok'`; the gate must decline instead.
+  itWithFixture(
+    'search-results-out-of-stock.html',
+    'an <h1> that agrees with a stale payload is not evidence of freshness',
+    async (runner) => {
+      await runner.page.evaluate(() => {
+        const h1 = document.querySelector('#searchGridHeader');
+        if (h1) h1.textContent = '“seasonal”';
+      });
+      const result = await runExtractor(runner, await extractScriptWithNextData());
+      const dbg = runner.messagesOfType('EXTRACT_DEBUG').find((m) => m.step === 'next_data');
+      expect(dbg?.ndReason).toBe('unverifiable');
+      expect(result.source).toBe('dom');
+      const names: string[] = result.candidates.map((c: { productName: string }) => c.productName);
+      expect(names.some((n) => /season-all/i.test(n))).toBe(false);
+      expect(names.some((n) => /chicken thighs/i.test(n))).toBe(true);
+    },
+  );
+
+  // The `unverifiable` guard's own mutation test. Deleting `if (!expected) return
+  // …'unverifiable'…` used to leave every HEB test passing, because on the fixtures
+  // the payload's term is non-empty and the gate then declined as 'stale' anyway.
+  // This is the case that has no such safety net: a grid-bearing page where the
+  // payload's search term is EMPTY too, so '' !== '' is false and a guardless gate
+  // accepts 38 products with zero verification that they belong to this search.
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'declines a grid whose payload carries no search term either (no q, no term)',
+    async (runner) => {
+      await runner.page.evaluate(() => {
+        const el = document.getElementById('__NEXT_DATA__')!;
+        const nd = JSON.parse(el.textContent!);
+        nd.props.pageProps.searchTerm = '';
+        nd.query = {};
+        el.textContent = JSON.stringify(nd);
+      });
+      const result = await runExtractor(runner, await extractScriptWithNextData());
+      const dbg = runner.messagesOfType('EXTRACT_DEBUG').find((m) => m.step === 'next_data');
+      // The grid is intact and non-empty — 'no_grid'/'empty' would mean this test
+      // stopped exercising the guard.
+      expect(dbg?.ndReason).toBe('unverifiable');
+      expect(result.source).toBe('dom');
+    },
+  );
+
+  // An unexpected payload SHAPE must fall back, not kill the script. Next.js parses
+  // a repeated ?q= into an ARRAY, and __hebNorm's .toLowerCase() cannot take one:
+  // the throw escaped the extractor entirely, so the page posted NOTHING — no
+  // EXTRACT_DEBUG, no SEARCH_RESULT — and the item died on the engine's search
+  // timeout. "HEB changed the payload" is the exact risk this fallback exists for.
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'falls back to the DOM when reading the payload throws',
+    async (runner) => {
+      await runner.page.evaluate(() => {
+        const el = document.getElementById('__NEXT_DATA__')!;
+        const nd = JSON.parse(el.textContent!);
+        delete nd.props.pageProps.searchTerm;
+        nd.query = { q: ['sour cream', 'sour cream'] };  // what ?q=x&q=x parses to
+        el.textContent = JSON.stringify(nd);
+      });
+      const result = await runExtractor(runner, await extractScriptWithNextData());
+      const dbg = runner.messagesOfType('EXTRACT_DEBUG').find((m) => m.step === 'next_data');
+      expect(dbg?.ndReason).toBe('threw');
+      expect(dbg?.ndError).toMatch(/toLowerCase/);
+      // Fell back and answered off the DOM, like every other failure reason.
+      expect(result.source).toBe('dom');
+      expect(result.candidates[0].productName).toBe('H-E-B Regular Sour Cream, 16 oz');
+    },
+    { url: 'https://www.heb.com/search?q=sour%20cream' },
+  );
+
+  // A malformed NAME field reads as absent, never as a candidate. Fed
+  // `decodedDisplayName: {weird:1}` the reader used to emit a candidate whose
+  // productName was an OBJECT, tagged source: 'next_data' — something the DOM path
+  // cannot produce and that scoreMatch and the add scripts both call string methods
+  // on. Two items, for the two ways it must read as absent: item 0 still has a
+  // usable fullDisplayName (the next field answers), item 1 has no string name
+  // anywhere (no candidate at all).
+  //
+  // Both items' SKU size is blanked deliberately. With a size present the old code
+  // reached `name.slice(...)` and threw, which the new call-site catch would turn
+  // into an honest DOM fallback — a pass for the wrong reason. Blanking the size
+  // skips the append, which is the path that actually let the object THROUGH.
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'treats a non-string display name as absent instead of passing it through',
+    async (runner) => {
+      const skipped = await runner.page.evaluate(() => {
+        const el = document.getElementById('__NEXT_DATA__')!;
+        const nd = JSON.parse(el.textContent!);
+        const grid = nd.props.pageProps.layout.visualComponents.find(
+          (c: { __typename: string }) => c.__typename === 'SearchGridV2',
+        );
+        for (const it of [grid.items[0], grid.items[1]]) it.SKUs[0].customerFriendlySize = '';
+        grid.items[0].decodedDisplayName = { weird: 1 };  // fullDisplayName survives
+        const gone = grid.items[1].decodedDisplayName;
+        grid.items[1].decodedDisplayName = { weird: 1 };
+        grid.items[1].fullDisplayName = 42;
+        grid.items[1].displayName = null;
+        el.textContent = JSON.stringify(nd);
+        return gone as string;
+      });
+      const result = await runExtractor(runner, await extractScriptWithNextData());
+      // The payload is still perfectly usable — this is not a fallback test.
+      expect(result.source).toBe('next_data');
+      const names = result.candidates.map((c: { productName: unknown }) => c.productName);
+      // Nothing non-string reached a candidate.
+      for (const n of names) expect(typeof n).toBe('string');
+      // Item 0's fullDisplayName answered — the object read as absent, not as a name.
+      expect(names[0]).toBe('H-E-B Regular Sour Cream, 16 oz');
+      // Item 1 had no string name anywhere, so it produced no candidate.
+      expect(names).not.toContain(skipped);
+    },
+    { url: 'https://www.heb.com/search?q=sour%20cream' },
   );
 
   // The flag defaults OFF: a build with no config push must run the DOM extractor,
@@ -422,6 +552,70 @@ describe('HEB MEAL-13: the DOM extractor is still the fallback', () => {
       expect(result.source).toBe('dom');
     },
     { url: 'https://www.heb.com/search?q=sour%20cream' },
+  );
+});
+
+// The flag's whole purpose is a telemetry comparison between the two extractors
+// before the DOM path is removed, and both of the signals that comparison needs
+// have to survive the worker wrappers to reach RN. The parallel pools do most of
+// the searching, and the PRESEARCH worker navigates straight to the results URL —
+// a real navigation, i.e. where the JSON path fires most reliably — so a wrapper
+// that drops `source` blinds the rollout on its best evidence.
+describe('HEB MEAL-13: the rollout signals survive the worker wrappers', () => {
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'presearch worker forwards source + the extractor reason',
+    async (runner) => {
+      const wrapped = buildPresearchWorker(3, await extractScriptWithNextData());
+      runner.clearMessages();
+      await runner.inject(wrapped);
+      const result = await runner.waitForMessage('WORKER_RESULT', 15_000);
+      expect(result.workerId).toBe(3);
+      expect(result.phase).toBe('search');
+      expect(result.candidates.length).toBeGreaterThan(0);
+      expect(result.source).toBe('next_data');
+      // `why` travels on the re-tagged debug message, the only place RN can read it.
+      const dbg = runner.messagesOfType('WORKER_DEBUG').find((m) => m.step === 'next_data');
+      expect(dbg?.workerId).toBe(3);
+      expect(dbg?.ndReason).toBe('ok');
+    },
+    { url: 'https://www.heb.com/search?q=sour%20cream' },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'parallel-search worker forwards source + the extractor reason',
+    async (runner) => {
+      await extractScriptWithNextData();  // flip the flag, then build via the store hook
+      const wrapped = getStoreScripts('heb')!.buildWorkerScript!(2);
+      runner.clearMessages();
+      await runner.inject(wrapped);
+      const result = await runner.waitForMessage('WORKER_RESULT', 15_000);
+      expect(result.workerId).toBe(2);
+      expect(result.candidates.length).toBeGreaterThan(0);
+      expect(result.source).toBe('next_data');
+      const dbg = runner.messagesOfType('WORKER_DEBUG').find((m) => m.step === 'next_data');
+      expect(dbg?.ndReason).toBe('ok');
+    },
+    { url: 'https://www.heb.com/search?q=sour%20cream' },
+  );
+
+  // And the fallback case reports itself the same way through the wrapper: source
+  // 'dom' with the reason that sent it there, which is what separates "HEB removed
+  // the payload" from "the freshness gate declined" in the funnel.
+  itWithFixture(
+    'search-results-out-of-stock.html',
+    'a wrapped worker reports source=dom with the reason it fell back',
+    async (runner) => {
+      const wrapped = buildPresearchWorker(0, await extractScriptWithNextData());
+      runner.clearMessages();
+      await runner.inject(wrapped);
+      const result = await runner.waitForMessage('WORKER_RESULT', 15_000);
+      expect(result.source).toBe('dom');
+      const dbg = runner.messagesOfType('WORKER_DEBUG').find((m) => m.step === 'next_data');
+      expect(dbg?.ndReason).toBe('stale');
+    },
+    { url: 'https://www.heb.com/search?q=HEB%20season%20chicken%20thighs%20for%20fajitas' },
   );
 });
 

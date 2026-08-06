@@ -18,6 +18,11 @@
  *  - Overrides ReactNativeWebView.postMessage *before* the extract runs, so the
  *    SEARCH_RESULT it eventually posts is re-emitted as WORKER_RESULT with the
  *    baked-in workerId (and its candidates preserved).
+ *  - Forwards `source` — which extractor produced the candidates (HEB's
+ *    'next_data' | 'dom', MEAL-13). Dropping it here would blind the rollout
+ *    comparison on exactly the flows that do the most searching: a wrapper that
+ *    forwards only `candidates` makes the funnel's candidatesDetail.source
+ *    look empty for every parallel search, which reads as "the flag isn't on".
  *  - Swallows the extract's debug/other messages so 5 concurrent workers don't
  *    flood the bridge.
  *  - Guards against double-posting if the page fires the injection twice.
@@ -100,7 +105,7 @@ export function buildPresearchWorker(workerId: number, extractScript: string): s
       if (m && m.type === 'SEARCH_RESULT') {
         if (postedSearch) return;
         postedSearch = true;
-        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, phase: 'search', candidates: m.candidates || [], storeUnavailable: !!m.storeUnavailable }));
+        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, phase: 'search', candidates: m.candidates || [], source: m.source || null, storeUnavailable: !!m.storeUnavailable }));
         return;
       }
       if (m && (m.type === 'ADD_RESULT' || m.type === 'SEARCH_AND_ADD_RESULT')) {
@@ -135,7 +140,7 @@ export function buildExtractWorker(workerId: number, extractScript: string): str
       if (m && m.type === 'SEARCH_RESULT') {
         if (posted) return;
         posted = true;
-        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, candidates: m.candidates || [], storeUnavailable: !!m.storeUnavailable }));
+        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, candidates: m.candidates || [], source: m.source || null, storeUnavailable: !!m.storeUnavailable }));
         return;
       }
       // Forward the extractor's diagnostic messages (tagged with the worker

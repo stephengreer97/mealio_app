@@ -55,7 +55,7 @@ for "not applicable".
 | Field | Example | Note |
 | --- | --- | --- |
 | `items` | 22–60 products | One page of results. **Capped at 60** — the two 60-item fixtures are truncated pages, not complete result sets |
-| `total` | `38`, and `1962` for a 60-item page | The FULL result count, which equals `items.length` only when the results fit one page. Do not read it as "how many items are in this array" |
+| `total` | `22`–`1962` (`38` on the sour-cream page; the two 60-item pages report `1962` and `106`) | The FULL result count, which equals `items.length` only when the results fit one page. Do not read it as "how many items are in this array", and do not read a capped page as implying a large `total` — how far it exceeds 60 is just how broad the query was |
 | `suggestedText` | `{ text: null, highlighted: null, reason: null }` | Spell-correction slot; null in all 8 |
 | `relaxedResults`, `resultsOverrideApplied`, `resultsTitleOverride` | | Merchandising overrides |
 | `filters`, `categoryFilters`, `categoryNavigations`, `parentCategory`, `sortOptions` | | Facet UI |
@@ -140,9 +140,12 @@ session's own purchase history), `analyticsProductProperties` (`isCrossSell`,
 ## The gap: no nutrition
 
 **There is no nutrition data in this payload.** No nutrition, allergen, ingredient
-statement, serving size, or calorie field appears on any of the 336 products — the
-only `nutrition` matches anywhere in a fixture are storefront nav links
-("Sports nutrition", "Nutrition Services") in the DOM, outside `__NEXT_DATA__`.
+statement, serving size, or calorie field appears on any of the 336 products.
+
+The word does occur elsewhere in the captures, never as product data: storefront
+nav links ("Sports nutrition", "Nutrition Services") in the DOM, and — inside
+`__NEXT_DATA__`, on the two home fixtures — a coupon campaign title ("Coca-Cola
+Love of Summer - Nutrition May – Jun 2026"). Both are copy, not a field.
 
 So MEAL-35's nutrition ask is **not** closeable from a search page. It would need
 either the product-detail page's own payload (`/product-detail/<slug>/<id>`, not

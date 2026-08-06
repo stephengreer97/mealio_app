@@ -136,7 +136,7 @@ const hebWaitFreshFn = () => {
 // in this payload. So the contamination __hebFindCards() exists to filter out
 // cannot happen here — verified against every committed search fixture.
 //
-// WHAT THIS IS NOT: a replacement for the DOM. Three verified ways the payload is
+// WHAT THIS IS NOT: a replacement for the DOM. Four verified ways the payload is
 // not usable, each of which returns a reason and sends the caller back to
 // __hebFindCards():
 //
@@ -150,12 +150,21 @@ const hebWaitFreshFn = () => {
 //      fajitas" page whose __NEXT_DATA__ still says searchTerm "seasonal". We
 //      therefore require the payload's own search term to match the term in the
 //      URL, and treat any mismatch as stale.
-//   3. EMPTY. A grid with zero items is indistinguishable from a payload we failed
+//   3. UNVERIFIABLE. No q in the URL means nothing independent to check the
+//      payload's own search term against, so it goes unused (see the gate below).
+//   4. EMPTY. A grid with zero items is indistinguishable from a payload we failed
 //      to understand, so it is not trusted over a DOM read.
 //
+// A fifth, THREW, is handled at the call site rather than here: every field read
+// below assumes the shapes documented in docs/heb-next-data-search-payload.md, and
+// "HEB changed the payload" is precisely the risk this fallback exists for. A
+// TypeError from an unexpected shape must land on the DOM path like any other
+// failure, not kill the injected script and strand the run on its search timeout.
+//
 // Depends on __hebExpectedTerm/__hebNorm (interpolate HEB_WAIT_FRESH_FN first).
+// Reads no selectors: the payload is addressed by JSON path and the gate reads the
+// URL, so there is nothing here for a selector push to steer.
 const hebNextDataFn = () => {
-  const s = sel();
   return `
   function __hebNextDataGrid(nd) {
     var vcs = nd && nd.props && nd.props.pageProps && nd.props.pageProps.layout
@@ -172,6 +181,11 @@ const hebNextDataFn = () => {
     return null;
   }
 
+  /** A non-empty string, or null — so a malformed field reads as absent. */
+  function __hebNextDataStr(v) {
+    return (typeof v === 'string' && v) ? v : null;
+  }
+
   // The name HEB's own ProductTitle component renders: the decoded display name,
   // plus the SKU's customer-friendly size when the name doesn't already end with
   // it. decodedDisplayName usually carries the size ("H-E-B Regular Sour Cream,
@@ -179,11 +193,22 @@ const hebNextDataFn = () => {
   // + size "Each" → the card reads "Fresh Large Hass Avocado, Each"). Getting
   // this exactly right is not cosmetic: scoreMatch needs === 100 and the add
   // scripts locate the card by comparing this string to the tile's title text.
+  //
+  // Each name field is checked for TYPE, not just falsiness. A non-string here
+  // (an object, a number) is the payload not being what we think it is, and a
+  // candidate whose productName isn't a string is worse than no candidate at all:
+  // scoreMatch and the add scripts both call string methods on it, and the DOM
+  // path can never produce one. Treat it as absent and let the next field — or,
+  // if none is a string, the DOM — answer.
   function __hebNextDataName(item, sku) {
-    var name = item.decodedDisplayName || item.fullDisplayName || item.displayName || null;
+    var name = __hebNextDataStr(item.decodedDisplayName)
+      || __hebNextDataStr(item.fullDisplayName)
+      || __hebNextDataStr(item.displayName);
     if (!name) return null;
-    var size = sku && sku.customerFriendlySize;
-    if (size && name.slice(-String(size).length) !== String(size)) name = name + ', ' + size;
+    // Same type discipline for the size: appending a non-string would put
+    // "[object Object]" in the middle of a product name.
+    var size = __hebNextDataStr(sku && sku.customerFriendlySize);
+    if (size && name.slice(-size.length) !== size) name = name + ', ' + size;
     return name;
   }
 
@@ -238,19 +263,27 @@ const hebNextDataFn = () => {
     var grid = __hebNextDataGrid(nd);
     if (!grid) return { candidates: null, why: 'no_grid' };
 
-    // Freshness gate — see note 2 in the header comment. The term in the URL is
-    // the primary signal (it changes the instant an SPA search starts, which is
-    // exactly when the payload goes stale); the echoed <h1> is the fallback for a
-    // /search render that carries no q param. With NEITHER available we cannot
-    // prove the payload belongs to this search, so we decline to use it rather
-    // than risk serving the previous query's products.
+    // Freshness gate — see notes 2 and 3 in the header comment. The ONLY accepted
+    // signal is the term in the URL: it changes the instant an SPA search starts,
+    // which is exactly when the payload goes stale, and it is set by us (or by
+    // HEB's own pushState) rather than read out of the page we are judging.
+    //
+    // The echoed <h1> is deliberately NOT a fallback here, though the DOM path
+    // gates on it. The DOM path POLLS the h1 until it matches the URL term, so the
+    // h1 is checked against an independent statement of what was searched. With no
+    // q there is no such statement, and h1-vs-payload is not one: during an SPA
+    // search both lag TOGETHER — the h1 still shows the previous term because the
+    // new results have not rendered, and the previous term is exactly what the
+    // payload contains. They agree, and both are wrong. (Demonstrated: the
+    // out-of-stock fixture with no q and its h1 rewritten to "seasonal" happily
+    // served the previous search's Morton Season-All.) So a q-less render — a
+    // path-style searchUrlTemplate push, say, since that field rides the same
+    // config channel as this flag — declines and uses the DOM.
     //
     // This is deliberately an equality test, not a contains: if HEB relaxes or
     // spell-corrects the query, its searchTerm won't equal ours and we fall back
     // to the DOM. Losing the fast path is fine; serving another search is not.
     var expected = __hebNorm(__hebExpectedTerm());
-    var headerEl = document.querySelector(${s.searchHeader});
-    if (!expected) expected = __hebNorm(headerEl ? headerEl.textContent : '');
     var embedded = __hebNorm(
       (nd.props && nd.props.pageProps && nd.props.pageProps.searchTerm)
       || (nd.query && nd.query.q) || ''
@@ -423,8 +456,9 @@ export const CHECK_LOGIN_SCRIPT = `(async function() {
  *
  * Two extractors, one output shape. With `nextDataSearch` pushed on, the embedded
  * __NEXT_DATA__ payload is read first (MEAL-13) and the DOM scrape runs only if
- * that payload is absent, unparseable, stale, or empty. `source` rides on every
- * SEARCH_RESULT so the two can be compared in telemetry before the DOM path goes.
+ * that payload is absent, unparseable, stale, unverifiable, empty, or of a shape
+ * that made the reader throw. `source` rides on every SEARCH_RESULT so the two can
+ * be compared in telemetry before the DOM path goes.
  */
 export function buildExtractProductsScript(): string {
   const s = sel();
@@ -445,11 +479,22 @@ ${hebNextDataFn()}
   // when the flag is on there is nothing to poll for and no carousel to filter.
   // Any reason it can't be trusted falls through to the DOM extractor below.
   if (${nextDataEnabled()}) {
-    var __nd = __hebNextDataCandidates(8);
+    // A throw is just another fallback reason. The reader walks a payload shape we
+    // do not control, so an unexpected one (e.g. a repeated ?q=, which Next.js
+    // parses to an ARRAY that __hebNorm's .toLowerCase() cannot take) must not
+    // escape: an uncaught error here posts NOTHING — no debug, no SEARCH_RESULT —
+    // and the item dies on the engine's search timeout instead of falling back.
+    var __nd;
+    try {
+      __nd = __hebNextDataCandidates(8);
+    } catch (e) {
+      __nd = { candidates: null, why: 'threw', error: String(e && e.message || e) };
+    }
     window.ReactNativeWebView.postMessage(JSON.stringify({
       type: 'EXTRACT_DEBUG', step: 'next_data', ndReason: __nd.why,
       count: __nd.candidates ? __nd.candidates.length : 0, gridItems: __nd.gridItems || 0,
-      embeddedTerm: __nd.embeddedTerm, expectedTerm: __nd.expectedTerm, url: window.location.href
+      embeddedTerm: __nd.embeddedTerm, expectedTerm: __nd.expectedTerm,
+      ndError: __nd.error, url: window.location.href
     }));
     if (__nd.candidates) {
       document.removeEventListener('focusin', __noKbd, true);
