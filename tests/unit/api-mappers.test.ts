@@ -163,6 +163,40 @@ describe('mapPresetMeal', () => {
     expect(r.ingredients[0].ingredientName).toBe('Sour Cream');
     expect(r.ingredients[0].qty).toBe(2);
   });
+
+  // MEAL-108. The asymmetry between the two mappers is the whole fix, so it is
+  // pinned on both sides: a catalogue row's productQty is a copy of qty that can
+  // rot and is re-derived; a user's is a choice and is read verbatim.
+  it('re-derives productQty on a preset row, ignoring a stale stored copy', () => {
+    const r = mapPresetMeal({
+      ...minimal,
+      ingredients: [{ ingredientName: 'Eggplant', qty: 3, unit: 'qty', measure: '3', productQty: 1 }],
+    });
+    expect(r.ingredients[0].productQty).toBe(3);
+  });
+
+  it('does not turn a measured preset amount into a package count', () => {
+    const r = mapPresetMeal({
+      ...minimal,
+      ingredients: [{ ingredientName: 'Olive oil', qty: 4, unit: 'tbsp', measure: '4', productQty: 1 }],
+    });
+    expect(r.ingredients[0].productQty).toBe(1);
+  });
+});
+
+describe('mapMeal vs mapPresetMeal — whose number productQty is', () => {
+  const ing = [{ ingredientName: 'Eggplant', qty: 3, unit: 'qty', measure: '3', productQty: 1 }];
+
+  it('mapMeal keeps the stored productQty — a user set it', () => {
+    // A shopper who stepped Eggplant down to 1 in MealDetailSheet must not have
+    // it pushed back up to 3 on the next read. That would be an over-buy, and
+    // over-buying is the failure mode that costs money.
+    expect(mapMeal({ id: 'm1', name: 'X', ingredients: ing }).ingredients[0].productQty).toBe(1);
+  });
+
+  it('mapPresetMeal re-derives it — nobody set it', () => {
+    expect(mapPresetMeal({ id: 'p1', name: 'X', ingredients: ing }).ingredients[0].productQty).toBe(3);
+  });
 });
 
 describe('mapCreator', () => {
