@@ -24,6 +24,16 @@ succeeding. Two probes remain and both need a logged-in human.
 > | **Durability** | **Wrong (small).** The fixture is ~2026-06, not 2026-02 — the window is ~2 months, not ~6. The claim itself came back *stronger*; "byte-identical" was the wrong word for the config comparisons. |
 > | **Tarpit** | **Refined.** The doc's own preferred explanation is the weaker branch. |
 > | **Probe 1** | **Fixed.** Two bugs (baseline diffed against a nonexistent file; 16 hosts, not 31). |
+>
+> A second pass then tightened four places where the corrected text still claimed
+> more than it had:
+>
+> | | What changed |
+> |---|---|
+> | **Answer 1 confidence** | Split into "high that the bundle says this; moderate that the server agrees". A single unverified source does not support one undifferentiated *high*, and the source is minified JavaScript read by a human. |
+> | **Answer 3 headline** | Narrowed from "no bot wall" to "no bot **interstitial**". Absence of an interstitial on ten anonymous requests is what was measured; absence of a wall is not, and Imperva profiles behaviour. |
+> | **Operations table + probe 2** | Marked bundle-only inline. The hedge existed in the surrounding prose, but tables and code blocks get copied out of context, and a 404 from probe 2 is a real result rather than a typo. |
+> | **The blob count** | **Wrong in both the merged version and the review** — both said 18. Counted directly: 17 `*Config` blobs, 19 named initialisers, 20 calls. No reading gives 18, so the "17 of 18" diff ratio is reported as unverified while the finding it carries stands. |
 
 **Question:** Albertsons is the widest family we support — 15 banners on one
 platform — so a network rail there pays out repeatedly. Where are the search and
@@ -37,12 +47,18 @@ session, and do they generalise across the family?
 1. **The endpoints are identified.**
    Search: `GET /abs/pub/xapi/search/products`. Cart: `/abs/pub/erums/cartservice/api/v2/cart`.
    Both are relative paths on whichever banner domain the page is already on.
-   **Confidence: high, on one source.** The base paths come from the page's own
-   config blob *and* the Angular bundle's call-construction code, which agree.
+   **Confidence: high that the bundle says this; moderate that the server agrees.**
+   The base *prefix* is corroborated three ways: the page's own config blob, the
+   Angular bundle's call-construction code, and a live APIM 404 for a sibling
+   prefix (`/basket/items`) that a wrong prefix would not produce.
    But `/items` and the three cart operations come from **the bundle alone** — the
-   config blob does not name them, and live probing does not corroborate them.
-   The bundle evidence is strong (their own code, in the clear, not inferred), so
-   the conclusion stands; it stands on one source, not two.
+   config blob does not name them, and live probing cannot corroborate them (see
+   the guessed-path correction below: `/items-typo` is indistinguishable from
+   `/items` at every gate we can reach anonymously).
+   The bundle evidence is strong — their own code, in the clear, not inferred —
+   but it is minified JavaScript read by a human, and no server response has yet
+   agreed with it about `/items`. Splitting the confidence is the honest form:
+   high that this is what their client sends, moderate that the server accepts it.
 
    *Corrected: the original text claimed this was "validated against production".
    It was not. See "The gate chain" — the 400 that was read as route confirmation
@@ -62,16 +78,20 @@ session, and do they generalise across the family?
    "byte-identical" was not. Where a byte comparison genuinely held — the two
    endpoint blobs across 16 banners — this document says so explicitly.*
 
-3. **There is no bot wall on this API surface.** Imperva is present at the CDN
-   (`x-cdn: Imperva`) but **passes plain-`curl` requests through to the origin** and
-   has done so on every probe. This is the decisive difference from H-E-B (MEAL-12),
-   where plain `curl` got an ABP interstitial for *everything*.
-   **Confidence: high for the endpoints probed, at the volumes probed.** Every
-   probe was a handful of anonymous requests. Behaviour under sustained
-   authenticated load is unmeasured and is the largest unknown on the list —
-   see "What remains unknown", gap 4, tracked as **MEAL-115**. If the search
-   tarpit turns out to be edge posture rather than an upstream dependency, that
-   partially contradicts this answer.
+3. **There is no bot *interstitial* on this API surface.** Imperva is present at
+   the CDN (`x-cdn: Imperva`) but **passes plain-`curl` requests through to the
+   origin** and has done so on every probe. This is the decisive difference from
+   H-E-B (MEAL-12), where plain `curl` got an ABP interstitial for *everything*.
+   **Confidence: high, for that claim.** What is measured is the *absence of an
+   interstitial* on a handful of anonymous requests — which is not the same as
+   the absence of a bot wall, and this document deliberately no longer says the
+   latter. Imperva demonstrably sits in the path and profiles behaviour rather
+   than only credentials, so a wall that never fires on ten requests may still
+   fire on ten thousand. Behaviour under sustained authenticated load is
+   unmeasured and is the largest unknown on the list — see "What remains
+   unknown", gap 4, tracked as **MEAL-115**. And the search tarpit is a live
+   candidate for edge posture on this very surface; if it is, this answer is
+   narrower still.
 
 4. **An in-page `fetch` is still the right shape — but for a different reason than
    H-E-B, and that reason matters.** At H-E-B the WebView was needed to *defeat*
@@ -102,9 +122,17 @@ against a stale hostname.
 ## Where the endpoints came from
 
 Albertsons has no `__NEXT_DATA__`. Its equivalent is a set of **`SWY.CONFIGSERVICE.init*()`
-calls inlined in the page**, each taking a single-quoted JSON string. There are
-**18 of them** in the committed logged-in fixture, and they carry the entire API
-surface: paths, hosts, subscription keys, and the Okta/CIAM config.
+calls inlined in the page**, each taking a single-quoted JSON string. The
+committed logged-in fixture carries **20 such calls**: 17 whose name ends in
+`Config`, plus `initPopularSearches`, `initThemeBuilderFlag`, and one bare
+`SWY.CONFIGSERVICE.init(`. Between them they carry the entire API surface —
+paths, hosts, subscription keys, and the Okta/CIAM config.
+
+*(Both the merged version of this document and its cold review said "18". Counted
+directly in `tests/fixtures/albertsons/logged-in-home.html`, no reading of the
+fixture yields 18: it is 17 `*Config` blobs, 19 named initialisers, or 20 calls.
+Nothing downstream depends on the count, but see the durability section — the
+"17 of 18" diff ratio inherits the bad denominator.)*
 
 That is the discovery mechanism worth remembering: **the endpoint map ships in the
 HTML of the storefront, on every banner, logged in or out.** No bundle spelunking
@@ -200,7 +228,7 @@ alone.** Live probing cannot distinguish a real sub-path from a made-up one here
 
 The three operations the ticket asks for, from the bundle:
 
-| Operation | Call |
+| Operation | Call (all three: **bundle-only, unconfirmed by any server response**) |
 |---|---|
 | **Add / update item** | `POST {cartAPI}/items` — body is the item payload, params from `generateCommonParams` |
 | **Read cart** | `POST {cartAPI}/customer/{customerId}?type=mini&storeId=…&zipCode=…&cartCategoryList=…&expressChk=true` with body `{}` (a POST that semantically reads) |
@@ -631,10 +659,14 @@ from `src/lib/webview-scripts/albertsons.ts:21` ("confirmed on Albertsons platfo
 2026-06-11 / 06-18 / 06-25 and first landed in commit `87498ca`, dated **2026-06-12**.
 
 The claim itself survives, and the cold review made it **stronger** than as
-written. It diffed all 18 committed config blobs against live Acme:
+written. It diffed the committed config blobs against live Acme:
 
-- **17 of 18 are value-identical**, `initSearchConfig` and `initErumsConfig`
+- **All but one are value-identical**, `initSearchConfig` and `initErumsConfig`
   included. The merged version checked only those two; the whole set holds.
+  The review reported this as "17 of 18", but the fixture contains no set of 18
+  (see the count above), so treat the *ratio* as unverified and the *finding* —
+  one blob changed, and it was `initFeatureToggleConfig` — as the substance.
+  Anyone re-running the diff should report the denominator they actually counted.
 - Only `initFeatureToggleConfig` changed — the same blob that varies between
   banners, i.e. the churn is confined to feature flags.
 - `initDeliverySubscriptionConfig` was **removed from live entirely**. The merged
@@ -643,7 +675,7 @@ written. It diffed all 18 committed config blobs against live Acme:
   get restructured and not merely re-valued — worth knowing before treating the
   blobs as immutable.
 
-So: ~2 months, 17 of 18 blobs unmoved, and the two endpoint blobs unmoved across
+So: ~2 months, all but one blob unmoved, and the two endpoint blobs unmoved across
 16 banners. The endpoint config is not churning — still a marked contrast with
 H-E-B's rotating persisted-query hashes, just on a shorter observed baseline than
 the merged version claimed. **Confidence: moderate** on durability specifically,
@@ -896,6 +928,11 @@ that this document never named.
   const zip     = ui.shopZipcode || '';
   const CART    = '/abs/pub/erums/cartservice/api/v2/cart';
   const CART_KEY   = 'c645e9387c654aa8ae253045f648bfac';   // from initErumsConfig
+  // NOTE: the prefix above is corroborated (config blob, bundle, and a live APIM
+  // 404 for the sibling /basket/items). The sub-paths this probe calls are NOT —
+  // they come from the bundle alone, and anonymous probing cannot tell `/items`
+  // from `/items-typo`. A 404 here is therefore a real result worth reporting,
+  // not a mistake in the probe.
   const SEARCH_KEY = 'e914eec9448c4d5eb672debf5011cf8f';   // from initSearchConfig
 
   // ── 2. CART READ. POST, but semantically a read — adds nothing. ───────────
