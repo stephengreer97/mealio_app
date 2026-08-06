@@ -47,7 +47,8 @@ const SELECTOR_KEY = 'wegmans';
 // Compiled-in selector fallbacks; the remote automation config overrides them so
 // a Wegmans redesign is a config push rather than an App Store release. Read only
 // inside a build function — the config loads after module import.
-const SEL_FALLBACKS = {
+// Exported for the fixture drift census (MEAL-30) — see the note on heb.ts's copy.
+export const SEL_FALLBACKS = {
   tile: 'div.component--product-tile',
   name: 'h3[data-testid="-baseHeading"]',
   addBtn: 'button.default-add-button',

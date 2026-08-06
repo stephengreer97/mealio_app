@@ -44,7 +44,8 @@ const PLATFORM: PlatformId = 'albertsons';
 // Compiled-in fallbacks. Kept in sync with BUNDLED_AUTOMATION_CONFIG's
 // platforms.albertsons table so the bundled config and this file can't silently
 // disagree.
-const SEL_FALLBACKS = {
+// Exported for the fixture drift census (MEAL-30) — see the note on heb.ts's copy.
+export const SEL_FALLBACKS = {
   atc: 'button[aria-label^="Add 1 unit of"]',
   bubble: 'button[data-qa="qty-stppr-bbl"]',
   increment: 'button[data-qa="prdctincrmntr"]',

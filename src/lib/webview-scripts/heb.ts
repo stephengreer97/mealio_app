@@ -15,7 +15,11 @@ export const HEB_CART_URL = 'https://www.heb.com/cart';
 
 const SELECTOR_KEY = 'heb';
 
-const SEL_FALLBACKS = {
+// Exported for the fixture drift census (MEAL-30), which resolves this table the
+// same way the scripts do and counts what each selector matches in every captured
+// page. It reads the real table rather than a copy precisely so the two cannot
+// disagree about which selectors the store scripts depend on.
+export const SEL_FALLBACKS = {
   title: '[data-qe-id="productTitle"]',
   // HEB layers sponsored/pairing carousels over the real results; only genuine
   // result tiles carry data-qe-id="productCard". See __hebFindCards below.

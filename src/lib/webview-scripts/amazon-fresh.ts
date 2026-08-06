@@ -28,7 +28,8 @@ const SELECTOR_KEY = 'amazon';
 // Amazon serves TWO distinct search-result layouts (the Fresh "qs-widget" cards
 // and the generic search-result cards), so most selectors come in A/B pairs and
 // both must be configurable. Read only inside a build function.
-const SEL_FALLBACKS = {
+// Exported for the fixture drift census (MEAL-30) — see the note on heb.ts's copy.
+export const SEL_FALLBACKS = {
   cardA: '[data-csa-c-item-type="asin"]',
   nameA: '.a-truncate-full.a-offscreen',
   atcWrapperA: '.qs-atc-plus',

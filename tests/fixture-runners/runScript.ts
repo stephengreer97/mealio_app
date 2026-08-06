@@ -15,9 +15,52 @@
 //
 // Reused by every store's fixture-test spec.
 
-import { chromium, Browser, Page } from 'playwright';
+import { chromium, Browser, BrowserContext, Page } from 'playwright';
 import { readFile } from 'fs/promises';
 import * as path from 'path';
+
+/**
+ * Browser context settings every fixture load uses.
+ *
+ * Exported because the drift census (tests/drift/capture.ts) loads the same
+ * fixtures in the same browser and MUST see the same DOM this runner does — a
+ * census taken under a different user agent or viewport would be recording a page
+ * the fixture tests never run against, and its baseline would disagree with them
+ * for reasons that have nothing to do with store drift.
+ */
+export const FIXTURE_CONTEXT_OPTIONS = {
+  // Use a mobile UA so fixture pages that branch on userAgent see the same
+  // markup as our actual RN WebView does.
+  userAgent:
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 ' +
+    '(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  viewport: { width: 390, height: 844 },  // iPhone 13/14 pixel dims
+} as const;
+
+/**
+ * Block external resource loads. Captured fixture HTML preserves <script>
+ * tags pointing at gtag, GTM, the store's React/Next bundle, etc. If those
+ * run inside Playwright, the store's SPA bootstrap can navigate the page
+ * away, destroying the execution context of the script we want to test
+ * (observed on HEB: search-results-tortillas.html bootstrap navigates and
+ * kills buildSearchAndAddScript before its first postMessage). We only care
+ * about the static DOM, never the captured page's runtime behavior.
+ *
+ * CONSEQUENCE WORTH KNOWING: stylesheets are blocked too, so a class like
+ * Albertsons' `d-none` never applies. CSS-hidden markup is present, laid out and
+ * readable here, which makes any visibility-based reasoning invalid against a
+ * fixture — including in the drift census, which therefore counts matches and
+ * never asks whether a user could see them.
+ */
+export async function installResourceBlocking(context: BrowserContext): Promise<void> {
+  await context.route('**/*', (route) => {
+    const type = route.request().resourceType();
+    if (type === 'script' || type === 'stylesheet' || type === 'font' || type === 'image' || type === 'media') {
+      return route.abort();
+    }
+    return route.continue();
+  });
+}
 
 export interface PostedMessage {
   type: string;
@@ -71,30 +114,10 @@ export async function loadFixture(
 ): Promise<FixtureRunner> {
   const browser = await chromium.launch();
   let closed = false;
-  const context = await browser.newContext({
-    // Use a mobile UA so fixture pages that branch on userAgent see the same
-    // markup as our actual RN WebView does.
-    userAgent:
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 ' +
-      '(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-    viewport: { width: 390, height: 844 },  // iPhone 13/14 pixel dims
-  });
+  const context = await browser.newContext(FIXTURE_CONTEXT_OPTIONS);
   const page = await context.newPage();
 
-  // Block external resource loads. Captured fixture HTML preserves <script>
-  // tags pointing at gtag, GTM, the store's React/Next bundle, etc. If those
-  // run inside Playwright, the store's SPA bootstrap can navigate the page
-  // away, destroying the execution context of the script we want to test
-  // (observed on HEB: search-results-tortillas.html bootstrap navigates and
-  // kills buildSearchAndAddScript before its first postMessage). We only care
-  // about the static DOM, never the captured page's runtime behavior.
-  await context.route('**/*', (route) => {
-    const type = route.request().resourceType();
-    if (type === 'script' || type === 'stylesheet' || type === 'font' || type === 'image' || type === 'media') {
-      return route.abort();
-    }
-    return route.continue();
-  });
+  await installResourceBlocking(context);
 
   const messages: PostedMessage[] = [];
 
