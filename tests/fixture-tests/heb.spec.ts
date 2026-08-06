@@ -4,11 +4,42 @@
 // running `npm run capture -- heb`.
 
 import { getStoreScripts } from '../../src/lib/webview-scripts';
+import {
+  loadAutomationConfig,
+  __resetAutomationConfigForTests,
+} from '../../src/lib/automation-config';
 import { buildCartPageCountScript } from '../../src/lib/webview-scripts/cart-count';
 import { storeFixtures } from './_helpers';
+import { FixtureRunner } from '../fixture-runners/runScript';
 
 const { itWithFixture } = storeFixtures('heb');
 const scripts = getStoreScripts('heb')!;
+
+// ── MEAL-13 helpers ───────────────────────────────────────────────────────────
+
+/**
+ * The extract script built with `nextDataSearch` pushed ON, i.e. what a device
+ * runs after the config flip. Built through the same remote-config path the app
+ * uses, so this also proves the flag actually reaches the injected string.
+ */
+async function extractScriptWithNextData(): Promise<string> {
+  await loadAutomationConfig(async () => ({
+    version: 13,
+    config: { stores: { heb: { nextDataSearch: true } } },
+  }));
+  return getStoreScripts('heb')!.extractProductsScript;
+}
+
+/** Run one extractor to completion and return its SEARCH_RESULT. */
+async function runExtractor(runner: FixtureRunner, script: string, timeoutMs = 20_000) {
+  runner.clearMessages();
+  await runner.inject(script);
+  return runner.waitForMessage('SEARCH_RESULT', timeoutMs);
+}
+
+// The flag is global module state, so every test that flips it must put it back
+// or the DOM-path tests below would silently start exercising the JSON path.
+afterEach(() => __resetAutomationConfigForTests());
 
 describe('HEB CHECK_LOGIN_SCRIPT', () => {
   // Positive-proof detection: against the captured account-panel-open DOM the
@@ -200,6 +231,197 @@ describe('HEB regression: in-page SPA search returns FRESH results, not stale', 
       expect(names.some((n) => /cilantro/i.test(n))).toBe(true);
     },
     { url: 'https://www.heb.com/search?q=cilantro' },
+  );
+});
+
+// ── MEAL-13: __NEXT_DATA__ extraction ─────────────────────────────────────────
+
+describe('HEB MEAL-13: __NEXT_DATA__ and DOM extraction agree', () => {
+  // The load-bearing test for the swap. Both extractors run against the SAME
+  // fixture and must produce the same candidates, field for field — the shape
+  // _scoring.ts and the add scripts consume is not allowed to drift.
+  //
+  // Note the JSON candidates carry two EXTRA keys (productId/skuId, from MEAL-13's
+  // acceptance criteria) that no DOM card exposes; they are compared separately.
+  const SHARED_FIELDS = [
+    'productName',
+    'imageUrl',
+    'outOfStock',
+    'preferences',
+    'price',
+    'isWeightItem',
+    'weightOptions',
+  ] as const;
+
+  function shared(c: Record<string, unknown>) {
+    const out: Record<string, unknown> = {};
+    for (const f of SHARED_FIELDS) out[f] = c[f];
+    return out;
+  }
+
+  // Every committed search fixture whose embedded payload belongs to the search
+  // its DOM shows. (search-results-out-of-stock.html deliberately does NOT: see
+  // the stale-payload describe below.)
+  const AGREEING: Array<[string, string]> = [
+    ['search-results-sour-cream.html', 'sour cream'],
+    ['search-results-with-preferences.html', 'avocado'],
+    ['search-results-weight-dropdown-closed.html', 'bulk coffee'],
+    ['search-results-tortillas.html', 'mission flour tortillas'],
+    ['search-results-product-in-cart.html', 'sour cream'],
+    ['search-results-stepper-open.html', 'sour cream'],
+  ];
+
+  for (const [fixture, term] of AGREEING) {
+    itWithFixture(
+      fixture,
+      `JSON candidates are identical to DOM candidates (${term})`,
+      async (runner) => {
+        const domResult = await runExtractor(runner, scripts.extractProductsScript);
+        const jsonResult = await runExtractor(runner, await extractScriptWithNextData());
+
+        expect(jsonResult.source).toBe('next_data');
+        expect(domResult.source).toBe('dom');
+        expect(domResult.candidates.length).toBeGreaterThan(0);
+        // Same products, same order, same count — the JSON list is capped at the
+        // same 8 the DOM loop stops at.
+        expect(jsonResult.candidates.map(shared)).toEqual(domResult.candidates.map(shared));
+
+        // The two id fields only the JSON path can supply (MEAL-14 depends on them).
+        for (const c of jsonResult.candidates) {
+          expect(typeof c.productId).toBe('string');
+          expect(c.productId.length).toBeGreaterThan(0);
+          expect(typeof c.skuId).toBe('string');
+          expect(c.skuId.length).toBeGreaterThan(0);
+        }
+      },
+      { url: `https://www.heb.com/search?q=${encodeURIComponent(term)}` },
+    );
+  }
+
+  // Preference options are the one field the DOM path pays for with clicks: it
+  // opens each tile's Add popup and reads the modal rows, for at most the first 5
+  // candidates. The payload carries them outright, for every item, with no
+  // interaction — same labels, same {text, value} pairs the add scripts match on.
+  itWithFixture(
+    'search-results-with-preferences.html',
+    'reads the avocado ripeness preferences without opening the modal',
+    async (runner) => {
+      const result = await runExtractor(runner, await extractScriptWithNextData());
+      expect(result.source).toBe('next_data');
+      expect(result.candidates[0].productName).toBe('Fresh Large Hass Avocado, Each');
+      expect(result.candidates[0].preferences).toEqual([
+        { text: 'No preference', value: 'No preference' },
+        { text: 'Ready Now', value: 'Ready Now' },
+        { text: 'Ready Later', value: 'Ready Later' },
+      ]);
+      // No modal was opened to get them.
+      expect(runner.messagesOfType('PREF_DEBUG')).toHaveLength(0);
+    },
+    { url: 'https://www.heb.com/search?q=avocado' },
+  );
+
+  // The name HEB's card renders is displayName + the SKU's size, and for
+  // each-priced produce decodedDisplayName omits that size ("Fresh Large Hass
+  // Avocado" vs the card's "Fresh Large Hass Avocado, Each"). Getting this wrong
+  // would hand scoreMatch a name that can never reach 100 and hand the add script
+  // a name no tile's title matches, so it is pinned on its own.
+  itWithFixture(
+    'search-results-with-preferences.html',
+    'appends the SKU size for each-priced items so names match the card exactly',
+    async (runner) => {
+      const jsonResult = await runExtractor(runner, await extractScriptWithNextData());
+      const names: string[] = jsonResult.candidates.map((c: { productName: string }) => c.productName);
+      expect(names).toContain('Fresh Large Hass Avocado, Each');
+      expect(names).toContain('Fresh Small Hass Avocado, Each');
+      // The DOM's own title text for the same tiles, straight from the page.
+      const domTitles = await runner.page.evaluate(() =>
+        Array.prototype.slice
+          .call(document.querySelectorAll('[data-qe-id="productCardContainer"] [data-qe-id="productTitle"]'))
+          .slice(0, 8)
+          .map((el: any) => el.textContent.trim()),
+      );
+      expect(names).toEqual(domTitles);
+    },
+    { url: 'https://www.heb.com/search?q=avocado' },
+  );
+});
+
+describe('HEB MEAL-13: the DOM extractor is still the fallback', () => {
+  // A trimmed capture with no <script id="__NEXT_DATA__"> at all. With the flag ON
+  // the extractor must notice, say so, and produce the same DOM answer as before —
+  // including still excluding the pairings carousel's granola.
+  itWithFixture(
+    'search-results-yogurt-pairings-carousel.html',
+    'falls back to the DOM when the page has no __NEXT_DATA__',
+    async (runner) => {
+      const result = await runExtractor(runner, await extractScriptWithNextData());
+      expect(result.source).toBe('dom');
+      const dbg = runner.messagesOfType('EXTRACT_DEBUG').find((m) => m.step === 'next_data');
+      expect(dbg).toBeDefined();
+      expect(dbg!.ndReason).toBe('no_next_data');
+
+      const names: string[] = result.candidates.map((c: { productName: string }) => c.productName);
+      expect(names).toHaveLength(3);
+      expect(names.some((n) => /granola/i.test(n))).toBe(false);
+      expect(/yogurt/i.test(names[0])).toBe(true);
+    },
+  );
+
+  // The discrepancy this ticket has to survive. __NEXT_DATA__ is the INITIAL
+  // server render's payload and is not rewritten by an in-page SPA search, so on
+  // this capture the DOM is a "HEB season chicken thighs for fajitas" results page
+  // while the embedded JSON still describes the earlier "seasonal" search (Morton
+  // Season-All Seasoned Salt et al). The DOM is right; the payload is a lie. The
+  // freshness gate must catch it and fall back.
+  itWithFixture(
+    'search-results-out-of-stock.html',
+    'rejects a payload left over from the previous SPA search',
+    async (runner) => {
+      const result = await runExtractor(runner, await extractScriptWithNextData());
+      const dbg = runner.messagesOfType('EXTRACT_DEBUG').find((m) => m.step === 'next_data');
+      expect(dbg).toBeDefined();
+      expect(dbg!.ndReason).toBe('stale');
+      expect(dbg!.embeddedTerm).toBe('seasonal');
+      expect(dbg!.expectedTerm).toBe('heb season chicken thighs for fajitas');
+
+      // Fell back, and returned what the page actually shows.
+      expect(result.source).toBe('dom');
+      const names: string[] = result.candidates.map((c: { productName: string }) => c.productName);
+      expect(names.some((n) => /chicken thighs/i.test(n))).toBe(true);
+      expect(names.some((n) => /season-all/i.test(n))).toBe(false);
+      // And the out-of-stock flag still comes off the live Add button.
+      expect(result.candidates.some((c: { outOfStock: boolean }) => c.outOfStock)).toBe(true);
+    },
+    { url: 'https://www.heb.com/search?q=HEB%20season%20chicken%20thighs%20for%20fajitas' },
+  );
+
+  // Nothing to check freshness against (no q in the URL, no echoed header) means we
+  // cannot prove the payload is for this search, so it goes unused. Same fixture,
+  // loaded with no URL: the header still disagrees, but this pins the "decline
+  // rather than guess" behavior at the gate's own level.
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'uses the echoed header when the URL carries no search term',
+    async (runner) => {
+      // No `url` option → window.location has no ?q=. The <h1> "sour cream" is the
+      // only signal, and it agrees with the payload, so the JSON path is used.
+      const result = await runExtractor(runner, await extractScriptWithNextData());
+      expect(result.source).toBe('next_data');
+      expect(result.candidates[0].productName).toBe('H-E-B Regular Sour Cream, 16 oz');
+    },
+  );
+
+  // The flag defaults OFF: a build with no config push must run the DOM extractor,
+  // which is what makes this safe to ship.
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'bundled default keeps the DOM extractor',
+    async (runner) => {
+      __resetAutomationConfigForTests();
+      const result = await runExtractor(runner, getStoreScripts('heb')!.extractProductsScript);
+      expect(result.source).toBe('dom');
+    },
+    { url: 'https://www.heb.com/search?q=sour%20cream' },
   );
 });
 

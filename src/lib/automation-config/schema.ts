@@ -43,6 +43,17 @@ export interface StoreConfigEntry {
   cacheBustNav?: boolean;
   /** SPA storefront whose search changes the URL via pushState. */
   spaSearch?: boolean;
+  /**
+   * Read search results out of the page's embedded `__NEXT_DATA__` JSON instead
+   * of scraping product cards out of the DOM (HEB only today — see MEAL-13).
+   *
+   * Default FALSE everywhere: the DOM extractor is the path that has shipped and
+   * is known good, so a build behaves identically until someone publishes an
+   * override. The JSON path always degrades back to the DOM extractor at runtime
+   * when the payload is missing, unparseable, or belongs to a previous search,
+   * so flipping this on can lose speed but not correctness.
+   */
+  nextDataSearch?: boolean;
   selectors?: StoreSelectors;
 }
 
@@ -131,6 +142,14 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
       // 'done', firing the after-cart snapshot while the search page was still up —
       // so the snapshot counted the search results page and reported 0 items.
       spaSearch: true,
+      // MEAL-13: HEB embeds the real search result set as JSON in
+      // <script id="__NEXT_DATA__"> under the SearchGridV2 visual component,
+      // where the sponsored/pairing carousels simply are not present. Reading it
+      // is both cleaner and faster than __hebFindCards(), but HEB can change that
+      // payload as easily as the markup, so the DOM extractor stays in the binary
+      // as the fallback and this ships OFF. Flip it with a config push:
+      //   {"stores":{"heb":{"nextDataSearch":true}}}
+      nextDataSearch: false,
       selectors: {
         // Product title inside a search-result card. Appeared in three separate
         // copies of the HEB scripts before this table existed.
