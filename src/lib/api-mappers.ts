@@ -8,7 +8,7 @@
 // expo-secure-store import chain through node-jest.
 
 import type { Meal, PresetMeal, Creator } from '../types';
-import { normalizeIngredients } from './normalizeIngredients';
+import { normalizeIngredients, normalizePresetIngredients } from './normalizeIngredients';
 
 export function mapMeal(m: any): Meal {
   return {
@@ -40,7 +40,14 @@ export function mapPresetMeal(m: any): PresetMeal {
     recipe: m.recipe ?? null,
     source: m.source ?? null,
     photoUrl: m.photo_url ?? m.photoUrl ?? null,
-    ingredients: normalizeIngredients(m.ingredients),
+    // Preset rows get their package count re-derived from the recipe line rather
+    // than read from storage — see normalizePresetIngredients. This is the read
+    // every catalogue flow goes through (discover list, by-id, creator portal,
+    // creator profile), and it is also the read StoreSelectorSheet copies into
+    // the user's own meal on save, so the corrected number is what gets
+    // persisted from here on. `mapMeal` is deliberately NOT changed: on a user's
+    // meal the number is a choice somebody made.
+    ingredients: normalizePresetIngredients(m.ingredients),
     tags: m.tags ?? [],
     difficulty: m.difficulty ?? null,
     serves: m.serves ?? null,
