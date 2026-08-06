@@ -43,6 +43,7 @@ import { getAutomationConfig, getConfigVersion } from '../lib/automation-config'
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { auditCartAfterRun, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
+import { ConfirmedSource, RequestedCount, RunKind, correctConfirmedFromCart, countRequested, isRunComplete } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -495,6 +496,30 @@ export default function WebViewCartSheet({
     setFailedNames(failures.map((f) => f.name));
   }, []);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
+  // ── North-star metric (MEAL-3) ─────────────────────────────────────────────
+  // The DENOMINATOR, counted once when the add phase commits its item set. It
+  // cannot be read off activeItemsRef at run_summary time: the parallel
+  // reconcile's top-up reassigns that ref to the retry subset, which would shrink
+  // the denominator down to exactly the items that went wrong and report the
+  // worst runs as perfect. See lib/north-star.ts for what counts as requested.
+  const requestedRef = useRef<RequestedCount>({ requested: 0, weightRequested: 0 });
+  // Does this run touch a cart at all? 'choose' runs save which product to buy
+  // and add nothing, so they are excluded from both rates whole rather than
+  // scored as a zero.
+  //
+  // NOT the same predicate as isChooseRun(items), and deliberately so. That one
+  // asks about the user's whole selection and titles the screen (MEAL-84); this
+  // one asks what THIS run does to a cart. They disagree on a mixed selection:
+  // some items chosen, some not. There, isChooseRun is false (the screen says
+  // "Add to Cart") while the run itself only ever searches the unchosen items and
+  // adds nothing — so for the metric it is a choose run. Tying the metric to the
+  // title instead would score that run 0-of-N against a cart it never touched.
+  const runKindRef = useRef<RunKind>('add');
+  // Set only when the run's final added-count came from a per-item CART diff.
+  // False leaves the count as the store scripts' own success flags, which MEAL-47
+  // showed are wrong in both directions — the run still reports its number, but
+  // labelled `worker_reports` so the dashboard knows not to stand on it.
+  const cartReconciledRef = useRef(false);
   // Parallel-add reconciliation: results from the concurrent pass (by item idx)
   // and a one-shot arm so the after-snapshot re-adds the genuinely-missing items
   // (false positives from the shared cart counter) sequentially, exactly once.
@@ -1142,6 +1167,13 @@ export default function WebViewCartSheet({
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
       reconcileIntendedRef.current = [];
+      // North-star counters. 'add' is the default because it is the reading that
+      // cannot silently hide a run: a shopping run mislabelled 'choose' would
+      // vanish from the metric, while a choose run mislabelled 'add' shows up as
+      // an obvious 0-of-0 that the requested===0 guard drops anyway.
+      requestedRef.current = { requested: 0, weightRequested: 0 };
+      runKindRef.current = 'add';
+      cartReconciledRef.current = false;
       setCartResultRows(null);
       setCartRowsTimedOut(false);
       if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
@@ -1161,6 +1193,12 @@ export default function WebViewCartSheet({
         const unchosen = consolidated.filter((it) => !it.searchTerm);
         const active = unchosen.filter((it) => it.productQty > 0);
         activeItemsRef.current = active.length > 0 ? active : unchosen;
+        // No north-star outcome: this branch only ever searches the UNCHOSEN
+        // items and the review it ends in offers "choose", not "add", so the run
+        // adds nothing to a cart. Excluded whole — scoring it against a cart
+        // would report a permanent 0% for a flow that did exactly what it was
+        // asked to. Covers the mixed selection too (see runKindRef).
+        runKindRef.current = 'choose';
         console.log(`[Cart ${ts()}]`, 'auto-start: active=', activeItemsRef.current.length, activeItemsRef.current.map(i => i.ingredientName));
         searchIdxRef.current = 0;
         if (loginPrewarm.getStatus(openStoreId) === 'loggedOut') {
@@ -1255,11 +1293,57 @@ export default function WebViewCartSheet({
     const outcome: 'success' | 'partial' | 'failed' =
       totalAdded === 0 ? 'failed' : cartDeltaWarning ? 'partial' : 'success';
     const runId = automationRunIdRef.current;
-    if (runId) usage.logAutomationComplete({ runId, itemsAdded: totalAdded, outcome });
+    // ── North-star metric (MEAL-3) ───────────────────────────────────────────
+    // itemsAdded is the NUMERATOR and `requested` the DENOMINATOR of the item
+    // success rate; runComplete is the run success rate's numerator. Both counts
+    // ship on the run row as well as on the funnel row: storeId lives on the run
+    // row, so the per-store daily rates are computable there without joining
+    // step rows at all, and the step row carries the qualifiers that say whether
+    // the rate is safe to draw. See lib/north-star.ts for every definition.
+    const { requested, weightRequested } = requestedRef.current;
+    const kind = runKindRef.current;
+    // Where the numerator came from, decided by how the run finalized rather than
+    // by which store it was: `confirm` step rows are absent on four of six stores
+    // (MEAL-122), so a store-keyed guess would be wrong for exactly the stores
+    // that matter most. `requested === 0` is the choose-run / nothing-requested
+    // case, which has no cart outcome to source.
+    const confirmedSource: ConfirmedSource =
+      kind === 'choose' || requested === 0
+        ? 'none'
+        : cartReconciledRef.current
+          ? 'cart_reconcile'
+          : 'worker_reports';
+    const skippedInReview = Object.values(skippedByIdx).filter(Boolean).length;
+    if (runId) {
+      usage.logAutomationComplete({
+        runId,
+        itemsAdded: totalAdded,
+        // Already in the client contract for this endpoint and never populated
+        // until now — this is the field the dashboard's denominator reads.
+        itemsRequested: requested,
+        outcome,
+      });
+    }
     // Funnel: one terminal row per run, then flush. dispose() sends whatever is
     // still buffered — without it a short run's steps would sit in the buffer
     // until the flush interval and be lost if the app is backgrounded.
-    const summaryDetail = { outcome, itemsAdded: totalAdded, cartDeltaWarning: !!cartDeltaWarning };
+    //
+    // itemsAdded is deliberately NOT corrected for MEAL-47 recoveries here: the
+    // after-probe that finds them has not run yet and must not be waited on (a
+    // hung probe would cost the whole run its terminal row). A `reconcile` row
+    // with phase 'north_star' follows when the probe finds anything, and the read
+    // side coalesces — see the emission site in the CART_COUNT 'after' branch.
+    const summaryDetail = {
+      outcome,
+      itemsAdded: totalAdded,
+      cartDeltaWarning: !!cartDeltaWarning,
+      kind,
+      requested,
+      confirmedSource,
+      weightRequested,
+      skippedInReview,
+      runComplete: isRunComplete(requested, totalAdded),
+    };
     if (outcome === 'failed') {
       // The run has no failure of its own — it failed because its steps did, so
       // it reports whichever code dominated them. A run that added nothing while
@@ -1275,7 +1359,9 @@ export default function WebViewCartSheet({
       tel().record('run_summary', 'ok', { detail: summaryDetail });
     }
     void tel().flush();
-  }, [step, totalAdded, cartDeltaWarning, tel]);
+    // skippedByIdx is read above; automationCompletedRef keeps this to one firing
+    // per run whatever re-renders the extra dependency causes.
+  }, [step, totalAdded, cartDeltaWarning, skippedByIdx, tel]);
 
   // Clear all safety timers on unmount. Without this, closing the sheet mid
   // login-check / search / add leaves a real setTimeout running that later
@@ -1381,6 +1467,13 @@ export default function WebViewCartSheet({
     const active = items.filter((it, i) => (checkedItems[i] ?? true) && !isZeroedOut(it));
     if (active.length === 0) return;
     activeItemsRef.current = active;
+    // The north-star denominator, fixed here and never recounted. This is the
+    // only gate a shopping run passes through, and it is the last moment the
+    // full requested set exists in one place: the reconcile top-up reassigns
+    // activeItemsRef to the retry subset later in the same run. Unchecked and
+    // zeroed lines were already filtered out above — they were never requested.
+    runKindRef.current = 'add';
+    requestedRef.current = countRequested(active);
     searchIdxRef.current = 0;
     // Arm the parked-worker commit (if any). We still run the normal login +
     // before-snapshot path below; only the add step changes (see beginSearchFlow).
@@ -2218,10 +2311,33 @@ export default function WebViewCartSheet({
             // the whole set to spot units no item intended.
             reconcileIntendedRef.current = outcome.intended;
             console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm), 'review=', reviewFailures.length, reviewFailures.map((r) => `${r.term}:${r.reason}`));
+            // North-star: this is the ONE moment in the run where the added count
+            // is backed by a per-item cart read, so it is the only place allowed
+            // to claim `cart_reconcile` as the confirmed source. A top-up
+            // downgrades it again below — the retry's results come back
+            // worker-reported, so the finalized count is then only partly
+            // cart-backed, and 'mostly trustworthy' is not a thing a metric can
+            // say. The after-probe that follows a top-up re-upgrades the run with
+            // a full cart audit (phase 'north_star'), so nothing is lost.
+            //
+            // Gated on the BASELINE, which this reconcile does not otherwise
+            // require: with no before-snapshot cartItemsBeforeRef is still [], so
+            // diffCartItems marks the user's whole existing cart as newly added
+            // and every intended item finds a row to claim. The reconcile has
+            // always behaved that way (it over-confirms rather than over-adds, so
+            // it is safe for the cart) and changing it belongs with MEAL-47's
+            // named baseline-retry follow-up, not here — but the METRIC must not
+            // present that run as cart-backed. It reports `worker_reports`
+            // instead, which is the honest description of what is left.
+            cartReconciledRef.current = cartCountBeforeRef.current != null;
             // Funnel: the reconcile delta is the ground truth the workers' own
             // reports are checked against. A retry count that climbs over time is
             // the earliest signal that a store's confirm signal has drifted.
             const reconcileDetail = {
+              // 'parallel' vs the after-probe's 'after'/'north_star' rows: all
+              // three are `reconcile` steps and the read side has to tell them
+              // apart to avoid counting one run twice.
+              phase: 'parallel',
               confirmed: confirmed.length,
               retry: retryItems.length,
               review: reviewFailures.length,
@@ -2252,6 +2368,10 @@ export default function WebViewCartSheet({
               setSearchResults(searchResultsRef.current);
             }
             if (retryItems.length > 0) {
+              // See cartReconciledRef above: from here the run's count is a mix
+              // of cart-confirmed items and worker-reported top-ups, which is not
+              // a claim the metric can make. The after-probe corrects it.
+              cartReconciledRef.current = false;
               addResultsRef.current = confirmed;
               activeItemsRef.current = retryItems;
               searchIdxRef.current = 0;
@@ -2316,6 +2436,11 @@ export default function WebViewCartSheet({
               countAfter: count,
             });
             const { missing, short, over, recovered, countShortfall } = findings;
+            // Read from the ref, NOT from the `totalAdded` state: onMessage is
+            // created once (deps []) so the state it closes over is this run's
+            // initial 0. This expression is the same one every finalize path
+            // computes setTotalAdded from, so it is the number run_summary shipped.
+            const reportedAddedCount = addResultsRef.current.filter((r) => r.success).length;
             // The workers under-reported: the cart holds items this run told the
             // user it could not add (MEAL-47). Say so — otherwise the user adds
             // them a second time by hand and pays twice. Recorded on the funnel
@@ -2326,8 +2451,54 @@ export default function WebViewCartSheet({
             if (recovered.length > 0) {
               console.log(`[Cart ${ts()}]`, 'cart check: RECOVERED false-negative adds', JSON.stringify(recovered));
               tel().record('reconcile', 'error', {
-                detail: { phase: 'after', recovered: recovered.length, reportedAdded: addResultsRef.current.filter((r) => r.success).length },
+                detail: { phase: 'after', recovered: recovered.length, reportedAdded: reportedAddedCount },
                 code: 'confirm_failed',
+              });
+            }
+            // ── North-star correction (MEAL-3 × MEAL-47) ─────────────────────
+            //
+            // The run's terminal run_summary row has already shipped with a
+            // confirmed count that was NOT cart-backed (confirmedSource
+            // 'worker_reports'): this probe is the first per-item cart read the
+            // run has had, and it lands after the fact. It is deliberately not
+            // waited on — see the run_summary emission — so the correction rides
+            // on its own row and the read side coalesces the two.
+            //
+            // Emitted only when `rows` came back, because with no per-item cart
+            // data there is nothing to correct WITH: countShortfall alone cannot
+            // say which lines landed, and inventing a per-item number from a
+            // header badge delta is the badge-count inference this whole metric
+            // exists to replace.
+            //
+            // It corrects in BOTH directions, which matters more than the
+            // recovery half: `missing` and `short` mean the workers claimed adds
+            // the cart cannot corroborate, so the uncorrected number is too HIGH.
+            // A north-star that can only be revised upward is a vanity metric.
+            if (rows) {
+              const correction = correctConfirmedFromCart({
+                requested: requestedRef.current.requested,
+                summaryConfirmed: reportedAddedCount,
+                missing: missing.length,
+                short: short.length,
+                recovered,
+              });
+              tel().record('reconcile', 'ok', {
+                detail: {
+                  phase: 'north_star',
+                  requested: requestedRef.current.requested,
+                  // What run_summary shipped, so the two rows can be reconciled
+                  // even if the runs table and the funnel disagree.
+                  summaryConfirmed: reportedAddedCount,
+                  confirmed: correction.confirmed,
+                  runComplete: correction.runComplete,
+                  overstated: correction.overstated,
+                  recovered: correction.recovered,
+                  // The noisy share of the recovery: a loose name match cannot
+                  // tell "the failed item landed" from "an unintended product
+                  // landed" (MEAL-47). Subtract it for a lower bound.
+                  recoveredLoose: correction.recoveredLoose,
+                  confirmedSource: 'cart_after_probe',
+                },
               });
             }
             if (missing.length > 0 || short.length > 0 || over.length > 0 || recovered.length > 0) {

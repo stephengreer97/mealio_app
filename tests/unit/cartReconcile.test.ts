@@ -413,7 +413,11 @@ const AUDIT_CASES: AuditCase[] = [
     short: [],
     over: [],
     countShortfall: null,
-    recovered: [{ name: 'sour cream', cartName: 'Daisy Pure & Natural Sour Cream, 16 oz', qty: 1 }],
+    // 'loose': the store's product title is not the search term, so only the
+    // token-subset matcher connects them. This is the ordinary shape of a
+    // recovery and the reason MEAL-3 counts loose ones apart — the same match
+    // that finds a real landed item would also find a lookalike.
+    recovered: [{ name: 'sour cream', cartName: 'Daisy Pure & Natural Sour Cream, 16 oz', qty: 1, matchQuality: 'loose' as const }],
   },
   {
     name: 'a partly-landed false negative reports the units actually found, not the units asked for',
@@ -427,7 +431,11 @@ const AUDIT_CASES: AuditCase[] = [
     short: [],
     over: [],
     countShortfall: null,
-    recovered: [{ name: 'Topo Chico Mineral Water', cartName: 'Topo Chico Mineral Water', qty: 1 }],
+    // 'exact': the cart title and the search term normalize to the same string,
+    // so this recovery is not open to the lookalike doubt — even though it is
+    // short of the 3 units asked for. Falling short and being misidentified are
+    // different problems and the metric keeps them apart.
+    recovered: [{ name: 'Topo Chico Mineral Water', cartName: 'Topo Chico Mineral Water', qty: 1, matchQuality: 'exact' as const }],
   },
   {
     name: 'a weight-priced false negative is recovered by PRESENCE — one row at N lb, whatever poundage was asked for',
@@ -441,7 +449,9 @@ const AUDIT_CASES: AuditCase[] = [
     short: [],
     over: [],
     countShortfall: null,
-    recovered: [{ name: 'brisket', cartName: 'H-E-B Prime 1 Beef Brisket', qty: 1 }],
+    // Always 'loose': presence matching has no exact pass in front of it, so a
+    // weight row is only ever claimed on name similarity.
+    recovered: [{ name: 'brisket', cartName: 'H-E-B Prime 1 Beef Brisket', qty: 1, matchQuality: 'loose' as const }],
   },
   {
     name: 'a genuinely failed item is NOT recovered by a lookalike row a reported item already claimed',
@@ -503,7 +513,7 @@ const AUDIT_CASES: AuditCase[] = [
     short: [],
     over: [],
     countShortfall: null,
-    recovered: [{ name: 'shredded cheese', cartName: 'Kraft Shredded Cheese Sharp Cheddar', qty: 1 }],
+    recovered: [{ name: 'shredded cheese', cartName: 'Kraft Shredded Cheese Sharp Cheddar', qty: 1, matchQuality: 'loose' as const }],
   },
   {
     name: 'an unintended unit stays an over-add — nothing attempted explains it',
