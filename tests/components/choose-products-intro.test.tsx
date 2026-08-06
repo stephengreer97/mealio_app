@@ -19,7 +19,8 @@
 //     is the one that regresses silently: nobody files a bug about an explainer
 //     they have learned to dismiss.
 
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { Alert } from 'react-native';
 
 const mockStore = new Map<string, string>();
 
@@ -86,14 +87,22 @@ jest.mock('../../src/context/LoginPrewarmContext', () => ({
 }));
 
 const mockListMeals = jest.fn();
+const mockUpdateMeal = jest.fn();
+const mockKrogerStatus = jest.fn();
 jest.mock('../../src/lib/api', () => ({
-  meals: { list: (...a: unknown[]) => mockListMeals(...a), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
-  kroger: { status: jest.fn(async () => ({ connected: false, locations: {} })) },
+  meals: {
+    list: (...a: unknown[]) => mockListMeals(...a),
+    create: jest.fn(),
+    update: (...a: unknown[]) => mockUpdateMeal(...a),
+    delete: jest.fn(),
+  },
+  kroger: { status: (...a: unknown[]) => mockKrogerStatus(...a) },
   images: { upload: jest.fn() },
 }));
 
 import MyMealsScreen from '../../src/screens/mymeals/MyMealsScreen';
 import { FIRST_RUN_CHOOSE_PRODUCTS } from '../../src/lib/firstRun';
+import { isChooseRun } from '../../src/lib/chooseRun';
 
 /** H-E-B: a WebView store, so the floating button drives the cart engine. */
 const UNCHOSEN_MEAL = {
@@ -114,11 +123,23 @@ const CHOSEN_MEAL = {
   ingredients: UNCHOSEN_MEAL.ingredients.map((i) => ({ ...i, searchTerm: 'H-E-B Sour Cream' })),
 };
 
+/** What the H-E-B meal looks like after a choose run has picked both products. */
+const UNCHOSEN_MEAL_AFTER_RUN = {
+  ...UNCHOSEN_MEAL,
+  ingredients: UNCHOSEN_MEAL.ingredients.map((i) => ({ ...i, searchTerm: 'H-E-B Sour Cream' })),
+};
+
+/** Kroger: choosing runs in ProductChooserSheet, behind connect + location. */
+const KROGER_MEAL = { ...UNCHOSEN_MEAL, storeId: 'kroger' };
+
 beforeEach(() => {
   mockStore.clear();
   mockStartJob.mockClear();
   mockListMeals.mockReset();
   mockListMeals.mockResolvedValue([UNCHOSEN_MEAL]);
+  mockUpdateMeal.mockReset();
+  mockKrogerStatus.mockReset();
+  mockKrogerStatus.mockResolvedValue({ connected: false, locations: {} });
 });
 
 /** Renders My Meals and selects the first meal, revealing the floating button. */
@@ -218,5 +239,129 @@ describe('the skip path', () => {
 
     await waitFor(() => expect(r.queryByText('First, match your ingredients')).toBeNull());
     expect(mockStartJob).not.toHaveBeenCalled();
+  });
+});
+
+// ── The promise the sheet makes about the end of the run ─────────────────────
+//
+// "At the end … you are back at your meals — with the button now offering to
+// add them all to your H-E-B cart."
+//
+// That was written for Kroger, where the chooser never touches the selection,
+// and then shown mostly to WebView users, where closing the run cleared it — and
+// the floating button only exists while something is selected. Twelve screens of
+// work ended on a screen with no button at all, which reads as failure.
+
+describe('where a choose run leaves you (WebView store)', () => {
+  /** Runs the choose flow to completion and closes it, as the sheet would. */
+  async function runChooseToCompletion() {
+    const r = await selectMeal();
+    fireEvent.press(await r.findByText('Choose Products for 1 meal'));
+
+    // The exact promise, so this fails if either the copy or the behaviour
+    // moves away from the other.
+    expect(
+      await r.findByText(/you are back at your meals — with the button now offering/),
+    ).toBeTruthy();
+    expect(r.getByText(/add them all to your H-E-B cart/)).toBeTruthy();
+
+    fireEvent.press(await r.findByText('Choose products (2)'));
+    await waitFor(() => expect(mockStartJob).toHaveBeenCalledTimes(1));
+    const job = mockStartJob.mock.calls[0][0];
+
+    // The run picks a product for every ingredient and saves it…
+    mockUpdateMeal.mockResolvedValue(UNCHOSEN_MEAL_AFTER_RUN);
+    await act(async () => {
+      await job.onIngredientChosen('Sour cream', ['m1'], 'H-E-B Sour Cream');
+    });
+    // …and then closes.
+    await act(async () => { job.onClose(); });
+    return r;
+  }
+
+  it('leaves the meals selected, with the button now offering the cart', async () => {
+    const r = await runChooseToCompletion();
+    expect(await r.findByText('Add 1 meal to H-E-B cart')).toBeTruthy();
+  });
+
+  it('still clears the selection after an add-to-cart run', async () => {
+    // The other half: a run that actually filled the cart is spent, and leaving
+    // those meals selected invites adding them twice.
+    mockListMeals.mockResolvedValue([CHOSEN_MEAL]);
+    const r = await selectMeal('Chosen Chili');
+    fireEvent.press(await r.findByText('Add 1 meal to H-E-B cart'));
+    await waitFor(() => expect(mockStartJob).toHaveBeenCalledTimes(1));
+
+    await act(async () => { mockStartJob.mock.calls[0][0].onClose(); });
+    await waitFor(() => expect(r.queryByText('Add 1 meal to H-E-B cart')).toBeNull());
+  });
+});
+
+// ── Kroger: the flag is spent by a run, not by a tap ─────────────────────────
+
+describe('a Kroger run that never opens does not spend the explainer', () => {
+  let alertSpy: jest.SpyInstance;
+  beforeEach(() => { alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {}); });
+  afterEach(() => { alertSpy.mockRestore(); });
+
+  it('keeps it for the run that does happen', async () => {
+    // A first-time Kroger user is by definition not connected yet: the tap goes
+    // explainer → "Choose products" → "Connect Kroger" alert → nothing opens.
+    mockListMeals.mockResolvedValue([KROGER_MEAL]);
+    const r = await selectMeal();
+    fireEvent.press(await r.findByText('Choose Products for 1 meal'));
+    fireEvent.press(await r.findByText('Choose products (2)'));
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+    expect(String(alertSpy.mock.calls[0][0])).toMatch(/^Connect /);
+    // Nothing was explained-and-then-done, so nothing has been used up.
+    expect(mockStore.has(FIRST_RUN_CHOOSE_PRODUCTS)).toBe(false);
+
+    // They connect, come back, and tap again — the twelve screens are still
+    // ahead of them, so the warning about them is still due.
+    mockKrogerStatus.mockResolvedValue({
+      connected: true,
+      locations: { kroger: { locationId: '01400376', locationName: 'Kroger' } },
+    });
+    fireEvent.press(r.getByText('Choose Products for 1 meal'));
+    expect(await r.findByText('First, match your ingredients')).toBeTruthy();
+
+    // This time the chooser really opens, and now it is spent.
+    fireEvent.press(await r.findByText('Choose products (2)'));
+    await waitFor(() => expect(mockStore.has(FIRST_RUN_CHOOSE_PRODUCTS)).toBe(true));
+  });
+});
+
+// ── The mixed selection ──────────────────────────────────────────────────────
+
+describe('a run with some products already chosen', () => {
+  it('is called shopping by the button, because that is what the sheet calls it', async () => {
+    // WebViewCartSheet titles a run "Choose Products" only when nothing in it
+    // has a product; a run holding one chosen item adds that item to a real
+    // cart. The button used to ask a different question ("does any meal still
+    // need choosing"), so this selection produced "Choose Products for 1 meal"
+    // → the explainer → a screen titled "Add to Cart".
+    const items = [...UNCHOSEN_MEAL.ingredients, ...CHOSEN_MEAL.ingredients];
+    expect(isChooseRun(items as any)).toBe(false);
+
+    mockListMeals.mockResolvedValue([UNCHOSEN_MEAL, CHOSEN_MEAL]);
+    const r = render(<MyMealsScreen />);
+    fireEvent.press(await r.findByText('Beef Tacos'));
+    fireEvent.press(await r.findByText('Chosen Chili'));
+
+    expect(await r.findByText('Add 2 meals to H-E-B cart')).toBeTruthy();
+    expect(r.queryByText('Choose Products for 1 meal')).toBeNull();
+  });
+
+  it('does not burn the explainer on itself', async () => {
+    mockListMeals.mockResolvedValue([UNCHOSEN_MEAL, CHOSEN_MEAL]);
+    const r = render(<MyMealsScreen />);
+    fireEvent.press(await r.findByText('Beef Tacos'));
+    fireEvent.press(await r.findByText('Chosen Chili'));
+    fireEvent.press(await r.findByText('Add 2 meals to H-E-B cart'));
+
+    await waitFor(() => expect(mockStartJob).toHaveBeenCalledTimes(1));
+    expect(r.queryByText('First, match your ingredients')).toBeNull();
+    expect(mockStore.has(FIRST_RUN_CHOOSE_PRODUCTS)).toBe(false);
   });
 });

@@ -32,6 +32,7 @@ import WebViewCartSheet from '../../components/WebViewCartSheet';
 import ProductChooserSheet from '../../components/ProductChooserSheet';
 import ChooseProductsIntroSheet from '../../components/ChooseProductsIntroSheet';
 import { hasSeen, markSeen, FIRST_RUN_CHOOSE_PRODUCTS } from '../../lib/firstRun';
+import { isChooseRun } from '../../lib/chooseRun';
 import { useCartJob } from '../../context/CartJobContext';
 import { useLoginPrewarm } from '../../context/LoginPrewarmContext';
 import { FEATURE_BACKGROUND_CART } from '../../constants/features';
@@ -52,6 +53,22 @@ function unchosenIngredients(meal: Meal): any[] {
 
 function hasUnchosenProducts(meal: Meal): boolean {
   return unchosenIngredients(meal).length > 0;
+}
+
+/**
+ * Will the WebView sheet treat this selection as a Choose Products run?
+ *
+ * Asks the sheet's own question, from `lib/chooseRun.ts`, so the button that
+ * starts a run and the title of the screen it opens cannot disagree. See that
+ * module for why "every item" and not "any meal", and why Kroger keeps the
+ * other question.
+ */
+function isWebViewChooseRun(meals: Meal[]): boolean {
+  return isChooseRun(
+    meals.flatMap((m) => ((m.ingredients ?? []) as any[]).map(
+      (i) => ({ searchTerm: i.searchTerm ?? i.search_term ?? null }),
+    )),
+  );
 }
 
 export default function MyMealsScreen() {
@@ -102,6 +119,9 @@ export default function MyMealsScreen() {
   // from the same floating button, so both go through here.
   const [introVisible, setIntroVisible] = useState(false);
   const pendingRunRef = useRef<(() => void) | null>(null);
+  // Was the WebView run that is currently open a Choose Products run? Decides
+  // whether closing it clears the selection — see `endWebViewRun`.
+  const webViewChooseRunRef = useRef(false);
 
   // Kroger store picker
   const [krogerPickerVisible, setKrogerPickerVisible] = useState(false);
@@ -277,6 +297,9 @@ export default function MyMealsScreen() {
       setKrogerPickerVisible(true);
       return;
     }
+    // Past both prerequisites — the chooser is opening, so the explainer that
+    // preceded it has now been spent on a real run.
+    noteChooseRunStarted();
     setChoosingMeal(meal);
   }
 
@@ -289,22 +312,62 @@ export default function MyMealsScreen() {
 
   // Run a choose-products flow, explaining it first the one time (MEAL-84).
   // The explainer never blocks: its primary button runs `start` unchanged, and
-  // it is marked seen whichever way it is closed, so this is a detour exactly
-  // once per device and a straight-through call forever after.
+  // it is a detour exactly once per device and a straight-through call forever
+  // after.
   async function withChooseIntro(start: () => void) {
     if (await hasSeen(FIRST_RUN_CHOOSE_PRODUCTS)) { start(); return; }
     pendingRunRef.current = start;
     setIntroVisible(true);
   }
 
+  /**
+   * Spend the one showing of the explainer, at the moment a choose run actually
+   * begins.
+   *
+   * Deliberately not called from `handleIntroStart`. Kroger's flow can still
+   * bounce after the explainer and before anything opens — a first-time Kroger
+   * user is by definition not connected yet, so "Choose products" hits the
+   * "Connect Kroger" alert and returns having opened nothing (same shape for the
+   * no-location path). Marking seen at the button spent the explainer on a run
+   * that never happened, and the person who came back connected, ready for the
+   * twelve screens this sheet exists to warn them about, got no warning.
+   */
+  function noteChooseRunStarted() {
+    markSeen(FIRST_RUN_CHOOSE_PRODUCTS);
+  }
+
+  /**
+   * A WebView run has closed. Clear the selection — unless it was a Choose
+   * Products run, which keeps it.
+   *
+   * Choosing is setup, not shopping: it saves matches and puts nothing in a
+   * cart, so the meals the user picked are still the meals they want. The
+   * explainer promises exactly this ("at the end … you are back at your meals,
+   * with the button now offering to add them all to your cart") and it was only
+   * true on Kroger, where the chooser never touches the selection. On the
+   * WebView path — every store except the Kroger family, i.e. most of the people
+   * who see the sheet — the selection was dropped, the floating button renders
+   * only when something is selected, and twelve screens of work ended on a
+   * screen with no button on it at all. Someone reasonably reads that as failure.
+   *
+   * An add-to-cart run still clears, unchanged: those meals are in the cart now
+   * and leaving them selected invites adding them twice.
+   */
+  function endWebViewRun() {
+    const wasChooseRun = webViewChooseRunRef.current;
+    webViewChooseRunRef.current = false;
+    if (!wasChooseRun) setSelectedMealIds(new Set());
+  }
+
   function handleIntroStart() {
     setIntroVisible(false);
-    markSeen(FIRST_RUN_CHOOSE_PRODUCTS);
     const start = pendingRunRef.current;
     pendingRunRef.current = null;
     start?.();
   }
 
+  // Dismissing is an answer, not a deferral — it is marked seen here, because
+  // there is no later run to mark it at.
   function handleIntroCancel() {
     setIntroVisible(false);
     markSeen(FIRST_RUN_CHOOSE_PRODUCTS);
@@ -351,6 +414,9 @@ export default function MyMealsScreen() {
       setKrogerLocations(prev => ({ ...prev, [loc.storeId]: { locationId: loc.locationId, locationName: loc.name } }));
       setKrogerPickerVisible(false);
       if (pendingChooseMealRef.current) {
+        // The run the explainer was shown for is resuming here, having been
+        // parked on "pick a store" — this is where it really starts.
+        noteChooseRunStarted();
         setChoosingMeal(pendingChooseMealRef.current);
         pendingChooseMealRef.current = null;
       }
@@ -707,8 +773,10 @@ export default function MyMealsScreen() {
             </TouchableOpacity>
           );
         }
-        // WebView store (e.g. H-E-B) — WebViewCartSheet handles both choose + add
-        const webViewNeedsChoose = selectedMeals.some(hasUnchosenProducts);
+        // WebView store (e.g. H-E-B) — WebViewCartSheet handles both choose + add.
+        // `isWebViewChooseRun` is the sheet's own test, asked here so the button
+        // and the screen it opens cannot disagree about which run this is.
+        const webViewNeedsChoose = isWebViewChooseRun(selectedMeals);
         const webViewUnchosenCount = selectedMeals.filter(hasUnchosenProducts).length;
         return (
           <TouchableOpacity
@@ -722,7 +790,7 @@ export default function MyMealsScreen() {
                     storeId: selectedStore,
                     storeName: STORES.find((s) => s.id === selectedStore)?.name ?? 'Store',
                     onIngredientChosen: handleIngredientChosen,
-                    onClose: () => setSelectedMealIds(new Set()),
+                    onClose: endWebViewRun,
                   });
                 } else {
                   setCartStoreId(selectedStore);
@@ -731,8 +799,17 @@ export default function MyMealsScreen() {
               };
               // Same sheet opens either way; only a run that has choosing to do
               // gets the explainer, since an add-to-cart run explains itself.
-              if (webViewNeedsChoose) withChooseIntro(start);
-              else start();
+              webViewChooseRunRef.current = webViewNeedsChoose;
+              if (webViewNeedsChoose) {
+                withChooseIntro(() => {
+                  // Nothing can bounce a WebView run between here and the sheet
+                  // opening, so this is where the explainer is spent.
+                  noteChooseRunStarted();
+                  start();
+                });
+              } else {
+                start();
+              }
             }}
             activeOpacity={0.88}
           >
@@ -777,7 +854,7 @@ export default function MyMealsScreen() {
           meals={selectedMeals}
           storeId={cartStoreId || selectedStore}
           storeName={STORES.find((s) => s.id === (cartStoreId || selectedStore))?.name ?? 'Store'}
-          onClose={() => { setWebViewCartVisible(false); setSelectedMealIds(new Set()); }}
+          onClose={() => { setWebViewCartVisible(false); endWebViewRun(); }}
           onIngredientChosen={handleIngredientChosen}
         />
       )}

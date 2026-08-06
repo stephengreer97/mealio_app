@@ -1,9 +1,16 @@
 // The one sentence Mealio has to land, and the words it lands in.
 //
-// ─── This file is a copy. ─────────────────────────────────────────────────────
+// ─── This file is a copy, with one deliberate difference. ────────────────────
 // The original is `lib/pitch.ts` in `mealio_central` (MEAL-86). The two repos
 // share no package, so the strings are duplicated here the same way `STORES` is
-// — diff the two files whenever either changes.
+// — diff the two files whenever either changes, and expect the diff to be
+// non-empty: the store list is *supposed* to differ. Cart automation for every
+// store except Kroger runs in this app, so the web build narrows its list to
+// `PITCH_STORES_WEB` and mobile must not follow. Taking the web's `PITCH_STEPS`
+// wholesale would tell someone reading it inside the app that their store only
+// works on the website. Read the `PITCH_STORES` docblock below before resolving
+// that hunk in either direction; every other string here should match the web
+// original character for character.
 //
 // The point of a shared module is that both surfaces tell one story. The web
 // front door (`/discover`) and this app's first run describe the same product;

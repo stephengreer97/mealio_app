@@ -30,6 +30,7 @@ import {
   consolidateIngredients,
 } from '../lib/consolidateIngredients';
 import { ingredientAmount } from '../lib/formatMeasurement';
+import { isChooseRun as isChooseRunItems } from '../lib/chooseRun';
 import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
 import { useParallelSearchPool } from '../lib/useParallelSearchPool';
 import { usePresearchAddPool, PresearchItem } from '../lib/usePresearchAddPool';
@@ -2731,7 +2732,8 @@ export default function WebViewCartSheet({
   // A run where nothing has a chosen product yet is a Choose Products run: it
   // saves matches and adds nothing. Titling its first screen "Add to Cart" is
   // the exact confusion MEAL-84 is about — the setup reading as the shopping.
-  const isChooseRun = items.length > 0 && items.every((it) => !it.searchTerm);
+  // Shared with the button that opens this sheet — see lib/chooseRun.ts.
+  const isChooseRun = isChooseRunItems(items);
 
   const titleMap: Record<Step, string> = {
     qty: isChooseRun ? 'Choose Products' : 'Add to Cart',
