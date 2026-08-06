@@ -139,6 +139,32 @@ describe('the tenant seam is complete', () => {
     expect(s.isSearchUrl('https://shop.example-co.test/help')).toBe(false);
   });
 
+  it('the sign-in-modal exclusion follows the menu selector it excludes', () => {
+    // The login poll skips a tick when some OTHER modal is up, so it doesn't
+    // yank the Main Menu open over a sign-in form. That exclusion used to be a
+    // hardcoded :not([aria-label="Main Menu"]) sitting next to a parameterized
+    // s.menu — override the menu and the exclusion stopped matching, silently,
+    // and the poll went back to fighting the modal.
+    const renamed: InstacartTenant = {
+      ...SYNTHETIC,
+      selectorOverrides: { menu: '[role="dialog"][aria-label="Hovedmeny"]' },
+    };
+    const src = scriptsOf(renamed).checkLogin;
+    expect(src).toContain('[role="dialog"][aria-modal="true"]:not([aria-label="Hovedmeny"])');
+    expect(src).not.toContain(':not([aria-label="Main Menu"])');
+  });
+
+  it('excludes the whole menu selector when it carries no aria-label', () => {
+    // Fallback branch: a banner whose menu is identified some other way still
+    // gets an exclusion that names it, rather than an empty :not() that would
+    // match the menu itself and stall the poll forever.
+    const byTestId: InstacartTenant = {
+      ...SYNTHETIC,
+      selectorOverrides: { menu: '[data-testid=main-menu-dialog]' },
+    };
+    expect(scriptsOf(byTestId).checkLogin).toContain(':not([data-testid=main-menu-dialog])');
+  });
+
   it('gives each tenant its own login guard, so two cannot clobber each other', () => {
     expect(scriptsOf(ALDI).checkLogin).toContain('window.__aldiLoginCheckActive');
     expect(scriptsOf(SYNTHETIC).checkLogin).toContain('window.__examplecoLoginCheckActive');
