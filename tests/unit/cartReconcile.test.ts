@@ -10,9 +10,10 @@ import {
   isWeightPriced,
   reconcileFromWorkerReports,
   reconcileParallelAdd,
+  shouldProbeAfterRun,
   toIntendedItem,
 } from '../../src/lib/cart-reconcile';
-import type { AttemptedAdd, IntendedItem, OverAdd, WorkerReport } from '../../src/lib/cart-reconcile';
+import type { AttemptedAdd, IntendedItem, OverAdd, RecoveredAdd, WorkerReport } from '../../src/lib/cart-reconcile';
 import type { CartRow } from '../../src/lib/webview-scripts/cart-count';
 
 const row = (name: string, qty: number, isWeight = false): CartRow =>
@@ -246,6 +247,8 @@ interface AuditCase {
   short: { name: string; got: number; expected: number }[];
   over: OverAdd[];
   countShortfall: { delta: number; expected: number } | null;
+  /** Omitted where nothing was under-reported (the common case). */
+  recovered?: RecoveredAdd[];
 }
 
 const AUDIT_CASES: AuditCase[] = [
@@ -394,6 +397,83 @@ const AUDIT_CASES: AuditCase[] = [
     over: [],
     countShortfall: null,
   },
+  // ── Under-reported adds (MEAL-47) ──────────────────────────────────────────
+  // The direction the audit used to be blind to: the worker said "failed", the
+  // cart says otherwise. These runs reported NOTHING added, which is exactly why
+  // the after-probe used to skip them.
+  {
+    name: 'worker false negative — the add committed while the badge read stale, so only the cart knows it landed',
+    rows: [row('Daisy Pure & Natural Sour Cream, 16 oz', 1)],
+    reportedAdded: [],
+    active: [intended('sour cream', 1)],
+    reconcileIntended: [],
+    countBefore: 4,
+    countAfter: 5,
+    missing: [],
+    short: [],
+    over: [],
+    countShortfall: null,
+    recovered: [{ name: 'sour cream', cartName: 'Daisy Pure & Natural Sour Cream, 16 oz', qty: 1 }],
+  },
+  {
+    name: 'a partly-landed false negative reports the units actually found, not the units asked for',
+    rows: [row('Topo Chico Mineral Water', 1)],
+    reportedAdded: [],
+    active: [intended('Topo Chico Mineral Water', 3)],
+    reconcileIntended: [],
+    countBefore: 0,
+    countAfter: 1,
+    missing: [],
+    short: [],
+    over: [],
+    countShortfall: null,
+    recovered: [{ name: 'Topo Chico Mineral Water', cartName: 'Topo Chico Mineral Water', qty: 1 }],
+  },
+  {
+    name: 'a weight-priced false negative is recovered by PRESENCE — one row at N lb, whatever poundage was asked for',
+    rows: [row('H-E-B Prime 1 Beef Brisket', 1, true)],
+    reportedAdded: [],
+    active: [intended('brisket', 4, true)],
+    reconcileIntended: [],
+    countBefore: 0,
+    countAfter: 1,
+    missing: [],
+    short: [],
+    over: [],
+    countShortfall: null,
+    recovered: [{ name: 'brisket', cartName: 'H-E-B Prime 1 Beef Brisket', qty: 1 }],
+  },
+  {
+    name: 'a genuinely failed item is NOT recovered by a lookalike row a reported item already claimed',
+    // "McCormick Ground Coriander" loosely matches the cumin row (2 of its 3
+    // tokens), so without the reported item claiming its own row first, a
+    // coriander that never landed would be announced as already in the cart.
+    rows: [row('McCormick Ground Cumin, 4.5 oz', 1)],
+    reportedAdded: ['McCormick Ground Cumin, 4.5 oz'],
+    active: [intended('McCormick Ground Cumin', 1), intended('McCormick Ground Coriander', 1)],
+    reconcileIntended: [],
+    countBefore: 0,
+    countAfter: 1,
+    missing: [],
+    short: [],
+    over: [],
+    countShortfall: null,
+    recovered: [],
+  },
+  {
+    name: 'an unintended unit stays an over-add — nothing attempted explains it',
+    rows: [row('Milk', 1), row('Impulse Candy Bar', 1)],
+    reportedAdded: ['Milk'],
+    active: [intended('Milk', 1), intended('Eggs', 1)],
+    reconcileIntended: [],
+    countBefore: 0,
+    countAfter: 2,
+    missing: [],
+    short: [],
+    over: [{ name: 'Impulse Candy Bar', qty: 1 }],
+    countShortfall: null,
+    recovered: [],
+  },
 ];
 
 describe('auditCartAfterRun', () => {
@@ -411,6 +491,32 @@ describe('auditCartAfterRun', () => {
     expect(out.over).toEqual(c.over);
     expect(out.overUnits).toBe(c.over.reduce((n, o) => n + o.qty, 0));
     expect(out.countShortfall).toEqual(c.countShortfall);
+    expect(out.recovered).toEqual(c.recovered ?? []);
+  });
+});
+
+// ── Arming the after-snapshot (MEAL-47) ───────────────────────────────────────
+//
+// The gate used to be the reported-success count, which skipped the cart read on
+// precisely the run that needed it: every add reported failed. The confirmation
+// rail is a shared header badge, so "failed" and "landed but unconfirmed" are the
+// same report — and the user was told an item was missing that was in their cart.
+
+describe('shouldProbeAfterRun', () => {
+  it('probes a run whose adds ALL reported failure — that run is the reason the snapshot exists', () => {
+    expect(shouldProbeAfterRun({ addsAttempted: 3, hasBaseline: true })).toBe(true);
+  });
+
+  it('probes a run that reported successes too (unchanged)', () => {
+    expect(shouldProbeAfterRun({ addsAttempted: 1, hasBaseline: true })).toBe(true);
+  });
+
+  it('does NOT probe when nothing was attempted — a choose-a-product run or an all-skipped review has no signal to find, and a cart load is not free', () => {
+    expect(shouldProbeAfterRun({ addsAttempted: 0, hasBaseline: true })).toBe(false);
+  });
+
+  it('does NOT probe without a baseline — with no before-snapshot every row diffs as newly added, so the findings would be the whole cart', () => {
+    expect(shouldProbeAfterRun({ addsAttempted: 3, hasBaseline: false })).toBe(false);
   });
 });
 

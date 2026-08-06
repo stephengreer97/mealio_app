@@ -306,6 +306,47 @@ export function reconcileFromWorkerReports(attempts: AttemptedAdd[]): WorkerRepo
 
 // ── After-run cart check ──────────────────────────────────────────────────────
 
+/**
+ * Whether a finished run has earned an after-snapshot of the cart.
+ *
+ * Gated on adds ATTEMPTED, never on adds REPORTED. A run whose adds all came
+ * back "failed" is exactly the run the snapshot exists to catch: the
+ * confirmation rail is a shared header badge (see webview-scripts/cart-confirm),
+ * so an add that committed while the badge read stale is reported as a failure.
+ * Gating on the reported count re-trusted the workers in the single case we know
+ * they are unreliable — the user was told an item was missing while it sat in
+ * their cart, and found out at checkout or by re-adding it and paying twice.
+ *
+ * Deliberately NOT unconditional. A run that attempted no adds at all — the
+ * choose-a-product flow, or every item skipped during review — has no signal to
+ * find, and a cart read costs a real page load on a store that is watching for
+ * automation. `addsAttempted` is the count of items that reached an add click,
+ * which is also the funnel's `add_click` denominator.
+ *
+ * `hasBaseline` stays a hard requirement: with no before-snapshot every row in
+ * the cart diffs as newly added, so the "findings" would be the user's entire
+ * cart. That a timed-out baseline therefore suppresses an otherwise useful
+ * reconcile is a real hole — it is MEAL-47's named follow-up (retry the
+ * before-probe, and/or an after-only presence check), deliberately not decided
+ * here.
+ */
+export function shouldProbeAfterRun(input: {
+  addsAttempted: number;
+  hasBaseline: boolean;
+}): boolean {
+  return input.hasBaseline && input.addsAttempted > 0;
+}
+
+/** An item the run reported as NOT added that the cart says did land. */
+export interface RecoveredAdd {
+  /** The intended item, by the title the run searched for. */
+  name: string;
+  /** The cart row accounting for it — the title the user sees in their cart. */
+  cartName: string;
+  /** Units of it found in the cart. */
+  qty: number;
+}
+
 export interface CartCheckFindings {
   /** Reported as added, but no cart row bears the name — a silent miss. */
   missing: string[];
@@ -317,12 +358,73 @@ export interface CartCheckFindings {
   /** Total units across `over`. */
   overUnits: number;
   /**
+   * Attempted, reported as NOT added, and in the cart anyway — a worker false
+   * negative. The run already told the user these failed; the cart says
+   * otherwise, and re-adding them by hand would double them.
+   */
+  recovered: RecoveredAdd[];
+  /**
    * Fallback shortfall for stores with no per-item cart data (header badge
    * only), or when names didn't resolve: the badge rose by less than the number
    * of items reported added. Null whenever there are per-item findings above —
    * those are strictly more specific, and the caller reports them instead.
    */
   countShortfall: { delta: number; expected: number } | null;
+}
+
+/** Did the run report adding this item? Matched in BOTH directions on purpose:
+ *  the intended title is a search term ("sour cream") while a reported title is
+ *  the store's product name ("Daisy Pure & Natural Sour Cream, 16 oz"), and
+ *  cartNameMatches only asks whether the second argument's tokens are present in
+ *  the first. Reading it one way alone would classify half the reported items as
+ *  unreported. Erring towards "reported" is the safe direction here: it costs a
+ *  recovery we don't announce, never a false "it's already in your cart". */
+function wasReported(item: IntendedItem, reportedAdded: string[]): boolean {
+  return reportedAdded.some(
+    (n) => cartNameMatches(item.name, n) || cartNameMatches(n, item.name),
+  );
+}
+
+/**
+ * Items the run attempted, reported as failed, and that the cart nonetheless
+ * contains — the worker false negative MEAL-47 is about.
+ *
+ * Units are claimed only from what is LEFT OVER once every reported-added item
+ * has taken its own rows, so a reported item's row can never be re-attributed to
+ * an unreported sibling with a similar title (the same pool discipline the
+ * pepper double-count taught us). That leftover is exactly the pool `over` draws
+ * from, and the two partition it: a leftover unit an attempted item explains is
+ * a recovery, one that nothing explains is an over-add.
+ *
+ * Weight lines are presence-based — one row at N lb confirms the item whatever
+ * the poundage (see isWeightPriced).
+ */
+export function findRecoveredItems(
+  addedRows: CartRow[],
+  reportedAdded: string[],
+  intendedAll: IntendedItem[],
+): RecoveredAdd[] {
+  const unreported = intendedAll.filter((it) => !wasReported(it, reportedAdded));
+  if (unreported.length === 0) return [];
+  const pool = findOverAddedItems(addedRows, intendedAll.filter((it) => wasReported(it, reportedAdded)))
+    .map((o) => ({ name: o.name, qty: o.qty }));
+  const recovered: RecoveredAdd[] = [];
+  for (const item of unreported) {
+    const need = item.isWeight ? 1 : Math.max(1, item.expectedQty || 1);
+    let got = 0;
+    let cartName = '';
+    for (const row of pool) {
+      if (got >= need) break;
+      if (row.qty <= 0) continue;
+      if (!cartNameMatches(row.name, item.name)) continue;
+      const take = Math.min(row.qty, need - got);
+      row.qty -= take;
+      got += take;
+      if (!cartName) cartName = row.name;
+    }
+    if (got > 0) recovered.push({ name: item.name, cartName, qty: got });
+  }
+  return recovered;
 }
 
 /**
@@ -337,6 +439,11 @@ export interface CartCheckFindings {
  * full intended set the parallel reconcile snapshotted before the top-up
  * narrowed `active`; the over-add check prefers it and falls back to `active`
  * for the serial path, which never reconciles and so never captures one.
+ *
+ * The audit reads in both directions: items reported added that the cart can't
+ * corroborate (`missing`/`short`), and items reported FAILED that the cart says
+ * landed anyway (`recovered`). The second direction is why this runs at all on
+ * a run that reported nothing added — see shouldProbeAfterRun.
  */
 export function auditCartAfterRun(input: {
   rows: CartRow[] | null;
@@ -350,10 +457,16 @@ export function auditCartAfterRun(input: {
   let missing: string[] = [];
   let short: ShortAdd[] = [];
   let over: OverAdd[] = [];
+  let recovered: RecoveredAdd[] = [];
   if (rows) {
     const addedRows = rows.filter((r) => r.added);
     missing = findUnaddedItems(reportedAdded, addedRows.map((r) => r.name));
-    over = findOverAddedItems(addedRows, reconcileIntended.length > 0 ? reconcileIntended : active);
+    // The full set the run meant to add. After a parallel top-up `active` is
+    // only the retry subset, so the reconcile's snapshot is preferred; the
+    // serial path never reconciles and falls back to its (unnarrowed) active set.
+    const intendedAll = reconcileIntended.length > 0 ? reconcileIntended : active;
+    over = findOverAddedItems(addedRows, intendedAll);
+    recovered = findRecoveredItems(addedRows, reportedAdded, intendedAll);
     // Only audit items we reported as added (failures already route to review),
     // skip sold-by-weight lines (one row at N lb, not count-comparable), and
     // skip fully-missing items (covered by `missing`).
@@ -371,6 +484,7 @@ export function auditCartAfterRun(input: {
     short,
     over,
     overUnits: over.reduce((n, o) => n + o.qty, 0),
+    recovered,
     countShortfall:
       clean && countBefore != null && countAfter != null && expected > 0 && countAfter - countBefore < expected
         ? { delta: Math.max(countAfter - countBefore, 0), expected }
