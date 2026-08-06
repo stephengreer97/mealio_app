@@ -45,6 +45,8 @@ export interface MergeResult {
 const MAX_SELECTOR_LENGTH = 500;
 const MAX_URL_LENGTH = 500;
 const MAX_STORES = 40;
+// Room for the known platforms plus headroom for ones a newer server knows about.
+const MAX_PLATFORMS = 12;
 const MAX_SELECTORS_PER_STORE = 60;
 
 // Characters that would terminate or escape the JS string literal a selector is
@@ -283,7 +285,15 @@ function mergePlatforms(remote: unknown, config: AutomationConfig, warnings: str
     warnings.push('platforms: expected an object — ignored');
     return;
   }
-  for (const [platformId, entry] of Object.entries(remote)) {
+  const entries = Object.entries(remote);
+  // Bail on an oversized section rather than emitting a warning per junk key, the
+  // same way `stores` is guarded by MAX_STORES. Only known ids are accepted below,
+  // so a payload larger than this is malformed or hostile either way.
+  if (entries.length > MAX_PLATFORMS) {
+    warnings.push(`platforms: ${entries.length} entries exceeds ${MAX_PLATFORMS} — ignored`);
+    return;
+  }
+  for (const [platformId, entry] of entries) {
     if (!isPlatformId(platformId)) {
       warnings.push(
         `platforms.${platformId}: not a known platform (${PLATFORM_IDS.join('|')}) — ignored`,

@@ -368,6 +368,15 @@ describe('mergeAutomationConfig', () => {
       expect(warnings.join()).toMatch(/exceeds 60/);
     });
 
+    it('ignores an oversized platforms section instead of warning per junk key', () => {
+      const platforms = Object.fromEntries(
+        Array.from({ length: 13 }, (_, i) => [`p${i}`, { selectors: { atc: '.x' } }]),
+      );
+      const { config, warnings } = mergeAutomationConfig({ platforms });
+      expect(config.platforms).toEqual(BUNDLED_AUTOMATION_CONFIG.platforms);
+      expect(warnings).toEqual(['platforms: 13 entries exceeds 12 — ignored']);
+    });
+
     it('platforms is no longer an unknown top-level section', () => {
       const { warnings } = mergeAutomationConfig({ platforms: {} });
       expect(warnings).toEqual([]);
