@@ -15,6 +15,7 @@
     "match-harness:build": "tsx tests/match-harness/build-corpus.ts",
     "capture": "tsx tests/fixture-runners/capture-fixtures.ts",
     "capture:server": "tsx tests/fixture-runners/capture-server.ts",
+    "drift": "tsx tests/drift/report.ts",
     "postinstall": "patch-package"
   },
   "dependencies": {

@@ -21,7 +21,8 @@ const SELECTOR_KEY = 'walmart';
 // be read INSIDE a build function — the remote config lands after module import,
 // so a module-scope capture would freeze these fallbacks forever. That is why the
 // script constants below are functions rather than template-literal consts.
-const SEL_FALLBACKS = {
+// Exported for the fixture drift census (MEAL-30) — see the note on heb.ts's copy.
+export const SEL_FALLBACKS = {
   card: '[data-automation-id="product"], [data-item-id]',
   title: '[data-automation-id="product-title"], [data-automation-id="name"]',
   addBtn: '[data-automation-id="add-to-cart"], button[aria-label*="Add to cart"]',

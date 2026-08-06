@@ -103,7 +103,7 @@ export interface InstacartTenant {
  *  Note which selectors CANNOT move up into the platform table: `cardLink` weaves
  *  in the tenant's own slug, and the platform table is static JSON that does not
  *  know which tenant is reading it. Slug-parameterised selectors stay here. */
-function selFallbacks(t: InstacartTenant): Record<string, string> {
+export function selFallbacks(t: InstacartTenant): Record<string, string> {
   return {
     atc: 'button[aria-label^="Add 1 "]',
     inc: 'button[aria-label^="Increment quantity"], button[aria-label^="Increase quantity"]',

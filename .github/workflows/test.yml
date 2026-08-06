@@ -65,6 +65,15 @@ jobs:
             spec: tests/fixture-tests/cart-count.spec.ts
           - name: parallel-workers
             spec: tests/fixture-tests/parallel-workers.spec.ts
+          # MEAL-30. Compares every store's selectors against the committed shape
+          # baseline. Runs on every push like the rest of this matrix, so a
+          # recapture PR carries its own drift report — but the alert this ticket
+          # is really about arrives when a SCHEDULED recapture lands, and that
+          # recapture cannot run here: it needs a residential IP (see MEAL-7 and
+          # the runner contract in tests/fixtures/README.md). This job checks
+          # fixtures; it never fetches a store.
+          - name: selector-drift
+            spec: tests/fixture-tests/selector-drift.spec.ts
     steps:
       - uses: actions/checkout@v4
 
