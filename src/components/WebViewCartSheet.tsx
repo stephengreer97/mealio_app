@@ -3654,8 +3654,17 @@ export default function WebViewCartSheet({
                       <Ionicons name="information-circle-outline" size={56} color="#6b7280" />
                     </View>
                     <Text style={styles.doneTitle}>No items were added.</Text>
+                    {/* Two different runs land here and they need different
+                        words. If nothing was ever attempted (choose-a-product,
+                        or every item skipped in review) the cart was never
+                        touched. If adds WERE attempted and all came back failed,
+                        "no products were selected" is simply false — and it is
+                        exactly the run the cart check below probes, so it can
+                        contradict the banner it sits above. */}
                     <Text style={styles.doneSub}>
-                      No products were selected or all were skipped.
+                      {addsAttemptedRef.current > 0
+                        ? "We couldn't confirm any adds."
+                        : 'No products were selected or all were skipped.'}
                     </Text>
                     {/* A run that added nothing still gets the cart check now
                         (MEAL-47), and it is the run most likely to have found

@@ -353,7 +353,9 @@ export interface CartCheckFindings {
   /** Present in the cart but with fewer units than requested (e.g. a store
    *  per-item cap accepted 2 of 3). */
   short: ShortAdd[];
-  /** Cart units no intended item accounts for. */
+  /** Cart units no intended item accounts for — neither a reported add nor a
+   *  recovered one. Partitioned against `recovered`, so a unit never appears in
+   *  both (see splitCartLeftover). */
   over: OverAdd[];
   /** Total units across `over`. */
   overUnits: number;
@@ -361,6 +363,9 @@ export interface CartCheckFindings {
    * Attempted, reported as NOT added, and in the cart anyway — a worker false
    * negative. The run already told the user these failed; the cart says
    * otherwise, and re-adding them by hand would double them.
+   *
+   * Claimed from the same pool as `over` and before it, so a recovered unit is
+   * never also announced as unintended.
    */
   recovered: RecoveredAdd[];
   /**
@@ -386,45 +391,130 @@ function wasReported(item: IntendedItem, reportedAdded: string[]): boolean {
 }
 
 /**
- * Items the run attempted, reported as failed, and that the cart nonetheless
- * contains — the worker false negative MEAL-47 is about.
+ * The two findings that share the added rows: recoveries and over-adds.
  *
- * Units are claimed only from what is LEFT OVER once every reported-added item
- * has taken its own rows, so a reported item's row can never be re-attributed to
- * an unreported sibling with a similar title (the same pool discipline the
- * pepper double-count taught us). That leftover is exactly the pool `over` draws
- * from, and the two partition it: a leftover unit an attempted item explains is
- * a recovery, one that nothing explains is an over-add.
- *
- * Weight lines are presence-based — one row at N lb confirms the item whatever
- * the poundage (see isWeightPriced).
+ * They are computed together because they are one partition of one pool. Two
+ * independent passes over the same rows (an `over` recomputed from the full
+ * intended set, a `recovered` claiming from its own reported-only pool) can
+ * attribute the same unit differently, and a unit the two disagree about lands
+ * in BOTH — the done screen then names one product twice, telling the user in
+ * the same breath not to re-add it and that nothing intended it. See
+ * splitCartLeftover.
  */
-export function findRecoveredItems(
+export interface CartLeftoverSplit {
+  recovered: RecoveredAdd[];
+  over: OverAdd[];
+}
+
+/** One added cart row while it is being consumed. Weight rows are held apart:
+ *  they carry no unit count (one line at N lb), so only a weight-priced item may
+ *  claim one, and only by presence — exactly findOverAddedItems' rule, which
+ *  loses the flag when it flattens leftovers to `{name, qty: 1}` on output. */
+interface Leftover {
+  count: { name: string; qty: number }[];
+  weight: { name: string; used: boolean }[];
+}
+
+function toLeftover(addedRows: CartRow[]): Leftover {
+  return {
+    count: addedRows.filter((r) => !r.isWeight).map((r) => ({ name: r.name, qty: r.qty })),
+    weight: addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false })),
+  };
+}
+
+/** A claim in progress: how many units of `item` the pool has yielded so far,
+ *  and the cart title they came from (what the user sees in their cart). */
+interface Claim {
+  item: IntendedItem;
+  qty: number;
+  cartName: string;
+}
+
+/** Consume weight rows by PRESENCE for the weight-priced items among `claims` —
+ *  one row at N lb confirms the item whatever poundage was asked for (see
+ *  isWeightPriced). Mutates `pool`. */
+function claimWeightRows(pool: Leftover, claims: Claim[]): void {
+  for (const c of claims) {
+    if (!c.item.isWeight || c.qty > 0) continue;
+    const w = pool.weight.find((p) => !p.used && cartNameMatches(p.name, c.item.name));
+    if (w) { w.used = true; c.qty = 1; c.cartName = w.name; }
+  }
+}
+
+/** Consume count rows for the count items among `claims`, capped at each item's
+ *  expected qty so a legitimately-requested unit never reads as overage.
+ *  Mutates `pool`. */
+function claimCountRows(pool: Leftover, claims: Claim[], exactOnly: boolean): void {
+  for (const c of claims) {
+    if (c.item.isWeight) continue;
+    const need = Math.max(1, c.item.expectedQty || 1);
+    for (const row of pool.count) {
+      if (c.qty >= need) break;
+      if (row.qty <= 0) continue;
+      const match = exactOnly
+        ? normalizeName(row.name) === normalizeName(c.item.name)
+        : cartNameMatches(row.name, c.item.name);
+      if (!match) continue;
+      const take = Math.min(row.qty, need - c.qty);
+      row.qty -= take;
+      c.qty += take;
+      if (!c.cartName) c.cartName = row.name;
+    }
+  }
+}
+
+/**
+ * Split the added cart rows into what the run under-reported (`recovered`) and
+ * what nothing intended (`over`) — ONE pool, claimed once, so no unit can be
+ * reported twice.
+ *
+ * Every added unit is offered to the intended items in a fixed order and then
+ * removed from the pool:
+ *
+ *   1. items the run REPORTED as added take their own rows — exact-name matches
+ *      reserved before loose ones, the pool discipline the pepper double-count
+ *      taught us. A lookalike title can then never be announced as landed.
+ *   2. items the run reported as FAILED claim from what is left. A unit one of
+ *      them explains is a `recovered` false negative: attempted, reported
+ *      failed, in the cart anyway — the bug MEAL-47 is about.
+ *   3. whatever no intended item claimed is `over`.
+ *
+ * Because it is a true partition, `over` is no longer recomputed from the full
+ * intended set: it is the residue of steps 1-2. Where the two used to disagree
+ * about a unit — a count item claiming a weight row it could never claim in the
+ * over pass, or a loose match the two passes attributed differently — the unit
+ * is now attributed once, to the recovery, and `over` no longer repeats it.
+ *
+ * The exact-name passes run before the loose ones ACROSS both groups, so a
+ * reported item's loose match cannot take the row an unreported item names
+ * exactly; within a pass, reported items claim first.
+ */
+export function splitCartLeftover(
   addedRows: CartRow[],
   reportedAdded: string[],
   intendedAll: IntendedItem[],
-): RecoveredAdd[] {
-  const unreported = intendedAll.filter((it) => !wasReported(it, reportedAdded));
-  if (unreported.length === 0) return [];
-  const pool = findOverAddedItems(addedRows, intendedAll.filter((it) => wasReported(it, reportedAdded)))
-    .map((o) => ({ name: o.name, qty: o.qty }));
-  const recovered: RecoveredAdd[] = [];
-  for (const item of unreported) {
-    const need = item.isWeight ? 1 : Math.max(1, item.expectedQty || 1);
-    let got = 0;
-    let cartName = '';
-    for (const row of pool) {
-      if (got >= need) break;
-      if (row.qty <= 0) continue;
-      if (!cartNameMatches(row.name, item.name)) continue;
-      const take = Math.min(row.qty, need - got);
-      row.qty -= take;
-      got += take;
-      if (!cartName) cartName = row.name;
-    }
-    if (got > 0) recovered.push({ name: item.name, cartName, qty: got });
-  }
-  return recovered;
+): CartLeftoverSplit {
+  const pool = toLeftover(addedRows);
+  const claims: Claim[] = intendedAll.map((item) => ({ item, qty: 0, cartName: '' }));
+  const reported = claims.filter((c) => wasReported(c.item, reportedAdded));
+  const unreported = claims.filter((c) => !wasReported(c.item, reportedAdded));
+
+  claimWeightRows(pool, reported);
+  claimWeightRows(pool, unreported);
+  claimCountRows(pool, reported, true);
+  claimCountRows(pool, unreported, true);
+  claimCountRows(pool, reported, false);
+  claimCountRows(pool, unreported, false);
+
+  const over: OverAdd[] = [];
+  for (const row of pool.count) if (row.qty > 0) over.push({ name: row.name, qty: row.qty });
+  for (const w of pool.weight) if (!w.used) over.push({ name: w.name, qty: 1 });
+  return {
+    recovered: unreported
+      .filter((c) => c.qty > 0)
+      .map((c) => ({ name: c.item.name, cartName: c.cartName, qty: c.qty })),
+    over,
+  };
 }
 
 /**
@@ -465,8 +555,11 @@ export function auditCartAfterRun(input: {
     // only the retry subset, so the reconcile's snapshot is preferred; the
     // serial path never reconciles and falls back to its (unnarrowed) active set.
     const intendedAll = reconcileIntended.length > 0 ? reconcileIntended : active;
-    over = findOverAddedItems(addedRows, intendedAll);
-    recovered = findRecoveredItems(addedRows, reportedAdded, intendedAll);
+    // ONE claim over the added rows, split two ways (see splitCartLeftover).
+    // Computing these separately let a single cart unit be reported as both a
+    // recovery and an over-add — the same product named twice on the done
+    // screen, "don't add it again" beside "nothing intended it".
+    ({ over, recovered } = splitCartLeftover(addedRows, reportedAdded, intendedAll));
     // Only audit items we reported as added (failures already route to review),
     // skip sold-by-weight lines (one row at N lb, not count-comparable), and
     // skip fully-missing items (covered by `missing`).

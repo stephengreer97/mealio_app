@@ -460,6 +460,51 @@ const AUDIT_CASES: AuditCase[] = [
     countShortfall: null,
     recovered: [],
   },
+  // ── over and recovered are ONE partition, never two claims on one unit ─────
+  // Both cases below used to report the SAME cart unit twice: once as recovered
+  // ("in your cart already — don't add it again") and once as an over-add
+  // ("added that Mealio didn't intend"), naming one product twice with
+  // contradictory instructions and over-counting recoveries on the funnel.
+  {
+    name: 'a weight cart row is never recovered by a COUNT item — the row stays a single over-add, not an over-add AND a recovery',
+    // A stepper-weight HEB deli item: weightStep but no purchaseWeight, so it is
+    // intended as an ordinary count item (see isWeightPriced) while its cart line
+    // is a weight row. `over` may not claim it for a count item, so the recovery
+    // pass must not either — the old pool flattened weight rows to {name, qty: 1}
+    // and lost the flag, letting the count item claim what over had left behind.
+    rows: [row('H-E-B Boneless Chicken Breast', 1, true)],
+    reportedAdded: [],
+    active: [intended('chicken breast', 1)],
+    reconcileIntended: [],
+    countBefore: 0,
+    countAfter: 1,
+    missing: [],
+    short: [],
+    over: [{ name: 'H-E-B Boneless Chicken Breast', qty: 1 }],
+    countShortfall: null,
+    recovered: [],
+  },
+  {
+    name: 'two rows and disjoint search terms — the unit an unreported item explains is a recovery ONLY, with no weight flag involved',
+    // "shredded cheese" loosely matches both rows; "mexican blend" matches only
+    // the H-E-B one, which is what the run reported adding. Recomputing `over`
+    // from the full intended set attributed the H-E-B row to "shredded cheese"
+    // (leaving the Kraft row as an over-add) while the recovery pass attributed
+    // the Kraft row to it — one 1-unit row, two claims. Reported items claim
+    // first now, so the H-E-B row is the reported add and the Kraft row is
+    // claimed exactly once.
+    rows: [row('H-E-B Shredded Cheese Mexican Blend, 8 oz', 1), row('Kraft Shredded Cheese Sharp Cheddar', 1)],
+    reportedAdded: ['H-E-B Mexican Blend Cheese'],
+    active: [intended('shredded cheese', 1), intended('mexican blend', 1)],
+    reconcileIntended: [],
+    countBefore: 0,
+    countAfter: 2,
+    missing: [],
+    short: [],
+    over: [],
+    countShortfall: null,
+    recovered: [{ name: 'shredded cheese', cartName: 'Kraft Shredded Cheese Sharp Cheddar', qty: 1 }],
+  },
   {
     name: 'an unintended unit stays an over-add — nothing attempted explains it',
     rows: [row('Milk', 1), row('Impulse Candy Bar', 1)],
@@ -492,6 +537,17 @@ describe('auditCartAfterRun', () => {
     expect(out.overUnits).toBe(c.over.reduce((n, o) => n + o.qty, 0));
     expect(out.countShortfall).toEqual(c.countShortfall);
     expect(out.recovered).toEqual(c.recovered ?? []);
+    // `over` and `recovered` split ONE pool, so every case — not just the two
+    // that regressed — must obey the partition: no more units claimed than the
+    // run added, and no cart row named on both sides (the done screen would tell
+    // the user not to re-add a product and that nothing intended it, at once).
+    if (c.rows) {
+      const addedUnits = c.rows.filter((r) => r.added).reduce((n, r) => n + r.qty, 0);
+      const claimedUnits = out.overUnits + out.recovered.reduce((n, r) => n + r.qty, 0);
+      expect(claimedUnits).toBeLessThanOrEqual(addedUnits);
+      const overNames = out.over.map((o) => o.name);
+      expect(out.recovered.filter((r) => overNames.includes(r.cartName))).toEqual([]);
+    }
   });
 });
 
