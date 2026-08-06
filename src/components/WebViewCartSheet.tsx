@@ -42,7 +42,7 @@ import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
-import { auditCartAfterRun, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
+import { auditCartAfterRun, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -473,6 +473,12 @@ export default function WebViewCartSheet({
   const addingIdxRef = useRef(0);
   const addingItemsRef = useRef<PickedItem[]>([]);
   const addResultsRef = useRef<{ name: string; success: boolean; reason?: string }[]>([]);
+  // Adds ATTEMPTED this run — one per item that reached an add click, whatever
+  // the store said back. Incremented wherever the funnel's `add_click` row is
+  // emitted, so the two can never drift. This, not the reported-success count,
+  // is what arms the after-snapshot: a run whose adds all reported failure is
+  // the run most in need of a look at the real cart (MEAL-47).
+  const addsAttemptedRef = useRef(0);
   // Compile the failed-item names (and log their reasons) for the done screen.
   // Called at each point the flow finalizes into 'done' with failures.
   const compileFailedNames = useCallback(() => {
@@ -1055,6 +1061,7 @@ export default function WebViewCartSheet({
       searchIdxRef.current = 0;
       addingIdxRef.current = 0;
       addResultsRef.current = [];
+      addsAttemptedRef.current = 0;
       autoPickedItemsRef.current = [];
       searchResultsRef.current = [];
       isCustomSearchRef.current = false;
@@ -1157,16 +1164,20 @@ export default function WebViewCartSheet({
   // strikethrough read, so what the screen says matches what runs.
   const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && !isZeroedOut(it)).length;
 
-  // Cart snapshot AFTER the run. Only fires when the before-snapshot succeeded
-  // and something was reported added. For cart-page stores (HEB) navigate the
-  // now-idle webview to /cart and count there; otherwise read the header badge
-  // off the last search page (still mounted through 'done').
+  // Cart snapshot AFTER the run. Fires when the before-snapshot succeeded and
+  // the run ATTEMPTED at least one add — see shouldProbeAfterRun for why the
+  // reported-success count is the wrong gate. For cart-page stores (HEB)
+  // navigate the now-idle webview to /cart and count there; otherwise read the
+  // header badge off the last search page (still mounted through 'done').
   useEffect(() => {
-    if (step !== 'done' || cartCountBeforeRef.current == null) return;
+    if (step !== 'done') return;
     // The reconcile pass already read the cart with its own probe and set the
     // final state — don't fire a redundant second after-probe.
     if (reconcileFinalizedRef.current) { reconcileFinalizedRef.current = false; return; }
-    if (totalAdded === 0) return;
+    if (!shouldProbeAfterRun({
+      addsAttempted: addsAttemptedRef.current,
+      hasBaseline: cartCountBeforeRef.current != null,
+    })) return;
     triggerCartProbe('after');
   }, [step, totalAdded, lockedStoreId, triggerCartProbe]);
 
@@ -1521,6 +1532,7 @@ export default function WebViewCartSheet({
       itemIndex: idx,
       detail: { path: 'sequential', qty: item.qty, onSearchPage: onSearchPageRef.current },
     });
+    addsAttemptedRef.current += 1;
     if (onSearchPageRef.current) {
       loadQueueRef.current = [scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null)];
       lastLoadEndUrlRef.current = '';
@@ -2237,9 +2249,27 @@ export default function WebViewCartSheet({
               countBefore: cartCountBeforeRef.current,
               countAfter: count,
             });
-            const { missing, short, over, countShortfall } = findings;
-            if (missing.length > 0 || short.length > 0 || over.length > 0) {
+            const { missing, short, over, recovered, countShortfall } = findings;
+            // The workers under-reported: the cart holds items this run told the
+            // user it could not add (MEAL-47). Say so — otherwise the user adds
+            // them a second time by hand and pays twice. Recorded on the funnel
+            // as a `reconcile` failure because that is what it is: the
+            // confirmation rail was wrong, and the size of this row over time is
+            // how the fix is told apart from a regression in itemsAdded (the
+            // run_summary row above has already shipped its lower count).
+            if (recovered.length > 0) {
+              console.log(`[Cart ${ts()}]`, 'cart check: RECOVERED false-negative adds', JSON.stringify(recovered));
+              tel().record('reconcile', 'error', {
+                detail: { phase: 'after', recovered: recovered.length, reportedAdded: addResultsRef.current.filter((r) => r.success).length },
+                code: 'confirm_failed',
+              });
+            }
+            if (missing.length > 0 || short.length > 0 || over.length > 0 || recovered.length > 0) {
               const parts: string[] = [];
+              if (recovered.length > 0) {
+                const names = recovered.map((r) => r.cartName || r.name).join(', ');
+                parts.push(`${recovered.length} item${recovered.length === 1 ? ' we reported as not added is' : 's we reported as not added are'} in your cart already (${names}) — don't add ${recovered.length === 1 ? 'it' : 'them'} again`);
+              }
               if (missing.length > 0) {
                 parts.push(`${missing.length} item${missing.length === 1 ? '' : 's'} may not have been added (${missing.join(', ')})`);
               }
@@ -2328,6 +2358,7 @@ export default function WebViewCartSheet({
           // Emit both halves here to keep the confirm-rate denominator complete —
           // a fused add that failed still counts as an attempt.
           tel().record('add_click', 'ok', { itemIndex: idx, detail: { path: 'fused' } });
+          addsAttemptedRef.current += 1;
           if (msg.success) {
             tel().record('confirm', 'ok', { itemIndex: idx, detail: { attempt: 1, path: 'fused' } });
           } else {
@@ -3623,9 +3654,31 @@ export default function WebViewCartSheet({
                       <Ionicons name="information-circle-outline" size={56} color="#6b7280" />
                     </View>
                     <Text style={styles.doneTitle}>No items were added.</Text>
+                    {/* Two different runs land here and they need different
+                        words. If nothing was ever attempted (choose-a-product,
+                        or every item skipped in review) the cart was never
+                        touched. If adds WERE attempted and all came back failed,
+                        "no products were selected" is simply false — and it is
+                        exactly the run the cart check below probes, so it can
+                        contradict the banner it sits above. */}
                     <Text style={styles.doneSub}>
-                      No products were selected or all were skipped.
+                      {addsAttemptedRef.current > 0
+                        ? "We couldn't confirm any adds."
+                        : 'No products were selected or all were skipped.'}
                     </Text>
+                    {/* A run that added nothing still gets the cart check now
+                        (MEAL-47), and it is the run most likely to have found
+                        something: an add that committed while the store's badge
+                        read stale comes back as a failure. Without this the
+                        finding had nowhere to render — the banner only existed
+                        on the added>0 branch — and the user would re-add an item
+                        already in their cart. */}
+                    {cartDeltaWarning && (
+                      <View style={styles.cartCheckBanner} testID="cart-check-warning">
+                        <Ionicons name="alert-circle" size={18} color="#b45309" />
+                        <Text style={styles.cartCheckBannerText}>{cartDeltaWarning}</Text>
+                      </View>
+                    )}
                   </>
                 )}
               </View>
@@ -3644,12 +3697,13 @@ export default function WebViewCartSheet({
                 </View>
               )}
 
-              {!cartResultRows && !cartRowsTimedOut && (buildCartPageCountScript(lockedStoreId) || buildInlineCartScript(lockedStoreId)) && totalAdded > 0 && cartCountBeforeRef.current != null ? (
+              {!cartResultRows && !cartRowsTimedOut && (buildCartPageCountScript(lockedStoreId) || buildInlineCartScript(lockedStoreId)) && shouldProbeAfterRun({ addsAttempted: addsAttemptedRef.current, hasBaseline: cartCountBeforeRef.current != null }) ? (
                 // Cart-page store (or inline side-panel store like ALDI) with a
                 // baseline: the after-probe is reading the cart. Show a loading
                 // state instead of the plain list so the breakdown doesn't flash
-                // in. (No baseline → the after-probe won't run, so we skip the
-                // spinner and fall through to the plain list below.)
+                // in. Same gate as the probe itself so the two can't disagree —
+                // no baseline, or no add attempted, means no probe, so we skip
+                // the spinner and fall through to the plain list below.
                 <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 }}>
                   <ActivityIndicator size="small" color={storeColor} />
                   <Text style={{ fontSize: 13, color: Colors.text3, fontFamily: 'Inter_400Regular' }}>

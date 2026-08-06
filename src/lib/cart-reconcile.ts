@@ -306,16 +306,68 @@ export function reconcileFromWorkerReports(attempts: AttemptedAdd[]): WorkerRepo
 
 // ── After-run cart check ──────────────────────────────────────────────────────
 
+/**
+ * Whether a finished run has earned an after-snapshot of the cart.
+ *
+ * Gated on adds ATTEMPTED, never on adds REPORTED. A run whose adds all came
+ * back "failed" is exactly the run the snapshot exists to catch: the
+ * confirmation rail is a shared header badge (see webview-scripts/cart-confirm),
+ * so an add that committed while the badge read stale is reported as a failure.
+ * Gating on the reported count re-trusted the workers in the single case we know
+ * they are unreliable — the user was told an item was missing while it sat in
+ * their cart, and found out at checkout or by re-adding it and paying twice.
+ *
+ * Deliberately NOT unconditional. A run that attempted no adds at all — the
+ * choose-a-product flow, or every item skipped during review — has no signal to
+ * find, and a cart read costs a real page load on a store that is watching for
+ * automation. `addsAttempted` is the count of items that reached an add click,
+ * which is also the funnel's `add_click` denominator.
+ *
+ * `hasBaseline` stays a hard requirement: with no before-snapshot every row in
+ * the cart diffs as newly added, so the "findings" would be the user's entire
+ * cart. That a timed-out baseline therefore suppresses an otherwise useful
+ * reconcile is a real hole — it is MEAL-47's named follow-up (retry the
+ * before-probe, and/or an after-only presence check), deliberately not decided
+ * here.
+ */
+export function shouldProbeAfterRun(input: {
+  addsAttempted: number;
+  hasBaseline: boolean;
+}): boolean {
+  return input.hasBaseline && input.addsAttempted > 0;
+}
+
+/** An item the run reported as NOT added that the cart says did land. */
+export interface RecoveredAdd {
+  /** The intended item, by the title the run searched for. */
+  name: string;
+  /** The cart row accounting for it — the title the user sees in their cart. */
+  cartName: string;
+  /** Units of it found in the cart. */
+  qty: number;
+}
+
 export interface CartCheckFindings {
   /** Reported as added, but no cart row bears the name — a silent miss. */
   missing: string[];
   /** Present in the cart but with fewer units than requested (e.g. a store
    *  per-item cap accepted 2 of 3). */
   short: ShortAdd[];
-  /** Cart units no intended item accounts for. */
+  /** Cart units no intended item accounts for — neither a reported add nor a
+   *  recovered one. Partitioned against `recovered`, so a unit never appears in
+   *  both (see splitCartLeftover). */
   over: OverAdd[];
   /** Total units across `over`. */
   overUnits: number;
+  /**
+   * Attempted, reported as NOT added, and in the cart anyway — a worker false
+   * negative. The run already told the user these failed; the cart says
+   * otherwise, and re-adding them by hand would double them.
+   *
+   * Claimed from the same pool as `over` and before it, so a recovered unit is
+   * never also announced as unintended.
+   */
+  recovered: RecoveredAdd[];
   /**
    * Fallback shortfall for stores with no per-item cart data (header badge
    * only), or when names didn't resolve: the badge rose by less than the number
@@ -323,6 +375,146 @@ export interface CartCheckFindings {
    * those are strictly more specific, and the caller reports them instead.
    */
   countShortfall: { delta: number; expected: number } | null;
+}
+
+/** Did the run report adding this item? Matched in BOTH directions on purpose:
+ *  the intended title is a search term ("sour cream") while a reported title is
+ *  the store's product name ("Daisy Pure & Natural Sour Cream, 16 oz"), and
+ *  cartNameMatches only asks whether the second argument's tokens are present in
+ *  the first. Reading it one way alone would classify half the reported items as
+ *  unreported. Erring towards "reported" is the safe direction here: it costs a
+ *  recovery we don't announce, never a false "it's already in your cart". */
+function wasReported(item: IntendedItem, reportedAdded: string[]): boolean {
+  return reportedAdded.some(
+    (n) => cartNameMatches(item.name, n) || cartNameMatches(n, item.name),
+  );
+}
+
+/**
+ * The two findings that share the added rows: recoveries and over-adds.
+ *
+ * They are computed together because they are one partition of one pool. Two
+ * independent passes over the same rows (an `over` recomputed from the full
+ * intended set, a `recovered` claiming from its own reported-only pool) can
+ * attribute the same unit differently, and a unit the two disagree about lands
+ * in BOTH — the done screen then names one product twice, telling the user in
+ * the same breath not to re-add it and that nothing intended it. See
+ * splitCartLeftover.
+ */
+export interface CartLeftoverSplit {
+  recovered: RecoveredAdd[];
+  over: OverAdd[];
+}
+
+/** One added cart row while it is being consumed. Weight rows are held apart:
+ *  they carry no unit count (one line at N lb), so only a weight-priced item may
+ *  claim one, and only by presence — exactly findOverAddedItems' rule, which
+ *  loses the flag when it flattens leftovers to `{name, qty: 1}` on output. */
+interface Leftover {
+  count: { name: string; qty: number }[];
+  weight: { name: string; used: boolean }[];
+}
+
+function toLeftover(addedRows: CartRow[]): Leftover {
+  return {
+    count: addedRows.filter((r) => !r.isWeight).map((r) => ({ name: r.name, qty: r.qty })),
+    weight: addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false })),
+  };
+}
+
+/** A claim in progress: how many units of `item` the pool has yielded so far,
+ *  and the cart title they came from (what the user sees in their cart). */
+interface Claim {
+  item: IntendedItem;
+  qty: number;
+  cartName: string;
+}
+
+/** Consume weight rows by PRESENCE for the weight-priced items among `claims` —
+ *  one row at N lb confirms the item whatever poundage was asked for (see
+ *  isWeightPriced). Mutates `pool`. */
+function claimWeightRows(pool: Leftover, claims: Claim[]): void {
+  for (const c of claims) {
+    if (!c.item.isWeight || c.qty > 0) continue;
+    const w = pool.weight.find((p) => !p.used && cartNameMatches(p.name, c.item.name));
+    if (w) { w.used = true; c.qty = 1; c.cartName = w.name; }
+  }
+}
+
+/** Consume count rows for the count items among `claims`, capped at each item's
+ *  expected qty so a legitimately-requested unit never reads as overage.
+ *  Mutates `pool`. */
+function claimCountRows(pool: Leftover, claims: Claim[], exactOnly: boolean): void {
+  for (const c of claims) {
+    if (c.item.isWeight) continue;
+    const need = Math.max(1, c.item.expectedQty || 1);
+    for (const row of pool.count) {
+      if (c.qty >= need) break;
+      if (row.qty <= 0) continue;
+      const match = exactOnly
+        ? normalizeName(row.name) === normalizeName(c.item.name)
+        : cartNameMatches(row.name, c.item.name);
+      if (!match) continue;
+      const take = Math.min(row.qty, need - c.qty);
+      row.qty -= take;
+      c.qty += take;
+      if (!c.cartName) c.cartName = row.name;
+    }
+  }
+}
+
+/**
+ * Split the added cart rows into what the run under-reported (`recovered`) and
+ * what nothing intended (`over`) — ONE pool, claimed once, so no unit can be
+ * reported twice.
+ *
+ * Every added unit is offered to the intended items in a fixed order and then
+ * removed from the pool:
+ *
+ *   1. items the run REPORTED as added take their own rows — exact-name matches
+ *      reserved before loose ones, the pool discipline the pepper double-count
+ *      taught us. A lookalike title can then never be announced as landed.
+ *   2. items the run reported as FAILED claim from what is left. A unit one of
+ *      them explains is a `recovered` false negative: attempted, reported
+ *      failed, in the cart anyway — the bug MEAL-47 is about.
+ *   3. whatever no intended item claimed is `over`.
+ *
+ * Because it is a true partition, `over` is no longer recomputed from the full
+ * intended set: it is the residue of steps 1-2. Where the two used to disagree
+ * about a unit — a count item claiming a weight row it could never claim in the
+ * over pass, or a loose match the two passes attributed differently — the unit
+ * is now attributed once, to the recovery, and `over` no longer repeats it.
+ *
+ * The exact-name passes run before the loose ones ACROSS both groups, so a
+ * reported item's loose match cannot take the row an unreported item names
+ * exactly; within a pass, reported items claim first.
+ */
+export function splitCartLeftover(
+  addedRows: CartRow[],
+  reportedAdded: string[],
+  intendedAll: IntendedItem[],
+): CartLeftoverSplit {
+  const pool = toLeftover(addedRows);
+  const claims: Claim[] = intendedAll.map((item) => ({ item, qty: 0, cartName: '' }));
+  const reported = claims.filter((c) => wasReported(c.item, reportedAdded));
+  const unreported = claims.filter((c) => !wasReported(c.item, reportedAdded));
+
+  claimWeightRows(pool, reported);
+  claimWeightRows(pool, unreported);
+  claimCountRows(pool, reported, true);
+  claimCountRows(pool, unreported, true);
+  claimCountRows(pool, reported, false);
+  claimCountRows(pool, unreported, false);
+
+  const over: OverAdd[] = [];
+  for (const row of pool.count) if (row.qty > 0) over.push({ name: row.name, qty: row.qty });
+  for (const w of pool.weight) if (!w.used) over.push({ name: w.name, qty: 1 });
+  return {
+    recovered: unreported
+      .filter((c) => c.qty > 0)
+      .map((c) => ({ name: c.item.name, cartName: c.cartName, qty: c.qty })),
+    over,
+  };
 }
 
 /**
@@ -337,6 +529,11 @@ export interface CartCheckFindings {
  * full intended set the parallel reconcile snapshotted before the top-up
  * narrowed `active`; the over-add check prefers it and falls back to `active`
  * for the serial path, which never reconciles and so never captures one.
+ *
+ * The audit reads in both directions: items reported added that the cart can't
+ * corroborate (`missing`/`short`), and items reported FAILED that the cart says
+ * landed anyway (`recovered`). The second direction is why this runs at all on
+ * a run that reported nothing added — see shouldProbeAfterRun.
  */
 export function auditCartAfterRun(input: {
   rows: CartRow[] | null;
@@ -350,10 +547,19 @@ export function auditCartAfterRun(input: {
   let missing: string[] = [];
   let short: ShortAdd[] = [];
   let over: OverAdd[] = [];
+  let recovered: RecoveredAdd[] = [];
   if (rows) {
     const addedRows = rows.filter((r) => r.added);
     missing = findUnaddedItems(reportedAdded, addedRows.map((r) => r.name));
-    over = findOverAddedItems(addedRows, reconcileIntended.length > 0 ? reconcileIntended : active);
+    // The full set the run meant to add. After a parallel top-up `active` is
+    // only the retry subset, so the reconcile's snapshot is preferred; the
+    // serial path never reconciles and falls back to its (unnarrowed) active set.
+    const intendedAll = reconcileIntended.length > 0 ? reconcileIntended : active;
+    // ONE claim over the added rows, split two ways (see splitCartLeftover).
+    // Computing these separately let a single cart unit be reported as both a
+    // recovery and an over-add — the same product named twice on the done
+    // screen, "don't add it again" beside "nothing intended it".
+    ({ over, recovered } = splitCartLeftover(addedRows, reportedAdded, intendedAll));
     // Only audit items we reported as added (failures already route to review),
     // skip sold-by-weight lines (one row at N lb, not count-comparable), and
     // skip fully-missing items (covered by `missing`).
@@ -371,6 +577,7 @@ export function auditCartAfterRun(input: {
     short,
     over,
     overUnits: over.reduce((n, o) => n + o.qty, 0),
+    recovered,
     countShortfall:
       clean && countBefore != null && countAfter != null && expected > 0 && countAfter - countBefore < expected
         ? { delta: Math.max(countAfter - countBefore, 0), expected }
