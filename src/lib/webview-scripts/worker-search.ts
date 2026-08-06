@@ -59,7 +59,11 @@ export function buildSearchAndAddWorker(workerId: number, addScript: string): st
           type: 'WORKER_RESULT', workerId: WORKER_ID, isAdd: true,
           success: !!m.success, productName: m.productName || null,
           reason: m.reason || null, candidates: m.candidates || [],
-          storeUnavailable: !!m.storeUnavailable
+          storeUnavailable: !!m.storeUnavailable,
+          // MEAL-14's per-item cart verdict. This whitelist is why MEAL-13 had to
+          // add 'source' here too: a field dropped at the wrapper is invisible on
+          // every parallel add, which reads as "the rail isn't running".
+          confirm: m.confirm || null
         }));
         return;
       }
@@ -111,7 +115,7 @@ export function buildPresearchWorker(workerId: number, extractScript: string): s
       if (m && (m.type === 'ADD_RESULT' || m.type === 'SEARCH_AND_ADD_RESULT')) {
         if (postedAdd) return;
         postedAdd = true;
-        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, phase: 'add', success: !!m.success, productName: m.productName || null, reason: m.reason || null, candidates: m.candidates || [], storeUnavailable: !!m.storeUnavailable }));
+        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, phase: 'add', success: !!m.success, productName: m.productName || null, reason: m.reason || null, candidates: m.candidates || [], storeUnavailable: !!m.storeUnavailable, confirm: m.confirm || null }));
         return;
       }
       if (m && (m.type === 'WORKER_DEBUG' || m.type === 'EXTRACT_DEBUG')) {

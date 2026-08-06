@@ -42,7 +42,8 @@ import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
-import { auditCartAfterRun, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
+import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
+import { auditCartAfterRun, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, correctConfirmedFromCart, countRequested, isRunComplete } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
@@ -89,6 +90,25 @@ interface AddResult {
   productName: string | null;
   reason: string | null;
   candidates: Candidate[];
+  /** MEAL-14: the cart's own verdict for this item, when the store has a cart
+   *  query we can read. Null = no verdict, NOT a negative one. */
+  confirm?: HebAddConfirmation | null;
+}
+
+/**
+ * A cart verdict flattened into telemetry `detail` scalars (sanitizeDetail drops
+ * nested objects, so a nested confirm would vanish silently). Empty when no rail
+ * ran — an absent `confirmVia` in the funnel means the DOM decided, which is a
+ * different row from a cart that answered.
+ */
+function confirmDetail(confirm: HebAddConfirmation | null | undefined): Record<string, unknown> {
+  if (!confirm) return {};
+  return {
+    confirmVia: confirm.via,
+    confirmState: confirm.state,
+    confirmWhy: confirm.reason ?? undefined,
+    confirmSku: confirm.skuId ?? confirm.productId ?? undefined,
+  };
 }
 
 interface PickedItem {
@@ -767,11 +787,12 @@ export default function WebViewCartSheet({
           recordWorkerCandidates('presearch', workerId, msg);
           presearchPool.reportSearched(workerId);
         } else if (msg.phase === 'add') {
-          console.log(`[Cart ${ts()}]`, 'presearch ADD result w', workerId, 'success=', msg.success, 'product=', msg.productName);
+          console.log(`[Cart ${ts()}]`, 'presearch ADD result w', workerId, 'success=', msg.success, 'product=', msg.productName, 'cart=', msg.confirm ? `${msg.confirm.state}/${msg.confirm.reason}` : null);
           if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
           presearchPool.reportAdded(workerId, {
             success: !!msg.success, productName: msg.productName ?? null,
             reason: msg.reason ?? null, candidates: msg.candidates ?? [],
+            confirm: msg.confirm ?? null,
           });
         }
       }
@@ -1025,7 +1046,7 @@ export default function WebViewCartSheet({
         return;
       }
       if (msg.type === 'WORKER_RESULT') {
-        console.log(`[Cart ${ts()}]`, 'ADD WORKER_RESULT w', workerId, 'success=', msg.success, 'product=', msg.productName, 'reason=', msg.reason ?? null, 'storeUnavailable=', !!msg.storeUnavailable);
+        console.log(`[Cart ${ts()}]`, 'ADD WORKER_RESULT w', workerId, 'success=', msg.success, 'product=', msg.productName, 'reason=', msg.reason ?? null, 'storeUnavailable=', !!msg.storeUnavailable, 'cart=', msg.confirm ? `${msg.confirm.state}/${msg.confirm.reason}` : null);
         // reason:'blocked' (app-nudge overlay) is recorded as a failed add here;
         // the reconcile's serial retry re-detects the nudge and surfaces it (the
         // serial SEARCH_AND_ADD_RESULT handler calls surfaceBlocker). Handling it
@@ -1034,6 +1055,7 @@ export default function WebViewCartSheet({
         addPool.reportResult(workerId, {
           success: !!msg.success, productName: msg.productName ?? null,
           reason: msg.reason ?? null, candidates: msg.candidates ?? [],
+          confirm: msg.confirm ?? null,
         });
         return;
       }
@@ -2273,6 +2295,17 @@ export default function WebViewCartSheet({
               ...toIntendedItem(item),
               report: reconResults.get(idx) ?? null,
             }));
+            // MEAL-14: name the items the CART said are missing, separately from
+            // the ones we simply could not verify. This is the per-item evidence
+            // MEAL-9's partial-success UI and MEAL-3's item-success metric read;
+            // logging it here is also how the rollout is judged — a run where
+            // everything is `unknown` means the rail never answered.
+            const verdicts = summarizeConfirmations(attempts);
+            if (verdicts.landed.length > 0 || verdicts.missing.length > 0) {
+              console.log(`[Cart ${ts()}]`, 'cart verdicts: landed=', verdicts.landed.map((v) => v.skuId || v.productId || v.name),
+                'missing=', verdicts.missing.map((v) => `${v.name}(${v.skuId || v.productId || '?'}:${v.reason})`),
+                'unverified=', verdicts.unknown.length);
+            }
             if (!rows) {
               // Can't diff per-item (header-badge store) → trust the worker
               // results. Parallel add is HEB-only today (a per-item cart store),
@@ -2585,6 +2618,7 @@ export default function WebViewCartSheet({
             presearchPool.reportAdded(mainColdSlotRef.current, {
               success: !!msg.success, productName: msg.productName ?? null,
               reason: msg.reason ?? null, candidates: msg.candidates ?? [],
+              confirm: msg.confirm ?? null,
             });
             return;
           }
@@ -2599,20 +2633,24 @@ export default function WebViewCartSheet({
           const idx = searchIdxRef.current;
           const active = activeItemsRef.current;
           const item = active[idx];
-          console.log(`[Cart ${ts()}]`, 'SEARCH_AND_ADD_RESULT idx=', idx, 'success=', msg.success, 'productName=', msg.productName);
+          console.log(`[Cart ${ts()}]`, 'SEARCH_AND_ADD_RESULT idx=', idx, 'success=', msg.success, 'productName=', msg.productName, 'cart=', msg.confirm ? `${msg.confirm.state}/${msg.confirm.reason}` : null);
           // Funnel: the fused search+add path dispatches inside the injected
           // script, so there is no separate click moment to hook on the RN side.
           // Emit both halves here to keep the confirm-rate denominator complete —
           // a fused add that failed still counts as an attempt.
           tel().record('add_click', 'ok', { itemIndex: idx, detail: { path: 'fused' } });
           addsAttemptedRef.current += 1;
+          // MEAL-14: which RAIL decided, and what it decided, flattened —
+          // sanitizeDetail keeps scalars only. Without this the funnel cannot tell
+          // a cart-verified confirm from a badge guess, which is the whole point.
+          const cartDetail = confirmDetail(msg.confirm);
           if (msg.success) {
-            tel().record('confirm', 'ok', { itemIndex: idx, detail: { attempt: 1, path: 'fused' } });
+            tel().record('confirm', 'ok', { itemIndex: idx, detail: { attempt: 1, path: 'fused', ...cartDetail } });
           } else {
             const failReason = String(msg.reason ?? 'unknown');
             tel().record('confirm', 'error', {
               itemIndex: idx,
-              detail: { attempt: 1, path: 'fused', reason: failReason },
+              detail: { attempt: 1, path: 'fused', reason: failReason, ...cartDetail },
               code: addFailureCode(failReason),
             });
           }
@@ -2801,15 +2839,16 @@ export default function WebViewCartSheet({
           // Funnel: the headline reliability number. `confirm` is what the store
           // actually evidenced, so a click that reported no success lands as
           // 'error' with its reason — that's the row the dashboard divides by.
+          const addCartDetail = confirmDetail(msg.confirm);
           if (msg.success) {
             tel().record('confirm', 'ok', {
-              itemIndex: addingIdxRef.current, detail: { attempt: 1, path: 'sequential' },
+              itemIndex: addingIdxRef.current, detail: { attempt: 1, path: 'sequential', ...addCartDetail },
             });
           } else {
             const failReason = String(msg.reason ?? 'unknown');
             tel().record('confirm', 'error', {
               itemIndex: addingIdxRef.current,
-              detail: { attempt: 1, reason: failReason, path: 'sequential' },
+              detail: { attempt: 1, reason: failReason, path: 'sequential', ...addCartDetail },
               code: addFailureCode(failReason),
             });
           }

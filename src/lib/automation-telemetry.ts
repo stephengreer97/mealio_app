@@ -120,6 +120,12 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   stepper_not_found: 'selector_miss',
   pref_required: 'selector_miss',
   cart_not_incremented: 'confirm_failed',
+  // MEAL-14: the store's own cart query answered and our line was absent (or
+  // unchanged) after the click. `confirm_failed` is the right family — nothing
+  // landed — but it is the only member of it backed by positive evidence rather
+  // than by an absent signal, so the raw reason in detail is what separates a
+  // cart-verified miss from a badge that never moved.
+  cart_absent: 'confirm_failed',
   not_confirmed: 'confirm_failed',
   click_failed: 'confirm_failed',
   blocked: 'waf_block',

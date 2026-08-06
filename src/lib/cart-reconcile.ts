@@ -23,6 +23,7 @@ import {
   findUnaddedItems,
   normalizeName,
 } from './webview-scripts/cart-count';
+import { HebAddConfirmation } from './webview-scripts/heb-cart-query';
 
 // ── Sold-by-weight ────────────────────────────────────────────────────────────
 
@@ -127,6 +128,13 @@ export interface WorkerReport {
   success: boolean;
   productName: string | null;
   reason: string | null;
+  /**
+   * MEAL-14: what the STORE'S CART said about this item, when the store has a
+   * cart query we can read (H-E-B, behind `stores.heb.cartSkuConfirm`). Null for
+   * every store and every path still confirming off the DOM — absence means "no
+   * cart verdict", which is not the same as a negative one.
+   */
+  confirm?: HebAddConfirmation | null;
 }
 
 /** Failure reasons that are definitive: the item is genuinely not in the cart
@@ -282,6 +290,70 @@ export function reconcileParallelAdd(
   };
 }
 
+// ── Per-item cart verdicts (MEAL-14) ─────────────────────────────────────────
+
+/** One item, and what the cart itself said about it. */
+export interface ConfirmedItem {
+  index: number;
+  /** The product name to show a human — the worker's title, else the intent's. */
+  name: string;
+  /** The cart's own ids for the line, when it had them. */
+  skuId: string | null;
+  productId: string | null;
+  /** Why the verdict — `absent_from_cart` vs `blocked` vs `weight_unchanged`. */
+  reason: string | null;
+}
+
+/**
+ * The three-way split MEAL-9's partial-success UI and MEAL-3's item-success
+ * metric need: which items the cart CONFIRMED, which ones the cart says are NOT
+ * there, and which ones we simply could not verify.
+ *
+ * `unknown` is the whole point of keeping this separate from confirmed/failed.
+ * An unreadable cart — Imperva block, timeout, unexpected shape — must never be
+ * counted as "these items failed": that would turn one broken read into a
+ * screenful of false failures, worse than the badge guess it replaced. Items in
+ * `unknown` were decided by the DOM rail as before, and their success/failure is
+ * still on the report; what is absent is cart-grade evidence either way.
+ *
+ * A `requested` count is deliberately NOT returned. MEAL-3 counts LINES, not
+ * units, and each attempt here is one line — so the denominator is
+ * `attempts.length` and there is no second definition of it to drift.
+ */
+export interface ConfirmSummary {
+  landed: ConfirmedItem[];
+  missing: ConfirmedItem[];
+  unknown: ConfirmedItem[];
+}
+
+/**
+ * Split attempted adds by what the store's cart said about each one.
+ *
+ * Items with no cart verdict at all (every store but H-E-B, every path still on
+ * the DOM rail, and every run with the flag off) land in `unknown` with reason
+ * `no_verdict` — no rail ran, so nothing was verified. That keeps "we didn't
+ * look" and "we looked and it isn't there" apart, which is the distinction the
+ * badge rail could never draw.
+ */
+export function summarizeConfirmations(attempts: AttemptedAdd[]): ConfirmSummary {
+  const out: ConfirmSummary = { landed: [], missing: [], unknown: [] };
+  attempts.forEach((attempt, index) => {
+    const r = attempt.report;
+    const c = r ? r.confirm : null;
+    const item: ConfirmedItem = {
+      index,
+      name: decodeHtmlEntities((r && r.productName) || attempt.name),
+      skuId: (c && c.skuId) || null,
+      productId: (c && c.productId) || null,
+      reason: c ? c.reason : 'no_verdict',
+    };
+    if (c && c.state === 'landed') out.landed.push(item);
+    else if (c && c.state === 'missing') out.missing.push(item);
+    else out.unknown.push(item);
+  });
+  return out;
+}
+
 export interface WorkerReportOutcome {
   confirmed: { index: number; name: string }[];
   failed: { index: number; name: string }[];
@@ -292,13 +364,24 @@ export interface WorkerReportOutcome {
  * (a header-badge store): trust the worker results, because there is nothing
  * better to trust. Parallel add is HEB-only today — a per-item cart store — so
  * this is a safety fallback, not the normal path.
+ *
+ * MEAL-14 gives it one thing better to trust. Where an item carries a cart
+ * verdict, that verdict wins over the worker's own claim — the worker inferred
+ * from a shared badge, the verdict is the store answering about this product. It
+ * applies ONLY to a definite verdict: `unknown` (an unreadable cart) leaves the
+ * worker's report in charge exactly as before, because a read we could not
+ * perform is not evidence about the item.
  */
 export function reconcileFromWorkerReports(attempts: AttemptedAdd[]): WorkerReportOutcome {
   const confirmed: { index: number; name: string }[] = [];
   const failed: { index: number; name: string }[] = [];
   attempts.forEach((attempt, index) => {
     const r = attempt.report;
-    if (r && r.success) confirmed.push({ index, name: r.productName || attempt.name });
+    const c = r ? r.confirm : null;
+    const name = (r && r.productName) || attempt.name;
+    if (c && c.state === 'landed') { confirmed.push({ index, name }); return; }
+    if (c && c.state === 'missing') { failed.push({ index, name: attempt.name }); return; }
+    if (r && r.success) confirmed.push({ index, name });
     else failed.push({ index, name: attempt.name });
   });
   return { confirmed, failed };

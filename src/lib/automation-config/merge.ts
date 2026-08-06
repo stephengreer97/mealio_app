@@ -193,7 +193,8 @@ function mergeStore(
       case 'forceSerialSearch':
       case 'cacheBustNav':
       case 'spaSearch':
-      case 'nextDataSearch': {
+      case 'nextDataSearch':
+      case 'cartSkuConfirm': {
         const b = takeBoolean(path, value, warnings);
         if (b !== undefined) target[key] = b;
         break;

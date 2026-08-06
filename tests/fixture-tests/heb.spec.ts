@@ -9,6 +9,7 @@ import {
   __resetAutomationConfigForTests,
 } from '../../src/lib/automation-config';
 import { buildCartPageCountScript } from '../../src/lib/webview-scripts/cart-count';
+import { buildHebCartQueryFn } from '../../src/lib/webview-scripts/heb-cart-query';
 import { buildPresearchWorker } from '../../src/lib/webview-scripts/worker-search';
 import { storeFixtures } from './_helpers';
 import { FixtureRunner } from '../fixture-runners/runScript';
@@ -736,5 +737,38 @@ describe('HEB buildSearchAndAddScript', () => {
       expect(result.productName).toBe('Mission Super Soft Flour Tortillas, Fajita Size, 40 ct');
     },
     { url: 'https://www.heb.com/search?q=mission%20flour%20tortillas' },
+  );
+});
+
+// ── MEAL-14: the cart-query rail's one DOM dependency ─────────────────────────
+//
+// Everything else about the rail is network-shaped and covered fast in
+// tests/unit/hebCartQuery.test.ts. What only a real capture can pin is the join
+// key: H-E-B's result cards carry no sku anywhere, so the rail identifies its
+// target by the product id in the card's /product-detail/<slug>/<id> link — the
+// same id the cart's own CartItem.id embeds. If that link ever moves, this fails
+// here instead of silently making every add unverifiable on a device.
+describe('HEB MEAL-14 cart-query target identity', () => {
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'reads the product id off a real result card',
+    async (runner) => {
+      await runner.inject(`(function() {
+${buildHebCartQueryFn()}
+        var cards = Array.prototype.slice.call(document.querySelectorAll('[data-qe-id="productCard"]'));
+        var first = cards[0] || null;
+        var title = first ? first.querySelector('[data-qe-id="productTitle"]') : null;
+        var target = __hebTargetFromCard(first, title ? title.textContent.trim() : null);
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'CART_TARGET', cards: cards.length, target: target }));
+      })(); true;`);
+      const msg = await runner.waitForMessage('CART_TARGET', 12_000);
+      expect(msg.cards).toBeGreaterThan(0);
+      // The first tile of the captured sour-cream page.
+      expect(msg.target).toEqual({
+        skuId: null,
+        productId: '314026',
+        name: 'H-E-B Regular Sour Cream, 16 oz',
+      });
+    },
   );
 });

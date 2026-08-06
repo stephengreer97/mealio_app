@@ -116,6 +116,24 @@ export interface StoreConfigEntry {
    * so flipping this on can lose speed but not correctness.
    */
   nextDataSearch?: boolean;
+  /**
+   * Confirm each add against the store's own CART QUERY instead of the shared
+   * header cart badge (HEB only today — see MEAL-14 and
+   * webview-scripts/heb-cart-query).
+   *
+   * Default FALSE everywhere. The response shape the rail reads is verified from
+   * committed cart captures, but the query document has never been executed
+   * against a logged-in H-E-B session (MEAL-12's open gap 1), and neither has
+   * Imperva ABP's tolerance for a rail issuing a cart read per add. Until both
+   * are checked on a real device this stays off, and a build behaves exactly as
+   * it does today.
+   *
+   * Turning it on cannot lose correctness: every way the cart read can fail —
+   * blocked, non-200, GraphQL error, unexpected shape, timeout — resolves to
+   * "we could not read the cart" and falls back to the badge rail, never to
+   * "the item is missing".
+   */
+  cartSkuConfirm?: boolean;
   selectors?: StoreSelectors;
 }
 
@@ -264,6 +282,12 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
       // as the fallback and this ships OFF. Flip it with a config push:
       //   {"stores":{"heb":{"nextDataSearch":true}}}
       nextDataSearch: false,
+      // MEAL-14: confirm an add by asking H-E-B's cart what is in it, rather than
+      // watching the header badge tick. Ships OFF for the reasons on
+      // StoreConfigEntry.cartSkuConfirm — chiefly that the cart query has never
+      // been run against a logged-in session. Flip it with a config push:
+      //   {"stores":{"heb":{"cartSkuConfirm":true}}}
+      cartSkuConfirm: false,
       selectors: {
         // Product title inside a search-result card. Appeared in three separate
         // copies of the HEB scripts before this table existed.
