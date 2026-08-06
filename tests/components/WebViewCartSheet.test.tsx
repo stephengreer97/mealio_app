@@ -165,6 +165,101 @@ describe('WebViewCartSheet — login_check timeout', () => {
   });
 });
 
+// MEAL-65: qty 0 unchecks the box and strikes the name. The row was already
+// excluded from the run at qty 0 — this pins the feedback that was missing, and
+// the weight-priced exception that must NOT be struck out.
+describe('WebViewCartSheet — qty 0 feedback (MEAL-65)', () => {
+  /** Does this element's style (array or object) carry a strikethrough? */
+  const isStruckThrough = (el: any) => {
+    const flat = [el.props.style].flat(Infinity).filter(Boolean);
+    return flat.some((s: any) => s && s.textDecorationLine === 'line-through');
+  };
+
+  const renderSheet = (ingredients?: any[]) =>
+    render(
+      <WebViewCartSheet
+        visible
+        meals={[ingredients ? baseMeal({ ingredients }) : baseMeal()]}
+        storeId="aldi"
+        storeName="ALDI"
+        onClose={() => {}}
+      />,
+    );
+
+  it('shows a checked, un-struck row at qty 1', () => {
+    const { getByText, queryByTestId } = renderSheet();
+    expect(queryByTestId('qty-checked-0')).toBeTruthy();
+    expect(isStruckThrough(getByText('sour cream'))).toBe(false);
+  });
+
+  it('unchecks the box and strikes the name once qty hits 0', () => {
+    const { getByText, queryByTestId } = renderSheet();
+    act(() => { fireEvent.press(getByText('−')); });
+    expect(queryByTestId('qty-checked-0')).toBeNull();
+    expect(isStruckThrough(getByText('sour cream'))).toBe(true);
+  });
+
+  it('disables the run CTA at qty 0 — the row really is excluded', () => {
+    const { getByText } = renderSheet();
+    act(() => { fireEvent.press(getByText('−')); });
+    // activeCount === 0 → CTA disabled, so pressing it must not leave qty.
+    act(() => { fireEvent.press(getByText(/add ingredients to/i)); });
+    expect(getByText(/add ingredients to/i)).toBeTruthy();
+  });
+
+  it('restores qty 1 and re-checks when the + is pressed from 0', () => {
+    const { getByText, queryByTestId } = renderSheet();
+    act(() => { fireEvent.press(getByText('−')); });
+    act(() => { fireEvent.press(getByText('+')); });
+    expect(queryByTestId('qty-checked-0')).toBeTruthy();
+    expect(isStruckThrough(getByText('sour cream'))).toBe(false);
+  });
+
+  it('restores qty 1 when the checkbox is tapped from 0 — not a dead tap', () => {
+    const { getByText, getByTestId, queryByTestId } = renderSheet();
+    act(() => { fireEvent.press(getByText('−')); });
+    act(() => { fireEvent.press(getByTestId('qty-checkbox-0')); });
+    expect(queryByTestId('qty-checked-0')).toBeTruthy();
+    expect(isStruckThrough(getByText('sour cream'))).toBe(false);
+  });
+
+  it('keeps the quantity when the box is unchecked at qty ≥ 1', () => {
+    const { getByText, getByTestId, queryByTestId } = renderSheet();
+    act(() => { fireEvent.press(getByTestId('qty-checkbox-0')); });
+    expect(queryByTestId('qty-checked-0')).toBeNull();
+    expect(isStruckThrough(getByText('sour cream'))).toBe(true);
+    act(() => { fireEvent.press(getByTestId('qty-checkbox-0')); });
+    expect(queryByTestId('qty-checked-0')).toBeTruthy();
+  });
+
+  it('never strikes out a weight-priced item — its stepper floors at one step', () => {
+    // Sold-by-weight (a chosen purchaseWeight): the stepper adjusts the WEIGHT
+    // and floors at one step, so the row can never zero out and must keep
+    // reading as included. See isZeroedOut / isWeightPriced.
+    const { getByText, queryByTestId } = renderSheet([
+      {
+        ingredientName: 'Deli Turkey',
+        searchTerm: 'deli turkey',
+        productQty: 1,
+        qty: 1,
+        unit: 'lb',
+        measure: '0.5',
+        purchaseWeight: 0.5,
+        weightStep: 0.25,
+      },
+    ]);
+    expect(getByText('0.5 lb')).toBeTruthy();
+    // Step down to the floor, then keep pressing: still weight-priced, still in.
+    act(() => { fireEvent.press(getByText('−')); });
+    expect(getByText('0.25 lb')).toBeTruthy();
+    act(() => { fireEvent.press(getByText('−')); });
+    expect(getByText('0.25 lb')).toBeTruthy();
+    expect(queryByTestId('qty-checked-0')).toBeTruthy();
+    expect(isStruckThrough(getByText('deli turkey'))).toBe(false);
+    expect(getByText(/add ingredients to/i)).toBeTruthy();
+  });
+});
+
 describe('WebViewCartSheet — searching/adding progress bar', () => {
   it('renders a progress bar (not the old "x of x" counter) during the spinner steps', () => {
     const { getByText, queryByText, queryByTestId } = render(

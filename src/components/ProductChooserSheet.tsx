@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import FloatingPreviewImage from './FloatingPreviewImage';
+import ProductImageViewer from './ProductImageViewer';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
 import { Meal } from '../types';
@@ -70,9 +71,12 @@ export default function ProductChooserSheet({
   const [customSearching, setCustomSearching] = useState(false);
   const [savedCount, setSavedCount] = useState(0);
 
+  const [viewerOpen, setViewerOpen] = useState(false);
+
   // Draggable floating preview image (88x88, rests 16px from the right, centered on
-  // the grey search-term box). See useDraggablePreview for the gesture handling.
-  const preview = useDraggablePreview(88, 88, 16);
+  // the grey search-term box). See useDraggablePreview for the gesture handling —
+  // including the tap that opens the full-screen viewer.
+  const preview = useDraggablePreview(88, 88, 16, () => setViewerOpen(true));
   const insets = useSafeAreaInsets();
 
   const unchosenIngredients = meal.ingredients.filter((i) => !i.searchTerm);
@@ -94,6 +98,7 @@ export default function ProductChooserSheet({
       setSelectedDescription(null);
       setCustomText('');
       setSavedCount(0);
+      setViewerOpen(false);
       preview.reset();
       doSearch();
     }
@@ -101,6 +106,9 @@ export default function ProductChooserSheet({
 
   useEffect(() => {
     setCustomText('');
+    // Close the viewer on the way to the next ingredient — it would otherwise
+    // stay up showing the previous product's photo.
+    setViewerOpen(false);
     preview.reset();
   }, [pickIdx, preview.reset]);
 
@@ -402,6 +410,13 @@ export default function ProductChooserSheet({
         )}
         </SafeAreaView>
       </View>
+
+      {/* Full-screen product photo (MEAL-64), opened by tapping the thumbnail. */}
+      <ProductImageViewer
+        uri={selectedImageUrl}
+        visible={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+      />
     </Modal>
   );
 }

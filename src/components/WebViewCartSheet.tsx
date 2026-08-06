@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import WebView, { WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
 import FloatingPreviewImage from './FloatingPreviewImage';
+import ProductImageViewer from './ProductImageViewer';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Meal } from '../types';
@@ -40,7 +41,7 @@ import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
-import { auditCartAfterRun, isWeightPriced, reconcileFromWorkerReports, reconcileParallelAdd, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
+import { auditCartAfterRun, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -334,14 +335,19 @@ export default function WebViewCartSheet({
   const [selectedPreference, setSelectedPreference] = useState<string | null>(null);
   const [reviewMealQtys, setReviewMealQtys] = useState<Record<number, Record<string, number>>>({});
   const [pickedItems, setPickedItems] = useState<PickedItem[]>([]);
-  // Draggable floating product-preview thumbnail (88x88, rests 12px from the right).
-  const preview = useDraggablePreview(88, 88, 12);
+  // Draggable floating product-preview thumbnail (88x88, rests 12px from the
+  // right). Tapping it opens the full-screen viewer (MEAL-64).
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const preview = useDraggablePreview(88, 88, 12, () => setViewerOpen(true));
   // Re-center the thumbnail on each new ingredient being reviewed. The Review
   // Ingredients flow rests slightly lower than Choose Product — its search box has
   // a reason line above it, so the centered default otherwise reads as too high.
   useEffect(() => {
     const rev = searchResultsRef.current[reviewIdx];
     preview.setDefaultOffset(rev && !rev.isChoose ? REVIEW_PREVIEW_Y_OFFSET : 0);
+    // Close the viewer on the way to the next ingredient — it would otherwise
+    // stay up showing the previous product's photo.
+    setViewerOpen(false);
     preview.reset();
   }, [reviewIdx, preview.reset, preview.setDefaultOffset]);
   // Ingredients the user explicitly skipped during review, keyed by reviewIndex
@@ -1012,6 +1018,7 @@ export default function WebViewCartSheet({
       setSelectedPreference(null);
       setReviewMealQtys({});
       setPickedItems([]);
+      setViewerOpen(false);
       preview.reset();
       setSkippedByIdx({});
       setCustomText('');
@@ -1125,14 +1132,29 @@ export default function WebViewCartSheet({
       }),
     );
 
-  const toggleChecked = (i: number) =>
-    setCheckedItems((prev) => prev.map((c, idx) => (idx === i ? !c : c)));
+  // The checkbox reports INCLUSION, and qty 0 excludes an item just as firmly as
+  // an unchecked box (MEAL-65). So a tap on a row that already reads unchecked
+  // has to clear whichever of the two is excluding it: restoring the box alone
+  // would leave a zeroed row still struck through and the tap looking dead.
+  const toggleChecked = (i: number) => {
+    const it = items[i];
+    if (!it) return;
+    const zeroed = isZeroedOut(it);
+    if ((checkedItems[i] ?? true) && !zeroed) {
+      setCheckedItems((prev) => prev.map((c, idx) => (idx === i ? false : c)));
+      return;
+    }
+    setCheckedItems((prev) => prev.map((c, idx) => (idx === i ? true : c)));
+    // Back to one unit — a re-checked row has to be worth running.
+    if (zeroed) updateQty(i, 1);
+  };
 
   const allChecked = checkedItems.length === 0 || checkedItems.every((c) => c);
   const toggleAll = () => setCheckedItems((prev) => prev.map(() => !allChecked));
   // A dropdown-weight item is active whenever it has a chosen weight; stepper
-  // and normal items need productQty > 0.
-  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && (isWeightPriced(it) || it.productQty > 0)).length;
+  // and normal items need productQty > 0. Same predicate the row's checkbox and
+  // strikethrough read, so what the screen says matches what runs.
+  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && !isZeroedOut(it)).length;
 
   // Cart snapshot AFTER the run. Only fires when the before-snapshot succeeded
   // and something was reported added. For cart-page stores (HEB) navigate the
@@ -1278,7 +1300,7 @@ export default function WebViewCartSheet({
   }, [step, items, parallelCfg, loginPrewarm.statusVersion]);
 
   const handleStartSearch = () => {
-    const active = items.filter((it, i) => (checkedItems[i] ?? true) && (isWeightPriced(it) || it.productQty > 0));
+    const active = items.filter((it, i) => (checkedItems[i] ?? true) && !isZeroedOut(it));
     if (active.length === 0) return;
     activeItemsRef.current = active;
     searchIdxRef.current = 0;
@@ -1287,7 +1309,7 @@ export default function WebViewCartSheet({
     if (FEATURE_PRESEARCH_ADD && presearchStartedRef.current) {
       presearchCommitEntriesRef.current = items
         .map((item, idx) => ({ idx, item }))
-        .filter((e) => (checkedItems[e.idx] ?? true) && (isWeightPriced(e.item) || e.item.productQty > 0));
+        .filter((e) => (checkedItems[e.idx] ?? true) && !isZeroedOut(e.item));
       presearchCommitArmedRef.current = presearchCommitEntriesRef.current.length > 0;
     }
     const pre = loginPrewarm.getStatus(lockedStoreIdRef.current);
@@ -3048,14 +3070,19 @@ export default function WebViewCartSheet({
                 </Text>
               </View>
               {items.map((it, i) => {
-                const checked = checkedItems[i] ?? true;
+                // Two distinct states. `boxChecked` is the checkbox flag alone and
+                // gates the steppers — the + has to stay live at qty 0 or there is
+                // no way back up. `included` is what actually runs, so it is what
+                // the checkbox fill and the strikethrough report (MEAL-65).
+                const boxChecked = checkedItems[i] ?? true;
+                const included = boxChecked && !isZeroedOut(it);
                 return (
-                  <View key={i} style={[styles.qtyRow, !checked && styles.qtyRowZeroed]}>
-                    <TouchableOpacity onPress={() => toggleChecked(i)} style={styles.checkbox} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                      {checked && <View style={[styles.checkboxInner, { backgroundColor: storeColor }]} />}
+                  <View key={i} style={[styles.qtyRow, !included && styles.qtyRowZeroed]}>
+                    <TouchableOpacity onPress={() => toggleChecked(i)} style={styles.checkbox} testID={`qty-checkbox-${i}`} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                      {included && <View testID={`qty-checked-${i}`} style={[styles.checkboxInner, { backgroundColor: storeColor }]} />}
                     </TouchableOpacity>
                     <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={[styles.ingName, !checked && styles.ingNameZeroed]}>
+                      <Text style={[styles.ingName, !included && styles.ingNameZeroed]}>
                         {it.searchTerm ?? it.ingredientName}
                       </Text>
                       {it.dropdown?.selectedText ? (
@@ -3086,8 +3113,8 @@ export default function WebViewCartSheet({
                       return (
                     <TouchableOpacity
                       onPress={() => updateQty(i, -1)}
-                      disabled={atMin || !checked}
-                      style={[styles.qtyBtn, (atMin || !checked) && { opacity: 0.3 }]}
+                      disabled={atMin || !boxChecked}
+                      style={[styles.qtyBtn, (atMin || !boxChecked) && { opacity: 0.3 }]}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
                       <Text style={styles.qtyBtnText}>−</Text>
@@ -3099,8 +3126,8 @@ export default function WebViewCartSheet({
                     </Text>
                     <TouchableOpacity
                       onPress={() => updateQty(i, 1)}
-                      disabled={!checked}
-                      style={[styles.qtyBtn, !checked && { opacity: 0.3 }]}
+                      disabled={!boxChecked}
+                      style={[styles.qtyBtn, !boxChecked && { opacity: 0.3 }]}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
                       <Text style={styles.qtyBtnText}>+</Text>
@@ -3527,6 +3554,15 @@ export default function WebViewCartSheet({
                 panHandlers={preview.panHandlers}
                 wrapStyle={styles.floatingImageWrap}
                 imageStyle={styles.floatingImage}
+              />
+
+              {/* Full-screen product photo (MEAL-64), opened by tapping the
+                  thumbnail. Lives here because the selected candidate's image
+                  URL is scoped to this step. */}
+              <ProductImageViewer
+                uri={selectedImageUrl}
+                visible={viewerOpen}
+                onClose={() => setViewerOpen(false)}
               />
             </View>
           );

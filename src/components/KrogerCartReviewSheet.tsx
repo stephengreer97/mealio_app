@@ -9,14 +9,16 @@ import {
   ActivityIndicator,
   TextInput,
   Linking,
-  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
 import { Meal, Ingredient } from '../types';
 import { ingredientAmount } from '../lib/formatMeasurement';
+import { isZeroedOut } from '../lib/cart-reconcile';
+import { useDraggablePreview } from '../lib/useDraggablePreview';
+import FloatingPreviewImage from './FloatingPreviewImage';
+import ProductImageViewer from './ProductImageViewer';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
 import { STORES } from '../constants/stores';
 
@@ -212,6 +214,15 @@ export default function KrogerCartReviewSheet({
   const [customSearchTerm, setCustomSearchTerm] = useState('');
   const shouldShowSuggestionsRef = useRef(false);
 
+  // The product preview on the review step. This used to be a fixed, untappable
+  // (`pointerEvents="none"`) 80x80 box of Kroger's own — it now runs the same
+  // FloatingPreviewImage + useDraggablePreview as the other two Choose Product
+  // surfaces, so it drags and its tap opens the full-screen viewer like theirs
+  // (MEAL-64). A feature that worked on two surfaces out of three would only
+  // teach the user it does not work.
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const preview = useDraggablePreview(80, 80, 16, () => setViewerOpen(true));
+
   // Step done
   const [totalAdded, setTotalAdded] = useState(0);
   const [cartError, setCartError] = useState('');
@@ -234,6 +245,8 @@ export default function KrogerCartReviewSheet({
       setTotalAdded(0);
       setCartError('');
       setAddedItems([]);
+      setViewerOpen(false);
+      preview.reset();
     }
   }, [visible]);
 
@@ -243,7 +256,12 @@ export default function KrogerCartReviewSheet({
     setCustomText('');
     setCustomSuggestions([]);
     setCustomSearchTerm('');
-  }, [reviewIdx]);
+    // Close the viewer on the way to the next ingredient — it would otherwise
+    // stay up showing the previous product's photo.
+    setViewerOpen(false);
+    // Re-center the thumbnail on the new ingredient's search box.
+    preview.reset();
+  }, [reviewIdx, preview.reset]);
 
   const reviewQueue = searchResults.filter((r) => !r.exact);
   const currentReview = reviewQueue[reviewIdx];
@@ -276,7 +294,7 @@ export default function KrogerCartReviewSheet({
   // ── Step handlers ────────────────────────────────────────────────────────
 
   const handleStartSearch = async () => {
-    const active = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0);
+    const active = items.filter((it, i) => (checkedItems[i] ?? true) && !isZeroedOut(it));
     if (active.length === 0) return;
     setStep('searching');
     setError('');
@@ -423,13 +441,6 @@ export default function KrogerCartReviewSheet({
       prev.map((it, idx) => (idx === i ? { ...it, productQty: Math.max(0, it.productQty + delta) } : it)),
     );
 
-  const toggleRemove = (i: number) =>
-    setItems((prev) =>
-      prev.map((it, idx) =>
-        idx === i ? { ...it, productQty: it.productQty === 0 ? 1 : 0 } : it,
-      ),
-    );
-
   const storeUrl = STORE_URLS[storeId] ?? 'kroger.com';
 
   const handleOpenStore = async () => {
@@ -448,10 +459,27 @@ export default function KrogerCartReviewSheet({
     done: 'Done!',
   };
 
-  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && it.productQty > 0).length;
+  // Same predicate the row's checkbox and strikethrough read, so what the screen
+  // says matches what runs (MEAL-65).
+  const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && !isZeroedOut(it)).length;
   const allChecked = checkedItems.length === 0 || checkedItems.every((c) => c);
   const toggleAll = () => setCheckedItems((prev) => prev.map(() => !allChecked));
-  const toggleChecked = (i: number) => setCheckedItems((prev) => prev.map((c, idx) => idx === i ? !c : c));
+  // The checkbox reports INCLUSION, and qty 0 excludes an item just as firmly as
+  // an unchecked box. So a tap on a row that already reads unchecked has to clear
+  // whichever of the two is excluding it: restoring the box alone would leave a
+  // zeroed row still struck through and the tap looking dead.
+  const toggleChecked = (i: number) => {
+    const it = items[i];
+    if (!it) return;
+    const zeroed = isZeroedOut(it);
+    if ((checkedItems[i] ?? true) && !zeroed) {
+      setCheckedItems((prev) => prev.map((c, idx) => (idx === i ? false : c)));
+      return;
+    }
+    setCheckedItems((prev) => prev.map((c, idx) => (idx === i ? true : c)));
+    // Back to one unit — a re-checked row has to be worth running.
+    if (zeroed) updateQty(i, 1);
+  };
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -486,18 +514,22 @@ export default function KrogerCartReviewSheet({
                 </Text>
               </View>
               {items.map((it, i) => {
-                const checked = checkedItems[i] ?? true;
-                const excluded = !checked;
+                // Two distinct states. `boxChecked` is the checkbox flag alone and
+                // gates the steppers — the + has to stay live at qty 0 or there is
+                // no way back up. `included` is what actually runs, so it is what
+                // the checkbox fill and the strikethrough report (MEAL-65).
+                const boxChecked = checkedItems[i] ?? true;
+                const included = boxChecked && !isZeroedOut(it);
                 return (
                   <View
                     key={i}
-                    style={[styles.qtyRow, excluded && styles.qtyRowZeroed]}
+                    style={[styles.qtyRow, !included && styles.qtyRowZeroed]}
                   >
-                    <TouchableOpacity onPress={() => toggleChecked(i)} style={styles.checkbox}>
-                      {checked && <View style={[styles.checkboxInner, { backgroundColor: storeColor }]} />}
+                    <TouchableOpacity onPress={() => toggleChecked(i)} style={styles.checkbox} testID={`qty-checkbox-${i}`}>
+                      {included && <View testID={`qty-checked-${i}`} style={[styles.checkboxInner, { backgroundColor: storeColor }]} />}
                     </TouchableOpacity>
                     <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={[styles.ingName, excluded && styles.ingNameZeroed]}>
+                      <Text style={[styles.ingName, !included && styles.ingNameZeroed]}>
                         {it.searchTerm ?? it.ingredientName}
                       </Text>
                       {it.mealIngredients.map((mi, mIdx) => {
@@ -515,16 +547,16 @@ export default function KrogerCartReviewSheet({
                     </View>
                     <TouchableOpacity
                       onPress={() => updateQty(i, -1)}
-                      disabled={it.productQty === 0 || excluded}
-                      style={[styles.qtyBtn, (it.productQty === 0 || excluded) && { opacity: 0.3 }]}
+                      disabled={it.productQty === 0 || !boxChecked}
+                      style={[styles.qtyBtn, (it.productQty === 0 || !boxChecked) && { opacity: 0.3 }]}
                     >
                       <Text style={styles.qtyBtnText}>−</Text>
                     </TouchableOpacity>
                     <Text style={styles.qtyNum}>{it.productQty}</Text>
                     <TouchableOpacity
                       onPress={() => updateQty(i, 1)}
-                      disabled={excluded}
-                      style={[styles.qtyBtn, excluded && { opacity: 0.3 }]}
+                      disabled={!boxChecked}
+                      style={[styles.qtyBtn, !boxChecked && { opacity: 0.3 }]}
                     >
                       <Text style={styles.qtyBtnText}>+</Text>
                     </TouchableOpacity>
@@ -626,13 +658,8 @@ export default function KrogerCartReviewSheet({
             : null;
 
           return (
-            <>
-              {selectedImageUrl ? (
-                <View style={styles.floatingImageWrap} pointerEvents="none">
-                  <Image source={{ uri: selectedImageUrl }} style={styles.floatingImage} contentFit="contain" />
-                </View>
-              ) : null}
-              <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.listContent}>
+            <View style={{ flex: 1 }} onLayout={preview.onContainerLayout}>
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.listContent} scrollEnabled={preview.scrollEnabled}>
                 {/* What was searched */}
                 {currentReview.reason === 'out_of_stock' && (
                   <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginBottom: 6 }}>⚠ Out of stock at this store</Text>
@@ -643,7 +670,7 @@ export default function KrogerCartReviewSheet({
                 {(!currentReview.reason || currentReview.reason === 'low_confidence') && (
                   <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3, marginBottom: 6 }}>No exact match found</Text>
                 )}
-                <View style={styles.searchedBox}>
+                <View style={styles.searchedBox} onLayout={preview.onAnchorLayout}>
                   <Text style={styles.searchedLabel}>You searched for</Text>
                   <Text style={styles.searchedTerm}>{currentReview.searchTerm ?? currentReview.term}</Text>
                   {currentReview.mealIngredients.map((mi, mIdx) => {
@@ -795,7 +822,26 @@ export default function KrogerCartReviewSheet({
                   </TouchableOpacity>
                 </View>
               </View>
-            </>
+
+              {/* Draggable product preview — rendered last so it paints above the
+                  list and its PanResponder wins the touch. Vanishes when the
+                  product has no image (or it fails to load) instead of showing a
+                  blank/stale frame. */}
+              <FloatingPreviewImage
+                uri={selectedImageUrl}
+                transform={preview.transform}
+                panHandlers={preview.panHandlers}
+                wrapStyle={styles.floatingImageWrap}
+                imageStyle={styles.floatingImage}
+              />
+
+              {/* Full-screen product photo (MEAL-64), opened by tapping it. */}
+              <ProductImageViewer
+                uri={selectedImageUrl}
+                visible={viewerOpen}
+                onClose={() => setViewerOpen(false)}
+              />
+            </View>
           );
         })()}
 
@@ -1141,10 +1187,11 @@ const styles = StyleSheet.create({
     color: Colors.text3,
   },
 
-  // Floating image (review step)
+  // Floating image (review step). `top: 0` because useDraggablePreview drives
+  // the offset from there — it centers the thumbnail on the search-term box.
   floatingImageWrap: {
     position: 'absolute',
-    top: 70,
+    top: 0,
     right: 16,
     width: 80,
     height: 80,
