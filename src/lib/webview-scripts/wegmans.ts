@@ -40,6 +40,40 @@ const SEARCH_INPUT_SEL = 'input[type="search"], input[placeholder*="earch" i]';
 // sessionStorage caches a positive ('in') detection across page bounces so a
 // late-killed observer doesn't lose its answer. 'out' is NEVER cached so that
 // post-login re-injections after the user signs in always re-check fresh.
+//
+// WHERE THAT CACHE IS READ, AND WHY IT IS NOT A FAST PATH (MEAL-114).
+//
+// This is the same correction MEAL-42 applied to albertsons.ts; the two stores
+// deliberately share one shape, so change them together.
+//
+// The read used to sit at the very top of the script, ahead of any detection:
+// a cached 'in' posted isLoggedIn:true and returned. Nothing ever called
+// removeItem, so after a mid-session logout or a store-side session expiry the
+// greeting button plainly read "Sign In" and the cache still answered true —
+// for the rest of the WebView's life. Both consumers reach it: SilentLoginProbe
+// is generic over storeId and *latches*, so it never asks again; WebViewCartSheet
+// does not latch but relies on a later LOGIN_STATUS:false to raise the login
+// step, which therefore never appeared. That is the failure direction that
+// breaks a run silently — every search runs signed out and every add fails with
+// no login wall — so the cache must never be able to outvote a header we can
+// actually read. Wegmans is more exposed than Albertsons here, not less:
+// isLoginSuccessUrl matches any wegmans.com URL that is not /sign-in or /login,
+// so re-injection at the login step is near-unconditional, and sessionStorage
+// survives the reload that clears __wegmansLoginPosted.
+//
+// So, in order:
+//   1. Live detection always runs first and always wins when it can read the
+//      greeting button — 'in' or 'out'.
+//   2. The cache is consulted ONLY once detection is inconclusive (the watchdog
+//      fired and the button never appeared at all — the MSAL landing page whose
+//      header has not hydrated). That is the one case where a previous
+//      injection's answer is better evidence than anything on this page.
+//   3. Inconclusive AND no cached positive resolves to signed OUT, explicitly.
+//      An unknown state must show the user a login wall, never a silent
+//      signed-out run.
+//   4. 'out' is still never written (that would defeat the post-sign-in
+//      re-check), but a negative verdict now REMOVES a cached positive, so a
+//      verdict we have just disproved cannot answer for anything later.
 import { selectorsFor, storeConfig, searchUrlFor } from '../automation-config';
 
 const SELECTOR_KEY = 'wegmans';
@@ -69,17 +103,11 @@ function buildCheckLoginScript(): string {
   }
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'start', url: window.location.href }));
 
-  // sessionStorage fast-path: if a previous injection within this session
-  // already determined logged-in, surface it immediately and skip the rest.
-  try {
-    var cached = sessionStorage.getItem('mealio_wegmans_login_state');
-    if (cached === 'in') {
-      window.__wegmansLoginPosted = true;
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'scan_result', isLoggedIn: true, state: 'in', via: 'sessionStorage' }));
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }));
-      return;
-    }
-  } catch(_) {}
+  // NOTE: the sessionStorage read used to sit HERE, ahead of detection. It is
+  // now in the watchdog below, reached only when the greeting button never
+  // appeared. See the header comment: as a fast path it answered "logged in"
+  // against a header that read "Sign In", and no re-scan could ever correct it.
+  // Do not move it back up.
 
   // The greeting button covers both states:
   //   Logged out: button text === "Sign In"
@@ -116,11 +144,17 @@ function buildCheckLoginScript(): string {
     var isLoggedIn = result.state === 'in';
     // Cache positive detection BEFORE postMessage so that even if a navigation
     // kills this script before RN receives the message, the next injection's
-    // fast-path picks up the answer. Never cache 'out' (would block correct
-    // detection after user signs in).
-    if (isLoggedIn) {
-      try { sessionStorage.setItem('mealio_wegmans_login_state', 'in'); } catch(_) {}
-    }
+    // inconclusive fallback picks up the answer. Never cache 'out' (would block
+    // correct detection after the user signs in) — but a negative verdict does
+    // CLEAR a cached positive, so a verdict we have just disproved cannot
+    // outlive the run that disproved it.
+    try {
+      if (isLoggedIn) {
+        sessionStorage.setItem('mealio_wegmans_login_state', 'in');
+      } else {
+        sessionStorage.removeItem('mealio_wegmans_login_state');
+      }
+    } catch(_) {}
     var headerButtons = Array.from(document.querySelectorAll('header button, header a, nav button, nav a, [class*="header" i] button, [class*="header" i] a'));
     var btnDebug = headerButtons.slice(0, 15).map(function(b) {
       return { tag: b.tagName, aria: b.getAttribute('aria-label'), href: b.getAttribute('href'), cls: (b.className || '').slice(0, 60), text: b.textContent.trim().slice(0, 40) };
@@ -149,10 +183,30 @@ function buildCheckLoginScript(): string {
   window.__wegmansLoginObserver = observer;
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
-  // Watchdog: after 8 seconds, post whatever we have (treat unknown as logged-out).
+  // Watchdog: after 8 seconds, post whatever we have.
   setTimeout(function() {
     if (window.__wegmansLoginPosted) return;
-    post(readState());
+    var r = readState();
+    if (r.state !== 'unknown') { post(r); return; }
+
+    // Detection is INCONCLUSIVE — eight seconds of observing and this page has
+    // no readable greeting button at all. That is the MSAL landing page before
+    // its header hydrates. ONLY here do we defer to what an earlier injection in
+    // this session concluded, because the alternative is posting a false that
+    // SilentLoginProbe latches for good. A header we CAN read always wins over
+    // the cache; a header we cannot read is the one case where the cache is
+    // better evidence than anything on this page.
+    try {
+      if (sessionStorage.getItem('mealio_wegmans_login_state') === 'in') {
+        post({ state: 'in', via: 'sessionStorage' });
+        return;
+      }
+    } catch(_) {}
+
+    // Inconclusive and nothing cached. Resolve to signed OUT, deliberately:
+    // that shows the user a login wall, where a false positive would run every
+    // search and every add against a signed-out session and fail silently.
+    post({ state: 'out', via: 'inconclusive_fail_closed' });
   }, 8000);
 })();true;`;
 }
