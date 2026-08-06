@@ -38,7 +38,24 @@
 // argument-order trap that makes a naive swap silently invert the comparison.
 
 import type { StoreScripts } from './index';
-import { selectorsFor, rawSelectorsFor, storeConfig, searchUrlFor } from '../automation-config';
+import {
+  selectorsFor,
+  rawSelectorsFor,
+  storeConfig,
+  searchUrlFor,
+  PlatformId,
+} from '../automation-config';
+
+/**
+ * The platform every tenant in this module runs on (MEAL-21).
+ *
+ * Passed to selectorsFor() so a banner inherits platforms.instacart.selectors from
+ * the automation config. Declared HERE rather than read from each tenant's config
+ * entry on purpose: a tenant registered below but not yet present in
+ * BUNDLED_AUTOMATION_CONFIG still inherits, which is what lets a new banner skip
+ * the config table entirely (its entry is then only about a per-banner kill switch).
+ */
+const PLATFORM: PlatformId = 'instacart';
 
 // ── Tenant model ──────────────────────────────────────────────────────────────
 
@@ -76,8 +93,16 @@ export interface InstacartTenant {
 }
 
 /** Platform-wide selector fallbacks, with the tenant's slug woven in.
- *  The remote automation config overrides these, so a platform redesign is a
- *  config push rather than an App Store release. */
+ *
+ *  These are the COMPILE-TIME floor, the least specific layer. Above them sit
+ *  platforms.instacart.selectors (shared by every banner) and then
+ *  stores.<banner>.selectors (that banner alone) — see selectorsFor(). So a
+ *  platform redesign is one config push rather than an App Store release, and the
+ *  set below is what a banner still resolves to if config goes silent entirely.
+ *
+ *  Note which selectors CANNOT move up into the platform table: `cardLink` weaves
+ *  in the tenant's own slug, and the platform table is static JSON that does not
+ *  know which tenant is reading it. Slug-parameterised selectors stay here. */
 function selFallbacks(t: InstacartTenant): Record<string, string> {
   return {
     atc: 'button[aria-label^="Add 1 "]',
@@ -111,13 +136,13 @@ function selFallbacks(t: InstacartTenant): Record<string, string> {
 /** Live selectors as interpolatable JS literals (quotes included).
  *  Call inside a build function — the remote config loads after this module is
  *  imported, so a module-scope capture would freeze the fallbacks forever. */
-const sel = (t: InstacartTenant) => selectorsFor(t.storeId, selFallbacks(t));
+const sel = (t: InstacartTenant) => selectorsFor(t.storeId, selFallbacks(t), PLATFORM);
 
 /** The same selectors, RAW, for the sites that interpolate into a quoted literal
  *  the script already owns. Same override precedence, revalidated on read — see
  *  rawSelectorsFor(). Used where switching to the `${sel.x}` form would have
  *  changed the bytes of a script that already ships. */
-const rawSel = (t: InstacartTenant) => rawSelectorsFor(t.storeId, selFallbacks(t));
+const rawSel = (t: InstacartTenant) => rawSelectorsFor(t.storeId, selFallbacks(t), PLATFORM);
 
 /**
  * The `:not(…)` clause that keeps the "is some OTHER modal up?" probe from
@@ -1111,10 +1136,14 @@ export function getInstacartSearchUrl(t: InstacartTenant, query: string): string
  *      without the second it does not appear in the picker at all. A tenant
  *      registered only here is unreachable — the most silent miss on the list.
  *   2. An entry here — origin, slug, domain, and any knob whose default differs.
- *   3. A `stores.<storeId>` entry in BUNDLED_AUTOMATION_CONFIG (schema.ts) so the
- *      banner is kill-switchable and its selectors are pushable. Omitting it is
- *      survivable — selFallbacks() below still yields working selectors — but the
- *      banner then has no remote escape hatch, which is not a state to ship in.
+ *   3. OPTIONAL since MEAL-21: a `stores.<storeId>` entry in
+ *      BUNDLED_AUTOMATION_CONFIG (schema.ts). It used to mean copying this
+ *      platform's whole selector table per banner; now the banner inherits
+ *      platforms.instacart.selectors automatically (this module declares PLATFORM,
+ *      so inheritance does not depend on the entry existing), and every one of
+ *      those selectors is already pushable for it. Add `{ enabled: true }` when you
+ *      want the per-banner kill switch, plus any knob whose default differs, and
+ *      `selectors` only for a key where this banner genuinely diverges.
  *   4. A `fixture-capture-config.ts` entry, or the documented
  *      `npm run capture -- <storeId>` has nothing to drive and step 6 is manual.
  *   5. Nothing for cart probing: buildInlineCartScript() and extractorFor() in

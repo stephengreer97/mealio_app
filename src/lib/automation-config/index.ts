@@ -14,7 +14,12 @@
 // server briefly has no active row while a publish/rollback swaps rows, and a
 // client that reverted during that window would undo a shipped fix for one run.
 
-import { AutomationConfig, BUNDLED_AUTOMATION_CONFIG, StoreSelectors } from './schema';
+import {
+  AutomationConfig,
+  BUNDLED_AUTOMATION_CONFIG,
+  PlatformId,
+  StoreSelectors,
+} from './schema';
 import { mergeAutomationConfig, isValidSelector } from './merge';
 
 export * from './schema';
@@ -121,6 +126,39 @@ export function isStoreEnabled(storeId: string): boolean {
 }
 
 /**
+ * The platform a store inherits selectors from, or undefined for none.
+ *
+ * `declared` is what the calling adapter knows about itself — instacart.ts passes
+ * 'instacart' because that is what the module IS. Config wins when it names a
+ * platform, matching how every other field in this subsystem works (`cfg.storeUrl
+ * ?? t.origin`), and the `declared` value covers the case that makes the feature
+ * worth having: a banner registered in an adapter but not in the config table at
+ * all still inherits its platform's selectors, so adding one needs no config entry.
+ *
+ * A re-platforming push is bounded rather than dangerous: adapters keep their full
+ * compiled-in fallback set, so the worst a wrong platform does is drop the store
+ * back to the selectors that shipped in the binary.
+ */
+function platformFor(storeId: string, declared?: PlatformId): PlatformId | undefined {
+  return current.stores[storeId]?.platform ?? declared;
+}
+
+/**
+ * The platform's shared selector table, or {} when there is none.
+ *
+ * Returns {} — never undefined, never throws — for a platform this build does not
+ * have a table for. That covers 'standalone' and 'kroger' (no table by design) and
+ * the older-app-meets-newer-config case where the id itself is unrecognised. The
+ * store's own selectors and the call-site fallbacks are unaffected, so a store can
+ * lose its INHERITANCE without ever losing its selectors.
+ */
+function platformSelectors(storeId: string, declared?: PlatformId): StoreSelectors {
+  const platform = platformFor(storeId, declared);
+  if (!platform) return {};
+  return current.platforms[platform]?.selectors ?? {};
+}
+
+/**
  * Selectors for a store, ready to interpolate into an injected script.
  *
  * Values are returned as JS string LITERALS (quotes included) via
@@ -132,15 +170,29 @@ export function isStoreEnabled(storeId: string): boolean {
  * second, independent defense. Doing the escaping here rather than at each of the
  * ~40 interpolation sites means a new site can't forget it.
  *
- * `fallbacks` supplies the literal a store script used before it was moved into
- * config, so an unknown key yields working JS instead of `undefined`.
+ * PRECEDENCE, least to most specific — most specific wins:
+ *
+ *     call-site `fallbacks`  <  platforms.<platform>.selectors  <  stores.<id>.selectors
+ *
+ * so a platform push fixes every banner on the platform in one go, while a banner
+ * that has diverged pins the one key it needs and is untouched by that push. Each
+ * of the two config layers is itself already remote-over-bundled, merged in
+ * merge.ts. `fallbacks` supplies the literal a store script used before it was
+ * moved into config, so an unknown key yields working JS instead of `undefined`.
+ *
+ * `platform` is the adapter's own declaration; see platformFor().
  */
 export function selectorsFor(
   storeId: string,
   fallbacks: StoreSelectors = {},
+  platform?: PlatformId,
 ): Record<string, string> {
   const configured = current.stores[storeId]?.selectors ?? {};
-  const merged: StoreSelectors = { ...fallbacks, ...configured };
+  const merged: StoreSelectors = {
+    ...fallbacks,
+    ...platformSelectors(storeId, platform),
+    ...configured,
+  };
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(merged)) out[key] = JSON.stringify(value);
   // A key the caller never declared a fallback for and config never set would be
@@ -172,17 +224,29 @@ export function selectorsFor(
  * `fallbacks` is developer-authored and used verbatim — that is the only way a
  * default containing a double quote can survive to the page.
  *
+ * Same precedence as selectorsFor (fallbacks < platform < store), with the same
+ * re-validation applied at BOTH config layers. Note the consequence for a bundled
+ * PLATFORM selector containing a double quote, which most of them do: it is
+ * re-validated like any configured value, dropped, and the identical call-site
+ * fallback stands. That is exactly what already happened to the bundled STORE
+ * selectors this table was extracted from, which is why moving them here does not
+ * change a byte of what ships.
+ *
  * Prefer selectorsFor() for any NEW interpolation site. This one is for keeping
  * faith with scripts that are already in users' hands.
  */
 export function rawSelectorsFor(
   storeId: string,
   fallbacks: StoreSelectors = {},
+  platform?: PlatformId,
 ): Record<string, string> {
   const configured = current.stores[storeId]?.selectors ?? {};
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(fallbacks)) {
     if (typeof value === 'string') out[key] = value;
+  }
+  for (const [key, value] of Object.entries(platformSelectors(storeId, platform))) {
+    if (isValidSelector(value)) out[key] = value;
   }
   for (const [key, value] of Object.entries(configured)) {
     if (isValidSelector(value)) out[key] = value;

@@ -17,6 +17,11 @@
 //     out of the JS string literal they get interpolated into. The interpolation
 //     site ALSO JSON.stringify()s them (see selectorsFor) — two independent
 //     defenses, because a config push is a remote code path into the WebView.
+//   • PLATFORM-level values (the `platforms` section, inherited by every store on
+//     a platform) go through the exact same validation as store-level ones. They
+//     reach more stores, which is a reason to gate them identically, not loosely.
+//     A `platform` a store names but this build doesn't know is refused, which
+//     leaves the store on its bundled platform rather than stripped of selectors.
 //
 // Every rejection is reported in `warnings` so a bad push is visible in the
 // telemetry funnel instead of silently degrading to defaults.
@@ -25,8 +30,11 @@ import {
   AutomationConfig,
   BUNDLED_AUTOMATION_CONFIG,
   NUMERIC_BOUNDS,
+  PLATFORM_IDS,
+  PlatformConfigEntry,
   StoreConfigEntry,
   StoreSelectors,
+  isPlatformId,
 } from './schema';
 
 export interface MergeResult {
@@ -134,26 +142,36 @@ function mergeScalarSection(
   }
 }
 
+/**
+ * Validate and merge a selector table. Mutates `target`.
+ *
+ * `path` is the full config path of the table ('stores.heb.selectors',
+ * 'platforms.instacart.selectors') and appears in every warning. Store-level and
+ * PLATFORM-level tables deliberately go through this one function: a platform
+ * value is interpolated into the same injected scripts as a store value, and it
+ * reaches more stores, so it gets the identical gate — wider blast radius is a
+ * reason to validate the same way, never a reason to relax.
+ */
 function mergeSelectors(
-  storeId: string,
+  path: string,
   target: StoreSelectors,
   remote: unknown,
   warnings: string[],
 ): void {
   if (!isPlainObject(remote)) {
-    warnings.push(`stores.${storeId}.selectors: expected an object — ignored`);
+    warnings.push(`${path}: expected an object — ignored`);
     return;
   }
   const entries = Object.entries(remote);
   if (entries.length > MAX_SELECTORS_PER_STORE) {
-    warnings.push(`stores.${storeId}.selectors: ${entries.length} entries exceeds ${MAX_SELECTORS_PER_STORE} — ignored`);
+    warnings.push(`${path}: ${entries.length} entries exceeds ${MAX_SELECTORS_PER_STORE} — ignored`);
     return;
   }
   for (const [key, value] of entries) {
     // A NEW selector key is allowed — that's how we ship a selector for a page
     // element the current build doesn't reference yet, ready for the next release.
     if (!isValidSelector(value)) {
-      warnings.push(`stores.${storeId}.selectors.${key}: unsafe or empty selector — ignored`);
+      warnings.push(`${path}.${key}: unsafe or empty selector — ignored`);
       continue;
     }
     target[key] = value as string;
@@ -201,14 +219,85 @@ function mergeStore(
         }
         break;
       }
+      case 'platform': {
+        // Refused unless this build knows the platform, and that refusal is the
+        // safe direction: the store keeps whatever platform it was BUNDLED with,
+        // so an old app meeting a config that re-platforms a store onto something
+        // newer keeps resolving the selectors it already had. Accepting the
+        // unknown string would be almost as safe (it would resolve to no platform
+        // table) but it would silently discard a working inheritance link.
+        if (isPlatformId(value)) target.platform = value;
+        else {
+          warnings.push(
+            `${path}: not a known platform (${PLATFORM_IDS.join('|')}) — ignored`,
+          );
+        }
+        break;
+      }
       case 'selectors': {
         target.selectors = target.selectors ?? {};
-        mergeSelectors(storeId, target.selectors, value, warnings);
+        mergeSelectors(`stores.${storeId}.selectors`, target.selectors, value, warnings);
         break;
       }
       default:
         warnings.push(`${path}: unknown key — ignored`);
     }
+  }
+}
+
+function mergePlatform(
+  platformId: string,
+  target: PlatformConfigEntry,
+  remote: Record<string, unknown>,
+  warnings: string[],
+): void {
+  for (const [key, value] of Object.entries(remote)) {
+    const path = `platforms.${platformId}.${key}`;
+    if (key === 'selectors') {
+      target.selectors = target.selectors ?? {};
+      mergeSelectors(`platforms.${platformId}.selectors`, target.selectors, value, warnings);
+    } else {
+      // Only selectors are shared platform-wide. A URL or kill switch here would
+      // be a push that takes out every banner on the platform at once, which is
+      // the one thing this feature must not make possible — see PlatformConfigEntry.
+      warnings.push(`${path}: unknown key — ignored`);
+    }
+  }
+}
+
+/**
+ * Merge the `platforms` section: selector tables inherited by every store on a
+ * platform.
+ *
+ * Unlike `stores`, an UNKNOWN key is refused rather than accepted as a new entry.
+ * The asymmetry is deliberate. A store id is an open namespace (constants/stores.ts
+ * grows without this file's permission), and accepting an unknown one lets us
+ * pre-stage config for a banner before its adapter ships. A platform id is a
+ * closed set, and a table for a platform this build cannot name is unreachable
+ * anyway: the only way to attach a store to it is `stores.<id>.platform`, which
+ * refuses the same unknown value. So it would be dead weight that merely looked
+ * like it had been applied.
+ */
+function mergePlatforms(remote: unknown, config: AutomationConfig, warnings: string[]): void {
+  if (!isPlainObject(remote)) {
+    warnings.push('platforms: expected an object — ignored');
+    return;
+  }
+  for (const [platformId, entry] of Object.entries(remote)) {
+    if (!isPlatformId(platformId)) {
+      warnings.push(
+        `platforms.${platformId}: not a known platform (${PLATFORM_IDS.join('|')}) — ignored`,
+      );
+      continue;
+    }
+    if (!isPlainObject(entry)) {
+      warnings.push(`platforms.${platformId}: expected an object — ignored`);
+      continue;
+    }
+    // A platform with no bundled table is still configurable — that is how
+    // 'kroger' gets selectors before its adapter exists.
+    config.platforms[platformId] = config.platforms[platformId] ?? {};
+    mergePlatform(platformId, config.platforms[platformId], entry, warnings);
   }
 }
 
@@ -233,7 +322,7 @@ export function mergeAutomationConfig(
   }
 
   for (const key of Object.keys(remote)) {
-    if (!['timeouts', 'flags', 'telemetry', 'stores'].includes(key)) {
+    if (!['timeouts', 'flags', 'telemetry', 'platforms', 'stores'].includes(key)) {
       warnings.push(`${key}: unknown top-level section — ignored`);
     }
   }
@@ -241,6 +330,8 @@ export function mergeAutomationConfig(
   mergeScalarSection('timeouts', config.timeouts, remote.timeouts, warnings);
   mergeScalarSection('flags', config.flags, remote.flags, warnings);
   mergeScalarSection('telemetry', config.telemetry, remote.telemetry, warnings);
+
+  if (remote.platforms !== undefined) mergePlatforms(remote.platforms, config, warnings);
 
   if (remote.stores !== undefined) {
     if (!isPlainObject(remote.stores)) {
