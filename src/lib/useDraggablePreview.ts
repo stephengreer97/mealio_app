@@ -3,6 +3,24 @@ import { Animated, PanResponder, LayoutChangeEvent } from 'react-native';
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+/** How far (px) a gesture may travel and still read as a tap rather than a drag.
+ *  Generous because the target is a small thumbnail and a finger rolls a few px
+ *  between touch-down and lift. */
+export const TAP_SLOP_PX = 8;
+
+/**
+ * Tap or drag? Decided from the released gesture's total travel.
+ *
+ * This has to live inside the responder. The thumbnail's PanResponder *captures*
+ * the touch on start (it must — see the hook's note), so no Touchable wrapped
+ * around or under it will ever see a press: there is no onPress to attach. The
+ * only place that knows a tap happened is the release handler, which is why
+ * MEAL-64's full-screen viewer is opened from there.
+ */
+export function isTapGesture(dx: number, dy: number): boolean {
+  return Math.abs(dx) <= TAP_SLOP_PX && Math.abs(dy) <= TAP_SLOP_PX;
+}
+
 /**
  * Draggable floating product-preview thumbnail shared by the Choose Product flows
  * (WebViewCartSheet review step + ProductChooserSheet). The thumbnail is anchored
@@ -16,8 +34,11 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
  * Default resting position centers the thumbnail vertically on an anchor box (the grey
  * search-term box) once both the container and that box have reported their layout.
  * The clamp keeps it inside the container, so it can never ride up over the header/close X.
+ *
+ * `onTap` fires when a gesture ends without travelling (see isTapGesture) — the
+ * capture above means a tap can only be recognised here, from the inside.
  */
-export function useDraggablePreview(width: number, height: number, rightInset: number) {
+export function useDraggablePreview(width: number, height: number, rightInset: number, onTap?: () => void) {
   const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const committed = useRef({ x: 0, y: 0 }); // last settled translate
   const container = useRef({ w: 0, h: 0 });
@@ -70,6 +91,12 @@ export function useDraggablePreview(width: number, height: number, rightInset: n
     if (!moved.current) place(0, restY.current + restOffset.current);
   }, [place]);
 
+  // The responder is built once, so it would capture the first render's onTap
+  // forever. Read it through a ref instead — the handler a parent passes closes
+  // over state (which product is selected) and changes on every render.
+  const onTapRef = useRef(onTap);
+  onTapRef.current = onTap;
+
   const responder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -87,9 +114,17 @@ export function useDraggablePreview(width: number, height: number, rightInset: n
         });
       },
       onPanResponderRelease: (_, g) => {
+        setScrollEnabled(true);
+        if (isTapGesture(g.dx, g.dy)) {
+          // A tap is not a drag: snap back the few px the finger rolled and
+          // leave `moved` alone, so the thumbnail keeps auto-centering on the
+          // anchor for the next ingredient instead of being pinned by a tap.
+          place(committed.current.x, committed.current.y);
+          onTapRef.current?.();
+          return;
+        }
         moved.current = true;
         place(committed.current.x + g.dx, committed.current.y + g.dy);
-        setScrollEnabled(true);
       },
       onPanResponderTerminate: () => {
         pan.setValue(committed.current);

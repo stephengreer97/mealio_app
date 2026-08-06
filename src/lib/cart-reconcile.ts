@@ -57,6 +57,34 @@ export function isWeightPriced<T extends WeightPricedFields>(
   return item.purchaseWeight != null;
 }
 
+// ── Qty-step exclusion ────────────────────────────────────────────────────────
+
+/** The fields the qty-step exclusion rule reads. Structurally satisfied by both
+ *  sheets' ConsolidatedIngredient (Kroger's carries no weight fields at all). */
+export interface QtyExcludableFields extends WeightPricedFields {
+  productQty?: number;
+}
+
+/**
+ * Is this item excluded from the run by its QUANTITY alone?
+ *
+ * The pre-automation qty step runs an item when its box is checked AND this is
+ * false. One predicate, shared by the filters that build the run and by the
+ * checkbox/strikethrough that report it — before MEAL-65 the row's treatment was
+ * bound to the checkbox only, so a zeroed row rendered as included while every
+ * filter had already dropped it. Tying both to the same expression is what keeps
+ * the two from drifting apart again.
+ *
+ * Weight-priced items are never zeroed out: their quantity IS the chosen
+ * absolute weight (see isWeightPriced), which the stepper floors at one step,
+ * and their productQty carries no meaning. Stepper-weight items are not
+ * weight-priced — productQty is their source of truth — so they zero out like
+ * ordinary count items.
+ */
+export function isZeroedOut<T extends QtyExcludableFields>(item: T): boolean {
+  return !isWeightPriced(item) && !((item.productQty ?? 0) > 0);
+}
+
 // ── Shared shapes ─────────────────────────────────────────────────────────────
 
 /** One item the run intended to add, reduced to what reconcile compares. */
