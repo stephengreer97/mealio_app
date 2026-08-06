@@ -13,6 +13,7 @@ import StoreSelectorSheet from '../components/StoreSelectorSheet';
 import { presetMeals as presetMealsApi } from '../lib/api';
 import { PresetMeal } from '../types';
 import DiscoverScreen from '../screens/discover/DiscoverScreen';
+import { DeepLinkBusyContext } from '../context/DeepLinkContext';
 
 const GuestStack = createNativeStackNavigator();
 
@@ -64,14 +65,35 @@ export default function RootNavigator() {
   const presetDetailVisibleRef = useRef(false);
   const [storeSelectorVisible, setStoreSelectorVisible] = useState(false);
 
+  // A deep link is resolving. Distinct from its sheet being visible: the gap
+  // between "we know there is a link" and "the meal has come back from the API"
+  // is a network round-trip, and it is exactly the window the first-run welcome
+  // used to slip through. `initialUrlChecked` covers the earlier gap still —
+  // before `getInitialURL` has even answered we do not yet know whether this
+  // launch came from a link, so we assume it might have.
+  const [initialUrlChecked, setInitialUrlChecked] = useState(false);
+  const [deepLinkPending, setDeepLinkPending] = useState(false);
+
   useEffect(() => {
-    Linking.getInitialURL().then((url) => {
-      if (url) handleDeepLink(url);
-    });
+    Linking.getInitialURL()
+      .then((url) => { if (url) handleDeepLink(url); })
+      .catch(() => {})
+      .finally(() => setInitialUrlChecked(true));
 
     const subscription = Linking.addEventListener('url', ({ url }) => handleDeepLink(url));
     return () => subscription.remove();
   }, []);
+
+  // Nothing inside the tabs can see these sheets — they are rendered as siblings
+  // of the entire app — so this is published through a context for the one thing
+  // that has to know: the first-run welcome, which is a Modal and would stack.
+  // See src/context/DeepLinkContext.ts.
+  const deepLinkBusy =
+    !initialUrlChecked
+    || deepLinkPending
+    || presetDetailVisible
+    || storeSelectorVisible
+    || deepLink !== null;
 
   async function handleDeepLink(url: string) {
     // Email verification callback — mealio://verified?token=xxx
@@ -88,6 +110,10 @@ export default function RootNavigator() {
     const link = parseDeepLink(url);
     if (!link) return;
 
+    // Claim the screen synchronously, before the API round-trip below. Anything
+    // that would open a Modal of its own now waits for us.
+    setDeepLinkPending(true);
+
     if (link.type === 'preset') {
       try {
         const meal = await presetMealsApi.getById(link.id);
@@ -103,9 +129,14 @@ export default function RootNavigator() {
         setPresetDetailVisible(true);
       } catch {
         // Silently ignore — bad/expired link
+      } finally {
+        // Hands over to `presetDetailVisible` on success; on a bad link this is
+        // the only thing holding the screen, and it lets go.
+        setDeepLinkPending(false);
       }
     } else {
       setDeepLink(link);
+      setDeepLinkPending(false);
     }
   }
 
@@ -132,7 +163,7 @@ export default function RootNavigator() {
   }
 
   return (
-    <>
+    <DeepLinkBusyContext.Provider value={deepLinkBusy}>
       {renderMain()}
 
       {/* Shared user meal deep link */}
@@ -169,6 +200,6 @@ export default function RootNavigator() {
         onClose={() => setStoreSelectorVisible(false)}
         onSaved={() => setStoreSelectorVisible(false)}
       />
-    </>
+    </DeepLinkBusyContext.Provider>
   );
 }

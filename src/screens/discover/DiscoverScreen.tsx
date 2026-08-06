@@ -26,6 +26,9 @@ import MealDetailSheet from '../../components/MealDetailSheet';
 import CreatorProfileSheet from '../../components/CreatorProfileSheet';
 import StoreSelectorSheet from '../../components/StoreSelectorSheet';
 import FilterSheet, { FilterValues, EMPTY_FILTERS } from '../../components/FilterSheet';
+import WelcomeSheet from '../../components/WelcomeSheet';
+import { hasSeen, markSeen, FIRST_RUN_WELCOME } from '../../lib/firstRun';
+import { useDeepLinkBusy } from '../../context/DeepLinkContext';
 
 const LIMIT = 20;
 
@@ -70,10 +73,49 @@ export default function DiscoverScreen() {
   const [selectedCreator, setSelectedCreator] = useState<Creator | null>(null);
   const [creatorSheetVisible, setCreatorSheetVisible] = useState(false);
 
+  // First run: the pitch (MEAL-84). Discover is the front door for signed-in and
+  // signed-out users alike, and a grid of recipe photos never says that Mealio
+  // fills a grocery cart. Held until the first load finishes so it does not
+  // animate in over the splash screen, and shown once per device.
+  //
+  // `welcomeDue` is "this device has not seen it"; `welcomeVisible` is "and now
+  // is a moment to show it". They are separate because a deep link can be
+  // occupying the screen with a Modal of its own that this one would stack on
+  // top of — see src/context/DeepLinkContext.ts. Due survives the wait; the flag
+  // is only spent by an actual dismissal, so a deep-linked first-run user gets
+  // the pitch after the meal sheet closes rather than instead of it.
+  const [welcomeVisible, setWelcomeVisible] = useState(false);
+  const [welcomeDue, setWelcomeDue] = useState(false);
+  const welcomeChecked = React.useRef(false);
+  const deepLinkBusy = useDeepLinkBusy();
+
   useEffect(() => {
     setLoading(true);
     loadData(0, true);
   }, [segment, filters]);
+
+  useEffect(() => {
+    if (loading || welcomeChecked.current) return;
+    welcomeChecked.current = true;
+    let cancelled = false;
+    (async () => {
+      if (!(await hasSeen(FIRST_RUN_WELCOME)) && !cancelled) setWelcomeDue(true);
+    })();
+    return () => { cancelled = true; };
+  }, [loading]);
+
+  useEffect(() => {
+    setWelcomeVisible(welcomeDue && !deepLinkBusy);
+  }, [welcomeDue, deepLinkBusy]);
+
+  // Every exit from the sheet is this one: the ✕, the backdrop, the button, the
+  // Android back gesture. Marked seen on the way out rather than on the way in,
+  // so an app killed mid-pitch still gets to show it.
+  function dismissWelcome() {
+    setWelcomeDue(false);
+    setWelcomeVisible(false);
+    markSeen(FIRST_RUN_WELCOME);
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -355,6 +397,8 @@ export default function DiscoverScreen() {
           ) : null
         }
       />
+
+      <WelcomeSheet visible={welcomeVisible} onDismiss={dismissWelcome} />
 
       <FilterSheet
         visible={filterVisible}

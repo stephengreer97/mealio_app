@@ -11,6 +11,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../../constants/colors';
 import BugReportSheet from '../../components/BugReportSheet';
+import HowMealioWorks from '../../components/HowMealioWorks';
+import { PITCH_STORES } from '../../constants/pitch';
 
 interface FAQItem {
   question: string;
@@ -32,15 +34,22 @@ const FAQ_SECTIONS: { title: string; items: FAQItem[] }[] = [
           'Browse the Discover tab to find meals you like. Tap on any meal and press "Save to My Meals". Choose which grocery store you shop at, and the meal will appear in your My Meals tab.',
       },
       {
+        // Was "H-E-B, Walmart, and Kroger … available in the browser extension",
+        // which is neither true nor the same answer the rest of the app gives.
+        // One store list, from the canonical pitch module (MEAL-84).
         question: 'Which grocery stores are supported?',
-        answer:
-          'Mealio currently supports H-E-B, Walmart, and Kroger. Cart-add functionality is available in the Mealio browser extension — open mealio.co to learn more.',
+        answer: `Mealio works with ${PITCH_STORES}. Pick your store when you save a meal, and Mealio adds the ingredients to your cart there.`,
       },
     ],
   },
   {
     title: 'My Meals',
     items: [
+      {
+        question: 'What is "Choose Products"?',
+        answer:
+          'One-time setup for a meal. A recipe asks for sour cream; your store stocks a dozen different ones, so Mealio shows you each ingredient in turn with the matching products and you pick the one you buy. Nothing goes into your cart while you do it. Your picks are saved, so from then on that meal adds to your cart in one tap.',
+      },
       {
         question: 'How do I edit a saved meal?',
         answer:
@@ -130,6 +139,14 @@ export default function HelpScreen() {
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.pageTitle}>Help & FAQ</Text>
 
+        {/* The first-run pitch, kept reachable. The welcome sheet shows once and
+            never again, so this is where somebody who tapped past it — or who
+            arrived here because they could not tell what the app was for — gets
+            the same words back (MEAL-84). */}
+        <View style={styles.howCard}>
+          <HowMealioWorks />
+        </View>
+
         {FAQ_SECTIONS.map((section) => (
           <FAQSection key={section.title} title={section.title} items={section.items} />
         ))}
@@ -162,6 +179,14 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
   scroll: { padding: 16, paddingBottom: 40 },
   pageTitle: { fontSize: 28, fontFamily: 'Inter_700Bold', color: Colors.text1, marginBottom: 20 },
+  howCard: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 16,
+    marginBottom: 24,
+  },
   section: { marginBottom: 24 },
   sectionTitle: {
     fontSize: 15,
