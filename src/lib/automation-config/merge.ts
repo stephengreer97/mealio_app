@@ -60,7 +60,10 @@ function isValidUrl(v: unknown): v is string {
   return !UNSAFE_SELECTOR.test(v);
 }
 
-function isValidSelector(v: unknown): v is string {
+/** True when a selector is safe to interpolate into an injected script.
+ *  Exported so the RAW interpolation path (rawSelectorsFor) can re-apply the
+ *  same rule at read time instead of relying on JSON.stringify. */
+export function isValidSelector(v: unknown): v is string {
   return (
     typeof v === 'string' &&
     v.trim().length > 0 &&

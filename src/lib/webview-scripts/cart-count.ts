@@ -13,17 +13,21 @@
 // don't-guess rule:
 //   heb        aria-label="Go to Cart page. 2 items in your cart. $9.93"
 //   walmart    aria-label="Cart contains 4 items Total Amount $13.33"
-//   aldi       aria-label="View Cart. Items in cart: 6, View cart"
+//   instacart  aria-label="View Cart. Items in cart: 6, View cart"  (seen on ALDI)
 //   wegmans    aria-label="View 2 selected items in my Cart"
 //   amazon     <span id="nav-cart-count">4</span>
 //   albertsons [data-qa="hdr-crt-txt-plus"] exists but renders its count
 //              client-side (empty in the static capture) — BEST EFFORT,
 //              needs live verification on a device before trusting it.
 //
-// NOTE (Stephen): ALDI's cart UI is a side panel, but the COUNT badge above
-// lives in the header of every store page, so no cart navigation is needed.
+// NOTE (Stephen): Instacart's cart UI is a side panel, but the COUNT badge
+// above lives in the header of every store page, so no cart navigation is
+// needed. Both are keyed to the PLATFORM here — every banner in
+// INSTACART_TENANTS shares them — rather than to ALDI, which is merely the
+// tenant they were first read off.
 
 import { ALBERTSONS_FAMILY_IDS, getAlbertsonsCartPageUrl } from './albertsons';
+import { isInstacartStore } from './instacart';
 import { MOCK_STORE_URL } from './mockstore';
 
 interface CountExtractor {
@@ -39,7 +43,10 @@ interface CountExtractor {
 const EXTRACTORS: Record<string, CountExtractor> = {
   heb: { sel: '[aria-label*="items in your cart"]', from: 'aria', re: '(\\d+)\\s+items? in your cart' },
   walmart: { sel: '[aria-label^="Cart contains"]', from: 'aria', re: 'Cart contains (\\d+) item' },
-  aldi: { sel: '[aria-label*="Items in cart:"]', from: 'aria', re: 'Items in cart:\\s*(\\d+)' },
+  // Instacart Storefront renders one header badge for every banner it hosts, so
+  // this is keyed to the PLATFORM, not to ALDI (where it was first observed).
+  // extractorFor() routes each registered tenant here.
+  instacart: { sel: '[aria-label*="Items in cart:"]', from: 'aria', re: 'Items in cart:\\s*(\\d+)' },
   wegmans: { sel: '[aria-label*="selected items in my Cart"]', from: 'aria', re: '(\\d+) selected item' },
   amazon: { sel: '#nav-cart-count', from: 'text' },
   albertsons: { sel: '[data-qa="hdr-crt-txt-plus"]', from: 'text' },
@@ -48,6 +55,10 @@ const EXTRACTORS: Record<string, CountExtractor> = {
 function extractorFor(storeId: string): CountExtractor | null {
   if (EXTRACTORS[storeId]) return EXTRACTORS[storeId];
   if (ALBERTSONS_FAMILY_IDS.includes(storeId)) return EXTRACTORS.albertsons;
+  // Platform families before the null: a banner with no entry of its own gets
+  // its platform's badge rather than a silent "count unknown", which reads as
+  // "skip validation" and takes the whole silent-miss check offline.
+  if (isInstacartStore(storeId)) return EXTRACTORS.instacart;
   return null;
 }
 
@@ -508,17 +519,21 @@ export function buildOpenCartScript(storeId: string): string | null {
   return null;
 }
 
-// ALDI (Instacart) has NO dedicated cart page — the cart is an in-page side
+// Instacart Storefront has NO dedicated cart page — the cart is an in-page side
 // panel ([role="dialog"][aria-label="Cart"]) opened from the floating cart
 // button. There's no navigation, so unlike HEB (URL) / Amazon (click→navigate)
 // this script does the whole thing in one injected pass: open the panel (if
 // closed), read each line item, post CART_COUNT, then close the panel so it
 // doesn't cover the search bar for the next step. Per line item:
 //   • name: the "Increment quantity of <name>" button's aria-label (minus the
-//           prefix). Live ALDI line items have NO "Remove" button — only the
+//           prefix). Live line items have NO "Remove" button — only the
 //           increment/decrement stepper — so the increment button is the anchor.
 //   • qty:  the stepper's "Quantity: N" text (walk up from the increment button)
-const ALDI_CART_PANEL_SCRIPT = `(async function() {
+//
+// Every selector here is the white-labelled platform's, observed on ALDI (the
+// only banner we hold fixtures for). It is shared by every tenant in
+// INSTACART_TENANTS because the side panel is Instacart's, not the banner's.
+const INSTACART_CART_PANEL_SCRIPT = `(async function() {
   function wait(ms){return new Promise(function(r){setTimeout(r,ms);});}
   function norm(s){return (s||'').trim().replace(/\\s+/g,' ');}
 
@@ -595,7 +610,14 @@ const ALDI_CART_PANEL_SCRIPT = `(async function() {
  * Inject it DIRECTLY (not via the nav/onLoadEnd chain). Null for other stores.
  */
 export function buildInlineCartScript(storeId: string): string | null {
-  if (storeId === 'aldi') return ALDI_CART_PANEL_SCRIPT;
+  // Registry-driven, not `storeId === 'aldi'`. The side panel is a property of
+  // Instacart Storefront, so it belongs to every banner on it. Hardcoding one
+  // banner meant a second tenant got null from all three of
+  // buildInlineCartScript / buildCartPageCountScript / buildOpenCartScript, at
+  // which point WebViewCartSheet takes NO cart-probe branch — no before
+  // baseline, no after count, no cart breakdown on the done screen, and no
+  // error either. Pinned by tests/unit/webview-scripts/instacartAdapter.test.ts.
+  if (isInstacartStore(storeId)) return INSTACART_CART_PANEL_SCRIPT;
   return null;
 }
 

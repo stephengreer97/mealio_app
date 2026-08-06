@@ -15,7 +15,7 @@
 // client that reverted during that window would undo a shipped fix for one run.
 
 import { AutomationConfig, BUNDLED_AUTOMATION_CONFIG, StoreSelectors } from './schema';
-import { mergeAutomationConfig } from './merge';
+import { mergeAutomationConfig, isValidSelector } from './merge';
 
 export * from './schema';
 export { mergeAutomationConfig } from './merge';
@@ -149,6 +149,48 @@ export function selectorsFor(
   // which the funnel records as `candidates: empty` rather than a syntax error.
   return new Proxy(out, {
     get: (target, prop: string) => (prop in target ? target[prop] : '""'),
+  });
+}
+
+/**
+ * Selectors as RAW strings — no surrounding quotes, no escaping.
+ *
+ * For the handful of sites that embed a selector INSIDE a JS literal the script
+ * already owns:
+ *
+ *     document.querySelector('${raw.searchTrigger}')   // not ${sel.searchTrigger}
+ *
+ * Those sites exist because moving an already-shipped selector into config must
+ * not change the BYTES of the script that ships (selectorsFor's JSON.stringify
+ * emits `"a[href=\"x\"]"`, which is different text from the `'a[href="x"]'` the
+ * script had inline). See tests/unit/webview-scripts/aldiGeneratedScripts.test.ts.
+ *
+ * The escaping that selectorsFor provides is replaced here by re-validation: a
+ * CONFIGURED value that could break out of a single-quoted literal (quote,
+ * backslash, backtick, newline, `${`) is dropped and the compile-time fallback
+ * stands, so the worst a bad or hostile push can do is fail to take effect.
+ * `fallbacks` is developer-authored and used verbatim — that is the only way a
+ * default containing a double quote can survive to the page.
+ *
+ * Prefer selectorsFor() for any NEW interpolation site. This one is for keeping
+ * faith with scripts that are already in users' hands.
+ */
+export function rawSelectorsFor(
+  storeId: string,
+  fallbacks: StoreSelectors = {},
+): Record<string, string> {
+  const configured = current.stores[storeId]?.selectors ?? {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(fallbacks)) {
+    if (typeof value === 'string') out[key] = value;
+  }
+  for (const [key, value] of Object.entries(configured)) {
+    if (isValidSelector(value)) out[key] = value;
+  }
+  // Mirror selectorsFor: an undeclared key yields an empty selector rather than
+  // the string "undefined" spliced into the page.
+  return new Proxy(out, {
+    get: (target, prop: string) => (prop in target ? target[prop] : ''),
   });
 }
 

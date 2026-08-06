@@ -1,8 +1,14 @@
 // ALDI fixture tests.
 //
-// ALDI runs on Instacart's storefront. Login is via a hamburger menu rather
+// ALDI runs on Instacart's storefront, driven by the shared adapter in
+// src/lib/webview-scripts/instacart.ts. Login is via a hamburger menu rather
 // than a direct profile button — the login-detection script looks for
 // "Sign out" / "Account" text in the menu drawer.
+//
+// ALDI is the ONLY Instacart tenant with captured fixtures, so this file is
+// also the only behavioural coverage that adapter has. A second banner needs
+// its own captures and its own copy of this matrix — see the tenant registry
+// comment in instacart.ts.
 //
 // All tests auto-skip when their fixture file isn't present. Activate by
 // running `npm run capture -- aldi`.
@@ -140,8 +146,7 @@ describe('ALDI parallel worker script (Phase G rollout)', () => {
     'search-results-tortillas.html',
     'worker extracts candidates and posts WORKER_RESULT with its workerId',
     async (runner) => {
-      const { buildAldiWorkerScript } = await import('../../src/lib/webview-scripts/aldi');
-      await runner.inject(buildAldiWorkerScript(3));
+      await runner.inject(scripts.buildWorkerScript!(3));
       const result = await runner.waitForMessage('WORKER_RESULT', 12_000);
       expect(result.workerId).toBe(3);
       expect(result.query).toBe('tortillas');
@@ -156,8 +161,7 @@ describe('ALDI parallel worker script (Phase G rollout)', () => {
     'logged-in-home.html',
     'worker stays silent on a warmup load (no ?k= query)',
     async (runner) => {
-      const { buildAldiWorkerScript } = await import('../../src/lib/webview-scripts/aldi');
-      await runner.inject(buildAldiWorkerScript(0));
+      await runner.inject(scripts.buildWorkerScript!(0));
       await expect(runner.waitForMessage('WORKER_RESULT', 3_000)).rejects.toThrow();
     },
     { url: 'https://www.aldi.us' },
