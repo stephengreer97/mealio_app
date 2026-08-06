@@ -1,10 +1,22 @@
 // Tests for the Instacart Storefront platform adapter (MEAL-20).
 //
 // WHAT THESE PROVE, AND WHAT THEY DO NOT
-// They prove the adapter's SEAM is complete: swap the tenant and every piece of
-// tenant-specific text in the injected JavaScript moves with it, with nothing
-// left hardcoded to ALDI. That is a real property and it is the thing the
-// refactor was for.
+// They prove the adapter's TENANT TOKENS round-trip: swap the tenant and the
+// origin, the /store/{slug}/ path segment and the login-guard name all move
+// with it, so the pieces the ticket parameterized are genuinely parameterized.
+//
+// They do NOT prove "no ALDI string is left hardcoded", and should not be read
+// that way. retenant() below substitutes exactly those three tokens; any
+// ALDI-shaped text containing none of them passes invisibly. Known residue that
+// slips straight through, all of it deliberate:
+//   • English word lists — /ask or search/i, /^Add 1 (?:item|ct)\s+(.+)/i
+//   • #search-bar-input, a platform id rather than a configured selector
+//   • a USD-only price regex /\$\d+\.\d{2}/, in three places
+//   • the CRITICAL / COMMON word sets in the inlined scorer, tuned with a
+//     comment that says "ALDI has limited selection"
+// These are defensible as platform-level for a white-labelled storefront whose
+// only banner is US and English, and none is a bug today. They are the work a
+// genuinely different banner would surface, and they are not covered here.
 //
 // They do NOT prove any second storefront works. The synthetic tenant below is
 // a fiction on a .test domain; no HTML from Publix, Sprouts, or any other banner
@@ -29,6 +41,12 @@ import {
   getInstacartSearchUrl,
 } from '../../../src/lib/webview-scripts/instacart';
 import { getStoreScripts } from '../../../src/lib/webview-scripts';
+import {
+  buildCartCountScript,
+  buildInlineCartScript,
+  buildCartPageCountScript,
+  buildOpenCartScript,
+} from '../../../src/lib/webview-scripts/cart-count';
 import { __resetAutomationConfigForTests } from '../../../src/lib/automation-config';
 import { BUNDLED_AUTOMATION_CONFIG } from '../../../src/lib/automation-config/schema';
 
@@ -63,9 +81,14 @@ function scriptsOf(t: InstacartTenant): Record<string, string> {
  *  in instacart.ts, which is module-private. */
 const loginFlagOf = (t: InstacartTenant) => `__${t.storeId}LoginCheckActive`;
 
-/** Rewrite the synthetic tenant's tokens back to ALDI's. If the adapter is fully
- *  parameterized, the result is ALDI's script exactly. Longest tokens first so a
- *  shorter one can't chew a prefix of a longer one. */
+/** Rewrite the synthetic tenant's THREE tokens back to ALDI's. If those tokens
+ *  are fully parameterized, the result is ALDI's script exactly. Longest tokens
+ *  first so a shorter one can't chew a prefix of a longer one.
+ *
+ *  Note the scope: this catches a hardcoded aldi.us or /store/aldi/, and nothing
+ *  else. ALDI-derived text that mentions no token — English copy, a USD price
+ *  regex, the tuned scorer word lists — round-trips unchanged and passes. See
+ *  the file header. */
 function retenant(src: string): string {
   return src
     .split(SYNTHETIC.origin).join(ALDI.origin)
@@ -80,9 +103,10 @@ describe('the tenant seam is complete', () => {
   it.each(Object.keys(scriptsOf(ALDI)))(
     '%s differs from ALDI only by tenant tokens',
     (name) => {
-      // The whole point: after substituting the tenant's own origin/slug/flag
-      // back to ALDI's, the two scripts are the same text. Any residue — a
-      // hardcoded aldi.us, a stray /store/aldi/ — shows up here as a diff.
+      // After substituting the tenant's own origin/slug/flag back to ALDI's, the
+      // two scripts are the same text — so a hardcoded aldi.us or a stray
+      // /store/aldi/ shows up here as a diff. That is the whole claim; it is not
+      // a claim that nothing ALDI-derived remains (see the file header).
       expect(retenant(synthScripts()[name])).toBe(aldiScripts()[name]);
     },
   );
@@ -158,6 +182,56 @@ describe('tenant registry', () => {
     for (const id of INSTACART_STORE_IDS) {
       expect(`${id}: ${!!BUNDLED_AUTOMATION_CONFIG.stores[id]}`).toBe(`${id}: true`);
     }
+  });
+
+  it('every tenant can probe a cart', () => {
+    // WebViewCartSheet picks its cart-probe branch by asking for a script:
+    // inline (in-page panel), cart-page (navigate then count), or open-cart
+    // (click then count). A tenant that answers null to ALL THREE gets no
+    // branch at all — no before baseline, no after count, no cart breakdown on
+    // the done screen — and reports nothing, because "no script" is not an
+    // error anywhere in that component. Silent degradation is the failure mode
+    // this asserts against.
+    for (const id of INSTACART_STORE_IDS) {
+      const probes =
+        !!buildInlineCartScript(id) || !!buildCartPageCountScript(id) || !!buildOpenCartScript(id);
+      expect(`${id}: ${probes}`).toBe(`${id}: true`);
+    }
+  });
+
+  it('every tenant can read the header cart badge', () => {
+    // The other half of the probe: buildCartCountScript reads the header badge
+    // for the before/after snapshot. Its EXTRACTORS map is per-store, so a
+    // tenant with no entry silently returns null — which callers must treat as
+    // "count unknown, skip validation", taking the silent-miss check offline
+    // for that banner without saying so.
+    for (const id of INSTACART_STORE_IDS) {
+      expect(`${id}: ${!!buildCartCountScript(id)}`).toBe(`${id}: true`);
+    }
+  });
+
+  it('cart probing follows the registry, not a hardcoded banner id', () => {
+    // The two tests above pass even against `storeId === 'aldi'` while ALDI is
+    // the only tenant, so they cannot catch the regression on their own. Add a
+    // second tenant for the length of this test and re-ask: a hardcoded banner
+    // check fails here, registry dispatch passes. This is the generalisation
+    // MEAL-20 is about — the cart side panel and the header badge belong to
+    // Instacart Storefront, not to ALDI.
+    const id = SYNTHETIC.storeId;
+    expect(INSTACART_TENANTS[id]).toBeUndefined();   // don't clobber a real one
+    INSTACART_TENANTS[id] = SYNTHETIC;
+    try {
+      expect(buildInlineCartScript(id)).not.toBeNull();
+      expect(buildCartCountScript(id)).not.toBeNull();
+      // Same platform, same panel and same badge: byte-for-byte what ALDI gets.
+      expect(buildInlineCartScript(id)).toBe(buildInlineCartScript('aldi'));
+      expect(buildCartCountScript(id)).toBe(buildCartCountScript('aldi'));
+    } finally {
+      delete INSTACART_TENANTS[id];
+    }
+    // And the registry is left exactly as it was found.
+    expect(INSTACART_TENANTS[id]).toBeUndefined();
+    expect(Object.keys(INSTACART_TENANTS)).toEqual(INSTACART_STORE_IDS);
   });
 
   it('every tenant has captured fixtures behind it', () => {

@@ -38,16 +38,16 @@
 // argument-order trap that makes a naive swap silently invert the comparison.
 
 import type { StoreScripts } from './index';
-import { selectorsFor, storeConfig, searchUrlFor } from '../automation-config';
+import { selectorsFor, rawSelectorsFor, storeConfig, searchUrlFor } from '../automation-config';
 
 // ── Tenant model ──────────────────────────────────────────────────────────────
 
 /**
  * One grocery banner running on Instacart Storefront.
  *
- * Adding a storefront is a new entry in INSTACART_TENANTS plus a
- * BUNDLED_AUTOMATION_CONFIG entry under the same `storeId`, plus captured
- * fixtures to prove the DOM actually matches. No new code path.
+ * An entry here buys you the injected scripts and nothing else — the store is
+ * not yet selectable, automatable, or capturable. See the checklist above
+ * INSTACART_TENANTS for the registrations a banner actually needs.
  */
 export interface InstacartTenant {
   /** Store id from constants/stores.ts. Doubles as the automation-config and
@@ -86,6 +86,24 @@ function selFallbacks(t: InstacartTenant): Record<string, string> {
     cardLink: `a[href*="/store/${t.slug}/products/"]`,
     menu: '[role="dialog"][aria-label="Main Menu"]',
     hamburger: '[data-testid="hamburger-coachmark-button"], button[aria-label="Main Menu"]',
+    // The collapsed search affordance. Instacart renders it with Emotion, so
+    // these class names are BUILD-HASHED content, not a stable contract — they
+    // can change on any ALDI redeploy and are near-certain to differ on another
+    // banner. They live here, not inline, precisely so that day is a config push
+    // instead of an App Store release. The script keeps a text-matching fallback
+    // ("ask or search") for when they go stale before a push lands.
+    searchTrigger: 'label[class*="e-6xs547"], span[class*="e-1olf6x2"]',
+    // The in-cart count on a product card, in the two shapes ALDI was observed
+    // rendering it: a testid'd counter, or a bubble button whose aria-label
+    // carries the number ("Quantity: N", "N ct", "N in cart").
+    cardQty: '[data-testid="item-quantity"], [data-testid*="quantity" i]',
+    cardQtyBubble: 'button[aria-label^="Quantity:"], button[aria-label$=" ct"], button[aria-label$=" in cart"]',
+    // NOT pushable, and deliberately so: getCardQty's last resort reads the
+    // count out of the increment button's aria-label with /currently\s+(\d+)/i.
+    // A regex is not a selector — merge.ts rejects the backslashes it needs, and
+    // splicing an unescaped `/` into a regex literal is an injection this file
+    // should not open. It stays inline. Both selectors above run first, so a
+    // banner that labels its stepper differently is still recoverable by a push.
     ...t.selectorOverrides,
   };
 }
@@ -94,6 +112,28 @@ function selFallbacks(t: InstacartTenant): Record<string, string> {
  *  Call inside a build function — the remote config loads after this module is
  *  imported, so a module-scope capture would freeze the fallbacks forever. */
 const sel = (t: InstacartTenant) => selectorsFor(t.storeId, selFallbacks(t));
+
+/** The same selectors, RAW, for the sites that interpolate into a quoted literal
+ *  the script already owns. Same override precedence, revalidated on read — see
+ *  rawSelectorsFor(). Used where switching to the `${sel.x}` form would have
+ *  changed the bytes of a script that already ships. */
+const rawSel = (t: InstacartTenant) => rawSelectorsFor(t.storeId, selFallbacks(t));
+
+/**
+ * The `:not(…)` clause that keeps the "is some OTHER modal up?" probe from
+ * matching the banner's own Main Menu.
+ *
+ * Derived from the tenant's RESOLVED menu selector rather than hardcoded: the
+ * menu is overridable (per-tenant and by config push), and an exclusion that
+ * didn't move with it would silently stop matching, leaving the login poll
+ * fighting the sign-in modal it was written to yield to. Prefers the menu's
+ * aria-label clause (what the dialogs are actually distinguished by); falls back
+ * to excluding the whole menu selector when there isn't one.
+ */
+function menuExclusion(menuSel: string): string {
+  const label = menuSel.match(/\[aria-label=("[^"]*"|'[^']*'|[^\]]+)\]/);
+  return `:not(${label ? `[aria-label=${label[1]}]` : menuSel})`;
+}
 
 /** The `{origin}/store/{slug}/s?k=` prefix every search URL is built from. */
 function searchPrefix(t: InstacartTenant): string {
@@ -116,6 +156,13 @@ const DEFAULT_SIGNED_IN_WORDS =
 function buildCheckLoginScript(t: InstacartTenant): string {
   const s = sel(t);
   const FLAG = loginFlag(t);
+  // Follows s.menu wherever a tenant or a config push moves it. See menuExclusion().
+  const NOT_MENU = menuExclusion(rawSel(t).menu);
+  // NOTE: these are spliced RAW into /${outWords}/ below, so they are a regex
+  // source, not a literal — `|` alternation is the point. Developer-authored at
+  // compile time (InstacartTenant is a code-level registry, not a config push),
+  // so this is not a reachable injection surface; it does mean a tenant author
+  // must write a VALID regex here, and a stray `/` would end the literal.
   const outWords = t.signedOutWords ?? DEFAULT_SIGNED_OUT_WORDS;
   const inWords = t.signedInWords ?? DEFAULT_SIGNED_IN_WORDS;
   return `(async function() {
@@ -223,7 +270,7 @@ function buildCheckLoginScript(t: InstacartTenant): string {
       await wait(2000);
       // Don't fight a sign-in modal: if some OTHER visible dialog is up (the
       // login form), skip this tick rather than yanking the Main Menu open.
-      var other = document.querySelector('[role="dialog"][aria-modal="true"]:not([aria-label="Main Menu"])');
+      var other = document.querySelector('[role="dialog"][aria-modal="true"]${NOT_MENU}');
       if (other && other.offsetParent !== null) continue;
       if (await evaluateMenu() === 'in') {
         closeMenu();
@@ -374,6 +421,7 @@ function buildAddToCartScript(
   const escapedName = JSON.stringify(productName);
 
   const s = sel(t);
+  const r = rawSel(t);
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
@@ -423,9 +471,9 @@ function buildAddToCartScript(
   // increment button's aria-label ("Increment quantity, currently N").
   function getCardQty(el) {
     if (!el) return null;
-    var q = el.querySelector('[data-testid="item-quantity"], [data-testid*="quantity" i]');
+    var q = el.querySelector('${r.cardQty}');
     if (q) { var qt = (q.textContent || '').match(/\\d+/); if (qt) return parseInt(qt[0], 10); }
-    var bubble = el.querySelector('button[aria-label^="Quantity:"], button[aria-label$=" ct"], button[aria-label$=" in cart"]');
+    var bubble = el.querySelector('${r.cardQtyBubble}');
     if (bubble) { var bm = (bubble.getAttribute('aria-label') || '').match(/(\\d+)/); if (bm) return parseInt(bm[1], 10); }
     var inc = el.querySelector(INC_SEL);
     if (inc) { var im = (inc.getAttribute('aria-label') || '').match(/currently\\s+(\\d+)/i); if (im) return parseInt(im[1], 10); }
@@ -488,6 +536,7 @@ function buildAddToCartScript(
 function buildSearchScript(t: InstacartTenant, term: string): string {
   const escaped = JSON.stringify(term);
   const s = sel(t);
+  const r = rawSel(t);
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   var term = ${escaped};
@@ -504,7 +553,7 @@ function buildSearchScript(t: InstacartTenant, term: string): string {
 
   // The search input (#search-bar-input) is hidden until the search area is clicked.
   // Click the "Ask or search anything" label/span to open it.
-  var trigger = document.querySelector('label[class*="e-6xs547"], span[class*="e-1olf6x2"]');
+  var trigger = document.querySelector('${r.searchTrigger}');
   if (!trigger) {
     // Broader fallback: click anything containing "search anything".
     var allEls = document.querySelectorAll('label, span, div');
@@ -609,6 +658,7 @@ function buildSearchAndAddScript(
 ): string {
   const escapedTerm = JSON.stringify(searchTerm);
   const s = sel(t);
+  const r = rawSel(t);
   return `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function __noKbd(e) {
@@ -636,7 +686,7 @@ function buildSearchAndAddScript(
   var staleName = getFirstLinkName();
 
   // Open search, type term, submit.
-  var trigger = document.querySelector('label[class*="e-6xs547"], span[class*="e-1olf6x2"]');
+  var trigger = document.querySelector('${r.searchTrigger}');
   if (!trigger) {
     var allEls = document.querySelectorAll('label, span, div');
     for (var ti = 0; ti < allEls.length; ti++) {
@@ -834,9 +884,9 @@ function buildSearchAndAddScript(
   // null when no counter is exposed.
   function getCardQty(el) {
     if (!el) return null;
-    var q = el.querySelector('[data-testid="item-quantity"], [data-testid*="quantity" i]');
+    var q = el.querySelector('${r.cardQty}');
     if (q) { var qt = (q.textContent || '').match(/\\d+/); if (qt) return parseInt(qt[0], 10); }
-    var bubble = el.querySelector('button[aria-label^="Quantity:"], button[aria-label$=" ct"], button[aria-label$=" in cart"]');
+    var bubble = el.querySelector('${r.cardQtyBubble}');
     if (bubble) { var bm = (bubble.getAttribute('aria-label') || '').match(/(\\d+)/); if (bm) return parseInt(bm[1], 10); }
     var inc = el.querySelector(INC_SEL);
     if (inc) { var im = (inc.getAttribute('aria-label') || '').match(/currently\\s+(\\d+)/i); if (im) return parseInt(im[1], 10); }
@@ -1052,19 +1102,35 @@ export function getInstacartSearchUrl(t: InstacartTenant, query: string): string
 /**
  * Every banner we drive on Instacart Storefront, keyed by storeId.
  *
- * ADDING ONE is three things and no new code:
- *   1. An entry here — origin, slug, domain, and any knob whose default differs.
- *   2. A `stores.<storeId>` entry in BUNDLED_AUTOMATION_CONFIG (schema.ts) so the
+ * ADDING ONE needs no new SCRIPT code — that is what the tenant seam bought —
+ * but it is more than an entry here. The full checklist, in the order a missing
+ * step bites:
+ *
+ *   1. `WEBVIEW_STORE_IDS` and `STORES` in src/constants/stores.ts. Without the
+ *      first, isWebViewStore() is false and the store is never automated;
+ *      without the second it does not appear in the picker at all. A tenant
+ *      registered only here is unreachable — the most silent miss on the list.
+ *   2. An entry here — origin, slug, domain, and any knob whose default differs.
+ *   3. A `stores.<storeId>` entry in BUNDLED_AUTOMATION_CONFIG (schema.ts) so the
  *      banner is kill-switchable and its selectors are pushable. Omitting it is
  *      survivable — selFallbacks() below still yields working selectors — but the
  *      banner then has no remote escape hatch, which is not a state to ship in.
- *   3. Captured fixtures under tests/fixtures/<storeId>/ and a spec modelled on
+ *   4. A `fixture-capture-config.ts` entry, or the documented
+ *      `npm run capture -- <storeId>` has nothing to drive and step 6 is manual.
+ *   5. Nothing for cart probing: buildInlineCartScript() and extractorFor() in
+ *      cart-count.ts both dispatch on this registry via isInstacartStore(), so a
+ *      tenant gets the side panel and the header badge for free. (They used to
+ *      test for 'aldi' by name, which silently gave a second banner no cart
+ *      probe at all; tests/unit/webview-scripts/instacartAdapter.test.ts pins it.)
+ *   6. Captured fixtures under tests/fixtures/<storeId>/ and a spec modelled on
  *      tests/fixture-tests/aldi.spec.ts.
  *
- * Step 3 is the one that cannot be skipped. The URL contract being identical
+ * Step 6 is the one that cannot be skipped. The URL contract being identical
  * across banners (MEAL-20's evidence) says nothing about the DOM, and every
  * selector in selFallbacks() was read off ALDI. A banner added without fixtures
- * is a guess, not a supported store.
+ * is a guess, not a supported store. Expect real work beyond the registrations:
+ * the scripts still carry English copy, a USD price regex and scorer word lists
+ * tuned on ALDI (see the header of instacartAdapter.test.ts).
  */
 export const INSTACART_TENANTS: Record<string, InstacartTenant> = {
   aldi: {
@@ -1087,8 +1153,19 @@ export const INSTACART_TENANTS: Record<string, InstacartTenant> = {
   },
 };
 
-/** Store ids served by this adapter. */
+/** Store ids served by this adapter. Snapshotted at module load. */
 export const INSTACART_STORE_IDS: string[] = Object.keys(INSTACART_TENANTS);
+
+/** True when this store runs on Instacart Storefront.
+ *
+ *  Read LIVE off the registry rather than off the INSTACART_STORE_IDS snapshot,
+ *  so anything dispatching on "is this the Instacart platform?" — cart probing
+ *  in cart-count.ts especially — picks up a tenant the moment it is registered.
+ *  This is the predicate to reach for when the answer is about the PLATFORM
+ *  (a side-panel cart, a shared header badge) rather than about one banner. */
+export function isInstacartStore(storeId: string): boolean {
+  return Object.prototype.hasOwnProperty.call(INSTACART_TENANTS, storeId);
+}
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
