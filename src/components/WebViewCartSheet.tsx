@@ -523,6 +523,53 @@ export default function WebViewCartSheet({
   const prefFetchResultIdxRef = useRef<number>(-1);
   const pendingNavIdxRef = useRef<number>(-1);
 
+  // MEAL-13 rollout evidence. The extractor's chosen source ('next_data' | 'dom')
+  // rides on SEARCH_RESULT, but WHY it chose it — 'ok', 'stale', 'no_next_data',
+  // 'unverifiable', 'empty', 'threw' — travels separately, on the EXTRACT_DEBUG it
+  // posts just before. Without the reason, every fallback collapses into
+  // source: 'dom' and the funnel cannot tell "HEB removed the payload" from "the
+  // freshness gate declined", which are the two outcomes the flag exists to
+  // measure. Stash it per search surface and attach it to the candidates row.
+  // Keyed by worker id; the main WebView uses MAIN_SURFACE.
+  const MAIN_SURFACE = -1;
+  const extractWhyRef = useRef<Record<number, string | null>>({});
+  const takeExtractWhy = useCallback((surface: number): string | null => {
+    const why = extractWhyRef.current[surface] ?? null;
+    // Consume it: a stale reason attached to a LATER search would be worse than
+    // none, since it would read as a measurement rather than a leftover.
+    delete extractWhyRef.current[surface];
+    return why;
+  }, []);
+
+  /**
+   * Record the `candidates` funnel row for a search that ran in a WORKER WebView.
+   *
+   * The main WebView records its own row inline in onMessage; the two worker pools
+   * recorded nothing, so the funnel only ever saw sequential searches — and the
+   * parallel pools are where most searching happens. `source`/`why` in particular
+   * are the MEAL-13 rollout comparison, which is the whole point of the flag.
+   *
+   * No itemIndex: the worker↔item mapping lives inside the pool's state machine,
+   * and a guessed index would be worse than an absent one. `path` and `workerId`
+   * identify the surface instead.
+   */
+  const recordWorkerCandidates = useCallback(
+    (path: 'parallel' | 'presearch', workerId: number, msg: { candidates?: unknown; source?: string | null; storeUnavailable?: boolean }) => {
+      const count = Array.isArray(msg.candidates) ? msg.candidates.length : 0;
+      const detail = {
+        count,
+        storeUnavailable: !!msg.storeUnavailable,
+        source: msg.source ?? null,
+        why: takeExtractWhy(workerId),
+        path,
+        workerId,
+      };
+      if (count > 0) tel().record('candidates', 'ok', { detail });
+      else tel().record('candidates', 'empty', { detail, code: 'no_candidates' });
+    },
+    [tel, takeExtractWhy],
+  );
+
   // Last script popped from the queue and injected. Re-injected if onLoadEnd
   // fires AGAIN for the same URL during the `searching` step before a result
   // arrives — this handles SSO/MSAL bootstrap reloads (e.g. Wegmans's first
@@ -680,10 +727,19 @@ export default function WebViewCartSheet({
   const onPresearchWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
-      if (msg.type === 'WORKER_DEBUG') return;
+      if (msg.type === 'WORKER_DEBUG') {
+        // The wrappers re-tag the extractor's EXTRACT_DEBUG as WORKER_DEBUG, so
+        // MEAL-13's ndReason arrives here — the ONLY place it can be read on this
+        // path. A bare `return` used to drop it, which left the presearch flow
+        // (a real navigation straight to the results URL, i.e. where the JSON path
+        // fires most reliably) as the one flow with no evidence at all.
+        if (msg.step === 'next_data') extractWhyRef.current[workerId] = msg.ndReason ?? null;
+        return;
+      }
       if (msg.type === 'WORKER_RESULT') {
         if (msg.phase === 'search') {
-          console.log(`[Cart ${ts()}]`, 'presearch PARKED w', workerId, 'candidates=', (msg.candidates ?? []).length);
+          console.log(`[Cart ${ts()}]`, 'presearch PARKED w', workerId, 'candidates=', (msg.candidates ?? []).length, 'source=', msg.source ?? null);
+          recordWorkerCandidates('presearch', workerId, msg);
           presearchPool.reportSearched(workerId);
         } else if (msg.phase === 'add') {
           console.log(`[Cart ${ts()}]`, 'presearch ADD result w', workerId, 'success=', msg.success, 'product=', msg.productName);
@@ -697,7 +753,7 @@ export default function WebViewCartSheet({
     } catch (e) {
       console.log(`[Cart ${ts()}]`, 'onPresearchWorkerMessage parse error w', workerId, e);
     }
-  }, [presearchPool]);
+  }, [presearchPool, recordWorkerCandidates]);
 
   // Emit coarse status (incl. a determinate progress fraction) upward so the
   // provider can drive the floating bubble. No-op in modal mode.
@@ -988,18 +1044,21 @@ export default function WebViewCartSheet({
       const msg = JSON.parse(event.nativeEvent.data);
       if (msg.type === 'WORKER_DEBUG') {
         console.log(`[Cart ${ts()}]`, 'WORKER_DEBUG w', workerId, JSON.stringify(msg));
+        // MEAL-13's extractor reason (see extractWhyRef), re-tagged by the wrapper.
+        if (msg.step === 'next_data') extractWhyRef.current[workerId] = msg.ndReason ?? null;
         return;
       }
       if (msg.type === 'WORKER_RESULT') {
-        console.log(`[Cart ${ts()}]`, 'WORKER_RESULT w', workerId, 'candidates=', (msg.candidates || []).length);
+        console.log(`[Cart ${ts()}]`, 'WORKER_RESULT w', workerId, 'candidates=', (msg.candidates || []).length, 'source=', msg.source ?? null);
         if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
+        recordWorkerCandidates('parallel', workerId, msg);
         parallelPool.reportResult(workerId, msg.candidates || []);
         return;
       }
     } catch (e) {
       console.log(`[Cart ${ts()}]`, 'onWorkerMessage parse error w', workerId, e);
     }
-  }, [parallelPool]);
+  }, [parallelPool, recordWorkerCandidates]);
 
   // ── Reset on open ────────────────────────────────────────────────────────
 
@@ -1046,6 +1105,7 @@ export default function WebViewCartSheet({
       setBlockReason(null);
       blockReasonRef.current = null;
       freshStoreUnavailableRef.current = false;
+      extractWhyRef.current = {};
       console.log(`[Cart ${ts()}]`, 'initial webviewUri=', scriptsRef.current!.storeUrl);
       setWebviewUri(scriptsRef.current!.storeUrl);
       loadQueueRef.current = [];
@@ -2327,6 +2387,16 @@ export default function WebViewCartSheet({
           return;
         }
 
+        // Extractor diagnostics. The one field that has to outlive the log line is
+        // MEAL-13's ndReason — see extractWhyRef. Everything else is dev-log only.
+        if (msg.type === 'EXTRACT_DEBUG') {
+          console.log(`[Cart ${ts()}]`, 'EXTRACT_DEBUG', JSON.stringify(msg));
+          if (msg.step === 'next_data') {
+            extractWhyRef.current[MAIN_SURFACE] = msg.ndReason ?? null;
+          }
+          return;
+        }
+
         if (msg.type === 'SEARCH_AND_ADD_RESULT') {
           // Real block: the store served an app-download / interstitial nudge over
           // the page (no HTTP error). Surface it so the user can dismiss it.
@@ -2437,12 +2507,15 @@ export default function WebViewCartSheet({
           {
             const found = Array.isArray(msg.candidates) ? msg.candidates.length : 0;
             // `source` says which extractor produced these ('next_data' | 'dom' on
-            // HEB, absent elsewhere). Recorded so the two can be compared in the
-            // funnel while MEAL-13's flag is rolling out.
+            // HEB, absent elsewhere) and `why` says what the JSON reader decided
+            // ('ok' when it answered, or the reason it handed over to the DOM).
+            // Recorded so the two can be compared in the funnel while MEAL-13's
+            // flag is rolling out.
             const candidatesDetail = {
               count: found,
               storeUnavailable: !!msg.storeUnavailable,
               source: msg.source ?? null,
+              why: takeExtractWhy(MAIN_SURFACE),
             };
             tel().record('search', 'ok', { itemIndex: searchIdxRef.current });
             if (found > 0) {
