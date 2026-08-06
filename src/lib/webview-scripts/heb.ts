@@ -188,8 +188,15 @@ const hebNextDataFn = () => {
   }
 
   // The card's <img> requests the first carousel rendition at 360px; reproduce that
-  // exact URL so a JSON candidate is byte-identical to a DOM one. Falls back to the
-  // MEDIUM product image for the rare item with no carousel renditions.
+  // exact URL so a JSON candidate is byte-identical to a DOM one — pinned by the
+  // DOM-vs-JSON fixture test.
+  //
+  // The MEDIUM fallback below is for the 7-of-336 fixture items that carry no
+  // carousel renditions, and is NOT verified against a card: all 7 sit either in a
+  // fixture whose DOM shows a different search or past the 8-candidate cap, so what
+  // HEB's own <img> uses for them is unknown. It is a different URL form (a
+  // prd-medium .jpg), so treat it as "an image of this product", not "the card's
+  // image"; imageUrl is display-only and never matched on.
   function __hebNextDataImage(item) {
     var car = item.carouselImageUrls;
     if (car && car.length > 0 && typeof car[0] === 'string') return car[0] + '?hei=360&wid=360';
@@ -215,7 +222,7 @@ const hebNextDataFn = () => {
     return (typeof f === 'string' && /\\d/.test(f)) ? f : null;
   }
 
-  // Returns { candidates, why, total }. candidates is null unless the payload was
+  // Returns { candidates, why, gridItems }. candidates is null unless the payload was
   // present, understood, for THIS search, and non-empty; "why" names the failure so
   // the funnel can tell "HEB changed the JSON" from "the store has no match". It is
   // deliberately NOT called "reason" — that name belongs to add-result reasons,
@@ -302,8 +309,8 @@ const hebNextDataFn = () => {
       if (limit > 0 && out.length >= limit) break;
     }
 
-    if (out.length === 0) return { candidates: null, why: 'empty', total: items.length };
-    return { candidates: out, why: 'ok', total: items.length };
+    if (out.length === 0) return { candidates: null, why: 'empty', gridItems: items.length };
+    return { candidates: out, why: 'ok', gridItems: items.length };
   }
 `;
 };
@@ -441,7 +448,7 @@ ${hebNextDataFn()}
     var __nd = __hebNextDataCandidates(8);
     window.ReactNativeWebView.postMessage(JSON.stringify({
       type: 'EXTRACT_DEBUG', step: 'next_data', ndReason: __nd.why,
-      count: __nd.candidates ? __nd.candidates.length : 0, total: __nd.total || 0,
+      count: __nd.candidates ? __nd.candidates.length : 0, gridItems: __nd.gridItems || 0,
       embeddedTerm: __nd.embeddedTerm, expectedTerm: __nd.expectedTerm, url: window.location.href
     }));
     if (__nd.candidates) {
