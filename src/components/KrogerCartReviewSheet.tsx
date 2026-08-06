@@ -48,7 +48,19 @@ interface MealIngredientQty {
   qty: number;
 }
 
-interface ConsolidatedIngredient {
+/**
+ * Kroger's qty-step item.
+ *
+ * It carries NO weight fields, and that is load-bearing rather than incidental:
+ * isZeroedOut's sold-by-weight exception keys off `purchaseWeight`, so with no
+ * such key here the exception is unreachable and the predicate reduces to the
+ * `productQty > 0` filter Kroger ran before MEAL-65 — which is why add-to-cart
+ * is provably unchanged on this surface. Add a weight field and that stops
+ * being true: rows would start surviving qty 0. Exported (with the builder
+ * below) so KrogerCartReviewSheetQty.test.tsx can pin the invariant instead of
+ * leaving it to a comment. See tests/unit/qtyStepExclusion.test.ts.
+ */
+export interface ConsolidatedIngredient {
   ingredientName: string;
   productQty: number;
   unit: string;
@@ -137,7 +149,8 @@ function normProductQty(ing: any): number {
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
-function consolidateIngredients(meals: Array<Pick<Meal, 'id' | 'name' | 'ingredients'>>): ConsolidatedIngredient[] {
+/** Exported for the no-weight-field invariant test — see ConsolidatedIngredient. */
+export function consolidateIngredients(meals: Array<Pick<Meal, 'id' | 'name' | 'ingredients'>>): ConsolidatedIngredient[] {
   const map = new Map<string, ConsolidatedIngredient>();
   for (const meal of meals) {
     for (const ing of meal.ingredients as any[]) {
@@ -552,7 +565,7 @@ export default function KrogerCartReviewSheet({
                     >
                       <Text style={styles.qtyBtnText}>−</Text>
                     </TouchableOpacity>
-                    <Text style={styles.qtyNum}>{it.productQty}</Text>
+                    <Text style={styles.qtyNum} testID={`qty-num-${i}`}>{it.productQty}</Text>
                     <TouchableOpacity
                       onPress={() => updateQty(i, 1)}
                       disabled={!boxChecked}

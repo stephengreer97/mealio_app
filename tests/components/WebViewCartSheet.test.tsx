@@ -186,6 +186,9 @@ describe('WebViewCartSheet — qty 0 feedback (MEAL-65)', () => {
       />,
     );
 
+  /** What the stepper is showing for a row, as text. */
+  const qtyOf = (el: any) => [el.props.children].flat(Infinity).join('');
+
   it('shows a checked, un-struck row at qty 1', () => {
     const { getByText, queryByTestId } = renderSheet();
     expect(queryByTestId('qty-checked-0')).toBeTruthy();
@@ -230,6 +233,47 @@ describe('WebViewCartSheet — qty 0 feedback (MEAL-65)', () => {
     expect(isStruckThrough(getByText('sour cream'))).toBe(true);
     act(() => { fireEvent.press(getByTestId('qty-checkbox-0')); });
     expect(queryByTestId('qty-checked-0')).toBeTruthy();
+  });
+
+  it('preserves the NUMBER across an uncheck/recheck — 3 units come back as 3', () => {
+    // At qty 1 "preserved" and "clobbered to 1" are indistinguishable, so the
+    // case above cannot tell them apart. The restore path (updateQty(i, 1)) is
+    // for ZEROED rows only; 3 units must survive a round trip as 3.
+    const { getByTestId, queryByTestId } = renderSheet([
+      { ingredientName: 'Sour Cream', searchTerm: 'sour cream', productQty: 3, qty: 3, unit: 'qty', measure: null },
+    ]);
+    expect(qtyOf(getByTestId('qty-num-0'))).toBe('3');
+
+    act(() => { fireEvent.press(getByTestId('qty-checkbox-0')); });
+    expect(queryByTestId('qty-checked-0')).toBeNull();
+    expect(qtyOf(getByTestId('qty-num-0'))).toBe('3'); // not touched on the way out
+
+    act(() => { fireEvent.press(getByTestId('qty-checkbox-0')); });
+    expect(queryByTestId('qty-checked-0')).toBeTruthy();
+    expect(qtyOf(getByTestId('qty-num-0'))).toBe('3'); // and not on the way back in
+  });
+
+  it('recovers from doubly-excluded — "Uncheck all" on an already-zeroed row', () => {
+    // The only route into unchecked AND zeroed at once: the steppers are dead
+    // while the box is off, so qty can only reach 0 with the box still on, and
+    // the box can only go off afterwards via the header. One checkbox tap has
+    // to clear BOTH exclusions or the row is stranded.
+    const { getByText, getByTestId, queryByTestId } = renderSheet();
+    act(() => { fireEvent.press(getByText('−')); });
+    expect(qtyOf(getByTestId('qty-num-0'))).toBe('0');
+
+    act(() => { fireEvent.press(getByText('Uncheck all')); });
+    expect(queryByTestId('qty-checked-0')).toBeNull();
+    expect(qtyOf(getByTestId('qty-num-0'))).toBe('0');
+
+    // Both steppers are disabled here — no way up except the checkbox.
+    act(() => { fireEvent.press(getByText('+')); });
+    expect(qtyOf(getByTestId('qty-num-0'))).toBe('0');
+
+    act(() => { fireEvent.press(getByTestId('qty-checkbox-0')); });
+    expect(queryByTestId('qty-checked-0')).toBeTruthy();
+    expect(qtyOf(getByTestId('qty-num-0'))).toBe('1');
+    expect(isStruckThrough(getByText('sour cream'))).toBe(false);
   });
 
   it('never strikes out a weight-priced item — its stepper floors at one step', () => {

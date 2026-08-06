@@ -3121,7 +3121,7 @@ export default function WebViewCartSheet({
                     </TouchableOpacity>
                       );
                     })()}
-                    <Text style={styles.qtyNum}>
+                    <Text style={styles.qtyNum} testID={`qty-num-${i}`}>
                       {(() => { const w = ingredientWeight(it); return w ? weightLabelLb(w.lb) : it.productQty; })()}
                     </Text>
                     <TouchableOpacity

@@ -6,7 +6,7 @@
 // needs a device; what a test CAN hold is that every surface subscribes to it,
 // which is the thing a future refactor would silently drop.
 
-import { render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 
 // Mock factories cannot reference outer-scope variables (jest hoists them), so
 // the spy is created inside and pulled back out through the mocked import.
@@ -78,6 +78,7 @@ jest.mock('../../src/lib/api', () => ({
 }));
 
 import { useDraggablePreview as useDraggablePreviewMock } from '../../src/lib/useDraggablePreview';
+import { kroger as krogerApiMock } from '../../src/lib/api';
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 import KrogerCartReviewSheet from '../../src/components/KrogerCartReviewSheet';
 import ProductChooserSheet from '../../src/components/ProductChooserSheet';
@@ -135,5 +136,66 @@ describe('MEAL-64 — every preview surface subscribes to the tap', () => {
       />,
     );
     expect(typeof lastOnTap()).toBe('function');
+  });
+});
+
+// Subscribing is not opening. The three cases above prove only that a function
+// reaches the hook — they would all still pass if every handler were a no-op.
+// Calling the captured onTap and watching the viewer come up is what closes
+// that gap: it is the same handler the released gesture invokes (the responder
+// reads it straight off onTapRef), so this covers the whole path bar the
+// PanResponder's own tap/drag arithmetic, which draggablePreviewTap.test owns.
+describe('MEAL-64 — the tap actually opens the full-screen viewer', () => {
+  const IMAGE = 'https://example.test/sour-cream.jpg';
+
+  // No searchTerm → "unchosen", which is what ProductChooserSheet searches for.
+  const unchosenMeal = {
+    id: 'm1',
+    name: 'Tacos',
+    ingredients: [
+      { ingredientName: 'Sour Cream', productQty: 1, qty: 1, unit: 'qty', measure: null },
+    ],
+  } as any;
+
+  const searchProducts = krogerApiMock.searchProducts as unknown as jest.Mock;
+
+  beforeEach(() => {
+    useDraggablePreview.mockClear();
+    searchProducts.mockClear();
+  });
+
+  it('ProductChooserSheet: invoking the captured onTap shows the photo full screen', async () => {
+    searchProducts.mockResolvedValueOnce({
+      results: [
+        { suggestions: [{ upc: '0001', description: 'Daisy Sour Cream', size: '16 oz', price: 3.49, imageUrl: IMAGE }] },
+      ],
+    });
+
+    const { findByText, getByTestId, queryByTestId } = render(
+      <ProductChooserSheet
+        visible
+        meal={unchosenMeal}
+        locationId="loc1"
+        storeName="Kroger"
+        storeColor="#003087"
+        onClose={() => {}}
+        onMealUpdated={() => {}}
+      />,
+    );
+    // Wait for the search to land on the picking step with a product selected —
+    // the preview (and so the viewer) has nothing to show before that.
+    await findByText('Daisy Sour Cream, 16 oz');
+
+    // Mounted but closed: nothing full screen yet.
+    expect(queryByTestId('product-image-viewer-image')).toBeNull();
+
+    const onTap = lastOnTap();
+    act(() => { onTap(); });
+
+    expect(getByTestId('product-image-viewer-image').props.source).toEqual({ uri: IMAGE });
+
+    // And it still closes: the viewer opened by a tap is not a trap.
+    act(() => { fireEvent.press(getByTestId('product-image-viewer-backdrop')); });
+    expect(queryByTestId('product-image-viewer-image')).toBeNull();
   });
 });

@@ -17,7 +17,11 @@ const oldWebViewActive = (it: { purchaseWeight?: number | null; productQty: numb
   it.purchaseWeight != null || it.productQty > 0;
 
 /** The expression KrogerCartReviewSheet used, verbatim. Kroger's items carry no
- *  weight fields at all. */
+ *  weight fields at all — an invariant this file DEPENDS on and cannot check
+ *  itself (the sheet is a React module, out of reach of the node project). It is
+ *  pinned, both structurally and at the type level, in
+ *  tests/components/KrogerCartReviewSheetQty.test.tsx → "Kroger qty item shape".
+ *  The disagreement that invariant holds off is spelled out below. */
 const oldKrogerActive = (it: { productQty: number }) => it.productQty > 0;
 
 describe('isZeroedOut — the rule', () => {
@@ -76,5 +80,25 @@ describe('isZeroedOut — add-to-cart behaviour is unchanged', () => {
       const item = { productQty };
       expect(!isZeroedOut(item)).toBe(oldKrogerActive(item));
     }
+  });
+
+  it('shows WHY the Kroger sweep may stop at qty — weight is what pulls them apart', () => {
+    // The equivalence above iterates qty only, and this is the reason it is
+    // allowed to: the moment an item has a purchaseWeight, isZeroedOut takes
+    // the sold-by-weight exception while Kroger's old filter keeps reading
+    // productQty, and the two disagree on every non-positive qty. Kroger's item
+    // type has no weight field, so this input is unconstructible there — which
+    // is exactly the invariant pinned in KrogerCartReviewSheetQty.test.tsx. If
+    // that pin ever goes, this shows what breaks.
+    let disagreements = 0;
+    for (const productQty of qtys) {
+      for (const purchaseWeight of [0, 0.25, 3]) {
+        const item = { productQty, purchaseWeight };
+        if (!isZeroedOut(item) !== oldKrogerActive(item)) disagreements++;
+      }
+    }
+    // qty ≤ 0 (−1 and 0) × three weights: weight-priced stays in, the old
+    // Kroger filter drops it.
+    expect(disagreements).toBe(6);
   });
 });
