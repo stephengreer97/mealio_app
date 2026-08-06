@@ -345,6 +345,21 @@ export interface RecoveredAdd {
   cartName: string;
   /** Units of it found in the cart. */
   qty: number;
+  /**
+   * How this recovery's cart row was matched: 'exact' when every unit came from
+   * a normalized exact-title match, 'loose' when any came from the token-subset
+   * matcher (cartNameMatches) — which includes every weight row, since presence
+   * matching has no exact pass.
+   *
+   * MEAL-47's caveat, made measurable. A recovery says "we told the user this
+   * failed, but it's in their cart" — and names alone cannot separate that from
+   * "an unintended product with a similar name is in their cart". An exact-title
+   * match is not open to that doubt; a loose one is. The done screen treats both
+   * the same (both mean "don't add it again", which is the safe advice either
+   * way), but MEAL-3's metric must not silently credit a loose guess as an add,
+   * so the two are counted apart in the telemetry.
+   */
+  matchQuality: 'exact' | 'loose';
 }
 
 export interface CartCheckFindings {
@@ -428,6 +443,11 @@ interface Claim {
   item: IntendedItem;
   qty: number;
   cartName: string;
+  /** Set once any unit of this claim came from a LOOSE (token-subset) match
+   *  rather than an exact title match. Sticky and pessimistic: a claim that took
+   *  two units exactly and one loosely is a loose claim, because the doubt
+   *  attaches to the row, not to the average. See RecoveredAdd.matchQuality. */
+  loose: boolean;
 }
 
 /** Consume weight rows by PRESENCE for the weight-priced items among `claims` —
@@ -437,7 +457,9 @@ function claimWeightRows(pool: Leftover, claims: Claim[]): void {
   for (const c of claims) {
     if (!c.item.isWeight || c.qty > 0) continue;
     const w = pool.weight.find((p) => !p.used && cartNameMatches(p.name, c.item.name));
-    if (w) { w.used = true; c.qty = 1; c.cartName = w.name; }
+    // Always loose: presence matching runs cartNameMatches with no exact pass in
+    // front of it, so a weight row is only ever claimed on name similarity.
+    if (w) { w.used = true; c.qty = 1; c.cartName = w.name; c.loose = true; }
   }
 }
 
@@ -458,6 +480,7 @@ function claimCountRows(pool: Leftover, claims: Claim[], exactOnly: boolean): vo
       const take = Math.min(row.qty, need - c.qty);
       row.qty -= take;
       c.qty += take;
+      if (!exactOnly) c.loose = true;
       if (!c.cartName) c.cartName = row.name;
     }
   }
@@ -495,7 +518,7 @@ export function splitCartLeftover(
   intendedAll: IntendedItem[],
 ): CartLeftoverSplit {
   const pool = toLeftover(addedRows);
-  const claims: Claim[] = intendedAll.map((item) => ({ item, qty: 0, cartName: '' }));
+  const claims: Claim[] = intendedAll.map((item) => ({ item, qty: 0, cartName: '', loose: false }));
   const reported = claims.filter((c) => wasReported(c.item, reportedAdded));
   const unreported = claims.filter((c) => !wasReported(c.item, reportedAdded));
 
@@ -512,7 +535,12 @@ export function splitCartLeftover(
   return {
     recovered: unreported
       .filter((c) => c.qty > 0)
-      .map((c) => ({ name: c.item.name, cartName: c.cartName, qty: c.qty })),
+      .map((c) => ({
+        name: c.item.name,
+        cartName: c.cartName,
+        qty: c.qty,
+        matchQuality: c.loose ? ('loose' as const) : ('exact' as const),
+      })),
     over,
   };
 }
