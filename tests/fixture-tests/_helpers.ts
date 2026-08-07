@@ -9,6 +9,26 @@ import * as path from 'path';
 
 import { loadFixture, FixtureRunner } from '../fixture-runners/runScript';
 
+/*
+ * Runners opened by the current test, so teardown can close them even when the
+ * test body never reaches its own `finally`.
+ *
+ * MEAL-113. A test that exceeds the jest timeout is abandoned mid-await: the rest
+ * of the callback never runs, so the `finally { runner.close() }` below never
+ * fires and the Chromium it launched outlives the test. That is the second half
+ * of "A worker process has failed to exit gracefully" — one slow fixture test
+ * leaves a browser behind, and the worker holding it cannot exit. Registered once
+ * per spec file, at import; `close()` is idempotent, so the happy path still
+ * closes in its own `finally` and this sees nothing to do.
+ */
+const openRunners = new Set<FixtureRunner>();
+
+afterEach(async () => {
+  const leaked = [...openRunners];
+  openRunners.clear();
+  await Promise.all(leaked.map((r) => r.close().catch(() => {})));
+});
+
 /**
  * Build a per-store fixture helper bound to that store's fixture directory.
  * Use:
@@ -47,20 +67,31 @@ export function storeFixtures(storeId: string) {
     fixtureName: string,
     description: string,
     body: (runner: FixtureRunner) => Promise<void>,
-    options: { url?: string } = {},
+    options: { url?: string; testTimeoutMs?: number } = {},
   ) {
     const fn = fixtureExists(fixtureName) ? it : it.skip;
     const label = fixtureExists(fixtureName)
       ? description
       : `${description} [SKIPPED — capture ${fixtureName} first]`;
-    fn(label, async () => {
-      const runner = await loadFixture(fxPath(fixtureName), options);
-      try {
-        await body(runner);
-      } finally {
-        await runner.close();
-      }
-    });
+    fn(
+      label,
+      async () => {
+        const runner = await loadFixture(fxPath(fixtureName), options);
+        openRunners.add(runner);
+        try {
+          await body(runner);
+        } finally {
+          openRunners.delete(runner);
+          await runner.close();
+        }
+      },
+      // A test whose own waitForMessage budget approaches jest's 30s default has
+      // the wrong outer bound: jest kills the test first, and an abandoned test
+      // reports "exceeded timeout" instead of the message-budget error that says
+      // WHICH message never arrived and what did. Pass testTimeoutMs whenever a
+      // budget is raised, and keep it comfortably above the budget.
+      options.testTimeoutMs,
+    );
   }
 
   return {

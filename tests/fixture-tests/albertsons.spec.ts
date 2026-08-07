@@ -184,6 +184,14 @@ describe('Albertsons regression: product already in cart (collapsed bubble)', ()
   // collapsed qty bubble (no ATC button) with a TRUNCATED aria-label. The add
   // script must match that bubble to the product and CLICK it (to reveal the
   // stepper) rather than bailing as "not found".
+  //
+  // BUDGET 30s, NOT 20s (MEAL-113). This is the second-slowest wait in the suite
+  // and it is bimodal: 14766 / 14768 / 18342 ms over three idle runs, a fast and a
+  // slow mode ~3.6s apart, with the slow mode at 92% of a 20s budget. See the note
+  // in aldi.spec.ts for the same step measured on three other waits; the short
+  // version is that both modes occur back to back on an unloaded box, so this is
+  // not contention and 8% of headroom is not enough to tell a real slowdown from
+  // the environmental one the project rule tells us to dismiss.
   itWithFixture(
     'search-results-collapsed-bubble.html',
     'matches the truncated bubble to the product and clicks it',
@@ -201,12 +209,13 @@ describe('Albertsons regression: product already in cart (collapsed bubble)', ()
         null,
       );
       await runner.inject(script);
-      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 30_000);
       const clicked = await runner.page.evaluate(
         () => (window as unknown as { __bubbleClicked?: boolean }).__bubbleClicked === true,
       );
       expect(clicked).toBe(true);
     },
+    { testTimeoutMs: 45_000 },
   );
 });
 

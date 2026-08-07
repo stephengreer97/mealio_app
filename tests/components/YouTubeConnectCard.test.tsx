@@ -68,11 +68,34 @@ beforeEach(() => {
 
 afterEach(() => jest.restoreAllMocks());
 
-/** Renders and waits for the status call to settle. */
+/**
+ * Renders and waits for the card to have settled.
+ *
+ * MEAL-113. This used to wait only for `expect(status).toHaveBeenCalled()`, which
+ * is the wrong thing: the mount effect calls `status()` synchronously, so that is
+ * already true on the first check — before the answer exists. The card renders
+ * null while `loading`, and every assertion after `show()` reads the render the
+ * answer produces, so the helper was handing back a card that had not loaded yet
+ * and the assertions were racing the commit.
+ *
+ * It passed anyway because `mockResolvedValue` lands inside the single
+ * `setImmediate` that waitFor's `wrapAsync` flushes on its way out. That margin
+ * is one macrotask wide. Make the answer arrive a macrotask later — which is what
+ * a real request does — and the card is still loading 36 times in 40. That is the
+ * flake that failed CI on a documentation-only PR: not a bad assertion, a helper
+ * that did not wait for what the assertions read.
+ *
+ * So wait for the answer to be on screen, not for the request to have left.
+ * `waitFor` polls on real timers, so it is indifferent to how many turns the
+ * answer takes. A creator with a channel always renders something once `loading`
+ * clears; the no-channel case renders null settled or not, so there is nothing to
+ * wait for there and its own test asserts the null directly.
+ */
 async function show(next: any, props: any = {}) {
   status.mockResolvedValue(next);
   const r = render(<YouTubeConnectCard {...props} />);
   await waitFor(() => expect(status).toHaveBeenCalled());
+  if (next?.hasChannel) await waitFor(() => expect(r.toJSON()).not.toBeNull());
   return r;
 }
 

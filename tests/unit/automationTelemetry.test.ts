@@ -29,14 +29,40 @@ function failUpload() {
   return { fn, attempts };
 }
 
+// MEAL-113. A recorder is a live object: `record()` arms a `setTimeout` for the
+// next flush, so every instance a test builds and walks away from leaves a timer
+// in the worker's event loop. That is what hung `npx jest` — the run finished its
+// tests in ~3s and then sat there, because the retry path re-arms on every failed
+// upload and a recorder built on `failUpload()` reschedules itself forever.
+// `--detectOpenHandles` named these four call sites (test lines 96, 104, 173, 313)
+// and `--forceExit` was papering over them.
+//
+// So every recorder gets tracked and disposed. `dispose()` is the documented way
+// to stop one, it is safe to call twice, and it runs after the assertions — a
+// test that wants to observe the flush still does it explicitly in its own body.
+const live: AutomationTelemetry[] = [];
+
+/** Track a recorder so afterEach can stop its timers. */
+function track(t: AutomationTelemetry): AutomationTelemetry {
+  live.push(t);
+  return t;
+}
+
+afterEach(async () => {
+  // Reverse order is not significant, but draining the array is: a recorder
+  // disposed twice is a no-op, one left behind is a hung run.
+  const pending = live.splice(0, live.length);
+  await Promise.all(pending.map((t) => t.dispose().catch(() => {})));
+});
+
 const make = (opts: Partial<ConstructorParameters<typeof AutomationTelemetry>[0]> = {}) =>
-  new AutomationTelemetry({
+  track(new AutomationTelemetry({
     runId: 'run-1',
     upload: async () => true,
     batchSize: 1000,        // large so nothing auto-flushes unless a test wants it
     flushIntervalMs: 60_000,
     ...opts,
-  });
+  }));
 
 describe('sanitizeDetail', () => {
   it('returns undefined for non-objects and empty objects', () => {
@@ -407,10 +433,10 @@ describe('AutomationTelemetry flush and retry', () => {
 
   it('passes run metadata on every batch', async () => {
     const up = okUpload();
-    const t = new AutomationTelemetry({
+    const t = track(new AutomationTelemetry({
       runId: 'run-9', upload: up.fn, configVersion: 7,
       appVersion: '1.2.3', platform: 'android', batchSize: 1000, flushIntervalMs: 60_000,
-    });
+    }));
     t.record('search', 'ok');
     await t.flush();
     expect(up.fn).toHaveBeenCalledWith(expect.objectContaining({
@@ -440,6 +466,26 @@ describe('AutomationTelemetry dispose', () => {
     expect(up.fn).toHaveBeenCalledTimes(1);
     expect(t.pending).toBe(0);
     expect(t.isRecording).toBe(false);
+  });
+
+  it('leaves no timer running when the last upload fails', async () => {
+    // MEAL-113. dispose() ends with a flush, and flush() re-arms the retry timer
+    // whenever the server refuses the batch — so the recorder used to come back
+    // out of dispose() with a live timer over a buffer dispose() had just
+    // emptied. Nothing observable changes in the app, which is exactly why it
+    // went unnoticed: the only symptom is a handle that keeps a Node event loop
+    // alive, and under jest that was a run that never exited.
+    jest.useFakeTimers();
+    try {
+      const up = failUpload();
+      const t = make({ upload: up.fn });
+      t.record('search', 'ok');
+      expect(jest.getTimerCount()).toBe(1);   // the flush is armed
+      await t.dispose();                      // its upload fails and re-arms it
+      expect(jest.getTimerCount()).toBe(0);   // and dispose still ends clean
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

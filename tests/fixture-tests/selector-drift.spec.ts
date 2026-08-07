@@ -25,7 +25,7 @@
 //   npm run drift -- <store> --update    accept the new shape (review the diff)
 
 import { Census, diffCensus, formatFindings } from '../drift/census';
-import { computeCensus } from '../drift/capture';
+import { computeCensus, closeOpenCensusBrowsers } from '../drift/capture';
 import { readBaseline } from '../drift/baseline';
 import { STORE_SURFACES } from '../drift/selector-surface';
 
@@ -38,6 +38,20 @@ beforeAll(async () => {
   baseline = readBaseline();
   census = await computeCensus();
 }, 120_000);
+
+/*
+ * MEAL-113. The teardown that closes leaked browsers for the per-store fixture
+ * specs lives in _helpers.ts, and THIS spec does not import it — it does not use
+ * `storeFixtures`, so nothing registered it here. But this is the file with the
+ * expensive hook: if the `beforeAll` above blows its 120s budget it is abandoned
+ * mid-await, `computeCensus`'s own `finally` never runs, and its Chromium survives
+ * the run. That is what happened in review, and it printed the "worker process has
+ * failed to exit gracefully" warning.
+ *
+ * jest runs afterAll even when beforeAll failed or timed out, which is what makes
+ * this the right place for it.
+ */
+afterAll(closeOpenCensusBrowsers);
 
 /** Just this store's slice, so a per-store failure message stays readable. */
 function slice(c: Census, store: string): Census {
