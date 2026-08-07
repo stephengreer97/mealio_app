@@ -142,16 +142,52 @@ export async function loadFixture(
   const absPath = path.resolve(fixturePath);
   const html = await readFile(absPath, 'utf8');
 
-  // If caller specified a url to mimic, navigate there first (it'll 404 but
-  // sets window.location); then setContent overrides the body. This lets
-  // store scripts that read window.location.search see the right URL.
+  // If caller specified a url to mimic, navigate there first (which sets
+  // window.location); then setContent overrides the body. This lets store
+  // scripts that read window.location.search see the right URL.
   if (options.url) {
-    // file://-backed about: scheme can't carry query strings. Use a data URL
-    // trick: navigate to the URL with content-base, then setContent.
-    await page.goto(options.url, { waitUntil: 'domcontentloaded' }).catch(() => {
-      // Real grocery store URLs will fail to load in tests; we don't care —
-      // we override with setContent. The .catch swallows the navigation error.
-    });
+    /*
+     * MEAL-113. That navigation is answered locally, and it has to be.
+     *
+     * These are real store URLs — `https://www.walmart.com/search?q=tortillas`
+     * and friends. `installResourceBlocking` above blocks scripts, styles, fonts,
+     * images and media, but a top-level navigation is a `document` request and it
+     * was being let straight through, so every fixture test that passes a `url`
+     * was making a live HTTP request to a grocery store. A recorded fixture
+     * exists precisely so the suite does not depend on the store answering.
+     *
+     * And the failure it caused was the ugly kind. The old code let `goto` fail
+     * and swallowed the error — but a swallowed rejection is not a settled page.
+     * A real 200 arriving late, or a redirect, or a `goto` whose 30s budget
+     * expired mid-flight, left a navigation still committing underneath the
+     * `setContent` below, which then died with "Execution context was destroyed,
+     * most likely because of a navigation". It landed on whichever store's server
+     * happened to answer at the wrong moment, so it was never the same test twice
+     * and never reproduced on re-run — the unreproducible fixture failure this
+     * ticket was chasing. Under load the window is wider, which is why it looked
+     * like contention; the dependency on the public internet is the actual bug.
+     *
+     * An empty document is all this needs. It exists only to set
+     * window.location, and `setContent` supplies the markup a moment later. A
+     * page-level route wins over the context-level one installed above.
+     */
+    const target = options.url;
+    // Compare NORMALIZED hrefs. `new URL('https://www.aldi.us').href` is
+    // `https://www.aldi.us/` — a bare host gains a trailing slash — and the
+    // predicate is handed a parsed URL, so matching against the raw option
+    // string silently misses exactly the callers that pass a bare origin. Which
+    // is how ALDI's warmup test kept being the one that went to the network.
+    const targetHref = new URL(target).href;
+    await page.route(
+      (url) => url.href === targetHref,
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'text/html',
+          body: '<!doctype html><html><head></head><body></body></html>',
+        }),
+    );
+    await page.goto(target, { waitUntil: 'domcontentloaded' });
   }
 
   await page.setContent(html, { waitUntil: 'domcontentloaded' });
