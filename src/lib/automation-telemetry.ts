@@ -400,6 +400,12 @@ export class AutomationTelemetry {
     await this.flush().catch(() => {});
     this.disposed = true;
     this.buffer = [];
+    // That flush re-arms the timer when the upload fails — it re-queues the
+    // batch and schedules the retry, and it had no way to know it was being
+    // disposed. Clear it again: nothing may outlive dispose(), or a run that
+    // ends while the server is down leaves a timer behind that wakes every
+    // flushInterval forever to retry a buffer this line just emptied.
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
   }
 
   /** Buffered-row count. Test/diagnostic use. */
