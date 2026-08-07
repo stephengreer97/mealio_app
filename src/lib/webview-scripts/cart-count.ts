@@ -196,14 +196,25 @@ export interface ShortAdd {
  * delta this run added. Each added unit is attributed to a SINGLE audited item
  * via a shared pool — exact-name matches reserved first, then loose matches take
  * whatever remains — so two near-identical product names can't both claim the
- * same row and hide a shortfall. Callers should pass only count-comparable items
- * (skip sold-by-weight lines, which are one row at N lb regardless of poundage).
+ * same row and hide a shortfall.
+ *
+ * Sold-by-weight rows are dropped from the pool, not left to the caller. This is
+ * a UNIT-COUNT comparison and a weight line carries no unit count: diffCartItems
+ * emits it as qty 1 whatever the poundage, so counting it as "1 unit" is a made-up
+ * number. Filtering here rather than at the call site because the two sides of
+ * the comparison have to agree about which rows exist, and only this function
+ * knows it is counting units — auditCartAfterRun filtered the ITEM side only
+ * (`!a.isWeight`) and still handed over every row, so a stepper-weight deli line
+ * was reported as `short: got 1, expected 3` by this pool AND as `over: qty 1` by
+ * splitCartLeftover, which cannot claim a weight row for a count item. One
+ * physical line, two contradictory findings about it. See findOverAddedItems,
+ * which has always split the pools internally for the same reason.
  */
 export function findShortAddedItems(
   addedRows: CartRow[],
   audit: { name: string; expectedQty: number }[],
 ): ShortAdd[] {
-  const pool = addedRows.map((row) => ({ name: row.name, qty: row.qty }));
+  const pool = addedRows.filter((row) => !row.isWeight).map((row) => ({ name: row.name, qty: row.qty }));
   const claimQty = (reportedName: string, need: number, exactOnly: boolean): number => {
     let got = 0;
     for (const row of pool) {

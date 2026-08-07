@@ -146,9 +146,12 @@ export type DefiniteFailureReason = 'out_of_stock' | 'no_results';
  * One item the parallel pass attempted, paired with its worker's report.
  *
  * The inherited `name` is only the FALLBACK title: when the worker reported a
- * product name, that name is what identifies the item in the cart. `isWeight`
- * feeds the intended snapshot — whether an item is confirmed by presence is
- * decided by the cart ROW, not by this flag.
+ * product name, that name is what identifies the item in the cart. `isWeight` is
+ * the item's INTENT (see isWeightPriced) and it decides which pool the item draws
+ * from: a weight-priced item is confirmed by presence off a weight row, an
+ * ordinary item by unit count off the count rows, and neither can touch the
+ * other's pool. Where the row disagrees with the intent, the intent wins — see
+ * reconcileParallelAdd.
  *
  * Decisions refer back to items by their INDEX in the array passed in, so this
  * module never needs to know the caller's item type nor hand it back.
@@ -180,6 +183,23 @@ export interface ReconcileOutcome {
   overAdds: OverAdd[];
   /** Total units across overAdds. */
   overAddUnits: number;
+  /**
+   * The intent-vs-row disagreements among `topUps`: items ordered by unit COUNT
+   * that came up short while an unclaimed sold-by-weight line bearing their name
+   * sits in the cart (the stepper-weight H-E-B deli shape — weightStep but no
+   * purchaseWeight, so isWeightPriced is false and the ×N is a unit count).
+   *
+   * Reported separately because the top-up these items get is the one case where
+   * a re-add can cost real money: the line plausibly DID land, so re-adding the
+   * full quantity unattended buys the meat a second time. A caller that can ask
+   * the user routes these to review instead of to the automatic top-up — see
+   * splitTopUpsForReview, which is how WebViewCartSheet does it. They appear in
+   * `topUps` as well, so a caller that does nothing behaves exactly as before.
+   *
+   * Each unclaimed weight row explains at most one item, so this can never name
+   * more items than the cart has unexplained weight lines.
+   */
+  countItemsOnWeightRows: { index: number; cartName: string }[];
 }
 
 /**
@@ -237,7 +257,16 @@ export function reconcileParallelAdd(
   // each pepper's name matches both rows, so a 1-of-2 shortfall looks fully
   // stocked. Instead, consume from a shared pool — reserve exact-name matches
   // first, then let a loose match take only what's genuinely left over.
-  const pool = addedRows.map((row) => ({ name: row.name, qty: row.qty }));
+  //
+  // TWO pools, and every added row belongs to exactly one of them — the split
+  // toLeftover makes below, and the split findOverAddedItems makes over the same
+  // rows, which is what lets the two agree about one cart. A weight line carries
+  // no unit count (one line at N lb) so it can never be spent as a count unit;
+  // MEAL-119: it used to sit in BOTH pools, and one physical row could be
+  // consumed twice over — once by the presence pass, then again as a "unit" by
+  // some other item's claimQty, which confirmed an item nothing had been bought
+  // for.
+  const pool = addedRows.filter((r) => !r.isWeight).map((row) => ({ name: row.name, qty: row.qty }));
   // Punctuation- and entity-insensitive so a reported title can reserve its OWN
   // cart row in the exact pass before a loosely-similar sibling ("McCormick
   // Ground Cumin" vs "…Gourmet Organic Ground Turmeric") can claim it in the
@@ -256,27 +285,67 @@ export function reconcileParallelAdd(
     return got;
   };
 
-  // Weight rows first, confirmed by PRESENCE (see isWeightPriced). Matching is
-  // driven by the CART ROW rather than by the item's own isWeight: whatever the
-  // intent said, a row the store sells by weight is one line at N lb and cannot
-  // be count-compared. Consume the row so a sibling can't claim it too.
+  // Weight-priced items first, confirmed by PRESENCE (see isWeightPriced): one
+  // unclaimed weight row bearing the name confirms the item at whatever poundage
+  // that row shows. Consume the row, so neither a sibling nor the count passes
+  // below can spend it a second time.
+  //
+  // Gated on the ITEM's isWeight — the SAME gate claimWeightRows and
+  // findOverAddedItems use. When intent and cart row disagree (a count item
+  // ordered ×3 whose name matches a sold-by-weight line, e.g. a stepper-weight
+  // deli item), intent wins and the item is count-compared. The count pool holds
+  // no weight rows, so it claims nothing and reports its full shortfall.
+  //
+  // Intent wins because the alternative is a GUESS: presence-confirming a count
+  // item off a weight row rests on cartNameMatches, a 0.6 token overlap, and when
+  // that guess is wrong the user is told their ×3 landed and receives nothing.
+  // Silent non-delivery is the worst failure available here, so failing visibly
+  // beats it.
+  //
+  // But the shortfall must not be re-added on its own either. The top-up is
+  // unattended and, here, the shortfall IS the full quantity — so where the weight
+  // line genuinely did land it buys a second one, and for a deli line that is meat
+  // the user pays for twice. Both machine answers are therefore refused: these
+  // items are named in `countItemsOnWeightRows`, splitTopUpsForReview lifts them
+  // out of the top-up, and WebViewCartSheet asks the user which they want.
+  //
+  // The disagreement is not swallowed either — no weight-priced item claimed the
+  // row, so findOverAddedItems returns it in `overAdds` and both sides are
+  // announced.
   const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false }));
   toMatch.forEach((m) => {
+    if (!m.isWeight) return;
     const w = weightPool.find((p) => !p.used && cartNameMatches(p.name, m.name));
     if (w) { w.used = true; m.confirmedWeight = true; }
   });
-  // Pass 1: every item reserves its exact-name units. Pass 2: items still short
-  // take loose matches from whatever remains unclaimed.
-  toMatch.forEach((m) => { if (!m.confirmedWeight) m.claimed = claimQty(m.name, m.expectedQty, true); });
-  toMatch.forEach((m) => { if (!m.confirmedWeight && m.claimed < m.expectedQty) m.claimed += claimQty(m.name, m.expectedQty - m.claimed, false); });
+  // Count items only, out of the count pool. Pass 1: every item reserves its
+  // exact-name units. Pass 2: items still short take loose matches from whatever
+  // remains unclaimed.
+  toMatch.forEach((m) => { if (!m.isWeight) m.claimed = claimQty(m.name, m.expectedQty, true); });
+  toMatch.forEach((m) => { if (!m.isWeight && m.claimed < m.expectedQty) m.claimed += claimQty(m.name, m.expectedQty - m.claimed, false); });
 
   const confirmed: { index: number; name: string }[] = [];
   const topUps: { index: number; shortfall: number }[] = [];
+  const countItemsOnWeightRows: { index: number; cartName: string }[] = [];
   toMatch.forEach((m) => {
-    if (m.confirmedWeight) { confirmed.push({ index: m.index, name: m.name }); return; }
+    // A weight-priced item needs exactly ONE row, not N units: its productQty
+    // carries no meaning (see isWeightPriced), so an absent one is a shortfall of
+    // 1 — one re-add, which re-picks the requested weight.
+    if (m.isWeight) {
+      if (m.confirmedWeight) confirmed.push({ index: m.index, name: m.name });
+      else topUps.push({ index: m.index, shortfall: 1 });
+      return;
+    }
     const shortfall = m.expectedQty - m.claimed;
-    if (shortfall <= 0) confirmed.push({ index: m.index, name: m.name });
-    else topUps.push({ index: m.index, shortfall });
+    if (shortfall <= 0) { confirmed.push({ index: m.index, name: m.name }); return; }
+    topUps.push({ index: m.index, shortfall });
+    // Short AND a weight line nobody claimed bears its name: this is the intent
+    // disagreement, not an ordinary missing item, and its top-up may buy a second
+    // one (see the presence pass above). Consume the row so two count items can't
+    // both be blamed on it — the weight pool is finished with by now, so nothing
+    // else reads this.
+    const w = weightPool.find((p) => !p.used && cartNameMatches(p.name, m.name));
+    if (w) { w.used = true; countItemsOnWeightRows.push({ index: m.index, cartName: w.name }); }
   });
 
   const overAdds = findOverAddedItems(addedRows, intended);
@@ -287,7 +356,59 @@ export function reconcileParallelAdd(
     intended,
     overAdds,
     overAddUnits: overAdds.reduce((n, o) => n + o.qty, 0),
+    countItemsOnWeightRows,
   };
+}
+
+// ── Routing the top-up: retry vs ask (MEAL-119) ───────────────────────────────
+
+/** One short item whose cart line disagrees with its intent, ready to be asked
+ *  about: the cart line that bears its name, and the units it is still short by
+ *  if the user decides the line does not cover them. */
+export interface TopUpQuestion {
+  index: number;
+  /** The sold-by-weight cart line matching this item's name. Truthful enough to
+   *  render: it is a line the cart really holds. */
+  cartName: string;
+  /** Units still unaccounted for — what an intentional top-up would add. */
+  shortfall: number;
+}
+
+export interface TopUpRouting {
+  /** Safe to re-add unattended: nothing in the cart plausibly covers these. */
+  retry: { index: number; shortfall: number }[];
+  /** Must be asked about before anything is added — see TopUpQuestion. */
+  ask: TopUpQuestion[];
+}
+
+/**
+ * Split a reconcile's top-up into the part a machine may re-add and the part
+ * only the user can decide.
+ *
+ * Both outcomes of the intent-vs-row disagreement are unacceptable and this is
+ * the fork where that is enforced. Re-adding a count item whose sold-by-weight
+ * line may well have landed buys the meat twice; confirming it off that line
+ * hands the user one deli slice and calls the order complete. So the item goes
+ * to neither: it leaves `retry` (no unattended re-add is possible for it) and
+ * arrives in `ask`, which the caller turns into a review card.
+ *
+ * A total partition of `topUps` by index — every short item ends up in exactly
+ * one side, so no item can be both re-added and asked about, and none can be
+ * dropped. `countItemsOnWeightRows` is already a subset of `topUps` (each
+ * unclaimed weight row blames at most one item), which is what makes that true.
+ */
+export function splitTopUpsForReview(
+  outcome: Pick<ReconcileOutcome, 'topUps' | 'countItemsOnWeightRows'>,
+): TopUpRouting {
+  const disagreements = new Map(outcome.countItemsOnWeightRows.map((c) => [c.index, c.cartName]));
+  const retry: { index: number; shortfall: number }[] = [];
+  const ask: TopUpQuestion[] = [];
+  for (const t of outcome.topUps) {
+    const cartName = disagreements.get(t.index);
+    if (cartName === undefined) retry.push(t);
+    else ask.push({ index: t.index, cartName, shortfall: t.shortfall });
+  }
+  return { retry, ask };
 }
 
 // ── Per-item cart verdicts (MEAL-14) ─────────────────────────────────────────
@@ -629,6 +750,30 @@ export function splitCartLeftover(
 }
 
 /**
+ * Drop the cart lines the run has already EXPLAINED to the user from an over-add
+ * list (MEAL-119).
+ *
+ * An in-cart-by-weight question is asked about a real cart line: a sold-by-weight
+ * row bearing the item's own name, which the count item that asked about it can
+ * never claim (see claimWeightRows / the weight pool in reconcileParallelAdd). So
+ * the row falls straight through to `over`, where the copy calls it something
+ * "Mealio didn't intend to add" and asks the user to review their cart.
+ *
+ * That sentence is false for these rows in every branch. Mealio DID intend the
+ * item — the row is the intent-vs-row disagreement, not overage — and printing it
+ * as unintended next to the card (or, on the done screen, next to the "kept as
+ * already in your cart" banner) tells the user to delete the very line they were
+ * just asked about. Following that advice leaves them with nothing, which is the
+ * outcome MEAL-119 exists to prevent, reached by taking our own advice.
+ *
+ * Matched loosely, like everything else that compares these two title sources.
+ */
+export function dropExplainedOverAdds(over: OverAdd[], explainedRows: string[]): OverAdd[] {
+  if (explainedRows.length === 0) return over;
+  return over.filter((o) => !explainedRows.some((name) => cartNameMatches(o.name, name)));
+}
+
+/**
  * Audit the after-run cart against what the run reported adding.
  *
  * `rows` are the diffCartItems output for this store, or null when the store
@@ -645,6 +790,11 @@ export function splitCartLeftover(
  * corroborate (`missing`/`short`), and items reported FAILED that the cart says
  * landed anyway (`recovered`). The second direction is why this runs at all on
  * a run that reported nothing added — see shouldProbeAfterRun.
+ *
+ * `explainedRows` are cart titles the run has already put to the user in its own
+ * words — the in-cart-by-weight questions (MEAL-119). They are held out of the
+ * over-add finding; see dropExplainedOverAdds for why announcing them there is
+ * not just noise but actively harmful advice.
  */
 export function auditCartAfterRun(input: {
   rows: CartRow[] | null;
@@ -653,8 +803,10 @@ export function auditCartAfterRun(input: {
   reconcileIntended: IntendedItem[];
   countBefore: number | null;
   countAfter: number | null;
+  explainedRows?: string[];
 }): CartCheckFindings {
   const { rows, reportedAdded, active, reconcileIntended, countBefore, countAfter } = input;
+  const explainedRows = input.explainedRows ?? [];
   let missing: string[] = [];
   let short: ShortAdd[] = [];
   let over: OverAdd[] = [];
@@ -671,9 +823,17 @@ export function auditCartAfterRun(input: {
     // recovery and an over-add — the same product named twice on the done
     // screen, "don't add it again" beside "nothing intended it".
     ({ over, recovered } = splitCartLeftover(addedRows, reportedAdded, intendedAll));
+    // Rows the run already asked the user about are not overage — see
+    // dropExplainedOverAdds. Filtered here rather than inside splitCartLeftover so
+    // the partition stays a partition: the row is still consumed as nothing's
+    // claim, it just isn't reported as unintended.
+    over = dropExplainedOverAdds(over, explainedRows);
     // Only audit items we reported as added (failures already route to review),
-    // skip sold-by-weight lines (one row at N lb, not count-comparable), and
-    // skip fully-missing items (covered by `missing`).
+    // skip sold-by-weight ITEMS (presence, not count — see isWeightPriced), and
+    // skip fully-missing items (covered by `missing`). The weight ROWS are
+    // dropped by findShortAddedItems itself: filtering only the items here left a
+    // weight line countable as a unit, and one deli line was reported short AND
+    // over at the same time.
     const auditItems = active.filter((a) =>
       !a.isWeight
       && reportedAdded.some((n) => cartNameMatches(a.name, n))
