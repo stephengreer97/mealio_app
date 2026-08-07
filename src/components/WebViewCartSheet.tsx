@@ -273,6 +273,12 @@ export default function WebViewCartSheet({
   // `.then()` would install HEB's runId and — worse — a recorder keyed to HEB,
   // so Walmart's steps would upload under HEB's run. Closing bumps this, and a
   // `.then()` from a superseded open bails out instead of writing anything.
+  //
+  // Assumes no StrictMode — there is none in this app today. Under one, the dev
+  // double-invoke would mount, unmount and remount, bumping the generation
+  // between the capture below and the response landing, so a legitimate first run
+  // would silently lose both its runId and its telemetry recorder in dev only.
+  // Anyone adding StrictMode has to key this off something the remount preserves.
   const automationGenRef = useRef(0);
 
   // Per-step funnel telemetry (see lib/automation-telemetry.ts). A ref, not state,

@@ -74,11 +74,12 @@ jest.mock('react-native-safe-area-context', () => {
   };
 });
 
+import * as SecureStore from 'expo-secure-store';
 import BugReportSheet from '../../src/components/BugReportSheet';
 import { AuthProvider, useAuth } from '../../src/context/AuthContext';
 import { bugReport, auth } from '../../src/lib/api';
 import { clearSessionLogs, getSessionLogs, installConsoleCapture } from '../../src/lib/logBuffer';
-import { clearLastAutomationRun, setLastAutomationRun } from '../../src/lib/lastAutomationRun';
+import { clearLastAutomationRun, getLastAutomationRun, setLastAutomationRun } from '../../src/lib/lastAutomationRun';
 
 const submit = bugReport.submit as jest.Mock;
 const login = auth.login as jest.Mock;
@@ -100,6 +101,9 @@ function sentLogs(): string {
  * name, the way HelpScreen mounts it. The buttons stand in for a sign-in screen
  * and the account screen's Log Out.
  */
+/** Anything logout rejected with, for the keychain-failure test. */
+const logoutErrors: unknown[] = [];
+
 function Harness() {
   const { user, login: doLogin, logout } = useAuth();
   return (
@@ -113,6 +117,12 @@ function Harness() {
       </TouchableOpacity>
       <TouchableOpacity testID="logout" onPress={() => { void logout(); }}>
         <Text>log out</Text>
+      </TouchableOpacity>
+      {/* AccountScreen does NOT catch logout (it is an onPress handler on an
+          Alert button). This one does, only so a rejection can be asserted
+          instead of surfacing as an unhandled rejection. */}
+      <TouchableOpacity testID="logout-catching" onPress={() => { logout().catch((e) => { logoutErrors.push(e); }); }}>
+        <Text>log out (caught)</Text>
       </TouchableOpacity>
       <BugReportSheet visible onClose={() => {}} currentRoute="Help" />
     </>
@@ -242,6 +252,31 @@ describe('signing out clears what the next account must not send', () => {
     expect(sentLogs()).not.toContain('Kirkland Prenatal Vitamins');
     expect(sentContext().lastCartRunId).toBeNull();
     expect(sentContext().lastCartRunStore).toBeNull();
+  });
+
+  it('clears them even when the keychain refuses to give up the token', async () => {
+    // tokenStorage.clear() is three bare SecureStore.deleteItemAsync calls in a
+    // Promise.all with nothing catching them, so one rejection used to skip both
+    // clears — and AccountScreen does not catch logout either. The session stays
+    // this account's when that happens, so no second person is there to receive
+    // anything; the clears still belong on the unconditional path, because the
+    // ordering of "sign-out failed" and "someone else picks up the phone" is not
+    // something this code gets to decide.
+    const utils = await renderSheet();
+    asUser('user-A');
+    await act(async () => { fireEvent.press(utils.getByTestId('login-a')); });
+    await waitFor(() => expect(utils.getByTestId('who')).toHaveTextContent('user-A'));
+
+    console.log('[Cart] added Kirkland Prenatal Vitamins to cart');
+    setLastAutomationRun('run-belongs-to-A', 'heb');
+
+    logoutErrors.length = 0;
+    (SecureStore.deleteItemAsync as jest.Mock).mockRejectedValueOnce(new Error('keychain unavailable'));
+    await act(async () => { fireEvent.press(utils.getByTestId('logout-catching')); });
+    await waitFor(() => expect(logoutErrors).toHaveLength(1));
+
+    expect(getSessionLogs()).not.toContain('Kirkland Prenatal Vitamins');
+    expect(getLastAutomationRun()).toBeNull();
   });
 
   it('keeps the run for the account that made it, so a normal report still joins', async () => {

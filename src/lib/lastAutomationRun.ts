@@ -83,13 +83,20 @@ const DAY = 24 * HOUR;
  * inbox as the last row of a nine-row table — `172800000`, which the reader has
  * to notice and divide by 86,400,000. Coarse on purpose: the only question the
  * age answers is "was this filed right after the run, or long after?".
+ *
+ * Floor in every branch, never round. Rounding overstated at each seam — 59.5s
+ * read "60s ago", 59m59.999s read "60m ago" and 23h59m59.999s read "24 hours
+ * ago", each naming the unit above the one its own branch had chosen — and it
+ * made the labels disagree with each other: 1h50m rounded UP to "2 hours ago"
+ * while 47h floored to "1 day ago". Flooring throughout means a label never
+ * claims more time has passed than has, and "59m ago" always means under an hour.
  */
 export function formatAge(ms: number): string {
   const v = Math.max(0, ms);
-  if (v < MINUTE) return `${Math.round(v / SECOND)}s ago`;
-  if (v < HOUR) return `${Math.round(v / MINUTE)}m ago`;
+  if (v < MINUTE) return `${Math.floor(v / SECOND)}s ago`;
+  if (v < HOUR) return `${Math.floor(v / MINUTE)}m ago`;
   if (v < DAY) {
-    const hours = Math.round(v / HOUR);
+    const hours = Math.floor(v / HOUR);
     return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
   }
   const days = Math.floor(v / DAY);

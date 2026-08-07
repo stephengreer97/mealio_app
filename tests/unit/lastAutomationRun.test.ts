@@ -44,7 +44,9 @@ describe('the last cart run of a session', () => {
     setLastAutomationRun('run-abc', 'heb', 1_000);
     const late = getLastAutomationRun(1_000 + 90 * 60_000);
     expect(late?.runId).toBe('run-abc');
-    expect(late?.ageLabel).toBe('2 hours ago');
+    // 90 minutes is "1 hour ago", not "2 hours ago" — the label floors, so it
+    // never claims more time has passed than has.
+    expect(late?.ageLabel).toBe('1 hour ago');
   });
 
   it('never reports a negative age when the clock moves backwards', () => {
@@ -86,6 +88,9 @@ describe('the last cart run of a session', () => {
 // website prints each context value with String(v) and has no formatting hook,
 // so an unformatted age lands in the inbox as `172800000` — a nine-digit integer
 // in the last row of a nine-row table, which is the same as not sending it.
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+
 describe('the age a reader actually sees', () => {
   it('reads in seconds for a report filed straight after the run', () => {
     expect(formatAge(0)).toBe('0s ago');
@@ -114,5 +119,24 @@ describe('the age a reader actually sees', () => {
 
   it('never shows a negative age', () => {
     expect(formatAge(-5_000)).toBe('0s ago');
+  });
+
+  it('never names the unit above the one it picked, right up to each seam', () => {
+    // Rounding used to overstate at all three seams, and each one printed a value
+    // the branch it came from cannot legitimately produce: "60s" from the
+    // under-a-minute branch, "60m" from the under-an-hour branch, "24 hours" from
+    // the under-a-day branch. A reader seeing "24 hours ago" has no way to know it
+    // was not a day, and "60m ago" invites the question of why it is not "1 hour".
+    expect(formatAge(59_500)).toBe('59s ago');
+    expect(formatAge(HOUR_MS - 1)).toBe('59m ago');
+    expect(formatAge(DAY_MS - 1)).toBe('23 hours ago');
+  });
+
+  it('is monotone across the unit changes, so labels agree with each other', () => {
+    // Flooring everywhere or nowhere: mixing them made 1h50m read "2 hours ago"
+    // (rounded up) while 47h read "1 day ago" (floored), so the same 10-minutes-
+    // short-of-the-next-unit gap was reported two different ways.
+    expect(formatAge(HOUR_MS + 50 * 60_000)).toBe('1 hour ago');
+    expect(formatAge(47 * HOUR_MS)).toBe('1 day ago');
   });
 });
