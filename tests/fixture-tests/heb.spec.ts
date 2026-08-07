@@ -66,11 +66,21 @@ describe('HEB CHECK_LOGIN_SCRIPT', () => {
   //
   // The budget is 20s, not 12s, and that is not slack for a slow assertion.
   // Reaching a logged-out verdict COSTS 8.2s by construction: CHECK_LOGIN polls
-  // 40 × 200ms for a "log out" marker that a logged-out page will never show, and
-  // only then reports. Measured on an idle machine the wait lands at 8.3s — 69%
-  // of a 12s budget, so roughly a 1.5× slowdown was enough to fail it, and it did
-  // fail that way. Widening cannot hide a defect: a script that is killed or never
-  // answers posts nothing at all, so it still fails, just 8s later.
+  // 40 × 200ms (heb.ts:418) for a "log out" marker that a logged-out page will
+  // never show, plus a 200ms close, and only then reports.
+  //
+  // Measured, three idle runs: 8309 / 8310 / 11903 ms. Two modes ~3.6s apart — the
+  // same step aldi.spec.ts documents on three other waits. The fast mode is 42% of
+  // the new 20s budget; the SLOW mode is 8ms short of failing the old 12s one,
+  // which is the whole story of why this test was intermittent.
+  //
+  // What widening does and does not buy. It cannot hide a killed or silent script:
+  // one that never posts fails anyway, 8s later, with the same error. It does raise
+  // the tolerated latency ceiling — from about 1.46× the 8.2s structural floor to
+  // about 2.44× — so a real regression that merely makes this path ~2× slower now
+  // passes. That is the price of not failing on load, and it is worth paying only
+  // because this test's verdict (isLoggedIn === false) is asserted, so a wrong
+  // answer still fails on the answer.
   itWithFixture(
     'logged-in-home.html',
     'CHECK_LOGIN reports logged-out when no "Log out" marker is visible',

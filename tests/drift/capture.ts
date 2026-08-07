@@ -25,7 +25,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Browser, chromium } from 'playwright';
 
-import { FIXTURE_CONTEXT_OPTIONS, installResourceBlocking } from '../fixture-runners/runScript';
+import {
+  FIXTURE_CONTEXT_OPTIONS,
+  FIXTURE_LAUNCH_OPTIONS,
+  installResourceBlocking,
+} from '../fixture-runners/runScript';
 import {
   CENSUS_VERSION,
   Census,
@@ -117,8 +121,12 @@ export async function computeCensus(options: CensusOptions = {}): Promise<Census
   const surfaces = STORE_SURFACES.filter((s) => !wanted || wanted.has(s.fixtureDir));
 
   const census: Census = { version: CENSUS_VERSION, stores: {} };
-  const browser = await chromium.launch();
-  openCensusBrowsers.add(browser);
+  // Register the LAUNCH, not the browser. `add(await launch())` leaves a window
+  // where an abandoned hook (see the note on openCensusBrowsers) has already
+  // spawned a Chromium that nothing has a handle to yet.
+  const launching = chromium.launch(FIXTURE_LAUNCH_OPTIONS);
+  openCensusBrowsers.add(launching);
+  const browser = await launching;
   try {
     const context = await browser.newContext(FIXTURE_CONTEXT_OPTIONS);
     await installResourceBlocking(context);
@@ -158,14 +166,16 @@ export async function computeCensus(options: CensusOptions = {}): Promise<Census
       census.stores[surface.fixtureDir] = store;
     }
   } finally {
-    openCensusBrowsers.delete(browser);
+    openCensusBrowsers.delete(launching);
     await browser.close();
   }
   return census;
 }
 
 /*
- * Census browsers that have been launched and not yet closed.
+ * Census browsers that have been launched and not yet closed. Held as the LAUNCH
+ * PROMISE rather than the `Browser`, so a hook abandoned *during* `chromium.launch()`
+ * still leaves the teardown something to close.
  *
  * MEAL-113. The `finally` above is not enough on its own. `computeCensus()` is
  * called from a jest `beforeAll` (tests/fixture-tests/selector-drift.spec.ts) with
@@ -181,13 +191,15 @@ export async function computeCensus(options: CensusOptions = {}): Promise<Census
  * closes whatever is still open. `close()` is idempotent and the happy path
  * deregisters first, so on a normal run the teardown has nothing to do.
  */
-const openCensusBrowsers = new Set<Browser>();
+const openCensusBrowsers = new Set<Promise<Browser>>();
 
 /** Close any census browser a timed-out hook left behind. Safe to call always. */
 export async function closeOpenCensusBrowsers(): Promise<void> {
   const leaked = [...openCensusBrowsers];
   openCensusBrowsers.clear();
-  await Promise.all(leaked.map((b) => b.close().catch(() => {})));
+  await Promise.all(
+    leaked.map((launching) => launching.then((b) => b.close()).catch(() => {})),
+  );
 }
 
 /** Which stores a census actually covered, for a report header. */

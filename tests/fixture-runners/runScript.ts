@@ -15,7 +15,7 @@
 //
 // Reused by every store's fixture-test spec.
 
-import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import { chromium, Browser, BrowserContext, LaunchOptions, Page } from 'playwright';
 import { readFile } from 'fs/promises';
 import * as path from 'path';
 
@@ -35,7 +35,58 @@ export const FIXTURE_CONTEXT_OPTIONS = {
     'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 ' +
     '(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
   viewport: { width: 390, height: 844 },  // iPhone 13/14 pixel dims
+  // A service worker's own fetches are not routed by `context.route`, so a
+  // registered worker is a hole in the blocking below. Nothing in a fixture
+  // registers one today; blocking the class costs nothing and keeps it that way.
+  serviceWorkers: 'block',
 } as const;
+
+/**
+ * Chromium launch options every fixture load and the drift census share.
+ *
+ * ONE ARG, AND IT IS THE ONE THAT ACTUALLY CLOSES THE DOOR (MEAL-113).
+ * `installResourceBlocking` below refuses every non-local *request*, and that is
+ * still worth having — it is what keeps a captured page's runtime behavior from
+ * changing the DOM under a test. But `context.route` only ever sees requests, and
+ * a browser reaches the network in ways that are not requests:
+ *
+ *   • `<link rel="preconnect">` / `rel="dns-prefetch"`. The committed fixtures
+ *     carry 200 of these hints (albertsons 80, walmart 45, aldi 36, wegmans 25,
+ *     amazon-fresh 14). A preconnect is a DNS lookup and a TLS handshake with no
+ *     HTTP request inside it, so no route handler is ever consulted and no count
+ *     of `route.continue()` calls can see one.
+ *   • WebSockets. Those need `context.routeWebSocket`, which we do not install.
+ *     Latent only: no fixture contains `new WebSocket(` today, and a re-capture
+ *     could introduce one that would then egress silently.
+ *   • Service-worker-initiated fetches (blocked separately above).
+ *
+ * Measured at the OS layer — `ss` filtered to the chrome PIDs under jest, with the
+ * chrome process count 0 before and after, so the attribution is not in doubt — a
+ * fixture run held established TLS connections to 36 distinct third-party
+ * endpoints across 29 PIDs, `dpm.demdex.net` (Adobe audience manager) and the
+ * 1.1.1.1 DNS-over-HTTPS resolver among them.
+ *
+ * WHAT THAT DID AND DID NOT LEAK, stated precisely, because the previous version of
+ * this comment overstated the fix and that is its own kind of bug. A preconnect
+ * carries no HTTP request, so no cookie, cart, price or loyalty id went anywhere:
+ * the "0 requests forwarded" claim was true and still is. What left on every run
+ * was METADATA — DNS and DoH lookups, TLS SNI hostnames, and this machine's IP —
+ * to ad-tech hosts.
+ *
+ * `--host-resolver-rules=MAP * ~NOTFOUND` refuses at the resolver instead, which is
+ * below all three holes at once: a preconnect, a WebSocket and a service worker all
+ * have to resolve a name first, and none of them can. `EXCLUDE localhost` keeps the
+ * mock store (tests/mock-store) reachable when it is served. Result: 0 chrome TCP
+ * sockets for a whole fixture run, and the run is FASTER, because a hint that
+ * cannot resolve fails immediately instead of waiting out a handshake.
+ *
+ * Keep both layers. The resolver rule is the boundary; the route handler is what
+ * makes an intercepted navigation land on a known empty page rather than on a
+ * network error, which is what the tests read.
+ */
+export const FIXTURE_LAUNCH_OPTIONS: LaunchOptions = {
+  args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'],
+};
 
 /**
  * Block external resource loads. Captured fixture HTML preserves <script>
@@ -52,33 +103,57 @@ export const FIXTURE_CONTEXT_OPTIONS = {
  * fixture — including in the drift census, which therefore counts matches and
  * never asks whether a user could see them.
  *
- * NOTHING LEAVES THIS MACHINE (MEAL-113). The list above is a list of resource
+ * NO REQUEST LEAVES THIS MACHINE (MEAL-113). The list above is a list of resource
  * types, and every type missing from it — `document`, `fetch`, `xhr`, `ping`,
  * `other` — used to be forwarded to the public internet. Blocking a class of
  * request by naming its members is a losing game: the members that matter are the
  * ones nobody named. So the rule is now the class itself. A request to anything
  * but localhost is never forwarded, whatever type it is.
  *
+ * (This used to say NOTHING leaves this machine. It does not cover preconnect
+ * hints, WebSockets or a service worker, none of which are requests — that is what
+ * FIXTURE_LAUNCH_OPTIONS is for, and the two together are what make the stronger
+ * claim true.)
+ *
  * That was not a theoretical hole. Blocking `<script src>` does not stop the
- * captured page's INLINE scripts, and they are what reach out: 348 `document`
- * requests to ~25 third-party hosts across the fixture suites (ad and consent
- * iframes, plus 5 to live store URLs — heb.com/my-account/login, the aldi.us
- * storefront, a wegmans search), 17 live `fetch` calls to heb.com/api/dsf, beacons
- * to unagi.amazon.com, ~40 Walmart bundle prefetches, and a DNS-over-HTTPS query
- * to 1.1.1.1. On every run.
+ * captured page's INLINE scripts, and they are what reach out. Measured by logging
+ * every non-local request that reaches this handler over one full fixture run:
+ * 11506 in total, of which 371 are not assets — 310 `document` requests to 17
+ * third-party hosts (safeframe.googlesyndication.com, four `fls.doubleclick.net`
+ * accounts, insight.adsrvr.org, websdk.ujet.co among them), 39 `other` (Walmart
+ * `_next` bundle prefetches from i5.walmartimages.com), 18 `fetch` — 17 of them
+ * live calls to heb.com/api/dsf — 2 `ping` beacons to unagi.amazon.com, and 2
+ * `xhr`, one of which is a page script's own DNS-over-HTTPS query to
+ * 1.1.1.1/dns-query. On every run.
+ *
+ * Separately, 21 fixture tests pass an `options.url` naming a real store URL
+ * (heb.com/search, aldi.us, albertsons.com, walmart.com, amazon.com, wegmans.com).
+ * Those navigations do NOT appear in the count above, because loadFixture registers
+ * a page-level route for them and page routes take precedence over context routes —
+ * see the note at that `page.route` call.
  *
  * Two reasons that has to stay shut, and the second is the one to remember:
  *
  *   1. It makes the suite depend on third parties answering, and on how fast. A
- *      live navigation takes seconds; an answered one takes milliseconds. A store
- *      script that posts a message and then does `window.location.href = …`
- *      (wegmans.ts, walmart.ts, albertsons.ts, amazon-fresh.ts) was winning that
- *      race only because the round trip was slow — a test green for a reason with
- *      nothing to do with the code under test. In the project's main defence
- *      against selector drift, that is the worst property it could have.
+ *      live navigation takes seconds; an answered one takes milliseconds, so every
+ *      one of them was wall-clock spent inside a budget the tests then had to be
+ *      widened to fit, and the amount varied with someone else's uptime. In the
+ *      project's main defence against selector drift, that is a bad property.
+ *
+ *      NOT, to be precise, because the scripts that navigate after posting
+ *      (wegmans.ts, walmart.ts, albertsons.ts, amazon-fresh.ts) were racing the
+ *      navigation and winning only on latency. They were not, and an earlier
+ *      version of this comment said they were. `postMessage` calls an
+ *      `exposeFunction` binding, so by the time that call returns the payload is
+ *      already in the Node-side `messages` array, and `waitForMessage` polls Node —
+ *      destroying the page afterwards cannot take it back out. Making navigations
+ *      faster is safe here, and it is what this does.
  *   2. It exfiltrated captured session data. Those requests carried what is
  *      committed in the fixtures — HEB cart contents and prices, an Albertsons
  *      loyalty id, a hashed email — out to ad networks on every fixture run.
+ *      Note the tense: `document`/`fetch`/`ping` requests DID carry payloads, and
+ *      they are what this handler stops. The residue that outlived it was
+ *      metadata only (see FIXTURE_LAUNCH_OPTIONS), never body or cookies.
  *
  * So do not relax this back to `continue()` for convenience, and do not narrow it
  * to a type list again. A `document` request is answered with an empty page —
@@ -110,7 +185,27 @@ export async function installResourceBlocking(context: BrowserContext): Promise<
  */
 export const EMPTY_DOCUMENT = '<!doctype html><html><head></head><body></body></html>';
 
-/** Whether a URL resolves on this machine. Everything else is refused. */
+/**
+ * Whether a URL resolves on this machine. Everything else is refused.
+ *
+ * This is the predicate that decides what reaches the network, so it is
+ * default-deny and every branch is exercised by runScript.test.ts — a comment
+ * saying "do not narrow this" is not a guard, and the tests are. What they pin,
+ * and why each case is the way it is:
+ *
+ *   • `localhost.evil.com` is DENIED. The check is equality, never `endsWith`.
+ *   • `http://2130706433/` is ALLOWED, because WHATWG URL normalises the integer
+ *     form to `127.0.0.1` before we compare — the same reason `http://[::1]/` has
+ *     hostname `[::1]`, brackets included, and `LOCALHOST` arrives lowercased.
+ *   • `127.0.0.2`, `0.0.0.0` and `[::ffff:127.0.0.1]` are DENIED. Loopback is
+ *     wider than this list; the list is what the suite actually uses.
+ *   • an unparseable string is DENIED, which is the safe direction.
+ *
+ * `file:` is deliberately NOT on the allow list. Fixtures arrive via `setContent`,
+ * so nothing here navigates to a file URL, and of all the schemes it is the one
+ * whose failure mode is not fail-safe — an allowed `file:` read is local
+ * filesystem access granted to a captured third-party page's inline script.
+ */
 export function isLocalUrl(raw: string): boolean {
   let url: URL;
   try {
@@ -118,10 +213,10 @@ export function isLocalUrl(raw: string): boolean {
   } catch {
     return false; // unparseable: treat as external, which is the safe direction
   }
-  if (url.protocol === 'about:' || url.protocol === 'data:' || url.protocol === 'blob:' || url.protocol === 'file:') {
+  if (url.protocol === 'about:' || url.protocol === 'data:' || url.protocol === 'blob:') {
     return true;
   }
-  return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1';
+  return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
 }
 
 export interface PostedMessage {
@@ -174,7 +269,7 @@ export async function loadFixture(
   fixturePath: string,
   options: { url?: string } = {},
 ): Promise<FixtureRunner> {
-  const browser = await chromium.launch();
+  const browser = await chromium.launch(FIXTURE_LAUNCH_OPTIONS);
   let closed = false;
   const context = await browser.newContext(FIXTURE_CONTEXT_OPTIONS);
   const page = await context.newPage();
@@ -231,6 +326,12 @@ export async function loadFixture(
      * so this route is not what keeps the goto off the network. It stays because
      * this one navigation carries a store's real URL and deserves an answer that
      * cannot be widened away by an edit to the resource-type list above.
+     *
+     * One consequence to know when reading counts off that handler: a PAGE route
+     * takes precedence over a CONTEXT route, so these 21 store-URL navigations are
+     * answered here and never reach `installResourceBlocking`. They are therefore
+     * absent from its measured totals, which is why the two figures in the MEAL-113
+     * history disagreed about whether "5 live store URLs" were included.
      */
     const target = options.url;
     // Compare NORMALIZED hrefs. `new URL('https://www.aldi.us').href` is

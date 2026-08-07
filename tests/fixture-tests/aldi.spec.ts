@@ -77,30 +77,73 @@ describe('ALDI CHECK_LOGIN_SCRIPT', () => {
   );
 });
 
+/*
+ * ON THE BUDGETS IN THIS FILE AND WHY THEY ARE 30s (MEAL-113).
+ *
+ * These two waits are the slowest in the suite, and they are BIMODAL. Measured on
+ * an idle machine (14 Gi free), three runs each, back to back:
+ *
+ *   already-in-cart   15711 / 15707 / 19297 ms   (and 19291 ms inside a full run)
+ *   stepper-open      14770 / 11232 / 11228 ms
+ *
+ * A fast mode and a slow mode about 3.6s apart, the same step that Albertsons'
+ * collapsed-bubble wait and HEB's logged-out CHECK_LOGIN show. Fast and slow occur
+ * back to back on an unloaded box, so the slow mode is not contention and cannot be
+ * tuned away by running less at once.
+ *
+ * Against the previous 20s budget the slow mode sat at 96% (already-in-cart) and
+ * 74% (stepper-open). 96% is not a margin. It matters more than it looks, because
+ * the project rule now reads a `Timed out … postMessage` failure as starvation
+ * rather than a defect: with 700ms of headroom, a genuine slowdown in the ALDI add
+ * path would emit exactly the signature we have agreed to dismiss. So the budget is
+ * 30s — the slow mode is 64% of it — and the tests below now assert what the script
+ * DECIDED, so a regression that still answers in time fails on the answer.
+ */
 describe('ALDI regression: product already in cart (bubble state)', () => {
   itWithFixture(
     'search-results-product-in-cart.html',
-    'completes without crashing when product is already in cart',
+    'reaches a not_confirmed verdict, with the sour cream tiles still matched',
     async (runner) => {
       const script = scripts.buildSearchAndAddScript('Sour Cream', 1, null);
       await runner.inject(script);
-      const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
-      expect(result).toBeDefined();
-      expect(typeof result.success).toBe('boolean');
+      const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 30_000);
+
+      // `success: false, reason: 'not_confirmed'` is the RIGHT answer here, and
+      // pinning it is the point. A static fixture cannot show a cart total
+      // changing, so a script that reported success would be reporting something
+      // it did not verify — the failure mode this store's confirm step exists to
+      // prevent. `expect(typeof result.success).toBe('boolean')` accepted either.
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('not_confirmed');
+
+      // And it must still have SEEN the products. This is the drift-sensitive
+      // half: if Instacart's tile markup moves, candidates goes empty and this
+      // fails, which is the whole reason the fixture is committed.
+      expect(Array.isArray(result.candidates)).toBe(true);
+      const names: string[] = result.candidates.map((c: { productName: string }) => c.productName);
+      expect(names).toContain('Friendly Farms Sour Cream');
+      expect(names).toContain('Friendly Farms Light Sour Cream');
     },
+    { testTimeoutMs: 45_000 },
   );
 });
 
 describe('ALDI regression: stepper already open', () => {
   itWithFixture(
     'search-results-stepper-open.html',
-    'script handles a tile with the stepper already visible',
+    'adds via the already-open stepper and reports the matched product',
     async (runner) => {
       const script = scripts.buildSearchAndAddScript('Sour Cream', 1, null);
       await runner.inject(script);
-      const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
-      expect(result).toBeDefined();
+      const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 30_000);
+
+      // With the stepper already open the script can drive it and confirm, so
+      // unlike the bubble fixture above this one SHOULD succeed — and name the
+      // tile it matched. `expect(result).toBeDefined()` could not fail.
+      expect(result.success).toBe(true);
+      expect(result.productName).toBe('Friendly Farms Sour Cream');
     },
+    { testTimeoutMs: 45_000 },
   );
 });
 
