@@ -17,6 +17,7 @@ import { Colors, Radius } from '../constants/colors';
 import { useAuth } from '../context/AuthContext';
 import { bugReport } from '../lib/api';
 import { getSessionLogs } from '../lib/logBuffer';
+import { getLastAutomationRun } from '../lib/lastRun';
 
 interface Props {
   visible: boolean;
@@ -38,6 +39,13 @@ export default function BugReportSheet({ visible, onClose, currentRoute }: Props
     }
     setSubmitting(true);
     try {
+      // The runId of the last add-to-cart run, when there was one (MEAL-142).
+      // Without it the logs below and the run's telemetry rows describe the same
+      // failure with no way to line them up. `runAgeMs` is included so whoever
+      // reads the report can tell "filed straight after it broke" from "filed
+      // two days later about something else" — a stale runId would point at an
+      // unrelated trace, which is worse than sending none.
+      const lastRun = getLastAutomationRun();
       await bugReport.submit({
         description: text,
         logs: getSessionLogs(),
@@ -48,6 +56,9 @@ export default function BugReportSheet({ visible, onClose, currentRoute }: Props
           route: currentRoute ?? null,
           userId: user?.id ?? null,
           tier: (user as any)?.tier ?? null,
+          automationRunId: lastRun?.runId ?? null,
+          automationStoreId: lastRun?.storeId ?? null,
+          automationRunAgeMs: lastRun?.ageMs ?? null,
         },
       });
       onClose();

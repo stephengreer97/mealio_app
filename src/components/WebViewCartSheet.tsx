@@ -40,6 +40,7 @@ import { buildSearchAndAddWorker, buildPresearchWorker } from '../lib/webview-sc
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS, FEATURE_PRESEARCH_ADD, ADD_COMMIT_JITTER_MS } from '../constants/features';
 import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
+import { setLastAutomationRun } from '../lib/lastRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
@@ -291,6 +292,10 @@ export default function WebViewCartSheet({
           })
           .then((id) => {
             automationRunIdRef.current = id;
+            // Hand the id to the bug-report path too (MEAL-142). The console
+            // buffer already captures what reproduces a failure; this is the key
+            // that ties it to the rows this run is about to upload.
+            if (id) setLastAutomationRun(id, storeId);
             // The recorder can only exist once the server has issued a runId —
             // steps are keyed to it. Steps emitted before this lands are dropped
             // by the no-op recorder, which is why login_check (the earliest step)
