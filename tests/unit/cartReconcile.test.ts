@@ -216,6 +216,22 @@ const RECONCILE_CASES: ReconcileCase[] = [
     overAdds: [{ name: 'H-E-B Boneless Chicken Breast', qty: 1 }],
   },
   {
+    name: 'a count item cannot even RESERVE a weight row — the weight-priced sibling that needs it still gets it',
+    // The count item is listed first, so a presence pass that ignored intent
+    // marked the row used and starved the weight-priced item behind it: the one
+    // item the row genuinely belonged to was reported short and re-added, buying
+    // a second value pack.
+    attempts: [
+      attempt('chicken breast', 3, { success: true, productName: 'H-E-B Boneless Skinless Chicken Breast' }),
+      attempt('chicken value pack', 2, { success: true, productName: 'H-E-B Boneless Chicken Breast Value Pack' }, true),
+    ],
+    addedRows: [row('H-E-B Boneless Chicken Breast Value Pack', 1, true)],
+    confirmed: ['H-E-B Boneless Chicken Breast Value Pack'],
+    topUps: [{ index: 0, shortfall: 3 }],
+    definiteFailures: [],
+    overAdds: [],
+  },
+  {
     name: 'two weight-priced items matching ONE weight row — the first claims it, the second is short by one line, not by its poundage',
     attempts: [
       attempt('beef brisket', 2, { success: true, productName: 'H-E-B Prime 1 Beef Brisket' }, true),
