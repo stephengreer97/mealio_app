@@ -15,6 +15,9 @@ import WebViewCartSheet, {
 import CartStatusBubble from '../components/CartStatusBubble';
 import { STORES } from '../constants/stores';
 import { Colors } from '../constants/colors';
+import { useAuth } from './AuthContext';
+import { clearSessionLogs } from '../lib/logBuffer';
+import { clearLastAutomationRun } from '../lib/lastAutomationRun';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CartJobProvider owns the single add-to-cart job for the whole app.
@@ -55,6 +58,11 @@ export function useCartJob(): CartJobContextValue {
 }
 
 export function CartJobProvider({ children }: { children: React.ReactNode }) {
+  // Signing out has to END the run, not just wipe what it already wrote — see
+  // the sign-out effect below. Safe to read here: App.tsx mounts this provider
+  // inside AuthProvider (it has to be, since a job is only ever started from a
+  // signed-in screen), so there is no ordering problem to solve.
+  const { user } = useAuth();
   const [job, setJob] = useState<CartJobParams | null>(null);
   const [status, setStatus] = useState<CartJobStatus | null>(null);
   // Expanded = full sheet visible; collapsed = slid offscreen + bubble shown.
@@ -93,6 +101,55 @@ export function CartJobProvider({ children }: { children: React.ReactNode }) {
     prevPhaseRef.current = null;
     onClose?.();
   }, []);
+
+  // ── Sign-out ends the run ──────────────────────────────────────────────────
+  //
+  // AuthContext.logout clears the console ring buffer and the recorded cart run,
+  // but clearing is not enough on its own: this provider sits ABOVE
+  // NavigationContainer, so the navigator swapping to the auth stack does not
+  // unmount it, and in layer mode the sheet is a plain root View (collapsed to
+  // `pointerEvents: 'none'`) rather than a modal. So the WebView kept automating
+  // straight through a sign-out — still logging product names, failed adds and
+  // ingredient names into the buffer that logout had just emptied, enough lines
+  // in one run to refill all 600. On a shared phone the next person could then
+  // file a report carrying the previous person's cart, attached to their own
+  // token-verified userId. It also left one account's store page sitting on top
+  // of the next account's login screen.
+  //
+  // Ending the job fixes both: the sheet unmounts and the WebView goes with it.
+  //
+  // It does not, on its own, mean nothing is left writing — the sheet was never
+  // the only writer. Each product a run chooses is handed to MyMealsScreen, which
+  // saves it on a per-meal promise chain of its own that outlives this teardown;
+  // after a sign-out those saves are guaranteed 401s and their failure logs name
+  // the products and ingredients. That queue had to be stopped where it lives —
+  // see `savesAbandonedRef` in src/screens/mymeals/MyMealsScreen.tsx.
+  const endedBySignOutRef = useRef(false);
+  useEffect(() => {
+    if (user || !jobRef.current) return;
+    endedBySignOutRef.current = true;
+    closeJob();
+  }, [user, closeJob]);
+
+  // The teardown above is asynchronous — a render, then this provider's effect,
+  // then the commit that unmounts the sheet — and logout's clears happen at the
+  // START of it. A cart run emits a line every few hundred ms and a
+  // logAutomationStart round trip is 100-500ms, so either can land inside that
+  // window and survive a clear that has already run. Clearing again once `job`
+  // is actually null closes it: React destroys the removed subtree's effects
+  // before running the effects of the same commit, so by the time this fires the
+  // sheet's unmount cleanup has already bumped its generation counter and no
+  // in-flight start can write either.
+  //
+  // Guarded by the ref rather than by `!user`, because both are null at app
+  // launch and a signed-out launch must keep its login diagnostics — those are
+  // exactly what a "can't sign in" report needs to carry.
+  useEffect(() => {
+    if (job || !endedBySignOutRef.current) return;
+    endedBySignOutRef.current = false;
+    clearSessionLogs();
+    clearLastAutomationRun();
+  }, [job]);
 
   // Map status transitions to expand/collapse decisions.
   const handleStatus = useCallback((st: CartJobStatus) => {

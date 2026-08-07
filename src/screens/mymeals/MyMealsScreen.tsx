@@ -85,6 +85,25 @@ export default function MyMealsScreen() {
   // instead of racing (each PATCH rewrites the meal's whole ingredient array;
   // overlapping writes from a stale base would clobber each other).
   const enqueueMealSave = useRef(createMealSaveQueue()).current;
+  // Signing out abandons whatever is still on that chain (MEAL-142). Because the
+  // saves for one meal are serialised, a run that chose several products for the
+  // same meal leaves several of them queued; once the session is over every one
+  // is a guaranteed 401, and the failure path below logs the product name, the
+  // ingredient name and the meal id into the console ring buffer — arbitrarily
+  // late, after logout emptied it, possibly after the next person has signed in.
+  // That is the same leak CartJobContext's sign-out effect exists to close, from
+  // a second writer: on a shared phone the next person's bug report would carry
+  // the previous person's product names under their own verified userId.
+  //
+  // The unmount cleanup is the half that fires: RootNavigator renders MainTabs
+  // only `if (user)`, so a sign-out REMOVES this screen rather than re-rendering
+  // it signed-out, and an effect keyed on `user` never observes null here
+  // (probed — only the cleanup ran). Unmounting this screen means the session
+  // ended or the app is going away, and a queued save is worthless either way.
+  // The `!user` effect is the standing invariant in case that ever changes.
+  const savesAbandonedRef = useRef(false);
+  useEffect(() => { if (!user) savesAbandonedRef.current = true; }, [user]);
+  useEffect(() => () => { savesAbandonedRef.current = true; }, []);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedStore, setSelectedStore] = useState<string>(STORES[0].id);
@@ -438,6 +457,10 @@ export default function MyMealsScreen() {
         enqueueMealSave(mealId, async () => {
           // Read the freshest copy (updated by any prior chained save below),
           // never the render snapshot.
+          // Whoever chose this product is gone, so this PATCH is doomed. Bail
+          // before it is sent, not just before it is logged: guarding only the
+          // catch would still fire a 401 and a renew attempt per queued save.
+          if (savesAbandonedRef.current) return;
           const meal = allMealsRef.current.find((m) => m.id === mealId);
           if (!meal) return;
           const updatedIngredients = mergeChosenProduct(
@@ -453,6 +476,11 @@ export default function MyMealsScreen() {
             allMealsRef.current = allMealsRef.current.map((m) => (m.id === updated.id ? updated : m));
             setAllMeals((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
           } catch (err) {
+            // A save already in flight when they signed out cannot be recalled,
+            // but its failure must not name their products in a buffer that now
+            // belongs to whoever signed in next. Still signed in, this line is
+            // exactly what a "my chosen product did not stick" report needs.
+            if (savesAbandonedRef.current) return;
             console.warn(`[MyMeals] failed to save chosen product "${productName}" for ingredient "${ingredientName}" (meal ${mealId})`, err);
           }
         }),

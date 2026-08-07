@@ -7,6 +7,8 @@ import * as tokenStorage from '../lib/tokenStorage';
 import { auth, creators, usage } from '../lib/api';
 import { initPurchases, identifyUser, resetUser } from '../lib/purchases';
 import { unregisterDevice } from '../lib/push';
+import { clearSessionLogs } from '../lib/logBuffer';
+import { clearLastAutomationRun } from '../lib/lastAutomationRun';
 
 interface AuthContextValue {
   user: User | null;
@@ -137,8 +139,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await auth.logout();
     } catch {}
-    await tokenStorage.clear();
-    await resetUser();
+    try {
+      await tokenStorage.clear();
+      await resetUser();
+    } finally {
+      // Drop this account's diagnostics. The console ring buffer deliberately
+      // keeps product names and cart contents (see lib/logBuffer) and the last
+      // cart run is this account's shopping activity; both live in memory only,
+      // so both used to survive a sign-out. On a shared phone that meant the
+      // previous person's cart getting attached to the next person's bug report,
+      // under the next person's verified userId. Same reasoning as the push token
+      // above: a shared phone must not carry one account's state into another's.
+      //
+      // In a `finally` because tokenStorage.clear() is three bare
+      // SecureStore.deleteItemAsync calls in a Promise.all and nothing above
+      // catches it: one keychain rejection used to skip both clears. Nothing
+      // here can throw (the buffer is an array, the run is a module variable),
+      // so it cannot mask the original error.
+      clearSessionLogs();
+      clearLastAutomationRun();
+    }
     setUser(null);
     setIsCreator(false);
   }

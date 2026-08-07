@@ -2,10 +2,12 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
+import { useAuth } from './AuthContext';
 import SilentLoginProbe, { PrewarmedCart } from '../components/SilentLoginProbe';
 import { getStoreScripts } from '../lib/webview-scripts';
 import { isWebViewStore } from '../constants/stores';
@@ -66,6 +68,16 @@ export function useLoginPrewarm(): LoginPrewarmValue {
 }
 
 export function LoginPrewarmProvider({ children }: { children: React.ReactNode }) {
+  // A sign-out has to stop the probe — see the sign-out effect below. Safe to
+  // read here: App.tsx mounts this provider inside AuthProvider (it has to be,
+  // since prewarming is only ever triggered from a signed-in screen).
+  const { user } = useAuth();
+  // Read during render, not in an effect, because a child's effects run BEFORE
+  // this provider's: a checkStore arriving from a child after `user` went null
+  // (MyMealsScreen's loadMeals resolves and prewarms the top store) must already
+  // see the sign-out here, not one commit later.
+  const userRef = useRef(user);
+  userRef.current = user;
   // Session cache. A ref (not state) because consumers read it imperatively at
   // add-to-cart time; the provider only needs to re-render to (un)mount the probe.
   const statusRef = useRef<Map<string, LoginPrewarmStatus>>(new Map());
@@ -97,6 +109,12 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   // Start the head of the queue if nothing is in flight.
   const pump = useCallback(() => {
     if (currentRef.current != null) return;
+    // Nobody is signed in, so nothing here is worth probing for and the lines it
+    // would write belong to no account. Belt and braces, and no test can kill it:
+    // both ways into pump are already shut — checkStore refuses below, and the
+    // deferred `setTimeout(pump, 0)` a settling probe leaves behind finds the
+    // queue emptied by the sign-out effect. Kept for the next caller pump grows.
+    if (!userRef.current) return;
     const next = queueRef.current.shift();
     if (!next) return;
     currentRef.current = next;
@@ -108,6 +126,10 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   const checkStore = useCallback(
     (storeId: string) => {
       if (!storeId) return;
+      // Silent on purpose, unlike every other skip below: the point of stopping
+      // here is that no `[Prewarm]` line lands in a buffer that now belongs to
+      // whoever signs in next, and a skip line is still a line.
+      if (!userRef.current) return;
       // Only WebView stores have a login check; Kroger-family stores use the API.
       if (!isWebViewStore(storeId) || !getStoreScripts(storeId)) {
         console.log('[Prewarm] checkStore skip', storeId, '— not a WebView store / no scripts');
@@ -165,6 +187,58 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     const prior = statusRef.current.get(storeId);
     settle(storeId, prior === 'loggedIn' ? 'loggedIn' : 'error');
   }, [settle]);
+
+  // ── Sign-out stops the probe and drops the cache ────────────────────────────
+  //
+  // The fourth writer that outlived a sign-out (MEAL-142). AuthContext.logout
+  // empties the console ring buffer, but this provider had no idea auth existed:
+  // a hidden probe could be in flight or queued straight through a sign-out and
+  // keep writing `[Prewarm]` lines into the buffer logout had just cleared —
+  // store login status, and LOGIN_DEBUG/EXTRACT_DEBUG dumps that go through
+  // JSON.stringify and so can carry cart contents. Same leak as the cart run and
+  // the ingredient saves, at smaller volume: the next person on a shared phone
+  // files a report from Help and it carries the previous person's data under
+  // their own token-verified userId.
+  //
+  // Clearing setCurrent(null) unmounts SilentLoginProbe, and the WebView goes
+  // with it, so there is no window for it to report late.
+  //
+  // The cached state goes too. The store login is device-level rather than
+  // Mealio-account-level, so the baseline is not really the next person's
+  // secret — they would see that cart on the store's own site anyway — but it
+  // can be stale, and stale-by-default is the better failure here. Dropping
+  // statusRef just means the next account re-probes, under its own name.
+  //
+  // Only the `!user` half is needed: this provider sits ABOVE
+  // NavigationContainer (App.tsx), so a sign-out re-renders it signed-out rather
+  // than unmounting it, and the effect observes null (probed — it fires, unlike
+  // MyMealsScreen's, which never does). No unmount cleanup to match, either:
+  // every ref here is reachable only through this provider, so unmounting is
+  // self-clearing, and the deferred pump cannot render a probe into a tree that
+  // is gone.
+  //
+  // One window is left open, deliberately, and it is worth naming rather than
+  // implying it is shut. A probe already mounted cannot write past this commit,
+  // and a checkStore arriving after it is refused — but logout clears the buffer
+  // and only THEN sets user null, so a microtask already queued when it does
+  // (MyMealsScreen's loadMeals resolving, and prewarming the top store) runs
+  // before React's render and still sees the old user in `userRef`. It starts a
+  // probe, and three lines survive into the emptied buffer: "checkStore queue
+  // heb", "starting silent login probe for heb", "probe mounted for heb". Then
+  // this effect fires and tears it down (measured: mounted for one commit, status
+  // left 'unknown'), so nothing that names a product or a cart gets out — a store
+  // name does. CartJobProvider closes its equivalent window by clearing again
+  // after teardown; that is not repeated here, because the payload does not
+  // warrant a second mechanism in this provider. If the chain gets a fifth link,
+  // this is where it starts.
+  useEffect(() => {
+    if (user) return;
+    queueRef.current = [];
+    statusRef.current.clear();
+    cartRef.current.clear();
+    currentRef.current = null;
+    setCurrent(null);
+  }, [user]);
 
   const value = useMemo<LoginPrewarmValue>(
     () => ({ checkStore, getStatus, takePrewarmedCart, statusVersion }),
