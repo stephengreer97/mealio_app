@@ -9,7 +9,7 @@
 // The synthetic-tile fixture IS committed and used by the regression specs
 // that don't need full DOM fidelity (e.g. the double-click test).
 
-import { loadFixture } from '../fixture-runners/runScript';
+import { loadFixture, FixtureRunner } from '../fixture-runners/runScript';
 import { getScripts } from '../../src/lib/webview-scripts/wegmans';
 import { buildCartPageCountScript } from '../../src/lib/webview-scripts/cart-count';
 import { storeFixtures } from './_helpers';
@@ -17,6 +17,109 @@ import { storeFixtures } from './_helpers';
 const { fxPath, itWithFixture } = storeFixtures('wegmans');
 const fx = fxPath;
 const scripts = getScripts();
+
+const LOGIN_CACHE_KEY = 'mealio_wegmans_login_state';
+
+/** Every selector readState() will look at, kept in one place. */
+const GREETING_SEL =
+  'button.component--site-header-desktop-sign-in-greeting-button, ' +
+  'button[class*="sign-in-greeting-button"], ' +
+  'button[aria-label="Account"]';
+
+/**
+ * Replace sessionStorage with an in-page stub. The fixture is loaded via
+ * setContent on an opaque origin where the real sessionStorage throws
+ * SecurityError, and the script swallows that — so without a stub the cache
+ * tests would pass vacuously. The stub also lets the test read back what the
+ * script stored. Same arrangement as tests/fixture-tests/albertsons.spec.ts.
+ */
+async function stubSessionStorage(runner: FixtureRunner): Promise<void> {
+  await runner.page.evaluate(() => {
+    const store: Record<string, string> = {};
+    (window as unknown as { __wegStore: Record<string, string> }).__wegStore = store;
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      value: {
+        getItem: (k: string) => (k in store ? store[k] : null),
+        setItem: (k: string, v: string) => {
+          store[k] = String(v);
+        },
+        removeItem: (k: string) => {
+          delete store[k];
+        },
+      },
+    });
+  });
+}
+
+/** What the script has actually written to the stubbed cache (null if absent). */
+async function readCachedLoginState(runner: FixtureRunner): Promise<string | null> {
+  return runner.page.evaluate((key) => {
+    const store = (window as unknown as { __wegStore?: Record<string, string> }).__wegStore;
+    return store && key in store ? store[key] : null;
+  }, LOGIN_CACHE_KEY);
+}
+
+/** Simulate a page reload: the JS-context latches go, sessionStorage survives. */
+async function clearWindowLatches(runner: FixtureRunner): Promise<void> {
+  await runner.page.evaluate(() => {
+    const w = window as unknown as Record<string, unknown>;
+    delete w.__wegmansLoginPosted;
+    delete w.__wegmansLoginObserver;
+  });
+}
+
+/**
+ * Turn the captured logged-in header into the signed-out one: every greeting
+ * button reads "Sign In" instead of "Hello, <name>". Also neutralises readState's
+ * fallback scan (any header/nav span starting with "Hello,"), which would
+ * otherwise still answer 'in' off the other header variant in this capture.
+ */
+async function flipHeaderToSignedOut(runner: FixtureRunner): Promise<void> {
+  await runner.page.evaluate((sel) => {
+    const btns = document.querySelectorAll(sel);
+    if (btns.length === 0) throw new Error('fixture drift: no greeting button matches ' + sel);
+    btns.forEach((b) => {
+      b.textContent = 'Sign In';
+    });
+    document.querySelectorAll('header span, nav span').forEach((s) => {
+      if ((s.textContent || '').trim().indexOf('Hello,') === 0) s.textContent = 'Sign In';
+    });
+  }, GREETING_SEL);
+}
+
+/** Put the greeting back, as a post-sign-in reload would. */
+async function flipHeaderToSignedIn(runner: FixtureRunner): Promise<void> {
+  await runner.page.evaluate((sel) => {
+    const btn = document.querySelector(sel);
+    if (!btn) throw new Error('fixture drift: no greeting button matches ' + sel);
+    btn.textContent = 'Hello, Stephen';
+  }, GREETING_SEL);
+}
+
+/**
+ * The unhydrated MSAL landing page: no account control at all, and no greeting
+ * anywhere for the fallback scan to find. readState() must be genuinely
+ * inconclusive, so this asserts that rather than assuming it.
+ */
+async function stripAccountControls(runner: FixtureRunner): Promise<void> {
+  await runner.page.evaluate((sel) => {
+    document.querySelectorAll(sel).forEach((el) => el.remove());
+    document.querySelectorAll('header span, nav span').forEach((s) => {
+      if ((s.textContent || '').trim().indexOf('Hello,') === 0) s.remove();
+    });
+  }, GREETING_SEL);
+  const leftovers = await runner.page.evaluate((sel) => {
+    return {
+      btns: document.querySelectorAll(sel).length,
+      greetings: Array.from(document.querySelectorAll('header span, nav span')).filter(
+        (s) => (s.textContent || '').trim().indexOf('Hello,') === 0,
+      ).length,
+    };
+  }, GREETING_SEL);
+  expect(leftovers.btns).toBe(0);
+  expect(leftovers.greetings).toBe(0);
+}
 
 describe('Wegmans cart-page snapshot', () => {
   itWithFixture(
@@ -45,7 +148,135 @@ describe('Wegmans CHECK_LOGIN_SCRIPT', () => {
       expect(status.isLoggedIn).toBe(true);
     },
   );
+});
 
+// ── The sessionStorage login cache (MEAL-114) ──────────────────────────────
+//
+// Wegmans had the same design MEAL-42 removed from Albertsons: the cache was an
+// unconditional fast path AHEAD of detection, only ever wrote 'in', and never
+// called removeItem. So after a mid-session logout or a session expiry the
+// greeting button plainly read "Sign In" and the cache still answered true, for
+// the rest of the WebView's life. Both consumers reach it — SilentLoginProbe is
+// generic over storeId and latches; WebViewCartSheet re-injects at the login step
+// for any URL matching isLoginSuccessUrl, and Wegmans' rule (any wegmans.com URL
+// that is not /sign-in or /login) is more permissive than Albertsons'.
+//
+// A false logged-in is the direction that breaks a run silently: every search
+// runs against a signed-out session, every add fails, and no login wall is ever
+// shown. These four tests pin the corrected contract, mirroring albertsons.spec:
+//   1. live detection always beats the cache (the post-logout re-scan),
+//   2. a negative verdict CLEARS a cached positive,
+//   3. the cache is still consulted when detection is inconclusive,
+//   4. inconclusive with nothing cached resolves to signed OUT.
+//
+// sessionStorage is stubbed rather than real because the fixture is loaded via
+// setContent on an opaque origin, where the real one throws SecurityError and the
+// script swallows it — unstubbed, every test here would pass vacuously.
+describe('Wegmans CHECK_LOGIN_SCRIPT sessionStorage cache', () => {
+  // 1 + 2. THE REGRESSION. First run caches 'in'; then the header flips to the
+  // signed-out shape and the window latches clear — a post-logout reload in the
+  // same WebView, where sessionStorage survives but __wegmansLoginPosted does not.
+  // The verdict must follow the header, and the disproved positive must be gone.
+  itWithFixture(
+    'logged-in-home.html',
+    'post-logout reload re-detects and posts false — the cached positive does not win',
+    async (runner) => {
+      await stubSessionStorage(runner);
+
+      await runner.inject(scripts.checkLoginScript);
+      expect((await runner.waitForMessage('LOGIN_STATUS', 12_000)).isLoggedIn).toBe(true);
+      // Guard: the positive really was cached, so this test can't pass vacuously.
+      expect(await readCachedLoginState(runner)).toBe('in');
+
+      runner.clearMessages();
+      await flipHeaderToSignedOut(runner);
+      await clearWindowLatches(runner);
+
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
+      expect(status.isLoggedIn).toBe(false);
+
+      // It read the header, not the cache.
+      const scan = runner.messagesOfType('LOGIN_DEBUG').find((m) => m.step === 'scan_result');
+      expect(scan?.via).toBe('btn_signin');
+      // And the disproved positive is gone, so nothing downstream can read it.
+      expect(await readCachedLoginState(runner)).toBeNull();
+    },
+  );
+
+  // 'out' is still never written — that would defeat the post-sign-in re-check,
+  // which is the mechanism by which we notice the user finishing a login. So a
+  // negative must not poison the next run.
+  itWithFixture(
+    'logged-in-home.html',
+    'never caches a negative, so a later sign-in is still detected',
+    async (runner) => {
+      await stubSessionStorage(runner);
+      await flipHeaderToSignedOut(runner);
+
+      await runner.inject(scripts.checkLoginScript);
+      expect((await runner.waitForMessage('LOGIN_STATUS', 12_000)).isLoggedIn).toBe(false);
+      expect(await readCachedLoginState(runner)).toBeNull();
+
+      // The user signs in; the store reloads onto the storefront.
+      runner.clearMessages();
+      await flipHeaderToSignedIn(runner);
+      await clearWindowLatches(runner);
+
+      await runner.inject(scripts.checkLoginScript);
+      expect((await runner.waitForMessage('LOGIN_STATUS', 12_000)).isLoggedIn).toBe(true);
+      expect(await readCachedLoginState(runner)).toBe('in');
+    },
+  );
+
+  // 3. The one legitimate use, kept: the MSAL landing page whose header has not
+  // hydrated. Detection finds no greeting control at all, and WITHOUT the cache
+  // the watchdog would post isLoggedIn:false — the exact wrong answer
+  // SilentLoginProbe latches permanently. Takes >8s: that is the watchdog, and
+  // the delay is the price of putting detection first.
+  itWithFixture(
+    'logged-in-home.html',
+    'answers from sessionStorage when detection is inconclusive (unhydrated header)',
+    async (runner) => {
+      await stubSessionStorage(runner);
+
+      await runner.inject(scripts.checkLoginScript);
+      expect((await runner.waitForMessage('LOGIN_STATUS', 12_000)).isLoggedIn).toBe(true);
+
+      runner.clearMessages();
+      await stripAccountControls(runner);
+      await clearWindowLatches(runner);
+
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 15_000);
+      expect(status.isLoggedIn).toBe(true);
+
+      // Detection ran FIRST and came up empty — that is what licenses the cache.
+      const scan = runner.messagesOfType('LOGIN_DEBUG').find((m) => m.step === 'scan_result');
+      expect(scan?.via).toBe('sessionStorage');
+    },
+  );
+
+  // 4. THE DIRECTION THAT MATTERS. Inconclusive, and nothing cached to fall back
+  // on. This must resolve to signed OUT — which shows the user a login wall —
+  // never to signed in, which would run the whole cart against a signed-out
+  // session and fail every add with no visible error.
+  itWithFixture(
+    'logged-in-home.html',
+    'inconclusive with nothing cached resolves to signed OUT (fail closed)',
+    async (runner) => {
+      await stubSessionStorage(runner);
+      await stripAccountControls(runner);
+
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 15_000);
+      expect(status.isLoggedIn).toBe(false);
+
+      const scan = runner.messagesOfType('LOGIN_DEBUG').find((m) => m.step === 'scan_result');
+      expect(scan?.via).toBe('inconclusive_fail_closed');
+      expect(await readCachedLoginState(runner)).toBeNull();
+    },
+  );
 });
 
 describe('Wegmans EXTRACT_PRODUCTS_SCRIPT', () => {

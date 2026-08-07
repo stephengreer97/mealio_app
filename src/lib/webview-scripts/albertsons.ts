@@ -142,6 +142,44 @@ export function albertsonsSearchQuery(name: string): string {
 //      cleared before the background poll starts). Without it, a same-context
 //      re-injection both re-runs the detection and stacks a second 3-minute
 //      LOGIN_COMPLETE poll on top of the first.
+//
+// WHY window.AB.userInfo.SWY_SHOP_TOKEN IS NOT THE LOGIN SIGNAL (MEAL-124).
+//
+// The MEAL-15 spike (docs/albertsons-network-rail-feasibility.md) found the
+// session bearer sitting on a page global — window.AB.userInfo.SWY_SHOP_TOKEN,
+// which Albertsons' own chat-widget code labels okta_token — and proposed it as
+// the passive login marker this check wants. It reads strictly better than a
+// markup heuristic: a positive fact about the session rather than an inference
+// from DOM that exists in both states. It is still not wired into the decision,
+// for three reasons, in descending order of how much they matter:
+//
+//   1. It would not fix this bug. window.AB.userInfo is populated by the AEM/
+//      Angular bootstrap at runtime — nothing in the committed logged-in capture
+//      defines it — so pre-hydration the property is simply absent, which is
+//      exactly the window MEAL-124 is about. Absent has to fall back to
+//      something: to the DOM (so the DOM heuristic still decides the racy case,
+//      and nothing is fixed) or to signed-out (a login wall for a signed-in user
+//      every time we inject early). It moves the race, it does not remove it.
+//   2. We have never observed it populated. MEAL-15's evidence is bundle source,
+//      the chat-widget snippet, and anonymous curl probes — it says outright that
+//      the confirming probe needs a logged-in human. We do not know that the
+//      property is non-empty for a signed-in user, what it holds for a guest
+//      (initSearchConfig ships userInfoSkipIfGuest:true, so plausibly an empty
+//      value rather than an absent one), or the format of tokenExpiration, so we
+//      cannot even bound staleness. Leading with it would mean trusting unseen
+//      evidence in the one direction that fails silently.
+//   3. It is unexercisable here. Fixture tests load static HTML with scripts
+//      blocked, so window.AB never exists — the token path would ship with no
+//      coverage at all while the covered path went unused.
+//
+// So the fix is the empty-span case itself (see acctIsMenu below), and the token
+// is recorded as a presence-only diagnostic in the passive_decision debug
+// payload. When someone runs the app on a real signed-in Albertsons session and
+// the log shows hasToken:true alongside a rendered name, points 1 and 2 are
+// answerable and promoting it to a cross-check — a second signal that must AGREE
+// before we say logged in, never one that can say it alone — becomes a small,
+// evidenced change. tests/fixture-tests/albertsons.spec.ts pins the refusal so
+// it cannot be reversed by accident.
 function buildCheckLoginScript(domain: string): string {
   const s = sel();
   return `(async function() {
@@ -194,15 +232,30 @@ function buildCheckLoginScript(domain: string): string {
     // path it answered "logged in" against a header that read "Sign In", and no
     // re-scan could ever correct it. Do not move it back up.
 
+    // The account control's rendered NAME, which is the only part of it that
+    // differs between auth states. aria-label is deliberately excluded: it is
+    // static markup ("Account menu") that reads the same signed in or out.
+    function acctNameOf(el) {
+      return el ? (el.textContent || '').trim() : '';
+    }
+
     // Poll for the profile button (up to 3s, usually < 1s).
+    //
+    // MEAL-124: the loop used to stop the moment the ELEMENT existed. That is
+    // the bug — the element is present pre-hydration, and the decision below
+    // then matched a static aria-label and answered "logged in" in single-digit
+    // milliseconds with no user in sight. Keep polling, within the same 3s
+    // budget, until the name inside it has actually rendered. A name that never
+    // arrives is not treated as a name: it falls through to the click check.
     var profileBtn = null;
+    var acctNameReady = false;
     for (var pi = 0; pi < 15; pi++) {
       var candidates = document.querySelectorAll(${s.profileBtn});
       for (var ci = 0; ci < candidates.length; ci++) {
         var aria = (candidates[ci].getAttribute('aria-label') || '').toLowerCase();
         if (!aria.includes('close')) { profileBtn = candidates[ci]; break; }
       }
-      if (profileBtn) break;
+      if (profileBtn && acctNameOf(profileBtn)) { acctNameReady = true; break; }
       await wait(200);
     }
     if (!profileBtn) {
@@ -222,6 +275,7 @@ function buildCheckLoginScript(domain: string): string {
     window.ReactNativeWebView.postMessage(JSON.stringify({
       type: 'LOGIN_DEBUG', step: 'profile_btn',
       found: !!profileBtn,
+      nameReady: acctNameReady,
       ariaLabel: profileBtn ? profileBtn.getAttribute('aria-label') : null,
       text: profileBtn ? profileBtn.textContent.trim().slice(0, 40) : null
     }));
@@ -270,12 +324,16 @@ function buildCheckLoginScript(domain: string): string {
     //     signed-out half is NOT unevidenced — it is one span away from the
     //     capture we have, and tests/fixture-tests/albertsons.spec.ts asserts it.
     //
-    //   • The reachable risk is NOT the signed-out state. It is any state where
-    //     that span is EMPTY, because nothing waits for it. The poll above waits
-    //     for the ELEMENT; acctIsMenu then matches on aria-label="Account menu",
+    //   • The reachable risk was NOT the signed-out state. It was any state where
+    //     that span is EMPTY, because nothing waited for it. The poll waited for
+    //     the ELEMENT; acctIsMenu then matched on aria-label="Account menu",
     //     which is static markup present regardless of auth state. Pre-hydration,
-    //     mid-render, or a slow auth bootstrap therefore reach 'loggedIn' in
-    //     single-digit ms with no user in sight.
+    //     mid-render, or a slow auth bootstrap therefore reached 'loggedIn' in
+    //     single-digit ms with no user in sight. FIXED in MEAL-124, two ways: the
+    //     poll now waits for the name to render (same 3s budget), and acctIsMenu
+    //     requires a non-empty name. An empty name reaches the click check, which
+    //     resolves to signed OUT when it finds no "sign out" — the direction that
+    //     shows a login wall rather than failing every add in silence.
     //
     //   • headerSignIn is the only independent second signal, and it is weaker
     //     than it looks: on the real capture Albertsons ships NO <header>, <nav>
@@ -289,7 +347,8 @@ function buildCheckLoginScript(domain: string): string {
     //     scan would post loggedOut for a signed-in user.
     try {
       var SIGNIN_RE = /sign\\s?in|log\\s?in|sign\\s?up|create account/i;
-      var acctName = ((profileBtn.getAttribute('aria-label') || '') + ' ' + (profileBtn.textContent || '')).trim();
+      var acctText = acctNameOf(profileBtn);
+      var acctName = ((profileBtn.getAttribute('aria-label') || '') + ' ' + acctText).trim();
       var headerSignIn = Array.prototype.slice
         .call(document.querySelectorAll('header a, header button, nav a, nav button, [role="banner"] a, [role="banner"] button, [role="navigation"] a, [role="navigation"] button'))
         .some(function(el) {
@@ -297,7 +356,13 @@ function buildCheckLoginScript(domain: string): string {
           return SIGNIN_RE.test(n);
         });
       var acctIsSignIn = SIGNIN_RE.test(acctName);
-      var acctIsMenu = /account\\s*menu|my\\s*account|account & lists|hi[, ]|welcome/i.test(acctName);
+      // MEAL-124: the acctText conjunct is the fix. Without it this matched
+      // aria-label="Account menu" alone, which is in the raw markup in BOTH auth
+      // states, so an empty name span — pre-hydration, mid-render, or a slow auth
+      // bootstrap — resolved to loggedIn. An empty name is NOT evidence of a
+      // signed-in user; it is no evidence at all, and it now falls through to the
+      // click check rather than short-circuiting to the answer that fails silently.
+      var acctIsMenu = !!acctText && /account\\s*menu|my\\s*account|account & lists|hi[, ]|welcome/i.test(acctName);
       if (acctIsSignIn || headerSignIn) {
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'passive_decision', decided: 'loggedOut', acctName: acctName.slice(0, 60) }));
         postStatus(false);
@@ -316,8 +381,33 @@ function buildCheckLoginScript(domain: string): string {
         postStatus(true);
         return;
       }
-      // else: ambiguous → click check below.
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'passive_decision', decided: 'ambiguous_click_fallback', acctName: acctName.slice(0, 60) }));
+      // else: ambiguous → click check below. An empty account name is called out
+      // separately because it is the MEAL-124 state and the one we most want to
+      // be able to recognise in a log: everything is rendered except the thing
+      // that distinguishes the two states.
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'LOGIN_DEBUG', step: 'passive_decision',
+        decided: acctText ? 'ambiguous_click_fallback' : 'ambiguous_empty_acct_name',
+        acctName: acctName.slice(0, 60),
+        acctText: acctText.slice(0, 60),
+        nameReady: acctNameReady,
+        // MEAL-15 found window.AB.userInfo.SWY_SHOP_TOKEN — the session bearer,
+        // which Albertsons' own chat code labels okta_token — and proposed it as
+        // the passive login marker this rule wants. It is NOT wired into the
+        // decision, deliberately: see the note above buildCheckLoginScript. This
+        // records only its PRESENCE (never its value — it is a live bearer) from
+        // real sessions, so the observation MEAL-15 is missing can come off a
+        // device log instead of a hand-run DevTools probe. Bounded: property
+        // reads only, no DOM, no enumeration, no layout flush.
+        sessionMarker: (function() {
+          try {
+            var ui = window.AB && window.AB.userInfo;
+            if (!ui) return { hasAB: false };
+            var t = ui.SWY_SHOP_TOKEN;
+            return { hasAB: true, hasToken: !!t, tokenLen: t ? String(t).length : 0, tokenExpiration: ui.tokenExpiration || null };
+          } catch (_) { return { hasAB: false, threw: true }; }
+        })(),
+      }));
     } catch (e) {}
 
     // Click the profile icon. Two outcomes:

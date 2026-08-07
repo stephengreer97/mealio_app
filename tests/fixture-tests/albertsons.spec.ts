@@ -81,6 +81,65 @@ async function clearWindowLatches(runner: FixtureRunner): Promise<void> {
 }
 
 /**
+ * The MEAL-124 state: everything the logged-in capture has, EXCEPT the rendered
+ * name. aria-label stays "Account menu" — that is the point, it is static markup
+ * present in both auth states — and only span[data-qa="hdr-accnt-nm"] is emptied.
+ * This is what pre-hydration, mid-render, and a slow auth bootstrap all look like.
+ */
+async function emptyAccountName(runner: FixtureRunner): Promise<void> {
+  await runner.page.evaluate(() => {
+    const span = document.querySelector('span[data-qa="hdr-accnt-nm"]');
+    if (!span) throw new Error('fixture drift: span[data-qa="hdr-accnt-nm"] is gone');
+    span.textContent = '';
+  });
+  // Guards, so no test built on this state can pass vacuously: the control still
+  // announces itself as the account menu (what the buggy rule matched on) and its
+  // rendered text is genuinely empty (what the fixed rule requires).
+  const state = await runner.page.evaluate(() => {
+    const link = document.querySelector('[data-qa="hdr-accnt-lnk"]');
+    return {
+      aria: link ? link.getAttribute('aria-label') : null,
+      text: link ? (link.textContent || '').trim() : null,
+    };
+  });
+  expect(state.aria).toMatch(/account\s*menu/i);
+  expect(state.text).toBe('');
+}
+
+/**
+ * Strip every "Sign Out"/"Log Out" string from the page. The click fallback's
+ * terminal condition is that text appearing in body innerText, and the fixture
+ * runner blocks stylesheets so the CSS-hidden account flyout is "visible" to
+ * innerText — which is why the click fallback answers loggedIn on this capture.
+ * Removing it is how a test can observe what the check does with NO evidence
+ * either way.
+ */
+async function stripSignOutEvidence(runner: FixtureRunner): Promise<void> {
+  await runner.page.evaluate(() => {
+    const re = /sign\s*out|log\s*out/i;
+    // Walk text nodes rather than guessing at containers.
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const doomed: Text[] = [];
+    let n: Node | null;
+    // eslint-disable-next-line no-cond-assign
+    while ((n = walker.nextNode())) {
+      if (re.test(n.nodeValue || '')) doomed.push(n as Text);
+    }
+    doomed.forEach((t) => {
+      t.nodeValue = '';
+    });
+    // aria-labels and titles also land in innerText for some elements.
+    document.querySelectorAll('[aria-label], [title]').forEach((el) => {
+      if (re.test(el.getAttribute('aria-label') || '')) el.setAttribute('aria-label', '');
+      if (re.test(el.getAttribute('title') || '')) el.setAttribute('title', '');
+    });
+  });
+  // Guard: if this didn't work the test below would pass for the wrong reason.
+  const bodyText = await runner.page.evaluate(() => (document.body.innerText || '').toLowerCase());
+  expect(bodyText).not.toMatch(/sign out|log out/);
+}
+
+/**
  * Make the account control AMBIGUOUS: aria-label that is neither a sign-in CTA
  * nor an "account menu", and an empty name span. Both the click fallback and
  * the headerSignIn branch are only reachable from this state.
@@ -246,6 +305,138 @@ describe('Albertsons family CHECK_LOGIN_SCRIPT', () => {
         .find((m) => m.step === 'passive_decision');
       expect(decision?.decided).toBe('loggedIn');
       expect(runner.messagesOfType('LOGIN_DEBUG').some((m) => m.step === 'after_click')).toBe(false);
+    },
+  );
+
+  // ── MEAL-124: the empty account-name span ────────────────────────────────
+  //
+  // The reachable half of the risk MEAL-42's review identified, and the one the
+  // note above this describe called out as where the rule is thin. Nothing waited
+  // for the name: the poll waited for the ELEMENT, and acctIsMenu then matched
+  // aria-label="Account menu", which is in the raw markup signed in or out. So
+  // the check answered loggedIn in single-digit milliseconds off a header that
+  // said nothing about whether anyone was signed in.
+  //
+  // These four tests pin, in order: that the empty span no longer decides
+  // loggedIn; that with no evidence either way the verdict is signed OUT; that
+  // the poll waits for a late-rendering name instead of guessing; and that
+  // SWY_SHOP_TOKEN is deliberately not a decider.
+
+  itWithFixture(
+    'logged-in-home.html',
+    'an empty account-name span decides nothing passively — no loggedIn from static markup',
+    async (runner) => {
+      await emptyAccountName(runner);
+
+      await runner.inject(scripts.checkLoginScript);
+      await runner.waitForMessage('LOGIN_STATUS', 12_000);
+
+      const debug = runner.messagesOfType('LOGIN_DEBUG');
+      const decision = debug.find((m) => m.step === 'passive_decision');
+      // Was 'loggedIn'. The empty name is now named for what it is: no answer.
+      expect(decision?.decided).toBe('ambiguous_empty_acct_name');
+      expect(decision?.acctText).toBe('');
+      // The poll spent its full budget waiting for a name that never came.
+      expect(debug.find((m) => m.step === 'profile_btn')?.found).toBe(true);
+      expect(debug.find((m) => m.step === 'profile_btn')?.nameReady).toBe(false);
+      // And it fell through to the click check — real evidence — rather than
+      // short-circuiting to a verdict.
+      expect(debug.some((m) => m.step === 'after_click')).toBe(true);
+    },
+  );
+
+  // THE DIRECTION THAT MATTERS. Same empty-span state, but with every
+  // "Sign Out"/"Log Out" string stripped, so the click fallback finds nothing
+  // either. An indeterminate state must resolve to signed OUT: that shows the
+  // user a login wall. The old code's answer here was `true`, which runs every
+  // search and every add against a signed-out session and fails in silence.
+  itWithFixture(
+    'logged-in-home.html',
+    'indeterminate resolves to signed OUT, never signed in (fail closed)',
+    async (runner) => {
+      await stubSessionStorage(runner);
+      await emptyAccountName(runner);
+      await stripSignOutEvidence(runner);
+
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
+      expect(status.isLoggedIn).toBe(false);
+
+      const debug = runner.messagesOfType('LOGIN_DEBUG');
+      expect(debug.find((m) => m.step === 'passive_decision')?.decided).toBe(
+        'ambiguous_empty_acct_name',
+      );
+      expect(debug.find((m) => m.step === 'after_click')?.isLoggedIn).toBe(false);
+      // Nothing positive was cached off a verdict we could not justify.
+      expect(await readCachedLoginState(runner)).toBeNull();
+    },
+  );
+
+  // The poll waits for the NAME, not the element. Empty the span, then let it
+  // render "Sign in" 600ms later — which is what a slow auth bootstrap on a
+  // signed-out page does. The verdict must follow the name that eventually
+  // arrives. Before the fix this answered loggedIn immediately, contradicting a
+  // header that was about to say "Sign in".
+  itWithFixture(
+    'logged-in-home.html',
+    'waits for a late-rendering account name and follows it (was: answered before it rendered)',
+    async (runner) => {
+      await emptyAccountName(runner);
+      await runner.page.evaluate(() => {
+        setTimeout(() => {
+          const span = document.querySelector('span[data-qa="hdr-accnt-nm"]');
+          if (span) span.textContent = 'Sign in';
+        }, 600);
+      });
+
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
+      expect(status.isLoggedIn).toBe(false);
+
+      const debug = runner.messagesOfType('LOGIN_DEBUG');
+      expect(debug.find((m) => m.step === 'profile_btn')?.nameReady).toBe(true);
+      const decision = debug.find((m) => m.step === 'passive_decision');
+      expect(decision?.decided).toBe('loggedOut');
+      // Decided off the name that rendered, not the click fallback.
+      expect(debug.some((m) => m.step === 'after_click')).toBe(false);
+    },
+  );
+
+  // MEAL-15 found window.AB.userInfo.SWY_SHOP_TOKEN — the session bearer, which
+  // Albertsons' own chat code labels okta_token — and proposed it as this check's
+  // passive login marker. It is deliberately NOT a decider; the reasoning is at
+  // the top of buildCheckLoginScript in albertsons.ts. This test pins the refusal
+  // so nobody promotes it by accident, and pins that the diagnostic records
+  // PRESENCE only: the value is a live bearer and must never reach a log.
+  itWithFixture(
+    'logged-in-home.html',
+    'a present SWY_SHOP_TOKEN does not decide logged-in, and its value is never posted',
+    async (runner) => {
+      const TOKEN = 'z'.repeat(900);
+      await runner.page.evaluate((tok) => {
+        (window as unknown as { AB: unknown }).AB = {
+          userInfo: { SWY_SHOP_TOKEN: tok, tokenExpiration: '1799999999' },
+        };
+      }, TOKEN);
+      await emptyAccountName(runner);
+
+      await runner.inject(scripts.checkLoginScript);
+      await runner.waitForMessage('LOGIN_STATUS', 12_000);
+
+      const decision = runner
+        .messagesOfType('LOGIN_DEBUG')
+        .find((m) => m.step === 'passive_decision');
+      // A readable bearer does not license a passive logged-in verdict.
+      expect(decision?.decided).toBe('ambiguous_empty_acct_name');
+      // But it IS observed, so a real signed-in session can settle MEAL-15's
+      // open question from a device log.
+      expect(decision?.sessionMarker).toMatchObject({
+        hasAB: true,
+        hasToken: true,
+        tokenLen: 900,
+      });
+      // Presence only — never the bearer itself, anywhere in the message stream.
+      expect(JSON.stringify(runner.messages())).not.toContain(TOKEN);
     },
   );
 
