@@ -102,19 +102,28 @@ describe('ALDI CHECK_LOGIN_SCRIPT', () => {
 describe('ALDI regression: product already in cart (bubble state)', () => {
   itWithFixture(
     'search-results-product-in-cart.html',
-    'reaches a not_confirmed verdict, with the sour cream tiles still matched',
+    'asks instead of guessing when the term is generic, with both tiles still matched',
     async (runner) => {
       const script = scripts.buildSearchAndAddScript('Sour Cream', 1, null);
       await runner.inject(script);
       const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 30_000);
 
-      // `success: false, reason: 'not_confirmed'` is the RIGHT answer here, and
-      // pinning it is the point. A static fixture cannot show a cart total
-      // changing, so a script that reported success would be reporting something
-      // it did not verify — the failure mode this store's confirm step exists to
-      // prevent. `expect(typeof result.success).toBe('boolean')` accepted either.
+      // `success: false` is the RIGHT answer, and pinning it is the point.
+      //
+      // The reason is now `low_confidence`, not `not_confirmed`, and the difference
+      // is the whole of MEAL-121. This search term is the generic ingredient
+      // "Sour Cream"; the tiles are "Friendly Farms Sour Cream". Those are not the
+      // same product name, so the script no longer picks one and tries to add it —
+      // it hands both back as candidates and the user chooses. It used to buy the
+      // best scorer above 30 out of 100, which is how a brand nobody asked for
+      // ended up in a cart unattended.
+      //
+      // This is the same rule HEB, Walmart, Wegmans, Amazon Fresh and Albertsons
+      // already follow. It works on a REPEAT run because the search term is then
+      // the product name the user chose earlier, so it matches exactly; on a first
+      // run with a generic ingredient, asking is the correct outcome.
       expect(result.success).toBe(false);
-      expect(result.reason).toBe('not_confirmed');
+      expect(result.reason).toBe('low_confidence');
 
       // And it must still have SEEN the products. This is the drift-sensitive
       // half: if Instacart's tile markup moves, candidates goes empty and this
@@ -131,9 +140,14 @@ describe('ALDI regression: product already in cart (bubble state)', () => {
 describe('ALDI regression: stepper already open', () => {
   itWithFixture(
     'search-results-stepper-open.html',
-    'adds via the already-open stepper and reports the matched product',
+    'adds via the already-open stepper when the term names the product exactly',
     async (runner) => {
-      const script = scripts.buildSearchAndAddScript('Sour Cream', 1, null);
+      // The term is the FULL tile name, which is what a repeat run sends: the
+      // product the user chose earlier is remembered and searched for by name.
+      // Under MEAL-121's exact gate that is the only kind of term that may add
+      // anything, so this is the test proving the gate is not simply "reject
+      // everything" — the add path still works when the match is real.
+      const script = scripts.buildSearchAndAddScript('Friendly Farms Sour Cream', 1, null);
       await runner.inject(script);
       const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 30_000);
 

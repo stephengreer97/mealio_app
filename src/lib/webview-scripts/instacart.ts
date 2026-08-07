@@ -663,9 +663,18 @@ function buildSearchScript(t: InstacartTenant, term: string): string {
 //   • −5 per extra candidate word here; no such term there
 //   • a COMMON stopword set here with no counterpart there
 //
-// Measured over 469 real product/query pairs the two disagree on 427. Swapping
-// in the shared function would change which product lands in a customer's cart
-// on every one of those, so it is a product decision, not a cleanup.
+// Measured over 469 real product/query pairs the two disagree on 427.
+//
+// NONE OF THAT DECIDES A PURCHASE ANY MORE (MEAL-121). This scorer used to gate the
+// add — keep the highest scorer, buy it if it cleared 30 out of 100 — so a name
+// sharing under a third of its words with the request went into a cart unattended.
+// `isExactMatch` gates the add now, exact after normalization like every other
+// store, so a divergence in the scoring curve cannot change which product anyone
+// ends up buying. What remains of these two functions is unreachable from the
+// decision path, and is kept only because the match harness measures the divergence
+// as data (tests/match-harness/score.ts and its README) and the generated-script
+// snapshot pins the emitted text. Deleting them touches both, so it belongs in its
+// own change rather than in a correctness fix.
 //
 // If you ever do reconcile them, note the ARGUMENT ORDER. This scoreOne(nf, nt)
 // reads its SECOND parameter as the query and is called as scoreMatch(name,
@@ -816,6 +825,18 @@ function buildSearchAndAddScript(
     return Math.max(0, score);
   }
 
+  // The only match test that decides a purchase. Exact after normalization, trying
+  // both normalizers so an accented or non-ASCII title still matches its plain
+  // counterpart — the same pair scoreMatch maxes over, and the same rule as
+  // scoreOne's nf === nt fast path, just without the scoring machinery behind it.
+  //
+  // Symmetric, so the argument-order trap documented at the top of this file cannot
+  // bite here: equality does not care which side is the query.
+  function isExactMatch(found) {
+    return normDiacritic(found) === normDiacritic(SEARCH_TERM)
+      || normStrip(found) === normStrip(SEARCH_TERM);
+  }
+
   function scoreMatch(found, target) {
     var s1 = scoreOne(normDiacritic(found), normDiacritic(target));
     var s2 = scoreOne(normStrip(found), normStrip(target));
@@ -863,7 +884,7 @@ function buildSearchAndAddScript(
 
   var seen = new Set();
   var candidates = [];
-  var bestCard = null, bestName = null, bestScore = -1;
+  var bestCard = null, bestName = null;
 
   for (var pi = 0; pi < productLinks.length && pi < 20; pi++) {
     var card = findCard(productLinks[pi]);
@@ -884,20 +905,34 @@ function buildSearchAndAddScript(
       price: extractPrice(card)
     });
 
-    if (!oos) {
-      var sc = scoreMatch(name, SEARCH_TERM);
-      if (sc > bestScore) {
-        bestScore = sc;
-        bestName = name;
-        bestCard = card;
-      }
+    // EXACT AFTER NORMALIZATION, and nothing looser. This used to keep the
+    // highest-scoring candidate and buy it if it cleared 30 out of 100 — so a name
+    // sharing under a third of its words with what the user asked for was added to
+    // their cart unattended. Every other store in this codebase requires an exact
+    // match: HEB, Walmart, Wegmans and Amazon Fresh gate on scoreMatch(...) === 100,
+    // and scoreOne returns 100 only when the normalized strings are equal (line
+    // ~794 here, and the same in _scoring.ts, where everything else caps at 99).
+    // Albertsons compares normalized strings directly. ALDI was the exception.
+    //
+    // First exact match wins, as at HEB — seen already deduplicates names, so a
+    // second exact candidate would be the same product twice.
+    //
+    // Anything not exact is not a worse guess to be made anyway; it goes back as a
+    // candidate and the user picks. That is the whole point: we do not buy something
+    // nobody asked for, and we do not silently substitute.
+    if (!oos && !bestName && isExactMatch(name)) {
+      bestName = name;
+      bestCard = card;
     }
     if (candidates.length >= 8) break;
   }
 
-  var MIN_SCORE = 30;
-  if (!bestName || bestScore < MIN_SCORE || !bestCard) {
-    var hasExactOos = candidates.some(function(c) { return scoreMatch(c.productName, SEARCH_TERM) >= MIN_SCORE && c.outOfStock; });
+  if (!bestName || !bestCard) {
+    // Named for what it is: an exact match that happens to be out of stock. The
+    // previous version called this hasExactOos while testing the same 30-point
+    // threshold, so "out_of_stock" was reported for products that merely resembled
+    // the request.
+    var hasExactOos = candidates.some(function(c) { return isExactMatch(c.productName) && c.outOfStock; });
     var reason = candidates.length === 0 ? 'no_results' : hasExactOos ? 'out_of_stock' : 'low_confidence';
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: reason, candidates: candidates }));
