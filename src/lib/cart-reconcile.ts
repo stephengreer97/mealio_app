@@ -191,13 +191,21 @@ export interface ReconcileOutcome {
    *
    * Reported separately because the top-up these items get is the one case where
    * a re-add can cost real money: the line plausibly DID land, so re-adding the
-   * full quantity unattended buys the meat a second time. A caller that can ask
-   * the user routes these to review instead of to the automatic top-up — see
-   * splitTopUpsForReview, which is how WebViewCartSheet does it. They appear in
-   * `topUps` as well, so a caller that does nothing behaves exactly as before.
+   * full quantity unattended buys the meat a second time. A caller that cannot
+   * tell the two apart must not re-add them — see splitUnverifiableTopUps, which
+   * is how WebViewCartSheet does it. They appear in `topUps` as well, so a caller
+   * that ignores this field behaves exactly as before (and re-adds them).
    *
    * Each unclaimed weight row explains at most one item, so this can never name
    * more items than the cart has unexplained weight lines.
+   *
+   * STOPGAP. Detecting the condition is all this can do: a count and a poundage
+   * are not comparable, so nothing here can decide whether the line covers the
+   * request. MEAL-148 replaces the guessing by computing the expected weight
+   * (productQty × increment) and comparing it against the cart line's actual
+   * poundage, which answers the question instead of reporting that it is open.
+   * Until then this number is also the measurement of how often the case fires —
+   * the sheet puts it on the funnel.
    */
   countItemsOnWeightRows: { index: number; cartName: string }[];
 }
@@ -306,8 +314,9 @@ export function reconcileParallelAdd(
   // unattended and, here, the shortfall IS the full quantity — so where the weight
   // line genuinely did land it buys a second one, and for a deli line that is meat
   // the user pays for twice. Both machine answers are therefore refused: these
-  // items are named in `countItemsOnWeightRows`, splitTopUpsForReview lifts them
-  // out of the top-up, and WebViewCartSheet asks the user which they want.
+  // items are named in `countItemsOnWeightRows` and splitUnverifiableTopUps lifts
+  // them out of the top-up, so nothing is bought and nothing claims success. The
+  // sheet reports them as unverified on the done screen.
   //
   // The disagreement is not swallowed either — no weight-priced item claimed the
   // row, so findOverAddedItems returns it in `overAdds` and both sides are
@@ -360,55 +369,70 @@ export function reconcileParallelAdd(
   };
 }
 
-// ── Routing the top-up: retry vs ask (MEAL-119) ───────────────────────────────
+// ── Routing the top-up: retry vs unverified (MEAL-119) ────────────────────────
 
-/** One short item whose cart line disagrees with its intent, ready to be asked
- *  about: the cart line that bears its name, and the units it is still short by
- *  if the user decides the line does not cover them. */
-export interface TopUpQuestion {
+/** One short item whose cart line disagrees with its intent: the sold-by-weight
+ *  line that bears its name, and the units still unaccounted for. */
+export interface UnverifiableTopUp {
   index: number;
   /** The sold-by-weight cart line matching this item's name. Truthful enough to
    *  render: it is a line the cart really holds. */
   cartName: string;
-  /** Units still unaccounted for — what an intentional top-up would add. */
+  /** Units still unaccounted for, if the line covers none of them. Reported, not
+   *  acted on — see splitUnverifiableTopUps. */
   shortfall: number;
 }
 
 export interface TopUpRouting {
   /** Safe to re-add unattended: nothing in the cart plausibly covers these. */
   retry: { index: number; shortfall: number }[];
-  /** Must be asked about before anything is added — see TopUpQuestion. */
-  ask: TopUpQuestion[];
+  /** Neither re-added nor confirmed — only reported. See UnverifiableTopUp. */
+  unverified: UnverifiableTopUp[];
 }
 
 /**
- * Split a reconcile's top-up into the part a machine may re-add and the part
- * only the user can decide.
+ * Split a reconcile's top-up into the part a machine may re-add and the part it
+ * must leave alone.
  *
- * Both outcomes of the intent-vs-row disagreement are unacceptable and this is
- * the fork where that is enforced. Re-adding a count item whose sold-by-weight
- * line may well have landed buys the meat twice; confirming it off that line
- * hands the user one deli slice and calls the order complete. So the item goes
- * to neither: it leaves `retry` (no unattended re-add is possible for it) and
- * arrives in `ask`, which the caller turns into a review card.
+ * Two governing rules bind cart automation: never add an item the user did not
+ * ask for, and never over- or under-add. The intent-vs-row disagreement breaks
+ * one of them whichever obvious thing we do:
+ *
+ *   • re-add the shortfall — here the shortfall IS the full quantity, so where
+ *     the weight line did land the user buys the deli meat a second time. An
+ *     over-add, and the expensive direction.
+ *   • presence-confirm it off the weight line — we assume it landed and tell
+ *     nobody. A silent under-add, and "they'll see it at checkout" is not a
+ *     defence.
+ *
+ * So the item goes to neither. It leaves `retry`, so nothing is bought; it never
+ * reaches `confirmed`, so nothing claims success; and it lands in `unverified`,
+ * which the caller REPORTS. That is still an under-add — but a stated one, and
+ * stating it is the only branch that does not silently break a rule.
+ *
+ * STOPGAP, deliberately. Nothing here can compare a unit count against a
+ * poundage, so "we could not verify this" is the most that is true. MEAL-148
+ * computes the expected weight (productQty × increment) and compares it against
+ * the cart line's actual poundage, which decides the case instead of reporting it
+ * open, and this split goes away with it.
  *
  * A total partition of `topUps` by index — every short item ends up in exactly
- * one side, so no item can be both re-added and asked about, and none can be
+ * one side, so no item can be both re-added and reported, and none can be
  * dropped. `countItemsOnWeightRows` is already a subset of `topUps` (each
  * unclaimed weight row blames at most one item), which is what makes that true.
  */
-export function splitTopUpsForReview(
+export function splitUnverifiableTopUps(
   outcome: Pick<ReconcileOutcome, 'topUps' | 'countItemsOnWeightRows'>,
 ): TopUpRouting {
   const disagreements = new Map(outcome.countItemsOnWeightRows.map((c) => [c.index, c.cartName]));
   const retry: { index: number; shortfall: number }[] = [];
-  const ask: TopUpQuestion[] = [];
+  const unverified: UnverifiableTopUp[] = [];
   for (const t of outcome.topUps) {
     const cartName = disagreements.get(t.index);
     if (cartName === undefined) retry.push(t);
-    else ask.push({ index: t.index, cartName, shortfall: t.shortfall });
+    else unverified.push({ index: t.index, cartName, shortfall: t.shortfall });
   }
-  return { retry, ask };
+  return { retry, unverified };
 }
 
 // ── Per-item cart verdicts (MEAL-14) ─────────────────────────────────────────
@@ -750,30 +774,6 @@ export function splitCartLeftover(
 }
 
 /**
- * Drop the cart lines the run has already EXPLAINED to the user from an over-add
- * list (MEAL-119).
- *
- * An in-cart-by-weight question is asked about a real cart line: a sold-by-weight
- * row bearing the item's own name, which the count item that asked about it can
- * never claim (see claimWeightRows / the weight pool in reconcileParallelAdd). So
- * the row falls straight through to `over`, where the copy calls it something
- * "Mealio didn't intend to add" and asks the user to review their cart.
- *
- * That sentence is false for these rows in every branch. Mealio DID intend the
- * item — the row is the intent-vs-row disagreement, not overage — and printing it
- * as unintended next to the card (or, on the done screen, next to the "kept as
- * already in your cart" banner) tells the user to delete the very line they were
- * just asked about. Following that advice leaves them with nothing, which is the
- * outcome MEAL-119 exists to prevent, reached by taking our own advice.
- *
- * Matched loosely, like everything else that compares these two title sources.
- */
-export function dropExplainedOverAdds(over: OverAdd[], explainedRows: string[]): OverAdd[] {
-  if (explainedRows.length === 0) return over;
-  return over.filter((o) => !explainedRows.some((name) => cartNameMatches(o.name, name)));
-}
-
-/**
  * Audit the after-run cart against what the run reported adding.
  *
  * `rows` are the diffCartItems output for this store, or null when the store
@@ -790,11 +790,6 @@ export function dropExplainedOverAdds(over: OverAdd[], explainedRows: string[]):
  * corroborate (`missing`/`short`), and items reported FAILED that the cart says
  * landed anyway (`recovered`). The second direction is why this runs at all on
  * a run that reported nothing added — see shouldProbeAfterRun.
- *
- * `explainedRows` are cart titles the run has already put to the user in its own
- * words — the in-cart-by-weight questions (MEAL-119). They are held out of the
- * over-add finding; see dropExplainedOverAdds for why announcing them there is
- * not just noise but actively harmful advice.
  */
 export function auditCartAfterRun(input: {
   rows: CartRow[] | null;
@@ -803,10 +798,8 @@ export function auditCartAfterRun(input: {
   reconcileIntended: IntendedItem[];
   countBefore: number | null;
   countAfter: number | null;
-  explainedRows?: string[];
 }): CartCheckFindings {
   const { rows, reportedAdded, active, reconcileIntended, countBefore, countAfter } = input;
-  const explainedRows = input.explainedRows ?? [];
   let missing: string[] = [];
   let short: ShortAdd[] = [];
   let over: OverAdd[] = [];
@@ -823,11 +816,6 @@ export function auditCartAfterRun(input: {
     // recovery and an over-add — the same product named twice on the done
     // screen, "don't add it again" beside "nothing intended it".
     ({ over, recovered } = splitCartLeftover(addedRows, reportedAdded, intendedAll));
-    // Rows the run already asked the user about are not overage — see
-    // dropExplainedOverAdds. Filtered here rather than inside splitCartLeftover so
-    // the partition stays a partition: the row is still consumed as nothing's
-    // claim, it just isn't reported as unintended.
-    over = dropExplainedOverAdds(over, explainedRows);
     // Only audit items we reported as added (failures already route to review),
     // skip sold-by-weight ITEMS (presence, not count — see isWeightPriced), and
     // skip fully-missing items (covered by `missing`). The weight ROWS are

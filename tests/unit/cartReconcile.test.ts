@@ -7,12 +7,11 @@
 
 import {
   auditCartAfterRun,
-  dropExplainedOverAdds,
   isWeightPriced,
   reconcileFromWorkerReports,
   reconcileParallelAdd,
   shouldProbeAfterRun,
-  splitTopUpsForReview,
+  splitUnverifiableTopUps,
   summarizeConfirmations,
   toIntendedItem,
 } from '../../src/lib/cart-reconcile';
@@ -870,109 +869,27 @@ describe('auditCartAfterRun', () => {
   });
 });
 
-// ── A line the user was ASKED about is not overage (MEAL-119) ──────────────────
+// ── Routing the top-up: retry vs unverified (MEAL-119) ────────────────────────
 //
-// The retry exit finalizes through the after-probe, and by then the user has
-// answered the in-cart-by-weight card. A kept line is still an added weight row
-// that no count item can claim, so it falls through to `over` — where the copy
-// calls it an item "Mealio didn't intend" and asks the user to review their cart.
+// A count-ordered item whose cart line came back sold-by-weight has no machine
+// answer. Two rules bind cart automation — never add what the user didn't ask
+// for, and never over- or under-add — and both obvious paths break one:
 //
-// That warning renders on the SAME done screen as "1 weight item kept as already
-// in your cart", naming the same product. A user who believes the warning deletes
-// the line they just approved and ends the run with nothing — Stephen's other
-// rejected outcome, reached by following Mealio's own advice.
-
-describe('dropExplainedOverAdds', () => {
-  const over: OverAdd[] = [
-    { name: 'H-E-B Boneless Chicken Breast', qty: 1 },
-    { name: 'H-E-B Bakery Cookies, 12 ct', qty: 2 },
-  ];
-
-  it('holds out the line the run asked about, and only that one', () => {
-    expect(dropExplainedOverAdds(over, ['H-E-B Boneless Chicken Breast'])).toEqual([
-      { name: 'H-E-B Bakery Cookies, 12 ct', qty: 2 },
-    ]);
-  });
-
-  it('changes nothing when the run asked about nothing', () => {
-    expect(dropExplainedOverAdds(over, [])).toEqual(over);
-  });
-
-  it('matches loosely, like every other comparison between these two title sources', () => {
-    // The over-add name comes from one cart read and the asked name from another,
-    // so a size suffix or a punctuation difference must not un-explain the row.
-    expect(dropExplainedOverAdds(over, ['H-E-B Boneless Chicken Breast, per lb'])).toEqual([
-      { name: 'H-E-B Bakery Cookies, 12 ct', qty: 2 },
-    ]);
-  });
-
-  it('still reports a genuinely unintended product — this is not a blanket mute', () => {
-    // Asking about the chicken must not buy silence about a cookie nobody ordered.
-    expect(dropExplainedOverAdds(over, ['H-E-B Boneless Chicken Breast']).length).toBe(1);
-  });
-});
-
-describe('auditCartAfterRun — the retry exit, after the user kept the weight line', () => {
-  // The exact state the sheet is in: the reconcile asked about the deli line and
-  // topped up the cumin, so `active` is the retry subset only and the deli item
-  // survives in `reconcileIntended`.
-  const KEPT_LINE = 'H-E-B Boneless Chicken Breast';
-  const audit = (explainedRows?: string[]) =>
-    auditCartAfterRun({
-      rows: [row(KEPT_LINE, 1, true), row('McCormick Ground Cumin, 4.5 oz', 2)],
-      reportedAdded: ['McCormick Ground Cumin, 4.5 oz'],
-      active: [{ name: 'cumin', expectedQty: 2, isWeight: false }],
-      reconcileIntended: [
-        { name: 'chicken breast', expectedQty: 3, isWeight: false },
-        { name: 'cumin', expectedQty: 2, isWeight: false },
-      ],
-      countBefore: 0,
-      countAfter: 3,
-      explainedRows,
-    });
-
-  it('reports the kept line as an over-add when nothing explains it — the bug', () => {
-    // Not an assertion about desired behaviour: it pins that this audit really
-    // does surface the row, so the test below is not passing vacuously.
-    expect(audit().over).toEqual([{ name: KEPT_LINE, qty: 1 }]);
-  });
-
-  it("never names a kept line as an item Mealio didn't intend", () => {
-    const out = audit([KEPT_LINE]);
-    expect(out.over).toEqual([]);
-    expect(out.overUnits).toBe(0);
-    // And it is not quietly moved to another finding instead: the count item that
-    // asked about it added nothing, so there is nothing to recover or report short.
-    expect(out.recovered).toEqual([]);
-    expect(out.short).toEqual([]);
-    expect(out.missing).toEqual([]);
-  });
-
-  it('takes its explained rows from the same cartName the ask card was built with', () => {
-    // Binds the two ends together: the string the sheet holds out of the warning is
-    // the string the review card showed the user, not a second guess at the title.
-    const reconciled = reconcileParallelAdd(
-      [
-        attempt('chicken breast', 3, { success: true, productName: KEPT_LINE }),
-        attempt('cumin', 2, { success: true, productName: 'McCormick Ground Cumin, 4.5 oz' }),
-      ],
-      [row(KEPT_LINE, 1, true)],
-    );
-    const asked = splitTopUpsForReview(reconciled).ask.map((a) => a.cartName);
-    expect(asked).toEqual([KEPT_LINE]);
-    expect(audit(asked).over).toEqual([]);
-  });
-});
-
-// ── Routing the top-up: retry vs ask (MEAL-119) ────────────────────────────────
+//   • re-add the shortfall (which here is the FULL quantity): where the weight
+//     line did land, the user buys the deli meat twice. An over-add.
+//   • presence-confirm it off the weight line: we assume it landed and say
+//     nothing. A silent under-add.
 //
-// Stephen's ruling on this case: "double adding is worst case scenario, but user
-// getting nothing is also not acceptable." Both machine answers are rejected, so
-// the item leaves the automatic top-up and becomes a question. This split is
-// where that is enforced — everything downstream (the review card, its buttons)
-// only matters if an item actually stops being re-added here.
+// So the item is neither re-added nor confirmed, and it is REPORTED — an under-add
+// that says so, the only branch that does not break a rule in silence. This split
+// is where that is enforced; if an item does not stop being re-added here, nothing
+// downstream can save it.
+//
+// STOPGAP. MEAL-148 replaces the whole question by computing the expected weight
+// (productQty × increment) and comparing it against the cart line's actual
+// poundage.
 
-describe('splitTopUpsForReview', () => {
+describe('splitUnverifiableTopUps', () => {
   const outcome = (
     topUps: { index: number; shortfall: number }[],
     countItemsOnWeightRows: { index: number; cartName: string }[] = [],
@@ -982,29 +899,29 @@ describe('splitTopUpsForReview', () => {
     // The one that costs money: a ×3 count item short beside its own deli line.
     // Left in `retry`, WebViewCartSheet re-adds productQty: 3 with no confirmation
     // step and the user pays for the meat twice.
-    const routing = splitTopUpsForReview(outcome(
+    const routing = splitUnverifiableTopUps(outcome(
       [{ index: 0, shortfall: 3 }],
       [{ index: 0, cartName: 'H-E-B Boneless Chicken Breast' }],
     ));
     expect(routing.retry).toEqual([]);
-    expect(routing.ask).toEqual([
+    expect(routing.unverified).toEqual([
       { index: 0, cartName: 'H-E-B Boneless Chicken Breast', shortfall: 3 },
     ]);
   });
 
   it('still retries an ordinary shortfall — nothing in the cart plausibly covers it', () => {
-    const routing = splitTopUpsForReview(outcome([{ index: 0, shortfall: 2 }]));
+    const routing = splitUnverifiableTopUps(outcome([{ index: 0, shortfall: 2 }]));
     expect(routing.retry).toEqual([{ index: 0, shortfall: 2 }]);
-    expect(routing.ask).toEqual([]);
+    expect(routing.unverified).toEqual([]);
   });
 
-  it('splits a mixed top-up per item, not per run — one asked item must not strand the others', () => {
-    const routing = splitTopUpsForReview(outcome(
+  it('splits a mixed top-up per item, not per run — one unverified item must not strand the others', () => {
+    const routing = splitUnverifiableTopUps(outcome(
       [{ index: 0, shortfall: 2 }, { index: 1, shortfall: 3 }, { index: 2, shortfall: 1 }],
       [{ index: 1, cartName: 'H-E-B Deli Roast Beef, lb' }],
     ));
     expect(routing.retry).toEqual([{ index: 0, shortfall: 2 }, { index: 2, shortfall: 1 }]);
-    expect(routing.ask).toEqual([
+    expect(routing.unverified).toEqual([
       { index: 1, cartName: 'H-E-B Deli Roast Beef, lb', shortfall: 3 },
     ]);
   });
@@ -1015,17 +932,17 @@ describe('splitTopUpsForReview', () => {
       { index: 3, shortfall: 4 },
       { index: 7, shortfall: 2 },
     ];
-    const routing = splitTopUpsForReview(outcome(topUps, [
+    const routing = splitUnverifiableTopUps(outcome(topUps, [
       { index: 3, cartName: 'H-E-B Deli Turkey, lb' },
       { index: 7, cartName: 'H-E-B Deli Ham, lb' },
     ]));
     const retried = routing.retry.map((r) => r.index);
-    const asked = routing.ask.map((a) => a.index);
-    expect([...retried, ...asked].sort()).toEqual([0, 3, 7]);
-    expect(retried.filter((i) => asked.includes(i))).toEqual([]);
-    // The shortfall travels with the item: it is what an intentional top-up adds,
-    // and the card names that number on its button.
-    expect(routing.ask.map((a) => a.shortfall)).toEqual([4, 2]);
+    const unverified = routing.unverified.map((u) => u.index);
+    expect([...retried, ...unverified].sort()).toEqual([0, 3, 7]);
+    expect(retried.filter((i) => unverified.includes(i))).toEqual([]);
+    // The shortfall travels with the item so the report can say how much of the
+    // request the cart line is being asked to cover.
+    expect(routing.unverified.map((u) => u.shortfall)).toEqual([4, 2]);
   });
 
   it('carries a real reconcile outcome through — the shapes the sheet actually passes', () => {
@@ -1038,14 +955,48 @@ describe('splitTopUpsForReview', () => {
       ],
       [row('H-E-B Boneless Chicken Breast', 1, true)],
     );
-    const routing = splitTopUpsForReview(out);
+    const routing = splitUnverifiableTopUps(out);
     expect(routing.retry).toEqual([{ index: 1, shortfall: 2 }]);
-    expect(routing.ask).toEqual([
+    expect(routing.unverified).toEqual([
       { index: 0, cartName: 'H-E-B Boneless Chicken Breast', shortfall: 3 },
     ]);
   });
-});
 
+  // THE regression test for this branch, stated as the three things that must all
+  // hold at once. Each clause fails on a different way of reverting the routing:
+  //
+  //   • back into the top-up (`retry` holds it)  → a second physical purchase
+  //   • back to presence-confirm (`confirmed` holds it) → a silent under-add
+  //   • routing deleted (`unverified` empty)     → an under-add nobody is told of
+  //
+  // Nothing may be bought, nothing may claim success, and the item must be named.
+  it('is neither bought nor claimed as landed, and is reported by name', () => {
+    const CART_LINE = 'H-E-B Deli Boneless Chicken Breast, lb';
+    const out = reconcileParallelAdd(
+      [attempt('chicken breast', 3, { success: true, productName: CART_LINE })],
+      [row(CART_LINE, 1, true)],
+    );
+    const routing = splitUnverifiableTopUps(out);
+
+    // 1. Nothing is bought. The sheet builds retryItems from `retry` alone, so an
+    //    empty retry is what makes the unattended re-add unreachable.
+    expect(routing.retry).toEqual([]);
+    // 2. Nothing claims success. `confirmed` is what becomes addResultsRef and
+    //    itemsAdded, so the item appearing here would report a delivery that was
+    //    never verified.
+    expect(out.confirmed).toEqual([]);
+    expect(out.confirmed.map((c) => c.name)).not.toContain(CART_LINE);
+    // 3. It is reported — the item, and the cart line it could not be compared
+    //    against. This pair is exactly what the done screen's
+    //    `snapshot-unverified-weight` banner renders, with no buttons on it.
+    expect(routing.unverified).toEqual([
+      { index: 0, cartName: CART_LINE, shortfall: 3 },
+    ]);
+    // And the detection it is derived from is still on the outcome, which is what
+    // the funnel's weightRowUnverified counts for MEAL-148.
+    expect(out.countItemsOnWeightRows).toEqual([{ index: 0, cartName: CART_LINE }]);
+  });
+});
 // ── Arming the after-snapshot (MEAL-47) ───────────────────────────────────────
 //
 // The gate used to be the reported-success count, which skipped the cart read on
