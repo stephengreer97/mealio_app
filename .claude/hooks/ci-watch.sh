@@ -26,7 +26,25 @@ case "$CMD" in
   *) exit 0 ;;
 esac
 
-cd "${CLAUDE_PROJECT_DIR:-$(pwd)}" || exit 0
+# Where the push actually happened, not where the session started.
+#
+# Pushes now come from git worktrees (one per concurrent agent), and reading HEAD
+# in CLAUDE_PROJECT_DIR reports whatever `main` is sitting at instead of the
+# branch that was just pushed — so the summary describes a commit nobody touched.
+# The payload's `cwd` is the Bash tool's working directory; fall back to the old
+# behaviour when it is absent.
+# `.cwd` is not actually in the payload on this version — kept first in case a
+# later one adds it — so the working directory is recovered from the command
+# itself. Worktree pushes are written `cd <path> && git push …`, and that `cd`
+# is the only record of which checkout was pushed. Without it HEAD resolves in
+# CLAUDE_PROJECT_DIR, i.e. whatever `main` happens to be at, and the summary
+# reports CI for a commit nobody touched.
+HOOK_CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)"
+if [ -z "$HOOK_CWD" ]; then
+  CD_PATH="$(printf '%s' "$CMD" | sed -n 's/^[[:space:]]*cd[[:space:]]\{1,\}\([^&|;]*\).*/\1/p' | head -1 | sed 's/[[:space:]]*$//')"
+  [ -n "$CD_PATH" ] && [ -d "$CD_PATH" ] && HOOK_CWD="$CD_PATH"
+fi
+cd "${HOOK_CWD:-${CLAUDE_PROJECT_DIR:-$(pwd)}}" || exit 0
 SHA="$(git rev-parse HEAD 2>/dev/null)" || exit 0
 
 # Give GitHub a moment to register the workflow runs.
@@ -56,7 +74,10 @@ FAILED="$(printf '%s' "$RUNS" | jq '[.[] | select(.conclusion != null and .concl
 echo "GitHub Actions finished for commit ${SHA:0:8}:"
 echo "$SUMMARY"
 if [ "$FAILED" = "0" ]; then
-  echo "ALL GREEN. Per the standing workflow: report statuses to Stephen, then run 'eas build --platform ios --profile production --clear-cache', and when that finishes remind him to optionally run 'eas submit --platform ios'."
+  # Report only. Kicking off a production build unprompted spends build credits
+  # and produces a release artifact off whatever commit happened to be pushed —
+  # Stephen runs `eas build` himself when he actually wants one.
+  echo "ALL GREEN. Report the statuses to Stephen and carry on with whatever you were doing. Do NOT start a build; he runs 'eas build' himself when he wants one."
 else
   echo "$FAILED run(s) failed. Read the logs via 'gh run view <id> --log-failed', fix, and push again."
 fi

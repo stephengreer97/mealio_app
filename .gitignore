@@ -78,3 +78,6 @@ tests/live/creds.json
 # Personal running backlog — maintained locally, not tracked in git.
 TODO.md
 TODO-DONE.md
+
+# Playwright MCP scratch output — page snapshots written during debugging.
+.playwright-mcp/
