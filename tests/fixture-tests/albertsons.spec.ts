@@ -176,6 +176,73 @@ describe('Albertsons cart-page count (snapshot before/after)', () => {
       expect(basmati && byName[basmati]).toBe(1);
       expect(hunts && byName[hunts]).toBe(1);
     },
+    // The URL matters now: the script refuses to count anywhere but /erums/cart
+    // (MEAL-136). Passing the real cart URL is also just more faithful — this
+    // fixture IS that page, and before this the test ran it on about:blank.
+    { url: 'https://www.acmemarkets.com/erums/cart' },
+  );
+});
+
+// MEAL-136. The defect was a DOMAIN_MAP host whose 301 discarded the path, so we
+// asked for /erums/cart and were handed a marketing home page. The script found
+// no product links and posted `count: 0` — which callers TRUST (only `null` means
+// "unknown, skip"), so cart reconciliation concluded the cart was empty.
+//
+// These tests use the real cart fixture and change only the URL it was served
+// from, which is exactly the difference the redirect made. Same DOM, same
+// selectors, same 2 countable items — so anything that changes here is the URL
+// check and nothing else.
+describe('Albertsons cart-page count refuses to count off the cart page (MEAL-136)', () => {
+  itWithFixture(
+    'cart-with-items.html',
+    'posts count:null with a named reason when a redirect dropped the cart path',
+    async (runner) => {
+      await runner.inject(buildCartPageCountScript('united')!);
+      const result = await runner.waitForMessage('CART_COUNT', 8_000);
+      // The bug: this used to be 0 — a trusted, wrong, "your cart is empty".
+      expect(result.count).toBeNull();
+      expect(result.reason).toBe('not_cart_page');
+      // The reason alone doesn't tell you WHICH host misbehaved; the URL does.
+      expect(result.url).toContain('shopunitedsupermarkets.com');
+      // Never invent items alongside an unknown count — the reconcile path keys
+      // off Array.isArray(msg.items) and would diff against an empty cart.
+      expect(result.items).toBeUndefined();
+    },
+    { url: 'https://www.shopunitedsupermarkets.com/' },
+  );
+
+  itWithFixture(
+    'cart-with-items.html',
+    'still counts normally on a cart URL under the corrected United host',
+    async (runner) => {
+      // The other half of the guard: the fix must not make United uncountable.
+      // Same host as above, correct path → the ordinary count.
+      await runner.inject(buildCartPageCountScript('united')!);
+      const result = await runner.waitForMessage('CART_COUNT', 8_000);
+      expect(result.count).toBe(2);
+      expect(result.items).toHaveLength(2);
+    },
+    { url: 'https://www.shopunitedsupermarkets.com/erums/cart' },
+  );
+
+  itWithFixture(
+    'cart-with-items.html',
+    'stays silent on an auth interstitial instead of posting a verdict',
+    async (runner) => {
+      // An SSO bounce is TRANSIENT — both injection sites re-inject on the next
+      // load. A verdict here (even count:null) burns the probe's single pending
+      // slot on a page that was never the cart, so the script must say nothing.
+      await runner.inject(buildCartPageCountScript('acme')!);
+      // Silence is the contract, so the only way to observe it is to wait out a
+      // window in which a verdict would have arrived. The script returns before
+      // its 5s hydration poll on this branch, so 2s is generous.
+      await expect(runner.waitForMessage('CART_COUNT', 2_000)).rejects.toThrow();
+      // waitForMessage resolves on the FIRST message of a type, and
+      // 'alb_cart_start' always posts first — so assert on the step list.
+      const steps = runner.messagesOfType('EXTRACT_DEBUG').map((m) => m.step);
+      expect(steps).toContain('alb_cart_skip_auth_redirect');
+    },
+    { url: 'https://www.acmemarkets.com/bin/safeway/unified/sso/authorize?code=test' },
   );
 });
 

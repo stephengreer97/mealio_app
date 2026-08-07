@@ -79,16 +79,31 @@ const DOMAIN_MAP: Record<string, string> = {
   carrs:        'carrsqc.com',
   kings:        'kingsfoodmarkets.com',
   balduccis:    'balduccis.com',
-  united:       'unitedsupermarkets.com',
+  // NOT unitedsupermarkets.com (MEAL-136). That host is the banner's Squarespace
+  // MARKETING site: it 301s to https://shopunitedsupermarkets.com **discarding
+  // the path**, which then 301s to www, so every URL we built for this banner —
+  // /erums/cart, /shop/search-results.html — landed on a marketing home page.
+  // No cart, no product tiles, no selectors, and nothing that failed loudly.
+  // shopunitedsupermarkets.com is the storefront: /erums/cart and
+  // /shop/search-results.html both return 200 off the same istio-envoy platform
+  // that serves the other 14 banners. Pinned by tests/unit/webview-scripts/
+  // url-builders.test.ts — a path-discarding redirect is invisible at runtime,
+  // so the host is only ever as right as the test that names it.
+  united:       'shopunitedsupermarkets.com',
 };
 
 export const ALBERTSONS_FAMILY_IDS: string[] = Object.keys(DOMAIN_MAP);
 
-/** Cart page URL for a given Albertsons-family brand. The cart lives at
- *  /erums/cart (a separate Angular app from the /shop storefront). */
+/** The cart's path on every Albertsons banner — a separate Angular app from the
+ *  /shop storefront. Platform-uniform (MEAL-15: endpoint paths need no
+ *  per-banner configuration; only the host list does). Exported so the cart-page
+ *  count script can check it still IS the path it landed on. */
+export const ALBERTSONS_CART_PATH = '/erums/cart';
+
+/** Cart page URL for a given Albertsons-family brand. */
 export function getAlbertsonsCartPageUrl(storeId: string): string {
   const domain = DOMAIN_MAP[storeId] || 'albertsons.com';
-  return `https://www.${domain}/erums/cart`;
+  return `https://www.${domain}${ALBERTSONS_CART_PATH}`;
 }
 
 /** Albertsons over-constrains on long queries — a full product title (esp. the

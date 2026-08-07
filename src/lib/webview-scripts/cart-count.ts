@@ -26,7 +26,8 @@
 // INSTACART_TENANTS shares them — rather than to ALDI, which is merely the
 // tenant they were first read off.
 
-import { ALBERTSONS_FAMILY_IDS, getAlbertsonsCartPageUrl } from './albertsons';
+import { ALBERTSONS_FAMILY_IDS, getAlbertsonsCartPageUrl, ALBERTSONS_CART_PATH } from './albertsons';
+import { AUTH_REDIRECT_URL_PATTERN } from './auth-urls';
 import { isInstacartStore } from './instacart';
 import { MOCK_STORE_URL } from './mockstore';
 
@@ -709,10 +710,61 @@ const HEB_CART_PAGE_SCRIPT = `(async function() {
 // mirrored by the visible .stepper-qty text. The page renders each item twice
 // (responsive desktop/mobile), so dedupe by product id. Verified against
 // tests/fixtures/albertsons/cart-with-items.html (Basmati x2, Hunt's x1).
+//
+// WHY THIS SCRIPT CHECKS THE URL IT LANDED ON (MEAL-136).
+//
+// A wrong host in DOMAIN_MAP is invisible at runtime. United Supermarkets was
+// pointed at its Squarespace marketing site, which 301s to the storefront apex
+// DISCARDING the path — so we navigated to /erums/cart and got a marketing home
+// page. This script then polled its full 5s, found zero product links, and
+// posted `count: 0`.
+//
+// That is the whole reason the bug survived: `count: 0` is not a selector miss.
+// It is a CONFIDENT WRONG ANSWER. `count: null` means "unknown, skip
+// validation"; a number is trusted, so a zero flows into the before/after
+// snapshot and cart reconciliation concludes the cart is empty. A silent-miss
+// detector that reports "nothing was in the cart" for every run on a banner is
+// worse than one that reports nothing at all.
+//
+// So: refuse to count on a page that is not the cart. Two cases, and they want
+// opposite handling — the same split buildCheckLoginScript already makes:
+//
+//   • An auth/SSO interstitial is TRANSIENT. Albertsons bounces the storefront
+//     through …/sso/authorize?code=… and back, and both injection sites
+//     re-inject on the next load. Post no verdict at all and let the landing
+//     page decide, exactly as the login check does. A verdict here would burn
+//     the probe's single pending slot on a page that was never the cart.
+//   • Anything else is TERMINAL — nothing further is loading, which is the
+//     redirected-marketing-page case. Post `count: null` with a named reason so
+//     the run degrades to "unknown" instead of "empty", and the reason lands in
+//     the log where a wrong host is legible as a wrong host.
+//
+// Note what this does NOT do: it never invents a count and never blocks a real
+// cart page. The failure it converts is trusted-zero → honest-unknown, and the
+// probe timeouts in WebViewCartSheet/SilentLoginProbe already cover silence.
+//
+// The check needs no per-banner configuration — ALBERTSONS_CART_PATH is uniform
+// across all 15 banners, which is the MEAL-15 finding restated: paths generalise,
+// hosts do not. Only the Albertsons family carries this guard; the other
+// cart-page scripts (HEB/Walmart/Wegmans) would each need their own and have no
+// reported defect of this kind.
 const ALBERTSONS_CART_PAGE_SCRIPT = `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
   try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'alb_cart_start', url: location.href })); } catch (e) {}
+
+  // Did we actually land on the cart? See the note above.
+  if (location.pathname.indexOf(${JSON.stringify(ALBERTSONS_CART_PATH)}) !== 0) {
+    if (new RegExp(${JSON.stringify(AUTH_REDIRECT_URL_PATTERN)}).test(location.href)) {
+      try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'alb_cart_skip_auth_redirect', url: location.href })); } catch (e) {}
+      return;
+    }
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: location.href
+    }));
+    return;
+  }
+
   // Poll for cart line items to hydrate.
   var links = [];
   for (var i = 0; i < 25; i++) {

@@ -277,6 +277,11 @@ describe('failure codes', () => {
       // one by one so a genuinely new ADD_RESULT reason still fails this test.
       'http_error', 'shape', 'graphql_error', 'network', 'no_read', 'no_baseline',
       'cart_query', 'cart_query_confirm', 'cart_query_crosscheck', 'missing', 'unknown',
+      // MEAL-136: a CART_COUNT reason, not an ADD_RESULT one. The Albertsons
+      // cart-page script posts it alongside `count: null` when a redirect landed
+      // us somewhere other than /erums/cart, so it explains why a COUNT is
+      // unknown — it never describes an add, and addFailureCode never sees it.
+      'not_cart_page',
     ]);
 
     const found = new Map<string, string>();
