@@ -172,6 +172,18 @@ describe('a cart sheet closed before its run id arrives', () => {
     expect(recorderRunIds()).toEqual([]);
   });
 
+  it('records nothing when the sheet is torn down rather than hidden', async () => {
+    // How the live mount site ends a run: CartJobContext renders this with
+    // `visible` hardcoded true and drops the job, so the component unmounts and
+    // the close branch never runs. The component's own refs go with it, but the
+    // recorded run is module state and outlives it.
+    const { unmount } = render(sheet({ visible: true, storeId: 'heb' }));
+    await act(async () => { unmount(); });
+    await landStartFor('heb');
+
+    expect(getLastAutomationRun()).toBeNull();
+  });
+
   it('still records the run for a sheet that stays open', async () => {
     render(sheet({ visible: true, storeId: 'heb' }));
     await landStartFor('heb');

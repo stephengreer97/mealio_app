@@ -343,6 +343,16 @@ export default function WebViewCartSheet({
     }
   }, [visible, storeId, meals.length, cfgTelemetry]);
 
+  // Being unmounted is an abandonment too, and it is the one that matters most:
+  // the live mount site (CartJobContext, FEATURE_BACKGROUND_CART) renders this
+  // with `visible` hardcoded true and ends a run by dropping the job, so the
+  // close branch above never runs there. The refs it would have reset die with
+  // the component anyway — but setLastAutomationRun writes module state that
+  // outlives it, so a response landing after teardown could still name a run
+  // nobody is watching. Its own effect, not a cleanup on the one above, which
+  // would fire on every dependency change and cancel a legitimate start.
+  useEffect(() => () => { automationGenRef.current += 1; }, []);
+
   // Step: qty
   const [items, setItems] = useState<ConsolidatedIngredient[]>([]);
   const [checkedItems, setCheckedItems] = useState<boolean[]>([]);
