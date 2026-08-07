@@ -19,8 +19,15 @@
 // context.userId from the token, so B's report is authoritatively B's).
 //
 // Two windows, both covered below: the run that keeps going indefinitely after
-// the clears, and the narrow one where a logAutomationStart response (a 100-500ms
-// round trip) lands after the clears but before the teardown has committed.
+// the clears, and the narrow one where one more line of its output lands after
+// the clears but before the teardown has committed. A logAutomationStart response
+// (a 100-500ms round trip) can land in that second window too; it is exercised
+// here but not asserted on, because what stops it is the run-generation guard,
+// pinned directly in webview-cart-run-generation.test.tsx — see the window test.
+//
+// The cart run is not the only thing that outlives a sign-out: the ingredient
+// saves MyMealsScreen queues do too, and they get their own guard and their own
+// file (mymeals-signout-ingredient-saves.test.tsx).
 
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import React, { useLayoutEffect, useRef } from 'react';
@@ -297,7 +304,12 @@ describe('signing out mid-run', () => {
     expect(utils.queryByTestId('qty-checkbox-0')).toBeNull();
   });
 
-  it('does not put the previous account cart on the next account report', async () => {
+  it('empties both diagnostic channels at sign-out, so the next account starts clean', async () => {
+    // Scoped deliberately: this pins logout's OWN clears, and nothing more. It
+    // passes with the sign-out effect above deleted entirely (measured), because
+    // by the time B files a report the clears have run either way. The headline
+    // gap — the run that keeps writing after them — is pinned by the test before
+    // this one, the window test after it, and the onClose test at the end.
     const utils = await renderApp();
     await signIn(utils, 'a');
     await startCart(utils);
@@ -343,10 +355,20 @@ describe('signing out mid-run', () => {
 
     const report = lastReport();
     expect(report.context.userId).toBe('user-B');
+    // The one line that discriminates: delete the clear-again-after-teardown
+    // effect and A's product arrives on B's report right here.
     expect(report.logs).not.toContain(A_PRODUCT);
-    // The late response must not re-arm A's run after clearLastAutomationRun().
-    expect(report.context.lastCartRunId).toBeNull();
-    expect(getLastAutomationRun()).toBeNull();
+    // The late start response is deliberately NOT asserted on. It cannot re-arm
+    // A's run in this harness for a reason that has nothing to do with clearing:
+    // under `act()` React flushes the sheet's unmount — which bumps the run
+    // generation — before the microtask queue drains, so the parked `.then()`
+    // bails on the generation guard whether or not this provider clears again.
+    // Measured: with the clear-again effect deleted, `lastCartRunId` is still
+    // null, so asserting it here would pin nothing. In production the response
+    // can land first, and the generation guard that stops it is pinned directly
+    // in webview-cart-run-generation.test.tsx ("records nothing when the sheet is
+    // torn down rather than hidden"). It is still landed above, because both
+    // writers really do try inside this window.
   });
 
   it('leaves a signed-out launch its own diagnostics', async () => {

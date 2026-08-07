@@ -116,8 +116,14 @@ export function CartJobProvider({ children }: { children: React.ReactNode }) {
   // token-verified userId. It also left one account's store page sitting on top
   // of the next account's login screen.
   //
-  // Ending the job fixes both: the sheet unmounts, the WebView goes with it, and
-  // nothing is left running to write anything more.
+  // Ending the job fixes both: the sheet unmounts and the WebView goes with it.
+  //
+  // It does not, on its own, mean nothing is left writing — the sheet was never
+  // the only writer. Each product a run chooses is handed to MyMealsScreen, which
+  // saves it on a per-meal promise chain of its own that outlives this teardown;
+  // after a sign-out those saves are guaranteed 401s and their failure logs name
+  // the products and ingredients. That queue had to be stopped where it lives —
+  // see `savesAbandonedRef` in src/screens/mymeals/MyMealsScreen.tsx.
   const endedBySignOutRef = useRef(false);
   useEffect(() => {
     if (user || !jobRef.current) return;
