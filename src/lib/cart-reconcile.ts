@@ -774,6 +774,58 @@ export function splitCartLeftover(
 }
 
 /**
+ * Hold the cart lines the run has ALREADY ACCOUNTED FOR out of an over-add list
+ * (MEAL-119).
+ *
+ * `countItemsOnWeightRows` / `TopUpRouting.unverified` name a real cart line: a
+ * sold-by-weight row bearing a requested item's own name, which the count item
+ * that asked for it can never claim (see claimWeightRows and the weight pool in
+ * reconcileParallelAdd). So the row falls straight through to `over`, where the
+ * copy calls it an item "Mealio didn't intend to add".
+ *
+ * That sentence is false. Mealio DID intend it — the user put chicken breast in
+ * their meal, and the row is the store's weight-priced rendering of the thing
+ * they asked for. The row is not overage: it is the blame for one specific
+ * requested item, and the done screen already reports it BY NAME as a line the
+ * run could not verify. Left in `over` it becomes one physical line described
+ * twice on one screen, once as unverifiable and once as unwanted, and a user who
+ * believes the second sentence deletes the chicken they asked for — the outcome
+ * MEAL-119 exists to prevent, reached by following Mealio's own advice.
+ *
+ * The justification is that the row is EXPLAINED, not that the user approved it.
+ * (An earlier version of this filter said "the user kept this line", which was
+ * true only while a review card existed to keep it with; that card is gone and
+ * the suppression is not.) An over-add warning is for cart rows nothing accounts
+ * for. This row is accounted for, so it belongs to the finding that accounts for
+ * it and to no other.
+ *
+ * EXACT normalized comparison, deliberately. Both sides are cart-page titles
+ * produced by the same extractor, so they are directly comparable and leniency
+ * buys nothing. The version that matched with cartNameMatches (0.6 token
+ * overlap) was found muting genuine warnings: an explained "Boneless Skinless
+ * Chicken Breasts" swallowed the warning about unintended "Chicken Thighs", and
+ * "Bananas" swallowed "Bananas Organic". Muting a safety net on a near-miss is
+ * far worse than printing one row of noise, so the match here is the strict one.
+ * The asymmetry is the whole argument: a miss here prints a warning about a row
+ * the banner also names — noise the user can check against their cart — while a
+ * false hit deletes a warning about a product nobody ordered.
+ *
+ * One unit per explained row. Each unclaimed weight row is a single line and
+ * explains at most one item, so it cancels exactly one over-add UNIT under its
+ * name; any further unit the cart holds under that same title is still nothing's
+ * claim and is still reported.
+ */
+export function dropExplainedOverAdds(over: OverAdd[], explainedRows: string[]): OverAdd[] {
+  if (explainedRows.length === 0) return over;
+  const remaining = over.map((o) => ({ ...o }));
+  for (const name of explainedRows) {
+    const hit = remaining.find((o) => o.qty > 0 && normalizeName(o.name) === normalizeName(name));
+    if (hit) hit.qty -= 1;
+  }
+  return remaining.filter((o) => o.qty > 0);
+}
+
+/**
  * Audit the after-run cart against what the run reported adding.
  *
  * `rows` are the diffCartItems output for this store, or null when the store
@@ -790,6 +842,11 @@ export function splitCartLeftover(
  * corroborate (`missing`/`short`), and items reported FAILED that the cart says
  * landed anyway (`recovered`). The second direction is why this runs at all on
  * a run that reported nothing added — see shouldProbeAfterRun.
+ *
+ * `explainedRows` are cart titles this run has already reported to the user in
+ * their own right — the unverified sold-by-weight lines (MEAL-119). They are held
+ * out of the over-add finding; see dropExplainedOverAdds for why naming them
+ * there is not noise but false and actively harmful advice.
  */
 export function auditCartAfterRun(input: {
   rows: CartRow[] | null;
@@ -798,8 +855,10 @@ export function auditCartAfterRun(input: {
   reconcileIntended: IntendedItem[];
   countBefore: number | null;
   countAfter: number | null;
+  explainedRows?: string[];
 }): CartCheckFindings {
   const { rows, reportedAdded, active, reconcileIntended, countBefore, countAfter } = input;
+  const explainedRows = input.explainedRows ?? [];
   let missing: string[] = [];
   let short: ShortAdd[] = [];
   let over: OverAdd[] = [];
@@ -816,6 +875,11 @@ export function auditCartAfterRun(input: {
     // recovery and an over-add — the same product named twice on the done
     // screen, "don't add it again" beside "nothing intended it".
     ({ over, recovered } = splitCartLeftover(addedRows, reportedAdded, intendedAll));
+    // Rows the run already reports by name as unverified are accounted for, not
+    // unintended — see dropExplainedOverAdds. Filtered here rather than inside
+    // splitCartLeftover so the partition stays a partition: the row is still
+    // consumed as nothing's claim, it just isn't ALSO called unwanted.
+    over = dropExplainedOverAdds(over, explainedRows);
     // Only audit items we reported as added (failures already route to review),
     // skip sold-by-weight ITEMS (presence, not count — see isWeightPriced), and
     // skip fully-missing items (covered by `missing`). The weight ROWS are

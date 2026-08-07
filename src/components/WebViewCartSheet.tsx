@@ -44,7 +44,7 @@ import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
-import { auditCartAfterRun, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
+import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, correctConfirmedFromCart, countRequested, isRunComplete } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
@@ -611,6 +611,13 @@ export default function WebViewCartSheet({
   // captured before the retry top-up narrows activeItemsRef to the retry subset.
   // Used by the final cart check to flag over-adds / unintended additions.
   const reconcileIntendedRef = useRef<{ name: string; expectedQty: number; isWeight: boolean }[]>([]);
+  // MEAL-119: the cart titles this run reports on the done screen as sold-by-weight
+  // lines it could not verify (the unverified banner names each one). Held in a ref
+  // because the only readers are inside onMessage (deps []), and BOTH of the
+  // reconcile's exits announce over-adds — neither may also call one of these lines
+  // an item "Mealio didn't intend to add". They are already accounted for, by name,
+  // in the banner beside that warning; see dropExplainedOverAdds.
+  const unverifiedCartNamesRef = useRef<string[]>([]);
   const parallelReconcileArmedRef = useRef(false);
   // Set when the reconcile probe finalized using its own cart read, so the
   // 'done' effect doesn't fire a redundant second after-probe.
@@ -1209,6 +1216,7 @@ export default function WebViewCartSheet({
       // between runs — run 2 would report run 1's unverified line on its done
       // screen and ship a stale count on the funnel.
       setUnverifiedWeightLines([]);
+      unverifiedCartNamesRef.current = [];
       setCustomText('');
       setCustomSearching(false);
       setCustomSuggestions([]);
@@ -2439,6 +2447,13 @@ export default function WebViewCartSheet({
               cartName: u.cartName,
             }));
             setUnverifiedWeightLines(unverified);
+            // The cart lines that banner names. Recorded before either exit below,
+            // because BOTH announce over-adds and neither may also call one of these
+            // rows unintended — the banner has already accounted for them, and one
+            // line described twice ("we couldn't verify this" beside "nothing
+            // intended this") is a contradiction that talks the user into deleting a
+            // thing they asked for. See dropExplainedOverAdds.
+            unverifiedCartNamesRef.current = routing.unverified.map((u) => u.cartName).filter(Boolean);
             // Keep the full intended set: the retry branch below narrows
             // activeItemsRef to the top-up subset, and the final cart check needs
             // the whole set to spot units no item intended.
@@ -2539,11 +2554,18 @@ export default function WebViewCartSheet({
             // Safety net: flag any units in the cart that no intended item
             // accounts for (a double-add or an unintended product), even when
             // every intended item was confirmed.
-            if (outcome.overAdds.length > 0) {
+            // Minus the unverified weight lines: those are accounted for by the
+            // banner that names them, so they are not rows "nothing explains".
+            // Applied here and not inside reconcileParallelAdd, whose overAdds must
+            // stay the exact residue of its claim (credited + overAddUnits ===
+            // cartUnits) — the row is still consumed as nothing's claim, it just
+            // isn't reported as unwanted on top of being reported as unverified.
+            const unexplainedOver = dropExplainedOverAdds(outcome.overAdds, unverifiedCartNamesRef.current);
+            if (unexplainedOver.length > 0) {
               const lockedName = STORES.find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
-              const list = outcome.overAdds.map(overAddLabel).join(', ');
-              const units = outcome.overAdds.reduce((n, o) => n + o.qty, 0);
-              console.log(`[Cart ${ts()}]`, 'reconcile: OVER-ADD detected', outcome.overAdds);
+              const list = unexplainedOver.map(overAddLabel).join(', ');
+              const units = unexplainedOver.reduce((n, o) => n + o.qty, 0);
+              console.log(`[Cart ${ts()}]`, 'reconcile: OVER-ADD detected', unexplainedOver);
               setCartDeltaWarning(`Cart check: your ${lockedName} cart has ${units} item(s) Mealio didn't intend to add (${list}). Please review your cart.`);
             } else {
               setCartDeltaWarning(null);
@@ -2580,6 +2602,11 @@ export default function WebViewCartSheet({
               reconcileIntended: reconcileIntendedRef.current,
               countBefore: cartCountBeforeRef.current,
               countAfter: count,
+              // The unverified weight lines survive into this cart read too, still
+              // unclaimable by the count items they belong to. Held out of `over`
+              // for the same reason as above: the done screen renders this warning
+              // beside the banner that already names them.
+              explainedRows: unverifiedCartNamesRef.current,
             });
             const { missing, short, over, recovered, countShortfall } = findings;
             // Read from the ref, NOT from the `totalAdded` state: onMessage is

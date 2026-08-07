@@ -7,6 +7,7 @@
 
 import {
   auditCartAfterRun,
+  dropExplainedOverAdds,
   isWeightPriced,
   reconcileFromWorkerReports,
   reconcileParallelAdd,
@@ -805,8 +806,10 @@ const AUDIT_CASES: AuditCase[] = [
   // count item (`short: got 1, expected 3`) — and splitCartLeftover, which cannot
   // claim a weight row for a count item, still had it left over (`over: qty 1`).
   // The done screen then said "you got 1 of 3" and "nothing intended this" about
-  // one line. Only the over-add is true: the row is real, and how much of it
-  // covers the ×3 is the user's call, which is what the review card now asks.
+  // one line. Neither sentence survives at the sheet: the row is real, so it is
+  // reported once, by name, as a line the run could not verify — and held out of
+  // the over-add warning by dropExplainedOverAdds, which the audit below covers.
+  // This row asserts the raw audit with no explanation supplied.
   {
     name: 'a stepper-weight deli line is reported ONCE — an over-add, not an over-add AND a shortfall',
     rows: [row('H-E-B Boneless Chicken Breast', 1, true)],
@@ -866,6 +869,168 @@ describe('auditCartAfterRun', () => {
       const overNames = out.over.map((o) => o.name);
       expect(out.recovered.filter((r) => overNames.includes(r.cartName))).toEqual([]);
     }
+  });
+});
+
+// ── An explained line is not overage (MEAL-119) ───────────────────────────────
+//
+// The unverified sold-by-weight line is still an added weight row no count item
+// can claim, so it falls through to `over` — where the copy calls it an item
+// "Mealio didn't intend to add", on the same done screen as the banner naming the
+// same physical line as one the run could not verify.
+//
+// Both halves of that are wrong. It is FALSE: the user put chicken breast in
+// their meal, and the row is the store's weight-priced rendering of that request,
+// so Mealio did intend it. And it CONTRADICTS the banner beside it: one line,
+// described twice, once as unverifiable and once as unwanted. A user who believes
+// the warning deletes the thing they asked for.
+//
+// The suppression is therefore about explanation, not approval: an over-add
+// warning is for rows nothing accounts for, and this row is already accounted for
+// by name. What must NOT follow is a blanket mute — the over-add check is the
+// safety net for "never add what the user didn't ask for", so the match is exact.
+
+describe('dropExplainedOverAdds', () => {
+  const CHICKEN = 'H-E-B Boneless Skinless Chicken Breasts';
+  const over: OverAdd[] = [
+    { name: CHICKEN, qty: 1 },
+    { name: 'H-E-B Bakery Chocolate Chip Cookies, 12 ct', qty: 2 },
+  ];
+
+  it('holds out the explained line, and only that one', () => {
+    expect(dropExplainedOverAdds(over, [CHICKEN])).toEqual([
+      { name: 'H-E-B Bakery Chocolate Chip Cookies, 12 ct', qty: 2 },
+    ]);
+  });
+
+  it('changes nothing when the run explained nothing', () => {
+    expect(dropExplainedOverAdds(over, [])).toEqual(over);
+  });
+
+  it('still reports the cookie nobody ordered — explaining one row is not a mute', () => {
+    const out = dropExplainedOverAdds(over, [CHICKEN]);
+    expect(out.map((o) => o.name)).toEqual(['H-E-B Bakery Chocolate Chip Cookies, 12 ct']);
+    expect(out.reduce((n, o) => n + o.qty, 0)).toBe(2);
+  });
+
+  it('still reports a NEAR name match — the chicken-thighs case the loose matcher muted', () => {
+    // The regression that killed cartNameMatches (0.6 token overlap) here: store
+    // titles for two different cuts share their descriptors, so the explained
+    // breasts line scored 3/4 against an unintended thighs line and swallowed the
+    // warning. A different product must survive however similar its title reads.
+    const thighs: OverAdd[] = [{ name: 'H-E-B Chicken Thighs, Boneless Skinless, 2 lb', qty: 1 }];
+    expect(dropExplainedOverAdds(thighs, [CHICKEN])).toEqual(thighs);
+  });
+
+  it('still reports a strict superset name — "Bananas" must not mute "Bananas Organic"', () => {
+    // Every token of the explained name appears in the over-add name, which is a
+    // 1.0 loose score and a total mute. They are two different products.
+    const organic: OverAdd[] = [{ name: 'Bananas Organic', qty: 1 }];
+    expect(dropExplainedOverAdds(organic, ['Bananas'])).toEqual(organic);
+  });
+
+  it('compares normalized, so punctuation and HTML entities between cart reads do not un-explain a row', () => {
+    // The two titles come from the same extractor on two reads of the same page —
+    // directly comparable — but one read may still carry an entity or a comma.
+    const encoded: OverAdd[] = [{ name: 'H-E-B Boneless Skinless Chicken&nbsp;Breasts', qty: 1 }];
+    expect(dropExplainedOverAdds(encoded, [CHICKEN])).toEqual([]);
+  });
+
+  it('cancels ONE unit per explained row — extra units under the same title stay reported', () => {
+    // Two explained lines cannot excuse three units, and one cannot excuse two.
+    expect(dropExplainedOverAdds([{ name: CHICKEN, qty: 3 }], [CHICKEN])).toEqual([
+      { name: CHICKEN, qty: 2 },
+    ]);
+    expect(dropExplainedOverAdds([{ name: CHICKEN, qty: 3 }], [CHICKEN, CHICKEN])).toEqual([
+      { name: CHICKEN, qty: 1 },
+    ]);
+  });
+
+  it('does not mutate the caller\'s over-add list', () => {
+    const input: OverAdd[] = [{ name: CHICKEN, qty: 2 }];
+    dropExplainedOverAdds(input, [CHICKEN]);
+    expect(input).toEqual([{ name: CHICKEN, qty: 2 }]);
+  });
+});
+
+describe('auditCartAfterRun — the retry exit, beside the unverified banner', () => {
+  // The exact state the sheet is in on the done screen: the reconcile could not
+  // verify the deli line and topped up the cumin, so `active` is the retry subset
+  // only and the deli item survives in `reconcileIntended`. The cart also holds a
+  // cookie nobody asked for, which the audit must still surface.
+  const UNVERIFIED_LINE = 'H-E-B Boneless Skinless Chicken Breasts';
+  const COOKIES = 'H-E-B Bakery Chocolate Chip Cookies, 12 ct';
+  const audit = (explainedRows?: string[]) =>
+    auditCartAfterRun({
+      rows: [
+        row(UNVERIFIED_LINE, 1, true),
+        row('McCormick Ground Cumin, 4.5 oz', 2),
+        row(COOKIES, 1),
+      ],
+      reportedAdded: ['McCormick Ground Cumin, 4.5 oz'],
+      active: [intended('cumin', 2)],
+      reconcileIntended: [intended('chicken breast', 3), intended('cumin', 2)],
+      countBefore: 0,
+      countAfter: 4,
+      explainedRows,
+    });
+
+  it('reports the weight line as an over-add when nothing explains it — the bug', () => {
+    // Not a claim about desired behaviour: it pins that this audit really does
+    // surface the row, so the assertion below cannot pass vacuously.
+    // Count rows are listed before weight rows (see splitCartLeftover's residue).
+    expect(audit().over).toEqual([{ name: COOKIES, qty: 1 }, { name: UNVERIFIED_LINE, qty: 1 }]);
+  });
+
+  it("never names an explained line as an item Mealio didn't intend", () => {
+    const out = audit([UNVERIFIED_LINE]);
+    expect(out.over.map((o) => o.name)).not.toContain(UNVERIFIED_LINE);
+    // And it is not quietly moved to another finding instead: the count item whose
+    // line this is added nothing, so there is nothing to recover or report short.
+    expect(out.recovered).toEqual([]);
+    expect(out.short).toEqual([]);
+    expect(out.missing).toEqual([]);
+  });
+
+  it('still reports the cookie on the very same run — the safety net is intact', () => {
+    const out = audit([UNVERIFIED_LINE]);
+    expect(out.over).toEqual([{ name: COOKIES, qty: 1 }]);
+    expect(out.overUnits).toBe(1);
+  });
+
+  it('still reports a near-name-match row that the explained line resembles', () => {
+    // Same shape as the cookie case, but with the title that used to be muted:
+    // an unintended thighs line beside an explained breasts line.
+    const out = auditCartAfterRun({
+      rows: [
+        row(UNVERIFIED_LINE, 1, true),
+        row('H-E-B Chicken Thighs, Boneless Skinless, 2 lb', 1),
+      ],
+      reportedAdded: [],
+      active: [],
+      reconcileIntended: [intended('chicken breast', 3)],
+      countBefore: 0,
+      countAfter: 2,
+      explainedRows: [UNVERIFIED_LINE],
+    });
+    expect(out.over).toEqual([{ name: 'H-E-B Chicken Thighs, Boneless Skinless, 2 lb', qty: 1 }]);
+    expect(out.overUnits).toBe(1);
+  });
+
+  it('takes its explained rows from the same cartName the banner is built from', () => {
+    // Binds the two ends together: the string held out of the warning is the string
+    // the done screen shows the user, not a second guess at the title.
+    const reconciled = reconcileParallelAdd(
+      [
+        attempt('chicken breast', 3, { success: true, productName: UNVERIFIED_LINE }),
+        attempt('cumin', 2, { success: true, productName: 'McCormick Ground Cumin, 4.5 oz' }),
+      ],
+      [row(UNVERIFIED_LINE, 1, true)],
+    );
+    const explained = splitUnverifiableTopUps(reconciled).unverified.map((u) => u.cartName);
+    expect(explained).toEqual([UNVERIFIED_LINE]);
+    expect(dropExplainedOverAdds(reconciled.overAdds, explained)).toEqual([]);
+    expect(audit(explained).over).toEqual([{ name: COOKIES, qty: 1 }]);
   });
 });
 
