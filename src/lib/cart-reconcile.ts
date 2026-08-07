@@ -192,9 +192,9 @@ export interface ReconcileOutcome {
    * Reported separately because the top-up these items get is the one case where
    * a re-add can cost real money: the line plausibly DID land, so re-adding the
    * full quantity unattended buys the meat a second time. A caller that can ask
-   * the user should route these to review instead of to the automatic top-up —
-   * they appear in `topUps` as well, so a caller that does nothing behaves
-   * exactly as before.
+   * the user routes these to review instead of to the automatic top-up — see
+   * splitTopUpsForReview, which is how WebViewCartSheet does it. They appear in
+   * `topUps` as well, so a caller that does nothing behaves exactly as before.
    *
    * Each unclaimed weight row explains at most one item, so this can never name
    * more items than the cart has unexplained weight lines.
@@ -361,6 +361,57 @@ export function reconcileParallelAdd(
     overAddUnits: overAdds.reduce((n, o) => n + o.qty, 0),
     countItemsOnWeightRows,
   };
+}
+
+// ── Routing the top-up: retry vs ask (MEAL-119) ───────────────────────────────
+
+/** One short item whose cart line disagrees with its intent, ready to be asked
+ *  about: the cart line that bears its name, and the units it is still short by
+ *  if the user decides the line does not cover them. */
+export interface TopUpQuestion {
+  index: number;
+  /** The sold-by-weight cart line matching this item's name. Truthful enough to
+   *  render: it is a line the cart really holds. */
+  cartName: string;
+  /** Units still unaccounted for — what an intentional top-up would add. */
+  shortfall: number;
+}
+
+export interface TopUpRouting {
+  /** Safe to re-add unattended: nothing in the cart plausibly covers these. */
+  retry: { index: number; shortfall: number }[];
+  /** Must be asked about before anything is added — see TopUpQuestion. */
+  ask: TopUpQuestion[];
+}
+
+/**
+ * Split a reconcile's top-up into the part a machine may re-add and the part
+ * only the user can decide.
+ *
+ * Both outcomes of the intent-vs-row disagreement are unacceptable and this is
+ * the fork where that is enforced. Re-adding a count item whose sold-by-weight
+ * line may well have landed buys the meat twice; confirming it off that line
+ * hands the user one deli slice and calls the order complete. So the item goes
+ * to neither: it leaves `retry` (no unattended re-add is possible for it) and
+ * arrives in `ask`, which the caller turns into a review card.
+ *
+ * A total partition of `topUps` by index — every short item ends up in exactly
+ * one side, so no item can be both re-added and asked about, and none can be
+ * dropped. `countItemsOnWeightRows` is already a subset of `topUps` (each
+ * unclaimed weight row blames at most one item), which is what makes that true.
+ */
+export function splitTopUpsForReview(
+  outcome: Pick<ReconcileOutcome, 'topUps' | 'countItemsOnWeightRows'>,
+): TopUpRouting {
+  const disagreements = new Map(outcome.countItemsOnWeightRows.map((c) => [c.index, c.cartName]));
+  const retry: { index: number; shortfall: number }[] = [];
+  const ask: TopUpQuestion[] = [];
+  for (const t of outcome.topUps) {
+    const cartName = disagreements.get(t.index);
+    if (cartName === undefined) retry.push(t);
+    else ask.push({ index: t.index, cartName, shortfall: t.shortfall });
+  }
+  return { retry, ask };
 }
 
 // ── Per-item cart verdicts (MEAL-14) ─────────────────────────────────────────
@@ -745,8 +796,11 @@ export function auditCartAfterRun(input: {
     // screen, "don't add it again" beside "nothing intended it".
     ({ over, recovered } = splitCartLeftover(addedRows, reportedAdded, intendedAll));
     // Only audit items we reported as added (failures already route to review),
-    // skip sold-by-weight lines (one row at N lb, not count-comparable), and
-    // skip fully-missing items (covered by `missing`).
+    // skip sold-by-weight ITEMS (presence, not count — see isWeightPriced), and
+    // skip fully-missing items (covered by `missing`). The weight ROWS are
+    // dropped by findShortAddedItems itself: filtering only the items here left a
+    // weight line countable as a unit, and one deli line was reported short AND
+    // over at the same time.
     const auditItems = active.filter((a) =>
       !a.isWeight
       && reportedAdded.some((n) => cartNameMatches(a.name, n))

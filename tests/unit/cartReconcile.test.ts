@@ -11,6 +11,7 @@ import {
   reconcileFromWorkerReports,
   reconcileParallelAdd,
   shouldProbeAfterRun,
+  splitTopUpsForReview,
   summarizeConfirmations,
   toIntendedItem,
 } from '../../src/lib/cart-reconcile';
@@ -798,6 +799,30 @@ const AUDIT_CASES: AuditCase[] = [
     countShortfall: null,
     recovered: [{ name: 'shredded cheese', cartName: 'Kraft Shredded Cheese Sharp Cheddar', qty: 1, matchQuality: 'loose' as const }],
   },
+  // MEAL-119, end to end: the same physical line reported as BOTH short and over.
+  // findShortAddedItems was handed every added row while only the audited ITEMS
+  // were filtered for weight, so the deli line was spent as "1 unit" against a ×3
+  // count item (`short: got 1, expected 3`) — and splitCartLeftover, which cannot
+  // claim a weight row for a count item, still had it left over (`over: qty 1`).
+  // The done screen then said "you got 1 of 3" and "nothing intended this" about
+  // one line. Only the over-add is true: the row is real, and how much of it
+  // covers the ×3 is the user's call, which is what the review card now asks.
+  {
+    name: 'a stepper-weight deli line is reported ONCE — an over-add, not an over-add AND a shortfall',
+    rows: [row('H-E-B Boneless Chicken Breast', 1, true)],
+    reportedAdded: ['H-E-B Boneless Chicken Breast'],
+    // Count-intended (no purchaseWeight → isWeight false), so the audit does
+    // cover it; the cart line came back sold-by-weight.
+    active: [intended('H-E-B Boneless Chicken Breast', 3)],
+    reconcileIntended: [],
+    countBefore: 0,
+    countAfter: 1,
+    missing: [],
+    short: [],
+    over: [{ name: 'H-E-B Boneless Chicken Breast', qty: 1 }],
+    countShortfall: null,
+    recovered: [],
+  },
   {
     name: 'an unintended unit stays an over-add — nothing attempted explains it',
     rows: [row('Milk', 1), row('Impulse Candy Bar', 1)],
@@ -841,6 +866,88 @@ describe('auditCartAfterRun', () => {
       const overNames = out.over.map((o) => o.name);
       expect(out.recovered.filter((r) => overNames.includes(r.cartName))).toEqual([]);
     }
+  });
+});
+
+// ── Routing the top-up: retry vs ask (MEAL-119) ────────────────────────────────
+//
+// Stephen's ruling on this case: "double adding is worst case scenario, but user
+// getting nothing is also not acceptable." Both machine answers are rejected, so
+// the item leaves the automatic top-up and becomes a question. This split is
+// where that is enforced — everything downstream (the review card, its buttons)
+// only matters if an item actually stops being re-added here.
+
+describe('splitTopUpsForReview', () => {
+  const outcome = (
+    topUps: { index: number; shortfall: number }[],
+    countItemsOnWeightRows: { index: number; cartName: string }[] = [],
+  ) => ({ topUps, countItemsOnWeightRows });
+
+  it('takes the disagreement OUT of the retry — no unattended re-add is possible for it', () => {
+    // The one that costs money: a ×3 count item short beside its own deli line.
+    // Left in `retry`, WebViewCartSheet re-adds productQty: 3 with no confirmation
+    // step and the user pays for the meat twice.
+    const routing = splitTopUpsForReview(outcome(
+      [{ index: 0, shortfall: 3 }],
+      [{ index: 0, cartName: 'H-E-B Boneless Chicken Breast' }],
+    ));
+    expect(routing.retry).toEqual([]);
+    expect(routing.ask).toEqual([
+      { index: 0, cartName: 'H-E-B Boneless Chicken Breast', shortfall: 3 },
+    ]);
+  });
+
+  it('still retries an ordinary shortfall — nothing in the cart plausibly covers it', () => {
+    const routing = splitTopUpsForReview(outcome([{ index: 0, shortfall: 2 }]));
+    expect(routing.retry).toEqual([{ index: 0, shortfall: 2 }]);
+    expect(routing.ask).toEqual([]);
+  });
+
+  it('splits a mixed top-up per item, not per run — one asked item must not strand the others', () => {
+    const routing = splitTopUpsForReview(outcome(
+      [{ index: 0, shortfall: 2 }, { index: 1, shortfall: 3 }, { index: 2, shortfall: 1 }],
+      [{ index: 1, cartName: 'H-E-B Deli Roast Beef, lb' }],
+    ));
+    expect(routing.retry).toEqual([{ index: 0, shortfall: 2 }, { index: 2, shortfall: 1 }]);
+    expect(routing.ask).toEqual([
+      { index: 1, cartName: 'H-E-B Deli Roast Beef, lb', shortfall: 3 },
+    ]);
+  });
+
+  it('is a total partition of the top-up — nothing in both sides, nothing dropped', () => {
+    const topUps = [
+      { index: 0, shortfall: 1 },
+      { index: 3, shortfall: 4 },
+      { index: 7, shortfall: 2 },
+    ];
+    const routing = splitTopUpsForReview(outcome(topUps, [
+      { index: 3, cartName: 'H-E-B Deli Turkey, lb' },
+      { index: 7, cartName: 'H-E-B Deli Ham, lb' },
+    ]));
+    const retried = routing.retry.map((r) => r.index);
+    const asked = routing.ask.map((a) => a.index);
+    expect([...retried, ...asked].sort()).toEqual([0, 3, 7]);
+    expect(retried.filter((i) => asked.includes(i))).toEqual([]);
+    // The shortfall travels with the item: it is what an intentional top-up adds,
+    // and the card names that number on its button.
+    expect(routing.ask.map((a) => a.shortfall)).toEqual([4, 2]);
+  });
+
+  it('carries a real reconcile outcome through — the shapes the sheet actually passes', () => {
+    // Not a hand-built outcome: the deli case from the reconcile table above,
+    // reconciled for real and then routed. Guards the two from drifting apart.
+    const out = reconcileParallelAdd(
+      [
+        attempt('chicken breast', 3, { success: true, productName: 'H-E-B Boneless Chicken Breast' }),
+        attempt('cumin', 2, { success: true, productName: 'McCormick Ground Cumin, 4.5 oz' }),
+      ],
+      [row('H-E-B Boneless Chicken Breast', 1, true)],
+    );
+    const routing = splitTopUpsForReview(out);
+    expect(routing.retry).toEqual([{ index: 1, shortfall: 2 }]);
+    expect(routing.ask).toEqual([
+      { index: 0, cartName: 'H-E-B Boneless Chicken Breast', shortfall: 3 },
+    ]);
   });
 });
 

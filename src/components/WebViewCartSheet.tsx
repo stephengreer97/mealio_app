@@ -43,7 +43,7 @@ import { getAutomationConfig, getConfigVersion } from '../lib/automation-config'
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
-import { auditCartAfterRun, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
+import { auditCartAfterRun, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitTopUpsForReview, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, correctConfirmedFromCart, countRequested, isRunComplete } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
@@ -74,14 +74,66 @@ interface Candidate {
   skuId?: string | null;
 }
 
+/**
+ * MEAL-119: a count-ordered item whose cart line came back sold-by-weight.
+ *
+ * Not "we could not add it" — the store may well have added it, as a single line
+ * at some poundage we cannot compare to a ×3. Both machine answers are wrong
+ * here: re-adding the shortfall unattended buys the deli meat a second time, and
+ * confirming it off that line hands the user one slice and reports the order
+ * complete. So the item is asked about instead. See splitTopUpsForReview.
+ */
+const IN_CART_BY_WEIGHT = 'in_cart_by_weight';
+
 interface SearchResult {
   term: string;
   candidates: Candidate[];
   mealIngredients: MealIngredientQty[];
   unit: string;
   measure: string | null;
-  reason: 'out_of_stock' | 'no_results' | 'low_confidence' | 'needs_weight';
+  reason: 'out_of_stock' | 'no_results' | 'low_confidence' | 'needs_weight' | typeof IN_CART_BY_WEIGHT;
   isChoose: boolean; // true = choose-product flow (no searchTerm yet); false = review unmatched (searchTerm set but no match)
+}
+
+/**
+ * Build the review card for one in-cart-by-weight item.
+ *
+ * The card renders from `candidates`, and the worker that added this item has
+ * none to give: H-E-B's success message carries no product list, so routing the
+ * item to review with the worker's (empty) candidates would draw a card with
+ * nothing named and nothing to press — trading a double purchase for a silent
+ * non-delivery. So the cart row itself becomes the candidate. It is not a search
+ * result and it is not pretending to be one: the name is the line the cart
+ * actually holds, which is exactly what the user needs to recognise.
+ *
+ * `isWeightItem` stays FALSE deliberately. The item's intent is a unit count (a
+ * stepper-weight deli item has no purchaseWeight — see isWeightPriced), so the
+ * qty stepper must read in units and an intentional top-up must add units, the
+ * same thing the automatic one would have added. Marking it weight would turn
+ * the stepper into a poundage picker and persist a made-up purchaseWeight.
+ */
+export function inCartByWeightReview(
+  item: Pick<ConsolidatedIngredient, 'searchTerm' | 'ingredientName' | 'unit' | 'measure'> & {
+    mealIngredients: MealIngredientQty[];
+  },
+  cartName: string,
+): SearchResult {
+  return {
+    term: item.searchTerm || item.ingredientName,
+    candidates: [{
+      productName: cartName,
+      imageUrl: null,
+      outOfStock: false,
+      preferences: null,
+      price: null,
+      isWeightItem: false,
+    }],
+    mealIngredients: item.mealIngredients,
+    unit: item.unit,
+    measure: item.measure,
+    reason: IN_CART_BY_WEIGHT,
+    isChoose: false,
+  };
 }
 
 // Result a parallel-add worker reports for one ingredient.
@@ -199,6 +251,109 @@ function isLikelyPageUrl(url: string, domain: string): boolean {
 
 function fmtWeight(qty: number): string {
   return `${(qty * 0.25).toFixed(2)} lb`;
+}
+
+// ── In-cart-by-weight review card (MEAL-119) ──────────────────────────────────
+
+/**
+ * What happened, in the user's terms — the card's reason block.
+ *
+ * Says the three things only this state can say: the item IS in the cart, it is
+ * there priced by weight, and *because* of that we cannot tell whether the amount
+ * covers what the meal asked for. The last clause is the one that earns the
+ * question: without it, "already in your cart" reads as done and the user has no
+ * reason to look at the buttons.
+ *
+ * Exported so it can be rendered and read in a test — the copy is the feature
+ * here, not decoration around it.
+ */
+export function InCartByWeightNote({ cartName }: { cartName: string | null }) {
+  return (
+    <View style={styles.noResultsBox} testID="in-cart-by-weight-note">
+      <Text style={styles.noResultsTitle}>⚖ Already in your cart, priced by weight</Text>
+      <Text style={styles.noResultsBody}>
+        {cartName ? `Your cart has "${cartName}". ` : 'Your cart already has this item. '}
+        It is charged by weight, so we cannot tell whether the amount there covers what your
+        meal needs — and we did not add any more. Keep it as it is, or add more yourself.
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * The card's buttons for this state, which is the whole point of MEAL-119.
+ *
+ * Neither of the two outcomes this ticket rejected is reachable from here:
+ *
+ *   • Nothing is confirmed silently. "Keep what's in my cart" is a press, on a
+ *     card the user had to be shown to reach.
+ *   • Nothing is re-added automatically, or at the full quantity by default. The
+ *     top-up button is inert until the user raises the qty stepper above this
+ *     footer off its 0, and it names the number it will add. Guarded twice —
+ *     `disabled` for the finger and a check inside onPress for everything else —
+ *     because a re-add here spends the user's money a second time.
+ *   • Skip stays exactly where it is on every other review card.
+ *
+ * There is deliberately no "Add & Update Meal Ingredient": the candidate on this
+ * card is synthesized from a cart line (see inCartByWeightReview), not chosen
+ * from search results, so saving it as the ingredient's product for all future
+ * runs would persist a guess.
+ */
+export function InCartByWeightActions({
+  addQty,
+  storeColor,
+  onKeep,
+  onAddMore,
+  onSkip,
+  onBack,
+}: {
+  /** Units the stepper is currently set to add. 0 = nothing chosen yet. */
+  addQty: number;
+  storeColor: string;
+  onKeep: () => void;
+  onAddMore: () => void;
+  onSkip: () => void;
+  /** Omitted on the first review item, which has nothing to go back to. */
+  onBack?: () => void;
+}) {
+  const canAddMore = addQty > 0;
+  return (
+    <>
+      <TouchableOpacity
+        testID="keep-cart-weight-line"
+        onPress={onKeep}
+        style={[styles.primaryBtn, { backgroundColor: storeColor }]}
+      >
+        <Text style={styles.primaryBtnText}>That's enough — keep my cart as is</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        testID="add-more-anyway"
+        onPress={() => { if (canAddMore) onAddMore(); }}
+        disabled={!canAddMore}
+        style={[styles.secondaryBtn, { borderColor: storeColor }, !canAddMore && { opacity: 0.4 }]}
+      >
+        <Text style={[styles.secondaryBtnText, { color: storeColor }]}>
+          {canAddMore
+            ? `Add ${addQty} more to my cart`
+            : 'To add more, set a quantity above'}
+        </Text>
+      </TouchableOpacity>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        {onBack && (
+          <TouchableOpacity
+            testID="in-cart-by-weight-back"
+            onPress={onBack}
+            style={[styles.skipBtn, { flex: 1, borderWidth: 1, borderColor: Colors.border, borderRadius: 12 }]}
+          >
+            <Text style={styles.skipBtnText}>← Back</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity testID="in-cart-by-weight-skip" onPress={onSkip} style={[styles.skipBtn, { flex: 1 }]}>
+          <Text style={styles.skipBtnText}>Skip this ingredient</Text>
+        </TouchableOpacity>
+      </View>
+    </>
+  );
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────────
@@ -382,6 +537,12 @@ export default function WebViewCartSheet({
   // so re-deciding after Back clears the earlier skip. Reported on the done
   // snapshot — distinct from items the automation failed to add.
   const [skippedByIdx, setSkippedByIdx] = useState<Record<number, string>>({});
+  // MEAL-119: in-cart-by-weight items the user decided were already covered by
+  // the cart line, keyed the same way. Held apart from both `addResults` and
+  // `skippedByIdx` because it is neither: Mealio did not add this, so it cannot
+  // be counted as added, and the user did not pass it over either — they looked
+  // at the cart line and said it was enough. The value is the cart line's name.
+  const [keptByIdx, setKeptByIdx] = useState<Record<number, string>>({});
   // Choose-product flow: single qty per ingredient (default 0, red until set)
   const [chooseQty, setChooseQty] = useState(0);
   // Custom search state (used when user selects "Other — type a product name…")
@@ -1336,6 +1497,11 @@ export default function WebViewCartSheet({
           ? 'cart_reconcile'
           : 'worker_reports';
     const skippedInReview = Object.values(skippedByIdx).filter(Boolean).length;
+    // MEAL-119: how many in-cart-by-weight questions the user answered with "the
+    // line I have is enough". Counted apart from skips (which pass over an item
+    // nobody has) and from itemsAdded (Mealio added nothing for these) — it is the
+    // read side's only way to see whether asking was the right call.
+    const keptInReview = Object.values(keptByIdx).filter(Boolean).length;
     if (runId) {
       usage.logAutomationComplete({
         runId,
@@ -1364,6 +1530,7 @@ export default function WebViewCartSheet({
       confirmedSource,
       weightRequested,
       skippedInReview,
+      keptInReview,
       runComplete: isRunComplete(requested, totalAdded),
     };
     if (outcome === 'failed') {
@@ -1381,9 +1548,9 @@ export default function WebViewCartSheet({
       tel().record('run_summary', 'ok', { detail: summaryDetail });
     }
     void tel().flush();
-    // skippedByIdx is read above; automationCompletedRef keeps this to one firing
-    // per run whatever re-renders the extra dependency causes.
-  }, [step, totalAdded, cartDeltaWarning, skippedByIdx, tel]);
+    // skippedByIdx / keptByIdx are read above; automationCompletedRef keeps this to
+    // one firing per run whatever re-renders the extra dependencies cause.
+  }, [step, totalAdded, cartDeltaWarning, skippedByIdx, keptByIdx, tel]);
 
   // Clear all safety timers on unmount. Without this, closing the sheet mid
   // login-check / search / add leaves a real setTimeout running that later
@@ -2322,12 +2489,16 @@ export default function WebViewCartSheet({
             }
             const outcome = reconcileParallelAdd(attempts, rows.filter((r) => r.added));
             const confirmed = outcome.confirmed.map((c) => ({ name: c.name, success: true }));
+            // Two destinations for a shortfall, and which one an item takes is not
+            // this screen's judgement to make — see splitTopUpsForReview. `retry`
+            // is re-added unattended; `ask` is the count-item-on-a-weight-row
+            // disagreement, where the cart plausibly already holds the item and
+            // both machine answers cost the user something real, so it goes to the
+            // user instead. Nothing is in both, and nothing is dropped.
+            const routing = splitTopUpsForReview(outcome);
             // Re-add only the missing units; re-adding the full qty would
-            // over-add the units that already landed. Note the one case where
-            // "missing" is a judgement rather than a count: for a count item whose
-            // cart line came back sold-by-weight the shortfall IS the full qty, so
-            // this re-adds everything with no confirmation step (see the log below).
-            const retryItems: ConsolidatedIngredient[] = outcome.topUps.map(
+            // over-add the units that already landed.
+            const retryItems: ConsolidatedIngredient[] = routing.retry.map(
               (t) => ({ ...active[t.index], productQty: t.shortfall }),
             );
             const reviewFailures: SearchResult[] = outcome.definiteFailures.map((f) => {
@@ -2342,20 +2513,22 @@ export default function WebViewCartSheet({
                 isChoose: false,
               };
             });
+            // The disagreements, as review cards. Appended to the same queue the
+            // definitive failures use, so they reach the user through the screen
+            // that already exists — and appended AFTER them so the run's outright
+            // failures are dealt with first.
+            const askCards: SearchResult[] = routing.ask.map(
+              (q) => inCartByWeightReview(active[q.index], q.cartName),
+            );
+            reviewFailures.push(...askCards);
             // Keep the full intended set: the retry branch below narrows
             // activeItemsRef to the top-up subset, and the final cart check needs
             // the whole set to spot units no item intended.
             reconcileIntendedRef.current = outcome.intended;
             console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm), 'review=', reviewFailures.length, reviewFailures.map((r) => `${r.term}:${r.reason}`));
-            // The subset of the top-up that can cost money to be wrong about: a
-            // count item short while a sold-by-weight line of its name sits in the
-            // cart, so the line plausibly DID land and the retry below re-adds the
-            // full quantity anyway. Logged and counted rather than routed, because
-            // routing it means asking the user something the review card has no
-            // shape for yet — see countItemsOnWeightRows in cart-reconcile.ts.
-            if (outcome.countItemsOnWeightRows.length > 0) {
-              console.log(`[Cart ${ts()}]`, 'reconcile: COUNT ITEM ON WEIGHT ROW — top-up may re-buy',
-                outcome.countItemsOnWeightRows.map((c) => `${active[c.index]?.searchTerm ?? c.index}→${c.cartName}`));
+            if (routing.ask.length > 0) {
+              console.log(`[Cart ${ts()}]`, 'reconcile: COUNT ITEM ON WEIGHT ROW — asking instead of re-adding',
+                routing.ask.map((q) => `${active[q.index]?.searchTerm ?? q.index}→${q.cartName} (short ${q.shortfall})`));
             }
             // North-star: this is the ONE moment in the run where the added count
             // is backed by a per-item cart read, so it is the only place allowed
@@ -2387,21 +2560,25 @@ export default function WebViewCartSheet({
               confirmed: confirmed.length,
               retry: retryItems.length,
               review: reviewFailures.length,
-              // How often the intent-vs-cart-row disagreement actually fires, which
-              // is what a decision about routing it to review needs to know.
-              weightRowRetry: outcome.countItemsOnWeightRows.length,
+              // How often the intent-vs-cart-row disagreement fires, and therefore
+              // how often a user is asked. Replaces `weightRowRetry` from earlier on
+              // this branch, which counted the same items while they were still
+              // being re-added — a different event with the same number.
+              weightRowAsked: routing.ask.length,
             };
             if (retryItems.length === 0 && reviewFailures.length === 0) {
               tel().record('reconcile', 'ok', { detail: reconcileDetail });
             } else {
               // A top-up means the cart is short of what the workers claimed —
               // that's the confirmation rail being wrong, and it outranks the
-              // review pile because it's the part we got wrong ourselves. With no
-              // top-ups the row reflects the review failures, which reconcile only
-              // ever routes here for out_of_stock / no_results.
+              // review pile because it's the part we got wrong ourselves. An asked
+              // item is the same family: the add was dispatched and the cart cannot
+              // corroborate what landed, which is confirm_failed however it is
+              // routed. With neither, the row reflects the review failures, which
+              // reconcile only ever routes here for out_of_stock / no_results.
               tel().record('reconcile', 'error', {
                 detail: reconcileDetail,
-                code: retryItems.length > 0
+                code: retryItems.length > 0 || routing.ask.length > 0
                   ? 'confirm_failed'
                   : reviewFailures.every((r) => r.reason === 'no_results')
                     ? 'no_candidates'
@@ -2942,9 +3119,9 @@ export default function WebViewCartSheet({
     webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(trimmed));
   }, []);
 
-  const handleReviewDecision = (action: 'add' | 'update' | 'skip' | 'choose') => {
+  const handleReviewDecision = (action: 'add' | 'update' | 'skip' | 'choose' | 'keep') => {
     // If the user typed a custom search term, trigger the search instead of advancing.
-    if (action !== 'skip' && action !== 'choose' && selectedSuggIdx === 'custom') {
+    if (action !== 'skip' && action !== 'choose' && action !== 'keep' && selectedSuggIdx === 'custom') {
       const term = customText.trim();
       if (term) {
         handleCustomSearch(term);
@@ -2960,14 +3137,38 @@ export default function WebViewCartSheet({
       if (skippedName) setSkippedByIdx((prev) => ({ ...prev, [reviewIdx]: skippedName }));
     }
 
-    if (action !== 'skip' && currentReview) {
+    // MEAL-119: "the weight line I already have is enough." Adds NOTHING — the
+    // whole point of the card is that the automatic re-add was the danger — and
+    // pushes no pick, so it advances exactly like a skip but is reported as the
+    // deliberate acceptance it is. Clears any earlier skip for this index, the
+    // same way a re-decided pick does.
+    if (action === 'keep') {
+      const keptName = currentReview?.candidates[0]?.productName || currentReview?.term || '';
+      if (keptName) setKeptByIdx((prev) => ({ ...prev, [reviewIdx]: keptName }));
+      setSkippedByIdx((prev) => {
+        if (!(reviewIdx in prev)) return prev;
+        const next = { ...prev };
+        delete next[reviewIdx];
+        return next;
+      });
+    }
+
+    if (action !== 'skip' && action !== 'keep' && currentReview) {
       const displayCandidates = customSuggestions.length > 0 ? customSuggestions : currentReview.candidates;
       const candidate = typeof selectedSuggIdx === 'number' ? displayCandidates[selectedSuggIdx] : null;
       // 'choose' only saves the product for future runs (no cart add), so an
       // out-of-stock pick is allowed; 'add'/'update' hit the cart, so OOS stays blocked.
       if (candidate && (action === 'choose' || !candidate.outOfStock)) {
-        // Re-deciding this ingredient after a Back: drop any earlier skip for it.
+        // Re-deciding this ingredient after a Back: drop any earlier skip for it,
+        // and any earlier "keep the weight line" — adding now supersedes both, and
+        // a stale keep would report the item as covered on the done screen.
         setSkippedByIdx((prev) => {
+          if (!(reviewIdx in prev)) return prev;
+          const next = { ...prev };
+          delete next[reviewIdx];
+          return next;
+        });
+        setKeptByIdx((prev) => {
           if (!(reviewIdx in prev)) return prev;
           const next = { ...prev };
           delete next[reviewIdx];
@@ -3105,7 +3306,12 @@ export default function WebViewCartSheet({
     login_check: 'Connecting…',
     login: `Log in to ${storeName}`,
     searching: currentReview?.isChoose ? 'Choosing Products…' : 'Finding Products…',
-    searchResult: 'Items Not Added',
+    // "Items Not Added" is false for a queue made only of in-cart-by-weight items:
+    // the store may well have added them, which is why they are being asked about
+    // (MEAL-119). A mixed queue keeps the failure title — some of it did fail.
+    searchResult: searchResults.length > 0 && searchResults.every((r) => r.reason === IN_CART_BY_WEIGHT)
+      ? 'Check Your Cart'
+      : 'Items Not Added',
     review: currentReview?.isChoose
       ? `Choose Product (${reviewIdx + 1} of ${searchResults.length})`
       : `Review Ingredients (${reviewIdx + 1} of ${searchResults.length})`,
@@ -3507,6 +3713,12 @@ export default function WebViewCartSheet({
         {/* ── Step: searchResult ──────────────────────────────────────────── */}
         {step === 'searchResult' && (() => {
           const autoAdded = autoPickedItemsRef.current;
+          // MEAL-119 items did not fail to be added — the cart may well hold them,
+          // by weight, which is the whole reason they need a decision. Saying
+          // "could not be added / out of stock" over them would be a lie the user
+          // then has to unlearn on the card itself.
+          const weighed = searchResults.filter((r) => r.reason === IN_CART_BY_WEIGHT).length;
+          const allWeighed = weighed > 0 && weighed === searchResults.length;
           return (
             <>
               <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.listContent, { alignItems: 'center' }]}>
@@ -3514,11 +3726,21 @@ export default function WebViewCartSheet({
                   <Ionicons name="alert-circle" size={48} color="#f59e0b" />
                 </View>
                 <Text style={[styles.doneTitle, { marginBottom: 8 }]}>
-                  {searchResults.length} item{searchResults.length !== 1 ? 's' : ''} could not be added to cart
+                  {allWeighed
+                    ? `${weighed} item${weighed !== 1 ? 's' : ''} need${weighed === 1 ? 's' : ''} your decision`
+                    : `${searchResults.length} item${searchResults.length !== 1 ? 's' : ''} could not be added to cart`}
                 </Text>
                 <Text style={[styles.doneSub, { marginBottom: 20 }]}>
-                  This may be because the item is out of stock or the store no longer carries it.
+                  {allWeighed
+                    ? `Already in your ${storeName} cart, priced by weight — we cannot tell whether the amount there is enough, so we did not add more.`
+                    : 'This may be because the item is out of stock or the store no longer carries it.'}
                 </Text>
+                {!allWeighed && weighed > 0 && (
+                  <Text style={[styles.doneSub, { marginBottom: 20 }]}>
+                    {weighed} of them {weighed === 1 ? 'is' : 'are'} already in your cart priced by weight — you will be
+                    asked whether to keep {weighed === 1 ? 'it' : 'them'} or add more.
+                  </Text>
+                )}
                 {autoAdded.length > 0 && (
                   <Text style={[styles.doneSub, { marginBottom: 20 }]}>
                     {autoAdded.length} item{autoAdded.length !== 1 ? 's' : ''} matched and will be added automatically.
@@ -3575,7 +3797,15 @@ export default function WebViewCartSheet({
             weightOpts ? (idx <= 0 ? '0 lb' : `${weightOpts[Math.min(idx, weightOpts.length) - 1]} lb`) : fmtWeight(idx);
           const maxWeightSteps = weightOpts ? weightOpts.length : Infinity;
           const needsPref = candidate && !candidate.outOfStock && candidate.preferences && candidate.preferences.length > 0;
-          console.log(`[Cart ${ts()}]`, 'review render', { isChoose, reviewIdx, candidateName: candidate?.productName, prefs: candidate?.preferences, needsPref, selectedSuggIdx });
+          // MEAL-119: the item is in the cart as a weight line and the only
+          // "candidate" is that line (see inCartByWeightReview). Once the user
+          // searches a real product instead, customSuggestions take over and this
+          // is an ordinary review card again — they have chosen to pick a product,
+          // so the normal add/save affordances are the right ones from then on.
+          const inCartByWeight = !isChoose
+            && currentReview.reason === IN_CART_BY_WEIGHT
+            && customSuggestions.length === 0;
+          console.log(`[Cart ${ts()}]`, 'review render', { isChoose, reviewIdx, candidateName: candidate?.productName, prefs: candidate?.preferences, needsPref, selectedSuggIdx, inCartByWeight });
           const canAdd = !customSearching && (
             selectedSuggIdx === 'custom'
               ? customText.trim().length > 0
@@ -3602,6 +3832,9 @@ export default function WebViewCartSheet({
                 )}
                 {!isChoose && currentReview.reason === 'needs_weight' && (
                   <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.brand, marginBottom: 6 }}>⚖ Sold by weight — choose how much to add</Text>
+                )}
+                {inCartByWeight && (
+                  <InCartByWeightNote cartName={currentReview.candidates[0]?.productName ?? null} />
                 )}
                 {/* Searched for */}
                 <View style={styles.searchedBox} onLayout={preview.onAnchorLayout}>
@@ -3650,7 +3883,11 @@ export default function WebViewCartSheet({
                   </View>
                 ) : hasCandidates ? (
                   <Text style={styles.suggHeader}>
-                    {customSuggestions.length > 0 ? `Results for "${customSearchTerm}"` : `${storeName} suggests`}
+                    {customSuggestions.length > 0
+                      ? `Results for "${customSearchTerm}"`
+                      // Not a suggestion and it must not claim to be one: this row
+                      // is the line already sitting in the cart (MEAL-119).
+                      : inCartByWeight ? 'In your cart now' : `${storeName} suggests`}
                   </Text>
                 ) : (
                   // No results: make it explicit the user can search a different product
@@ -3758,10 +3995,14 @@ export default function WebViewCartSheet({
                 {!isChoose && currentReview.mealIngredients.map((mi) => {
                   const qty = mealQtys[mi.mealId] ?? 0;
                   const showMealName = currentReview.mealIngredients.length > 1;
+                  // On an in-cart-by-weight card, 0 is a perfectly good answer
+                  // ("keep what I have") rather than a missing one, so the stepper
+                  // is not reddened and asks for EXTRA units instead of the qty.
+                  const qtyRequired = !inCartByWeight && qty === 0;
                   return (
                     <View key={mi.mealId} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: qty === 0 ? '#ef4444' : Colors.text2, flex: 1 }} numberOfLines={1}>
-                        {showMealName ? mi.mealName : 'Qty to add to cart'}
+                      <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: qtyRequired ? '#ef4444' : Colors.text2, flex: 1 }} numberOfLines={1}>
+                        {showMealName ? mi.mealName : inCartByWeight ? 'Extra qty to add' : 'Qty to add to cart'}
                       </Text>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                         <TouchableOpacity
@@ -3771,7 +4012,7 @@ export default function WebViewCartSheet({
                         >
                           <Text style={styles.qtyBtnText}>−</Text>
                         </TouchableOpacity>
-                        <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: qty === 0 ? '#ef4444' : Colors.text1, minWidth: 36, textAlign: 'center' }}>
+                        <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: qtyRequired ? '#ef4444' : Colors.text1, minWidth: 36, textAlign: 'center' }}>
                           {isWeightCandidate ? weightLabel(qty) : qty}
                         </Text>
                         <TouchableOpacity onPress={() => { if (!isWeightCandidate || qty < maxWeightSteps) adjustReviewMealQty(reviewIdx, mi.mealId, 1); }} style={styles.qtyBtn}>
@@ -3781,7 +4022,7 @@ export default function WebViewCartSheet({
                     </View>
                   );
                 })}
-                {!isChoose && totalQty === 0 && typeof selectedSuggIdx === 'number' && (
+                {!isChoose && !inCartByWeight && totalQty === 0 && typeof selectedSuggIdx === 'number' && (
                   <Text style={styles.qtyHint}>Set a quantity above to add this to your cart.</Text>
                 )}
 
@@ -3850,6 +4091,24 @@ export default function WebViewCartSheet({
                       <Text style={styles.skipBtnText}>Skip this ingredient</Text>
                     </TouchableOpacity>
                   </>
+                ) : inCartByWeight ? (
+                  // MEAL-119: neither "pick a product" nor "out of stock" — the
+                  // item is in the cart by weight and only the user can say whether
+                  // that covers the meal. Its own three answers, none of which is
+                  // an unattended re-add. See InCartByWeightActions.
+                  <InCartByWeightActions
+                    addQty={totalQty}
+                    storeColor={storeColor}
+                    onKeep={() => handleReviewDecision('keep')}
+                    // 'add' (not 'update'): adds the units the user asked for
+                    // without saving a cart line's title as the ingredient's
+                    // product for every future run.
+                    onAddMore={() => handleReviewDecision('add')}
+                    onSkip={() => handleReviewDecision('skip')}
+                    onBack={reviewIdx > 0
+                      ? () => { const target = reviewIdx - 1; setReviewIdx(target); setPickedItems((prev) => prev.filter((p) => p.reviewIndex !== target)); }
+                      : undefined}
+                  />
                 ) : (
                   // Review-unmatched flow: add to cart (with or without saving searchTerm).
                   <>
@@ -3922,6 +4181,7 @@ export default function WebViewCartSheet({
         {step === 'done' && (() => {
           const wasChooseFlow = searchResults.length > 0 && searchResults.every(r => r.isChoose);
           const skippedNames = Object.values(skippedByIdx).filter(Boolean);
+          const keptNames = Object.values(keptByIdx).filter(Boolean);
           return (
             <>
               <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 32, paddingBottom: 16 }}>
@@ -4005,6 +4265,20 @@ export default function WebViewCartSheet({
                   </Text>
                   <Text style={styles.skippedBannerBody} numberOfLines={3}>
                     {skippedNames.join(', ')}
+                  </Text>
+                </View>
+              )}
+
+              {/* MEAL-119: weight lines the user decided were already enough.
+                  Reported, not counted as added — Mealio added nothing for these,
+                  and the count above must stay the count of what it did. */}
+              {keptNames.length > 0 && (
+                <View style={styles.skippedBanner} testID="snapshot-kept">
+                  <Text style={styles.skippedBannerTitle}>
+                    {keptNames.length} weight item{keptNames.length !== 1 ? 's' : ''} kept as already in your cart
+                  </Text>
+                  <Text style={styles.skippedBannerBody} numberOfLines={3}>
+                    {keptNames.join(', ')}
                   </Text>
                 </View>
               )}
