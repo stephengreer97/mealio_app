@@ -402,9 +402,19 @@ export class AutomationTelemetry {
     this.buffer = [];
     // That flush re-arms the timer when the upload fails — it re-queues the
     // batch and schedules the retry, and it had no way to know it was being
-    // disposed. Clear it again: nothing may outlive dispose(), or a run that
-    // ends while the server is down leaves a timer behind that wakes every
-    // flushInterval forever to retry a buffer this line just emptied.
+    // disposed. Clear it again: nothing may outlive dispose().
+    //
+    // What that timer actually was, measured, because a generation guard around
+    // this lifecycle has to know: ONE pending timeout, not an unbounded chain. It
+    // fires once, `flush()` returns immediately on the empty buffer this line just
+    // cleared, and nothing re-arms — one flushInterval of lifetime and then gone.
+    // (The unbounded chain is the other half of the leak: an UNDISPOSED recorder
+    // whose uploads keep failing re-arms on every refused attempt, forever. That
+    // one is why the test run hung; this one is not.)
+    //
+    // A single bounded timeout is still worth clearing. It is a handle that keeps
+    // an event loop alive past the run that owns it — which is how jest came to
+    // need `--forceExit` — and it makes dispose() mean what it says.
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
   }
 

@@ -122,13 +122,14 @@ jobs:
 
       - run: npm ci
 
-      # Pre-existing type errors live in a few screens (MealDetailSheet,
-      # AccountScreen, MyMealsScreen, CreatorPortalScreen). Until those are
-      # cleaned up we gate only on NEW errors: fail if the error count
-      # exceeds the known baseline.
+      # The baseline was 14 for the pre-existing errors in MealDetailSheet,
+      # AccountScreen, MyMealsScreen and CreatorPortalScreen. Those are gone —
+      # `npx tsc --noEmit --skipLibCheck` reports 0 — so the gate was allowing up
+      # to 14 NEW type errors to land without failing. It is 0 now, which is what
+      # the tree actually holds; raise it only alongside the errors it is covering.
       - name: Typecheck with baseline
         run: |
-          BASELINE=14
+          BASELINE=0
           COUNT=$(npx tsc --noEmit --skipLibCheck 2>&1 | grep -cE "error TS" || true)
           echo "TypeScript errors: $COUNT (baseline: $BASELINE)"
           if [ "$COUNT" -gt "$BASELINE" ]; then

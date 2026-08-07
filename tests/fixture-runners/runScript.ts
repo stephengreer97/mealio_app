@@ -51,6 +51,39 @@ export const FIXTURE_CONTEXT_OPTIONS = {
  * readable here, which makes any visibility-based reasoning invalid against a
  * fixture — including in the drift census, which therefore counts matches and
  * never asks whether a user could see them.
+ *
+ * NOTHING LEAVES THIS MACHINE (MEAL-113). The list above is a list of resource
+ * types, and every type missing from it — `document`, `fetch`, `xhr`, `ping`,
+ * `other` — used to be forwarded to the public internet. Blocking a class of
+ * request by naming its members is a losing game: the members that matter are the
+ * ones nobody named. So the rule is now the class itself. A request to anything
+ * but localhost is never forwarded, whatever type it is.
+ *
+ * That was not a theoretical hole. Blocking `<script src>` does not stop the
+ * captured page's INLINE scripts, and they are what reach out: 348 `document`
+ * requests to ~25 third-party hosts across the fixture suites (ad and consent
+ * iframes, plus 5 to live store URLs — heb.com/my-account/login, the aldi.us
+ * storefront, a wegmans search), 17 live `fetch` calls to heb.com/api/dsf, beacons
+ * to unagi.amazon.com, ~40 Walmart bundle prefetches, and a DNS-over-HTTPS query
+ * to 1.1.1.1. On every run.
+ *
+ * Two reasons that has to stay shut, and the second is the one to remember:
+ *
+ *   1. It makes the suite depend on third parties answering, and on how fast. A
+ *      live navigation takes seconds; an answered one takes milliseconds. A store
+ *      script that posts a message and then does `window.location.href = …`
+ *      (wegmans.ts, walmart.ts, albertsons.ts, amazon-fresh.ts) was winning that
+ *      race only because the round trip was slow — a test green for a reason with
+ *      nothing to do with the code under test. In the project's main defence
+ *      against selector drift, that is the worst property it could have.
+ *   2. It exfiltrated captured session data. Those requests carried what is
+ *      committed in the fixtures — HEB cart contents and prices, an Albertsons
+ *      loyalty id, a hashed email — out to ad networks on every fixture run.
+ *
+ * So do not relax this back to `continue()` for convenience, and do not narrow it
+ * to a type list again. A `document` request is answered with an empty page —
+ * enough to set `window.location`, and nothing else — and everything else is
+ * aborted, which is what a captured page's runtime behavior deserves.
  */
 export async function installResourceBlocking(context: BrowserContext): Promise<void> {
   await context.route('**/*', (route) => {
@@ -58,8 +91,37 @@ export async function installResourceBlocking(context: BrowserContext): Promise<
     if (type === 'script' || type === 'stylesheet' || type === 'font' || type === 'image' || type === 'media') {
       return route.abort();
     }
-    return route.continue();
+    // Local URLs are allowed through: a fixture run reaches nothing else, but the
+    // mock store (tests/mock-store) is served on localhost when it is served.
+    if (isLocalUrl(route.request().url())) {
+      return route.continue();
+    }
+    if (type === 'document') {
+      return route.fulfill({ status: 200, contentType: 'text/html', body: EMPTY_DOCUMENT });
+    }
+    return route.abort();
   });
+}
+
+/**
+ * The page every intercepted navigation is answered with. It exists only to give
+ * the document a `location`; the markup a test reads always arrives afterwards
+ * via `setContent`.
+ */
+export const EMPTY_DOCUMENT = '<!doctype html><html><head></head><body></body></html>';
+
+/** Whether a URL resolves on this machine. Everything else is refused. */
+export function isLocalUrl(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false; // unparseable: treat as external, which is the safe direction
+  }
+  if (url.protocol === 'about:' || url.protocol === 'data:' || url.protocol === 'blob:' || url.protocol === 'file:') {
+    return true;
+  }
+  return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1';
 }
 
 export interface PostedMessage {
@@ -150,11 +212,9 @@ export async function loadFixture(
      * MEAL-113. That navigation is answered locally, and it has to be.
      *
      * These are real store URLs — `https://www.walmart.com/search?q=tortillas`
-     * and friends. `installResourceBlocking` above blocks scripts, styles, fonts,
-     * images and media, but a top-level navigation is a `document` request and it
-     * was being let straight through, so every fixture test that passes a `url`
-     * was making a live HTTP request to a grocery store. A recorded fixture
-     * exists precisely so the suite does not depend on the store answering.
+     * and friends — so every fixture test that passes a `url` used to make a live
+     * HTTP request to a grocery store. A recorded fixture exists precisely so the
+     * suite does not depend on the store answering.
      *
      * And the failure it caused was the ugly kind. The old code let `goto` fail
      * and swallowed the error — but a swallowed rejection is not a settled page.
@@ -167,9 +227,10 @@ export async function loadFixture(
      * ticket was chasing. Under load the window is wider, which is why it looked
      * like contention; the dependency on the public internet is the actual bug.
      *
-     * An empty document is all this needs. It exists only to set
-     * window.location, and `setContent` supplies the markup a moment later. A
-     * page-level route wins over the context-level one installed above.
+     * `installResourceBlocking` now answers every non-local `document` request,
+     * so this route is not what keeps the goto off the network. It stays because
+     * this one navigation carries a store's real URL and deserves an answer that
+     * cannot be widened away by an edit to the resource-type list above.
      */
     const target = options.url;
     // Compare NORMALIZED hrefs. `new URL('https://www.aldi.us').href` is
@@ -180,12 +241,7 @@ export async function loadFixture(
     const targetHref = new URL(target).href;
     await page.route(
       (url) => url.href === targetHref,
-      (route) =>
-        route.fulfill({
-          status: 200,
-          contentType: 'text/html',
-          body: '<!doctype html><html><head></head><body></body></html>',
-        }),
+      (route) => route.fulfill({ status: 200, contentType: 'text/html', body: EMPTY_DOCUMENT }),
     );
     await page.goto(target, { waitUntil: 'domcontentloaded' });
   }

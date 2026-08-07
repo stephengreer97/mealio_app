@@ -63,12 +63,20 @@ describe('HEB CHECK_LOGIN_SCRIPT', () => {
   // CHECK_LOGIN must report logged-OUT. The old script inferred login from the
   // absence of a logout redirect, which a slow connection could fake — this
   // pins that it no longer does.
+  //
+  // The budget is 20s, not 12s, and that is not slack for a slow assertion.
+  // Reaching a logged-out verdict COSTS 8.2s by construction: CHECK_LOGIN polls
+  // 40 × 200ms for a "log out" marker that a logged-out page will never show, and
+  // only then reports. Measured on an idle machine the wait lands at 8.3s — 69%
+  // of a 12s budget, so roughly a 1.5× slowdown was enough to fail it, and it did
+  // fail that way. Widening cannot hide a defect: a script that is killed or never
+  // answers posts nothing at all, so it still fails, just 8s later.
   itWithFixture(
     'logged-in-home.html',
     'CHECK_LOGIN reports logged-out when no "Log out" marker is visible',
     async (runner) => {
       await runner.inject(scripts.checkLoginScript);
-      const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 20_000);
       expect(status.isLoggedIn).toBe(false);
     },
   );

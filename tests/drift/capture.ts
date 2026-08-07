@@ -23,7 +23,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { chromium } from 'playwright';
+import { Browser, chromium } from 'playwright';
 
 import { FIXTURE_CONTEXT_OPTIONS, installResourceBlocking } from '../fixture-runners/runScript';
 import {
@@ -118,6 +118,7 @@ export async function computeCensus(options: CensusOptions = {}): Promise<Census
 
   const census: Census = { version: CENSUS_VERSION, stores: {} };
   const browser = await chromium.launch();
+  openCensusBrowsers.add(browser);
   try {
     const context = await browser.newContext(FIXTURE_CONTEXT_OPTIONS);
     await installResourceBlocking(context);
@@ -157,9 +158,36 @@ export async function computeCensus(options: CensusOptions = {}): Promise<Census
       census.stores[surface.fixtureDir] = store;
     }
   } finally {
+    openCensusBrowsers.delete(browser);
     await browser.close();
   }
   return census;
+}
+
+/*
+ * Census browsers that have been launched and not yet closed.
+ *
+ * MEAL-113. The `finally` above is not enough on its own. `computeCensus()` is
+ * called from a jest `beforeAll` (tests/fixture-tests/selector-drift.spec.ts) with
+ * a 120s budget, and a hook that exceeds its budget is ABANDONED mid-await: the
+ * rest of the function never runs, `finally` included, and the Chromium this
+ * launched outlives the run. That is the exact hook that timed out in review, and
+ * the run then printed the "worker process has failed to exit gracefully" warning
+ * this ticket set out to eliminate — the fixture-runner teardown in
+ * tests/fixture-tests/_helpers.ts could not cover it, because the drift spec does
+ * not import that module.
+ *
+ * So the census registers its browser where a teardown can find it, and the spec
+ * closes whatever is still open. `close()` is idempotent and the happy path
+ * deregisters first, so on a normal run the teardown has nothing to do.
+ */
+const openCensusBrowsers = new Set<Browser>();
+
+/** Close any census browser a timed-out hook left behind. Safe to call always. */
+export async function closeOpenCensusBrowsers(): Promise<void> {
+  const leaked = [...openCensusBrowsers];
+  openCensusBrowsers.clear();
+  await Promise.all(leaked.map((b) => b.close().catch(() => {})));
 }
 
 /** Which stores a census actually covered, for a report header. */
