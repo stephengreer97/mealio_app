@@ -7,6 +7,8 @@ import {
   ALBERTSONS_FAMILY_IDS,
   ALBERTSONS_CART_PATH,
 } from '../../../src/lib/webview-scripts/albertsons';
+import { getStoreScripts } from '../../../src/lib/webview-scripts';
+import { WEBVIEW_STORE_IDS } from '../../../src/constants/stores';
 
 describe('getWegmansSearchUrl', () => {
   it('builds the canonical /shop/search?query=... URL', () => {
@@ -104,5 +106,27 @@ describe('getAlbertsonsCartPageUrl', () => {
     for (const storeId of ALBERTSONS_FAMILY_IDS) {
       expect(new URL(getAlbertsonsCartPageUrl(storeId)).pathname).toBe(ALBERTSONS_CART_PATH);
     }
+  });
+
+  // The other half of the invariant, and the half nothing actually held until now.
+  // The test above starts FROM DOMAIN_MAP, so it is blind to the opposite mistake:
+  // a banner added to the app's own store list with no DOMAIN_MAP row. That is the
+  // direction that would silently take the unreachable `albertsons.com` fallback.
+  //
+  // A comment in albertsons.ts used to credit tests/unit/generatedScripts.test.ts
+  // with covering this. It does not — its `STORES` is a hand-written seven-entry
+  // array local to that file, not src/constants/stores.ts, so the app's real list
+  // was unguarded. WEBVIEW_STORE_IDS is the hand-maintained source of truth for
+  // which stores run the WebView engine, so it is what a new banner gets added to,
+  // and anything in it must resolve to a script bundle.
+  // `mockstore` is the local development storefront and deliberately has no
+  // scripts — the sheet opens and closes again for it. It is the one member of the
+  // set that is not a real banner, so it is named here rather than silently
+  // tolerated by a looser assertion.
+  it('has scripts for every real store the app says runs the WebView engine', () => {
+    const withoutScripts = [...WEBVIEW_STORE_IDS]
+      .filter((id) => id !== 'mockstore')
+      .filter((id) => !getStoreScripts(id));
+    expect(withoutScripts).toEqual([]);
   });
 });

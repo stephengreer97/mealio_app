@@ -116,13 +116,20 @@ export const ALBERTSONS_CART_PATH = '/erums/cart';
  *  this far. A stale id gets `null` from those gates and the ordinary
  *  unsupported-store UI, which is the behaviour we want anyway.
  *
- *  Two tests hold the invariant, one for each way it could break:
- *    • tests/unit/webview-scripts/url-builders.test.ts, "has a verified cart URL
- *      for every banner in the family" — catches a DOMAIN_MAP row added without
- *      a curl-verified host.
- *    • tests/unit/generatedScripts.test.ts — iterates STORES and throws
- *      `no scripts for <id>`, catching a banner added to STORES with no
- *      DOMAIN_MAP entry (which is exactly what would silently take a fallback). */
+ *  Two tests hold the invariant, one for each way it could break, and both live in
+ *  tests/unit/webview-scripts/url-builders.test.ts:
+ *    • "has a verified cart URL for every banner in the family" — catches a
+ *      DOMAIN_MAP row added without a curl-verified host.
+ *    • "has scripts for every store the app says runs the WebView engine" —
+ *      iterates WEBVIEW_STORE_IDS, the hand-maintained list a new banner actually
+ *      gets added to, and catches the opposite mistake: a banner in the app's store
+ *      list with no DOMAIN_MAP row, which is what would silently take a fallback.
+ *
+ *  An earlier version of this note credited tests/unit/generatedScripts.test.ts with
+ *  the second invariant. It does not hold it: that file's `STORES` is a hand-written
+ *  seven-entry array local to the test, not src/constants/stores.ts, so the app's
+ *  real store list was unguarded. Corrected rather than left, because a comment
+ *  naming coverage that does not exist is how the next reader gets misled. */
 export function getAlbertsonsCartPageUrl(storeId: string): string {
   // Unreachable fallback — see the note above.
   const domain = DOMAIN_MAP[storeId] || 'albertsons.com';

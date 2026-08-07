@@ -109,18 +109,24 @@ describe('SilentLoginProbe cart phase on an auth redirect (MEAL-136)', () => {
   });
 
   it('still injects on the real cart page that loads after the interstitial', () => {
-    // The regression this pins. Without the skip, step 1 latches
+    // The regression this pins. Without the skip, the interstitial latches
     // cartCountInjectedRef and the cart page below is never injected — the probe
     // then times out with no baseline. The skip has to happen BEFORE the latch.
+    //
+    // The WHICH-load assertion is the whole test. An earlier version only checked
+    // the total was 1 at the end, which passes either way: the broken path also
+    // injects exactly once, just on the wrong page. So assert the interstitial
+    // injected nothing, and that the injection arrived with the cart load.
     renderProbeInCartPhase();
 
     act(() => {
       webviewProps().onLoadEnd({ nativeEvent: { url: SSO_URL } });
     });
+    expect(injected().filter(isCountScript)).toHaveLength(0);
+
     act(() => {
       webviewProps().onLoadEnd({ nativeEvent: { url: `${CART_URL}?_t=1754500000000` } });
     });
-
     expect(injected().filter(isCountScript)).toHaveLength(1);
   });
 
