@@ -174,6 +174,91 @@ const RECONCILE_CASES: ReconcileCase[] = [
     definiteFailures: [],
     overAdds: [{ name: 'McCormick Gourmet Organic Ground Turmeric, 1.37 Oz', qty: 1 }],
   },
+  // ── One cart row, one claim (MEAL-119) ────────────────────────────────────
+  // A weight line used to sit in BOTH claim pools: the presence pool AND the
+  // count pool. `used` on the presence pool never decremented the count pool, so
+  // one physical row could be consumed twice — and the second consumer was told
+  // its item had landed when nothing had been bought for it.
+  {
+    name: 'one weight row cannot be spent twice — a row claimed by presence is no longer available as a count unit',
+    // Two brisket items: one weight-priced (4 lb from the dropdown), one an
+    // ordinary packaged product whose title matches the same cart line. Only the
+    // weight line landed. The presence pass confirmed the weight-priced item off
+    // it and claimQty then spent the very same row as a count unit for the
+    // packaged one: two items reported landed, one physical brisket in the cart,
+    // and no top-up for the item that never made it.
+    attempts: [
+      attempt('beef brisket', 4, { success: true, productName: 'H-E-B Prime 1 Beef Brisket' }, true),
+      attempt('brisket', 1, { success: true, productName: 'H-E-B Beef Brisket, Boneless' }),
+    ],
+    addedRows: [row('H-E-B Prime 1 Beef Brisket', 1, true)],
+    confirmed: ['H-E-B Prime 1 Beef Brisket'],
+    topUps: [{ index: 1, shortfall: 1 }],
+    definiteFailures: [],
+    overAdds: [],
+  },
+  {
+    name: 'a COUNT item ×3 whose name matches a weight row is short, not confirmed — and the row is announced as an over-add',
+    // Intent and cart row disagree: a stepper-weight deli line (weightStep, no
+    // purchaseWeight — NOT weight-priced, see isWeightPriced) whose ×3 was
+    // ordered by unit count. The item's own isWeight used to be ignored here, so
+    // presence confirmed it off one line and the other two units were never
+    // bought and never mentioned. Intent wins now: it is count-compared, finds
+    // nothing in the count pool, and is topped up — the recoverable direction.
+    // The row is not swallowed either: no weight-priced item claimed it, so it
+    // comes back as an over-add, the same verdict findOverAddedItems and
+    // splitCartLeftover give it.
+    attempts: [attempt('chicken breast', 3, { success: true, productName: 'H-E-B Boneless Chicken Breast' })],
+    addedRows: [row('H-E-B Boneless Chicken Breast', 1, true)],
+    confirmed: [],
+    topUps: [{ index: 0, shortfall: 3 }],
+    definiteFailures: [],
+    overAdds: [{ name: 'H-E-B Boneless Chicken Breast', qty: 1 }],
+  },
+  {
+    name: 'two weight-priced items matching ONE weight row — the first claims it, the second is short by one line, not by its poundage',
+    attempts: [
+      attempt('beef brisket', 2, { success: true, productName: 'H-E-B Prime 1 Beef Brisket' }, true),
+      attempt('brisket flat', 3, { success: true, productName: 'H-E-B Prime Beef Brisket' }, true),
+    ],
+    addedRows: [row('H-E-B Prime 1 Beef Brisket', 1, true)],
+    confirmed: ['H-E-B Prime 1 Beef Brisket'],
+    // Shortfall 1, not 3: a weight-priced item needs one LINE, and its
+    // productQty carries no meaning (see isWeightPriced). Before the fix the
+    // unclaimed sibling fell through to the count pool and took the very row its
+    // brother had already claimed, reporting a shortfall of 2 against a row that
+    // was already spoken for.
+    topUps: [{ index: 1, shortfall: 1 }],
+    definiteFailures: [],
+    overAdds: [],
+  },
+  {
+    name: 'a weight-priced item the cart has no weight line for tops up ONE line, whatever poundage was asked for',
+    attempts: [attempt('beef brisket', 4, { success: true, productName: 'H-E-B Prime 1 Beef Brisket' }, true)],
+    addedRows: [row('McCormick Ground Cumin, 4.5 oz', 2)],
+    confirmed: [],
+    topUps: [{ index: 0, shortfall: 1 }],
+    definiteFailures: [],
+    // The cumin row belongs to no attempted item, and a weight-priced item may
+    // not claim count units — so it stays overage rather than quietly confirming
+    // the brisket.
+    overAdds: [{ name: 'McCormick Ground Cumin, 4.5 oz', qty: 2 }],
+  },
+  {
+    // A regression guard rather than a reproduction: diffCartItems emits weight
+    // rows with qty 1, so count-comparing them would report a false shortfall on
+    // every multi-lb run. Segregating the pools must not turn into that.
+    name: 'a weight-priced item beside a genuine multi-unit count item — presence for one, unit count for the other, no false shortfall',
+    attempts: [
+      attempt('beef brisket', 4, { success: true, productName: 'H-E-B Prime 1 Beef Brisket' }, true),
+      attempt('cumin', 2, { success: true, productName: 'McCormick Ground Cumin, 4.5 oz' }),
+    ],
+    addedRows: [row('H-E-B Prime 1 Beef Brisket', 1, true), row('McCormick Ground Cumin, 4.5 oz', 2)],
+    confirmed: ['H-E-B Prime 1 Beef Brisket', 'McCormick Ground Cumin, 4.5 oz'],
+    topUps: [],
+    definiteFailures: [],
+    overAdds: [],
+  },
   {
     name: 'nothing landed at all — every item tops up its full quantity',
     attempts: [
@@ -216,6 +301,48 @@ describe('reconcileParallelAdd', () => {
   it('clamps a zero/absent requested quantity to one unit', () => {
     const out = reconcileParallelAdd([attempt('milk', 0, { success: true, productName: 'Milk' })], []);
     expect(out.topUps).toEqual([{ index: 0, shortfall: 1 }]);
+  });
+
+  // MEAL-119, stated as the property rather than as a table row: the reconcile
+  // and the over-add check consume ONE pool, so every unit the cart holds is
+  // credited to exactly one item or reported as overage — never to both, and
+  // never to two items. While weight rows sat in both pools this sum came out
+  // ABOVE the cart's real contents, which is precisely a unit credited twice.
+  it('credits every added cart unit exactly once — the reconcile and findOverAddedItems agree about one cart', () => {
+    const addedRows = [
+      row('H-E-B Prime 1 Beef Brisket', 1, true),        // weight line, weight-priced item
+      row('H-E-B Boneless Chicken Breast', 1, true),      // weight line, COUNT item ordered ×2
+      row('McCormick Ground Cumin, 4.5 oz', 2),           // count line, fully accounted for
+      row('Impulse Candy Bar', 1),                        // nothing intended it
+    ];
+    const attempts = [
+      attempt('beef brisket', 4, { success: true, productName: 'H-E-B Prime 1 Beef Brisket' }, true),
+      attempt('chicken breast', 2, { success: true, productName: 'H-E-B Boneless Chicken Breast' }),
+      attempt('cumin', 2, { success: true, productName: 'McCormick Ground Cumin, 4.5 oz' }),
+    ];
+    const out = reconcileParallelAdd(attempts, addedRows);
+    // No definitive failures here, so intended[i] is attempt i.
+    const credited = out.intended.reduce((n, item, i) => {
+      const short = out.topUps.find((t) => t.index === i);
+      // A weight-priced item is credited by PRESENCE (one line) and a count item
+      // by the units it claimed — its request less whatever it is still short.
+      if (item.isWeight) return n + (short ? 0 : 1);
+      return n + (item.expectedQty - (short ? short.shortfall : 0));
+    }, 0);
+    const cartUnits = addedRows.reduce((n, r) => n + r.qty, 0);
+    expect(credited + out.overAddUnits).toBe(cartUnits);
+    // And the same cart read from both sides: the brisket line is the brisket's,
+    // the chicken line is claimed by nobody (its item wanted units, not a line)
+    // so it is overage AND the item is re-added.
+    expect(out.confirmed.map((c) => c.name)).toEqual([
+      'H-E-B Prime 1 Beef Brisket',
+      'McCormick Ground Cumin, 4.5 oz',
+    ]);
+    expect(out.topUps).toEqual([{ index: 1, shortfall: 2 }]);
+    expect(out.overAdds).toEqual([
+      { name: 'Impulse Candy Bar', qty: 1 },
+      { name: 'H-E-B Boneless Chicken Breast', qty: 1 },
+    ]);
   });
 });
 

@@ -146,9 +146,12 @@ export type DefiniteFailureReason = 'out_of_stock' | 'no_results';
  * One item the parallel pass attempted, paired with its worker's report.
  *
  * The inherited `name` is only the FALLBACK title: when the worker reported a
- * product name, that name is what identifies the item in the cart. `isWeight`
- * feeds the intended snapshot — whether an item is confirmed by presence is
- * decided by the cart ROW, not by this flag.
+ * product name, that name is what identifies the item in the cart. `isWeight` is
+ * the item's INTENT (see isWeightPriced) and it decides which pool the item draws
+ * from: a weight-priced item is confirmed by presence off a weight row, an
+ * ordinary item by unit count off the count rows, and neither can touch the
+ * other's pool. Where the row disagrees with the intent, the intent wins — see
+ * reconcileParallelAdd.
  *
  * Decisions refer back to items by their INDEX in the array passed in, so this
  * module never needs to know the caller's item type nor hand it back.
@@ -237,7 +240,16 @@ export function reconcileParallelAdd(
   // each pepper's name matches both rows, so a 1-of-2 shortfall looks fully
   // stocked. Instead, consume from a shared pool — reserve exact-name matches
   // first, then let a loose match take only what's genuinely left over.
-  const pool = addedRows.map((row) => ({ name: row.name, qty: row.qty }));
+  //
+  // TWO pools, and every added row belongs to exactly one of them — the split
+  // toLeftover makes below, and the split findOverAddedItems makes over the same
+  // rows, which is what lets the two agree about one cart. A weight line carries
+  // no unit count (one line at N lb) so it can never be spent as a count unit;
+  // MEAL-119: it used to sit in BOTH pools, and one physical row could be
+  // consumed twice over — once by the presence pass, then again as a "unit" by
+  // some other item's claimQty, which confirmed an item nothing had been bought
+  // for.
+  const pool = addedRows.filter((r) => !r.isWeight).map((row) => ({ name: row.name, qty: row.qty }));
   // Punctuation- and entity-insensitive so a reported title can reserve its OWN
   // cart row in the exact pass before a loosely-similar sibling ("McCormick
   // Ground Cumin" vs "…Gourmet Organic Ground Turmeric") can claim it in the
@@ -256,24 +268,44 @@ export function reconcileParallelAdd(
     return got;
   };
 
-  // Weight rows first, confirmed by PRESENCE (see isWeightPriced). Matching is
-  // driven by the CART ROW rather than by the item's own isWeight: whatever the
-  // intent said, a row the store sells by weight is one line at N lb and cannot
-  // be count-compared. Consume the row so a sibling can't claim it too.
+  // Weight-priced items first, confirmed by PRESENCE (see isWeightPriced): one
+  // unclaimed weight row bearing the name confirms the item at whatever poundage
+  // that row shows. Consume the row, so neither a sibling nor the count passes
+  // below can spend it a second time.
+  //
+  // Gated on the ITEM's isWeight — the SAME gate claimWeightRows and
+  // findOverAddedItems use. When intent and cart row disagree (a count item
+  // ordered ×3 whose name matches a sold-by-weight line, e.g. a stepper-weight
+  // deli item), intent wins and the item is count-compared. The count pool holds
+  // no weight rows, so it claims nothing and reports its full shortfall. That is
+  // the deliberate choice, and it is the recoverable direction: a shortfall costs
+  // a re-add the user watches happen, whereas confirming a ×3 count item off one
+  // weight line hands them a single unit and tells them the order landed. The
+  // disagreement is not swallowed either — no weight-priced item claimed the row,
+  // so findOverAddedItems returns it in `overAdds` and both sides are announced.
   const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false }));
   toMatch.forEach((m) => {
+    if (!m.isWeight) return;
     const w = weightPool.find((p) => !p.used && cartNameMatches(p.name, m.name));
     if (w) { w.used = true; m.confirmedWeight = true; }
   });
-  // Pass 1: every item reserves its exact-name units. Pass 2: items still short
-  // take loose matches from whatever remains unclaimed.
-  toMatch.forEach((m) => { if (!m.confirmedWeight) m.claimed = claimQty(m.name, m.expectedQty, true); });
-  toMatch.forEach((m) => { if (!m.confirmedWeight && m.claimed < m.expectedQty) m.claimed += claimQty(m.name, m.expectedQty - m.claimed, false); });
+  // Count items only, out of the count pool. Pass 1: every item reserves its
+  // exact-name units. Pass 2: items still short take loose matches from whatever
+  // remains unclaimed.
+  toMatch.forEach((m) => { if (!m.isWeight) m.claimed = claimQty(m.name, m.expectedQty, true); });
+  toMatch.forEach((m) => { if (!m.isWeight && m.claimed < m.expectedQty) m.claimed += claimQty(m.name, m.expectedQty - m.claimed, false); });
 
   const confirmed: { index: number; name: string }[] = [];
   const topUps: { index: number; shortfall: number }[] = [];
   toMatch.forEach((m) => {
-    if (m.confirmedWeight) { confirmed.push({ index: m.index, name: m.name }); return; }
+    // A weight-priced item needs exactly ONE row, not N units: its productQty
+    // carries no meaning (see isWeightPriced), so an absent one is a shortfall of
+    // 1 — one re-add, which re-picks the requested weight.
+    if (m.isWeight) {
+      if (m.confirmedWeight) confirmed.push({ index: m.index, name: m.name });
+      else topUps.push({ index: m.index, shortfall: 1 });
+      return;
+    }
     const shortfall = m.expectedQty - m.claimed;
     if (shortfall <= 0) confirmed.push({ index: m.index, name: m.name });
     else topUps.push({ index: m.index, shortfall });
