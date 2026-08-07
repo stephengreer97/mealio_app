@@ -246,6 +246,69 @@ describe('Albertsons cart-page count refuses to count off the cart page (MEAL-13
   );
 });
 
+// The guard matches the cart path EXACTLY (modulo a trailing slash) rather than
+// as a prefix. Same fixture, same 2 countable items, URL is the only variable —
+// so each case reads as "does this URL count, yes or no".
+//
+// Sub-paths are the reason: `indexOf(path) !== 0` accepts /erums/cart/checkout
+// and /erums/cartoons. Neither exists on the platform today (both 404, while the
+// real sibling /erums/checkout is 200 and was already rejected), so this is a
+// nit closed, not a hole plugged — but a page that merely starts with the cart
+// path is not the cart, and a trusted count off one would be the MEAL-136 bug
+// with a different URL.
+describe('Albertsons cart-page count matches the cart path exactly (MEAL-136)', () => {
+  // Off-cart paths that a prefix test would have counted on. Each must degrade
+  // to the honest unknown rather than post a number.
+  const REFUSES = [
+    ['a deeper path under the cart', 'https://www.acmemarkets.com/erums/cart/checkout'],
+    ['a longer path that merely starts with it', 'https://www.acmemarkets.com/erums/cartoons'],
+  ] as const;
+
+  for (const [label, url] of REFUSES) {
+    itWithFixture(
+      'cart-with-items.html',
+      `posts count:null on ${label}`,
+      async (runner) => {
+        await runner.inject(buildCartPageCountScript('acme')!);
+        const result = await runner.waitForMessage('CART_COUNT', 8_000);
+        expect(result.count).toBeNull();
+        expect(result.reason).toBe('not_cart_page');
+        expect(result.url).toBe(url);
+      },
+      { url },
+    );
+  }
+
+  // The other direction, and the more important one: tightening the match must
+  // not start refusing pages that ARE the cart. A query string and a hash are
+  // not part of location.pathname, so both still count — which matters because
+  // both injection sites append a `_t=` cache-buster to the cart URL, and a
+  // guard that rejected it would take every Albertsons baseline down to null.
+  const COUNTS = [
+    ['a cache-buster query, as both injection sites append', 'https://www.acmemarkets.com/erums/cart?_t=1754500000000'],
+    ['a hash fragment', 'https://www.acmemarkets.com/erums/cart#items'],
+    ['a trailing slash', 'https://www.acmemarkets.com/erums/cart/'],
+    // Precedence: the path wins over the auth-redirect pattern. This URL's
+    // query matches that pattern, but it is the cart, and the pattern is only
+    // consulted once the path has already failed.
+    ['a query that matches the auth-redirect pattern', 'https://www.acmemarkets.com/erums/cart?next=/sso/authorize'],
+  ] as const;
+
+  for (const [label, url] of COUNTS) {
+    itWithFixture(
+      'cart-with-items.html',
+      `still counts with ${label}`,
+      async (runner) => {
+        await runner.inject(buildCartPageCountScript('acme')!);
+        const result = await runner.waitForMessage('CART_COUNT', 8_000);
+        expect(result.count).toBe(2);
+        expect(result.items).toHaveLength(2);
+      },
+      { url },
+    );
+  }
+});
+
 describe('Albertsons regression: product already in cart (collapsed bubble)', () => {
   // When the searched product is already in the cart, Albertsons shows a
   // collapsed qty bubble (no ATC button) with a TRUNCATED aria-label. The add

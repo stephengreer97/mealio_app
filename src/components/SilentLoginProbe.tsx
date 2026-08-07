@@ -169,6 +169,18 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
       console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — injecting check script');
       webviewRef.current?.injectJavaScript(scripts.checkLoginScript);
     } else if ((cartMethodRef.current === 'url' || cartMethodRef.current === 'click') && !cartCountInjectedRef.current) {
+      // Same skip as the login branch above, and for a sharper reason: this
+      // branch LATCHES on its first injection. Injecting on an auth/SSO
+      // interstitial would set the latch, the script's own guard would then bail
+      // silently (correctly — a verdict there would burn our single pending
+      // slot), and the real cart page that loads next would never get the
+      // script. The probe would sit out CART_TIMEOUT_MS and report logged-in
+      // with no baseline. Skip before the latch so the landing page still gets
+      // its one injection. (MEAL-136)
+      if (isAuthRedirectUrl(url)) {
+        console.log('[Prewarm] probe', storeId, 'onLoadEnd (cart) — skipping auth redirect page', url);
+        return;
+      }
       // Cart page has loaded — count it.
       const countScript = buildCartPageCountScript(storeId);
       if (countScript) {
@@ -195,6 +207,12 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
           if (msg.isLoggedIn) startCartCapture();
           else finish({ isLoggedIn: false });
         } else if (msg?.type === 'CART_COUNT' && phaseRef.current === 'cart') {
+          // Log reason/url, not just the count: a bare "count= null" is
+          // indistinguishable from a selector miss, whereas
+          // `reason=not_cart_page url=<host>` names a wrong DOMAIN_MAP host as a
+          // wrong host. `finish` below drops both from the cached baseline, so
+          // this line is the only place they survive. (MEAL-136)
+          console.log('[Prewarm] probe', storeId, 'CART_COUNT count=', msg.count, 'reason=', msg.reason ?? null, 'url=', msg.url);
           finish({
             isLoggedIn: true,
             cart: {

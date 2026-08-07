@@ -737,7 +737,12 @@ const HEB_CART_PAGE_SCRIPT = `(async function() {
 //   • Anything else is TERMINAL — nothing further is loading, which is the
 //     redirected-marketing-page case. Post `count: null` with a named reason so
 //     the run degrades to "unknown" instead of "empty", and the reason lands in
-//     the log where a wrong host is legible as a wrong host.
+//     the log where a wrong host is legible as a wrong host. Both CART_COUNT
+//     handlers print `reason=`/`url=` for exactly that — WebViewCartSheet's
+//     onMessage and SilentLoginProbe's. Neither stores them (the cached baseline
+//     keeps only count/items/url), so those two log lines are the whole audit
+//     trail; a handler that printed the count alone would make this reason
+//     indistinguishable from a selector miss and the guard pointless.
 //
 // Note what this does NOT do: it never invents a count and never blocks a real
 // cart page. The failure it converts is trusted-zero → honest-unknown, and the
@@ -754,7 +759,22 @@ const ALBERTSONS_CART_PAGE_SCRIPT = `(async function() {
   try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'alb_cart_start', url: location.href })); } catch (e) {}
 
   // Did we actually land on the cart? See the note above.
-  if (location.pathname.indexOf(${JSON.stringify(ALBERTSONS_CART_PATH)}) !== 0) {
+  //
+  // EXACT path match, modulo a trailing slash — not a prefix. A prefix test also
+  // accepts sub-paths, so /erums/cart/checkout and /erums/cartoons would COUNT.
+  // Neither exists on the platform today (both 404, while the real sibling
+  // /erums/checkout is 200 and correctly rejected), so this closes a nit rather
+  // than a live hole — but "starts with the cart path" is not the thing we mean.
+  //
+  // Query strings and hash fragments are deliberately unaffected: they are not
+  // part of location.pathname, so /erums/cart?_t=… (the cache-buster both
+  // injection sites append) and /erums/cart#items still count. That also fixes
+  // the precedence between the two checks — /erums/cart?next=/sso/authorize is
+  // the CART, even though its query matches the auth-redirect pattern, and the
+  // path wins because we only consult that pattern once the path has failed.
+  var __path = location.pathname;
+  while (__path.length > 1 && __path.charAt(__path.length - 1) === '/') __path = __path.slice(0, -1);
+  if (__path !== ${JSON.stringify(ALBERTSONS_CART_PATH)}) {
     if (new RegExp(${JSON.stringify(AUTH_REDIRECT_URL_PATTERN)}).test(location.href)) {
       try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'alb_cart_skip_auth_redirect', url: location.href })); } catch (e) {}
       return;

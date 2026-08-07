@@ -2143,6 +2143,15 @@ export default function WebViewCartSheet({
     const url = e?.nativeEvent?.url ?? '';
     const s = scriptsRef.current;
     // Only process pages for this store — ignore about:blank and other internal loads.
+    //
+    // NOT FIXED, recorded: this is a substring test, so it matches any host that
+    // merely CONTAINS the configured domain. That is how MEAL-136's wrong host
+    // got past it — www.shopunitedsupermarkets.com contains the substring
+    // "unitedsupermarkets.com", so the redirect to the storefront still looked
+    // like "our store" and the flow carried on onto a marketing home page. The
+    // substring is doing real work today (www./m. prefixes, per-banner
+    // subdomains), and tightening it to a hostname suffix test is its own change
+    // with its own blast radius across 20+ banners; MEAL-136 fixed the host.
     if (!s || !url.includes(s.domain)) {
       console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'skipped: not store domain');
       return;
@@ -2520,7 +2529,11 @@ export default function WebViewCartSheet({
           cartCountPendingRef.current = null;
           if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
           const count = typeof msg.count === 'number' ? msg.count : null;
-          console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count);
+          // reason/url are what make a `count: null` diagnosable (MEAL-136): the
+          // count alone says "unknown", while `reason=not_cart_page url=<host>`
+          // says a wrong DOMAIN_MAP host sent us somewhere that was never the
+          // cart. Log them or the script's named reason reaches nobody.
+          console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count, 'reason=', msg.reason ?? null, 'url=', msg.url);
           if (phase === 'before') {
             cartCountBeforeRef.current = count;
             cartItemsBeforeRef.current = Array.isArray(msg.items) ? msg.items : [];
