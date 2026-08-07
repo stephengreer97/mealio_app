@@ -302,15 +302,12 @@ export function reconcileParallelAdd(
   // Silent non-delivery is the worst failure available here, so failing visibly
   // beats it.
   //
-  // But be honest about what the visible failure costs. It is NOT "a re-add the
-  // user watches happen": the top-up runs unattended and at the FULL quantity
-  // (WebViewCartSheet sets step 'searching' and navigates straight into the
-  // retry — there is no confirmation step). So where the weight line genuinely
-  // did land, this buys a second one, and for a deli line that is meat the user
-  // pays for twice. That is the open cost of the rule, not a free one: these
-  // items are named in `countItemsOnWeightRows` so a caller can route the
-  // disagreement to review instead, and today's caller does not — it logs and
-  // counts them, and the automatic second purchase is still reachable.
+  // But the shortfall must not be re-added on its own either. The top-up is
+  // unattended and, here, the shortfall IS the full quantity — so where the weight
+  // line genuinely did land it buys a second one, and for a deli line that is meat
+  // the user pays for twice. Both machine answers are therefore refused: these
+  // items are named in `countItemsOnWeightRows`, splitTopUpsForReview lifts them
+  // out of the top-up, and WebViewCartSheet asks the user which they want.
   //
   // The disagreement is not swallowed either — no weight-priced item claimed the
   // row, so findOverAddedItems returns it in `overAdds` and both sides are
