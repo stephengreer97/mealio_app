@@ -2323,7 +2323,10 @@ export default function WebViewCartSheet({
             const outcome = reconcileParallelAdd(attempts, rows.filter((r) => r.added));
             const confirmed = outcome.confirmed.map((c) => ({ name: c.name, success: true }));
             // Re-add only the missing units; re-adding the full qty would
-            // over-add the units that already landed.
+            // over-add the units that already landed. Note the one case where
+            // "missing" is a judgement rather than a count: for a count item whose
+            // cart line came back sold-by-weight the shortfall IS the full qty, so
+            // this re-adds everything with no confirmation step (see the log below).
             const retryItems: ConsolidatedIngredient[] = outcome.topUps.map(
               (t) => ({ ...active[t.index], productQty: t.shortfall }),
             );
@@ -2344,6 +2347,16 @@ export default function WebViewCartSheet({
             // the whole set to spot units no item intended.
             reconcileIntendedRef.current = outcome.intended;
             console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm), 'review=', reviewFailures.length, reviewFailures.map((r) => `${r.term}:${r.reason}`));
+            // The subset of the top-up that can cost money to be wrong about: a
+            // count item short while a sold-by-weight line of its name sits in the
+            // cart, so the line plausibly DID land and the retry below re-adds the
+            // full quantity anyway. Logged and counted rather than routed, because
+            // routing it means asking the user something the review card has no
+            // shape for yet — see countItemsOnWeightRows in cart-reconcile.ts.
+            if (outcome.countItemsOnWeightRows.length > 0) {
+              console.log(`[Cart ${ts()}]`, 'reconcile: COUNT ITEM ON WEIGHT ROW — top-up may re-buy',
+                outcome.countItemsOnWeightRows.map((c) => `${active[c.index]?.searchTerm ?? c.index}→${c.cartName}`));
+            }
             // North-star: this is the ONE moment in the run where the added count
             // is backed by a per-item cart read, so it is the only place allowed
             // to claim `cart_reconcile` as the confirmed source. A top-up
@@ -2374,6 +2387,9 @@ export default function WebViewCartSheet({
               confirmed: confirmed.length,
               retry: retryItems.length,
               review: reviewFailures.length,
+              // How often the intent-vs-cart-row disagreement actually fires, which
+              // is what a decision about routing it to review needs to know.
+              weightRowRetry: outcome.countItemsOnWeightRows.length,
             };
             if (retryItems.length === 0 && reviewFailures.length === 0) {
               tel().record('reconcile', 'ok', { detail: reconcileDetail });

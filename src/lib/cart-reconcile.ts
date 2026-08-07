@@ -183,6 +183,23 @@ export interface ReconcileOutcome {
   overAdds: OverAdd[];
   /** Total units across overAdds. */
   overAddUnits: number;
+  /**
+   * The intent-vs-row disagreements among `topUps`: items ordered by unit COUNT
+   * that came up short while an unclaimed sold-by-weight line bearing their name
+   * sits in the cart (the stepper-weight H-E-B deli shape — weightStep but no
+   * purchaseWeight, so isWeightPriced is false and the ×N is a unit count).
+   *
+   * Reported separately because the top-up these items get is the one case where
+   * a re-add can cost real money: the line plausibly DID land, so re-adding the
+   * full quantity unattended buys the meat a second time. A caller that can ask
+   * the user should route these to review instead of to the automatic top-up —
+   * they appear in `topUps` as well, so a caller that does nothing behaves
+   * exactly as before.
+   *
+   * Each unclaimed weight row explains at most one item, so this can never name
+   * more items than the cart has unexplained weight lines.
+   */
+  countItemsOnWeightRows: { index: number; cartName: string }[];
 }
 
 /**
@@ -277,12 +294,27 @@ export function reconcileParallelAdd(
   // findOverAddedItems use. When intent and cart row disagree (a count item
   // ordered ×3 whose name matches a sold-by-weight line, e.g. a stepper-weight
   // deli item), intent wins and the item is count-compared. The count pool holds
-  // no weight rows, so it claims nothing and reports its full shortfall. That is
-  // the deliberate choice, and it is the recoverable direction: a shortfall costs
-  // a re-add the user watches happen, whereas confirming a ×3 count item off one
-  // weight line hands them a single unit and tells them the order landed. The
-  // disagreement is not swallowed either — no weight-priced item claimed the row,
-  // so findOverAddedItems returns it in `overAdds` and both sides are announced.
+  // no weight rows, so it claims nothing and reports its full shortfall.
+  //
+  // Intent wins because the alternative is a GUESS: presence-confirming a count
+  // item off a weight row rests on cartNameMatches, a 0.6 token overlap, and when
+  // that guess is wrong the user is told their ×3 landed and receives nothing.
+  // Silent non-delivery is the worst failure available here, so failing visibly
+  // beats it.
+  //
+  // But be honest about what the visible failure costs. It is NOT "a re-add the
+  // user watches happen": the top-up runs unattended and at the FULL quantity
+  // (WebViewCartSheet sets step 'searching' and navigates straight into the
+  // retry — there is no confirmation step). So where the weight line genuinely
+  // did land, this buys a second one, and for a deli line that is meat the user
+  // pays for twice. That is the open cost of the rule, not a free one: these
+  // items are named in `countItemsOnWeightRows` so a caller can route the
+  // disagreement to review instead, and today's caller does not — it logs and
+  // counts them, and the automatic second purchase is still reachable.
+  //
+  // The disagreement is not swallowed either — no weight-priced item claimed the
+  // row, so findOverAddedItems returns it in `overAdds` and both sides are
+  // announced.
   const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false }));
   toMatch.forEach((m) => {
     if (!m.isWeight) return;
@@ -297,6 +329,7 @@ export function reconcileParallelAdd(
 
   const confirmed: { index: number; name: string }[] = [];
   const topUps: { index: number; shortfall: number }[] = [];
+  const countItemsOnWeightRows: { index: number; cartName: string }[] = [];
   toMatch.forEach((m) => {
     // A weight-priced item needs exactly ONE row, not N units: its productQty
     // carries no meaning (see isWeightPriced), so an absent one is a shortfall of
@@ -307,8 +340,15 @@ export function reconcileParallelAdd(
       return;
     }
     const shortfall = m.expectedQty - m.claimed;
-    if (shortfall <= 0) confirmed.push({ index: m.index, name: m.name });
-    else topUps.push({ index: m.index, shortfall });
+    if (shortfall <= 0) { confirmed.push({ index: m.index, name: m.name }); return; }
+    topUps.push({ index: m.index, shortfall });
+    // Short AND a weight line nobody claimed bears its name: this is the intent
+    // disagreement, not an ordinary missing item, and its top-up may buy a second
+    // one (see the presence pass above). Consume the row so two count items can't
+    // both be blamed on it — the weight pool is finished with by now, so nothing
+    // else reads this.
+    const w = weightPool.find((p) => !p.used && cartNameMatches(p.name, m.name));
+    if (w) { w.used = true; countItemsOnWeightRows.push({ index: m.index, cartName: w.name }); }
   });
 
   const overAdds = findOverAddedItems(addedRows, intended);
@@ -319,6 +359,7 @@ export function reconcileParallelAdd(
     intended,
     overAdds,
     overAddUnits: overAdds.reduce((n, o) => n + o.qty, 0),
+    countItemsOnWeightRows,
   };
 }
 

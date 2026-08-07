@@ -52,6 +52,9 @@ interface ReconcileCase {
   topUps: { index: number; shortfall: number }[];
   definiteFailures: { index: number; reason: string }[];
   overAdds: OverAdd[];
+  /** The intent-vs-row disagreements the outcome should name. Omitted means none
+   *  — asserted on every row, so a case that starts reporting one has to say so. */
+  onWeightRows?: { index: number; cartName: string }[];
 }
 
 const RECONCILE_CASES: ReconcileCase[] = [
@@ -198,6 +201,35 @@ const RECONCILE_CASES: ReconcileCase[] = [
     overAdds: [],
   },
   {
+    // The other half of the pool split, and the half the segregated pools are
+    // ONLY tested by here: not "a weight row can't be spent as a count unit" but
+    // "a weight-priced ITEM can't spend count units". Gating the count passes on
+    // confirmedWeight instead of isWeight leaves every other MEAL-119 case
+    // passing, because in all of them the weight-priced item found its row and so
+    // never reached the count pool. This one denies it a row.
+    name: 'a weight-priced item with NO weight row to claim cannot fall back onto count units — the count sibling that owns them stays confirmed',
+    attempts: [
+      // No remembered poundage, so the worker bailed to the weight picker and
+      // added nothing (heb.ts posts needs_weight, which is not a definitive
+      // failure). Its identity falls back to the search term.
+      attempt('beef brisket', 2, { success: false, reason: 'needs_weight' }, true),
+      // An ordinary packaged brisket that DID land: the worker missed the confirm
+      // signal (the false-negative case above) so it too is identified by its
+      // search term, and its row is a loose match for both items.
+      attempt('beef brisket', 1, { success: false, reason: 'timeout' }),
+    ],
+    addedRows: [row('H-E-B Beef Brisket', 1)],
+    // The count item keeps the row it paid for. Gated on confirmedWeight, the
+    // unconfirmed weight item reaches the loose pass FIRST and takes the row out
+    // from under it — so the packaged brisket is reported short and re-added, and
+    // the user pays for a second brisket against a row already in the cart.
+    confirmed: ['beef brisket'],
+    // The weight-priced item still needs its one line, whatever poundage.
+    topUps: [{ index: 0, shortfall: 1 }],
+    definiteFailures: [],
+    overAdds: [],
+  },
+  {
     name: 'a COUNT item ×3 whose name matches a weight row is short, not confirmed — and the row is announced as an over-add',
     // Intent and cart row disagree: a stepper-weight deli line (weightStep, no
     // purchaseWeight — NOT weight-priced, see isWeightPriced) whose ×3 was
@@ -214,8 +246,14 @@ const RECONCILE_CASES: ReconcileCase[] = [
     topUps: [{ index: 0, shortfall: 3 }],
     definiteFailures: [],
     overAdds: [{ name: 'H-E-B Boneless Chicken Breast', qty: 1 }],
+    // Named as the disagreement it is, so a caller can ask before re-adding: the
+    // deli line plausibly DID land, and the top-up re-adds the full ×3 unattended.
+    onWeightRows: [{ index: 0, cartName: 'H-E-B Boneless Chicken Breast' }],
   },
   {
+    // No disagreement to report here even though a count item is short beside a
+    // weight row: the weight-priced sibling claimed that row, so the row is
+    // explained and the count item's shortfall is an ordinary missing item.
     name: 'a count item cannot even RESERVE a weight row — the weight-priced sibling that needs it still gets it',
     // The count item is listed first, so a presence pass that ignored intent
     // marked the row used and starved the weight-priced item behind it: the one
@@ -297,6 +335,12 @@ describe('reconcileParallelAdd', () => {
     expect(out.definiteFailures).toEqual(c.definiteFailures);
     expect(out.overAdds).toEqual(c.overAdds);
     expect(out.overAddUnits).toBe(c.overAdds.reduce((n, o) => n + o.qty, 0));
+    expect(out.countItemsOnWeightRows).toEqual(c.onWeightRows ?? []);
+    // Whatever it names is a subset of the top-up, never a fourth verdict of its
+    // own: a caller that ignores it behaves exactly as it did before.
+    for (const d of out.countItemsOnWeightRows) {
+      expect(out.topUps.some((t) => t.index === d.index)).toBe(true);
+    }
   });
 
   it('snapshots the full intended set (definitive failures excluded) for the later over-add check', () => {
@@ -358,6 +402,30 @@ describe('reconcileParallelAdd', () => {
     expect(out.overAdds).toEqual([
       { name: 'Impulse Candy Bar', qty: 1 },
       { name: 'H-E-B Boneless Chicken Breast', qty: 1 },
+    ]);
+    // The chicken's top-up is the intent disagreement, and it is named as one so
+    // a caller can ask the user before re-adding ×2 against a deli line that may
+    // well have landed.
+    expect(out.countItemsOnWeightRows).toEqual([
+      { index: 1, cartName: 'H-E-B Boneless Chicken Breast' },
+    ]);
+  });
+
+  // The disagreement report obeys the same one-row-one-claim discipline as the
+  // pools it reads: naming both short items against a single deli line would
+  // overstate the cost of the rule, and a caller routing on it would send two
+  // items to review over one row.
+  it('blames at most one count item per unclaimed weight row', () => {
+    const out = reconcileParallelAdd(
+      [
+        attempt('roast beef', 3, { success: true, productName: 'H-E-B Deli Roast Beef, lb' }),
+        attempt('deli roast beef', 2, { success: true, productName: 'H-E-B Deli Roast Beef, lb' }),
+      ],
+      [row('H-E-B Deli Roast Beef, lb', 1, true)],
+    );
+    expect(out.topUps).toEqual([{ index: 0, shortfall: 3 }, { index: 1, shortfall: 2 }]);
+    expect(out.countItemsOnWeightRows).toEqual([
+      { index: 0, cartName: 'H-E-B Deli Roast Beef, lb' },
     ]);
   });
 });
