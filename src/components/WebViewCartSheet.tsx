@@ -43,7 +43,7 @@ import { getAutomationConfig, getConfigVersion } from '../lib/automation-config'
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
-import { auditCartAfterRun, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitTopUpsForReview, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
+import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitTopUpsForReview, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, correctConfirmedFromCart, countRequested, isRunComplete } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
@@ -288,11 +288,25 @@ export function InCartByWeightNote({ cartName }: { cartName: string | null }) {
  *   • Nothing is confirmed silently. "Keep what's in my cart" is a press, on a
  *     card the user had to be shown to reach.
  *   • Nothing is re-added automatically, or at the full quantity by default. The
- *     top-up button is inert until the user raises the qty stepper above this
- *     footer off its 0, and it names the number it will add. Guarded twice —
- *     `disabled` for the finger and a check inside onPress for everything else —
- *     because a re-add here spends the user's money a second time.
+ *     top-up button is inert until the user raises the stepper above this footer
+ *     off its 0. Guarded twice — `disabled` for the finger and a check inside
+ *     onPress for everything else — because a re-add here spends the user's money
+ *     a second time.
  *   • Skip stays exactly where it is on every other review card.
+ *
+ * The top-up deliberately does NOT promise a number of units, though the stepper
+ * above it counts in whole numbers. This item's cart line came back sold by
+ * weight, which is precisely the shape whose Add button opens H-E-B's weight
+ * picker, and that picker resolves a bare qty to the qty-th weight option (see
+ * handleWeightDropdown) — one line at that weight, never N pieces. "Add 3 more"
+ * would therefore assert a count the store does not honour, and it would be wrong
+ * in the direction that costs money. Instead the copy says what is actually true
+ * of every branch: the store picks the amount from the weights it sells, and a
+ * bigger number asks it for a bigger one.
+ *
+ * Every button goes inert while a custom product search is in flight. Advancing
+ * mid-search is how the previous item's results end up offered on the next item's
+ * card — the in-flight SEARCH_RESULT lands wherever the review has got to.
  *
  * There is deliberately no "Add & Update Meal Ingredient": the candidate on this
  * card is synthesized from a cart line (see inCartByWeightReview), not chosen
@@ -302,6 +316,8 @@ export function InCartByWeightNote({ cartName }: { cartName: string | null }) {
 export function InCartByWeightActions({
   addQty,
   storeColor,
+  searching,
+  customTermMissing,
   onKeep,
   onAddMore,
   onSkip,
@@ -310,21 +326,30 @@ export function InCartByWeightActions({
   /** Units the stepper is currently set to add. 0 = nothing chosen yet. */
   addQty: number;
   storeColor: string;
+  /** A custom product search is in flight. Nothing may be decided until it
+   *  resolves — advancing sends its result to the wrong card. */
+  searching: boolean;
+  /** "Other — type a product name…" is selected with an empty box, so the add has
+   *  no term to search and no product to add: it would return doing nothing. */
+  customTermMissing: boolean;
   onKeep: () => void;
   onAddMore: () => void;
   onSkip: () => void;
   /** Omitted on the first review item, which has nothing to go back to. */
   onBack?: () => void;
 }) {
-  const canAddMore = addQty > 0;
+  const canAddMore = addQty > 0 && !searching && !customTermMissing;
   return (
     <>
       <TouchableOpacity
         testID="keep-cart-weight-line"
-        onPress={onKeep}
-        style={[styles.primaryBtn, { backgroundColor: storeColor }]}
+        onPress={() => { if (!searching) onKeep(); }}
+        disabled={searching}
+        style={[styles.primaryBtn, { backgroundColor: storeColor }, searching && { opacity: 0.4 }]}
       >
-        <Text style={styles.primaryBtnText}>That's enough — keep my cart as is</Text>
+        <Text style={styles.primaryBtnText}>
+          {searching ? 'Searching…' : "That's enough — keep my cart as is"}
+        </Text>
       </TouchableOpacity>
       <TouchableOpacity
         testID="add-more-anyway"
@@ -333,22 +358,39 @@ export function InCartByWeightActions({
         style={[styles.secondaryBtn, { borderColor: storeColor }, !canAddMore && { opacity: 0.4 }]}
       >
         <Text style={[styles.secondaryBtnText, { color: storeColor }]}>
-          {canAddMore
-            ? `Add ${addQty} more to my cart`
-            : 'To add more, set a quantity above'}
+          {searching
+            ? 'Searching…'
+            : customTermMissing
+              ? 'Type a product name above to search'
+              : addQty > 0
+                ? 'Add more of this to my cart'
+                : 'To add more, set an amount above'}
         </Text>
       </TouchableOpacity>
+      {canAddMore && (
+        <Text style={styles.qtyHint} testID="add-more-weight-caveat">
+          This line is priced by weight, so the store picks the size — a bigger number
+          above asks it for a bigger amount, up to the largest it sells. We can't
+          promise an exact quantity.
+        </Text>
+      )}
       <View style={{ flexDirection: 'row', gap: 8 }}>
         {onBack && (
           <TouchableOpacity
             testID="in-cart-by-weight-back"
-            onPress={onBack}
-            style={[styles.skipBtn, { flex: 1, borderWidth: 1, borderColor: Colors.border, borderRadius: 12 }]}
+            onPress={() => { if (!searching) onBack(); }}
+            disabled={searching}
+            style={[styles.skipBtn, { flex: 1, borderWidth: 1, borderColor: Colors.border, borderRadius: 12 }, searching && { opacity: 0.4 }]}
           >
             <Text style={styles.skipBtnText}>← Back</Text>
           </TouchableOpacity>
         )}
-        <TouchableOpacity testID="in-cart-by-weight-skip" onPress={onSkip} style={[styles.skipBtn, { flex: 1 }]}>
+        <TouchableOpacity
+          testID="in-cart-by-weight-skip"
+          onPress={() => { if (!searching) onSkip(); }}
+          disabled={searching}
+          style={[styles.skipBtn, { flex: 1 }, searching && { opacity: 0.4 }]}
+        >
           <Text style={styles.skipBtnText}>Skip this ingredient</Text>
         </TouchableOpacity>
       </View>
@@ -709,6 +751,12 @@ export default function WebViewCartSheet({
   // captured before the retry top-up narrows activeItemsRef to the retry subset.
   // Used by the final cart check to flag over-adds / unintended additions.
   const reconcileIntendedRef = useRef<{ name: string; expectedQty: number; isWeight: boolean }[]>([]);
+  // MEAL-119: the cart titles this run put to the user as in-cart-by-weight
+  // questions. Held in a ref because the only readers are inside onMessage (deps
+  // []), and both of the reconcile's exits need them: neither the reconcile's own
+  // over-add warning nor the after-probe's may call one of these lines something
+  // "Mealio didn't intend to add" — see dropExplainedOverAdds.
+  const askedCartNamesRef = useRef<string[]>([]);
   const parallelReconcileArmedRef = useRef(false);
   // Set when the reconcile probe finalized using its own cart read, so the
   // 'done' effect doesn't fire a redundant second after-probe.
@@ -1301,6 +1349,12 @@ export default function WebViewCartSheet({
       setViewerOpen(false);
       preview.reset();
       setSkippedByIdx({});
+      // MEAL-119: reset alongside the skips. Harmless while FEATURE_BACKGROUND_CART
+      // keeps this sheet keyed and conditionally mounted, but under the
+      // !FEATURE_BACKGROUND_CART mount (MyMealsScreen) the component survives
+      // between runs — run 2 would show run 1's kept line on its done screen and
+      // ship a stale keptInReview on the funnel.
+      setKeptByIdx({});
       setCustomText('');
       setCustomSearching(false);
       setCustomSuggestions([]);
@@ -1350,6 +1404,7 @@ export default function WebViewCartSheet({
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
       reconcileIntendedRef.current = [];
+      askedCartNamesRef.current = [];
       // North-star counters. 'add' is the default because it is the reading that
       // cannot silently hide a run: a shopping run mislabelled 'choose' would
       // vanish from the metric, while a choose run mislabelled 'add' shows up as
@@ -2521,6 +2576,10 @@ export default function WebViewCartSheet({
               (q) => inCartByWeightReview(active[q.index], q.cartName),
             );
             reviewFailures.push(...askCards);
+            // The cart lines those cards name. Recorded before either exit below,
+            // because BOTH announce over-adds and neither may call one of these
+            // rows unintended — see dropExplainedOverAdds.
+            askedCartNamesRef.current = routing.ask.map((q) => q.cartName).filter(Boolean);
             // Keep the full intended set: the retry branch below narrows
             // activeItemsRef to the top-up subset, and the final cart check needs
             // the whole set to spot units no item intended.
@@ -2619,12 +2678,17 @@ export default function WebViewCartSheet({
             setAddedNames(confirmed.map((x) => x.name));
             // Safety net: flag any units in the cart that no intended item
             // accounts for (a double-add or an unintended product), even when
-            // every intended item was confirmed.
-            if (outcome.overAdds.length > 0) {
+            // every intended item was confirmed. The lines the ask cards above
+            // name are held out: they are unclaimed weight rows by construction,
+            // so they land in overAdds every time, and this copy would tell the
+            // user to delete the line the very next screen asks them about.
+            const unexplainedOver = dropExplainedOverAdds(outcome.overAdds, askedCartNamesRef.current);
+            if (unexplainedOver.length > 0) {
               const lockedName = STORES.find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
-              const list = outcome.overAdds.map(overAddLabel).join(', ');
-              console.log(`[Cart ${ts()}]`, 'reconcile: OVER-ADD detected', outcome.overAdds);
-              setCartDeltaWarning(`Cart check: your ${lockedName} cart has ${outcome.overAddUnits} item(s) Mealio didn't intend to add (${list}). Please review your cart.`);
+              const list = unexplainedOver.map(overAddLabel).join(', ');
+              const units = unexplainedOver.reduce((n, o) => n + o.qty, 0);
+              console.log(`[Cart ${ts()}]`, 'reconcile: OVER-ADD detected', unexplainedOver);
+              setCartDeltaWarning(`Cart check: your ${lockedName} cart has ${units} item(s) Mealio didn't intend to add (${list}). Please review your cart.`);
             } else {
               setCartDeltaWarning(null);
             }
@@ -2660,6 +2724,14 @@ export default function WebViewCartSheet({
               reconcileIntended: reconcileIntendedRef.current,
               countBefore: cartCountBeforeRef.current,
               countAfter: count,
+              // MEAL-119: this probe is the retry exit's finalizer, and it runs
+              // AFTER the user has answered the ask cards. A kept line is an added
+              // weight row no count item can claim, so without this it comes back
+              // as `over: qty 1` and the done screen prints "1 item added that
+              // Mealio didn't intend (…)" directly above "1 weight item kept as
+              // already in your cart (…)" — the same product, in both banners,
+              // with the warning telling the user to delete what they approved.
+              explainedRows: askedCartNamesRef.current,
             });
             const { missing, short, over, recovered, countShortfall } = findings;
             // Read from the ref, NOT from the `totalAdded` state: onMessage is
@@ -3135,6 +3207,17 @@ export default function WebViewCartSheet({
       // Remember this ingredient as skipped so the done snapshot can report it.
       const skippedName = currentReview?.term ?? '';
       if (skippedName) setSkippedByIdx((prev) => ({ ...prev, [reviewIdx]: skippedName }));
+      // Drop any earlier "keep the weight line" for this index, the mirror of what
+      // 'keep' does to an earlier skip (MEAL-119). Without it, keep → Back → Skip
+      // leaves the item in BOTH maps: the done screen lists it as kept and as
+      // skipped, and keptInReview over-counts on the funnel. Neither decision
+      // added anything, so this is contradictory reporting, not wrong groceries.
+      setKeptByIdx((prev) => {
+        if (!(reviewIdx in prev)) return prev;
+        const next = { ...prev };
+        delete next[reviewIdx];
+        return next;
+      });
     }
 
     // MEAL-119: "the weight line I already have is enough." Adds NOTHING — the
@@ -4002,7 +4085,7 @@ export default function WebViewCartSheet({
                   return (
                     <View key={mi.mealId} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                       <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: qtyRequired ? '#ef4444' : Colors.text2, flex: 1 }} numberOfLines={1}>
-                        {showMealName ? mi.mealName : inCartByWeight ? 'Extra qty to add' : 'Qty to add to cart'}
+                        {showMealName ? mi.mealName : inCartByWeight ? 'How much more to ask for' : 'Qty to add to cart'}
                       </Text>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                         <TouchableOpacity
@@ -4099,6 +4182,16 @@ export default function WebViewCartSheet({
                   <InCartByWeightActions
                     addQty={totalQty}
                     storeColor={storeColor}
+                    // The two guards every other footer on this screen already
+                    // had. Without the first, a decision taken mid-search advances
+                    // the queue and the in-flight SEARCH_RESULT lands on the NEXT
+                    // item's card, offering this ingredient's products under
+                    // "Results for <previous term>"; without the second, "Add more"
+                    // with "Other — type a product name…" selected and the box
+                    // empty returns out of handleReviewDecision doing nothing at
+                    // all — no add, no advance, no feedback.
+                    searching={customSearching}
+                    customTermMissing={selectedSuggIdx === 'custom' && customText.trim().length === 0}
                     onKeep={() => handleReviewDecision('keep')}
                     // 'add' (not 'update'): adds the units the user asked for
                     // without saving a cart line's title as the ingredient's

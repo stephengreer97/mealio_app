@@ -750,6 +750,30 @@ export function splitCartLeftover(
 }
 
 /**
+ * Drop the cart lines the run has already EXPLAINED to the user from an over-add
+ * list (MEAL-119).
+ *
+ * An in-cart-by-weight question is asked about a real cart line: a sold-by-weight
+ * row bearing the item's own name, which the count item that asked about it can
+ * never claim (see claimWeightRows / the weight pool in reconcileParallelAdd). So
+ * the row falls straight through to `over`, where the copy calls it something
+ * "Mealio didn't intend to add" and asks the user to review their cart.
+ *
+ * That sentence is false for these rows in every branch. Mealio DID intend the
+ * item — the row is the intent-vs-row disagreement, not overage — and printing it
+ * as unintended next to the card (or, on the done screen, next to the "kept as
+ * already in your cart" banner) tells the user to delete the very line they were
+ * just asked about. Following that advice leaves them with nothing, which is the
+ * outcome MEAL-119 exists to prevent, reached by taking our own advice.
+ *
+ * Matched loosely, like everything else that compares these two title sources.
+ */
+export function dropExplainedOverAdds(over: OverAdd[], explainedRows: string[]): OverAdd[] {
+  if (explainedRows.length === 0) return over;
+  return over.filter((o) => !explainedRows.some((name) => cartNameMatches(o.name, name)));
+}
+
+/**
  * Audit the after-run cart against what the run reported adding.
  *
  * `rows` are the diffCartItems output for this store, or null when the store
@@ -766,6 +790,11 @@ export function splitCartLeftover(
  * corroborate (`missing`/`short`), and items reported FAILED that the cart says
  * landed anyway (`recovered`). The second direction is why this runs at all on
  * a run that reported nothing added — see shouldProbeAfterRun.
+ *
+ * `explainedRows` are cart titles the run has already put to the user in its own
+ * words — the in-cart-by-weight questions (MEAL-119). They are held out of the
+ * over-add finding; see dropExplainedOverAdds for why announcing them there is
+ * not just noise but actively harmful advice.
  */
 export function auditCartAfterRun(input: {
   rows: CartRow[] | null;
@@ -774,8 +803,10 @@ export function auditCartAfterRun(input: {
   reconcileIntended: IntendedItem[];
   countBefore: number | null;
   countAfter: number | null;
+  explainedRows?: string[];
 }): CartCheckFindings {
   const { rows, reportedAdded, active, reconcileIntended, countBefore, countAfter } = input;
+  const explainedRows = input.explainedRows ?? [];
   let missing: string[] = [];
   let short: ShortAdd[] = [];
   let over: OverAdd[] = [];
@@ -792,6 +823,11 @@ export function auditCartAfterRun(input: {
     // recovery and an over-add — the same product named twice on the done
     // screen, "don't add it again" beside "nothing intended it".
     ({ over, recovered } = splitCartLeftover(addedRows, reportedAdded, intendedAll));
+    // Rows the run already asked the user about are not overage — see
+    // dropExplainedOverAdds. Filtered here rather than inside splitCartLeftover so
+    // the partition stays a partition: the row is still consumed as nothing's
+    // claim, it just isn't reported as unintended.
+    over = dropExplainedOverAdds(over, explainedRows);
     // Only audit items we reported as added (failures already route to review),
     // skip sold-by-weight ITEMS (presence, not count — see isWeightPriced), and
     // skip fully-missing items (covered by `missing`). The weight ROWS are

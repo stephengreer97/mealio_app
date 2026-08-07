@@ -764,6 +764,14 @@ export function buildAddToCartScript(
   }
 
   var TITLE_SEL = ${s.title};
+  // The in-page twin of cart-count's normalizeName: lowercase, every run of
+  // non-alphanumerics to one space, trimmed. No entity decoding — textContent has
+  // already decoded them, which is the one thing normalizeName has to do itself.
+  // (hebWaitFreshFn carries the same function as __hebNorm for the freshness gate,
+  // but it is not interpolated into this script — hence the separate name.)
+  function __hebNormTitle(s) {
+    return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  }
 ${hebFindCardsFn()}
   // MEAL-14 cart-query rail (see webview-scripts/heb-cart-query). Off by default;
   // when on it decides the normal add path below and the DOM signals stay as the
@@ -797,6 +805,33 @@ ${buildHebCartQueryFn()}
     if (el && el.textContent.trim() === TARGET_NAME) {
       targetCard = cards[ci];
       break;
+    }
+  }
+  // Second pass, punctuation- and case-insensitive — the same normalization
+  // cart-count's normalizeName applies before it compares two titles, so this is
+  // still an EXACT match, not a lenient one.
+  //
+  // It exists because TARGET_NAME does not always come from a search page. On the
+  // MEAL-119 top-up it is a cart row's own title, and everything else that
+  // compares those two sources normalizes first (cart-reconcile does not even
+  // offer a raw pass in front of its presence matching). A hyphen, an ampersand or
+  // a stray double space between the cart's rendering of a name and the search
+  // page's would end the press as ADD_RESULT not_found — the user is told, but
+  // they are told the top-up they asked for failed.
+  //
+  // Deliberately stops short of cartNameMatches' 0.6 token overlap: this
+  // comparison decides WHICH PRODUCT to buy, and a lenient match here would buy
+  // the wrong thing rather than merely report the right thing wrongly. Same-tokens
+  // normalization cannot reach a different product; a token subset can.
+  if (!targetCard) {
+    var TARGET_NORM = __hebNormTitle(TARGET_NAME);
+    for (var cj = 0; cj < cards.length; cj++) {
+      var el2 = cards[cj].querySelector(TITLE_SEL);
+      if (el2 && TARGET_NORM && __hebNormTitle(el2.textContent) === TARGET_NORM) {
+        targetCard = cards[cj];
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '1_title_normalized', target: TARGET_NAME, matched: el2.textContent.trim() }));
+        break;
+      }
     }
   }
 

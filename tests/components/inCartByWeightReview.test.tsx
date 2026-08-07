@@ -129,7 +129,10 @@ describe('InCartByWeightNote — what the card says happened', () => {
 });
 
 describe('InCartByWeightActions — neither rejected outcome is reachable without a choice', () => {
-  const renderActions = (addQty: number, opts: { withBack?: boolean } = {}) => {
+  const renderActions = (
+    addQty: number,
+    opts: { withBack?: boolean; searching?: boolean; customTermMissing?: boolean } = {},
+  ) => {
     const onKeep = jest.fn();
     const onAddMore = jest.fn();
     const onSkip = jest.fn();
@@ -138,6 +141,8 @@ describe('InCartByWeightActions — neither rejected outcome is reachable withou
       <InCartByWeightActions
         addQty={addQty}
         storeColor="#e21a2c"
+        searching={opts.searching ?? false}
+        customTermMissing={opts.customTermMissing ?? false}
         onKeep={onKeep}
         onAddMore={onAddMore}
         onSkip={onSkip}
@@ -165,11 +170,76 @@ describe('InCartByWeightActions — neither rejected outcome is reachable withou
     expect(onAddMore).not.toHaveBeenCalled();
   });
 
-  it('says how much it will add once the user has chosen a number', () => {
+  it('goes live once the user has chosen a number', () => {
     const { getByTestId, getByText, onAddMore } = renderActions(3);
-    expect(getByText('Add 3 more to my cart')).toBeTruthy();
+    expect(getByText('Add more of this to my cart')).toBeTruthy();
     fireEvent.press(getByTestId('add-more-anyway'));
     expect(onAddMore).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT promise a number of units — the store will not honour one', () => {
+    // This item's cart line came back sold by weight, which is exactly the shape
+    // whose Add button opens H-E-B's weight picker. That picker resolves a bare qty
+    // to the qty-th weight OPTION (handleWeightDropdown, with no __WEIGHT_TARGET to
+    // aim at), so pressing this at 3 buys one line at the 3rd-smallest weight —
+    // 3 lb, or 1.5 lb on 0.5 lb increments — never 3 pieces. "Add 3 more to my
+    // cart" asserted a count the store does not honour, and it did so in the
+    // direction that spends money.
+    const { queryByText, getByText } = renderActions(3);
+    expect(queryByText(/\b3\s+more\b/)).toBeNull();
+    expect(queryByText(/3 units?/i)).toBeNull();
+    // What IS true of every branch, said out loud: the store sizes it.
+    expect(getByText(/the store picks the size/i)).toBeTruthy();
+    expect(getByText(/can't promise an exact quantity/i)).toBeTruthy();
+  });
+
+  it('says nothing about the store sizing it while the button is inert', () => {
+    // The caveat explains a press that is available. At rest there is nothing to
+    // caveat, and the button says what to do instead.
+    const { queryByTestId, getByText } = renderActions(0);
+    expect(queryByTestId('add-more-weight-caveat')).toBeNull();
+    expect(getByText('To add more, set an amount above')).toBeTruthy();
+  });
+
+  it('will not add on an empty custom search box — no dead press', () => {
+    // "Other — type a product name…" is selected with nothing typed. Left enabled,
+    // handleReviewDecision takes its custom-search branch, finds no term and
+    // returns: no add, no advance, no feedback, a button that looks broken.
+    const { getByTestId, getByText, onAddMore } = renderActions(3, { customTermMissing: true });
+    const btn = getByTestId('add-more-anyway');
+    expect(btn.props.accessibilityState?.disabled).toBe(true);
+    fireEvent.press(btn);
+    expect(onAddMore).not.toHaveBeenCalled();
+    expect(getByText('Type a product name above to search')).toBeTruthy();
+  });
+
+  it('freezes every answer while a custom search is in flight', () => {
+    // The cross-contamination guard, and the reason it belongs on all four buttons
+    // rather than only on the add. Mid-custom-search this card still has
+    // customSuggestions === [], so the in-cart-by-weight branch is still chosen and
+    // Keep / Add / Skip would still be live. Any of them advances the review, and
+    // advancing does not cancel the search — so the in-flight SEARCH_RESULT lands
+    // on the NEXT item's card and offers THIS ingredient's products there, under
+    // "Results for <previous term>". The user then adds the wrong product to their
+    // cart, having been shown it under the wrong ingredient's name.
+    const { getByTestId, onKeep, onAddMore, onSkip, onBack } = renderActions(3, {
+      withBack: true,
+      searching: true,
+    });
+    for (const id of [
+      'keep-cart-weight-line',
+      'add-more-anyway',
+      'in-cart-by-weight-skip',
+      'in-cart-by-weight-back',
+    ]) {
+      const btn = getByTestId(id);
+      expect(btn.props.accessibilityState?.disabled).toBe(true);
+      fireEvent.press(btn);
+    }
+    expect(onKeep).not.toHaveBeenCalled();
+    expect(onAddMore).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
+    expect(onBack).not.toHaveBeenCalled();
   });
 
   it('confirms the cart line only on a press — nothing is accepted silently', () => {

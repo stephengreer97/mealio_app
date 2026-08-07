@@ -7,6 +7,7 @@
 
 import {
   auditCartAfterRun,
+  dropExplainedOverAdds,
   isWeightPriced,
   reconcileFromWorkerReports,
   reconcileParallelAdd,
@@ -866,6 +867,100 @@ describe('auditCartAfterRun', () => {
       const overNames = out.over.map((o) => o.name);
       expect(out.recovered.filter((r) => overNames.includes(r.cartName))).toEqual([]);
     }
+  });
+});
+
+// ── A line the user was ASKED about is not overage (MEAL-119) ──────────────────
+//
+// The retry exit finalizes through the after-probe, and by then the user has
+// answered the in-cart-by-weight card. A kept line is still an added weight row
+// that no count item can claim, so it falls through to `over` — where the copy
+// calls it an item "Mealio didn't intend" and asks the user to review their cart.
+//
+// That warning renders on the SAME done screen as "1 weight item kept as already
+// in your cart", naming the same product. A user who believes the warning deletes
+// the line they just approved and ends the run with nothing — Stephen's other
+// rejected outcome, reached by following Mealio's own advice.
+
+describe('dropExplainedOverAdds', () => {
+  const over: OverAdd[] = [
+    { name: 'H-E-B Boneless Chicken Breast', qty: 1 },
+    { name: 'H-E-B Bakery Cookies, 12 ct', qty: 2 },
+  ];
+
+  it('holds out the line the run asked about, and only that one', () => {
+    expect(dropExplainedOverAdds(over, ['H-E-B Boneless Chicken Breast'])).toEqual([
+      { name: 'H-E-B Bakery Cookies, 12 ct', qty: 2 },
+    ]);
+  });
+
+  it('changes nothing when the run asked about nothing', () => {
+    expect(dropExplainedOverAdds(over, [])).toEqual(over);
+  });
+
+  it('matches loosely, like every other comparison between these two title sources', () => {
+    // The over-add name comes from one cart read and the asked name from another,
+    // so a size suffix or a punctuation difference must not un-explain the row.
+    expect(dropExplainedOverAdds(over, ['H-E-B Boneless Chicken Breast, per lb'])).toEqual([
+      { name: 'H-E-B Bakery Cookies, 12 ct', qty: 2 },
+    ]);
+  });
+
+  it('still reports a genuinely unintended product — this is not a blanket mute', () => {
+    // Asking about the chicken must not buy silence about a cookie nobody ordered.
+    expect(dropExplainedOverAdds(over, ['H-E-B Boneless Chicken Breast']).length).toBe(1);
+  });
+});
+
+describe('auditCartAfterRun — the retry exit, after the user kept the weight line', () => {
+  // The exact state the sheet is in: the reconcile asked about the deli line and
+  // topped up the cumin, so `active` is the retry subset only and the deli item
+  // survives in `reconcileIntended`.
+  const KEPT_LINE = 'H-E-B Boneless Chicken Breast';
+  const audit = (explainedRows?: string[]) =>
+    auditCartAfterRun({
+      rows: [row(KEPT_LINE, 1, true), row('McCormick Ground Cumin, 4.5 oz', 2)],
+      reportedAdded: ['McCormick Ground Cumin, 4.5 oz'],
+      active: [{ name: 'cumin', expectedQty: 2, isWeight: false }],
+      reconcileIntended: [
+        { name: 'chicken breast', expectedQty: 3, isWeight: false },
+        { name: 'cumin', expectedQty: 2, isWeight: false },
+      ],
+      countBefore: 0,
+      countAfter: 3,
+      explainedRows,
+    });
+
+  it('reports the kept line as an over-add when nothing explains it — the bug', () => {
+    // Not an assertion about desired behaviour: it pins that this audit really
+    // does surface the row, so the test below is not passing vacuously.
+    expect(audit().over).toEqual([{ name: KEPT_LINE, qty: 1 }]);
+  });
+
+  it("never names a kept line as an item Mealio didn't intend", () => {
+    const out = audit([KEPT_LINE]);
+    expect(out.over).toEqual([]);
+    expect(out.overUnits).toBe(0);
+    // And it is not quietly moved to another finding instead: the count item that
+    // asked about it added nothing, so there is nothing to recover or report short.
+    expect(out.recovered).toEqual([]);
+    expect(out.short).toEqual([]);
+    expect(out.missing).toEqual([]);
+  });
+
+  it('takes its explained rows from the same cartName the ask card was built with', () => {
+    // Binds the two ends together: the string the sheet holds out of the warning is
+    // the string the review card showed the user, not a second guess at the title.
+    const reconciled = reconcileParallelAdd(
+      [
+        attempt('chicken breast', 3, { success: true, productName: KEPT_LINE }),
+        attempt('cumin', 2, { success: true, productName: 'McCormick Ground Cumin, 4.5 oz' }),
+      ],
+      [row(KEPT_LINE, 1, true)],
+    );
+    const asked = splitTopUpsForReview(reconciled).ask.map((a) => a.cartName);
+    expect(asked).toEqual([KEPT_LINE]);
+    expect(audit(asked).over).toEqual([]);
   });
 });
 
