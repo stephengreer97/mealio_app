@@ -243,6 +243,14 @@ describe('failure codes', () => {
     const IGNORED = new Set([
       'no_target', 'healthy', 'small_confirmed',   // log/diagnostic payloads
       'add', 'cards_ready', 'no_best', 'skip_submit_method', // co-located, not reasons
+      // MEAL-14's cart-query rail (heb-cart-query.ts) carries its OWN `reason`
+      // vocabulary — why a cart read failed, and why a verdict came out the way it
+      // did. None of these are ever posted as an ADD_RESULT reason: the rail's
+      // verdict reaches the funnel as `confirmState`/`confirmWhy` detail, and the
+      // single reason it does turn into is `cart_absent`, which IS mapped. Listed
+      // one by one so a genuinely new ADD_RESULT reason still fails this test.
+      'http_error', 'shape', 'graphql_error', 'network', 'no_read', 'no_baseline',
+      'cart_query', 'cart_query_confirm', 'cart_query_crosscheck', 'missing', 'unknown',
     ]);
 
     const found = new Map<string, string>();

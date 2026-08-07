@@ -9,6 +9,8 @@
 
 import { selectorsFor, storeConfig } from '../automation-config';
 
+import { buildHebCartQueryFn, hebCartQueryEnabled } from './heb-cart-query';
+
 export const HEB_URL = 'https://www.heb.com';
 export const HEB_LOGIN_URL = 'https://www.heb.com/my-account/login';
 export const HEB_CART_URL = 'https://www.heb.com/cart';
@@ -763,6 +765,14 @@ export function buildAddToCartScript(
 
   var TITLE_SEL = ${s.title};
 ${hebFindCardsFn()}
+  // MEAL-14 cart-query rail (see webview-scripts/heb-cart-query). Off by default;
+  // when on it decides the normal add path below and the DOM signals stay as the
+  // fallback for every way a cart read can fail.
+  var __HEB_CART_RAIL = ${hebCartQueryEnabled() ? 'true' : 'false'};
+${buildHebCartQueryFn()}
+  var __cartTarget = null;
+  var __cartQueryBefore = null;
+  var __cartConf = null;
 
   // Product-specific add confirmation: HEB relabels a card's own Add button to
   // "N added" once the item is in the cart. Unlike the shared header badge, this
@@ -804,9 +814,25 @@ ${hebFindCardsFn()}
   var hasPopup = addBtn.getAttribute('aria-haspopup') === 'true';
   window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '1_btn', hasPopup: hasPopup, hasPref: !!PREFERENCE, qty: QTY, name: TARGET_NAME }));
 
+  // MEAL-14 baseline, issued here — after the target is known, before any branch
+  // below clicks anything, so whatever it returns is a true "before" for every
+  // path. Awaited lazily (__cartBaseline) so the round trip overlaps the scroll
+  // and modal-polling those paths already spend, rather than adding to them.
+  if (__HEB_CART_RAIL) __cartTarget = __hebTargetFromCard(targetCard, TARGET_NAME);
+  var __cartBeforeP = __cartTarget ? __hebCartRead(6000) : null;
+  async function __cartBaseline() {
+    if (__cartBeforeP && !__cartQueryBefore) __cartQueryBefore = await __cartBeforeP;
+    return __cartQueryBefore;
+  }
+
   if (hasPopup && PREFERENCE) {
     addBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
     await wait(100);
+    // Settle the baseline BEFORE the first click. Issuing the read early is only
+    // safe if its response lands first: a read still in flight when the store
+    // commits our add would come back already counting it, and the cross-check
+    // would then read an unchanged line and call a successful add missing.
+    await __cartBaseline();
     addBtn.click();
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '2_atc_clicked' }));
 
@@ -934,6 +960,7 @@ ${hebFindCardsFn()}
 
     addBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
     await wait(100);
+    await __cartBaseline();
     addBtn.click();
     await wait(400);
 
@@ -943,12 +970,46 @@ ${hebFindCardsFn()}
       return;
     }
 
-    // Per-card label first (~8s), then the shared badge as a short fallback.
-    var committed = await __waitCardAdded(targetCard, cardBefore + 1, 40);
-    if (!committed) committed = await waitForCartIncrease(cartBefore, 12);
+    // MEAL-14: the cart's own answer decides when we could get one. Only when it
+    // is 'unknown' — a read we could not perform — do we spend the DOM budget:
+    // per-card label first (~8s), then the shared badge as a short fallback.
+    var committed = null;
+    if (__cartTarget) {
+      __cartConf = await __hebCartConfirmAdd(__cartTarget, __cartQueryBefore, {});
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId }));
+      if (__cartConf.state === 'landed') committed = true;
+      else if (__cartConf.state === 'missing') {
+        // A 'missing' verdict used to end the matter, which threw away
+        // __waitCardAdded — the per-card label this file calls the reliable
+        // success signal, because a sibling worker's add cannot nudge it. So the
+        // rail replaced a product-specific DOM signal with a cart read and then
+        // discarded the corroboration that would catch the cart read being wrong
+        // (a lost session answering about a different cart, or a second line under
+        // another preference id).
+        //
+        // Costs nothing on a true miss: the label will not show added either.
+        var cardSays = await __waitCardAdded(targetCard, cardBefore + 1, 40);
+        if (!cardSays) {
+          committed = false;
+        } else {
+          // Two independent product-specific signals disagree. The label is a
+          // positive observation, so the add commits — but the cart has NOT
+          // confirmed it, and the verdict is downgraded so nothing counts this as
+          // cart-backed. Reported either way, because a run that keeps landing
+          // here means the cart read is unreliable and the flag should go off.
+          committed = true;
+          __cartConf = __hebCartContradicted(__cartConf, 'contradicted_by_card');
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_contradicted', sku: __cartConf.skuId, product: __cartConf.productId }));
+        }
+      }
+    }
+    if (committed === null) {
+      committed = await __waitCardAdded(targetCard, cardBefore + 1, 40);
+      if (!committed) committed = await waitForCartIncrease(cartBefore, 12);
+    }
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '3_postclick', cardAfter: __cardAddedQty(targetCard), cartAfter: cartCount(), committed: committed }));
     if (!committed) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'cart_not_incremented' }));
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: (__cartConf && __cartConf.state === 'missing') ? 'cart_absent' : 'cart_not_incremented', confirm: __cartConf }));
       return;
     }
 
@@ -972,6 +1033,7 @@ ${hebFindCardsFn()}
     // rows[0] fallback — so the add lands instead of failing pref_required.
     addBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
     await wait(100);
+    await __cartBaseline();   // ordered before the click — see the branch above
     addBtn.click();
     await wait(700);
     if (await handleWeightDropdown(QTY, targetCard)) {
@@ -1033,7 +1095,21 @@ ${hebFindCardsFn()}
     return;
   }
 
-  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: true }));
+  // MEAL-14: the preference paths above confirm off a modal row's own increment
+  // control — product-specific, not the shared badge, so it is not the guess this
+  // ticket set out to replace and it stays the decision. But the cart can still
+  // contradict it, and a contradiction is a fact: cross-check once here so those
+  // paths also report per-item, and downgrade success only on 'missing'. Skipped
+  // when the branch above already asked (__cartConf set).
+  if (__cartTarget && !__cartConf) {
+    __cartConf = await __hebCartConfirmAdd(__cartTarget, await __cartBaseline(), { tries: 3 });
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_crosscheck', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId }));
+    if (__cartConf.state === 'missing') {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'cart_absent', confirm: __cartConf }));
+      return;
+    }
+  }
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: true, confirm: __cartConf }));
 })();true;`;
 }
 
@@ -1079,6 +1155,14 @@ export function buildSearchAndAddScript(
   // header cart count actually rising, so each (parallel) worker only reports
   // success when its add truly committed. Unreadable badge → not confirmed; the
   // reconcile pass re-reads the real cart, so a false negative is recovered.
+  //
+  // MEAL-14: when __HEB_CART_RAIL is on this is the FALLBACK, not the decision —
+  // the cart query below answers per product, which the shared badge cannot (a
+  // sibling worker's add moves it, as the wait-flush hack at the bottom of this
+  // script attests). It stays in the binary because a cart read we cannot perform
+  // must degrade to the rail that shipped, not to "everything failed".
+  var __HEB_CART_RAIL = ${hebCartQueryEnabled() ? 'true' : 'false'};
+${buildHebCartQueryFn()}
   function __cartCount() {
     var el = document.querySelector('[data-qe-id="headerCartButtonDesktop"], [data-testid="cart-link"]');
     var a = el ? (el.getAttribute('aria-label') || '') : '';
@@ -1246,10 +1330,21 @@ ${hebWaitFreshFn()}
     }
   }
 
+  var __cartTarget = null;
+  var __cartQueryBefore = null;
+  var __cartConf = null;
+
   try {
     __cartBefore = __cartCount();
+    // MEAL-14 baseline. Issued BEFORE the click (so it cannot see our own add)
+    // but awaited AFTER the scroll, so its round trip overlaps work this script
+    // already does — the before-read costs the run almost nothing in wall clock.
+    // One read per add, not two: the after-read doubles as the poll.
+    if (__HEB_CART_RAIL) __cartTarget = __hebTargetFromCard(bestCard, bestName);
+    var __cartBeforeP = __cartTarget ? __hebCartRead(6000) : null;
     bestBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
     await wait(100);
+    if (__cartBeforeP) __cartQueryBefore = await __cartBeforeP;
     bestBtn.click();
 
     if (bestHasPopup && DROPDOWN) {
@@ -1368,17 +1463,35 @@ ${hebWaitFreshFn()}
       }
     }
 
-    var __committed = await __waitForCartIncrease(__cartBefore, 50);
+    // MEAL-14: ask the cart. 'landed' and 'missing' are both facts from the
+    // store's own answer, so either settles the item — and 'missing' names the
+    // product instead of leaving a count short. 'unknown' means we could not read
+    // the cart (blocked, non-200, odd shape, timeout, or no baseline), which is
+    // NOT evidence of absence: fall through to the badge rail exactly as before.
+    var __committed = null;
+    if (__cartTarget) {
+      __cartConf = await __hebCartConfirmAdd(__cartTarget, __cartQueryBefore, {});
+      // EXTRACT_DEBUG, not DEBUG: the worker wrapper re-tags this type and the
+      // main-WebView handler logs it, so the rail is visible on both rails.
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId }));
+      if (__cartConf.state === 'landed') __committed = true;
+      else if (__cartConf.state === 'missing') __committed = false;
+    }
+    if (__committed === null) __committed = await __waitForCartIncrease(__cartBefore, 50);
     // Parallel-worker mode: the badge can tick up from a SIBLING worker's add,
     // so __committed may pass while our OWN cart POST is still in flight. The
     // pool re-navigates this worker the instant we post the result, which would
     // cancel that request. Give it a beat to flush first. (The sequential flow
     // has the RN-side navigation buffer, so it skips this.)
-    if (__committed && location.hash && location.hash.indexOf('#mealio=') === 0) await wait(450);
+    // MEAL-14 skips that flush when the CART itself already lists our line: the
+    // request cannot still be in flight if the server has recorded it, so the
+    // rail hands back ~450ms per parallel add rather than costing any.
+    var __cartProved = !!(__cartConf && __cartConf.state === 'landed');
+    if (__committed && !__cartProved && location.hash && location.hash.indexOf('#mealio=') === 0) await wait(450);
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify(__committed
-      ? { type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }
-      : { type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'cart_not_incremented', productName: bestName, candidates: candidates }));
+      ? { type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName, confirm: __cartConf }
+      : { type: 'SEARCH_AND_ADD_RESULT', success: false, reason: (__cartConf && __cartConf.state === 'missing') ? 'cart_absent' : 'cart_not_incremented', productName: bestName, candidates: candidates, confirm: __cartConf }));
   } catch(e) {
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: candidates }));

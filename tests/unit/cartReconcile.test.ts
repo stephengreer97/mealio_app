@@ -11,13 +11,23 @@ import {
   reconcileFromWorkerReports,
   reconcileParallelAdd,
   shouldProbeAfterRun,
+  summarizeConfirmations,
   toIntendedItem,
 } from '../../src/lib/cart-reconcile';
 import type { AttemptedAdd, IntendedItem, OverAdd, RecoveredAdd, WorkerReport } from '../../src/lib/cart-reconcile';
 import type { CartRow } from '../../src/lib/webview-scripts/cart-count';
+import type { HebAddConfirmation } from '../../src/lib/webview-scripts/heb-cart-query';
 
 const row = (name: string, qty: number, isWeight = false): CartRow =>
   ({ name, qty, added: true, isWeight });
+
+/** A cart verdict, as MEAL-14's rail posts it back from the page. */
+const confirm = (
+  state: HebAddConfirmation['state'],
+  reason: string,
+  skuId: string | null = null,
+  productId: string | null = null,
+): HebAddConfirmation => ({ state, via: 'cart_query', reason, skuId, productId });
 
 const attempt = (
   name: string,
@@ -227,6 +237,68 @@ describe('reconcileFromWorkerReports (unreadable per-item cart)', () => {
       { index: 2, name: 'galangal' },
       { index: 3, name: 'butter' },
     ]);
+  });
+
+  // MEAL-14: a cart verdict is the store answering about one product, so it beats
+  // a worker that inferred from a shared badge — but only when it is definite.
+  it('lets a definite cart verdict overrule the worker on both sides', () => {
+    const out = reconcileFromWorkerReports([
+      // Worker said it landed; the cart says the line is not there.
+      attempt('sour cream', 1, { success: true, productName: 'H-E-B Sour Cream 16 oz', confirm: confirm('missing', 'absent_from_cart') }),
+      // Worker's badge read went stale; the cart says it landed anyway.
+      attempt('tortillas', 1, { success: false, reason: 'cart_not_incremented', productName: 'H-E-B Flour Tortillas', confirm: confirm('landed', 'qty_increased') }),
+    ]);
+    expect(out.confirmed).toEqual([{ index: 1, name: 'H-E-B Flour Tortillas' }]);
+    expect(out.failed).toEqual([{ index: 0, name: 'sour cream' }]);
+  });
+
+  it('leaves the worker in charge when the cart could not be read', () => {
+    const out = reconcileFromWorkerReports([
+      attempt('sour cream', 1, { success: true, productName: 'H-E-B Sour Cream 16 oz', confirm: confirm('unknown', 'blocked') }),
+      attempt('galangal', 1, { success: false, reason: 'cart_not_incremented', confirm: confirm('unknown', 'timeout') }),
+    ]);
+    expect(out.confirmed).toEqual([{ index: 0, name: 'H-E-B Sour Cream 16 oz' }]);
+    expect(out.failed).toEqual([{ index: 1, name: 'galangal' }]);
+  });
+});
+
+// ── Per-item cart verdicts (MEAL-14) ─────────────────────────────────────────
+
+describe('summarizeConfirmations', () => {
+  it('names the items the cart says are missing, apart from the unverified ones', () => {
+    const out = summarizeConfirmations([
+      attempt('sour cream', 1, { success: true, productName: 'H-E-B Sour Cream 16 oz', confirm: confirm('landed', 'qty_increased', '4122025475', '314026') }),
+      attempt('tortillas', 2, { success: false, reason: 'cart_absent', confirm: confirm('missing', 'absent_from_cart', '4122006881', '124989') }),
+      attempt('bulk coffee', 1, { success: true, productName: 'CAFE Olé Bulk Coffee', confirm: confirm('unknown', 'weight_unchanged', '61342', '894630') }, true),
+      // No rail ran at all — the DOM decided, as it does for every other store.
+      attempt('butter', 1, { success: true, productName: 'H-E-B Butter' }),
+    ]);
+    expect(out.landed.map((i) => i.index)).toEqual([0]);
+    expect(out.missing).toEqual([
+      { index: 1, name: 'tortillas', skuId: '4122006881', productId: '124989', reason: 'absent_from_cart' },
+    ]);
+    expect(out.unknown.map((i) => [i.index, i.reason])).toEqual([
+      [2, 'weight_unchanged'],
+      [3, 'no_verdict'],
+    ]);
+  });
+
+  // The failure mode this rail must never cause: one blocked read turning into a
+  // screenful of "we couldn't add these".
+  it('reports a blocked cart as unverified for every item, never as mass failure', () => {
+    const attempts = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((n) =>
+      attempt(n, 1, { success: true, productName: n, confirm: confirm('unknown', 'blocked') }));
+    const out = summarizeConfirmations(attempts);
+    expect(out.missing).toEqual([]);
+    expect(out.landed).toEqual([]);
+    expect(out.unknown).toHaveLength(8);
+  });
+
+  it('decodes entities in the name a human will read', () => {
+    const out = summarizeConfirmations([
+      attempt('yogurt', 1, { success: true, productName: 'Chobani&reg; Whole Milk', confirm: confirm('landed', 'qty_increased') }),
+    ]);
+    expect(out.landed[0].name).toBe('Chobani® Whole Milk');
   });
 });
 

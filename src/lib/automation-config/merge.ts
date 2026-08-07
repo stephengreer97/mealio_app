@@ -193,7 +193,8 @@ function mergeStore(
       case 'forceSerialSearch':
       case 'cacheBustNav':
       case 'spaSearch':
-      case 'nextDataSearch': {
+      case 'nextDataSearch':
+      case 'cartSkuConfirm': {
         const b = takeBoolean(path, value, warnings);
         if (b !== undefined) target[key] = b;
         break;
@@ -209,6 +210,19 @@ function mergeStore(
       case 'cartUrl': {
         if (isValidUrl(value)) target[key] = value;
         else warnings.push(`${path}: not a safe https URL — ignored`);
+        break;
+      }
+      case 'cartEndpoint': {
+        // A same-origin path, deliberately not run through isValidUrl: an
+        // absolute URL is exactly what must not get through, because this string
+        // is interpolated into a script injected into the store's own page. The
+        // rail re-validates it at the point of use as well — a shape gate at both
+        // ends, so a bad override cannot reach the page even if one side changes.
+        if (typeof value === 'string' && /^\/[A-Za-z0-9._~\-/]{0,120}$/.test(value) && !value.startsWith('//')) {
+          target[key] = value;
+        } else {
+          warnings.push(`${path}: not a same-origin path — ignored`);
+        }
         break;
       }
       case 'searchUrlTemplate': {
