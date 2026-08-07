@@ -17,7 +17,7 @@ import { Colors, Radius } from '../constants/colors';
 import { useAuth } from '../context/AuthContext';
 import { bugReport } from '../lib/api';
 import { getSessionLogs } from '../lib/logBuffer';
-import { getLastAutomationRun } from '../lib/lastRun';
+import { getLastAutomationRun } from '../lib/lastAutomationRun';
 
 interface Props {
   visible: boolean;
@@ -39,12 +39,16 @@ export default function BugReportSheet({ visible, onClose, currentRoute }: Props
     }
     setSubmitting(true);
     try {
-      // The runId of the last add-to-cart run, when there was one (MEAL-142).
+      // The last add-to-cart run of this session, when there was one (MEAL-142).
       // Without it the logs below and the run's telemetry rows describe the same
-      // failure with no way to line them up. `runAgeMs` is included so whoever
-      // reads the report can tell "filed straight after it broke" from "filed
-      // two days later about something else" — a stale runId would point at an
-      // unrelated trace, which is worse than sending none.
+      // failure with no way to line them up.
+      //
+      // The keys say "lastCartRun", not "cartRun": this is NOT necessarily the
+      // run the report is about. Nothing here can know that — see the note in
+      // lib/lastAutomationRun.ts — so the age rides along as a readable phrase
+      // ("4s ago" / "2 days ago") and the reader judges. There is no ms value:
+      // the run row carries its own timestamp, and a nine-digit integer in an
+      // email is a row people skip.
       const lastRun = getLastAutomationRun();
       await bugReport.submit({
         description: text,
@@ -56,9 +60,9 @@ export default function BugReportSheet({ visible, onClose, currentRoute }: Props
           route: currentRoute ?? null,
           userId: user?.id ?? null,
           tier: (user as any)?.tier ?? null,
-          automationRunId: lastRun?.runId ?? null,
-          automationStoreId: lastRun?.storeId ?? null,
-          automationRunAgeMs: lastRun?.ageMs ?? null,
+          lastCartRunId: lastRun?.runId ?? null,
+          lastCartRunStore: lastRun?.storeId ?? null,
+          lastCartRunAge: lastRun?.ageLabel ?? null,
         },
       });
       onClose();

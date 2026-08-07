@@ -40,7 +40,7 @@ import { buildSearchAndAddWorker, buildPresearchWorker } from '../lib/webview-sc
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS, FEATURE_PRESEARCH_ADD, ADD_COMMIT_JITTER_MS } from '../constants/features';
 import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
-import { setLastAutomationRun } from '../lib/lastRun';
+import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
@@ -266,6 +266,14 @@ export default function WebViewCartSheet({
   const automationRunIdRef = useRef<string | null>(null);
   const automationStartedRef = useRef(false);
   const automationCompletedRef = useRef(false);
+  // Which open of the sheet we are on. logAutomationStart is a round trip
+  // (~100-500ms) and the close path below re-arms automationStartedRef, so a
+  // close-then-reopen puts two starts in flight at once: open HEB, close before
+  // the response lands, open Walmart. If HEB's response arrives second, its
+  // `.then()` would install HEB's runId and — worse — a recorder keyed to HEB,
+  // so Walmart's steps would upload under HEB's run. Closing bumps this, and a
+  // `.then()` from a superseded open bails out instead of writing anything.
+  const automationGenRef = useRef(0);
 
   // Per-step funnel telemetry (see lib/automation-telemetry.ts). A ref, not state,
   // because the message handler records steps synchronously and must never wait a
@@ -279,6 +287,7 @@ export default function WebViewCartSheet({
     if (visible) {
       if (!automationStartedRef.current) {
         automationStartedRef.current = true;
+        const gen = automationGenRef.current;
         usage
           .logAutomationStart({
             storeId,
@@ -291,6 +300,10 @@ export default function WebViewCartSheet({
             platform: Platform.OS === 'ios' ? 'ios' : 'android',
           })
           .then((id) => {
+            // This open was abandoned while the request was in flight. Every
+            // write below would name a run nobody is watching — and the recorder
+            // would misfile the CURRENT open's steps under it.
+            if (gen !== automationGenRef.current) return;
             automationRunIdRef.current = id;
             // Hand the id to the bug-report path too (MEAL-142). The console
             // buffer already captures what reproduces a failure; this is the key
@@ -316,6 +329,9 @@ export default function WebViewCartSheet({
           });
       }
     } else {
+      // Retire this open before re-arming the start below, so a response still
+      // in flight for it can no longer write anything.
+      automationGenRef.current += 1;
       automationStartedRef.current = false;
       automationCompletedRef.current = false;
       automationRunIdRef.current = null;
