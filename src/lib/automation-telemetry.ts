@@ -126,6 +126,17 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   // than by an absent signal, so the raw reason in detail is what separates a
   // cart-verified miss from a badge that never moved.
   cart_absent: 'confirm_failed',
+  // MEAL-14 review: the cart said absent and the per-card "N added" label said
+  // added. Two independent product-specific signals disagreeing is not a miss, so
+  // the add still commits on the label and these should NOT normally reach a
+  // failure row at all — they are mapped because a reason that can be emitted must
+  // have a deliberate family, not fall through to a default. `confirm_failed` is
+  // the least wrong: if one of these ever does surface as a failure, what happened
+  // is that we could not verify the item, and the raw reason in detail says which
+  // signal we distrusted. A run producing these repeatedly means the cart read is
+  // unreliable and `stores.heb.cartSkuConfirm` should go back off.
+  contradicted: 'confirm_failed',
+  contradicted_by_card: 'confirm_failed',
   not_confirmed: 'confirm_failed',
   click_failed: 'confirm_failed',
   blocked: 'waf_block',

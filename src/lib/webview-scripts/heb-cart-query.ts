@@ -39,8 +39,12 @@
 //    measured as accepted. Swapping to a hash is a one-line change in
 //    `__hebCartBody` if H-E-B ever enables safelisting.
 //  • AUTHENTICATED operations were never measured (MEAL-12's open gap 1, and the
-//    cart query is authenticated). Nor was ABP's behaviour under a rail issuing
-//    ~10 cart reads per run. Both are why this ships behind
+//    cart query is authenticated). Nor was ABP's behaviour under this rail's
+//    request rate: it is a baseline read plus 1–5 polled after-reads PER ADD, so
+//    an 8-item run issues AT LEAST 16 authenticated `/graphql` POSTs and up to
+//    48, and in the parallel/presearch pools ~4 baselines fire within a few
+//    hundred ms of each other. MEAL-12 calls ABP under sustained programmatic
+//    load its largest open unknown. Both gaps are why this ships behind
 //    `stores.heb.cartSkuConfirm`, DEFAULT FALSE, exactly as MEAL-13 shipped
 //    `nextDataSearch`.
 //
@@ -51,6 +55,46 @@
 // distinct all the way up: 'landed' (the cart shows our units), 'missing' (the
 // cart answered and our line is absent or unchanged), 'unknown' (we could not
 // read the cart).
+//
+// A READABLE WRONG CART IS THE OTHER WAY TO REPORT MASS FAILURE, and it is not a
+// read failure, so the `unknown` plumbing above cannot catch it. MEAL-12's own
+// probes were all logged-out and still got 200s, so a worker WebView that loses
+// its H-E-B session mid-run gets a perfectly valid answer about SOMEBODY ELSE'S
+// (or a guest's) cart — every line absent, every item `missing`. The defence is
+// `Cart.id`, which the query already selects: the before and after snapshots
+// carry it, and any disagreement between them is `unknown`/`cart_changed`, not a
+// verdict. It follows that a `missing` verdict now REQUIRES a readable baseline —
+// with no `before` there is no id to compare, so absence is reported as
+// `no_baseline` and the DOM rail decides, exactly as it did before this rail.
+//
+// IDENTITY IS THE PRODUCT ID TODAY, and the ticket's "diff by skuId" was not
+// achievable from the card — but that is a narrower statement than the one this
+// file used to make, and the difference is worth writing down.
+//
+// The card MARKUP carries no sku; the PAGE does. All 220 distinct Products across
+// the committed `search-results-*.html` fixtures that have a `__NEXT_DATA__` carry
+// `SKUs:[{id}]`, immediately beside the `productPageURL` this rail already parses,
+// and for the three products appearing in both a search and a cart capture the two
+// agree exactly (1627072→4122093426, 3454081→25607700000, 894630→61342). So a sku
+// IS obtainable, and the earlier claim that H-E-B's cards carry none anywhere was
+// wrong about the page.
+//
+// It is not wired yet, deliberately. MEAL-13's `__NEXT_DATA__` extractor lives in
+// heb.ts rather than here, the payload is the INITIAL server render and is not
+// rewritten by SPA search (MEAL-13's own staleness gate exists for that), and two
+// of the ten committed search fixtures carry no `__NEXT_DATA__` at all. Reaching
+// across for it is a real change with a real staleness question, not a one-liner.
+//
+// The consequence, stated plainly rather than left to be discovered: because
+// `__hebTargetFromCard` always returns `skuId: null`, the sku half of
+// `__hebCartLineIs` and all of `__hebCartSkuKey`'s zero-padding are DEAD in
+// production, and the `missing` report names items with a null sku. The product-id
+// fallback carries the whole rail, and it is verified to: the card's
+// /product-detail/<slug>/<id> id equals `Product.id` for all 220 products, and all
+// 297 cards across the ten fixtures hold exactly one distinct product-detail id —
+// the pairings-carousel fixture included, its tiles correctly excluded by
+// [data-qe-id="productCard"]. Matching is "sku OR product id" so that wiring the
+// sku later widens the match set without changing any existing verdict.
 //
 // ONE IMPLEMENTATION, NOT TWO. The parse/diff/confirm logic lives only in the
 // injectable JS string below — it is what actually runs on the device. Nothing
@@ -72,6 +116,32 @@ const SELECTOR_KEY = 'heb';
  */
 export function hebCartQueryEnabled(): boolean {
   return storeConfig(SELECTOR_KEY).cartSkuConfirm === true;
+}
+
+/** The bundled default, and what a rejected override falls back to. */
+export const HEB_CART_ENDPOINT_DEFAULT = '/graphql';
+
+/**
+ * Where to POST the cart query. Same-origin path, remote-overridable via
+ * `stores.heb.cartEndpoint` — `network-confirmation-findings.md` §Recommendation
+ * 2 asks for cart-endpoint URLs to live in the remote config precisely because
+ * they drift like selectors do, and a hardcoded path would need an app release to
+ * change even though the flag that turns the rail on is remote.
+ *
+ * Read through a FUNCTION for the same reason as the flag (remote config lands
+ * after import), and re-validated HERE rather than trusted from the merge: this
+ * string is interpolated into an injected script, so the shape gate applies at
+ * both ends. Anything that is not a plain same-origin path — an absolute URL, a
+ * protocol-relative `//host`, quotes, whitespace — is refused and the default
+ * stands, because the safe failure is "we query the endpoint we shipped with".
+ */
+export function hebCartEndpoint(): string {
+  const v = storeConfig(SELECTOR_KEY).cartEndpoint;
+  if (typeof v !== 'string') return HEB_CART_ENDPOINT_DEFAULT;
+  if (!/^\/[A-Za-z0-9._~\-/]{0,120}$/.test(v) || v.startsWith('//')) {
+    return HEB_CART_ENDPOINT_DEFAULT;
+  }
+  return v;
 }
 
 /** One cart line, as the rail reports it. */
@@ -113,7 +183,17 @@ export type HebCartReadFailure =
   | 'timeout';
 
 export type HebCartSnapshot =
-  | { ok: true; lines: HebCartLine[]; itemCount: number | null; status: number | null }
+  | {
+    ok: true;
+    /** `Cart.id`. The only thing that says the after-read looked at the SAME cart
+     *  the before-read did — see the module header. Null only if H-E-B stops
+     *  returning the field, in which case before and after agree on null and
+     *  there is nothing to compare. */
+    cartId: string | null;
+    lines: HebCartLine[];
+    itemCount: number | null;
+    status: number | null;
+  }
   | { ok: false; reason: HebCartReadFailure; status: number | null; detail?: string | null };
 
 /** The product an add targeted, as far as the cart can identify it. */
@@ -136,9 +216,10 @@ export interface HebAddConfirmation {
   reason: string | null;
   skuId?: string | null;
   productId?: string | null;
-  /** Units on the line after the add (weight lines: 1). Null when unread. */
+  /** Units across EVERY cart line for this product after the add (a weight line
+   *  contributes 1). Null when unread. */
   qtyAfter?: number | null;
-  /** Pounds after the add, weight lines only. */
+  /** Pounds after the add, summed over this product's weight lines. */
   weightAfter?: number | null;
 }
 
@@ -152,7 +233,30 @@ export interface HebAddConfirmation {
  * `product.fullDisplayName` earns its place by naming the item in the report the
  * user eventually sees.
  */
-export const HEB_CART_QUERY = `query MealioCartLines {
+/**
+ * Our operation name — neutral and descriptive, and deliberately NOT H-E-B's own.
+ *
+ * No evidence exists in this repo for the name their storefront uses for this
+ * query (the ticket's `cartEstimated` appears nowhere), and inventing a
+ * plausible-looking one would be a guess dressed as a fact. But it was
+ * `MealioCartLines`, which is the opposite mistake: the single most
+ * self-identifying string in a request to a store that runs behavioural
+ * profiling, sitting next to an `apollographql-client-name` header that says we
+ * are the storefront. One request cannot coherently claim both, and the field
+ * that gets logged and grepped is the operation name. `CartLines` says what the
+ * document does and advertises nothing.
+ *
+ * This is a reduction, not concealment, and the difference matters: the document
+ * still carries no `__typename` fields, which is exactly the fingerprint MEAL-12
+ * used to prove the gateway executed OUR text rather than a cached persisted
+ * operation. We cannot remove that without schema knowledge we do not have, so
+ * the request remains distinguishable from the site's own by anyone looking.
+ */
+export const HEB_CART_OPERATION = 'CartLines';
+
+/** Interpolated from HEB_CART_OPERATION so the document text and the
+ *  `operationName` field cannot drift apart — a mismatch is a 400. */
+export const HEB_CART_QUERY = `query ${HEB_CART_OPERATION} {
   cartV2 {
     id
     itemCount { total }
@@ -165,11 +269,6 @@ export const HEB_CART_QUERY = `query MealioCartLines {
     }
   }
 }`;
-
-/** Our operation name. Deliberately ours: no evidence exists in this repo for
- *  the name H-E-B's own storefront uses for this query, and inventing a
- *  plausible-looking one would be a guess dressed as a fact. */
-export const HEB_CART_OPERATION = 'MealioCartLines';
 
 /**
  * The client name header the storefront itself sends, which MEAL-12's verified
@@ -184,8 +283,9 @@ const HEB_APOLLO_CLIENT = 'WebPlatform-Solar (Production)';
  *
  *   __hebCartRead(timeoutMs)                  → Promise<snapshot>
  *   __hebCartParse(status, json, text)        → snapshot            (pure)
- *   __hebCartFind(lines, target)              → line | null         (pure)
+ *   __hebCartMatch(lines, target)             → merged line | null  (pure)
  *   __hebCartConfirm(target, before, after)   → confirmation        (pure)
+ *   __hebCartContradicted(conf, why)          → confirmation        (pure)
  *   __hebCartConfirmAdd(target, before, opts) → Promise<confirmation>
  *   __hebTargetFromCard(card, name)           → target | null
  *
@@ -194,7 +294,7 @@ const HEB_APOLLO_CLIENT = 'WebPlatform-Solar (Production)';
  */
 export function buildHebCartQueryFn(): string {
   return `
-  var __HEB_CART_ENDPOINT = '/graphql';
+  var __HEB_CART_ENDPOINT = ${JSON.stringify(hebCartEndpoint())};
   var __HEB_CART_QUERY = ${JSON.stringify(HEB_CART_QUERY)};
   var __HEB_CART_OP = ${JSON.stringify(HEB_CART_OPERATION)};
   var __HEB_CART_CLIENT = ${JSON.stringify(HEB_APOLLO_CLIENT)};
@@ -274,24 +374,67 @@ export function buildHebCartQueryFn(): string {
     var lines = [];
     for (var i = 0; i < cart.items.length; i++) lines.push(__hebCartLine(cart.items[i]));
     var total = (cart.itemCount && typeof cart.itemCount.total === 'number') ? cart.itemCount.total : null;
-    return { ok: true, lines: lines, itemCount: total, status: status };
+    // cartId is carried, not merely selected: a VALID answer about a DIFFERENT
+    // cart is the one failure mode that looks like success, and this is the only
+    // field that exposes it. See the module header.
+    return {
+      ok: true,
+      cartId: (cart.id != null && cart.id !== '') ? String(cart.id) : null,
+      lines: lines, itemCount: total, status: status
+    };
   }
 
-  // Match a target to a cart line: SKU first (the cart's own primary id), then
-  // product id (the only one a DOM-driven add can read off a result card).
-  function __hebCartFind(lines, target) {
+  // Does one cart line belong to the target? Sku OR product id — a union, not a
+  // priority order, because the sum below has to be over the same set of lines on
+  // both sides of the diff and either id can be the one a given line carries.
+  function __hebCartLineIs(line, sk, pid) {
+    if (!line) return false;
+    if (sk && __hebCartSkuKey(line.skuId) === sk) return true;
+    if (pid && line.productId === pid) return true;
+    return false;
+  }
+
+  // Every line for the target, MERGED — not the first one.
+  //
+  // One product can hold more than one cart line: CartItem.id is
+  // "item#<productId>#<preferenceId>", and the committed weight capture has
+  // "item#3454081#b58dbfed-…". So an add that creates a SECOND line under a
+  // different preference leaves the first line untouched, and a
+  // first-match-wins lookup reads the same pre-existing line in both snapshots,
+  // sees no change, and calls a successful add missing. Summing over the whole
+  // set is the only reading of "how many of this product does the cart hold" that
+  // survives that, and it is also correct for the ordinary single-line case.
+  //
+  // qty sums (a weight line contributes 1, per __hebCartLine); weight sums, so a
+  // second deli line at 0.5 lb reads as heavier and not as unchanged; isWeight is
+  // true if ANY matching line is one, which routes a mixed set through the
+  // presence rule rather than a unit comparison — the conservative direction.
+  function __hebCartMatch(lines, target) {
     if (!lines || !target) return null;
     var sk = __hebCartSkuKey(target.skuId);
-    var i;
-    if (sk) {
-      for (i = 0; i < lines.length; i++) if (__hebCartSkuKey(lines[i].skuId) === sk) return lines[i];
-    }
     var pid = (target.productId != null && String(target.productId).trim() !== '')
       ? String(target.productId).trim() : null;
-    if (pid) {
-      for (i = 0; i < lines.length; i++) if (lines[i].productId === pid) return lines[i];
+    if (!sk && !pid) return null;
+    var out = null;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      if (!__hebCartLineIs(l, sk, pid)) continue;
+      if (!out) {
+        out = {
+          lineId: l.lineId, skuId: l.skuId, productId: l.productId, name: l.name,
+          qty: l.qty, isWeight: l.isWeight, weight: l.weight, lineCount: 1
+        };
+        continue;
+      }
+      out.qty += l.qty;
+      out.isWeight = out.isWeight || l.isWeight;
+      if (l.weight != null) out.weight = (out.weight == null) ? l.weight : out.weight + l.weight;
+      if (!out.skuId && l.skuId) out.skuId = l.skuId;
+      if (!out.productId && l.productId) out.productId = l.productId;
+      if (!out.name && l.name) out.name = l.name;
+      out.lineCount++;
     }
-    return null;
+    return out;
   }
 
   // The decision. Pure: two snapshots in, one confirmation out.
@@ -310,14 +453,29 @@ export function buildHebCartQueryFn(): string {
     if (!target || (!idsku && !idprod)) return out('unknown', 'no_target', null);
     if (!after) return out('unknown', 'no_read', null);
     if (!after.ok) return out('unknown', after.reason || 'no_read', null);
-    var a = __hebCartFind(after.lines, target);
-    // The cart answered and our line is not in it. This is the one claim the
-    // badge rail could never make, and the reason MEAL-14 exists.
-    if (!a) return out('missing', 'absent_from_cart', null);
-    // Present, but with no baseline we cannot tell our units from units that were
-    // already there. Unknown, so the caller falls back — never 'landed'.
+    var a = __hebCartMatch(after.lines, target);
+    // No baseline: we can neither tell our units from units that were already
+    // there NOR check that this is the same cart the before-read saw, and the
+    // second is why this gate is above the absence check rather than below it. An
+    // unreadable baseline plus a cart we cannot vouch for is not evidence that
+    // the item is missing — it is the DOM rail's turn.
     if (!before || !before.ok) return out('unknown', 'no_baseline', a);
-    var b = __hebCartFind(before.lines, target);
+    // SAME CART? A valid answer about a different cart reads as "every item
+    // failed" — the one outcome this rail must never produce, and not a read
+    // failure, so nothing else catches it. MEAL-12's probes prove an anonymous
+    // /graphql call still gets a 200, so a worker that loses its session mid-run
+    // lands here. Any disagreement, including one side having an id and the other
+    // not, is 'unknown'. (Both null — H-E-B dropping Cart.id — compares equal and
+    // passes; the parse already rejects a response without an items array, so a
+    // wholesale shape change is caught upstream.)
+    var bid = (before.cartId == null) ? null : String(before.cartId);
+    var aid = (after.cartId == null) ? null : String(after.cartId);
+    if (bid !== aid) return out('unknown', 'cart_changed', a);
+    // The cart answered, about the cart we baselined, and our line is not in it.
+    // This is the one claim the badge rail could never make, and the reason
+    // MEAL-14 exists.
+    if (!a) return out('missing', 'absent_from_cart', null);
+    var b = __hebCartMatch(before.lines, target);
     if (a.isWeight) {
       // A weight line is confirmed by PRESENCE, per the single definition of
       // sold-by-weight in lib/cart-reconcile (isWeightPriced): one line at N lb
@@ -376,6 +534,29 @@ export function buildHebCartQueryFn(): string {
     } finally {
       if (timer) clearTimeout(timer);
     }
+  }
+
+  // Withdraw a 'missing' verdict that a second, independent signal contradicts.
+  //
+  // The caller in heb.ts holds the other product-specific signal: the per-card
+  // "N added" label, which that file calls the reliable success one precisely
+  // because a sibling worker's add cannot nudge it. When the cart says absent and
+  // the label says added, the honest state is that we do not know — one of the two
+  // reads is wrong, and this rail is not entitled to assume it is the label.
+  //
+  // Deliberately downgrades to 'unknown' rather than to 'landed': the DOM signal
+  // may be good enough for the CALLER to commit the add, but nothing here has
+  // confirmed the item from the cart, so no cart-backed metric may count it.
+  // Keeps the identity and quantity fields, which are what make the disagreement
+  // diagnosable later.
+  function __hebCartContradicted(conf, why) {
+    if (!conf) return conf;
+    return {
+      state: 'unknown',
+      reason: why || 'contradicted',
+      skuId: conf.skuId, productId: conf.productId,
+      qtyAfter: conf.qtyAfter, weightAfter: conf.weightAfter
+    };
   }
 
   // Poll the cart until it shows our units. The store commits the add

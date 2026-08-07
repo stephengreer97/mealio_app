@@ -29,8 +29,9 @@ import { buildHebCartQueryFn, HEB_CART_QUERY, HEB_CART_OPERATION } from '../../s
 
 interface Rail {
   parse: (status: number, json: unknown, text?: string) => any;
-  find: (lines: any[], target: any) => any;
+  match: (lines: any[], target: any) => any;
   confirm: (target: any, before: any, after: any) => any;
+  contradicted: (conf: any, why?: string) => any;
   read: (timeoutMs?: number) => Promise<any>;
   confirmAdd: (target: any, before: any, opts?: any) => Promise<any>;
   targetFromCard: (card: any, name: string | null) => any;
@@ -43,7 +44,8 @@ function makeRail(fetchStub?: FetchStub): Rail {
   const src = `(function() {
 ${buildHebCartQueryFn()}
     return {
-      parse: __hebCartParse, find: __hebCartFind, confirm: __hebCartConfirm,
+      parse: __hebCartParse, match: __hebCartMatch, confirm: __hebCartConfirm,
+      contradicted: __hebCartContradicted,
       read: __hebCartRead, confirmAdd: __hebCartConfirmAdd,
       targetFromCard: __hebTargetFromCard, body: __hebCartBody
     };
@@ -151,6 +153,11 @@ function withoutProduct(response: any, productId: string): any {
     (it: any) => it.product.id !== productId,
   );
   return clone;
+}
+
+/** The `Cart.id` a capture carries — the field the identity gate compares. */
+function cartId(fixtureName: string): string {
+  return cartResponseFrom(fixtureName).data.cartV2.id;
 }
 
 const CART = 'cart-with-items.html';
@@ -420,7 +427,10 @@ describe('MEAL-14 polling for the add to land', () => {
       status: 200,
       text: async () => JSON.stringify(bodies[Math.min(i++, bodies.length - 1)]),
     }));
-    const before = { ok: true, lines: [], itemCount: 0, status: 200 };
+    // The baseline carries the same cartId the polled responses do — a real
+    // before-read of the same cart always does, and a mismatch is now its own
+    // verdict (see the cart-identity tests below).
+    const before = { ok: true, cartId: cartId(CART), lines: [], itemCount: 0, status: 200 };
     const conf = await rail.confirmAdd({ skuId: null, productId: LAVASH, name: null }, before, { firstDelayMs: 0, gapMs: 0, tries: 5 });
     expect(conf).toMatchObject({ state: 'landed' });
     expect(i).toBe(3);
@@ -430,10 +440,122 @@ describe('MEAL-14 polling for the add to land', () => {
     const full = cartResponseFrom(CART);
     const { fn, calls } = stubFetch(200, withoutProduct(full, LAVASH));
     const rail = makeRail(fn);
-    const before = { ok: true, lines: [], itemCount: 0, status: 200 };
+    const before = { ok: true, cartId: cartId(CART), lines: [], itemCount: 0, status: 200 };
     const conf = await rail.confirmAdd({ skuId: LAVASH_SKU, productId: LAVASH, name: 'Lavash' }, before, { firstDelayMs: 0, gapMs: 0, tries: 3 });
     expect(calls).toHaveLength(3);
     expect(conf).toMatchObject({ state: 'missing', reason: 'absent_from_cart', skuId: LAVASH_SKU });
+  });
+});
+
+// The failure this rail must never produce: a VALID answer about a DIFFERENT cart.
+// It is not a read failure, so none of the 'unknown' plumbing above catches it —
+// every line is absent, so every item would report missing. MEAL-12's probes were
+// all logged-out and still got 200s, so a worker that loses its H-E-B session
+// mid-run lands exactly here.
+describe('MEAL-14 the cart we baselined is the cart we read', () => {
+  it('refuses to call an item missing when the cart id changed under us', () => {
+    const rail = makeRail();
+    const after = rail.parse(200, cartResponseFrom(CART));
+    const before = { ok: true, cartId: 'someone-elses-cart', lines: [], itemCount: 0, status: 200 };
+    // LAVASH is genuinely absent from `before` and present in `after` — on cart
+    // identity alone this would read as a clean landing. It must not.
+    const conf = rail.confirm({ skuId: null, productId: LAVASH, name: null }, before, after);
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'cart_changed' });
+  });
+
+  it('does not report a mass miss when the session drops and a guest cart answers', () => {
+    const rail = makeRail();
+    const mine = rail.parse(200, cartResponseFrom(CART));
+    const guest = rail.parse(200, { data: { cartV2: { id: 'guest-cart', itemCount: { total: 0 }, items: [] } } });
+    // Every product we could ask about is absent from the guest cart. Without the
+    // identity gate each one returns missing/absent_from_cart, and a whole meal
+    // lands in the review queue for the user to re-add.
+    for (const pid of [LAVASH, COFFEE, TORTILLAS]) {
+      const conf = rail.confirm({ skuId: null, productId: pid, name: null }, mine, guest);
+      expect(conf.state).toBe('unknown');
+      expect(conf.state).not.toBe('missing');
+    }
+  });
+
+  it('compares equal when neither read carried an id, so a dropped field does not disable the rail', () => {
+    const rail = makeRail();
+    const full = cartResponseFrom(CART);
+    const noId = JSON.parse(JSON.stringify(full));
+    noId.data.cartV2.id = null;
+    const after = rail.parse(200, noId);
+    const before = { ok: true, cartId: null, lines: [], itemCount: 0, status: 200 };
+    expect(rail.confirm({ skuId: null, productId: LAVASH, name: null }, before, after))
+      .toMatchObject({ state: 'landed' });
+  });
+
+  // KNOWN LIMITATION, pinned so it is visible rather than discovered. If H-E-B
+  // returns no Cart.id for an EMPTY cart, the baseline for the first add of a run
+  // carries none while the after-read does, and the rail degrades to the DOM path
+  // for that item. That is the safe direction — never a false miss — but it would
+  // quietly halve the rail's coverage, and no committed capture shows an empty
+  // H-E-B cart, so it is unresolved. The authenticated probe on the checklist
+  // should capture one.
+  it('degrades to unknown, never missing, when only one side carried an id', () => {
+    const rail = makeRail();
+    const after = rail.parse(200, cartResponseFrom(CART));
+    const before = { ok: true, cartId: null, lines: [], itemCount: 0, status: 200 };
+    const conf = rail.confirm({ skuId: null, productId: LAVASH, name: null }, before, after);
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'cart_changed' });
+  });
+});
+
+// One product can hold more than one cart line: CartItem.id is
+// "item#<productId>#<preferenceId>", and the committed weight capture carries
+// "item#3454081#b58dbfed-…". A first-match-wins lookup reads the same pre-existing
+// line in both snapshots, sees no change, and calls a successful add missing.
+describe('MEAL-14 a product with more than one cart line', () => {
+  function twoLines(qtyA: number, qtyB: number): any {
+    const full = cartResponseFrom(CART);
+    const line = full.data.cartV2.items.find((i: any) => i.product.id === LAVASH);
+    const second = JSON.parse(JSON.stringify(line));
+    line.quantity = qtyA;
+    second.id = `item#${LAVASH}#a-second-preference`;
+    second.quantity = qtyB;
+    full.data.cartV2.items.push(second);
+    return full;
+  }
+
+  it('sums every line for the product instead of taking the first', () => {
+    const rail = makeRail();
+    const snap = rail.parse(200, twoLines(1, 2));
+    const m = rail.match(snap.lines, { skuId: null, productId: LAVASH, name: null });
+    expect(m.qty).toBe(3);
+    expect(m.lineCount).toBe(2);
+  });
+
+  it('confirms an add that landed on a NEW line while the old one stood still', () => {
+    const rail = makeRail();
+    // Before: one line at 1. After: that line untouched, plus a second at 1.
+    const before = rail.parse(200, twoLines(1, 0));
+    before.lines = before.lines.filter((l: any) => l.lineId !== `item#${LAVASH}#a-second-preference`);
+    const after = rail.parse(200, twoLines(1, 1));
+    expect(rail.confirm({ skuId: null, productId: LAVASH, name: null }, before, after))
+      .toMatchObject({ state: 'landed' });
+  });
+});
+
+// A 'missing' verdict used to end the matter, discarding __waitCardAdded — the
+// per-card label heb.ts calls the reliable success signal because a sibling
+// worker's add cannot nudge it.
+describe('MEAL-14 withdrawing a verdict a second signal contradicts', () => {
+  it('downgrades to unknown, never up to landed, and keeps the identity', () => {
+    const rail = makeRail();
+    const missing = { state: 'missing', reason: 'absent_from_cart', skuId: LAVASH_SKU, productId: LAVASH, qtyAfter: 0, weightAfter: null };
+    const out = rail.contradicted(missing, 'contradicted_by_card');
+    expect(out).toMatchObject({ state: 'unknown', reason: 'contradicted_by_card', skuId: LAVASH_SKU, productId: LAVASH });
+    expect(out.state).not.toBe('landed');
+  });
+
+  it('names the disagreement even without a reason, so it is never silently confirmed', () => {
+    const rail = makeRail();
+    const out = rail.contradicted({ state: 'missing', reason: 'qty_unchanged', skuId: null, productId: LAVASH }, undefined);
+    expect(out.state).toBe('unknown');
+    expect(out.reason).toBe('contradicted');
   });
 });
 

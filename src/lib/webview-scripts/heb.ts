@@ -978,7 +978,30 @@ ${buildHebCartQueryFn()}
       __cartConf = await __hebCartConfirmAdd(__cartTarget, __cartQueryBefore, {});
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId }));
       if (__cartConf.state === 'landed') committed = true;
-      else if (__cartConf.state === 'missing') committed = false;
+      else if (__cartConf.state === 'missing') {
+        // A 'missing' verdict used to end the matter, which threw away
+        // __waitCardAdded — the per-card label this file calls the reliable
+        // success signal, because a sibling worker's add cannot nudge it. So the
+        // rail replaced a product-specific DOM signal with a cart read and then
+        // discarded the corroboration that would catch the cart read being wrong
+        // (a lost session answering about a different cart, or a second line under
+        // another preference id).
+        //
+        // Costs nothing on a true miss: the label will not show added either.
+        var cardSays = await __waitCardAdded(targetCard, cardBefore + 1, 40);
+        if (!cardSays) {
+          committed = false;
+        } else {
+          // Two independent product-specific signals disagree. The label is a
+          // positive observation, so the add commits — but the cart has NOT
+          // confirmed it, and the verdict is downgraded so nothing counts this as
+          // cart-backed. Reported either way, because a run that keeps landing
+          // here means the cart read is unreliable and the flag should go off.
+          committed = true;
+          __cartConf = __hebCartContradicted(__cartConf, 'contradicted_by_card');
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_contradicted', sku: __cartConf.skuId, product: __cartConf.productId }));
+        }
+      }
     }
     if (committed === null) {
       committed = await __waitCardAdded(targetCard, cardBefore + 1, 40);

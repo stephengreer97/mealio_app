@@ -134,6 +134,19 @@ export interface StoreConfigEntry {
    * "the item is missing".
    */
   cartSkuConfirm?: boolean;
+  /**
+   * Where the cart-confirmation rail POSTs its query — a same-origin path, not a
+   * URL. `network-confirmation-findings.md` asks for cart endpoints to live in
+   * remote config because they drift the way selectors do, and a hardcoded path
+   * would need an app release to change even though `cartSkuConfirm`, the flag
+   * that turns the rail on, is remote.
+   *
+   * Only a plain same-origin path is accepted. An absolute URL, a
+   * protocol-relative `//host`, quotes or whitespace are refused and the bundled
+   * default stands, because this string is interpolated into an injected script
+   * and the safe failure is "query the endpoint we shipped with".
+   */
+  cartEndpoint?: string;
   selectors?: StoreSelectors;
 }
 
@@ -288,6 +301,10 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
       // been run against a logged-in session. Flip it with a config push:
       //   {"stores":{"heb":{"cartSkuConfirm":true}}}
       cartSkuConfirm: false,
+      // Same-origin path the cart query is POSTed to. Bundled rather than
+      // hardcoded so a path change is a config push instead of an app release —
+      // see StoreConfigEntry.cartEndpoint for what an override may look like.
+      cartEndpoint: '/graphql',
       selectors: {
         // Product title inside a search-result card. Appeared in three separate
         // copies of the HEB scripts before this table existed.
