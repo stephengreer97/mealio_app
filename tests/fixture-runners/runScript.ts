@@ -60,11 +60,23 @@ export const FIXTURE_CONTEXT_OPTIONS = {
  *     could introduce one that would then egress silently.
  *   • Service-worker-initiated fetches (blocked separately above).
  *
- * Measured at the OS layer — `ss` filtered to the chrome PIDs under jest, with the
- * chrome process count 0 before and after, so the attribution is not in doubt — a
- * fixture run held established TLS connections to 36 distinct third-party
- * endpoints across 29 PIDs, `dpm.demdex.net` (Adobe audience manager) and the
- * 1.1.1.1 DNS-over-HTTPS resolver among them.
+ * WHAT IS ACTUALLY MEASURED, since an earlier version of this comment asserted more
+ * than anyone had checked. At the OS layer — `ss` filtered to the chrome PIDs under
+ * jest, chrome count 0 before and after — a fixture run holds **zero** TCP and UDP
+ * sockets with this rule on. But it also holds zero with the rule OFF, and zero with
+ * every name mapped to a listener that would accept and hold. Nothing in the captured
+ * pages attempts a connection on this box either way, because the route layer above
+ * already refuses everything non-local.
+ *
+ * A figure of "36 third-party endpoints across 29 PIDs" appeared here and did not
+ * reproduce. Treat it as withdrawn. It most likely predates the route-layer widening,
+ * and its host list overlaps the request-level list this file says is already blocked.
+ *
+ * So the resolver rule is **defence in depth, not a fix for an observed leak.** It is
+ * not inert — with it on, `https://www.aldi.us/` fails `ERR_NAME_NOT_RESOLVED` — and
+ * it closes three holes `context.route` structurally cannot see (a preconnect carries
+ * no request; WebSockets and service workers are not intercepted). Keep it for that
+ * reason, which is a design argument rather than a measurement.
  *
  * WHAT THAT DID AND DID NOT LEAK, stated precisely, because the previous version of
  * this comment overstated the fix and that is its own kind of bug. A preconnect
@@ -76,9 +88,15 @@ export const FIXTURE_CONTEXT_OPTIONS = {
  * `--host-resolver-rules=MAP * ~NOTFOUND` refuses at the resolver instead, which is
  * below all three holes at once: a preconnect, a WebSocket and a service worker all
  * have to resolve a name first, and none of them can. `EXCLUDE localhost` keeps the
- * mock store (tests/mock-store) reachable when it is served. Result: 0 chrome TCP
- * sockets for a whole fixture run, and the run is FASTER, because a hint that
- * cannot resolve fails immediately instead of waiting out a handshake.
+ * mock store (tests/mock-store) reachable when it is served — but only by NAME.
+ * `MAP * ~NOTFOUND` clobbers IP literals and `EXCLUDE localhost` does not cover them,
+ * so `http://127.0.0.1:PORT/` fails `ERR_NAME_NOT_RESOLVED` while `http://localhost:PORT/`
+ * answers. That contradicts `isLocalUrl` below, whose own tests pin `127.0.0.1`, `[::1]`
+ * and `2130706433` as allowed. Nothing reaches it today — no fixture test touches
+ * loopback — and the fix is more EXCLUDE clauses, tracked separately.
+ *
+ * Run time is unchanged, not faster: 75.45 s vs 74.89 s on albertsons, 52.84 s vs
+ * 51.97 s on aldi. An earlier version of this comment claimed a speedup; it is noise.
  *
  * Keep both layers. The resolver rule is the boundary; the route handler is what
  * makes an intercepted navigation land on a known empty page rather than on a
