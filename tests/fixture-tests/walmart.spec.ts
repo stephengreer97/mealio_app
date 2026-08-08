@@ -63,6 +63,18 @@ describe('Walmart cart-page count refuses to count off the cart page (MEAL-152)'
       // Never invent items alongside an unknown count — both CART_COUNT handlers
       // key off Array.isArray(msg.items) and would diff against an empty cart.
       expect(result.items).toBeUndefined();
+
+      // The guard must be TERMINAL, not merely first. Deleting the `return`
+      // after that postMessage survived every other test here: waitForMessage
+      // resolves on the first hit, so the script was free to carry on and post a
+      // second, trusted count read off the wrong page. This fixture has four
+      // quantity-labels, so the hydration poll exits immediately and that second
+      // message would land in milliseconds — the settle below is slack, not a
+      // race. Live impact of the mutant is small (cartCountPendingRef is already
+      // nulled by the first message, and the prewarm's finish is once-only), but
+      // nothing else holds the `return` that makes the refusal final.
+      await new Promise((r) => setTimeout(r, 3_000));
+      expect(runner.messagesOfType('CART_COUNT')).toHaveLength(1);
     },
     { url: 'https://www.walmart.com/' },
   );
