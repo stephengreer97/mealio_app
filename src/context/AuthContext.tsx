@@ -220,6 +220,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Kept in step with the state for the same reason beginSession does it: a
     // sign-in landing before React re-renders must see that nobody is here, not
     // the account that just left.
+    //
+    // That window is real, and the route to it is worth naming because the
+    // commit that added the test for it named the wrong one. It is NOT a launch
+    // race — `logout()` never runs at launch; `initAuth`'s failure paths call
+    // `tokenStorage.clear()` directly and its only callers are the three
+    // user-initiated buttons in AccountScreen. It is this: logout awaits
+    // unregisterDevice, auth.logout, tokenStorage.clear and resetUser before
+    // reaching this line, and the deep-link listener is registered app-wide
+    // (RootNavigator), so a verification link tapped during those round trips
+    // lands beginSession(B) after logout's tail and before React commits. A
+    // stale ref still naming A would read that as A → B and clear the
+    // diagnostics written in between.
     userRef.current = null;
     setUser(null);
     setIsCreator(false);
