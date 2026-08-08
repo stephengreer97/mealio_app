@@ -8,6 +8,7 @@ import React, {
   useState,
 } from 'react';
 import { useAuth } from './AuthContext';
+import { useSessionEnd } from './useSessionEnd';
 import SilentLoginProbe, { PrewarmedCart } from '../components/SilentLoginProbe';
 import { getStoreScripts } from '../lib/webview-scripts';
 import { isWebViewStore } from '../constants/stores';
@@ -68,7 +69,7 @@ export function useLoginPrewarm(): LoginPrewarmValue {
 }
 
 export function LoginPrewarmProvider({ children }: { children: React.ReactNode }) {
-  // A sign-out has to stop the probe — see the sign-out effect below. Safe to
+  // The end of a session has to stop the probe — see the effect below. Safe to
   // read here: App.tsx mounts this provider inside AuthProvider (it has to be,
   // since prewarming is only ever triggered from a signed-in screen).
   const { user } = useAuth();
@@ -188,10 +189,10 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     settle(storeId, prior === 'loggedIn' ? 'loggedIn' : 'error');
   }, [settle]);
 
-  // ── Sign-out stops the probe and drops the cache ────────────────────────────
+  // ── The end of a session stops the probe and drops the cache ───────────────
   //
-  // The fourth writer that outlived a sign-out (MEAL-142). AuthContext.logout
-  // empties the console ring buffer, but this provider had no idea auth existed:
+  // The fourth writer that outlived a sign-out (MEAL-142). AuthContext empties
+  // the console ring buffer, but this provider had no idea auth existed:
   // a hidden probe could be in flight or queued straight through a sign-out and
   // keep writing `[Prewarm]` lines into the buffer logout had just cleared —
   // store login status, and LOGIN_DEBUG/EXTRACT_DEBUG dumps that go through
@@ -209,36 +210,42 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   // can be stale, and stale-by-default is the better failure here. Dropping
   // statusRef just means the next account re-probes, under its own name.
   //
-  // Only the `!user` half is needed: this provider sits ABOVE
-  // NavigationContainer (App.tsx), so a sign-out re-renders it signed-out rather
-  // than unmounting it, and the effect observes null (probed — it fires, unlike
-  // MyMealsScreen's, which never does). No unmount cleanup to match, either:
-  // every ref here is reachable only through this provider, so unmounting is
-  // self-clearing, and the deferred pump cannot render a probe into a tree that
-  // is gone.
+  // No unmount cleanup to match this: this provider sits ABOVE
+  // NavigationContainer (App.tsx), so the end of a session re-renders it rather
+  // than unmounting it (probed — this fires, unlike MyMealsScreen's equivalent,
+  // which never does). Every ref here is reachable only through this provider,
+  // so unmounting is self-clearing, and the deferred pump cannot render a probe
+  // into a tree that is gone.
+  //
+  // Keyed on the session ENDING, not on `user` going null (MEAL-146). B taking
+  // over via the verification deep link never passes through null, and A's
+  // probe, A's store login statuses and A's captured cart baseline are no more
+  // B's than they are the login screen's. The `!userRef.current` guards in
+  // `checkStore` and `pump` are the sign-out half of this and stay as they are:
+  // they refuse work when nobody is signed in, which an A → B hand-over is not.
+  // What stops A's queue reaching B is this reset.
   //
   // One window is left open, deliberately, and it is worth naming rather than
   // implying it is shut. A probe already mounted cannot write past this commit,
-  // and a checkStore arriving after it is refused — but logout clears the buffer
-  // and only THEN sets user null, so a microtask already queued when it does
-  // (MyMealsScreen's loadMeals resolving, and prewarming the top store) runs
-  // before React's render and still sees the old user in `userRef`. It starts a
-  // probe, and three lines survive into the emptied buffer: "checkStore queue
-  // heb", "starting silent login probe for heb", "probe mounted for heb". Then
-  // this effect fires and tears it down (measured: mounted for one commit, status
-  // left 'unknown'), so nothing that names a product or a cart gets out — a store
-  // name does. CartJobProvider closes its equivalent window by clearing again
-  // after teardown; that is not repeated here, because the payload does not
-  // warrant a second mechanism in this provider. If the chain gets a fifth link,
-  // this is where it starts.
-  useEffect(() => {
-    if (user) return;
+  // and a checkStore arriving after a sign-out is refused — but AuthContext
+  // clears the buffer and only THEN changes the user, so a microtask already
+  // queued when it does (MyMealsScreen's loadMeals resolving, and prewarming the
+  // top store) runs before React's render and still sees the old user in
+  // `userRef`. It starts a probe, and three lines survive into the emptied
+  // buffer: "checkStore queue heb", "starting silent login probe for heb",
+  // "probe mounted for heb". Then this effect fires and tears it down (measured:
+  // mounted for one commit, status left 'unknown'), so nothing that names a
+  // product or a cart gets out — a store name does. CartJobProvider closes its
+  // equivalent window by clearing again after teardown; that is not repeated
+  // here, because the payload does not warrant a second mechanism in this
+  // provider. If the chain gets a fifth link, this is where it starts.
+  useSessionEnd(() => {
     queueRef.current = [];
     statusRef.current.clear();
     cartRef.current.clear();
     currentRef.current = null;
     setCurrent(null);
-  }, [user]);
+  });
 
   const value = useMemo<LoginPrewarmValue>(
     () => ({ checkStore, getStatus, takePrewarmedCart, statusVersion }),
