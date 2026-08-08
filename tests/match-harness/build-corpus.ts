@@ -30,6 +30,7 @@
 // candidate cap or the timing machinery.
 
 import { chromium } from 'playwright';
+import { FIXTURE_LAUNCH_OPTIONS, installResourceBlocking } from '../fixture-runners/runScript';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -273,16 +274,29 @@ export interface Corpus {
 }
 
 async function main() {
-  const browser = await chromium.launch();
+  // Same two layers the fixture runner uses, for the same reason (MEAL-150).
+  //
+  // This script never fetches anything: it reads the committed captures off disk
+  // and `setContent`s them below. But the captures are real storefronts, and their
+  // inline markup still points at the store's live bundles, trackers and beacons —
+  // so a browser with no boundary will go and get them, carrying whatever those
+  // pages carry. The corpus fixtures include cart contents, prices, an Albertsons
+  // loyalty id and an email hash.
+  //
+  // The old handler here aborted script/stylesheet/font/image/media and
+  // `continue()`d everything else, which forwarded `document`, `fetch`, `xhr` and
+  // `ping`. MEAL-113 established that a resourceType allow-list is the losing half
+  // of this: it cannot see a preconnect, a WebSocket or a service worker, because
+  // those never reach a route handler. FIXTURE_LAUNCH_OPTIONS refuses at the
+  // resolver, which is below all of them.
+  //
+  // Keep both. The resolver rule is the boundary; installResourceBlocking is what
+  // makes an intercepted navigation land on a known empty page instead of a network
+  // error — which is also what keeps a live bundle from navigating the page away
+  // mid-extraction, the thing the comment this replaces was worried about.
+  const browser = await chromium.launch(FIXTURE_LAUNCH_OPTIONS);
   const context = await browser.newContext();
-  // Block subresources: fixture HTML still references the store's live bundles,
-  // and letting those run navigates the page away mid-extraction.
-  await context.route('**/*', (route) => {
-    const t = route.request().resourceType();
-    return t === 'script' || t === 'stylesheet' || t === 'font' || t === 'image' || t === 'media'
-      ? route.abort()
-      : route.continue();
-  });
+  await installResourceBlocking(context);
   const page = await context.newPage();
 
   const stores: Record<string, CorpusQuery[]> = {};
