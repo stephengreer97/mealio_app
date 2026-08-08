@@ -166,8 +166,6 @@ export function usePresearchAddPool<TItem, TResult>(
   const notifySettled = useCallback((info: PoolSettled<TResult>) => {
     try { onSettledRef.current?.(info); } catch { /* reporting must not break the pool */ }
   }, []);
-  const notifySettledRef = useRef(notifySettled);
-  notifySettledRef.current = notifySettled;
 
   const setUri = useCallback((workerId: number, uri: string) => {
     setWorkerUris((prev) => {
@@ -248,7 +246,7 @@ export function usePresearchAddPool<TItem, TResult>(
         setCompleted(resultsRef.current.size);
         // Before freeSlot/dispatchNext, so an item's rows land while it is still
         // the slot's item, and before tryFinish fires the run's terminal work.
-        notifySettledRef.current({ workerId, itemIndex: assigned.idx, result, timedOut });
+        notifySettled({ workerId, itemIndex: assigned.idx, result, timedOut });
       }
       freeSlot(workerId);
       if (!tryFinish()) dispatchNext(workerId);
