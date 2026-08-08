@@ -877,6 +877,14 @@ export default function WebViewCartSheet({
       // override (it is prepended, so it installs first), which is the only
       // reason a sample survives this path at all — the wrapper swallows every
       // message type it does not name.
+      //
+      // KNOWN TEST GAP, stated rather than implied: the sibling handlers for the
+      // parallel search and add pools each have a test that fails when this line
+      // is deleted from them (webview-cart-selector-health), and this one does
+      // not. The pre-search pool parks its workers on the qty screen, where the
+      // browser region is not mounted, so no worker tile — and therefore no
+      // handler to post into — exists in a test-driven run. Deleting this line
+      // loses every pre-search sample and every suite stays green.
       if (ingestSelectorHealth(msg)) return;
       if (msg.type === 'WORKER_DEBUG') {
         // The wrappers re-tag the extractor's EXTRACT_DEBUG as WORKER_DEBUG, so
