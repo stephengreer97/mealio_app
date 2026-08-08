@@ -296,6 +296,36 @@ describe('the fixture browser can reach loopback and nothing else', () => {
     await page.close();
   }, 30_000);
 
+  it('refuses everything the exclude list does not name', () => {
+    // The assertion the other three cannot give, and the reason this file needed a
+    // fourth round.
+    //
+    // Every test below asserts BEHAVIOUR AT ONE ADDRESS. The property that actually
+    // matters is universal: everything except the exclude list is refused. No finite
+    // set of navigations expresses that, so each round closed one hole and invited
+    // the next enumerating mutant — `MAP 127.0.0.2` beat the round-2 test, and
+    // `MAP 127.0.0.*, MAP 0.0.0.0` beats the round-3 one. Worse, simply appending
+    // `EXCLUDE www.heb.com` ships a hole in the boundary with every behavioural test
+    // still green: a name goes to the system resolver and reaches a real server.
+    //
+    // So this one asserts on the RULE, not on a navigation. It is deterministic, has
+    // no browser, no DNS and no platform dependency, and it kills every mutant found
+    // across all four rounds. The navigation tests stay as proof the string is
+    // load-bearing; this is the proof that it is complete.
+    //
+    // If you are here because this failed: you changed the boundary. That is a
+    // decision, not a typo — make it deliberately and update the list below.
+    const rule = FIXTURE_LAUNCH_OPTIONS.args!
+      .find((a) => a.startsWith('--host-resolver-rules='))!
+      .slice('--host-resolver-rules='.length);
+    const [map, ...excludes] = rule.split(',').map((c) => c.trim());
+
+    // A catch-all, not a prefix and not a range.
+    expect(map).toBe('MAP * ~NOTFOUND');
+    // And the only holes in it are the three spellings of loopback.
+    expect(excludes).toEqual(['EXCLUDE localhost', 'EXCLUDE 127.0.0.1', 'EXCLUDE ::1']);
+  });
+
   it('refuses an address that would reach the mock store if the wildcard lapsed', async () => {
     // Retargeting the test above off a public host removed a real ambiguity, and
     // took something with it: nothing was left asserting that `MAP *` covers the
