@@ -29,7 +29,7 @@
 // INSTACART_TENANTS shares them — rather than to ALDI, which is merely the
 // tenant they were first read off.
 
-import { ALBERTSONS_FAMILY_IDS, getAlbertsonsCartPageUrl } from './albertsons';
+import { ALBERTSONS_FAMILY_IDS, getAlbertsonsCartPageUrl, ALBERTSONS_CART_PATH } from './albertsons';
 import { AUTH_REDIRECT_URL_PATTERN } from './auth-urls';
 import { isInstacartStore } from './instacart';
 import { MOCK_STORE_URL } from './mockstore';
@@ -951,16 +951,95 @@ ${cartPathGuardJs(CART_PAGE_PATH.heb)}
 // (responsive desktop/mobile), so dedupe by product id. Verified against
 // tests/fixtures/albertsons/cart-with-items.html (Basmati x2, Hunt's x1).
 //
-// UNGUARDED HERE ON PURPOSE (MEAL-152). This script has the same defect, and it
-// is the one where it was first observed and diagnosed — a DOMAIN_MAP host whose
-// 301 dropped the path. PR #81 (fix/meal-136-united-domain) fixes it with the
-// guard this file's cart-page scripts now share; adding a second copy on this
-// branch would only conflict with it. If that PR is ever abandoned, this script
-// still needs the guard.
+// WHY THIS SCRIPT CHECKS THE URL IT LANDED ON (MEAL-136).
+//
+// A wrong host in DOMAIN_MAP is invisible at runtime. United Supermarkets was
+// pointed at its Squarespace marketing site, which 301s to the storefront apex
+// DISCARDING the path — so we navigated to /erums/cart and got a marketing home
+// page. This script then polled its full 5s, found zero product links, and
+// posted `count: 0`.
+//
+// That is the whole reason the bug survived: `count: 0` is not a selector miss.
+// It is a CONFIDENT WRONG ANSWER. `count: null` means "unknown, skip
+// validation"; a number is trusted, so a zero flows into the before/after
+// snapshot and cart reconciliation concludes the cart is empty. A silent-miss
+// detector that reports "nothing was in the cart" for every run on a banner is
+// worse than one that reports nothing at all.
+//
+// So: refuse to count on a page that is not the cart. Two cases, and they want
+// opposite handling — the same split buildCheckLoginScript already makes:
+//
+//   • An auth/SSO interstitial is TRANSIENT. Albertsons bounces the storefront
+//     through …/sso/authorize?code=… and back. Post no verdict at all and let
+//     the landing page decide, exactly as the login check does — a verdict here
+//     would burn the probe's single pending slot on a page that was never the
+//     cart.
+//
+//     This branch is a BACKSTOP, not the primary defence, and an earlier version
+//     of this comment had that wrong. It said both injection sites re-inject on
+//     the next load. WebViewCartSheet does; SilentLoginProbe LATCHES on its first
+//     injection, so relying on a re-inject there would have cost the probe its
+//     one shot and left the run with no baseline at all (MEAL-152 found this and
+//     added the same auth skip that branch already had for login). Neither site
+//     injects on an interstitial now, so reaching this branch means something
+//     upstream missed — which is exactly when a silent no-verdict is right.
+//   • Anything else is TERMINAL — nothing further is loading, which is the
+//     redirected-marketing-page case. Post `count: null` with a named reason so
+//     the run degrades to "unknown" instead of "empty", and the reason lands in
+//     the log where a wrong host is legible as a wrong host. Both CART_COUNT
+//     handlers print `reason=`/`url=` for exactly that — WebViewCartSheet's
+//     onMessage and SilentLoginProbe's. Neither stores them (the cached baseline
+//     keeps only count/items/url), so those two log lines are the whole audit
+//     trail; a handler that printed the count alone would make this reason
+//     indistinguishable from a selector miss and the guard pointless.
+//
+// Note what this does NOT do: it never invents a count and never blocks a real
+// cart page. The failure it converts is trusted-zero → honest-unknown, and the
+// probe timeouts in WebViewCartSheet/SilentLoginProbe already cover silence.
+//
+// The check needs no per-banner configuration — ALBERTSONS_CART_PATH is uniform
+// across all 15 banners, which is the MEAL-15 finding restated: paths generalise,
+// hosts do not.
+//
+// This was the only guarded script when it was written, and the sentence here
+// said the others had "no reported defect of this kind". They did. MEAL-152
+// measured `https://www.walmart.com/cart` 302ing to the homepage — the same
+// trusted zero, on a bigger store — and HEB and Wegmans had the identical shape
+// with no redirect to trigger it yet. All three now carry the guard via
+// cartPathGuardJs(); this script keeps its own copy because it predates the
+// shared helper and its path comes from the banner registry.
 const ALBERTSONS_CART_PAGE_SCRIPT = `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
   try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'alb_cart_start', url: location.href })); } catch (e) {}
+
+  // Did we actually land on the cart? See the note above.
+  //
+  // EXACT path match, modulo a trailing slash — not a prefix. A prefix test also
+  // accepts sub-paths, so /erums/cart/checkout and /erums/cartoons would COUNT.
+  // Neither exists on the platform today (both 404, while the real sibling
+  // /erums/checkout is 200 and correctly rejected), so this closes a nit rather
+  // than a live hole — but "starts with the cart path" is not the thing we mean.
+  //
+  // Query strings and hash fragments are deliberately unaffected: they are not
+  // part of location.pathname, so /erums/cart?_t=… (the cache-buster both
+  // injection sites append) and /erums/cart#items still count. That also fixes
+  // the precedence between the two checks — /erums/cart?next=/sso/authorize is
+  // the CART, even though its query matches the auth-redirect pattern, and the
+  // path wins because we only consult that pattern once the path has failed.
+  var __path = location.pathname;
+  while (__path.length > 1 && __path.charAt(__path.length - 1) === '/') __path = __path.slice(0, -1);
+  if (__path !== ${JSON.stringify(ALBERTSONS_CART_PATH)}) {
+    if (new RegExp(${JSON.stringify(AUTH_REDIRECT_URL_PATTERN)}).test(location.href)) {
+      try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'alb_cart_skip_auth_redirect', url: location.href })); } catch (e) {}
+      return;
+    }
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: location.href
+    }));
+    return;
+  }
+
   // Poll for cart line items to hydrate.
   var links = [];
   for (var i = 0; i < 25; i++) {
