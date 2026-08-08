@@ -11,6 +11,7 @@ import {
   StepRecord,
   STEP_FAILURE_CODES,
 } from '../../src/lib/automation-telemetry';
+import type { StepFailureCode } from '../../src/lib/automation-telemetry';
 
 // The property that matters most here is "telemetry can never break a cart run":
 // bounded buffer, swallowed errors, no throw from any entry point. The second is
@@ -341,14 +342,66 @@ describe('failure codes', () => {
     expect('code' in up.all[1]).toBe(false);
   });
 
-  it('reports the dominant code for the run, ties going to the first seen', () => {
+  it('reports the code that explains the run, not the one that occurs most', () => {
     const t = make();
-    expect(t.dominantFailureCode()).toBeUndefined();
+    expect(t.primaryFailureCode()).toBeUndefined();
+
+    // MEAL-123's own scenario. Three confirmation misses and one block: the block
+    // is why the other three happened, and it is the only actionable one. Ranking
+    // by count reported confirm_failed and buried it.
+    t.record('confirm', 'error', { code: 'confirm_failed' });
+    t.record('confirm', 'error', { code: 'confirm_failed' });
+    t.record('confirm', 'error', { code: 'confirm_failed' });
+    t.record('search', 'blocked', { code: 'waf_block' });
+    expect(t.primaryFailureCode()).toBe('waf_block');
+
+    // And frequency is still available, so nothing was traded away for the
+    // ranking — most frequent first, as a flat string because sanitizeDetail drops
+    // nested objects. It is asserted THROUGH the sanitizer, because a Record here
+    // was silently discarded on the way to the server and the claim that nothing
+    // is lost was false without anyone noticing.
+    expect(t.failureCodeSummary()).toBe('confirm_failed:3,waf_block:1');
+    expect(sanitizeDetail({ failureCodes: t.failureCodeSummary() }))
+      .toEqual({ failureCodes: 'confirm_failed:3,waf_block:1' });
+  });
+
+  it('outranks a symptom with its cause however lopsided the counts', () => {
+    // selector_miss explains the confirm failures that follow it, so it wins at
+    // any ratio. Under the old count-based rule it lost as soon as a second
+    // confirm_failed arrived.
+    const t = make();
     t.record('confirm', 'error', { code: 'selector_miss' });
-    t.record('confirm', 'error', { code: 'confirm_failed' });
-    expect(t.dominantFailureCode()).toBe('selector_miss');
-    t.record('confirm', 'error', { code: 'confirm_failed' });
-    expect(t.dominantFailureCode()).toBe('confirm_failed');
+    for (let i = 0; i < 20; i++) t.record('confirm', 'error', { code: 'confirm_failed' });
+    expect(t.primaryFailureCode()).toBe('selector_miss');
+  });
+
+  it('says nothing when no failure was recorded', () => {
+    const t = make();
+    expect(t.primaryFailureCode()).toBeUndefined();
+    expect(t.failureCodeSummary()).toBeUndefined();
+  });
+
+  it('falls back to the most frequent when no ranked code was recorded', () => {
+    // Defensive: the severity table is exhaustive over StepFailureCode and the
+    // compiler enforces that, so this path should be unreachable today. It exists
+    // so a future code added to the union without a rank still reports something
+    // instead of nothing.
+    //
+    // Which means the only way to test it is to do what that future edit would do
+    // by accident — record a code the table has never heard of. Hence the casts.
+    // Asserting undefined on an empty telemetry would NOT test this: the loop can
+    // be deleted outright and an empty run still reports undefined.
+    const unranked = 'script_error' as StepFailureCode;
+    const alsoUnranked = 'quota_exceeded' as StepFailureCode;
+
+    const t = make();
+    t.record('confirm', 'error', { code: unranked });
+    t.record('confirm', 'error', { code: unranked });
+    t.record('search', 'error', { code: alsoUnranked });
+
+    // Most frequent wins, which is the pre-MEAL-123 behaviour.
+    expect(t.primaryFailureCode()).toBe(unranked);
+    expect(t.failureCodeSummary()).toBe('script_error:2,quota_exceeded:1');
   });
 
   it('keeps the run tally past a flush and past buffer trimming', async () => {
@@ -359,7 +412,7 @@ describe('failure codes', () => {
     t.record('confirm', 'error', { code: 'waf_block' });
     await t.flush();
     for (let i = 0; i < 600; i++) t.record('search', 'ok');
-    expect(t.dominantFailureCode()).toBe('waf_block');
+    expect(t.primaryFailureCode()).toBe('waf_block');
   });
 
   it('carries a code through startTimer', async () => {

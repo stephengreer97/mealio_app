@@ -511,13 +511,13 @@ describe('useParallelSearchPool — end-to-end funnel through a real recorder', 
       // (A wall was not previously invisible — surfaceBlocker records a run-level
       // `blocked` row on the reconcile's re-detect. What was missing is which
       // item, and how many.)
-      // NOTE for whoever merges PR #83 (fix/meal-123-dominant-severity): that
-      // branch renames dominantFailureCode() to primaryFailureCode(). This line
-      // is the rename's only reach into MEAL-122, and it is not a git conflict —
-      // different file — so it will break at compile time rather than at merge.
-      // The assertion holds either way: waf_block is both the most frequent code
-      // here and the most severe.
-      expect(tel.dominantFailureCode()).toBe('waf_block');
+      // MEAL-122 left a note here for whoever merged MEAL-123, because the rename
+      // from dominantFailureCode() to primaryFailureCode() reaches this one line
+      // and is not a git conflict — different file — so it breaks at compile time
+      // rather than at merge. It did exactly that, and this is the merge. The
+      // assertion is unchanged and holds under both rules: waf_block is the most
+      // frequent code here AND the most severe.
+      expect(tel.primaryFailureCode()).toBe('waf_block');
     } finally {
       await tel.dispose();
     }

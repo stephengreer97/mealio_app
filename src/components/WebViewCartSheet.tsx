@@ -46,7 +46,7 @@ import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/poo
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
-import { ConfirmedSource, RequestedCount, RunKind, correctConfirmedFromCart, countRequested, isRunComplete } from '../lib/north-star';
+import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -1466,7 +1466,7 @@ export default function WebViewCartSheet({
     // hung probe would cost the whole run its terminal row). A `reconcile` row
     // with phase 'north_star' follows when the probe finds anything, and the read
     // side coalesces — see the emission site in the CART_COUNT 'after' branch.
-    const summaryDetail = {
+    const summaryFacts: RunSummaryFacts = {
       outcome,
       itemsAdded: totalAdded,
       cartDeltaWarning: !!cartDeltaWarning,
@@ -1480,7 +1480,9 @@ export default function WebViewCartSheet({
     };
     if (outcome === 'failed') {
       // The run has no failure of its own — it failed because its steps did, so
-      // it reports whichever code dominated them.
+      // it reports the one that best EXPLAINS them: severity order, not the most
+      // frequent, because a store that blocked us used to show up as a pile of
+      // ordinary confirmation misses (MEAL-123).
       //
       // The fallback used to carry the parallel add path, which emitted no step
       // rows at all: confirm_failed was the only thing still true there. MEAL-122
@@ -1489,13 +1491,18 @@ export default function WebViewCartSheet({
       // single coded step — a login_check that never resolved, or a run abandoned
       // before any item settled. `codeSource: 'fallback'` in the detail is how the
       // read side can tell how often that is still happening.
-      const dominant = tel().dominantFailureCode();
+      const primary = tel().primaryFailureCode();
+      // The whole tally rides along with the chosen code, so ranking by severity
+      // does not hide how often each code actually occurred (MEAL-123). Built in
+      // north-star.ts because the result is at sanitizeDetail's key cap exactly and
+      // the tally is the field the cap would drop — see runSummaryFailureDetail for
+      // both ways it has been lost, and northStar.test.ts for what now holds it.
       tel().record('run_summary', 'error', {
-        detail: { ...summaryDetail, codeSource: dominant ? 'dominant' : 'fallback' },
-        code: dominant ?? 'confirm_failed',
+        detail: runSummaryFailureDetail(summaryFacts, primary, tel().failureCodeSummary()),
+        code: primary ?? 'confirm_failed',
       });
     } else {
-      tel().record('run_summary', 'ok', { detail: summaryDetail });
+      tel().record('run_summary', 'ok', { detail: runSummaryDetail(summaryFacts) });
     }
     void tel().flush();
     // skippedByIdx / unverifiedWeightLines are read above; automationCompletedRef

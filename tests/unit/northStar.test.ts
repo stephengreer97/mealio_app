@@ -10,7 +10,11 @@ import {
   correctConfirmedFromCart,
   countRequested,
   isRunComplete,
+  runSummaryDetail,
+  runSummaryFailureDetail,
 } from '../../src/lib/north-star';
+import type { RunSummaryFacts } from '../../src/lib/north-star';
+import { MAX_DETAIL_KEYS, sanitizeDetail } from '../../src/lib/automation-telemetry';
 import { auditCartAfterRun, isWeightPriced } from '../../src/lib/cart-reconcile';
 import type { IntendedItem, RecoveredAdd } from '../../src/lib/cart-reconcile';
 import type { CartRow } from '../../src/lib/webview-scripts/cart-count';
@@ -258,5 +262,66 @@ describe('correctConfirmedFromCart over auditCartAfterRun output', () => {
     });
     expect(out.confirmed).toBe(1);
     expect(out.runComplete).toBe(false);
+  });
+});
+
+describe('the run_summary detail a finished run ships', () => {
+  // A plausible failed run: eight lines asked for, none confirmed, two of them
+  // sold by weight, one skipped in review.
+  const facts: RunSummaryFacts = {
+    outcome: 'failed',
+    itemsAdded: 0,
+    cartDeltaWarning: false,
+    kind: 'add',
+    requested: 8,
+    confirmedSource: 'worker_reports',
+    weightRequested: 2,
+    skippedInReview: 1,
+    runComplete: false,
+    weightRowUnverified: 0,
+  };
+
+  it('survives sanitizeDetail whole, including the failure tally', () => {
+    // The point of this test, and the reason the payload is assembled in a
+    // function at all: the failed-run detail is at MAX_DETAIL_KEYS EXACTLY.
+    //
+    // sanitizeDetail truncates over the cap silently, in Object.entries order, and
+    // `failureCodes` is last — so a field added to RunSummaryFacts drops the tally
+    // and nothing anywhere says so. The row would go on claiming a distribution it
+    // no longer carries, which is the exact failure MEAL-123 fixed once already (as
+    // a nested Record the sanitizer discarded).
+    //
+    // If this fails after you ADDED a field: the fix is not to loosen the assertion.
+    // Either raise MAX_DETAIL_KEYS deliberately, or drop a field. If it fails
+    // because you REMOVED one, the count is what needs updating — but removing a
+    // field is a schema change too, so update the header block in north-star.ts and
+    // tell the dashboard before you do.
+    //
+    // The exact count carries weight the round-trip below cannot: toEqual treats an
+    // undefined-valued key as equal to an absent one, so an 11th fact that happens
+    // to be undefined here would spend no key slot and slip past it.
+    const detail = runSummaryFailureDetail(facts, 'waf_block', 'confirm_failed:3,waf_block:1');
+
+    expect(Object.keys(detail)).toHaveLength(MAX_DETAIL_KEYS);
+    expect(sanitizeDetail(detail)).toEqual(detail);
+    expect(sanitizeDetail(detail)!.failureCodes).toBe('confirm_failed:3,waf_block:1');
+  });
+
+  it("says whether the row's code was ranked or guessed", () => {
+    // codeSource is how the read side tells a severity-ranked answer from the
+    // fallback the caller uses when a run recorded no coded failure at all.
+    expect(runSummaryFailureDetail(facts, 'waf_block', 'waf_block:1').codeSource)
+      .toBe('severity');
+    expect(runSummaryFailureDetail(facts, undefined, undefined).codeSource)
+      .toBe('fallback');
+  });
+
+  it('carries no failure fields on a run that did not fail', () => {
+    const detail = runSummaryDetail({
+      ...facts, outcome: 'success', itemsAdded: 8, runComplete: true,
+    });
+    expect('codeSource' in detail).toBe(false);
+    expect('failureCodes' in detail).toBe(false);
+    expect(sanitizeDetail(detail)).toEqual(detail);
   });
 });

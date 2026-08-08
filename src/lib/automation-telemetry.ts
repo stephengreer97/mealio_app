@@ -77,6 +77,63 @@ export const STEP_FAILURE_CODES = [
 
 export type StepFailureCode = (typeof STEP_FAILURE_CODES)[number];
 
+/**
+ * The codes in order of how much they EXPLAIN, most explanatory first.
+ *
+ * This is not "how bad it is" — it is "if you only read one code from this run,
+ * which one tells you what happened". The top two are conditions under which
+ * everything downstream was always going to fail, so a count of the downstream
+ * failures says nothing:
+ *
+ *   waf_block      the store refused us. Nothing after this is evidence of anything.
+ *   auth_required  not signed in, so every add would have failed regardless.
+ *   nav_failed     the page never loaded, so nothing could be read from it.
+ *   selector_miss  the page is not the shape we expect. Usually store drift, and
+ *                  it explains the misses that follow it.
+ *   timeout        ranked here not because a timeout is itself explanatory — it is
+ *                  ambiguous, and on its own that argues for ranking it LOW — but
+ *                  because in this app it is the catch-all for two conditions that
+ *                  explain a whole run. It absorbs every `nav_failed` case (see
+ *                  above), and a `login_check` timeout means we never established
+ *                  whether the user was signed in, which is `auth_required`'s
+ *                  neighbourhood. Those outrank any per-item answer below.
+ *                  The cost: `selector_miss` sits above it, so a run whose login
+ *                  check timed out and whose one add hit a missing button headlines
+ *                  as store drift. Accepted, because if the user was in fact signed
+ *                  in, drift IS the story. Splitting the code would fix it properly
+ *                  and can't be done unilaterally — the enum is shared with the
+ *                  extension.
+ *   no_candidates  the search returned nothing. Often a true answer about stock.
+ *   match_rejected we saw products and none matched. A real, actionable answer.
+ *   confirm_failed most often a SYMPTOM: the add was dispatched and nothing
+ *                  evidenced it landing, which is what any of the above causes
+ *                  looks like from here.
+ *
+ * Reordering this changes which code lands on the run_summary row, and that row
+ * is what the dashboard groups on — so it is a reporting decision, not a cleanup.
+ */
+const FAILURE_CODE_SEVERITY = [
+  'waf_block',
+  'auth_required',
+  'nav_failed',
+  'selector_miss',
+  'timeout',
+  'no_candidates',
+  'match_rejected',
+  'confirm_failed',
+] as const satisfies readonly StepFailureCode[];
+
+// Exhaustiveness, checked by the compiler rather than by whoever adds the next
+// code: a new member of STEP_FAILURE_CODES that is missing from the table above
+// makes this line an error, so the ranking cannot silently fall through to the
+// frequency fallback.
+type _SeverityCoversEveryCode =
+  Exclude<StepFailureCode, (typeof FAILURE_CODE_SEVERITY)[number]> extends never
+    ? true
+    : ['FAILURE_CODE_SEVERITY is missing a StepFailureCode'];
+const _severityIsExhaustive: _SeverityCoversEveryCode = true;
+void _severityIsExhaustive;
+
 /** Outcomes that end a step in failure and therefore must carry a code.
  *  'skipped' is excluded deliberately: a step that never ran didn't fail. */
 export type FailureOutcome = Exclude<StepOutcome, 'ok' | 'skipped'>;
@@ -230,7 +287,7 @@ export interface TelemetryOptions {
 const MAX_BUFFER = 500;
 // Detail payloads are for diagnosis, not archival. Cap the key count and value
 // sizes so a well-meaning caller can't attach a page's worth of HTML.
-const MAX_DETAIL_KEYS = 12;
+export const MAX_DETAIL_KEYS = 12;
 const MAX_DETAIL_STRING = 200;
 
 /** Strip a detail payload down to something safe to send. Never throws. */
@@ -263,8 +320,8 @@ export interface StepSettle {
 export class AutomationTelemetry {
   private buffer: StepRecord[] = [];
   private seq = 0;
-  // Every code recorded this run, counted. Feeds dominantFailureCode() — see
-  // there for why the run's own terminal row needs it.
+  // Every code recorded this run, counted. Feeds primaryFailureCode() and
+  // failureCodeSummary() — see there for why the run's own terminal row needs it.
   private readonly failureCounts = new Map<StepFailureCode, number>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private flushing = false;
@@ -337,21 +394,60 @@ export class AutomationTelemetry {
   }
 
   /**
-   * The code recorded most often this run (ties go to the first one seen).
+   * The code that best EXPLAINS this run, by severity rather than by count.
    *
-   * The run's terminal row has no single cause of its own — it fails because its
-   * steps did — so it borrows the one that dominated. The dashboard could derive
-   * this by joining a run's step rows, but the run_summary row is the one most
-   * likely to survive a dropped batch or a truncated buffer, so it carries the
-   * answer itself.
+   * The run's terminal row has no cause of its own — it fails because its steps
+   * did — so it borrows one. The dashboard could derive this by joining a run's
+   * step rows, but the run_summary row is the one most likely to survive a dropped
+   * batch or a truncated buffer, so it carries the answer itself. That is exactly
+   * why the answer has to be the useful one.
+   *
+   * It used to return whichever code appeared MOST OFTEN, which buries the causes
+   * worth acting on. A run with three `confirm_failed` and one `waf_block`
+   * reported `confirm_failed` — so a store that had blocked us looked like eight
+   * ordinary confirmation misses, and the row most likely to become the headline
+   * number on the dashboard named the symptom instead of the cause.
+   *
+   * Frequency is not lost: `failureCodeSummary()` carries the whole tally, and the
+   * caller puts it in the row's detail. So both readings are available and this
+   * ranking is a default, not a deletion.
    */
-  dominantFailureCode(): StepFailureCode | undefined {
+  primaryFailureCode(): StepFailureCode | undefined {
+    for (const code of FAILURE_CODE_SEVERITY) {
+      if (this.failureCounts.has(code)) return code;
+    }
+    // A code outside the severity table should be impossible — the table is
+    // exhaustive over StepFailureCode and the compiler checks it below. If one
+    // ever appears anyway, say something rather than nothing: fall back to the
+    // most frequent, which is the old behaviour.
     let best: StepFailureCode | undefined;
     let bestCount = 0;
     for (const [code, count] of this.failureCounts) {
       if (count > bestCount) { best = code; bestCount = count; }
     }
     return best;
+  }
+
+  /**
+   * Every failure code recorded this run with its count, as a flat string:
+   * `"confirm_failed:3,waf_block:1"`. Most frequent first, so a reader sees the
+   * shape of the run and not just its worst moment.
+   *
+   * A STRING, not the obvious Record, because `sanitizeDetail` drops objects and
+   * arrays outright — nesting is where payload bloat and PII hide, so that is the
+   * right call and this has to live within it. An earlier version of this returned
+   * a Record and the tally was silently discarded on its way to the server, which
+   * made the claim that ranking by severity loses nothing quietly false. Measured,
+   * not assumed: `sanitizeDetail({a:1, failureCodes:{x:1}})` returns `{a:1}`.
+   *
+   * Eight codes at worst is ~120 characters, inside the 200-char string cap.
+   */
+  failureCodeSummary(): string | undefined {
+    if (this.failureCounts.size === 0) return undefined;
+    return [...this.failureCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([code, count]) => `${code}:${count}`)
+      .join(',');
   }
 
   private scheduleFlush(): void {
