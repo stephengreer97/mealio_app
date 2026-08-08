@@ -216,6 +216,39 @@ function Screens() {
       <TouchableOpacity testID="verified-link" onPress={() => { void loginWithToken('token-from-email'); }}>
         <Text>tap verification link</Text>
       </TouchableOpacity>
+      {/*
+        Two links redeemed back to back with no chance for React to commit in
+        between — the shape of a launch that restores a stored session and
+        handles an initial verification URL at the same time.
+      */}
+      <TouchableOpacity
+        testID="two-links"
+        onPress={() => {
+          void (async () => {
+            await loginWithToken('first-token');
+            console.log('[Prewarm] written while the first token was current');
+            await loginWithToken('second-token');
+          })();
+        }}
+      >
+        <Text>two links</Text>
+      </TouchableOpacity>
+      {/*
+        A sign-out and the sign-in that follows it, with no chance for React to
+        commit in between — the other half of the `userRef` bookkeeping.
+      */}
+      <TouchableOpacity
+        testID="logout-then-link"
+        onPress={() => {
+          void (async () => {
+            await logout();
+            console.log('[Login] signing in again: selector matched nothing');
+            await loginWithToken('token-after-logout');
+          })();
+        }}
+      >
+        <Text>log out, then sign in</Text>
+      </TouchableOpacity>
       <TouchableOpacity testID="refresh" onPress={() => { void refreshUser(); }}>
         <Text>refresh profile</Text>
       </TouchableOpacity>
@@ -442,6 +475,52 @@ describe('B takes the phone over through the verification link', () => {
     expect(prewarm.getStatus('heb')).toBe<LoginPrewarmStatus>('unknown');
     expect(prewarm.takePrewarmedCart('heb')).toBeNull();
     expect(utils.queryByTestId('probe-heb')).toBeNull();
+  });
+
+  it('compares against the account it just installed, not the one on screen', async () => {
+    // `beginSession` keeps `userRef` in step itself rather than waiting for the
+    // next render, and this is the case that needs it: two redemptions landing
+    // before React commits either. A launch does exactly that — initAuth
+    // restores the stored session while RootNavigator's getInitialURL redeems an
+    // initial verification URL — and the second one has to be compared against
+    // the account the first just installed, not against the stale one still on
+    // screen.
+    //
+    // B then A, deliberately: with A → B → C every comparison differs and the
+    // clear happens either way, so only a return to the account React still
+    // thinks is current can tell a fresh `userRef` from a stale one.
+    const utils = await renderApp();
+    await signInAsA(utils);
+
+    verify
+      .mockResolvedValueOnce({ user: { id: 'user-B', email: 'b@example.com' } })
+      .mockResolvedValueOnce({ user: { id: 'user-A', email: 'a@example.com' } });
+
+    await act(async () => { fireEvent.press(utils.getByTestId('two-links')); });
+    await waitFor(() => expect(utils.getByTestId('who')).toHaveTextContent('user-A'));
+
+    // B held the session, however briefly, and wrote to the buffer. A coming
+    // back is a new session, not a resumption of the one B interrupted.
+    expect(getSessionLogs()).not.toContain('written while the first token was current');
+  });
+
+  it('does not treat the departed account as current when the next one signs in', async () => {
+    // The matching half of the bookkeeping above, in `logout`. A sign-out that
+    // has not yet been committed leaves the leaving account in `userRef`, so the
+    // sign-in arriving straight after it would be compared against A and read as
+    // an account switch — clearing the login diagnostics written in between,
+    // which are exactly what a "it would not let me sign back in" report needs.
+    // logout has already cleared what was A's; there is nothing left to take.
+    const utils = await renderApp();
+    await signInAsA(utils);
+    console.log(A_CART_LINE);
+
+    verify.mockResolvedValueOnce({ user: { id: 'user-B', email: 'b@example.com' } });
+    await act(async () => { fireEvent.press(utils.getByTestId('logout-then-link')); });
+    await waitFor(() => expect(utils.getByTestId('who')).toHaveTextContent('user-B'));
+
+    expect(getSessionLogs()).not.toContain(A_PRODUCT);              // A's went at logout
+    expect(getSessionLogs()).toContain('selector matched nothing'); // B's own did not
   });
 
   it("does not leave B wearing A's creator status", async () => {
