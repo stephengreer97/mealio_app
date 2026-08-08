@@ -85,6 +85,29 @@ jest.mock('../../src/lib/selector-health', () => {
   return { ...actual, SelectorHealthTally: RecordingTally };
 });
 
+// Report the store as already signed in. This is the ONLY thing standing between
+// a component test and the pre-search parking pool: the effect that calls
+// presearchPool.start gates on `loginPrewarm.getStatus(storeId) === 'loggedIn'`,
+// and nothing in a test ever runs the silent probe that sets it. (An earlier note
+// in WebViewCartSheet blamed the browser region not being mounted on the qty
+// screen. That was wrong — the region's gate is `step !== 'qty' || presearchGrid`
+// and the parked tiles render offscreen, where RNTL still finds them.)
+jest.mock('../../src/context/LoginPrewarmContext', () => {
+  const actual = jest.requireActual('../../src/context/LoginPrewarmContext');
+  return {
+    ...actual,
+    // Per-test, defaulting to 'unknown' so every other test in this file sees the
+    // real flow. Reporting 'loggedIn' globally would skip the login check and
+    // park pre-search workers under all of them.
+    useLoginPrewarm: () => ({
+      checkStore: () => {},
+      getStatus: () => (globalThis as any).__prewarmStatus ?? 'unknown',
+      takePrewarmedCart: () => null,
+      statusVersion: (globalThis as any).__prewarmStatus === 'loggedIn' ? 1 : 0,
+    }),
+  };
+});
+
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 import { SELECTOR_HEALTH_MESSAGE } from '../../src/lib/selector-health';
 
@@ -93,7 +116,11 @@ const ingested = () => ((globalThis as any).__ingested ?? []) as unknown[];
 const uploaded = () =>
   (((globalThis as any).__batches ?? []) as Array<{ steps: any[] }>).flatMap((b) => b.steps);
 
-beforeEach(() => { (globalThis as any).__ingested = []; (globalThis as any).__batches = []; });
+beforeEach(() => {
+  (globalThis as any).__ingested = [];
+  (globalThis as any).__batches = [];
+  (globalThis as any).__prewarmStatus = 'unknown';
+});
 
 const meal = {
   id: 'm1',
@@ -169,15 +196,18 @@ describe('SELECTOR_HEALTH from a pool worker', () => {
   // output in tests/unit/selectorHealth.test.ts. Both halves are needed: this
   // file passed unchanged while two of the three pools emitted nothing at all.
   type Ing = Omit<(typeof meal)['ingredients'][number], 'searchTerm'> & { searchTerm?: string };
-  const walmartSheet = (ingredient: Ing) => (
+  const walmartSheet = (...ingredients: Ing[]) => (
     <WebViewCartSheet
       visible
-      meals={[{ id: 'm1', name: 'Tacos', ingredients: [ingredient] }]}
+      meals={[{ id: 'm1', name: 'Tacos', ingredients }]}
       storeId="walmart"
       storeName="Walmart"
       onClose={() => {}}
     />
   );
+  const chosen = (name: string): Ing => ({
+    ingredientName: name, searchTerm: name.toLowerCase(), productQty: 1, qty: 1, unit: 'qty', measure: null,
+  });
 
   /** Render, sign in, and return the worker WebView the pool spun up. */
   async function poolWorker(view: ReturnType<typeof render>) {
@@ -214,8 +244,35 @@ describe('SELECTOR_HEALTH from a pool worker', () => {
     expect(ingested()).toEqual([{ card: 1 }]);
   });
 
+  it('reaches the tally from a PRE-SEARCH parked worker', async () => {
+    // The one handler that had no coverage. The pool parks its workers on the qty
+    // screen — the browser region stays mounted for exactly that reason and the
+    // tiles sit offscreen, so RNTL finds them — but the effect that starts it
+    // requires the silent login pre-warm to have resolved 'loggedIn', which no
+    // test had ever set.
+    //
+    // Worth having rather than conceding: since the composition fix this pool
+    // emits samples for real, so a missing branch here is live data loss.
+    (globalThis as any).__prewarmStatus = 'loggedIn';
+    // Three items, because the first parked slot is the COLD one — the main
+    // WebView enlisted as an extra add surface — and a single-item run never
+    // reaches a tile worker at all.
+    const view = render(walmartSheet(chosen('Sour Cream'), chosen('Tortillas'), chosen('Cheese')));
+    await act(async () => { jest.advanceTimersByTime(5_000); });
+    // Still on the qty screen, and the parked tiles are already mounted.
+    expect(view.getByText(/add ingredients to/i)).toBeTruthy();
+    const webviews = view.getAllByTestId('mock-webview');
+    expect(webviews.length).toBeGreaterThan(1);
+    act(() => {
+      webviews[1].props.onMessage({
+        nativeEvent: { data: JSON.stringify({ type: SELECTOR_HEALTH_MESSAGE, sel: { cardLink: 0 } }) },
+      });
+    });
+    expect(ingested()).toEqual([{ cardLink: 0 }]);
+  });
+
   it('reaches the tally from a parallel ADD worker', async () => {
-    const view = render(walmartSheet({ ingredientName: 'Sour Cream', searchTerm: 'sour cream', productQty: 1, qty: 1, unit: 'qty', measure: null }));
+    const view = render(walmartSheet(chosen('Sour Cream')));
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
     const worker = await poolWorker(view);
     act(() => {
