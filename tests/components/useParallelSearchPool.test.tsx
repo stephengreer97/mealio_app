@@ -3,7 +3,12 @@
 // timeout, result ordering by item index, and the all-done callback.
 
 import { act, renderHook } from '@testing-library/react-native';
-import { useParallelSearchPool } from '../../src/lib/useParallelSearchPool';
+import { PoolSettled, useParallelSearchPool } from '../../src/lib/useParallelSearchPool';
+import {
+  AutomationTelemetry,
+  StepRecord,
+  recordPoolAddOutcome,
+} from '../../src/lib/automation-telemetry';
 
 jest.useFakeTimers();
 
@@ -322,5 +327,199 @@ describe('useParallelSearchPool — reset', () => {
     act(() => {
       jest.advanceTimersByTime(2_000);
     });
+  });
+});
+
+// ── MEAL-122: the pool's reporting seam ─────────────────────────────────────
+//
+// The pool stays telemetry-agnostic; onSettled is the single point at which an
+// item's result becomes final. What matters is that it fires for EVERY dispatched
+// item exactly once — including the item nobody ever reported, which is the one
+// the funnel most needs, and which no message handler can see.
+
+describe('useParallelSearchPool — onSettled', () => {
+  const settledOf = (calls: PoolSettled<Result>[]) =>
+    calls.map((c) => [c.itemIndex, c.workerId, c.timedOut, c.result.hits]);
+
+  it('fires once per reported item, with the index the worker was dispatched on', () => {
+    const onSettled = jest.fn();
+    const { result } = setup({ onSettled });
+    act(() => { result.current.start([{ term: 'a' }, { term: 'b' }, { term: 'c' }], () => {}); });
+    act(() => {
+      result.current.reportResult(2, { hits: 9 });
+      result.current.reportResult(0, { hits: 7 });
+      result.current.reportResult(1, { hits: 8 });
+    });
+    // Reported out of order on purpose: the seam must carry the item index, not
+    // the arrival order.
+    expect(settledOf(onSettled.mock.calls.map((c) => c[0]))).toEqual([
+      [2, 2, false, 9],
+      [0, 0, false, 7],
+      [1, 1, false, 8],
+    ]);
+  });
+
+  it('fires for an item that never reported, flagged as timed out', () => {
+    const onSettled = jest.fn();
+    const { result } = setup({ onSettled });
+    act(() => { result.current.start([{ term: 'a' }], () => {}); });
+    act(() => { jest.advanceTimersByTime(1_001); });
+    expect(settledOf(onSettled.mock.calls.map((c) => c[0]))).toEqual([[0, 0, true, 0]]);
+  });
+
+  it('fires exactly once per item across a queue that outlasts the workers', () => {
+    const onSettled = jest.fn();
+    const { result } = setup({ onSettled });
+    act(() => {
+      result.current.start(
+        [{ term: 'a' }, { term: 'b' }, { term: 'c' }, { term: 'd' }, { term: 'e' }],
+        () => {},
+      );
+    });
+    act(() => { result.current.reportResult(0, { hits: 1 }); }); // 0 done, picks up d
+    act(() => { result.current.reportResult(0, { hits: 2 }); }); // d done
+    act(() => { result.current.reportResult(1, { hits: 3 }); }); // 1 done, picks up e
+    act(() => { jest.advanceTimersByTime(1_001); });             // c and e time out
+    const seen = onSettled.mock.calls.map((c) => c[0] as PoolSettled<Result>);
+    expect(seen.map((s) => s.itemIndex).sort()).toEqual([0, 1, 2, 3, 4]);
+    expect(seen).toHaveLength(5);
+  });
+
+  it('fires before onAllDone, so per-item rows precede the run terminal rows', () => {
+    // seq is the funnel's only ordering signal. If the seam moved after
+    // tryFinish, an item's rows would land AFTER the reconcile and run_summary
+    // that its own run emitted.
+    const order: string[] = [];
+    const { result } = setup({
+      onSettled: (i) => order.push(`settled:${i.itemIndex}`),
+    });
+    act(() => {
+      result.current.start([{ term: 'a' }, { term: 'b' }], () => order.push('allDone'));
+    });
+    act(() => { result.current.reportResult(0, { hits: 1 }); });
+    act(() => { result.current.reportResult(1, { hits: 2 }); });
+    expect(order).toEqual(['settled:0', 'settled:1', 'allDone']);
+  });
+
+  it('fires before onAllDone on the timeout path too', () => {
+    const order: string[] = [];
+    const { result } = setup({ onSettled: (i) => order.push(`settled:${i.itemIndex}`) });
+    act(() => { result.current.start([{ term: 'a' }], () => order.push('allDone')); });
+    act(() => { jest.advanceTimersByTime(1_001); });
+    expect(order).toEqual(['settled:0', 'allDone']);
+  });
+
+  it('does not fire for an item abandoned by reset()', () => {
+    // A cancelled run must not inflate either side of the confirm rate.
+    const onSettled = jest.fn();
+    const { result } = setup({ onSettled });
+    act(() => { result.current.start([{ term: 'a' }, { term: 'b' }], () => {}); });
+    act(() => { result.current.reset(); });
+    act(() => { jest.advanceTimersByTime(2_000); });
+    expect(onSettled).not.toHaveBeenCalled();
+  });
+
+  it('keeps draining when the caller throws', () => {
+    // Reporting is not the pool's job. A throw out of onSettled must not strand
+    // an add mid-run.
+    const cb = jest.fn();
+    const { result } = setup({
+      onSettled: () => { throw new Error('reporter blew up'); },
+    });
+    act(() => { result.current.start([{ term: 'a' }, { term: 'b' }], cb); });
+    act(() => { result.current.reportResult(0, { hits: 1 }); });
+    act(() => { result.current.reportResult(1, { hits: 2 }); });
+    expect(cb).toHaveBeenCalledTimes(1);
+    const got = cb.mock.calls[0][0] as Map<number, Result>;
+    expect(got.get(0)).toEqual({ hits: 1 });
+    expect(got.get(1)).toEqual({ hits: 2 });
+  });
+});
+
+// ── MEAL-122: the funnel a real run would upload ────────────────────────────
+//
+// Wires the pool to a REAL recorder through the same reporter the cart sheet
+// uses, and reads the batch the upload function received. Asserting that a mock
+// was called would not have caught the thing this project has already been
+// burned by: a detail payload that sanitizeDetail silently dropped on its way
+// out. These assertions are on rows the server would actually have seen.
+describe('useParallelSearchPool — end-to-end funnel through a real recorder', () => {
+  type AddLike = { success: boolean; reason: string | null };
+
+  async function run(): Promise<{ rows: StepRecord[]; tel: AutomationTelemetry }> {
+    const uploaded: StepRecord[][] = [];
+    const tel = new AutomationTelemetry({
+      runId: 'run-122',
+      upload: async (b) => { uploaded.push(b.steps); return true; },
+      batchSize: 1000,
+      flushIntervalMs: 60_000,
+    });
+    const { result } = renderHook(() =>
+      useParallelSearchPool<Item, AddLike>({
+        workerCount: 2,
+        workerTimeoutMs: 1_000,
+        getUrl: (i) => `https://example/?q=${i.term}`,
+        emptyResult: () => ({ success: false, reason: 'timeout' }),
+        onSettled: (info) => recordPoolAddOutcome(tel, {
+          path: 'parallel_add',
+          workerId: info.workerId,
+          itemIndex: info.itemIndex,
+          success: info.result.success,
+          reason: info.result.reason,
+          timedOut: info.timedOut,
+          addDispatched: info.addDispatched,
+          detail: { confirmVia: 'badge' },
+        }),
+      }),
+    );
+    // Three items, two workers: one succeeds, one hits a wall, one never answers.
+    act(() => {
+      result.current.start([{ term: 'a' }, { term: 'b' }, { term: 'c' }], () => {});
+    });
+    act(() => { result.current.reportResult(0, { success: true, reason: null }); });
+    act(() => { result.current.reportResult(1, { success: false, reason: 'blocked' }); });
+    act(() => { jest.advanceTimersByTime(1_001); });
+    await tel.flush();
+    return { rows: uploaded.flat(), tel };
+  }
+
+  it('gives every item a coded, item-attributed funnel row the server can see', async () => {
+    const { rows, tel } = await run();
+    try {
+      // Before MEAL-122 the parallel pass emitted none of these: three items,
+      // three outcomes, no per-item rows at all.
+      expect(rows.map((r) => [r.step, r.outcome, r.code, r.itemIndex])).toEqual([
+        ['add_click', 'ok', undefined, 0],
+        ['confirm', 'ok', undefined, 0],
+        ['add_click', 'ok', undefined, 1],
+        ['blocked', 'blocked', 'waf_block', 1],
+        ['confirm', 'error', 'waf_block', 1],
+        ['add_click', 'ok', undefined, 2],
+        ['confirm', 'timeout', 'timeout', 2],
+      ]);
+      // seq is the server's idempotency key and its only ordering signal. Rows
+      // from concurrent workers interleave by item, never within one.
+      expect(rows.map((r) => r.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+      // The detail actually arrived — sanitizeDetail keeps these because they
+      // are scalars. This is the assertion a mock-was-called test cannot make.
+      expect(rows[1].detail).toEqual({
+        attempt: 1, path: 'parallel_add', workerId: 0, confirmVia: 'badge',
+      });
+      // Confirm-rate denominator: one add_click per item, no more and no fewer.
+      expect(rows.filter((r) => r.step === 'add_click')).toHaveLength(3);
+      // And the run's headline code is the wall, attributed to the item it took.
+      // (A wall was not previously invisible — surfaceBlocker records a run-level
+      // `blocked` row on the reconcile's re-detect. What was missing is which
+      // item, and how many.)
+      // NOTE for whoever merges PR #83 (fix/meal-123-dominant-severity): that
+      // branch renames dominantFailureCode() to primaryFailureCode(). This line
+      // is the rename's only reach into MEAL-122, and it is not a git conflict —
+      // different file — so it will break at compile time rather than at merge.
+      // The assertion holds either way: waf_block is both the most frequent code
+      // here and the most severe.
+      expect(tel.dominantFailureCode()).toBe('waf_block');
+    } finally {
+      await tel.dispose();
+    }
   });
 });
