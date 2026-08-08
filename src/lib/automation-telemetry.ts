@@ -413,12 +413,26 @@ export class AutomationTelemetry {
     return best;
   }
 
-  /** Every failure code recorded this run, with its count. Ordered most frequent
-   *  first so a reader sees the shape of the run, not just its worst moment. */
-  failureCodeCounts(): Record<string, number> {
-    return Object.fromEntries(
-      [...this.failureCounts.entries()].sort((a, b) => b[1] - a[1]),
-    );
+  /**
+   * Every failure code recorded this run with its count, as a flat string:
+   * `"confirm_failed:3,waf_block:1"`. Most frequent first, so a reader sees the
+   * shape of the run and not just its worst moment.
+   *
+   * A STRING, not the obvious Record, because `sanitizeDetail` drops objects and
+   * arrays outright — nesting is where payload bloat and PII hide, so that is the
+   * right call and this has to live within it. An earlier version of this returned
+   * a Record and the tally was silently discarded on its way to the server, which
+   * made the claim that ranking by severity loses nothing quietly false. Measured,
+   * not assumed: `sanitizeDetail({a:1, failureCodes:{x:1}})` returns `{a:1}`.
+   *
+   * Eight codes at worst is ~120 characters, inside the 200-char string cap.
+   */
+  failureCodeSummary(): string | undefined {
+    if (this.failureCounts.size === 0) return undefined;
+    return [...this.failureCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([code, count]) => `${code}:${count}`)
+      .join(',');
   }
 
   private scheduleFlush(): void {

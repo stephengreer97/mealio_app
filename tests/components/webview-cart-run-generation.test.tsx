@@ -92,7 +92,7 @@ jest.mock('../../src/lib/automation-telemetry', () => {
     record() {}
     startTimer() { return () => {}; }
     primaryFailureCode() { return undefined; }
-    failureCodeCounts() { return {}; }
+    failureCodeSummary() { return undefined; }
     async flush() {}
     async dispose() {}
   }

@@ -347,9 +347,13 @@ describe('failure codes', () => {
     expect(t.primaryFailureCode()).toBe('waf_block');
 
     // And frequency is still available, so nothing was traded away for the
-    // ranking — most frequent first.
-    expect(t.failureCodeCounts()).toEqual({ confirm_failed: 3, waf_block: 1 });
-    expect(Object.keys(t.failureCodeCounts())[0]).toBe('confirm_failed');
+    // ranking — most frequent first, as a flat string because sanitizeDetail drops
+    // nested objects. It is asserted THROUGH the sanitizer, because a Record here
+    // was silently discarded on the way to the server and the claim that nothing
+    // is lost was false without anyone noticing.
+    expect(t.failureCodeSummary()).toBe('confirm_failed:3,waf_block:1');
+    expect(sanitizeDetail({ failureCodes: t.failureCodeSummary() }))
+      .toEqual({ failureCodes: 'confirm_failed:3,waf_block:1' });
   });
 
   it('outranks a symptom with its cause however lopsided the counts', () => {
@@ -368,7 +372,7 @@ describe('failure codes', () => {
     // future code added to the union without a rank still reports something.
     const t = make();
     expect(t.primaryFailureCode()).toBeUndefined();
-    expect(t.failureCodeCounts()).toEqual({});
+    expect(t.failureCodeSummary()).toBeUndefined();
   });
 
   it('keeps the run tally past a flush and past buffer trimming', async () => {

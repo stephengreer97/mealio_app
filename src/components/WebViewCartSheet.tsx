@@ -1639,8 +1639,15 @@ export default function WebViewCartSheet({
           ...summaryDetail,
           codeSource: primary ? 'severity' : 'fallback',
           // The whole tally rides along, so ranking by severity above does not
-          // hide how often each code actually occurred (MEAL-123).
-          failureCodes: tel().failureCodeCounts(),
+          // hide how often each code actually occurred (MEAL-123). A flat string
+          // because sanitizeDetail drops nested objects — see failureCodeSummary.
+          //
+          // NOTE ON HEADROOM: summaryDetail is 10 keys, and with codeSource and
+          // this one the row sits at exactly sanitizeDetail's 12-key cap. The cap
+          // truncates SILENTLY and in Object.entries order, so the next key added
+          // here will drop one of these without saying so. Widen MAX_DETAIL_KEYS
+          // or drop a field first.
+          failureCodes: tel().failureCodeSummary(),
         },
         code: primary ?? 'confirm_failed',
       });
