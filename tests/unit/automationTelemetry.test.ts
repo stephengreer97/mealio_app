@@ -711,6 +711,12 @@ describe('WebViewCartSheet wires both pools to the funnel', () => {
     const { body } = wiredHandler('usePresearchAddPool<ConsolidatedIngredient, AddResult>');
     expect(body).toContain('presearchAddDispatched(');
     expect(body).toContain('mainColdInjectedRef.current');
+    // And that it names the slot the correction applies TO. Point this at the wrong
+    // index and the cold slot never matches, the pool's optimistic `true` is used
+    // instead, and the defect above is silently back with every test still green.
+    // A regex, not toContain: 'slotId: COLD_SLOT_IDX' is a substring of
+    // 'slotId: COLD_SLOT_IDX + 1', so the plain form cannot see the mutation.
+    expect(body).toMatch(/slotId:\s*COLD_SLOT_IDX\s*[,}]/);
   });
 
   it('routes them through the extracted mapping rather than an inline one', () => {
