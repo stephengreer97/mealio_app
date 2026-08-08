@@ -42,6 +42,8 @@ import {
   withSelectorProbe,
 } from '../../src/lib/selector-health';
 import { getStoreScripts } from '../../src/lib/webview-scripts';
+import { INSTACART_STORE_IDS } from '../../src/lib/webview-scripts/instacart';
+import { ALBERTSONS_FAMILY_IDS } from '../../src/lib/webview-scripts/albertsons';
 import { buildExtractWorker, buildPresearchWorker, buildSearchAndAddWorker } from '../../src/lib/webview-scripts/worker-search';
 import { __resetAutomationConfigForTests } from '../../src/lib/automation-config';
 
@@ -257,6 +259,14 @@ describe('the injected probe', () => {
     expect(posted).toEqual(['not json at all']);
   });
 
+  // Both of the above are properties of the PROBE LAYER, not of a finished worker.
+  // Composed under a pool wrapper, a non-JSON payload and a throwing bridge are
+  // each swallowed — the wrapper's own `orig(...)` sits inside its try/catch and
+  // it discards types it does not recognise. That is pre-existing behaviour the
+  // probe neither causes nor can undo from underneath, and the safety argument
+  // does not depend on it: what matters is that the probe never makes forwarding
+  // WORSE than the layer it was inserted beneath. Recorded so nobody later reads
+  // forward-first as an end-to-end guarantee.
   it('propagates a bridge failure the way an unhooked bridge would', () => {
     // The other side of forward-first: if the native post throws, the store
     // script's own try/catch must see it, exactly as it did before the hook
@@ -376,15 +386,48 @@ const POOL_WORKERS: Array<[string, (s: any) => string, Record<string, unknown>]>
   ['buildAddWorkerScript (parallel add)', (s) => s.buildAddWorkerScript!(2), { type: 'SEARCH_AND_ADD_RESULT', success: true }],
 ];
 
-// Walmart uses the generic wrappers in worker-search.ts; ALDI ships a
-// purpose-built parallel-search worker with no postMessage override at all, so
-// between them the two arrangements the probe has to survive are both covered.
-const POOL_STORES = ['heb', 'walmart', 'amazon', 'wegmans', 'aldi', 'safeway'];
+/**
+ * Every store the registry can return WebView scripts for, derived from the
+ * registry's own id lists rather than listed here.
+ *
+ * Listing them was a real hole, not a tidiness point. `getStoreScripts` routes
+ * each store through `finish()` by hand, and a store routed around it gets no
+ * `buildPresearchWorkerScript` and no `buildAddWorkerScript` at all — whereupon
+ * WebViewCartSheet yields `[]` for both pools and that store runs with NO
+ * WORKERS. Since the composition moved into the registry, missing a store costs
+ * it its pools, not just its telemetry. Measured: routing `vons` (a real
+ * Albertsons banner) around `finish()` leaves both fields `undefined` and the
+ * whole suite green at 1204/1204.
+ *
+ * Twenty stores, sixty combinations. Deriving the list is what makes the
+ * coverage claim true rather than true-of-the-six-someone-typed.
+ *
+ * Both arrangements the probe has to survive are in here by construction: the
+ * generic wrappers in worker-search.ts (HEB, Walmart, Amazon Fresh, the
+ * Albertsons family), and the purpose-built parallel-search workers that install
+ * no postMessage override at all (Wegmans, ALDI).
+ */
+const POOL_STORES = ['heb', 'walmart', 'amazon', 'wegmans', ...INSTACART_STORE_IDS, ...ALBERTSONS_FAMILY_IDS];
 
 describe('a registry-composed pool worker reports its selectors', () => {
   const cases = POOL_STORES.flatMap((storeId) =>
     POOL_WORKERS.map(([label, build, terminal]) => [storeId, label, build, terminal] as const),
   );
+
+  it('gives every registered store all three pool builders', () => {
+    // The guard on the guard, and the real cost of routing a store around
+    // finish(): these fields go undefined, WebViewCartSheet yields [] for the
+    // pool, and that store runs with no workers. Asserted per store rather than
+    // per combination so the failure names the store, not a script.
+    expect(POOL_STORES).toHaveLength(20);
+    for (const storeId of POOL_STORES) {
+      const scripts = getStoreScripts(storeId);
+      expect(scripts).not.toBeNull();
+      expect(typeof scripts!.buildWorkerScript).toBe('function');
+      expect(typeof scripts!.buildPresearchWorkerScript).toBe('function');
+      expect(typeof scripts!.buildAddWorkerScript).toBe('function');
+    }
+  });
 
   it.each(cases)('%s / %s', (storeId, _label, build, terminal) => {
     const { posted, bodyThrew } = runWorkerInPage(build(getStoreScripts(storeId)!), terminal);
@@ -396,23 +439,35 @@ describe('a registry-composed pool worker reports its selectors', () => {
     expect(Object.keys(samples[0].sel).length).toBeGreaterThan(0);
   });
 
-  it('puts the probe\'s hook under any override the composition installs', () => {
-    for (const storeId of POOL_STORES) {
-      const scripts = getStoreScripts(storeId)!;
-      for (const [label, build] of POOL_WORKERS) {
-        const script = build(scripts);
-        const probe = script.indexOf('__mealioSelHealth');
-        const wrapper = Math.max(
-          script.indexOf('__mealioWorkerWrapped'),
-          script.indexOf('__mealioPresearchWrapped'),
-          script.indexOf('__mealioAddWorkerWrapped'),
-        );
-        expect(`${storeId}/${label}: probe@${probe}`).toBe(`${storeId}/${label}: probe@${probe}`);
-        expect(probe).toBeGreaterThanOrEqual(0);
-        // -1 means this store ships a purpose-built worker with no override of
-        // its own (Wegmans, the Instacart banners) — nothing to be under.
-        if (wrapper >= 0) expect(probe).toBeLessThan(wrapper);
-      }
+  /**
+   * Find every postMessage override in a composed script, generically.
+   *
+   * Deliberately NOT a list of the wrappers' `__mealio*Wrapped` sentinels. That
+   * is the same `indexOf(...) === -1` reading that mislabelled Wegmans and ALDI
+   * in the first harness for this ticket, and it degrades to "no override to be
+   * under" — i.e. it SKIPS — whenever a sentinel is renamed. Measured: renaming
+   * `__mealioAddWorkerWrapped` left this file green at 70/70 while the invariant
+   * it claims to hold was no longer being checked on that pool.
+   */
+  const overridesIn = (script: string) =>
+    [...script.matchAll(/postMessage\s*=\s*function/g)].map((m) => m.index!);
+
+  it.each(cases)('%s / %s installs the probe\'s hook before any other', (_storeId, label, build) => {
+    const script = build(getStoreScripts(_storeId)!);
+    const overrides = overridesIn(script);
+    const probeMarker = script.indexOf('__mealioSelHealth');
+    expect(probeMarker).toBeGreaterThanOrEqual(0);
+    expect(overrides.length).toBeGreaterThan(0);
+    // The FIRST override in the finished text is the probe's own — the probe
+    // declares itself just above it, so anything installed earlier would push
+    // overrides[0] ahead of the marker.
+    expect(probeMarker).toBeLessThan(overrides[0]);
+    // And the two pools that wrap must actually still have their wrapper: a
+    // second override, after the probe's. Only the parallel-search pool may have
+    // one override total, and only for the two stores whose worker is
+    // purpose-built (Wegmans, ALDI).
+    if (label.includes('pre-search') || label.includes('parallel add')) {
+      expect(overrides.length).toBeGreaterThanOrEqual(2);
     }
   });
 });
