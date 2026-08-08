@@ -443,9 +443,16 @@ export default function WebViewCartSheet({
   // convention. `endRun` is stable, so listing it would buy nothing, but a dep
   // that ever DID change turns this cleanup into a mid-run event: it bumps the
   // generation, so the in-flight logAutomationStart response is discarded and
-  // the run never gets a recorder at all. Measured with `[step]`: zero rows for
-  // the whole run, and no test failed. So `endRun` reads refs only (see there)
-  // and this list stays empty.
+  // the run never gets a recorder at all.
+  //
+  // Measured with `[step]`, and the outcome depends on a race: if a step change
+  // beats the logAutomationStart response the run uploads NOTHING, and if the
+  // start lands first the run ships a false `skipped` terminal row for a run that
+  // actually finished — losing login_check, add_click, confirm and the real `ok`
+  // summary. The second is the worse one, and it is exactly the corruption the
+  // single-terminal-row guard above exists to prevent. Neither failed a test
+  // before this commit; both do now. So `endRun` reads refs only (see there) and
+  // this list stays empty.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => () => {
     automationGenRef.current += 1;

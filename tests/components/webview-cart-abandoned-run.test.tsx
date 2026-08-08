@@ -236,6 +236,39 @@ describe('a cart run that never reaches the done screen', () => {
     expect(summaries[0].detail).toMatchObject({ kind: 'choose', requested: 0 });
   });
 
+  it('carries the work already done when the run is abandoned part-way', async () => {
+    // Same defect as abandonedAt, one field over, and it survived the fix for it:
+    // every other test here tears down before the CTA press, so `requested` and
+    // `itemsAdded` are only ever asserted at 0 and a hardcoded 0 satisfies all of
+    // them. Cold review measured that — pinning either to the constant passed
+    // 11/11.
+    //
+    // These two are the north-star numerator and denominator, and a run abandoned
+    // AFTER some items landed is exactly the population MEAL-5 exists to stop
+    // under-reporting. A zero here would say the user got nothing when they got
+    // something.
+    const r = render(sheet({ visible: true, storeId: 'aldi' }));
+    await landStartFor('aldi');
+    await act(async () => { fireEvent.press(r.getByText(/add ingredients to/i)); });
+    post({ type: 'LOGIN_STATUS', loggedIn: true });
+    await settle();
+    post({
+      type: 'SEARCH_AND_ADD_RESULT', success: true, added: 1,
+      productName: 'Sour Cream', term: 'sour cream',
+    });
+    await settle();
+
+    // Torn down before the done screen, with one item already in the cart.
+    await act(async () => { r.unmount(); });
+    await settle();
+
+    const summaries = uploaded().filter((s) => s.step === 'run_summary');
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].detail).toMatchObject({
+      terminal: 'abandoned', kind: 'add', requested: 1, itemsAdded: 1, runComplete: false,
+    });
+  });
+
   it('stays silent for a run the server never issued an id for', async () => {
     // No runId means no `automation_runs` row either, so there is nothing for a
     // terminal row to be the missing half of — and the recorder is the no-op
