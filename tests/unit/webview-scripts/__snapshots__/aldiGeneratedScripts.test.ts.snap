@@ -62,7 +62,42 @@ exports[`ALDI StoreScripts non-script fields (bundled config) urls, domain and r
 `;
 
 exports[`ALDI generated WebView scripts (bundled config) buildAddToCartScript 1`] = `
-"(async function() {
+"(function(){
+  try {
+    var W = window;
+    var T = [["atc",["button[aria-label^=\\"Add 1 \\"]"]],["inc",["button[aria-label^=\\"Increment quantity\\"]","button[aria-label^=\\"Increase quantity\\"]"]],["qtyBubble",["button[aria-label^=\\"Quantity:\\"]"]],["cardQty",["[data-testid=\\"item-quantity\\"]","[data-testid*=\\"quantity\\" i]"]],["cardQtyBubble",["button[aria-label^=\\"Quantity:\\"]","button[aria-label$=\\" ct\\"]","button[aria-label$=\\" in cart\\"]"]]];
+    var H = W.__mealioSelHealth;
+    if (!H) {
+      var rn = W.ReactNativeWebView;
+      if (!rn || typeof rn.postMessage !== 'function') return;
+      var post = rn.postMessage.bind(rn);
+      var TERM = ["SEARCH_RESULT","ADD_RESULT","SEARCH_AND_ADD_RESULT","WORKER_RESULT","LOGIN_STATUS","CART_COUNT"];
+      H = W.__mealioSelHealth = { targets: [] };
+      rn.postMessage = function(s) {
+        post(s);
+        try {
+          var m = JSON.parse(s);
+          if (!m || TERM.indexOf(m.type) < 0) return;
+          var sel = {};
+          for (var i = 0; i < H.targets.length; i++) {
+            var key = H.targets[i][0];
+            var branches = H.targets[i][1];
+            var v = -1;
+            for (var b = 0; b < branches.length; b++) {
+              try {
+                if (document.querySelector(branches[b])) { v = b; break; }
+              } catch (e) { v = -2; break; }
+            }
+            sel[key] = v;
+          }
+          post(JSON.stringify({ type: 'SELECTOR_HEALTH', sel: sel }));
+        } catch (e) {}
+      };
+    }
+    H.targets = T;
+  } catch (e) {}
+})();
+(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
   function __noKbd(e) {
@@ -172,7 +207,42 @@ exports[`ALDI generated WebView scripts (bundled config) buildAddToCartScript 1`
 `;
 
 exports[`ALDI generated WebView scripts (bundled config) buildSearchAndAddScript 1`] = `
-"(async function() {
+"(function(){
+  try {
+    var W = window;
+    var T = [["atc",["button[aria-label^=\\"Add 1 \\"]"]],["inc",["button[aria-label^=\\"Increment quantity\\"]","button[aria-label^=\\"Increase quantity\\"]"]],["qtyBubble",["button[aria-label^=\\"Quantity:\\"]"]],["cardLink",["a[href*=\\"/store/aldi/products/\\"]"]],["searchTrigger",["label[class*=\\"e-6xs547\\"]","span[class*=\\"e-1olf6x2\\"]"]],["cardQty",["[data-testid=\\"item-quantity\\"]","[data-testid*=\\"quantity\\" i]"]],["cardQtyBubble",["button[aria-label^=\\"Quantity:\\"]","button[aria-label$=\\" ct\\"]","button[aria-label$=\\" in cart\\"]"]]];
+    var H = W.__mealioSelHealth;
+    if (!H) {
+      var rn = W.ReactNativeWebView;
+      if (!rn || typeof rn.postMessage !== 'function') return;
+      var post = rn.postMessage.bind(rn);
+      var TERM = ["SEARCH_RESULT","ADD_RESULT","SEARCH_AND_ADD_RESULT","WORKER_RESULT","LOGIN_STATUS","CART_COUNT"];
+      H = W.__mealioSelHealth = { targets: [] };
+      rn.postMessage = function(s) {
+        post(s);
+        try {
+          var m = JSON.parse(s);
+          if (!m || TERM.indexOf(m.type) < 0) return;
+          var sel = {};
+          for (var i = 0; i < H.targets.length; i++) {
+            var key = H.targets[i][0];
+            var branches = H.targets[i][1];
+            var v = -1;
+            for (var b = 0; b < branches.length; b++) {
+              try {
+                if (document.querySelector(branches[b])) { v = b; break; }
+              } catch (e) { v = -2; break; }
+            }
+            sel[key] = v;
+          }
+          post(JSON.stringify({ type: 'SELECTOR_HEALTH', sel: sel }));
+        } catch (e) {}
+      };
+    }
+    H.targets = T;
+  } catch (e) {}
+})();
+(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function __noKbd(e) {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'))
@@ -551,7 +621,42 @@ exports[`ALDI generated WebView scripts (bundled config) buildSearchAndAddScript
 `;
 
 exports[`ALDI generated WebView scripts (bundled config) buildSearchScript 1`] = `
-"(async function() {
+"(function(){
+  try {
+    var W = window;
+    var T = [["atc",["button[aria-label^=\\"Add 1 \\"]"]],["searchTrigger",["label[class*=\\"e-6xs547\\"]","span[class*=\\"e-1olf6x2\\"]"]]];
+    var H = W.__mealioSelHealth;
+    if (!H) {
+      var rn = W.ReactNativeWebView;
+      if (!rn || typeof rn.postMessage !== 'function') return;
+      var post = rn.postMessage.bind(rn);
+      var TERM = ["SEARCH_RESULT","ADD_RESULT","SEARCH_AND_ADD_RESULT","WORKER_RESULT","LOGIN_STATUS","CART_COUNT"];
+      H = W.__mealioSelHealth = { targets: [] };
+      rn.postMessage = function(s) {
+        post(s);
+        try {
+          var m = JSON.parse(s);
+          if (!m || TERM.indexOf(m.type) < 0) return;
+          var sel = {};
+          for (var i = 0; i < H.targets.length; i++) {
+            var key = H.targets[i][0];
+            var branches = H.targets[i][1];
+            var v = -1;
+            for (var b = 0; b < branches.length; b++) {
+              try {
+                if (document.querySelector(branches[b])) { v = b; break; }
+              } catch (e) { v = -2; break; }
+            }
+            sel[key] = v;
+          }
+          post(JSON.stringify({ type: 'SELECTOR_HEALTH', sel: sel }));
+        } catch (e) {}
+      };
+    }
+    H.targets = T;
+  } catch (e) {}
+})();
+(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   var term = "sour cream";
   var ATC_SEL = "button[aria-label^=\\"Add 1 \\"]";
@@ -641,7 +746,42 @@ exports[`ALDI generated WebView scripts (bundled config) buildSearchScript 1`] =
 `;
 
 exports[`ALDI generated WebView scripts (bundled config) buildWorkerScript 1`] = `
-"var WORKER_ID = 3;
+"(function(){
+  try {
+    var W = window;
+    var T = [["atc",["button[aria-label^=\\"Add 1 \\"]"]],["cardLink",["a[href*=\\"/store/aldi/products/\\"]"]]];
+    var H = W.__mealioSelHealth;
+    if (!H) {
+      var rn = W.ReactNativeWebView;
+      if (!rn || typeof rn.postMessage !== 'function') return;
+      var post = rn.postMessage.bind(rn);
+      var TERM = ["SEARCH_RESULT","ADD_RESULT","SEARCH_AND_ADD_RESULT","WORKER_RESULT","LOGIN_STATUS","CART_COUNT"];
+      H = W.__mealioSelHealth = { targets: [] };
+      rn.postMessage = function(s) {
+        post(s);
+        try {
+          var m = JSON.parse(s);
+          if (!m || TERM.indexOf(m.type) < 0) return;
+          var sel = {};
+          for (var i = 0; i < H.targets.length; i++) {
+            var key = H.targets[i][0];
+            var branches = H.targets[i][1];
+            var v = -1;
+            for (var b = 0; b < branches.length; b++) {
+              try {
+                if (document.querySelector(branches[b])) { v = b; break; }
+              } catch (e) { v = -2; break; }
+            }
+            sel[key] = v;
+          }
+          post(JSON.stringify({ type: 'SELECTOR_HEALTH', sel: sel }));
+        } catch (e) {}
+      };
+    }
+    H.targets = T;
+  } catch (e) {}
+})();
+var WORKER_ID = 3;
 (function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function dbg(obj) {
@@ -749,7 +889,42 @@ true;
 `;
 
 exports[`ALDI generated WebView scripts (bundled config) checkLoginScript 1`] = `
-"(async function() {
+"(function(){
+  try {
+    var W = window;
+    var T = [["menu",["[role=\\"dialog\\"][aria-label=\\"Main Menu\\"]"]],["hamburger",["[data-testid=\\"hamburger-coachmark-button\\"]","button[aria-label=\\"Main Menu\\"]"]]];
+    var H = W.__mealioSelHealth;
+    if (!H) {
+      var rn = W.ReactNativeWebView;
+      if (!rn || typeof rn.postMessage !== 'function') return;
+      var post = rn.postMessage.bind(rn);
+      var TERM = ["SEARCH_RESULT","ADD_RESULT","SEARCH_AND_ADD_RESULT","WORKER_RESULT","LOGIN_STATUS","CART_COUNT"];
+      H = W.__mealioSelHealth = { targets: [] };
+      rn.postMessage = function(s) {
+        post(s);
+        try {
+          var m = JSON.parse(s);
+          if (!m || TERM.indexOf(m.type) < 0) return;
+          var sel = {};
+          for (var i = 0; i < H.targets.length; i++) {
+            var key = H.targets[i][0];
+            var branches = H.targets[i][1];
+            var v = -1;
+            for (var b = 0; b < branches.length; b++) {
+              try {
+                if (document.querySelector(branches[b])) { v = b; break; }
+              } catch (e) { v = -2; break; }
+            }
+            sel[key] = v;
+          }
+          post(JSON.stringify({ type: 'SELECTOR_HEALTH', sel: sel }));
+        } catch (e) {}
+      };
+    }
+    H.targets = T;
+  } catch (e) {}
+})();
+(async function() {
   if (window.__aldiLoginCheckActive) return;
   window.__aldiLoginCheckActive = true;
   try {
@@ -872,7 +1047,42 @@ exports[`ALDI generated WebView scripts (bundled config) checkLoginScript 1`] = 
 `;
 
 exports[`ALDI generated WebView scripts (bundled config) extractProductsScript 1`] = `
-"(async function() {
+"(function(){
+  try {
+    var W = window;
+    var T = [["atc",["button[aria-label^=\\"Add 1 \\"]"]],["qtyBubble",["button[aria-label^=\\"Quantity:\\"]"]],["cardLink",["a[href*=\\"/store/aldi/products/\\"]"]]];
+    var H = W.__mealioSelHealth;
+    if (!H) {
+      var rn = W.ReactNativeWebView;
+      if (!rn || typeof rn.postMessage !== 'function') return;
+      var post = rn.postMessage.bind(rn);
+      var TERM = ["SEARCH_RESULT","ADD_RESULT","SEARCH_AND_ADD_RESULT","WORKER_RESULT","LOGIN_STATUS","CART_COUNT"];
+      H = W.__mealioSelHealth = { targets: [] };
+      rn.postMessage = function(s) {
+        post(s);
+        try {
+          var m = JSON.parse(s);
+          if (!m || TERM.indexOf(m.type) < 0) return;
+          var sel = {};
+          for (var i = 0; i < H.targets.length; i++) {
+            var key = H.targets[i][0];
+            var branches = H.targets[i][1];
+            var v = -1;
+            for (var b = 0; b < branches.length; b++) {
+              try {
+                if (document.querySelector(branches[b])) { v = b; break; }
+              } catch (e) { v = -2; break; }
+            }
+            sel[key] = v;
+          }
+          post(JSON.stringify({ type: 'SELECTOR_HEALTH', sel: sel }));
+        } catch (e) {}
+      };
+    }
+    H.targets = T;
+  } catch (e) {}
+})();
+(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
   function __noKbd(e) {

@@ -18,6 +18,14 @@
 // Regenerate deliberately, never reflexively: `npx jest aldiGeneratedScripts -u`
 // and read the diff. A changed snapshot means the code injected into a real
 // user's WebView changed.
+//
+// Every snapshot below now opens with MEAL-31's selector-health prefix — the
+// `(function(){ ... __mealioSelHealth ... })();` block. It is not ALDI logic and
+// not part of the adapter: it is prepended to every store script by
+// getStoreScripts, it hooks postMessage to sample the selectors the script that
+// follows will query, and the store's own script begins on the line after it,
+// unchanged. The snapshot covers it on purpose — a change to what the probe
+// injects is a change to what runs on a phone, and this is the file that says so.
 
 import { getStoreScripts } from '../../../src/lib/webview-scripts';
 import { __resetAutomationConfigForTests } from '../../../src/lib/automation-config';
