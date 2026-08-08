@@ -52,6 +52,17 @@ describe('product-matching harness', () => {
         expect(now().pairRecall).toBeCloseTo(was.pairRecall ?? NaN, 6);
       });
 
+      it(`choose-flow ranking matches the baseline. ${REGENERATE}`, () => {
+        expect(now().chooseRankedPrecision).toBeCloseTo(was.chooseRankedPrecision ?? NaN, 6);
+      });
+
+      // Not a match-the-baseline check: this is the claim the whole of MEAL-28
+      // rests on. Ranking must never leave the user staring at a worse first
+      // row than the store's own order would have given them.
+      it('ranking is never worse than the store order it replaced', () => {
+        expect(now().chooseRankedNumerator).toBeGreaterThanOrEqual(now().chooseStoreOrderNumerator);
+      });
+
       it('abstains on every query where no product is acceptable', () => {
         // A false auto-add on an unanswerable query is the worst failure mode
         // the harness can see: the cart gets something nobody asked for. This

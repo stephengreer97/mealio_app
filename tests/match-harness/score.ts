@@ -45,6 +45,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 
+import { rankChoiceCandidates } from '../../src/lib/chooseRanking';
 import { scoreMatch } from '../../src/lib/webview-scripts/_scoring';
 
 const DIR = path.resolve(__dirname);
@@ -141,6 +142,20 @@ export interface StoreMetrics {
   abstainDenominator: number;
   pairPrecision: number | null;
   pairRecall: number | null;
+  /**
+   * Choose-product flow (MEAL-28). Denominator is EVERY answerable query, not
+   * just the ones the matcher scored: the choose list always has a first row
+   * and something is always sitting under the default selection, so a query we
+   * rank nowhere is a miss rather than an abstention. That makes these numbers
+   * stricter than precisionAt1 above and NOT comparable to it.
+   */
+  chooseDenominator: number;
+  /** First row is acceptable, in the store's own order — the pre-MEAL-28 behaviour. */
+  chooseStoreOrderNumerator: number;
+  chooseStoreOrderPrecision: number | null;
+  /** First row is acceptable under rankChoiceCandidates — what ships. */
+  chooseRankedNumerator: number;
+  chooseRankedPrecision: number | null;
 }
 
 export interface QueryDetail {
@@ -196,6 +211,9 @@ export function evaluate(): Report {
     acceptableMatchRate: 0, acceptableMatchNumerator: 0,
     abstainCorrect: null, abstainDenominator: 0,
     pairPrecision: null, pairRecall: null,
+    chooseDenominator: 0,
+    chooseStoreOrderNumerator: 0, chooseStoreOrderPrecision: null,
+    chooseRankedNumerator: 0, chooseRankedPrecision: null,
     tp: 0, fp: 0, fn: 0,
   });
   const acc: Record<string, ReturnType<typeof blank>> = {};
@@ -256,6 +274,11 @@ export function evaluate(): Report {
 
       if (answerable) {
         a.answerableQueries++;
+        // Choose flow: what sits in the first row, before and after ranking.
+        a.chooseDenominator++;
+        if (acceptable.has(q.products[0])) a.chooseStoreOrderNumerator++;
+        const rankedTop = rankChoiceCandidates(q.query, q.products.map((productName) => ({ productName })))[0];
+        if (rankedTop && acceptable.has(rankedTop.productName)) a.chooseRankedNumerator++;
         if (top.score > 0) {
           a.precisionAt1Denominator++;
           if (acceptable.has(top.name)) a.precisionAt1Numerator++;
@@ -275,6 +298,8 @@ export function evaluate(): Report {
     a.acceptableMatchRate = a.answerableQueries ? a.acceptableMatchNumerator / a.answerableQueries : 0;
     a.pairPrecision = a.tp + a.fp ? a.tp / (a.tp + a.fp) : null;
     a.pairRecall = a.tp + a.fn ? a.tp / (a.tp + a.fn) : null;
+    a.chooseStoreOrderPrecision = a.chooseDenominator ? a.chooseStoreOrderNumerator / a.chooseDenominator : null;
+    a.chooseRankedPrecision = a.chooseDenominator ? a.chooseRankedNumerator / a.chooseDenominator : null;
     if (a.abstainDenominator === 0) a.abstainCorrect = null;
     const { tp, fp, fn, ...rest } = a;
     return rest;
@@ -283,7 +308,8 @@ export function evaluate(): Report {
   for (const [store, a] of Object.entries(acc)) {
     for (const k of ['queries', 'answerableQueries', 'unanswerableQueries', 'pairs', 'acceptablePairs',
       'precisionAt1Numerator', 'precisionAt1Denominator', 'acceptableMatchNumerator',
-      'abstainDenominator', 'tp', 'fp', 'fn'] as const) {
+      'abstainDenominator', 'chooseDenominator', 'chooseStoreOrderNumerator',
+      'chooseRankedNumerator', 'tp', 'fp', 'fn'] as const) {
       (overall as any)[k] += (a as any)[k];
     }
     overall.abstainCorrect = (overall.abstainCorrect ?? 0) + (a.abstainCorrect ?? 0);
@@ -334,6 +360,25 @@ function print(report: Report) {
       '    pair columns are _scoring.ts measured on ALDI pages — ALDI ranks nothing.',
     );
   }
+
+  console.log(
+    '\nChoose-product flow (MEAL-28) — is the FIRST row the user sees acceptable?\n' +
+    'Denominator is every answerable query, so a query we rank nowhere counts as a\n' +
+    'miss. Stricter than P@1 above, and not comparable to it.\n',
+  );
+  const chead = 'store            store order      ranked';
+  console.log(chead);
+  console.log('-'.repeat(chead.length));
+  const crow = (name: string, m: StoreMetrics) => {
+    console.log(
+      name.padEnd(15) +
+      pct(m.chooseStoreOrderPrecision) + ' ' + frac(m.chooseStoreOrderNumerator, m.chooseDenominator).padEnd(7) +
+      pct(m.chooseRankedPrecision) + ' ' + frac(m.chooseRankedNumerator, m.chooseDenominator),
+    );
+  };
+  for (const [store, m] of Object.entries(report.stores)) crow(store, m);
+  console.log('-'.repeat(chead.length));
+  crow('ALL', report.overall);
 
   console.log('\nPer query (top-ranked product, ties broken by store result order):\n');
   for (const d of report.details) {

@@ -17,7 +17,12 @@
       "abstainCorrect": null,
       "abstainDenominator": 0,
       "pairPrecision": 0.2620689655172414,
-      "pairRecall": 0.8444444444444444
+      "pairRecall": 0.8444444444444444,
+      "chooseDenominator": 6,
+      "chooseStoreOrderNumerator": 5,
+      "chooseStoreOrderPrecision": 0.8333333333333334,
+      "chooseRankedNumerator": 5,
+      "chooseRankedPrecision": 0.8333333333333334
     },
     "walmart": {
       "usesSharedScorer": true,
@@ -34,7 +39,12 @@
       "abstainCorrect": null,
       "abstainDenominator": 0,
       "pairPrecision": 0.49206349206349204,
-      "pairRecall": 0.96875
+      "pairRecall": 0.96875,
+      "chooseDenominator": 3,
+      "chooseStoreOrderNumerator": 1,
+      "chooseStoreOrderPrecision": 0.3333333333333333,
+      "chooseRankedNumerator": 3,
+      "chooseRankedPrecision": 1
     },
     "albertsons": {
       "usesSharedScorer": true,
@@ -51,7 +61,12 @@
       "abstainCorrect": 1,
       "abstainDenominator": 1,
       "pairPrecision": 0.5208333333333334,
-      "pairRecall": 0.9615384615384616
+      "pairRecall": 0.9615384615384616,
+      "chooseDenominator": 2,
+      "chooseStoreOrderNumerator": 0,
+      "chooseStoreOrderPrecision": 0,
+      "chooseRankedNumerator": 2,
+      "chooseRankedPrecision": 1
     },
     "aldi": {
       "usesSharedScorer": false,
@@ -68,7 +83,12 @@
       "abstainCorrect": null,
       "abstainDenominator": 0,
       "pairPrecision": 0.8,
-      "pairRecall": 0.9230769230769231
+      "pairRecall": 0.9230769230769231,
+      "chooseDenominator": 2,
+      "chooseStoreOrderNumerator": 1,
+      "chooseStoreOrderPrecision": 0.5,
+      "chooseRankedNumerator": 2,
+      "chooseRankedPrecision": 1
     },
     "amazon-fresh": {
       "usesSharedScorer": true,
@@ -85,7 +105,12 @@
       "abstainCorrect": 1,
       "abstainDenominator": 1,
       "pairPrecision": 0.5666666666666667,
-      "pairRecall": 1
+      "pairRecall": 1,
+      "chooseDenominator": 2,
+      "chooseStoreOrderNumerator": 2,
+      "chooseStoreOrderPrecision": 1,
+      "chooseRankedNumerator": 2,
+      "chooseRankedPrecision": 1
     },
     "wegmans": {
       "usesSharedScorer": true,
@@ -102,7 +127,12 @@
       "abstainCorrect": 1,
       "abstainDenominator": 1,
       "pairPrecision": 0.36363636363636365,
-      "pairRecall": 1
+      "pairRecall": 1,
+      "chooseDenominator": 2,
+      "chooseStoreOrderNumerator": 1,
+      "chooseStoreOrderPrecision": 0.5,
+      "chooseRankedNumerator": 2,
+      "chooseRankedPrecision": 1
     }
   },
   "overall": {
@@ -119,6 +149,11 @@
     "abstainCorrect": 3,
     "abstainDenominator": 3,
     "pairPrecision": 0.40705128205128205,
-    "pairRecall": 0.927007299270073
+    "pairRecall": 0.927007299270073,
+    "chooseDenominator": 17,
+    "chooseStoreOrderNumerator": 10,
+    "chooseStoreOrderPrecision": 0.5882352941176471,
+    "chooseRankedNumerator": 16,
+    "chooseRankedPrecision": 0.9411764705882353
   }
 }

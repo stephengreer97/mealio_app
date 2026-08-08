@@ -2,7 +2,8 @@
 
 Measures whether `src/lib/webview-scripts/_scoring.ts` picks a product the
 shopper would accept, per store, so a scoring change can be shown to help or
-hurt instead of argued about.
+hurt instead of argued about. Since MEAL-28 it also measures the ordering the
+choose-product flow shows the user — see [Choose-product ranking](#choose-product-ranking-meal-28).
 
 ```bash
 npm run match-harness            # the report
@@ -231,6 +232,79 @@ Ranking changes are caught; threshold and veto changes are not. Closing that
 needs queries carrying the attributes the veto exists for — "organic milk",
 "boneless skinless chicken thighs", "unsalted butter", "large eggs" — which is
 another argument for the extra capture sessions above.
+
+## Choose-product ranking (MEAL-28)
+
+The metrics above describe `_scoring.ts`. The **choose-flow** columns describe
+what a user actually sees, and they are the only place a scoring change is
+visible at all — the add gate is exact-name equality, so `scoreMatch`
+improvements below 100 cannot change a cart.
+
+Before MEAL-28 the choose flow passed the store's candidate list straight to the
+UI in the store's own order (`WebViewCartSheet.tsx`, the `else` branch of
+`isChooseFlow`). Our scorer was never consulted, so the first row — and with it
+the default selection — was whatever the store ranked first, paid placement
+included.
+
+```
+store            store order      ranked
+----------------------------------------
+heb              83.3% 5/6      83.3% 5/6
+walmart          33.3% 1/3     100.0% 3/3
+albertsons        0.0% 0/2     100.0% 2/2
+aldi             50.0% 1/2     100.0% 2/2
+amazon-fresh    100.0% 2/2     100.0% 2/2
+wegmans          50.0% 1/2     100.0% 2/2
+----------------------------------------
+ALL              58.8% 10/17    94.1% 16/17
+```
+
+**Read the denominator carefully.** It is every *answerable* query, not just the
+ones the matcher scored, because the choose list always has a first row: a query
+we rank nowhere is a miss, not an abstention. That makes these numbers stricter
+than, and not comparable to, `precision@1` above.
+
+Most of the movement — 10/17 → 15/17 — is from ranking by the **existing**
+`scoreMatch` at all. `_scoring.ts` is unchanged by MEAL-28, and every column in
+the first table is byte-identical to the pre-MEAL-28 baseline. That is the point:
+the win was never a better scorer, it was consulting the scorer we already had.
+
+The remaining step, 15/17 → 16/17, is the unrequested-word tiebreak in
+`src/lib/chooseRanking.ts`. `scoreOne` computes `|query ∩ candidate| / |query|` —
+how much of the *query* the product covers — and never looks the other way, so
+every word of the product name the query did not ask for is free. That is why
+"sour cream" ties at 99 across the dairy, the ranch dip and the onion chips. The
+tiebreak supplies the missing direction.
+
+### What was tried and rejected
+
+Measured the same way, on the same 17 queries. Recorded so the next person does
+not pay for them again.
+
+| Candidate from the ticket | Verdict |
+| --- | --- |
+| Rank the choose flow by `scoreMatch` | **Kept.** 10/17 → 15/17. |
+| Unrequested-word tiebreak | **Kept.** 15/17 → 16/17. Insensitive to the weight: −1, −2 and −5 give an identical ranking over the whole corpus. |
+| Unrequested-word penalty applied across *all* candidates, not just recognised ones | **Rejected.** 15/17. Reordering the score-0 tier demotes the right answer on heb's "chicken thighs for fajitas", where every product scores 0 and the store's own order is correct. Hence the two-tier sort. |
+| Category / prepared-food penalty (`dip`, `chips`, `spread`, `sauce`, …) | **Rejected.** 15/17 — no movement, and it is whack-a-mole: penalising *dip* and *chips* promoted "Sour Cream & Onion **Kettle**" and "**Crema** Salvadorena" instead. The tail of sour-cream-flavoured things is unbounded, so each word added promotes the next word not on the list. |
+| `CRITICAL_WORDS` veto applied in reverse (penalise a critical word in the *candidate* the query did not ask for) | **Rejected, and it actively hurts.** 13/17 alone, 15/17 combined with the tiebreak. The set contains words that are *good* in a candidate: "whole" (whole-milk yogurt is the acceptable one), "large"/"jumbo" (large Hass avocado is acceptable). |
+| Unit / quantity awareness ("2 lbs chicken thighs" prefers a ~2 lb pack) | **Not built — unmeasurable here.** No query in the corpus carries a quantity. Building it would be exactly the unfalsifiable tinkering the ticket forbids. Note the data *is* available in the component (`SearchResult.unit` / `.measure`); what is missing is corpus queries to validate against, which needs capture sessions, not code. |
+| Pack-count parsing ("12 ct", "6-pack") | **Not built — unmeasurable here.** Same reason: no corpus query names a pack count. |
+| Deprioritise sponsored placements | **Not buildable.** No candidate carries a sponsored flag. The extractors *discard* the signal: `walmart.ts` skips `sba-container`, `heb.ts` keeps only `data-qe-id="productCard"` tiles (which excludes the sponsored rail), and `amazon-fresh.ts` strips the `"Sponsored Ad - "` prefix off the name in 15 places. The corpus is product names only, so even if the flag were plumbed through, nothing here could score it. |
+| Share weight normalisation with `weightDisplay.ts` | **Nothing to share.** `weightDisplay.ts` does not parse product names. It converts an ingredient's `purchaseWeight` / `weightStep` into a "0.75 lb" label for the stepper UI. It and `_scoring.ts` have no overlapping concern, so there is no disagreement to unify. |
+
+### The one remaining miss
+
+heb's "yogurt" — 3 products in a trimmed fixture, all scoring 99, where the
+acceptable one (`H-E-B 17g Protein Whole Milk Greek Yogurt - Plain`) has the
+*longest* name and the unacceptable one (`Fage Total 0% Nonfat Plain Greek
+Yogurt`) the shortest. No length-based measure can fix it; it needs the rubric's
+rule 5 (an unrequested attribute that changes how the food eats), which means
+knowing "nonfat" and "low-fat" are disqualifying while "whole" and "organic" are
+not. The reverse-`CRITICAL_WORDS` attempt above was that idea, and it lost. It
+also exposed a **tokenisation defect worth fixing on its own**: `CRITICAL_WORDS`
+contains `lowfat` as one token, but "Low-Fat" normalizes to `low` + `fat`, so the
+existing veto never fires on any product written that way.
 
 ## Labelling
 
