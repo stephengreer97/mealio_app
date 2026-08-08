@@ -69,10 +69,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * one added should not have to know this rule exists.
    *
    * The teardown runs BEFORE setUser, in the same order logout does it, and for
-   * the same reason: the instant `user` becomes B, B's session starts — the
-   * creator check, the RevenueCat identify, every screen keyed on `user?.id`.
-   * Clearing after that point would be clearing B's fresh state instead of A's
-   * stale state.
+   * the same reason: the instant React COMMITS B, B's session starts — the
+   * creator check, the RevenueCat identify, every screen keyed on `user?.id` —
+   * and a clear that has not happened by then is clearing B's fresh state
+   * instead of A's stale state.
+   *
+   * The commit, not this call, is the line that matters, and it is worth being
+   * exact about which one is pinned. Moving the clear SYNCHRONOUSLY below
+   * `setUser` changes nothing observable: React batches, so neither has
+   * committed yet, and no test can tell the two apart (measured). What is real
+   * is the deferred form — a clear that lands a tick later, after the commit —
+   * and that is what account-switch-boundary.test.tsx, "clears A's state before
+   * B is installed, not after B has started writing", catches.
    *
    * Keyed on the id, never on the object: a token renewal or a profile refresh
    * hands down a new User object for the SAME person, and tearing their session

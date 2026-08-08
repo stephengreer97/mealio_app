@@ -689,10 +689,15 @@ describe('signing in from signed out', () => {
   });
 
   it('still tears down on a plain sign-out, and not on the sign-in after it', async () => {
-    // The MEAL-142 boundary, re-pinned here because generalising the guard is the
-    // obvious place to break it: recording the new id only after an early return
-    // would make the B sign-in that follows a sign-out look like A → B and tear
-    // down B's own fresh session.
+    // The MEAL-142 boundary, still holding after the guard was generalised.
+    //
+    // What this does NOT pin, despite reading like it: `useSessionEnd` recording
+    // the new id only after an early return. That mutant passes here (measured),
+    // because the consumers' teardowns do not touch the log buffer — the clear
+    // is AuthContext.beginSession's, under its own separate guard, and after a
+    // logout `userRef.current` is null so nothing clears whatever the hook
+    // decides. The sequencing is pinned by useSessionEnd.test.tsx, "stays silent
+    // on the sign-in that follows a sign-out", which watches the hook directly.
     const utils = await renderApp();
     await signInAsA(utils);
     console.log(A_CART_LINE);
