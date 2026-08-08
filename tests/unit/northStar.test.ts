@@ -291,8 +291,15 @@ describe('the run_summary detail a finished run ships', () => {
     // no longer carries, which is the exact failure MEAL-123 fixed once already (as
     // a nested Record the sanitizer discarded).
     //
-    // If this fails after you added a field: the fix is not to loosen the
-    // assertion. Either raise MAX_DETAIL_KEYS deliberately, or drop a field.
+    // If this fails after you ADDED a field: the fix is not to loosen the assertion.
+    // Either raise MAX_DETAIL_KEYS deliberately, or drop a field. If it fails
+    // because you REMOVED one, the count is what needs updating — but removing a
+    // field is a schema change too, so update the header block in north-star.ts and
+    // tell the dashboard before you do.
+    //
+    // The exact count carries weight the round-trip below cannot: toEqual treats an
+    // undefined-valued key as equal to an absent one, so an 11th fact that happens
+    // to be undefined here would spend no key slot and slip past it.
     const detail = runSummaryFailureDetail(facts, 'waf_block', 'confirm_failed:3,waf_block:1');
 
     expect(Object.keys(detail)).toHaveLength(MAX_DETAIL_KEYS);

@@ -105,6 +105,12 @@
 //        confirmedSource  'cart_reconcile' | 'worker_reports' | 'none'
 //        weightRequested  of `requested`, how many are presence-confirmed
 //        skippedInReview  lines the user skipped (INSIDE `requested` — see above)
+//        keptInReview     lines where the user answered an in-cart-by-weight
+//                         question with "what I have is enough". Counted apart from
+//                         skips (which pass over an item nobody has) and from
+//                         itemsAdded (Mealio added nothing for these). Whether it
+//                         belongs in the denominator is still open — see the
+//                         checklist item on the item-success rate.
 //        failureCodes     every code this run recorded, counted, most frequent
 //                         first: "confirm_failed:3,waf_block:1". A STRING, not an
 //                         object — sanitizeDetail drops nested values. Present only
@@ -294,9 +300,11 @@ export function correctConfirmedFromCart(input: {
 }
 
 /**
- * The facts a finished run reports on its own `run_summary` row — every field of
- * the detail JSON documented in the header, except the two that describe how the
- * row's failure code was chosen.
+ * The facts a finished run reports on its own `run_summary` row: every field of the
+ * detail JSON documented in the header block above, except `codeSource` and
+ * `failureCodes`, which describe how the row's failure code was chosen rather than
+ * what the run did. Keep the two lists in step — a fact here and not up there is a
+ * field the dashboard receives and has no definition for.
  *
  * A named type rather than an inline literal because the row sits at exactly
  * sanitizeDetail's key cap. Adding a field here is a schema change with a
@@ -332,7 +340,7 @@ export function runSummaryDetail(facts: RunSummaryFacts): Record<string, unknown
  * second way to lose it is still open: with these two fields the detail is at
  * MAX_DETAIL_KEYS exactly, the cap truncates in Object.entries order, and
  * `failureCodes` is last. So the next field added to RunSummaryFacts would drop the
- * tally again, the same way, with nothing to say it happened.
+ * tally again, the same way, and nothing in a running app would report it.
  *
  * Assembling it in one place lets a test hold the cap instead of a comment asking
  * the next reader to.
