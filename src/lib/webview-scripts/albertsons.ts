@@ -25,7 +25,7 @@
 //   Add to cart button: button[aria-label^="Add 1 unit of"]
 //   Collapsed bubble:   button[data-qa="qty-stppr-bbl"]
 //   Increment button:   button[data-qa="prdctincrmntr"]
-//   Cart URL fallback:  /shop/cart.html
+//   Cart URL:           /erums/cart  (ALBERTSONS_CART_PATH)
 
 import type { StoreScripts } from './index';
 import { buildExtractWorker } from './worker-search';
@@ -1697,7 +1697,17 @@ export function getScripts(storeId: string): StoreScripts {
   return {
     storeUrl: storeOrigin,
     loginUrl: storeOrigin,
-    cartUrl: `${storeOrigin}/shop/cart.html`,
+    // MEAL-151: was `/shop/cart.html`, which 404s on all 15 banners — verified
+    // across the family, including albertsons.com itself. This is not a dead
+    // constant: `cartUrl` has exactly one consumer, the Linking.openURL that opens
+    // the user's cart in the real app (WebViewCartSheet), so every tap of that
+    // button landed on a 404 page.
+    //
+    // ALBERTSONS_CART_PATH rather than another literal, because it is the same
+    // path the cart-count probe already navigates to and MEAL-136 already proved
+    // uniform across the family. Two copies of a path is how one of them goes
+    // stale without the other noticing.
+    cartUrl: `${storeOrigin}${ALBERTSONS_CART_PATH}`,
     domain: domain,
     isSearchUrl: (url: string) => url.includes(domain) && url.includes('/shop/search-results.html'),
     // Albertsons login is a popup on the same page — login success is detected via
