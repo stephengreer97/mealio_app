@@ -152,6 +152,76 @@ describe('SELECTOR_HEALTH on the cart bridge', () => {
   });
 });
 
+// ── The parallel pools' own bridges ─────────────────────────────────────────
+
+describe('SELECTOR_HEALTH from a pool worker', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  // Each pool's worker WebView has its OWN onMessage handler, and each swallows
+  // what it does not recognise, so a handler missing the branch loses every
+  // sample from that pool in silence. On the four stores these pools serve —
+  // HEB, Walmart, Amazon Fresh, Albertsons — that is the MAIN path, so the loss
+  // would be most of the data while the main WebView kept reporting enough to
+  // look healthy.
+  const walmartSheet = (ingredient: Record<string, unknown>) => (
+    <WebViewCartSheet
+      visible
+      meals={[{ id: 'm1', name: 'Tacos', ingredients: [ingredient] }]}
+      storeId="walmart"
+      storeName="Walmart"
+      onClose={() => {}}
+    />
+  );
+
+  /** Render, sign in, and return the worker WebView the pool spun up. */
+  async function poolWorker(view: ReturnType<typeof render>) {
+    const webviews = () => view.getAllByTestId('mock-webview');
+    act(() => {
+      webviews()[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }) },
+      });
+    });
+    // The pool is dispatched off the store page load, and the sheet's own
+    // timers sit between the two. Nudge both until a worker tile exists rather
+    // than pinning an exact schedule this test has no stake in.
+    for (let i = 0; i < 4 && webviews().length < 2; i++) {
+      await act(async () => { jest.advanceTimersByTime(5_000); });
+      if (webviews().length > 1) break;
+      await act(async () => {
+        webviews()[0].props.onLoadEnd({ nativeEvent: { url: 'https://www.walmart.com/grocery' } });
+      });
+    }
+    expect(webviews().length).toBeGreaterThan(1);
+    return webviews()[1];
+  }
+
+  it('reaches the tally from a parallel SEARCH worker', async () => {
+    // An ingredient with no searchTerm auto-starts the choose flow, which is
+    // what puts the search pool on screen.
+    const view = render(walmartSheet({ ingredientName: 'Sour Cream', productQty: 1, qty: 1, unit: 'qty', measure: null }));
+    const worker = await poolWorker(view);
+    act(() => {
+      worker.props.onMessage({
+        nativeEvent: { data: JSON.stringify({ type: SELECTOR_HEALTH_MESSAGE, sel: { card: 1 } }) },
+      });
+    });
+    expect(ingested()).toEqual([{ card: 1 }]);
+  });
+
+  it('reaches the tally from a parallel ADD worker', async () => {
+    const view = render(walmartSheet({ ingredientName: 'Sour Cream', searchTerm: 'sour cream', productQty: 1, qty: 1, unit: 'qty', measure: null }));
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    const worker = await poolWorker(view);
+    act(() => {
+      worker.props.onMessage({
+        nativeEvent: { data: JSON.stringify({ type: SELECTOR_HEALTH_MESSAGE, sel: { addBtn: 0 } }) },
+      });
+    });
+    expect(ingested()).toEqual([{ addBtn: 0 }]);
+  });
+});
+
 // ── A whole run, from bridge message to uploaded row ────────────────────────
 
 describe('a finished run uploads its selector health', () => {
