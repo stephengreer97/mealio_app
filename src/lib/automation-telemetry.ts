@@ -500,12 +500,25 @@ export interface PoolAddOutcome {
  * serial retry re-detects the wall and calls surfaceBlocker, and calling it from
  * the handler would forward-reference it. That restraint is about the USER-FACING
  * escalation only; it never had a telemetry reason. Recording the row here
- * surfaces nothing, touches no UI, and is what makes a wall visible at all on
- * these four stores. Note it lands `waf_block` on the run's code tally TWICE for
- * one item — once from this row and once from the confirm row that follows it,
- * whose reason is also 'blocked'. Both rows genuinely failed for that reason, so
- * they are both counted rather than one being suppressed; a reader wanting items
- * rather than rows counts distinct itemIndex on the blocked rows.
+ * surfaces nothing and touches no UI.
+ *
+ * What it adds is attribution, not existence. surfaceBlocker records a `blocked`
+ * row of its own, so a wall was never invisible: a blocked item claims no cart
+ * row, becomes a shortfall, lands in the reconcile's retry set, and the serial
+ * fused retry re-detects the nudge and records it. But that row is RUN-LEVEL —
+ * one per run, no itemIndex, and only after a second page load on a store that
+ * has just refused us. This row is per-item and immediate, so a funnel can say
+ * which items the wall took and how many, without waiting for the re-detect.
+ *
+ * It does land `waf_block` on the run's code tally twice for one item — once
+ * here and once on the confirm row that follows, whose reason is also 'blocked'.
+ * Both rows genuinely failed for that reason, so both are counted rather than one
+ * being suppressed. Concretely, once PR #83 lands: its failureCodeSummary() reads
+ * the same failureCounts map into `run_summary.failureCodes`, so a single blocked
+ * item reads there as `waf_block:2`, and run_summary carries no itemIndex to
+ * de-duplicate against. Only the tally distorts — #83 ranks the run's PRIMARY
+ * code by severity, not by count, so the headline code is immune. A reader
+ * wanting items rather than rows counts distinct itemIndex on the blocked rows.
  *
  * Never throws. The pools call this from a worker message handler and from a
  * timer, and telemetry must never disturb an add — record() already swallows its

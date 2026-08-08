@@ -1339,10 +1339,12 @@ export default function WebViewCartSheet({
         // serial SEARCH_AND_ADD_RESULT handler calls surfaceBlocker). Handling it
         // here would forward-reference surfaceBlocker (defined later) → TDZ.
         //
-        // That is about the USER-FACING escalation only. MEAL-122: the funnel row
-        // for a blocked worker is emitted from the pool's onSettled seam (see
-        // recordPoolAdd), which surfaces nothing and has no TDZ problem — so a
-        // wall is now visible in telemetry without changing what the user sees.
+        // That is about the USER-FACING escalation only. MEAL-122: a PER-ITEM
+        // funnel row for a blocked worker is emitted from the pool's onSettled
+        // seam (see recordPoolAdd), which surfaces nothing and has no TDZ
+        // problem. surfaceBlocker's own row still fires on the re-detect — that
+        // one is run-level and arrives a page load later, so this attributes the
+        // wall to items rather than making it visible for the first time.
         if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
         addPool.reportResult(workerId, {
           success: !!msg.success, productName: msg.productName ?? null,

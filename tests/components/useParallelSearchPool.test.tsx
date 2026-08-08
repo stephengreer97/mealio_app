@@ -462,8 +462,8 @@ describe('useParallelSearchPool — end-to-end funnel through a real recorder', 
   it('gives every item a coded, item-attributed funnel row the server can see', async () => {
     const { rows, tel } = await run();
     try {
-      // Before MEAL-122 this whole batch was empty: three items, three outcomes,
-      // no rows at all.
+      // Before MEAL-122 the parallel pass emitted none of these: three items,
+      // three outcomes, no per-item rows at all.
       expect(rows.map((r) => [r.step, r.outcome, r.code, r.itemIndex])).toEqual([
         ['add_click', 'ok', undefined, 0],
         ['confirm', 'ok', undefined, 0],
@@ -483,7 +483,10 @@ describe('useParallelSearchPool — end-to-end funnel through a real recorder', 
       });
       // Confirm-rate denominator: one add_click per item, no more and no fewer.
       expect(rows.filter((r) => r.step === 'add_click')).toHaveLength(3);
-      // And the run's headline code is now the wall rather than nothing at all.
+      // And the run's headline code is the wall, attributed to the item it took.
+      // (A wall was not previously invisible — surfaceBlocker records a run-level
+      // `blocked` row on the reconcile's re-detect. What was missing is which
+      // item, and how many.)
       // NOTE for whoever merges PR #83 (fix/meal-123-dominant-severity): that
       // branch renames dominantFailureCode() to primaryFailureCode(). This line
       // is the rename's only reach into MEAL-122, and it is not a git conflict —
