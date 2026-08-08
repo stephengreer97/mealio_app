@@ -161,6 +161,94 @@ describe('ALDI regression: stepper already open', () => {
   );
 });
 
+/*
+ * THE OUT-OF-STOCK REASON, BOTH HALVES OF IT (MEAL-121).
+ *
+ * `hasExactOos` decides whether a failed add is reported to the user as
+ * "out of stock" or as "we could not be sure" — one of the three things this
+ * store must never get wrong, because the first is a claim about their cart and
+ * the shelf, and it is false if the product it names is not the one they asked
+ * for. That is exactly what the old code did: it called the flag hasExactOos
+ * while testing the same 30-out-of-100 score as the add gate.
+ *
+ * Neither captured search page has a disabled Add button — both were taken on a
+ * fully stocked day, so `aria-disabled="true"` appears zero times in each — which
+ * means `hasExactOos` is false on the raw fixtures whatever it tests, and no
+ * assertion on them could tell `isExactMatch(name) && outOfStock` apart from a
+ * bare `outOfStock`. Only the generated-script snapshot noticed the change, and a
+ * snapshot notices text, not behaviour.
+ *
+ * So these two disable the Add button on one real tile — the same
+ * `runner.page.evaluate` trick the login tests above use to turn the captured
+ * Main Menu into a signed-out one — and then differ only in the search term. One
+ * term names that tile exactly and must be reported out of stock; the other
+ * merely resembles it and must not be. Together they pin both halves of the
+ * condition: drop either and one of them fails.
+ */
+describe('ALDI regression: out_of_stock is claimed only for an exact match', () => {
+  itWithFixture(
+    'search-results-product-in-cart.html',
+    'reports out_of_stock when the exactly-named product is the disabled tile',
+    async (runner) => {
+      await runner.page.evaluate(() => {
+        const btn = document.querySelector('button[aria-label="Add 1 ct Friendly Farms Sour Cream"]')!;
+        btn.setAttribute('aria-disabled', 'true');
+      });
+
+      const script = scripts.buildSearchAndAddScript('Friendly Farms Sour Cream', 1, null);
+      await runner.inject(script);
+      const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 30_000);
+
+      // The term names this tile exactly, the tile cannot be added, and nothing
+      // else on the page is named that — so "out of stock" is the true statement.
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('out_of_stock');
+
+      // And it is the tile we meant: if the fixture's aria-label moves, the
+      // evaluate above disables nothing and this catches it rather than passing
+      // for the wrong reason.
+      const oos: string[] = result.candidates
+        .filter((c: { outOfStock: boolean }) => c.outOfStock)
+        .map((c: { productName: string }) => c.productName);
+      expect(oos).toEqual(['Friendly Farms Sour Cream']);
+    },
+    { testTimeoutMs: 45_000 },
+  );
+
+  itWithFixture(
+    'search-results-product-in-cart.html',
+    'reports low_confidence when the disabled tile only resembles the term',
+    async (runner) => {
+      await runner.page.evaluate(() => {
+        const btn = document.querySelector('button[aria-label="Add 1 ct Friendly Farms Sour Cream"]')!;
+        btn.setAttribute('aria-disabled', 'true');
+      });
+
+      // Same page, same disabled tile, generic term. "Sour Cream" is not the name
+      // of anything here, so there is no exact match in stock OR out of it, and
+      // the honest answer is that we are not sure — not that the shelf is empty.
+      // Telling the user "out of stock" here would be a false statement about a
+      // product they never named.
+      const script = scripts.buildSearchAndAddScript('Sour Cream', 1, null);
+      await runner.inject(script);
+      const result = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 30_000);
+
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('low_confidence');
+
+      // The out-of-stock tile really was among the candidates considered — this is
+      // what makes the assertion above load-bearing rather than vacuous.
+      expect(
+        result.candidates.some(
+          (c: { productName: string; outOfStock: boolean }) =>
+            c.productName === 'Friendly Farms Sour Cream' && c.outOfStock,
+        ),
+      ).toBe(true);
+    },
+    { testTimeoutMs: 45_000 },
+  );
+});
+
 describe('ALDI cart side-panel snapshot', () => {
   itWithFixture(
     'cart-with-items.html',

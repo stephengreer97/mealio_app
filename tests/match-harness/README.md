@@ -31,13 +31,13 @@ here comes from the fixtures that were already committed; nothing is invented.
 
 | Store | Queries | Pairs | Acceptable | ≥200? |
 | --- | --- | --- | --- | --- |
-| heb | 6 | 182 | 59 | no |
+| heb | 6 | 182 | 45 | no |
 | walmart | 3 | 85 | 32 | no |
 | albertsons | 3 | 74 | 26 | no |
 | amazon-fresh | 3 | 61 | 17 | no |
 | aldi | 2 | 38 | 13 | no |
 | wegmans | 3 | 29 | 4 | no |
-| **total** | **20** | **469** | **151** | — |
+| **total** | **20** | **469** | **137** | — |
 
 The ceiling is the number of distinct searches that were ever captured, not the
 number of tiles. Each store has 2–6 real search-result pages, several of which
@@ -84,28 +84,43 @@ Note the small denominators on the per-query metrics: with 2–6 queries per
 store, precision@1 moves in steps of 20–50 percentage points. Treat the
 pair-level numbers as the sensitive ones and precision@1 as a coarse alarm.
 
-## Baseline (recorded 2026-08-05, `_scoring.ts` unchanged)
+## Baseline (recorded 2026-08-08, `_scoring.ts` unchanged)
 
 ```
 store           queries  pairs   P@1          accept-match   abstain-ok   pair-P   pair-R
 heb                6     182  100.0% 5/5      0.0% 0/6      n/a         26.2%   84.4%
 walmart            3      85   66.7% 2/3     33.3% 1/3      n/a         49.2%   96.9%
 albertsons         3      74   50.0% 1/2      0.0% 0/2      1/1         52.1%   96.2%
-aldi *             2      38  100.0% 2/2    100.0% 2/2      n/a         80.0%   92.3%
+aldi *             2      38  100.0% 2/2      0.0% 0/2      n/a         80.0%   92.3%
 amazon-fresh       3      61  100.0% 2/2      0.0% 0/2      1/1         56.7%  100.0%
 wegmans            3      29  100.0% 2/2    100.0% 2/2      1/1         36.4%  100.0%
-ALL               20     469   87.5% 14/16   29.4% 5/17     3/3         40.7%   92.7%
+ALL               20     469   87.5% 14/16   17.6% 3/17     3/3         40.7%   92.7%
 ```
+
+Re-recorded for MEAL-121, which did not touch `_scoring.ts`: ALDI's auto-add
+threshold in `score.ts` was 30, describing a fuzzy gate ALDI no longer has, and is
+now 100 like everything else. Only ALDI's accept-match moved — `100.0% 2/2` →
+`0.0% 0/2`, and with it `ALL` from `29.4% 5/17` to `17.6% 3/17`. Both of ALDI's
+queries are generic ingredients ("sour cream", "tortillas") that no product is
+named exactly, so ALDI now sends them to review, which is what the store actually
+does. Every other cell is unchanged, including all of P@1, pair-P and pair-R: the
+threshold is not an input to those.
 
 ### Three things the headline numbers do not say
 
 **`abstain-ok 3/3` passes for the wrong reason.** Two of the three unanswerable
 queries score **99** at the top — amazon-fresh "seasonal" leads with Flonase
 nasal spray, wegmans "seasonal" with a Kentucky Bourbon Seasonal Ale. They
-abstain only because the auto-add gate is `=== 100`, not because the scorer
-recognised there was nothing to buy. Relax that gate to `>= 90` — the exact
+abstain only because the auto-add gate is exact-name equality, not because the
+scorer recognised there was nothing to buy. Relax that gate to `>= 90` — the exact
 change argued for below — and abstain-ok drops to 1/3. **A gate change and a
 ranking change therefore have to land together**, and the harness will say so.
+
+This is also the argument MEAL-121 acted on from the other end. ALDI's gate *was*
+relaxed, to 30 out of 100, without a ranking change — and its two queries do not
+appear in abstain-ok, because both have an acceptable product, so the harness
+scored them as hits and said nothing about the brand it was choosing on the user's
+behalf. What the number could not see, the store did.
 
 **precision@1 excludes total misses from its denominator.** heb's "HEB season
 chicken thighs for fajitas" is answerable (2 of 19 products are acceptable) but
@@ -113,12 +128,13 @@ scores 0 on everything, so it leaves the denominator entirely: 16, not 17. Read
 the other way — counting a query with an acceptable answer that we ranked
 nowhere as a miss — the headline 87.5% is **82.4%**.
 
-**Five of six stores have no ranking step at all.** heb, walmart, wegmans and
-amazon-fresh take the *first* card scoring exactly 100; albertsons requires
-`>= 100` from its own local scorer. Only aldi runs a max-score loop. So P@1 here
-measures a ranker that no shipped store code actually contains — it describes
-what `_scoring.ts` *would* do if a store ranked, which is the thing to fix, but
-it is not a measurement of today's behaviour.
+**No store has a ranking step at all.** heb, walmart, wegmans and amazon-fresh
+take the *first* card scoring exactly 100; albertsons requires `>= 100` from its
+own local scorer; aldi takes the first card whose normalized name equals the term.
+aldi's max-score loop was the last one, and MEAL-121 removed it. So P@1 here
+measures a ranker that no shipped store code contains — it describes what
+`_scoring.ts` *would* do if a store ranked, which is the thing to fix, but it is
+not a measurement of today's behaviour.
 
 What the baseline says:
 
@@ -130,40 +146,55 @@ What the baseline says:
    every word of the query appears in both.
 
 2. **The auto-add gate is exact-name equality, so ranking barely reaches the
-   cart.** Only 5 of 17 answerable queries end with an acceptable product added.
-   Four of those five are queries that were already a full product name (the
-   search-and-add flow re-finding a product the user picked earlier). For an
-   ingredient like "sour cream" no product is ever named exactly that, so the
-   score tops out at 99 and every store except ALDI sends the item to manual
-   review. Improving the ranking will not change the cart at all until that gate
-   changes.
+   cart.** Only 3 of 17 answerable queries end with an acceptable product added,
+   and all three are queries that were already a full product name (the
+   search-and-add flow re-finding a product the user picked earlier): walmart's
+   butterball turkey breast and wegmans' two. For an ingredient like "sour cream"
+   no product is ever named exactly that, so the score tops out at 99 and every
+   store sends the item to manual review. Improving the ranking will not change
+   the cart at all until that gate changes.
 
-3. **Pair precision is low (45%) against high recall (93%).** The 70%
+   It was 5 of 17 before MEAL-121, and the two extra were ALDI's — an
+   ingredient-shaped query being answered with a brand at 30 points out of 100.
+   That is not a capability the number should have been crediting.
+
+3. **Pair precision is low (41%) against high recall (93%).** The 70%
    word-overlap floor lets nearly everything related through — for "sour cream"
    that includes the chips, the dips and the crema — and then leans on the exact
    match to sort it out. That is the shape of a matcher tuned for recall.
 
-4. **`_scoring.ts` no longer describes what ALDI runs.** The header comment says
-   the store copies must stay byte-identical; `aldi.ts` has its own `scoreOne` —
-   a 0.3 overlap floor, −5 per extra candidate word, and a ±15 critical-word
-   penalty instead of a hard veto, plus a `COMMON` stopword set with no
-   counterpart in `_scoring.ts`. Its row is `_scoring.ts` measured on ALDI's
-   pages, not ALDI's live match quality — hence the asterisk.
+4. **`_scoring.ts` still does not describe the scorer ALDI carries — but that
+   scorer no longer decides anything.** The header comment says the store copies
+   must stay byte-identical; `instacart.ts` has its own `scoreOne` — a 0.3 overlap
+   floor, −5 per extra candidate word, and a ±15 critical-word penalty instead of
+   a hard veto, plus a `COMMON` stopword set with no counterpart in `_scoring.ts`.
+
+   As of MEAL-121 nothing calls it. ALDI's add gate is `isExactMatch`, an equality
+   test over the same two normalizations, which accepts exactly the strings
+   `scoreMatch(...) === 100` accepts — so the accept-match and abstain columns are
+   live-accurate. The asterisk now marks the *ranking* columns only: P@1 and the
+   pair numbers are `_scoring.ts` measured on ALDI's pages, and ALDI ranks nothing.
 
    Over all 469 pairs the two disagree on 427 (lower on 377, higher on 50):
-   ALDI is *stricter* on long product names, because the per-word penalty
+   ALDI's copy is *stricter* on long product names, because the per-word penalty
    dominates, but *more permissive* at the match-at-all gate. On ALDI's own 38
-   pairs `_scoring` accepts 15 and `aldi` accepts 18. On both ALDI queries the
-   top pick is the same product either way, so this is a consistency defect
-   rather than a live outage.
+   pairs `_scoring` accepts 15 and ALDI's copy accepts 18. On both ALDI queries the
+   top pick is the same product either way. That was a consistency defect rather
+   than a live outage even while the scorer was wired up, and it is now dead-code
+   trivia: none of those 427 disagreements can reach a cart.
 
-   **Its parameter order is a signature difference, not a bug — and that makes
-   the obvious fix dangerous.** `aldi`'s `scoreOne(nf, nt)` reads its *second*
-   parameter as the query, so the call site `scoreMatch(name, SEARCH_TERM)`
-   produces the same orientation as `_scoring`'s `scoreMatch(query, candidate)`.
-   Dropping in the shared `scoreOne` without also flipping that call site to
-   `scoreMatch(SEARCH_TERM, name)` would silently invert the comparison and make
-   ALDI worse than it is today.
+   **Its parameter order is a signature difference, not a bug — and it is the trap
+   waiting for whoever reconciles them.** ALDI's `scoreOne(nf, nt)` reads its
+   *second* parameter as the query, so the call site it had until MEAL-121,
+   `scoreMatch(name, SEARCH_TERM)`, produced the same orientation as `_scoring`'s
+   `scoreMatch(query, candidate)`. Dropping in the shared `scoreOne` without
+   writing any future call site as `scoreMatch(SEARCH_TERM, name)` would silently
+   invert the comparison, and it would still return plausible numbers.
+
+   Deleting ALDI's copy outright breaks nothing here — the harness imports
+   `_scoring.ts` and never runs it. What it does touch is
+   `tests/unit/webview-scripts/__snapshots__/aldiGeneratedScripts.test.ts.snap`, which pins the
+   emitted script text, and these paragraphs.
 
    The other five stores' `scoreOne`/`scoreMatch` copies are byte-identical to
    each other and agree with `_scoring.ts` on all 469 pairs. Note that this is a
@@ -173,7 +204,9 @@ What the baseline says:
 
 ## What the corpus can and cannot see
 
-Checked by mutating `_scoring.ts` and re-running:
+Checked by mutating `_scoring.ts` and re-running. The floor and veto rows were
+re-measured on 2026-08-08 (MEAL-121); the extra-word row was not, so read its
+figures as of when they were taken.
 
 | Change to `_scoring.ts` | Harness reaction |
 | --- | --- |
@@ -183,11 +216,12 @@ Checked by mutating `_scoring.ts` and re-running:
 
 The last two are a real blind spot, not a bug in the harness, and it is wider
 than "0.9 happens not to bind". The overlap distribution is **strictly bimodal**:
-309 pairs sit at exactly `p = 1.0`, 157 sit below 0.7, and **nothing at all sits
-in between**. So *every* floor in `(0.7, 1.0]` is unobservable here — this corpus
-cannot tell today's fuzzy matcher apart from one that demands every query word.
-Loosening the floor IS caught (0.7 → 0.5 moves pair-P 45.2 → 40.4); tightening it
-is not, at any value.
+312 pairs sit at exactly `p = 1.0`, 157 sit below 0.7, and **nothing at all sits
+in between** — 312 + 157 is the whole corpus. So *every* floor in `(0.7, 1.0]` is
+unobservable here, under either normalization: this corpus cannot tell today's
+fuzzy matcher apart from one that demands every query word. Loosening the floor IS
+caught (0.7 → 0.5 moves overall pair-P 40.7% → 36.6%, pair-R 92.7% → 96.4%);
+tightening it is not, at any value.
 
 The veto is structurally unreachable rather than merely untested: it fires on 9
 of 469 pairs, all of which already score 0 on overlap, and the only two queries

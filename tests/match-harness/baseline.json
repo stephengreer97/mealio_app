@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-08-05",
+  "recordedAt": "2026-08-08",
   "note": "Baseline for MEAL-27. Regenerate with `npm run match-harness -- --write-baseline` ONLY alongside an intentional scoring change, and state the before/after in the PR.",
   "stores": {
     "heb": {
@@ -63,8 +63,8 @@
       "precisionAt1": 1,
       "precisionAt1Numerator": 2,
       "precisionAt1Denominator": 2,
-      "acceptableMatchRate": 1,
-      "acceptableMatchNumerator": 2,
+      "acceptableMatchRate": 0,
+      "acceptableMatchNumerator": 0,
       "abstainCorrect": null,
       "abstainDenominator": 0,
       "pairPrecision": 0.8,
@@ -114,8 +114,8 @@
     "precisionAt1": 0.875,
     "precisionAt1Numerator": 14,
     "precisionAt1Denominator": 16,
-    "acceptableMatchRate": 0.29411764705882354,
-    "acceptableMatchNumerator": 5,
+    "acceptableMatchRate": 0.17647058823529413,
+    "acceptableMatchNumerator": 3,
     "abstainCorrect": 3,
     "abstainDenominator": 3,
     "pairPrecision": 0.40705128205128205,
