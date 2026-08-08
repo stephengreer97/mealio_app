@@ -30,7 +30,7 @@ const src = fs.readFileSync(
 );
 
 /**
- * `src` with every comment blanked out, using TypeScript's own scanner.
+ * `src` with every comment blanked out, using TypeScript's own parser.
  *
  * These assertions distinguish a flag the engine READS from one it merely
  * mentions, and this file mentions all of them in prose — the note beside each
@@ -44,7 +44,7 @@ const src = fs.readFileSync(
  * truncated. Each fix was correct and each left the next hole, because the thing
  * being written was a JavaScript lexer one case at a time.
  *
- * `ts.createScanner` is the lexer, already a dependency, and it knows what a
+ * `ts.createSourceFile` is the parser, already a dependency, and it knows what a
  * comment is — including JSX comments, template literals, regex literals and
  * escapes. Comments are replaced with equivalent-length whitespace rather than
  * deleted, so every offset in `code` still lines up with `src` and the windows
@@ -65,7 +65,8 @@ function stripComments(source: string): string {
   const collect = (node: ts.Node) => {
     if (
       ts.isStringLiteralLike(node) || ts.isRegularExpressionLiteral(node) ||
-      ts.isTemplateLiteral(node) || ts.isJsxText(node)
+      ts.isTemplateHead(node) || ts.isTemplateMiddle(node) ||
+      ts.isTemplateTail(node) || ts.isJsxText(node)
     ) literal.push([node.getStart(sf), node.getEnd()]);
     node.forEachChild(collect);
   };
@@ -94,13 +95,44 @@ function stripComments(source: string): string {
 
 const code = stripComments(src);
 
+/** The same file, parsed. `readsFlag` walks this instead of matching text. */
+const sourceFile = ts.createSourceFile(
+  'WebViewCartSheet.tsx', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX,
+);
+
 /** Does the engine actually read `flags.<key>` off the config snapshot? */
 function readsFlag(key: string): boolean {
-  // Anchored to the two legal read forms, and \b-terminated. Neither detail is
-  // decoration: a bare `.${key}` search reports `parallelAdd` as read because
-  // `cfgFlags.parallelAddWorkers` — a DIFFERENT key, wired years earlier —
-  // contains it as a prefix. That false positive was live until a mutant found it.
-  return new RegExp(`\\bcfgFlags(?:Ref\\.current)?\\.${key}\\b`).test(code);
+  // An AST walk, not a text match, and that difference is the whole point.
+  //
+  // This guard has now had four rounds of review find four ways to fool a text
+  // oracle: a trailing `//`, a `/* */`, a multi-line block whose interior lines
+  // carry no marker, and a comment inside a template substitution. Each fix was
+  // right and each left another member of the family — and the family does not
+  // end at comments. A plain string works too:
+  //
+  //   const _doc = 'if (!FEATURE_PRESEARCH_ADD || !cfgFlags.presearchAdd) return;';
+  //
+  // No amount of comment-stripping reaches that, because the oracle reads text
+  // and a string is text it must keep. Stripping strings as well would only move
+  // the target to identifiers and dead branches.
+  //
+  // A property access is not any of those things. `cfgFlags.presearchAdd` inside
+  // a comment, a string or a template substitution is not a
+  // PropertyAccessExpression, so all of those classes disappear at once rather
+  // than one per round. It also keeps the prefix precision the regex needed the
+  // `\b` for: the node's name is `parallelAdd` or it is `parallelAddWorkers`,
+  // and there is no such thing as a partial match.
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isPropertyAccessExpression(node) && node.name.text === key) {
+      const base = node.expression.getText(sourceFile);
+      if (base === 'cfgFlags' || base === 'cfgFlagsRef.current') { found = true; return; }
+    }
+    node.forEachChild(visit);
+  };
+  visit(sourceFile);
+  return found;
 }
 
 /**
@@ -221,7 +253,7 @@ describe('the engine reads the flags it validates', () => {
     // is true: every downstream branch (commit arming, beginSearchFlow, the
     // tiles) is conditioned on presearchStartedRef. A second arming site would
     // route around the flag, so the claim is pinned rather than trusted.
-    const arms = code.match(/presearchStartedRef\.current = true;/g) ?? [];
+    const arms = code.match(/presearchStartedRef\.current\s*=\s*true/g) ?? [];
     expect(arms.length).toBe(1);
   });
 
@@ -268,6 +300,12 @@ describe('the engine reads the flags it validates', () => {
     // docs/store-fingerprint-profiles.md calls load-bearing, and it passed all
     // ten tests. `base` has to appear on both sides of the arithmetic.
     expect(body).toMatch(/jitter\s*=\s*base\s*\+\s*Math\.floor\(Math\.random\(\)\s*\*\s*base\)/);
+    // And that the value is USED. Computing it and then passing the constant to
+    // setTimeout leaves every other assertion here green while both the config
+    // read and the randomisation stop reaching the wire — a mutant found exactly
+    // that. Asserting a value is derived says nothing about whether anything
+    // consumes it.
+    expect(body).toMatch(/,\s*jitter\s*\);/);
     // Reading the config and then doing the arithmetic on the build constant
     // anyway is the mutation a `toContain` alone cannot see: the config read
     // would still be right there in the source. So the constant must appear
