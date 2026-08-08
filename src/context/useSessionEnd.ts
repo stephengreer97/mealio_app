@@ -25,19 +25,20 @@ import { useAuth } from './AuthContext';
  * WHAT THIS DOES NOT CLOSE, because the name invites the wrong assumption. This
  * closes the DIAGNOSTIC leak chain across the account boundary — the ring
  * buffer, the recorded cart run, the cart engine, the prewarm cache and the
- * ingredient-save queue. The account boundary itself is still open in two ways
- * that are filed separately and are not addressed here:
+ * ingredient-save queue. Two neighbours are filed separately:
  *
- *   • MEAL-154 — the previous account's CONTENT stays on screen. Nothing
- *     unmounts on a hand-over (MainTabs is rendered while `user` is truthy) and
- *     MyMealsScreen reloads only on focus, so B can be looking at A's saved
- *     meals. DiscoverScreen has the same shape. That is a bigger hole than this
- *     one: it is directly visible and needs no bug report to surface it.
+ *   • MEAL-154 — the previous account's CONTENT staying on screen. Closed since,
+ *     and NOT by this hook: RootNavigator keys the tab tree on the account id
+ *     (`<MainTabs key={user.id} />`), so a hand-over remounts every screen under
+ *     it and each refetches for the new account. That covers what a screen holds
+ *     in its own state; it does not cover state living above the key, nor work
+ *     already in flight from a screen that has since been unmounted, which is
+ *     what the consumers here are for. Both are needed.
  *   • MEAL-155 — `loginWithToken` writes the new token to SecureStore BEFORE
  *     validating it, and lib/api reads the token per request. A transient
  *     verify failure therefore leaves `user` as A in React state while every
  *     request authenticates as B, which bypasses this mechanism entirely
- *     because `beginSession` never runs.
+ *     because `beginSession` never runs. Still open.
  *
  * What this deliberately does NOT fire on:
  *

@@ -104,26 +104,33 @@ export default function MyMealsScreen() {
   //     `if (user)`, so `user` going null REMOVES the screen rather than
   //     re-rendering it signed-out, and the cleanup is the half that runs
   //     (probed under MEAL-142 — only the cleanup ran).
-  //   • ANOTHER ACCOUNT TAKING OVER does not. B arriving through the
-  //     verification deep link keeps `user` truthy, so MainTabs is not swapped
-  //     and this screen is not unmounted; the cleanup never runs and the queue
-  //     survives into B's session, where every save is a 401 or a 404 for a meal
-  //     that is not B's, and each failure names one of A's products in B's
-  //     buffer. `useSessionEnd` is the half that catches that — and, being keyed
-  //     on the user id rather than on the object, it does NOT fire for a token
-  //     renewal or a profile refresh, which would silently drop a live user's
-  //     own saves.
+  //   • ANOTHER ACCOUNT TAKING OVER did not, when MEAL-146 was written. B
+  //     arriving through the verification deep link keeps `user` truthy, so
+  //     MainTabs was reconciled rather than swapped and this screen was never
+  //     unmounted; the cleanup never ran and the queue survived into B's
+  //     session, where every save is a 401 or a 404 for a meal that is not B's,
+  //     and each failure names one of A's products in B's buffer.
+  //     `useSessionEnd` is the half that catches that — and, being keyed on the
+  //     user id rather than on the object, it does NOT fire for a token renewal
+  //     or a profile refresh, which would silently drop a live user's own saves.
+  //
+  // MEAL-154 has since keyed MainTabs on the account id, so a hand-over does
+  // remount this screen. That does not make the hook redundant and the epoch is
+  // still the thing a save is compared against: a PATCH already in flight comes
+  // back to a closure that outlives the unmount, and one navigator option is all
+  // it takes for a future hand-over to reach a still-mounted instance again.
   //
   // A COUNTER, NOT A FLAG, and that distinction is the whole of MEAL-146's
   // second review. A boolean "saves are abandoned" was safe only while the
   // premise above was "the screen is unmounted either way": every session got a
-  // fresh instance, so nothing had to un-set it. Removing that premise turns the
-  // same flag into a one-way latch on a screen that outlives the session which
-  // set it — B chooses a product, the latch A left behind drops the PATCH before
-  // it is sent, and the guard in the catch swallows the line that would have
-  // said so. Silent, total data loss on Choose Products for the whole of B's
-  // session, since MainTabs has no `unmountOnBlur`. Measured on the first
-  // version of this fix: `meals.update` called 0 times for B, expected 1.
+  // fresh instance, so nothing had to un-set it. Resting on that premise is what
+  // turns the same flag into a one-way latch the moment a session outlives the
+  // instance that set it — B chooses a product, the latch A left behind drops
+  // the PATCH before it is sent, and the guard in the catch swallows the line
+  // that would have said so. Silent, total data loss on Choose Products for the
+  // whole of B's session. Measured on the first version of this fix:
+  // `meals.update` called 0 times for B, expected 1. The remount would mask that
+  // today, which is exactly why the guard must not depend on it.
   //
   // So the question a queued save asks is not "have saves been abandoned?" but
   // "is the session that queued me still the one running?". Each choice captures

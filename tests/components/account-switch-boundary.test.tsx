@@ -554,10 +554,11 @@ describe('B takes the phone over through the verification link', () => {
     // The teardown has to end A's session, not disable the feature. This is the
     // "too eager" direction, and it is the direction the first version of this
     // fix got wrong on MyMealsScreen: a guard set at the hand-over stayed set,
-    // on a provider that — like this one — is never unmounted by an account
-    // switch. Nothing here latches (the flag this provider sets is cleared by
-    // its own clear-again effect as soon as the job is null), and this is what
-    // says so.
+    // on something an account switch did not unmount. MEAL-154 has since keyed
+    // the tab tree on the account, so that screen is remounted now — but this
+    // provider sits ABOVE the navigator and is not, so the hazard is undiminished
+    // here. Nothing latches (the flag this provider sets is cleared by its own
+    // clear-again effect as soon as the job is null), and this is what says so.
     const utils = await renderApp();
     await signInAsA(utils);
     await startCart(utils);
