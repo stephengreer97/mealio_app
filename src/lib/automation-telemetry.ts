@@ -469,10 +469,12 @@ export interface PoolAddOutcome {
  * both halves for the subset it retries (`path: 'fused'`), and since the
  * reconcile exists BECAUSE shortfalls are common, a failing run on these stores
  * routinely did emit add/confirm rows. What it could not emit was a row for an
- * item the top-up never retried — anything the cart said had landed, and anything
- * routed to review rather than retry. So the funnel's add half was a biased
- * sample of the run: the items that failed twice, and never the ones that failed
- * once. That is the shape that reads clean and is not.
+ * item the top-up never retried — anything the cart said had landed, and the
+ * definite failures (out_of_stock, no_results) that route to review instead of
+ * retry. So the funnel's add half was a biased sample: only items that failed at
+ * least once in the parallel pass, never the ones that worked. A confirm rate
+ * computed over it is a rate among items already known to have gone wrong once,
+ * which is not the number anyone thinks they are reading.
  *
  * Rows emitted, when an add WAS dispatched, in this order:
  *   add_click  ok       always — this is the confirm-rate DENOMINATOR
