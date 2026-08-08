@@ -496,7 +496,7 @@ describe('AutomationTelemetry dispose', () => {
 // detail payload can be "passed" by a call site and still never reach the
 // server. Only the uploaded rows prove what a dashboard would be able to group on.
 describe('recordPoolAddOutcome', () => {
-  const base = { path: 'parallel_add' as const, workerId: 2, itemIndex: 4 };
+  const base = { path: 'parallel_add' as const, workerId: 2, itemIndex: 4, addDispatched: true };
 
   /** Record one outcome on a real recorder and return the rows the server saw. */
   async function upload(out: Parameters<typeof recordPoolAddOutcome>[1]): Promise<StepRecord[]> {
@@ -569,6 +569,35 @@ describe('recordPoolAddOutcome', () => {
     expect(rows[1].detail).toEqual({ reason: 'blocked', path: 'parallel_add', workerId: 2 });
   });
 
+  it('does NOT count an item whose add was never dispatched as an attempt', async () => {
+    // The pre-search park timeout: the tap came before the results page did, so
+    // onInjectAdd never ran and no add script reached that page. Counting it as
+    // an add_click put an item nobody tried to add into the confirm-rate
+    // denominator — a number people divide by.
+    const rows = await upload({
+      ...base, addDispatched: false, success: false, reason: 'timeout', timedOut: true,
+    });
+    expect(rows.map((r) => [r.step, r.outcome, r.code])).toEqual([
+      ['search', 'timeout', 'timeout'],
+    ]);
+    expect(rows.map((r) => r.step)).not.toContain('add_click');
+    expect(rows.map((r) => r.step)).not.toContain('confirm');
+    // Still attributable: it is a visible item in the funnel, just not an attempt.
+    expect(rows[0].itemIndex).toBe(4);
+    expect(rows[0].detail).toEqual({ reason: 'timeout', path: 'parallel_add', workerId: 2 });
+  });
+
+  it('reports an undispatched item that failed rather than timed out on its reason', async () => {
+    // No producer today — the only undispatched settle is a timeout. Kept so a
+    // future one is coded rather than silently dropped.
+    const rows = await upload({
+      ...base, addDispatched: false, success: false, reason: 'no_results', timedOut: false,
+    });
+    expect(rows.map((r) => [r.step, r.outcome, r.code])).toEqual([
+      ['search', 'error', 'no_candidates'],
+    ]);
+  });
+
   it('tags the pool that produced each row', async () => {
     const rows = await upload({ ...base, path: 'presearch', success: true, timedOut: false });
     expect(rows.every((r) => (r.detail as Record<string, unknown>).path === 'presearch')).toBe(true);
@@ -578,8 +607,8 @@ describe('recordPoolAddOutcome', () => {
     const up = okUpload();
     const t = make({ upload: up.fn });
     // Two workers settling back to back, as they do under a real pool.
-    recordPoolAddOutcome(t, { path: 'parallel_add', workerId: 0, itemIndex: 0, success: false, reason: 'blocked', timedOut: false });
-    recordPoolAddOutcome(t, { path: 'parallel_add', workerId: 1, itemIndex: 1, success: true, timedOut: false });
+    recordPoolAddOutcome(t, { path: 'parallel_add', workerId: 0, itemIndex: 0, success: false, reason: 'blocked', timedOut: false, addDispatched: true });
+    recordPoolAddOutcome(t, { path: 'parallel_add', workerId: 1, itemIndex: 1, success: true, timedOut: false, addDispatched: true });
     await t.flush();
     expect(up.all.map((r) => r.seq)).toEqual([0, 1, 2, 3, 4]);
     expect(up.all.map((r) => r.itemIndex)).toEqual([0, 0, 0, 1, 1]);
@@ -594,7 +623,7 @@ describe('recordPoolAddOutcome', () => {
       enumerable: true, get() { throw new Error('detail exploded'); },
     }) as Record<string, unknown>;
     expect(() => recordPoolAddOutcome(t, {
-      path: 'presearch', workerId: 0, itemIndex: 0, success: true, timedOut: false, detail: hostile,
+      path: 'presearch', workerId: 0, itemIndex: 0, success: true, timedOut: false, addDispatched: true, detail: hostile,
     })).not.toThrow();
     await t.flush();
     // The add_click row precedes the throw and survives; the confirm row is lost.
@@ -605,7 +634,7 @@ describe('recordPoolAddOutcome', () => {
   it('is a no-op on a recorder that is not reporting', async () => {
     const up = okUpload();
     const t = track(new AutomationTelemetry({ runId: 'r', upload: up.fn, enabled: false }));
-    recordPoolAddOutcome(t, { path: 'presearch', workerId: 0, itemIndex: 0, success: false, reason: 'blocked', timedOut: false });
+    recordPoolAddOutcome(t, { path: 'presearch', workerId: 0, itemIndex: 0, success: false, reason: 'blocked', timedOut: false, addDispatched: true });
     await t.flush();
     expect(up.all).toEqual([]);
   });

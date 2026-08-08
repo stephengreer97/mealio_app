@@ -884,6 +884,7 @@ export default function WebViewCartSheet({
         success: !!info.result.success,
         reason: info.result.reason,
         timedOut: info.timedOut,
+        addDispatched: info.addDispatched,
         // MEAL-14's cart verdict, flattened — sanitizeDetail keeps scalars only.
         detail: confirmDetail(info.result.confirm),
       });

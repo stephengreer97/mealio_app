@@ -443,6 +443,10 @@ export interface PoolAddOutcome {
   reason?: string | null;
   /** True when no worker reported and the pool synthesized the result. */
   timedOut: boolean;
+  /** Whether an add was actually sent to the item's page. False means we never
+   *  got as far as trying — see PoolSettled.addDispatched for what each pool can
+   *  honestly say, and the `search` row below for what that item gets instead. */
+  addDispatched: boolean;
   /** Extra scalars for the confirm row (the caller's flattened cart verdict).
    *  Nested values are dropped downstream by sanitizeDetail. */
   detail?: Record<string, unknown>;
@@ -459,13 +463,29 @@ export interface PoolAddOutcome {
  * collapsed into a single reconcile code. Per-store funnels read clean for those
  * stores because they emitted no failure rows, not because they had no failures.
  *
- * Rows emitted, in this order:
+ * Rows emitted, when an add WAS dispatched, in this order:
  *   add_click  ok       always — this is the confirm-rate DENOMINATOR
  *   blocked    blocked  only when the reason is 'blocked' (see below)
  *   confirm    ok | timeout | error
  *
- * Both halves are emitted at SETTLE rather than add_click at dispatch, which is
- * how the sequential path does it. That is safe here for a reason specific to
+ * And when it was NOT (`addDispatched: false`), one row instead:
+ *   search     timeout | error
+ *
+ * That second case is the pre-search pool's park timeout: the user tapped
+ * add-to-cart while an item's results page was still loading, the pool stopped
+ * waiting, and onInjectAdd never ran — no add script ever touched that page. It
+ * emitted an `add_click` here until it didn't, which put an item nobody had tried
+ * to add into the denominator of the confirm rate. The denominator is a real
+ * number people divide by, so the item is reported for what it is: a `search`
+ * that never finished. It keeps its itemIndex and stays visible in the funnel; it
+ * just is not counted as an attempt.
+ *
+ * (The 'error' variant of that row has no producer today — the only undispatched
+ * settle is a timeout. It exists so that a future one is not silently dropped,
+ * the way STEP_FAILURE_CODES keeps `nav_failed` for a producer it does not have.)
+ *
+ * Both add halves are emitted at SETTLE rather than add_click at dispatch, which
+ * is how the sequential path does it. That is safe here for a reason specific to
  * the pools: every dispatched item settles exactly once — a real worker result,
  * or a result the pool synthesizes when its timeout fires — so no attempt can
  * vanish from the denominator by never being heard from. (The one item that
@@ -494,8 +514,27 @@ export interface PoolAddOutcome {
 export function recordPoolAddOutcome(tel: AutomationTelemetry, out: PoolAddOutcome): void {
   try {
     const base = { path: out.path, workerId: out.workerId };
-    // Emitted for a timed-out item as well: we dispatched the add, so it counts
-    // as an attempt whether or not we ever heard that a button was pressed.
+    if (!out.addDispatched) {
+      // Never reached its add — report the step it actually died on, and leave
+      // the add funnel alone. See the header for why this is not an add_click.
+      const why = String(out.reason ?? (out.timedOut ? 'timeout' : 'unknown'));
+      // Split rather than a ternary outcome: record()'s overloads require the
+      // code to be decided alongside the outcome, which is the point of them.
+      if (out.timedOut) {
+        tel.record('search', 'timeout', {
+          itemIndex: out.itemIndex, detail: { reason: why, ...base }, code: 'timeout',
+        });
+      } else {
+        tel.record('search', 'error', {
+          itemIndex: out.itemIndex, detail: { reason: why, ...base }, code: addFailureCode(why),
+        });
+      }
+      return;
+    }
+    // Emitted for a timed-out item as well: the add went to the page, so it
+    // counts as an attempt whether or not we ever heard that a button was
+    // pressed. On the parallel-add pool "went to the page" is the page load
+    // itself — see PoolSettled.addDispatched for why that is the honest read.
     tel.record('add_click', 'ok', { itemIndex: out.itemIndex, detail: { ...base } });
     if (out.success) {
       tel.record('confirm', 'ok', {

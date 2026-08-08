@@ -223,7 +223,7 @@ describe('usePresearchAddPool — onSettled', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
 
-  type Settled = { workerId: number; itemIndex: number; result: Result; timedOut: boolean };
+  type Settled = { workerId: number; itemIndex: number; result: Result; timedOut: boolean; addDispatched: boolean };
 
   function setupSettled(overrides: Partial<PresearchPoolOptions<Item, Result>> = {}) {
     const settled: Settled[] = [];
@@ -246,31 +246,35 @@ describe('usePresearchAddPool — onSettled', () => {
     act(() => hook.result.current.reportAdded(1, { success: true, product: 'Eggs' }));
     act(() => hook.result.current.reportAdded(0, { success: false, product: '' }));
     expect(settled).toEqual([
-      { workerId: 1, itemIndex: 1, result: { success: true, product: 'Eggs' }, timedOut: false },
-      { workerId: 0, itemIndex: 0, result: { success: false, product: '' }, timedOut: false },
+      { workerId: 1, itemIndex: 1, result: { success: true, product: 'Eggs' }, timedOut: false, addDispatched: true },
+      { workerId: 0, itemIndex: 0, result: { success: false, product: '' }, timedOut: false, addDispatched: true },
     ]);
   });
 
-  it('fires for an add that timed out, flagged as such', () => {
+  it('fires for an add that timed out, flagged as timed out AND dispatched', () => {
     const { hook, settled } = setupSettled({ addTimeoutMs: 1000 });
     act(() => hook.result.current.start(mk(['milk'])));
     act(() => hook.result.current.reportSearched(0));
     act(() => hook.result.current.commit(mk(['milk']), () => {}));
     act(() => jest.advanceTimersByTime(1001));
+    // The add WAS injected here — the page just never answered. Contrast with
+    // the park-timeout case below, which is the one that must not be counted.
     expect(settled).toEqual([
-      { workerId: 0, itemIndex: 0, result: { success: false, product: '' }, timedOut: true },
+      { workerId: 0, itemIndex: 0, result: { success: false, product: '' }, timedOut: true, addDispatched: true },
     ]);
   });
 
-  it('fires for an item still loading at the tap whose park then timed out', () => {
-    // The commit branch of the park timeout settles it as a miss; before this it
-    // reached the result map with no row anywhere.
-    const { hook, settled } = setupSettled({ searchTimeoutMs: 1000, addTimeoutMs: 9000 });
+  it('reports an item whose park timed out as NOT dispatched — no add ever reached it', () => {
+    // The tap came before this item's results page did, so injectAdd never ran.
+    // It still settles (the result map must be complete), but calling it an add
+    // attempt put an item nobody tried to add into the confirm-rate denominator.
+    const { hook, injected, settled } = setupSettled({ searchTimeoutMs: 1000, addTimeoutMs: 9000 });
     act(() => hook.result.current.start(mk(['milk'])));
     act(() => hook.result.current.commit(mk(['milk']), () => {}));
     act(() => jest.advanceTimersByTime(1001));
+    expect(injected).toEqual([]);   // the proof: no add script was ever injected
     expect(settled).toEqual([
-      { workerId: 0, itemIndex: 0, result: { success: false, product: '' }, timedOut: true },
+      { workerId: 0, itemIndex: 0, result: { success: false, product: '' }, timedOut: true, addDispatched: false },
     ]);
   });
 
@@ -282,7 +286,7 @@ describe('usePresearchAddPool — onSettled', () => {
     act(() => hook.result.current.commit([{ idx: 1, item: { name: 'eggs' } }], () => {}));
     act(() => hook.result.current.reportAdded(1, { success: true, product: 'Eggs' }));
     expect(settled).toEqual([
-      { workerId: 1, itemIndex: 1, result: { success: true, product: 'Eggs' }, timedOut: false },
+      { workerId: 1, itemIndex: 1, result: { success: true, product: 'Eggs' }, timedOut: false, addDispatched: true },
     ]);
   });
 
@@ -314,7 +318,7 @@ describe('usePresearchAddPool — onSettled', () => {
     act(() => hook.result.current.commit(mk(['milk', 'eggs', 'bread']), () => {}));
     act(() => hook.result.current.reportAdded(2, { success: false, product: '' }));
     expect(settled).toEqual([
-      { workerId: 2, itemIndex: 2, result: { success: false, product: '' }, timedOut: false },
+      { workerId: 2, itemIndex: 2, result: { success: false, product: '' }, timedOut: false, addDispatched: true },
     ]);
   });
 

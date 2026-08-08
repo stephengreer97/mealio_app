@@ -40,6 +40,27 @@ export interface PoolSettled<TResult> {
   result: TResult;
   /** True when no worker reported in time and `emptyResult()` was synthesized. */
   timedOut: boolean;
+  /**
+   * Whether an add was actually sent to the item's page before it settled.
+   *
+   * It separates "we tried to add this and it didn't land" from "we never got as
+   * far as trying", which is the difference between an item that belongs in the
+   * confirm-rate denominator and one that does not.
+   *
+   * The two pools know this to different depths, and the flag reports what each
+   * one can honestly say:
+   *
+   *   useParallelSearchPool — always true once an item is dispatched. The add
+   *     rides the page load (the worker's URL carries the payload and its script
+   *     fires search+add on load), so dispatch happens inside the page and the RN
+   *     side has no signal that separates "the page never loaded" from "it loaded
+   *     and never answered". Both arrive as silence. True is the same read the
+   *     sequential fused path takes for the same reason.
+   *   usePresearchAddPool — genuinely known. Injecting the add is an explicit
+   *     RN-side act (onInjectAdd), so a parked item whose page was still loading
+   *     when the run stopped waiting reports false, and it is not a guess.
+   */
+  addDispatched: boolean;
 }
 
 export interface ParallelPoolOptions<TItem, TResult> {
@@ -220,7 +241,7 @@ export function useParallelSearchPool<TItem, TResult>(
       setCompleted(resultsRef.current.size);
       workerBusyRef.current[workerId] = false;
       workerIdxRef.current[workerId] = -1;
-      notifySettled({ workerId, itemIndex: stuckIdx, result: synthesized, timedOut: true });
+      notifySettled({ workerId, itemIndex: stuckIdx, result: synthesized, timedOut: true, addDispatched: true });
       if (!tryFinish()) {
         dispatchToWorker(workerId);
       }
@@ -238,7 +259,7 @@ export function useParallelSearchPool<TItem, TResult>(
     setCompleted(resultsRef.current.size);
     workerBusyRef.current[workerId] = false;
     workerIdxRef.current[workerId] = -1;
-    notifySettled({ workerId, itemIndex: idx, result, timedOut: false });
+    notifySettled({ workerId, itemIndex: idx, result, timedOut: false, addDispatched: true });
     if (!tryFinish()) {
       dispatchToWorker(workerId);
     }

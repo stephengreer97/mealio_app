@@ -244,9 +244,19 @@ export function usePresearchAddPool<TItem, TResult>(
       if (assigned) {
         resultsRef.current.set(assigned.idx, result);
         setCompleted(resultsRef.current.size);
-        // Before freeSlot/dispatchNext, so an item's rows land while it is still
-        // the slot's item, and before tryFinish fires the run's terminal work.
-        notifySettled({ workerId, itemIndex: assigned.idx, result, timedOut });
+        // Before tryFinish, which is what fires the run's terminal work: every
+        // per-item row must precede the run's own. (Ordering against freeSlot is
+        // NOT load-bearing — `assigned` is a local, so freeing the slot first
+        // would read the same. Only the tryFinish edge is pinned by a test.)
+        //
+        // A park timeout settles a slot still in phase 'loading': the commit
+        // reached it before its results page did, so onInjectAdd never ran and no
+        // add script ever touched that page. Reporting it as dispatched put an
+        // item nobody tried to add into the confirm-rate denominator.
+        notifySettled({
+          workerId, itemIndex: assigned.idx, result, timedOut,
+          addDispatched: slotPhaseRef.current[workerId] === 'adding',
+        });
       }
       freeSlot(workerId);
       if (!tryFinish()) dispatchNext(workerId);
