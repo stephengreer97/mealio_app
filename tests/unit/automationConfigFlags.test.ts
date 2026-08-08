@@ -29,17 +29,48 @@ const src = fs.readFileSync(
 );
 
 /**
- * `src` with comment-only lines dropped.
+ * One line with any `//` comment removed, quote-aware.
  *
- * The coverage test below has to distinguish a flag the engine READS from one it
- * merely mentions, and this file mentions all of them in prose — the note beside
- * each gate names `flags.presearchAdd` in the very comment explaining it. Left
- * in, that prose satisfies the search and the test passes for a key nothing
- * consumes, which is precisely the defect it exists to catch.
+ * Quote-aware because this file is full of `https://` URLs and a naive
+ * `/\/\/.*$/` truncates every line carrying one. Tracking string state costs a
+ * dozen lines and is the difference between a filter that works and one that
+ * silently deletes code it was never meant to touch.
+ */
+function stripLineComment(line: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === '\\') { i++; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+    if (c === '/' && line[i + 1] === '/') return line.slice(0, i);
+  }
+  return line;
+}
+
+/**
+ * `src` with every comment removed — whole lines and trailing ones alike.
+ *
+ * These assertions have to distinguish a flag the engine READS from one it
+ * merely mentions, and this file mentions all of them in prose: the note beside
+ * each gate names `flags.presearchAdd` in the very comment explaining it.
+ *
+ * Dropping comment-ONLY lines is not enough, and the gap was live. A cold review
+ * demonstrated that replacing the gate with
+ *
+ *   if (!FEATURE_PRESEARCH_ADD) return; // gate removed; see cfgFlags.presearchAdd
+ *
+ * deleted the entire wiring with all ten tests green — the trailing comment
+ * carried the string every assertion was looking for. So trailing comments go
+ * too, and every assertion below reads `code`, never `src`.
  */
 const code = src
   .split('\n')
   .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+  .map(stripLineComment)
   .join('\n');
 
 /** Does the engine actually read `flags.<key>` off the config snapshot? */
@@ -116,23 +147,28 @@ describe('the engine reads the flags it validates', () => {
     // is true: every downstream branch (commit arming, beginSearchFlow, the
     // tiles) is conditioned on presearchStartedRef. A second arming site would
     // route around the flag, so the claim is pinned rather than trusted.
-    const arms = src.match(/presearchStartedRef\.current = true;/g) ?? [];
+    const arms = code.match(/presearchStartedRef\.current = true;/g) ?? [];
     expect(arms.length).toBe(1);
   });
 
-  it('gates pre-search parking on flags.presearchAdd', () => {
-    const arm = src.indexOf('presearchStartedRef.current = true;');
-    const open = src.lastIndexOf('useEffect(() => {', arm);
+  it('gates pre-search parking on flags.presearchAdd, in the right direction', () => {
+    const arm = code.indexOf('presearchStartedRef.current = true;');
+    const open = code.lastIndexOf('useEffect(() => {', arm);
     expect(open).toBeGreaterThan(-1);
-    const body = src.slice(open, arm);
-    expect(body).toContain('FEATURE_PRESEARCH_ADD');
-    expect(body).toContain('cfgFlags.presearchAdd');
+    const body = code.slice(open, arm);
+    // POLARITY, not just presence. `toContain('cfgFlags.presearchAdd')` cannot
+    // see a dropped `!`, and a cold review showed what that costs: with
+    // `|| cfgFlags.presearchAdd` the switch runs backwards — the bundled default
+    // `true` disables pre-search on every build, and publishing `false` turns it
+    // ON. All ten tests passed. A ticket that exists because a switch did nothing
+    // must not ship one that does the opposite of what it says.
+    expect(body).toMatch(/!FEATURE_PRESEARCH_ADD\s*\|\|\s*!cfgFlags\.presearchAdd/);
   });
 
   it('gates the parallel-add branch on flags.parallelAdd', () => {
-    const at = src.indexOf('const beginSearchFlow = useCallback(');
+    const at = code.indexOf('const beginSearchFlow = useCallback(');
     expect(at).toBeGreaterThan(-1);
-    const body = src.slice(at, src.indexOf('\n  }, [', at));
+    const body = code.slice(at, code.indexOf('\n  }, [', at));
     // Both halves on the same branch: dropping the constant would ship the
     // pilot flag's decision to config, and dropping the config read is the
     // regression this whole file is about.
@@ -140,10 +176,16 @@ describe('the engine reads the flags it validates', () => {
   });
 
   it('computes the pre-search commit jitter from flags.addCommitJitterMs', () => {
-    const at = src.indexOf('const presearchOnInjectAdd = useCallback(');
+    const at = code.indexOf('const presearchOnInjectAdd = useCallback(');
     expect(at).toBeGreaterThan(-1);
-    const body = src.slice(at, src.indexOf('\n  }, [', at));
+    const body = code.slice(at, code.indexOf('\n  }, [', at));
     expect(body).toContain('cfgFlagsRef.current.addCommitJitterMs');
+    // The RANDOMISATION, not just the source of the base. `const jitter = base`
+    // reads the config correctly and still turns every worker's commit into a
+    // fixed 500ms metronome — which is the exact property §1.5 of
+    // docs/store-fingerprint-profiles.md calls load-bearing, and it passed all
+    // ten tests. `base` has to appear on both sides of the arithmetic.
+    expect(body).toMatch(/jitter\s*=\s*base\s*\+\s*Math\.floor\(Math\.random\(\)\s*\*\s*base\)/);
     // Reading the config and then doing the arithmetic on the build constant
     // anyway is the mutation a `toContain` alone cannot see: the config read
     // would still be right there in the source. So the constant must appear

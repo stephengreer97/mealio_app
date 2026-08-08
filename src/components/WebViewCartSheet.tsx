@@ -263,11 +263,13 @@ export default function WebViewCartSheet({
   const cfgTimeouts = useMemo(() => getAutomationConfig().timeouts, [visible]);
   const cfgFlags = useMemo(() => getAutomationConfig().flags, [visible]);
   const cfgTelemetry = useMemo(() => getAutomationConfig().telemetry, [visible]);
-  // Same snapshot, reachable from the []-dependency callbacks below. Several of
-  // them (presearchOnInjectAdd, beginSearchFlow) deliberately capture nothing so
-  // they can't go stale on a re-render, which also means they cannot close over
-  // `cfgFlags` — reading it through a ref is how the rest of this file solves
-  // that (scriptsRef, lockedStoreIdRef) and keeps the per-open snapshot.
+  // Same snapshot, reachable from the callbacks below that cannot close over it.
+  // presearchOnInjectAdd has [] deps and captures nothing on purpose;
+  // beginSearchFlow lists four deps, none of them the config, and is reached
+  // through a closure chain that froze at an early render — which is why it
+  // already resolves the store from a live ref rather than trusting what it
+  // captured. Reading the config the same way (scriptsRef, lockedStoreIdRef) is
+  // how the rest of this file solves that, and it keeps the per-open snapshot.
   const cfgFlagsRef = useRef(cfgFlags);
   cfgFlagsRef.current = cfgFlags;
 
