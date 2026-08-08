@@ -2071,7 +2071,16 @@ export default function WebViewCartSheet({
     // Fast path: a fresh cart baseline was pre-captured during the silent login
     // check, so skip the cart round-trip entirely and go straight to the search.
     const prewarmed = loginPrewarm.takePrewarmedCart(probeStoreId);
-    if (prewarmed) {
+    // A cached baseline with no COUNT is not a baseline (MEAL-152). The probe
+    // caches its result either way, so before this a prewarm that could not read
+    // the cart — now more likely, since the cart-page scripts refuse to answer
+    // off the cart page — permanently forfeited the run's own before-snapshot:
+    // the fast path consumed the empty result and returned, and the live probe
+    // below never ran. Fall through instead, which is exactly what happens when
+    // there is no prewarmed cart at all. Still one-shot: takePrewarmedCart has
+    // already dropped the entry, so this cannot loop, and the cost is one cart
+    // navigation bounded by CART_PROBE_TIMEOUT_MS.
+    if (prewarmed && prewarmed.count != null) {
       console.log(`[Cart ${ts()}]`, 'snapshotBefore: using PREWARMED baseline count=', prewarmed.count, 'lines=', prewarmed.items.length);
       cartCountBeforeRef.current = prewarmed.count;
       cartItemsBeforeRef.current = prewarmed.items;
