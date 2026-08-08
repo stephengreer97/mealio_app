@@ -126,6 +126,44 @@ describe('AutomationTelemetry sampling', () => {
     expect(sampledOut.pending).toBe(0);  // none of them
   });
 
+  // MEAL-5. The assertion above is what the property SAYS, but it does not pin
+  // it: `random: () => 0.1` answers every call the same way, so a per-step roll
+  // passes it identically — five steps all in, or all out. The two below vary the
+  // roll, which is the only thing that can tell the two implementations apart.
+  it('rolls the sample exactly once, at construction', () => {
+    // First roll loses. Under a per-step roll the four steps after it would be
+    // recorded; under a per-run roll the run is out and stays out.
+    const rolls = [0.9, 0.1, 0.1, 0.1, 0.1];
+    let i = 0;
+    const random = jest.fn(() => rolls[i++] ?? 0.1);
+    const t = make({ sampleRate: 0.5, random });
+    for (let n = 0; n < 5; n++) t.record('search', 'ok');
+    expect(t.pending).toBe(0);
+    expect(random).toHaveBeenCalledTimes(1);
+  });
+
+  it('uploads every step of a sampled run, including ones a later roll would lose', async () => {
+    // The direction that does the damage: a per-step roll on a run that is IN
+    // yields a funnel with holes — an add with no confirm reads as a failure that
+    // never happened. Read off the batch the upload actually received, since a
+    // row can also be lost between record() and the wire.
+    const rolls = [0.1, 0.9, 0.9, 0.9, 0.9];
+    let i = 0;
+    const random = jest.fn(() => rolls[i++] ?? 0.9);
+    const up = okUpload();
+    const t = make({ sampleRate: 0.5, random, upload: up.fn });
+    t.record('login_check', 'ok');
+    t.record('search', 'ok');
+    t.record('add_click', 'ok');
+    t.record('confirm', 'ok');
+    t.record('run_summary', 'ok');
+    await t.flush();
+    expect(up.all.map((s) => s.step)).toEqual([
+      'login_check', 'search', 'add_click', 'confirm', 'run_summary',
+    ]);
+    expect(random).toHaveBeenCalledTimes(1);
+  });
+
   it('records everything at sampleRate 1 without consulting random', () => {
     const random = jest.fn(() => 0.99);
     const t = make({ sampleRate: 1, random });
