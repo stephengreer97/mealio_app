@@ -326,8 +326,12 @@ function buildCheckLoginScript(domain: string): string {
     //
     // WHAT IT COSTS WHEN IT IS WRONG, which is the whole reason it is shaped
     // this way. A false negative falls through to the click check, which opens
-    // the panel, finds "Sign Out", and answers loggedIn: one click and up to
-    // 1.5s, right answer. A false positive is a wrong verdict the entire run
+    // the panel, finds "Sign Out", and answers loggedIn — the right answer, at a
+    // cost of up to ~4.5s: the poll below spends its full 3s budget first,
+    // because acctTextResolved never returns true, and only then does the panel
+    // wait add up to 1.5s. Measured: placeholder cases 3.8-4.9s against 0.5s for
+    // a genuine name. An earlier version of this comment said "one click and up
+    // to 1.5s", counting only the second half. A false positive is a wrong verdict the entire run
     // then acts on. The two directions are not comparable, so where there is
     // any doubt this returns false — e.g. a real user literally named "Loading"
     // takes the click check and still gets the right answer.
@@ -340,7 +344,19 @@ function buildCheckLoginScript(domain: string): string {
       var s = (t || '').replace(/\\s+/g, ' ').trim();
       if (!s) return false;
       if (!/\\p{L}/u.test(s)) return false;
-      if (/^(loading|please wait|one moment|updating|fetching)\\b/i.test(s)) return false;
+      // Leading non-letters stripped before the word test, because the two clauses
+      // do not partition the space the way the comment above first claimed. A
+      // spinner glyph in FRONT of the word — a braille dot, a bullet — is
+      // covered by neither: clause 1 sees the letters in "Loading" and passes it,
+      // and an anchored clause 2 never reaches the word. Cold review drove both
+      // through the real script and got decided:"loggedIn" in ~500ms, which is
+      // the original defect intact.
+      //
+      // A leading run of non-letters is exactly the shape of a spinner, a bullet
+      // or an ellipsis, so dropping it costs nothing a real name would miss —
+      // a name does not begin with punctuation.
+      var word = s.replace(/^[^\\p{L}]+/u, '');
+      if (/^(loading|please wait|one moment|updating|fetching)\\b/i.test(word)) return false;
       return true;
     }
 
@@ -1697,8 +1713,11 @@ export function getScripts(storeId: string): StoreScripts {
   return {
     storeUrl: storeOrigin,
     loginUrl: storeOrigin,
-    // MEAL-151: was `/shop/cart.html`, which 404s on all 15 banners — verified
-    // across the family, including albertsons.com itself. This is not a dead
+    // MEAL-151: was `/shop/cart.html`, which 404s while `/erums/cart` returns 200
+    // — spot-checked live on albertsons.com, safeway.com and vons.com. Not all
+    // fifteen were probed; the path is uniform across the family (pinned by
+    // url-builders.test.ts), so there is no reason to expect the rest to differ,
+    // but the comment should say what was measured rather than what follows. This is not a dead
     // constant: `cartUrl` has exactly one consumer, the Linking.openURL that opens
     // the user's cart in the real app (WebViewCartSheet), so every tap of that
     // button landed on a 404 page.

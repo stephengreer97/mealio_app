@@ -608,6 +608,12 @@ describe('Albertsons family CHECK_LOGIN_SCRIPT', () => {
     ['a spinner glyph', '⠋'],
     ['the word Loading', 'Loading'],
     ['Loading with trailing dots', 'Loading...'],
+    // The combination, which beat the first version of the rule: a typographic
+    // placeholder in FRONT of the lexical one. Clause 1 sees the letters in
+    // "Loading" and passes it; an anchored clause 2 never reaches the word. Cold
+    // review drove exactly these through the real script and got `loggedIn`.
+    ['a spinner before the word', '⠋ Loading'],
+    ['a bullet before the word', '• Loading…'],
   ])('a placeholder account name (%s)', (_label, placeholder) => {
     itWithFixture(
       'logged-in-home.html',
