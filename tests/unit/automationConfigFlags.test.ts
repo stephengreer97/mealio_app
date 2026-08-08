@@ -36,19 +36,33 @@ const src = fs.readFileSync(
  * dozen lines and is the difference between a filter that works and one that
  * silently deletes code it was never meant to touch.
  */
-function stripLineComment(line: string): string {
+export function stripLineComment(line: string): string {
   let quote: string | null = null;
+  let out = '';
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
     if (quote) {
-      if (c === '\\') { i++; continue; }
+      out += c;
+      if (c === '\\') { out += line[i + 1] ?? ''; i++; continue; }
       if (c === quote) quote = null;
       continue;
     }
-    if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
-    if (c === '/' && line[i + 1] === '/') return line.slice(0, i);
+    if (c === '"' || c === "'" || c === '`') { quote = c; out += c; continue; }
+    if (c === '/' && line[i + 1] === '/') return out;
+    // Block comments too. The first version of this closed `//` and left `/* */`
+    // wide open, in a commit whose subject was "stop trailing comments faking a
+    // read" — and a review deleted the whole gate behind `/* … */` with all ten
+    // tests green. This file already carries 27 mid-line block comments, so it is
+    // idiomatic camouflage rather than an exotic case.
+    if (c === '/' && line[i + 1] === '*') {
+      const end = line.indexOf('*/', i + 2);
+      if (end === -1) return out;      // runs to end of line
+      i = end + 1;                      // skip it, keep whatever follows
+      continue;
+    }
+    out += c;
   }
-  return line;
+  return out;
 }
 
 /**
@@ -95,6 +109,68 @@ const DELIBERATELY_UNREAD: Record<string, string> = {
   // whoever owns CartJobContext rather than to this file.
   backgroundCart: 'mount-site selection, owned by CartJobContext',
 };
+
+describe('stripLineComment — the oracle\'s own guard', () => {
+  // M8 and M9: deleting `.map(stripLineComment)` or making this an identity
+  // function left the suite green and silently reopened the hole it exists to
+  // close. Hand-rolled parsing with no direct coverage is a guard nobody guards.
+  it('removes a trailing line comment', () => {
+    expect(stripLineComment('const a = 1; // flags.presearchAdd')).toBe('const a = 1; ');
+  });
+
+  it('removes a trailing block comment but keeps what follows it', () => {
+    expect(stripLineComment('const a = /* flags.presearchAdd */ 1;')).toBe('const a =  1;');
+  });
+
+  it('keeps a URL, which is why this is quote-aware at all', () => {
+    const line = "if (u.startsWith('https://x/')) return;";
+    expect(stripLineComment(line)).toBe(line);
+  });
+
+  it('TRUNCATES a regex literal containing a slash pair — a known limitation', () => {
+    // Pinned as the limitation it is, not fixed. `!/\\/api\\//.test(url)` loses its
+    // tail, because a regex is not a string and quote tracking never sees it.
+    //
+    // Telling a regex literal from division needs real expression context — the
+    // same `/` is either, depending on what precedes it. Adding that is another
+    // hand-rolled case in a parser that has now needed three, which is the trend
+    // worth stopping rather than extending.
+    //
+    // Safe today for a reason that is checked, not assumed: the assertions all
+    // slice narrow windows around the flag gates, and `src/components/
+    // WebViewCartSheet.tsx` has exactly one line of this shape, far outside every
+    // one of them. The test below is what notices if that stops being true.
+    const line = 'if (!/\\/api\\//.test(url)) return;';
+    // Truncates at the `//` that ends the regex, keeping the escaped slash before
+    // it — later than you would guess, which is the point of pinning the actual
+    // value rather than an assumed one.
+    expect(stripLineComment(line)).toBe('if (!/\\/api\\');
+  });
+
+  it('has no regex literal inside any window the assertions read', () => {
+    // The guard on the limitation above. If a regex literal ever lands in a gate
+    // window, the stripper eats the rest of that line and an assertion can start
+    // passing or failing for a reason nobody intended.
+    const windows = [
+      ['presearch gate', 'presearchStartedRef.current = true;'],
+      ['parallel-add gate', 'const beginSearchFlow = useCallback('],
+      ['jitter', 'const jitter'],
+    ] as const;
+    for (const [label, anchor] of windows) {
+      const at = src.indexOf(anchor);
+      expect([label, at > -1]).toEqual([label, true]);
+      const window = src.slice(Math.max(0, at - 2000), at + 2000);
+      // A regex literal opening right after `(`, `!`, `=` or `,` — the positions
+      // where `/` cannot be division.
+      expect([label, /[(!=,]\s*\/[^/*\s]/.test(window)]).toEqual([label, false]);
+    }
+  });
+
+  it('does not strip inside a string that merely looks like a comment', () => {
+    const line = "const s = 'a // b';";
+    expect(stripLineComment(line)).toBe(line);
+  });
+});
 
 describe('flags in the merge', () => {
   it('carries the bundled defaults with no override', () => {
@@ -162,7 +238,15 @@ describe('the engine reads the flags it validates', () => {
     // `true` disables pre-search on every build, and publishing `false` turns it
     // ON. All ten tests passed. A ticket that exists because a switch did nothing
     // must not ship one that does the opposite of what it says.
-    expect(body).toMatch(/!FEATURE_PRESEARCH_ADD\s*\|\|\s*!cfgFlags\.presearchAdd/);
+    //
+    // Anchored to the WHOLE statement, not a substring of it. An unanchored match
+    // reports a fully inverted gate as fine, because the inversion wraps the
+    // matched text rather than altering it — `if (!(!A || !B)) return;` and a
+    // hoisted `const off = !A || !B; if (!off) return;` both contain this
+    // sequence verbatim, and both ship the switch backwards. The second is an
+    // ordinary extract-a-const refactor with one `!` misplaced, which is exactly
+    // how this would really arrive.
+    expect(body).toMatch(/if\s*\(\s*!FEATURE_PRESEARCH_ADD\s*\|\|\s*!cfgFlags\.presearchAdd\s*\)\s*return;/);
   });
 
   it('gates the parallel-add branch on flags.parallelAdd', () => {

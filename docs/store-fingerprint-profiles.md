@@ -401,8 +401,10 @@ Haggen, Carrs, Kings, Balducci's…) read the single `albertsons` config entry, 
 **The worker count here is a memory limit that got explained as an anti-bot
 limit, and the two have been conflated ever since.** What was seen: 5 concurrent
 add WebViews **crashed the iOS WKWebView content process** (shared memory
-budget), while 3 was *"safe but slow"*. *(Observed, `80b3314` — a sentence in a
-commit message, not a recorded run. §1.5 explains why this is not Measured.)*
+budget), while 3 was *"safe but slow"*. *(Observed. The crash is stated in `80b3314`'s
+commit message; the "safe but slow" half is a **code comment** that commit added,
+which is what §1.5 quotes. Neither is a recorded run — see §1.5 for why this is
+not Measured.)*
 **No Albertsons WAF block has ever been recorded.**
 
 So the current comment's "3 is proven safe and matches the low global default
@@ -490,15 +492,17 @@ produces a wrong baseline, and MEAL-152 shows what wrong cart baselines cost.
 
 | Key | Bundled | Read by the engine? |
 | --- | --- | --- |
-| `flags.parallelAddWorkers` | 3 | **Yes** — `WebViewCartSheet.tsx:721` |
+| `flags.parallelAddWorkers` | 3 | **Yes** — `WebViewCartSheet.tsx:712` |
 | `flags.addCommitJitterMs` | 500 | No — `:801` used the `features.ts` constant |
 | `flags.parallelAdd` | true | No — `:1915` used the `features.ts` constant |
 | `flags.presearchAdd` | true | No — `:1597` used the `features.ts` constant |
 | `flags.backgroundCart` | true | No |
 
-The three "No" rows cite `origin/main`, since they describe the state this audit
-found. `parallelAddWorkers` cites this branch: it is the one row that is still
-true after the change.
+Every row cites `origin/main`, like the rest of Parts 1–3 — this table describes
+the state the audit found, and `parallelAddWorkers` was already read there. An
+earlier revision moved that one row to this branch's numbering and added a note
+explaining the mix; a reader checking a citation is the last person who should
+have to track which line of a table follows which convention.
 
 They merge, they type-check, they are bounds-checked, `automationConfigMerge.test.ts`
 asserts that malformed values are refused — and then nothing consumes them. A
