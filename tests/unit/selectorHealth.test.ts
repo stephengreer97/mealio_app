@@ -42,8 +42,7 @@ import {
   withSelectorProbe,
 } from '../../src/lib/selector-health';
 import { getStoreScripts } from '../../src/lib/webview-scripts';
-import { INSTACART_STORE_IDS } from '../../src/lib/webview-scripts/instacart';
-import { ALBERTSONS_FAMILY_IDS } from '../../src/lib/webview-scripts/albertsons';
+import { WEBVIEW_STORE_IDS } from '../../src/constants/stores';
 import { buildExtractWorker, buildPresearchWorker, buildSearchAndAddWorker } from '../../src/lib/webview-scripts/worker-search';
 import { __resetAutomationConfigForTests } from '../../src/lib/automation-config';
 
@@ -407,26 +406,37 @@ const POOL_WORKERS: Array<[string, (s: any) => string, Record<string, unknown>]>
  * Albertsons family), and the purpose-built parallel-search workers that install
  * no postMessage override at all (Wegmans, ALDI).
  */
-const POOL_STORES = ['heb', 'walmart', 'amazon', 'wegmans', ...INSTACART_STORE_IDS, ...ALBERTSONS_FAMILY_IDS];
+// Derived from WEBVIEW_STORE_IDS, which is the hand-maintained source of truth for
+// which stores run the WebView engine — the set a new banner gets added to, and the
+// set `isWebViewStore` gates automation on. Typing the top-level stores here instead
+// left the hole open one more time: round three shipped a store with no workers
+// because a name was missing from a list, and a list of four names has the same
+// failure as a list of six. `mockstore` is excused because MOCK_STORE_ENABLED is
+// false outside dev, so getStoreScripts never returns it here.
+const POOL_STORES = [...WEBVIEW_STORE_IDS].filter((id) => id !== 'mockstore');
 
 describe('a registry-composed pool worker reports its selectors', () => {
   const cases = POOL_STORES.flatMap((storeId) =>
     POOL_WORKERS.map(([label, build, terminal]) => [storeId, label, build, terminal] as const),
   );
 
-  it('gives every registered store all three pool builders', () => {
-    // The guard on the guard, and the real cost of routing a store around
-    // finish(): these fields go undefined, WebViewCartSheet yields [] for the
-    // pool, and that store runs with no workers. Asserted per store rather than
-    // per combination so the failure names the store, not a script.
+  it('covers every WebView store', () => {
     expect(POOL_STORES).toHaveLength(20);
-    for (const storeId of POOL_STORES) {
-      const scripts = getStoreScripts(storeId);
-      expect(scripts).not.toBeNull();
-      expect(typeof scripts!.buildWorkerScript).toBe('function');
-      expect(typeof scripts!.buildPresearchWorkerScript).toBe('function');
-      expect(typeof scripts!.buildAddWorkerScript).toBe('function');
-    }
+  });
+
+  // One case PER STORE, so a store routed around finish() fails a test whose title
+  // is its own name. The previous version looped inside a single `it`, and its
+  // comment claimed the failure named the store — it did not, because storeId was
+  // a loop variable jest never printed.
+  it.each(POOL_STORES)('%s has all three pool builders', (storeId) => {
+    // The real cost of routing a store around finish(): these fields go undefined,
+    // WebViewCartSheet yields [] for the pool, and that store runs with no workers
+    // at all — worse than the missing telemetry this branch set out to fix.
+    const scripts = getStoreScripts(storeId);
+    expect(scripts).not.toBeNull();
+    expect(typeof scripts!.buildWorkerScript).toBe('function');
+    expect(typeof scripts!.buildPresearchWorkerScript).toBe('function');
+    expect(typeof scripts!.buildAddWorkerScript).toBe('function');
   });
 
   it.each(cases)('%s / %s', (storeId, _label, build, terminal) => {
