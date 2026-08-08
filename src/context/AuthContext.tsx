@@ -39,6 +39,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     usage.logOpen({ source: 'app', platform: Platform.OS, appVersion: Constants.expoConfig?.version });
   }
 
+  // ── The end of a session ───────────────────────────────────────────────────
+  //
+  // Everything here is in-memory only and all of it is this account's shopping
+  // activity: the console ring buffer deliberately retains product names and
+  // cart contents (see lib/logBuffer) and a bug report attaches it, and the last
+  // cart run is the key that joins such a report to this account's automation
+  // rows. On a shared phone neither may follow the previous person into the next
+  // person's report.
+  //
+  // One function, called from BOTH boundaries — `logout` below and `beginSession`
+  // when a different account takes over without one. Deliberately not a second
+  // copy: MEAL-146 exists precisely because the account boundary and the
+  // sign-out boundary had drifted apart, and a copy is how they drift again.
+  function endSessionDiagnostics() {
+    clearSessionLogs();
+    clearLastAutomationRun();
+  }
+
+  /**
+   * Install `nextUser` as the signed-in user.
+   *
+   * EVERY path into an authenticated session goes through here — password login,
+   * 2FA, the email-verification / OAuth token, the launch-time restore, and
+   * refreshUser — so the account boundary is enforced in one place instead of at
+   * each of them. `loginWithToken` is the path MEAL-146 was filed against
+   * (RootNavigator calls it from an app-wide deep link listener with no
+   * signed-in check), but it is not the only one worth covering, and the next
+   * one added should not have to know this rule exists.
+   *
+   * The teardown runs BEFORE setUser, in the same order logout does it, and for
+   * the same reason: the instant `user` becomes B, B's session starts — the
+   * creator check, the RevenueCat identify, every screen keyed on `user?.id`.
+   * Clearing after that point would be clearing B's fresh state instead of A's
+   * stale state.
+   *
+   * Keyed on the id, never on the object: a token renewal or a profile refresh
+   * hands down a new User object for the SAME person, and tearing their session
+   * down for that would be a new bug of the same family.
+   */
+  function beginSession(nextUser: User) {
+    const previous = userRef.current;
+    if (previous && previous.id !== nextUser.id) {
+      endSessionDiagnostics();
+      // As at logout. Otherwise A's creator status decides what B's tab bar
+      // shows for the round trip checkCreatorStatus takes to answer for B.
+      setIsCreator(false);
+    }
+    // Kept in step here rather than waiting for the next render, so that a
+    // second call landing before React re-renders compares against the account
+    // this one just installed.
+    userRef.current = nextUser;
+    setUser(nextUser);
+  }
+
   useEffect(() => {
     initPurchases();
     initAuth();
@@ -71,7 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Verify token is still valid
       try {
         const { user: verifiedUser } = await auth.verify();
-        setUser(verifiedUser);
+        beginSession(verifiedUser);
         recordOpen();
         await Promise.all([checkCreatorStatus(), identifyUser(verifiedUser.id)]);
       } catch {
@@ -82,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // Renew may omit the user; fall back to the already-stored one.
             const renewedUser = result.user ?? storedUser;
             await tokenStorage.save(result.accessToken, null, renewedUser);
-            setUser(renewedUser);
+            beginSession(renewedUser);
             recordOpen();
             await Promise.all([checkCreatorStatus(), identifyUser(renewedUser.id)]);
           } else {
@@ -115,7 +169,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (result.accessToken) {
       await tokenStorage.save(result.accessToken, null, result.user);
-      setUser(result.user);
+      beginSession(result.user);
       await Promise.all([checkCreatorStatus(), identifyUser(result.user.id)]);
     }
 
@@ -127,7 +181,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await SecureStore.setItemAsync('mealio_access_token', accessToken);
     const { user: verifiedUser } = await auth.verify();
     await tokenStorage.save(accessToken, null, verifiedUser);
-    setUser(verifiedUser);
+    beginSession(verifiedUser);
     await Promise.all([checkCreatorStatus(), identifyUser(verifiedUser.id)]);
   }
 
@@ -143,22 +197,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await tokenStorage.clear();
       await resetUser();
     } finally {
-      // Drop this account's diagnostics. The console ring buffer deliberately
-      // keeps product names and cart contents (see lib/logBuffer) and the last
-      // cart run is this account's shopping activity; both live in memory only,
-      // so both used to survive a sign-out. On a shared phone that meant the
-      // previous person's cart getting attached to the next person's bug report,
-      // under the next person's verified userId. Same reasoning as the push token
-      // above: a shared phone must not carry one account's state into another's.
+      // Drop this account's diagnostics — see endSessionDiagnostics above for
+      // what and why. Signing out is one of the two ways this session can end;
+      // the other is another account taking over without one, and it runs the
+      // same function rather than a copy of it.
       //
       // In a `finally` because tokenStorage.clear() is three bare
       // SecureStore.deleteItemAsync calls in a Promise.all and nothing above
       // catches it: one keychain rejection used to skip both clears. Nothing
       // here can throw (the buffer is an array, the run is a module variable),
       // so it cannot mask the original error.
-      clearSessionLogs();
-      clearLastAutomationRun();
+      endSessionDiagnostics();
     }
+    // Kept in step with the state for the same reason beginSession does it: a
+    // sign-in landing before React re-renders must see that nobody is here, not
+    // the account that just left.
+    userRef.current = null;
     setUser(null);
     setIsCreator(false);
   }
@@ -168,7 +222,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (result.accessToken) {
       await tokenStorage.save(result.accessToken, null, result.user);
-      setUser(result.user);
+      beginSession(result.user);
       await Promise.all([checkCreatorStatus(), identifyUser(result.user.id)]);
     }
 
@@ -178,7 +232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function refreshUser() {
     try {
       const { user: updated } = await auth.verify();
-      setUser(updated);
+      beginSession(updated);
       const accessToken = await tokenStorage.getAccessToken();
       if (accessToken) {
         await tokenStorage.save(accessToken, null, updated);

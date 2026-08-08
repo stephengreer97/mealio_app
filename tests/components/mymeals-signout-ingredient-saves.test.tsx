@@ -124,6 +124,8 @@ import { clearSessionLogs, getSessionLogs, installConsoleCapture } from '../../s
 const { AuthTestContext } = jest.requireMock('../../src/context/AuthContext') as any;
 
 const USER_A = { id: 'user-A', tier: 'paid' };
+/** Whoever takes the phone over next (MEAL-146). */
+const USER_B = { id: 'user-B', tier: 'free' };
 
 const MEAL = {
   id: 'm1',
@@ -273,6 +275,80 @@ describe('however the sign-out reaches this screen', () => {
 
     expect(mockUpdateMeal).toHaveBeenCalledTimes(1);
     expect(getSessionLogs()).not.toContain(FAILURE_LINE);
+  });
+});
+
+// ── The session can end without a sign-out (MEAL-146) ───────────────────────
+
+describe('when another account takes over without a sign-out', () => {
+  // RootNavigator handles the `mealio://verified?token=…` deep link by calling
+  // loginWithToken with no signed-in check, from a listener registered app-wide.
+  // So B taps the verification link in their own email on A's phone and `user`
+  // goes A → B, never through null. This screen is the guard that notices least:
+  // RootNavigator renders MainTabs `if (user)`, which is still true, so nothing
+  // unmounts — the cleanup that covers a sign-out never runs and A's queued
+  // saves sail into B's session.
+  //
+  // `r.update` with a different user and the same element types is exactly that:
+  // same screen instance, different account.
+
+  it("never sends A's queued saves under B's session", async () => {
+    const { r, job } = await startChooseRun();
+
+    void job.onIngredientChosen('prenatal vitamins', ['m1'], A_PRODUCT_1);
+    void job.onIngredientChosen('sour cream', ['m1'], A_PRODUCT_2);
+    await act(async () => { await Promise.resolve(); });
+    expect(mockUpdateMeal).toHaveBeenCalledTimes(1);
+
+    // B arrives. A is still on screen — nothing unmounted.
+    await act(async () => { r.update(<App user={USER_B} />); });
+    expect(r.queryByText('Beef Tacos')).not.toBeNull();
+
+    // A's in-flight save comes back — a 401, or a 404 for a meal that is not B's.
+    await act(async () => {
+      pendingUpdates[0].reject(Object.assign(new Error('Unauthorized'), { status: 401 }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The queued one is dropped where it stands, so B's session sends no PATCH
+    // for a meal of A's…
+    expect(mockUpdateMeal).toHaveBeenCalledTimes(1);
+    expect(pendingUpdates).toHaveLength(1);
+    // …and neither save names one of A's products in the buffer that now backs
+    // B's bug report.
+    expect(getSessionLogs()).not.toContain(FAILURE_LINE);
+    expect(getSessionLogs()).not.toContain(A_PRODUCT_1);
+    expect(getSessionLogs()).not.toContain(A_PRODUCT_2);
+    expect(getSessionLogs()).not.toContain('prenatal vitamins');
+  });
+
+  it('keeps saving for the same account when its user object is replaced', async () => {
+    // The other end of the line, and the reason the guard keys on the user ID and
+    // not on the object: a token renewal or a refreshUser hands this screen a
+    // brand new User for the SAME person several times a session. Abandoning
+    // there would silently drop the products a live user just chose.
+    const { r, job } = await startChooseRun();
+
+    void job.onIngredientChosen('prenatal vitamins', ['m1'], A_PRODUCT_1);
+    void job.onIngredientChosen('sour cream', ['m1'], A_PRODUCT_2);
+    await act(async () => { await Promise.resolve(); });
+    expect(mockUpdateMeal).toHaveBeenCalledTimes(1);
+
+    // Same id, different object — as a renewal produces.
+    await act(async () => { r.update(<App user={{ ...USER_A }} />); });
+
+    await act(async () => {
+      pendingUpdates[0].reject(Object.assign(new Error('Unauthorized'), { status: 401 }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The queue moved on to A's second save rather than being thrown away…
+    expect(mockUpdateMeal).toHaveBeenCalledTimes(2);
+    // …and A's own failure is still on the record for A's own bug report.
+    expect(getSessionLogs()).toContain(FAILURE_LINE);
+    expect(getSessionLogs()).toContain(A_PRODUCT_1);
   });
 });
 

@@ -15,7 +15,7 @@ import WebViewCartSheet, {
 import CartStatusBubble from '../components/CartStatusBubble';
 import { STORES } from '../constants/stores';
 import { Colors } from '../constants/colors';
-import { useAuth } from './AuthContext';
+import { useSessionEnd } from './useSessionEnd';
 import { clearSessionLogs } from '../lib/logBuffer';
 import { clearLastAutomationRun } from '../lib/lastAutomationRun';
 
@@ -58,11 +58,6 @@ export function useCartJob(): CartJobContextValue {
 }
 
 export function CartJobProvider({ children }: { children: React.ReactNode }) {
-  // Signing out has to END the run, not just wipe what it already wrote — see
-  // the sign-out effect below. Safe to read here: App.tsx mounts this provider
-  // inside AuthProvider (it has to be, since a job is only ever started from a
-  // signed-in screen), so there is no ordering problem to solve.
-  const { user } = useAuth();
   const [job, setJob] = useState<CartJobParams | null>(null);
   const [status, setStatus] = useState<CartJobStatus | null>(null);
   // Expanded = full sheet visible; collapsed = slid offscreen + bubble shown.
@@ -102,10 +97,10 @@ export function CartJobProvider({ children }: { children: React.ReactNode }) {
     onClose?.();
   }, []);
 
-  // ── Sign-out ends the run ──────────────────────────────────────────────────
+  // ── The end of a session ends the run ─────────────────────────────────────
   //
-  // AuthContext.logout clears the console ring buffer and the recorded cart run,
-  // but clearing is not enough on its own: this provider sits ABOVE
+  // AuthContext clears the console ring buffer and the recorded cart run when a
+  // session ends, but clearing is not enough on its own: this provider sits ABOVE
   // NavigationContainer, so the navigator swapping to the auth stack does not
   // unmount it, and in layer mode the sheet is a plain root View (collapsed to
   // `pointerEvents: 'none'`) rather than a modal. So the WebView kept automating
@@ -124,16 +119,29 @@ export function CartJobProvider({ children }: { children: React.ReactNode }) {
   // after a sign-out those saves are guaranteed 401s and their failure logs name
   // the products and ingredients. That queue had to be stopped where it lives —
   // see `savesAbandonedRef` in src/screens/mymeals/MyMealsScreen.tsx.
-  const endedBySignOutRef = useRef(false);
-  useEffect(() => {
-    if (user || !jobRef.current) return;
-    endedBySignOutRef.current = true;
+  //
+  // Keyed on the session ENDING rather than on `user` going null (MEAL-146). A
+  // sign-out is one way A stops being the signed-in user; B taking over via the
+  // verification deep link is another, and it never passes through null. A's
+  // WebView must not keep automating — and keep logging A's products — into B's
+  // session any more than it may into the login screen. `useSessionEnd` also
+  // holds the other end of the line: a token renewal or a profile refresh hands
+  // down a new User object for the same person, and killing their live run for
+  // that would be a worse bug than the one being fixed.
+  //
+  // Safe to read auth here: App.tsx mounts this provider inside AuthProvider (it
+  // has to be, since a job is only ever started from a signed-in screen), so
+  // there is no ordering problem to solve.
+  const endedBySessionEndRef = useRef(false);
+  useSessionEnd(() => {
+    if (!jobRef.current) return;
+    endedBySessionEndRef.current = true;
     closeJob();
-  }, [user, closeJob]);
+  });
 
   // The teardown above is asynchronous — a render, then this provider's effect,
-  // then the commit that unmounts the sheet — and logout's clears happen at the
-  // START of it. A cart run emits a line every few hundred ms and a
+  // then the commit that unmounts the sheet — and AuthContext's clears happen at
+  // the START of it. A cart run emits a line every few hundred ms and a
   // logAutomationStart round trip is 100-500ms, so either can land inside that
   // window and survive a clear that has already run. Clearing again once `job`
   // is actually null closes it: React destroys the removed subtree's effects
@@ -144,9 +152,16 @@ export function CartJobProvider({ children }: { children: React.ReactNode }) {
   // Guarded by the ref rather than by `!user`, because both are null at app
   // launch and a signed-out launch must keep its login diagnostics — those are
   // exactly what a "can't sign in" report needs to carry.
+  //
+  // On an A → B hand-over this second clear costs B the handful of lines their
+  // own session wrote between AuthContext installing them and the sheet
+  // unmounting. That is the deliberate trade and it is the right way round: the
+  // alternative is A's product names surviving in the buffer B's next bug report
+  // attaches. B loses a few lines of startup diagnostics; A loses nothing they
+  // are entitled to keep.
   useEffect(() => {
-    if (job || !endedBySignOutRef.current) return;
-    endedBySignOutRef.current = false;
+    if (job || !endedBySessionEndRef.current) return;
+    endedBySessionEndRef.current = false;
     clearSessionLogs();
     clearLastAutomationRun();
   }, [job]);

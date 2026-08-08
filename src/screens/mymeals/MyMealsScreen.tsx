@@ -24,6 +24,7 @@ import { meals as mealsApi, kroger as krogerApi } from '../../lib/api';
 import { getOffering, purchasePackage } from '../../lib/purchases';
 import { mergeChosenProduct, createMealSaveQueue } from '../../lib/saveChosenIngredient';
 import { useAuth } from '../../context/AuthContext';
+import { useSessionEnd } from '../../context/useSessionEnd';
 import { STORES, isKrogerBrand, isWebViewStore } from '../../constants/stores';
 import MealCard from '../../components/MealCard';
 import MealDetailSheet from '../../components/MealDetailSheet';
@@ -85,24 +86,35 @@ export default function MyMealsScreen() {
   // instead of racing (each PATCH rewrites the meal's whole ingredient array;
   // overlapping writes from a stale base would clobber each other).
   const enqueueMealSave = useRef(createMealSaveQueue()).current;
-  // Signing out abandons whatever is still on that chain (MEAL-142). Because the
-  // saves for one meal are serialised, a run that chose several products for the
-  // same meal leaves several of them queued; once the session is over every one
-  // is a guaranteed 401, and the failure path below logs the product name, the
-  // ingredient name and the meal id into the console ring buffer — arbitrarily
-  // late, after logout emptied it, possibly after the next person has signed in.
-  // That is the same leak CartJobContext's sign-out effect exists to close, from
-  // a second writer: on a shared phone the next person's bug report would carry
-  // the previous person's product names under their own verified userId.
+  // The end of a session abandons whatever is still on that chain (MEAL-142).
+  // Because the saves for one meal are serialised, a run that chose several
+  // products for the same meal leaves several of them queued; once the session
+  // is over every one is doomed, and the failure path below logs the product
+  // name, the ingredient name and the meal id into the console ring buffer —
+  // arbitrarily late, after the buffer was emptied, possibly after the next
+  // person has signed in. That is the same leak CartJobContext's teardown exists
+  // to close, from a second writer: on a shared phone the next person's bug
+  // report would carry the previous person's product names under their own
+  // verified userId.
   //
-  // The unmount cleanup is the half that fires: RootNavigator renders MainTabs
-  // only `if (user)`, so a sign-out REMOVES this screen rather than re-rendering
-  // it signed-out, and an effect keyed on `user` never observes null here
-  // (probed — only the cleanup ran). Unmounting this screen means the session
-  // ended or the app is going away, and a queued save is worthless either way.
-  // The `!user` effect is the standing invariant in case that ever changes.
+  // Which of the two guards below fires depends on how the session ends, and
+  // MEAL-146 is why both are needed:
+  //
+  //   • SIGN-OUT unmounts this screen. RootNavigator renders MainTabs only
+  //     `if (user)`, so `user` going null REMOVES the screen rather than
+  //     re-rendering it signed-out, and the cleanup is the half that runs
+  //     (probed under MEAL-142 — only the cleanup ran).
+  //   • ANOTHER ACCOUNT TAKING OVER does not. B arriving through the
+  //     verification deep link keeps `user` truthy, so MainTabs is not swapped
+  //     and this screen is not unmounted; the cleanup never runs and the queue
+  //     survives into B's session, where every save is a 401 or a 404 for a meal
+  //     that is not B's, and each failure names one of A's products in B's
+  //     buffer. `useSessionEnd` is the half that catches that — and, being keyed
+  //     on the user id rather than on the object, it does NOT fire for a token
+  //     renewal or a profile refresh, which would silently drop a live user's
+  //     own saves.
   const savesAbandonedRef = useRef(false);
-  useEffect(() => { if (!user) savesAbandonedRef.current = true; }, [user]);
+  useSessionEnd(() => { savesAbandonedRef.current = true; });
   useEffect(() => () => { savesAbandonedRef.current = true; }, []);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
