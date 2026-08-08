@@ -263,6 +263,13 @@ export default function WebViewCartSheet({
   const cfgTimeouts = useMemo(() => getAutomationConfig().timeouts, [visible]);
   const cfgFlags = useMemo(() => getAutomationConfig().flags, [visible]);
   const cfgTelemetry = useMemo(() => getAutomationConfig().telemetry, [visible]);
+  // Same snapshot, reachable from the []-dependency callbacks below. Several of
+  // them (presearchOnInjectAdd, beginSearchFlow) deliberately capture nothing so
+  // they can't go stale on a re-render, which also means they cannot close over
+  // `cfgFlags` — reading it through a ref is how the rest of this file solves
+  // that (scriptsRef, lockedStoreIdRef) and keeps the per-open snapshot.
+  const cfgFlagsRef = useRef(cfgFlags);
+  cfgFlagsRef.current = cfgFlags;
 
   // Usage analytics for the WebView automation run (best-effort). Covers both the
   // background (startJob) and direct (setWebViewCartVisible) entry paths since it
@@ -798,7 +805,13 @@ export default function WebViewCartSheet({
     if (!ref || !s?.buildSearchAndAddScript) return;
     const term = item.searchTerm ?? item.ingredientName;
     const script = s.buildSearchAndAddScript(term, item.productQty, item.dropdown ?? null);
-    const jitter = ADD_COMMIT_JITTER_MS + Math.floor(Math.random() * ADD_COMMIT_JITTER_MS);
+    // Remote-tunable (MEAL-32). `flags.addCommitJitterMs` shipped in the config
+    // schema — bounded 0..10_000, refused when malformed — but nothing read it,
+    // so the documented way to spread a commit burst against a store that started
+    // scoring it did nothing. Bundled default is 500, the value this constant
+    // already held, so no build behaves differently until a push lands.
+    const base = cfgFlagsRef.current.addCommitJitterMs ?? ADD_COMMIT_JITTER_MS;
+    const jitter = base + Math.floor(Math.random() * base);
     console.log(`[Cart ${ts()}]`, 'presearch commit: worker', workerId, 'term=', term, 'in', jitter, 'ms');
     setTimeout(() => { presearchWorkerRefs.current[workerId]?.injectJavaScript(script); }, jitter);
   }, []);
@@ -1594,7 +1607,18 @@ export default function WebViewCartSheet({
   // and every ingredient already has a chosen product (the regular add flow). A
   // mixed/unchosen set goes through the choose flow instead, so we skip it there.
   useEffect(() => {
-    if (!FEATURE_PRESEARCH_ADD) return;
+    // Remote kill switch for the whole pre-search path (MEAL-32). This is the
+    // only place presearchStartedRef is ever set, and every downstream gate —
+    // the commit arming in handleStartSearch, beginSearchFlow's branch, the
+    // tile rendering — is conditioned on it, so refusing here disables the path
+    // entirely. `flags.presearchAdd` defaults true (the bundled value), so this
+    // changes nothing until a push says otherwise.
+    //
+    // Why it matters for a WAF: pre-search holds N results pages open across the
+    // qty screen and then fires N adds within ~1s of the tap. That is a distinct
+    // request pattern from the fused search+add path, and this is the only way to
+    // drop back to the latter without a release.
+    if (!FEATURE_PRESEARCH_ADD || !cfgFlags.presearchAdd) return;
     if (step !== 'qty' || presearchStartedRef.current) return;
     if (!parallelCfg) return;
     if (loginPrewarm.getStatus(lockedStoreIdRef.current) !== 'loggedIn') return;
@@ -1912,7 +1936,15 @@ export default function WebViewCartSheet({
       startPresearchCommit();
     } else if (canParallel && allChoose) {
       startParallelSearch();
-    } else if (canParallel && !allChoose && FEATURE_PARALLEL_ADD) {
+      // Remote kill switch for concurrent adds (MEAL-32), read off the ref for
+      // the same reason `s` is resolved live above: this callback's deps do not
+      // include the config. Defaults true, so nothing changes without a push.
+      //
+      // It is checked AFTER the pre-search branch on purpose, and the two flags
+      // have to be published together to mean "stop adding concurrently":
+      // parked workers commit their adds through startPresearchCommit, which
+      // this branch never reaches. `flags.presearchAdd:false` is the other half.
+    } else if (canParallel && !allChoose && FEATURE_PARALLEL_ADD && cfgFlagsRef.current.parallelAdd) {
       // Regular add flow through the parallel pool: each worker searches AND
       // adds one product concurrently. Unconfirmed items fall to review.
       startParallelAdd();
