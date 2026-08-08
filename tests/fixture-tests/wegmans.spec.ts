@@ -135,6 +135,30 @@ describe('Wegmans cart-page snapshot', () => {
       expect(result.items[0].name).toMatch(/Mission Super Soft Flour Tortillas/i);
       expect(result.items[0].qty).toBe(2);
     },
+    // The script refuses to count anywhere but /cart (MEAL-152), so the fixture
+    // has to be served from the URL it was captured at.
+    { url: 'https://www.wegmans.com/cart' },
+  );
+
+  // MEAL-152. No redirect has been observed on www.wegmans.com/cart (200, 0
+  // redirects, measured 2026-08-07 anonymously under the app's mobile UA), so
+  // this guard is a no-op on today's Wegmans and this test is a standing
+  // guarantee rather than a regression pin for a live defect. What it pins is
+  // the rule: "the cart is empty" and "we are not on the cart" must not be the
+  // same zero, because a trusted zero baseline makes the done screen attribute
+  // the user's own cart to this run.
+  itWithFixture(
+    'cart-with-items.html',
+    'posts count:null off the cart path instead of a trusted count (MEAL-152)',
+    async (runner) => {
+      await runner.inject(buildCartPageCountScript('wegmans')!);
+      const result = await runner.waitForMessage('CART_COUNT', 8_000);
+      expect(result.count).toBeNull();
+      expect(result.reason).toBe('not_cart_page');
+      expect(result.url).toBe('https://www.wegmans.com/');
+      expect(result.items).toBeUndefined();
+    },
+    { url: 'https://www.wegmans.com/' },
   );
 });
 

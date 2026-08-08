@@ -195,6 +195,11 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
           if (msg.isLoggedIn) startCartCapture();
           else finish({ isLoggedIn: false });
         } else if (msg?.type === 'CART_COUNT' && phaseRef.current === 'cart') {
+          // Same reason as WebViewCartSheet's CART_COUNT log (MEAL-152), and this
+          // is the likelier path to hit it: the prewarm probe is where most
+          // before-baselines come from. `finish` drops reason/url from the
+          // cached baseline, so this line is the only place they survive.
+          console.log('[Prewarm] probe', storeId, 'CART_COUNT count=', msg.count, 'reason=', msg.reason ?? null, 'url=', msg.url);
           finish({
             isLoggedIn: true,
             cart: {

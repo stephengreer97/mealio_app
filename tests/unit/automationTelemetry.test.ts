@@ -277,6 +277,12 @@ describe('failure codes', () => {
       // one by one so a genuinely new ADD_RESULT reason still fails this test.
       'http_error', 'shape', 'graphql_error', 'network', 'no_read', 'no_baseline',
       'cart_query', 'cart_query_confirm', 'cart_query_crosscheck', 'missing', 'unknown',
+      // MEAL-152: a CART_COUNT reason, not an ADD_RESULT one. The cart-page
+      // scripts post it alongside `count: null` when the page they landed on is
+      // not the cart, so it explains why a COUNT is unknown — it never describes
+      // an add, and addFailureCode never sees it. (PR #81 adds the same entry
+      // for MEAL-136's Albertsons guard; one line survives the merge.)
+      'not_cart_page',
     ]);
 
     const found = new Map<string, string>();

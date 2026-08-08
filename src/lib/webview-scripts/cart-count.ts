@@ -5,8 +5,11 @@
 // snapshot the cart before and after an add-to-cart run and warn when the
 // cart delta is short of what was reported added (silent-miss detection).
 //
-// count === null means "badge not found / unparseable" — callers must treat
-// that as unknown and SKIP validation, never warn.
+// count === null means "unknown" — badge not found / unparseable, or (for the
+// cart-PAGE scripts below) the page we landed on was not the cart. Callers must
+// treat null as unknown and SKIP validation, never warn. The converse is the
+// load-bearing half: any NUMBER is trusted, so a script must never emit one it
+// is not sure of. See the page-identity note above cartPathGuardJs (MEAL-152).
 //
 // Every selector below was verified against captured fixture HTML
 // (tests/fixtures/<store>/search-results-tortillas.html), per the
@@ -27,6 +30,7 @@
 // tenant they were first read off.
 
 import { ALBERTSONS_FAMILY_IDS, getAlbertsonsCartPageUrl } from './albertsons';
+import { AUTH_REDIRECT_URL_PATTERN } from './auth-urls';
 import { isInstacartStore } from './instacart';
 import { MOCK_STORE_URL } from './mockstore';
 
@@ -85,6 +89,92 @@ export function getCartPageUrl(storeId: string): string | null {
   if (CART_PAGE_URL[storeId]) return CART_PAGE_URL[storeId];
   if (ALBERTSONS_FAMILY_IDS.includes(storeId)) return getAlbertsonsCartPageUrl(storeId);
   return null;
+}
+
+// ── Page identity for cart-page counting (MEAL-152) ──────────────────────────
+//
+// Navigating to a cart URL is not the same as ARRIVING on the cart page.
+// www.walmart.com/cart answers 302 → https://www.walmart.com/ — the redirect
+// DISCARDS the path — and the homepage carries no [data-testid="quantity-label"]
+// at all. The count script polled its full 5s, found zero line items, and posted
+// `count: 0`.
+//
+// That zero is the defect, not the missing selector. `count: null` is the
+// protocol's "unknown — skip validation"; ANY number is taken as authoritative.
+// So a wrong zero is a CONFIDENT WRONG ANSWER, and it propagates:
+// cartItemsBeforeRef is set to [], and diffCartItems([], after) then attributes
+// the user's entire pre-existing cart to this run — after which the done screen
+// can tell them Mealio added items it did not intend and invite them to delete
+// their own groceries. Both of Stephen's cart principles are about what reaches
+// the cart; this is the reporting side of the same rule, and a wrong answer here
+// asks the USER to break the second one.
+//
+// So: a script that cannot tell it is on the cart page reports null.
+//
+// Shape borrowed deliberately from the Albertsons guard in PR #81
+// (fix/meal-136-united-domain), which is the same defect found on a different
+// store — a host whose 301 dropped the path. Same two cases, handled the same
+// way, because consistency across stores is worth more here than local
+// elegance:
+//
+//   • An auth/SSO interstitial is TRANSIENT. Post nothing and let the landing
+//     page decide — both injection sites (WebViewCartSheet.onLoadEnd and
+//     SilentLoginProbe.onLoadEnd) re-inject on the next load, and a verdict here
+//     would burn the probe's single pending slot on a page that was never the
+//     cart. The probe timeouts already cover silence.
+//   • Anything else is TERMINAL — nothing further is loading. Post
+//     `count: null` with a named reason, so the run degrades to "unknown"
+//     instead of "empty" and the log says WHY. Both CART_COUNT handlers print
+//     `reason=`/`url=`; neither stores them, so those log lines are the whole
+//     audit trail and without them this is indistinguishable from a selector
+//     miss.
+//
+// What it does NOT do: invent a count, or refuse a real cart page. The only
+// conversion is trusted-zero → honest-unknown.
+
+/**
+ * Exact pathname each cart URL above is expected to settle on. Kept beside
+ * CART_PAGE_URL because the two must agree — pinned by
+ * tests/unit/webview-scripts/cartPagePath.test.ts, which parses every
+ * CART_PAGE_URL and asserts the path here matches, so moving a cart URL without
+ * moving its path fails the build rather than silently making a store
+ * uncountable.
+ */
+const CART_PAGE_PATH: Record<string, string> = {
+  heb: '/cart',
+  walmart: '/cart',
+  wegmans: '/cart',
+};
+
+/** The pathname a store's cart page must be on to be counted, else null. */
+export function getCartPagePath(storeId: string): string | null {
+  return CART_PAGE_PATH[storeId] ?? null;
+}
+
+/**
+ * Injectable prologue asserting the page really is `cartPath` before counting.
+ *
+ * EXACT path match, modulo a trailing slash — not a prefix. A prefix test also
+ * accepts sub-paths, so /cart/checkout and /cartoons would count. Query strings
+ * and hash fragments are deliberately unaffected: they aren't part of
+ * location.pathname, so the `_t=` cache-buster both injection sites append to
+ * the cart URL still counts, as does /cart#items. That ordering also settles
+ * precedence — /cart?next=/sso/authorize IS the cart even though its query
+ * matches the auth-redirect pattern, because the pattern is only consulted once
+ * the path has already failed.
+ */
+function cartPathGuardJs(cartPath: string): string {
+  return `
+  var __path = location.pathname;
+  while (__path.length > 1 && __path.charAt(__path.length - 1) === '/') __path = __path.slice(0, -1);
+  if (__path !== ${JSON.stringify(cartPath)}) {
+    if (new RegExp(${JSON.stringify(AUTH_REDIRECT_URL_PATTERN)}).test(location.href)) return;
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: location.href
+    }));
+    return;
+  }
+`;
 }
 
 export interface CartItem {
@@ -323,9 +413,16 @@ export function diffCartItems(beforeRaw: CartItem[], afterRaw: CartItem[]): Cart
  * getCartPageUrl(storeId) first and inject this on the cart page's load.
  * Returns null for stores that don't use cart-page counting.
  *
- * count is 0 / items is [] for a genuinely empty cart (no item rows on a loaded
- * /cart page); the caller only reaches this after onLoadEnd confirmed the cart
- * URL and that the page wasn't an anti-bot block, so 0 rows means empty.
+ * count is 0 / items is [] for a genuinely empty cart — no item rows on a page
+ * the script has CONFIRMED is the cart.
+ *
+ * That confirmation is the script's own (cartPathGuardJs), not the caller's.
+ * This comment used to credit onLoadEnd with "confirmed the cart URL"; onLoadEnd
+ * tests `url.includes(store.domain)` and nothing more, so every page on the
+ * store's domain — its homepage included — passed. MEAL-152: a script that
+ * cannot tell it is on the cart page posts `count: null, reason:
+ * 'not_cart_page'` and no items. Not yet true of every store here; see the
+ * per-script notes.
  */
 export function buildCartPageCountScript(storeId: string): string | null {
   if (storeId === 'heb') return HEB_CART_PAGE_SCRIPT;
@@ -370,9 +467,17 @@ const MOCKSTORE_CART_PAGE_SCRIPT = `(async function() {
 // isolates real cart lines. The Remove button ("Remove 1 ea from N ea of ...")
 // matches "from N ea", not "to N ea", so each line yields exactly one match.
 // Verified against tests/fixtures/wegmans/cart-with-items.html (1 item, qty 2).
+//
+// No redirect has been observed on www.wegmans.com/cart (200, 0 redirects,
+// measured anonymously on 2026-08-07 under the app's mobile UA). The guard is
+// here because the FAILURE MODE is the same as Walmart's regardless of the
+// cause: this script's "cart is empty" and "we are not on the cart" are the
+// same zero, so any future redirect — or an expired session bounced to a sign-in
+// wall — reads as an empty cart. See the note above cartPathGuardJs.
 const WEGMANS_CART_PAGE_SCRIPT = `(async function() {
   function wait(ms){return new Promise(function(r){setTimeout(r,ms);});}
   function norm(s){return (s||'').trim().replace(/\\s+/g,' ');}
+${cartPathGuardJs(CART_PAGE_PATH.wegmans)}
   var ITEM_RE = /to (\\d+) ea of (.+?) in the cart/i;
   // Poll for cart line items (each increment button names item + current qty).
   var btns = [];
@@ -403,9 +508,15 @@ const WEGMANS_CART_PAGE_SCRIPT = `(async function() {
 // item-scoped product name. The single-productName guard avoids over-shooting to
 // an ancestor that spans multiple items.
 // Verified against tests/fixtures/walmart/cart-with-items.html (4 items).
+//
+// The page-identity guard is why MEAL-152 exists: www.walmart.com/cart 302s to
+// the homepage, discarding the path, and the homepage has no quantity-label —
+// so without it this script posts a trusted `count: 0`. See the note above
+// cartPathGuardJs.
 const WALMART_CART_PAGE_SCRIPT = `(async function() {
   function wait(ms){return new Promise(function(r){setTimeout(r,ms);});}
   function norm(s){return (s||'').trim().replace(/\\s+/g,' ');}
+${cartPathGuardJs(CART_PAGE_PATH.walmart)}
   // Poll for line items (each has a quantity-label) to hydrate.
   var labels = [];
   for (var i=0;i<25;i++){
@@ -632,9 +743,17 @@ export function buildInlineCartScript(storeId: string): string | null {
   return null;
 }
 
+// No redirect has been observed on www.heb.com/cart (200, 0 redirects, measured
+// anonymously on 2026-08-07 under the app's mobile UA), so the guard below is
+// a no-op on today's HEB. It is here because HEB is the store with the most to
+// lose: its before-snapshot is the baseline the MEAL-14 cart-query rail and the
+// done-screen diff both read, and an unguarded zero from a bounced session would
+// present the user's own cart as this run's work. See the note above
+// cartPathGuardJs.
 const HEB_CART_PAGE_SCRIPT = `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
+${cartPathGuardJs(CART_PAGE_PATH.heb)}
   function rowQty(row) {
     var inp = row.querySelector('[data-qe-id="cartQuantityCounterValue"]');
     if (!inp) return 0;

@@ -656,6 +656,9 @@ describe('HEB cart-page count (snapshot before/after)', () => {
       expect(names.some((n: string) => /tzatziki/i.test(n))).toBe(true);
       result.items.forEach((it: { qty: number }) => expect(it.qty).toBe(1));
     },
+    // The script refuses to count anywhere but /cart (MEAL-152), so the fixture
+    // has to be served from the URL it was captured at.
+    { url: 'https://www.heb.com/cart' },
   );
 
   // Sold-by-weight lines (Deli / Fish Market / bulk) have NO
@@ -679,6 +682,27 @@ describe('HEB cart-page count (snapshot before/after)', () => {
       // The bulk coffee is one of them.
       expect(weighty.some((it) => /bulk coffee/i.test(it.name))).toBe(true);
     },
+    { url: 'https://www.heb.com/cart' },
+  );
+
+  // MEAL-152. No redirect has been observed on www.heb.com/cart (200, 0
+  // redirects, measured 2026-08-07 anonymously under the app's mobile UA), so
+  // this guard is a no-op on today's HEB and this test is a standing guarantee
+  // rather than a regression pin for a live defect. What it pins is the rule:
+  // a page that is not the cart yields the honest unknown, never a trusted
+  // zero that would present the user's own cart as this run's additions.
+  itWithFixture(
+    'cart-with-items.html',
+    'posts count:null off the cart path instead of a trusted count (MEAL-152)',
+    async (runner) => {
+      await runner.inject(buildCartPageCountScript('heb')!);
+      const result = await runner.waitForMessage('CART_COUNT', 8_000);
+      expect(result.count).toBeNull();
+      expect(result.reason).toBe('not_cart_page');
+      expect(result.url).toBe('https://www.heb.com/');
+      expect(result.items).toBeUndefined();
+    },
+    { url: 'https://www.heb.com/' },
   );
 });
 

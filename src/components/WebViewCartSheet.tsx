@@ -2520,7 +2520,13 @@ export default function WebViewCartSheet({
           cartCountPendingRef.current = null;
           if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
           const count = typeof msg.count === 'number' ? msg.count : null;
-          console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count);
+          // reason/url are what make a `count: null` diagnosable (MEAL-152): the
+          // count alone says "unknown", while `reason=not_cart_page url=<href>`
+          // says the cart URL landed somewhere that was never the cart. Nothing
+          // downstream stores either field, so this line is the whole audit
+          // trail — without it a redirect is indistinguishable from a selector
+          // miss.
+          console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count, 'reason=', msg.reason ?? null, 'url=', msg.url);
           if (phase === 'before') {
             cartCountBeforeRef.current = count;
             cartItemsBeforeRef.current = Array.isArray(msg.items) ? msg.items : [];
