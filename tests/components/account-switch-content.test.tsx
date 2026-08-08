@@ -311,7 +311,10 @@ async function launchSignedInAsA() {
  * `auth.verify` is how `loginWithToken` finds out whose token it is, so
  * answering it as B is what makes this an account switch rather than a renewal.
  */
-async function tapVerificationLinkAs(user: typeof USER_A, meals: unknown[]) {
+async function tapVerificationLinkAs(
+  user: { id: string; email: string; tier?: string },
+  meals: unknown[],
+) {
   mockVerify.mockResolvedValueOnce({ user });
   mockListMeals.mockResolvedValue(meals);
   await act(async () => {
@@ -399,8 +402,23 @@ describe('the same account being re-set', () => {
     // remount the whole tab tree every time one landed.
     const utils = await launchSignedInAsA();
 
-    await tapVerificationLinkAs({ ...USER_A, tier: 'paid' }, [A_MEAL]);
-    await tapVerificationLinkAs({ ...USER_A, tier: 'paid' }, [A_MEAL]);
+    await tapVerificationLinkAs({ ...USER_A }, [A_MEAL]);
+    await tapVerificationLinkAs({ ...USER_A }, [A_MEAL]);
+
+    expect(utils.queryByText(A_MEAL.name)).not.toBeNull();
+    expect(mounted()).toBe(1);
+  });
+
+  it("survives the same person's profile coming back with different values", async () => {
+    // Not only a new object with identical contents. `refreshUser` runs straight
+    // after a purchase and after a subscription lapses, so the tier genuinely
+    // comes back changed on the same account — which rules out keying on
+    // anything derived from the user's fields rather than on the id alone. It is
+    // also the worst possible moment to throw the screen away: whatever they
+    // were part-way through is still there.
+    const utils = await launchSignedInAsA();
+
+    await tapVerificationLinkAs({ ...USER_A, tier: 'free' }, [A_MEAL]);
 
     expect(utils.queryByText(A_MEAL.name)).not.toBeNull();
     expect(mounted()).toBe(1);
