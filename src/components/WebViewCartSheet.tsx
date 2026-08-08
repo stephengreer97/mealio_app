@@ -42,7 +42,7 @@ import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
-import { confirmDetail, recordPoolAdd } from '../lib/pool-add-funnel';
+import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitTopUpsForReview, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
@@ -850,15 +850,13 @@ export default function WebViewCartSheet({
    * MEAL-122. The add funnel for the two worker POOLS.
    *
    * The body lives in lib/pool-add-funnel so a test can call the real mapping
-   * with a real recorder — see the note there. What stays here is the one thing
-   * only this file knows: which pool is which.
+   * with a real recorder — see the note there. What stays here is what only this
+   * file knows: which pool is which, and (for the pre-search pool's cold slot)
+   * whether an add was ever injected. The pre-search half is declared further
+   * down, next to the cold-slot refs it has to read.
    */
   const onAddPoolSettled = useCallback(
     (info: PoolSettled<AddResult>) => recordPoolAdd(tel(), 'parallel_add', info),
-    [tel],
-  );
-  const onPresearchPoolSettled = useCallback(
-    (info: PoolSettled<AddResult>) => recordPoolAdd(tel(), 'presearch', info),
     [tel],
   );
 
@@ -957,6 +955,19 @@ export default function WebViewCartSheet({
   const mainColdSlotRef = useRef<number>(COLD_SLOT_IDX);
   const mainColdItemRef = useRef<ConsolidatedIngredient | null>(null);
   const mainColdInjectedRef = useRef(false);  // fused add injected for the current item
+  // The cold slot is in phase 'adding' from the moment it is dispatched, so the
+  // pool's addDispatched is true for it before its page has even loaded. Only
+  // this component knows whether the fused add was actually injected — see
+  // presearchAddDispatched.
+  const onPresearchPoolSettled = useCallback(
+    (info: PoolSettled<AddResult>) => recordPoolAdd(tel(), 'presearch', {
+      ...info,
+      addDispatched: presearchAddDispatched(info, {
+        slotId: COLD_SLOT_IDX, injected: mainColdInjectedRef.current,
+      }),
+    }),
+    [tel, COLD_SLOT_IDX],
+  );
   const presearchOnInjectAdd = useCallback((workerId: number, item: ConsolidatedIngredient) => {
     const ref = presearchWorkerRefs.current[workerId];
     const s = scriptsRef.current;
@@ -972,12 +983,17 @@ export default function WebViewCartSheet({
   // and its result is fed back via onMessage → reportAdded.
   const presearchOnColdDispatch = useCallback((slot: number, item: ConsolidatedIngredient) => {
     const s = scriptsRef.current;
+    // Cleared FIRST, so the flag always means "the add for the cold item this
+    // slot is holding right now". After the early return below no injection can
+    // happen, and the funnel reads this flag to decide whether the item was ever
+    // an add attempt — a value left over from the previous cold item would say
+    // yes for one nothing was sent to.
+    mainColdInjectedRef.current = false;
     if (!s?.getSearchUrl) return; // no search URL → the pool's add timeout settles it
     const term = item.searchTerm ?? item.ingredientName;
     mainColdActiveRef.current = true;
     mainColdSlotRef.current = slot;
     mainColdItemRef.current = item;
-    mainColdInjectedRef.current = false;
     const url = s.getSearchUrl(term);
     console.log(`[Cart ${ts()}]`, 'presearch COLD (main webview) → search', term);
     setWebviewUri(url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now());

@@ -2,7 +2,7 @@ import {
   AutomationTelemetry,
   StepRecord,
 } from '../../src/lib/automation-telemetry';
-import { confirmDetail, recordPoolAdd } from '../../src/lib/pool-add-funnel';
+import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../../src/lib/pool-add-funnel';
 import type { PoolSettled } from '../../src/lib/useParallelSearchPool';
 import type { PoolAddResult } from '../../src/lib/pool-add-funnel';
 
@@ -123,6 +123,51 @@ describe('recordPoolAdd — attribution', () => {
     expect(rows[1].detail).toEqual({
       attempt: 1, path: 'presearch', workerId: 3, reason: 'out_of_stock',
     });
+  });
+});
+
+// MEAL-122 confirming review. The park-timeout fix left a narrower version of the
+// same bug alive on the pre-search pool's COLD slot: dispatchColdNext puts it in
+// phase 'adding' at DISPATCH, before its page loads, so the pool reports
+// addDispatched:true for an item the component never injected an add into. The
+// pool cannot see that — the injection happens in onLoadEnd — so the caller
+// corrects it here.
+describe('presearchAddDispatched', () => {
+  const COLD = 3;
+
+  it('trusts the pool for a parked worker', () => {
+    for (const flag of [true, false]) {
+      expect(presearchAddDispatched(
+        { workerId: 1, addDispatched: flag }, { slotId: COLD, injected: !flag },
+      )).toBe(flag);
+    }
+  });
+
+  it('overrides the pool for the cold slot, which is what the pool gets wrong', () => {
+    // The bug's exact shape: pool says dispatched, nothing was ever injected.
+    expect(presearchAddDispatched(
+      { workerId: COLD, addDispatched: true }, { slotId: COLD, injected: false },
+    )).toBe(false);
+  });
+
+  it('still counts a cold item whose add WAS injected', () => {
+    // The correction must not swing the other way and drop real attempts out of
+    // the denominator — under-counting reads the confirm rate high.
+    expect(presearchAddDispatched(
+      { workerId: COLD, addDispatched: true }, { slotId: COLD, injected: true },
+    )).toBe(true);
+  });
+
+  it('produces a search row, not an add attempt, for an uninjected cold item', async () => {
+    // End to end through the real mapping, on the rows the server would receive.
+    const info = settled({ workerId: COLD, itemIndex: 2, timedOut: true, addDispatched: true,
+      result: { success: false, reason: 'timeout' } });
+    const rows = await rowsFor('presearch', {
+      ...info,
+      addDispatched: presearchAddDispatched(info, { slotId: COLD, injected: false }),
+    });
+    expect(rows.map((r) => [r.step, r.outcome, r.code])).toEqual([['search', 'timeout', 'timeout']]);
+    expect(rows[0].itemIndex).toBe(2);
   });
 });
 

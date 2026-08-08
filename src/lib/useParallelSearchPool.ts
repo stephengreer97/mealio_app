@@ -70,9 +70,18 @@ export interface PoolSettled<TResult> {
    *     and the cost of each error is not symmetric: over-counting reads the
    *     confirm rate LOW, under-counting reads it high. A metric about whether
    *     adds land should fail toward admitting failure.
-   *   usePresearchAddPool — genuinely known. Injecting the add is an explicit
-   *     RN-side act (onInjectAdd), so a parked item whose page was still loading
-   *     when the run stopped waiting reports false, and it is not a guess.
+   *
+   *   usePresearchAddPool — known for its PARKED workers. Injecting the add is
+   *     an explicit RN-side act (injectAdd sets the phase), so a parked item
+   *     whose page was still loading when the run stopped waiting reports false,
+   *     and that is not a guess.
+   *
+   *     NOT known for its COLD slot, which the pool reports true for and should
+   *     not: dispatchColdNext sets phase 'adding' at dispatch, before the page
+   *     has loaded, and the injection happens later in the component's onLoadEnd.
+   *     The pool has no way to see that, so the CALLER corrects it — see
+   *     presearchAddDispatched in lib/pool-add-funnel. Anything reading this flag
+   *     straight off a pre-search settle is wrong on the cold slot.
    */
   addDispatched: boolean;
 }

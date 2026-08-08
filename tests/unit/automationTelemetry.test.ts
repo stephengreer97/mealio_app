@@ -702,6 +702,17 @@ describe('WebViewCartSheet wires both pools to the funnel', () => {
     expect(body).not.toContain("'parallel_add'");
   });
 
+  it('corrects the pre-search cold slot with the component-only injection flag', () => {
+    // The pool reports addDispatched:true for the cold slot from the moment it is
+    // dispatched, so without this the uninjected cold item goes back into the
+    // confirm-rate denominator — the same defect as the park timeout, one path
+    // over. presearchAddDispatched is covered directly in poolAddFunnel.test.ts;
+    // what only the source can show is that the component still feeds it the ref.
+    const { body } = wiredHandler('usePresearchAddPool<ConsolidatedIngredient, AddResult>');
+    expect(body).toContain('presearchAddDispatched(');
+    expect(body).toContain('mainColdInjectedRef.current');
+  });
+
   it('routes them through the extracted mapping rather than an inline one', () => {
     // recordPoolAdd is what poolAddFunnel.test.ts covers directly. An inline
     // re-implementation here would be untested again.

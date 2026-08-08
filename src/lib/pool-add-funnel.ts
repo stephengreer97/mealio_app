@@ -49,6 +49,39 @@ export function confirmDetail(confirm: HebAddConfirmation | null | undefined): R
   };
 }
 
+/** What the component knows about the pre-search pool's COLD slot: which slot it
+ *  is, and whether the fused add has actually been injected into it. */
+export interface ColdSlotState {
+  slotId: number;
+  /** The component's mainColdInjectedRef — set at the moment onLoadEnd injects. */
+  injected: boolean;
+}
+
+/**
+ * Whether a pre-search settle really had an add dispatched to it.
+ *
+ * The pool's own answer is right for every PARKED worker: those go to phase
+ * 'adding' inside injectAdd, so the phase is the injection. It is wrong for the
+ * COLD slot (the main WebView enlisted as an extra add surface), which
+ * dispatchColdNext puts in phase 'adding' at DISPATCH — before its page has even
+ * loaded. The injection happens later, from the component's onLoadEnd. So a cold
+ * slot whose page never loads settles as phase 'adding' with nothing injected,
+ * and reported the exact defect MEAL-122's review caught on the park path: an
+ * item nobody tried to add, counted in the confirm-rate denominator.
+ *
+ * The pool cannot know this — the fact lives in the component, which owns both
+ * the WebView and the injection. So the component supplies it here rather than
+ * the comment on PoolSettled.addDispatched being softened to admit an exception.
+ * The same answer also covers onColdDispatch's `!getSearchUrl` early exit, where
+ * no navigation happens at all.
+ */
+export function presearchAddDispatched(
+  info: Pick<PoolSettled<unknown>, 'workerId' | 'addDispatched'>,
+  cold: ColdSlotState,
+): boolean {
+  return info.workerId === cold.slotId ? cold.injected : info.addDispatched;
+}
+
 /**
  * Record the funnel rows for one item a worker pool has settled.
  *

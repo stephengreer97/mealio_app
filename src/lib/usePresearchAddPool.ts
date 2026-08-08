@@ -253,6 +253,12 @@ export function usePresearchAddPool<TItem, TResult>(
         // reached it before its results page did, so onInjectAdd never ran and no
         // add script ever touched that page. Reporting it as dispatched put an
         // item nobody tried to add into the confirm-rate denominator.
+        //
+        // The phase says this correctly for the parked workers only. The COLD
+        // slot enters 'adding' at dispatch (see dispatchColdNext), before its
+        // page loads, so it reports true even when nothing was injected — the
+        // same defect, one path over. The pool cannot see that; the component
+        // owns the injection and corrects it at the seam.
         notifySettled({
           workerId, itemIndex: assigned.idx, result, timedOut,
           addDispatched: slotPhaseRef.current[workerId] === 'adding',
