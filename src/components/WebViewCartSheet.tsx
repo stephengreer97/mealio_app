@@ -1627,14 +1627,22 @@ export default function WebViewCartSheet({
     };
     if (outcome === 'failed') {
       // The run has no failure of its own — it failed because its steps did, so
-      // it reports whichever code dominated them. A run that added nothing while
+      // it reports the one that best EXPLAINS them: severity order, not the most
+      // frequent, because a store that blocked us used to show up as a pile of
+      // ordinary confirmation misses (MEAL-123). A run that added nothing while
       // recording no coded failure at all is the parallel add path, whose workers
       // report through the pool and emit no step rows: confirm_failed is the only
       // thing still true there (adds were dispatched, nothing evidenced landing).
-      const dominant = tel().dominantFailureCode();
+      const primary = tel().primaryFailureCode();
       tel().record('run_summary', 'error', {
-        detail: { ...summaryDetail, codeSource: dominant ? 'dominant' : 'fallback' },
-        code: dominant ?? 'confirm_failed',
+        detail: {
+          ...summaryDetail,
+          codeSource: primary ? 'severity' : 'fallback',
+          // The whole tally rides along, so ranking by severity above does not
+          // hide how often each code actually occurred (MEAL-123).
+          failureCodes: tel().failureCodeCounts(),
+        },
+        code: primary ?? 'confirm_failed',
       });
     } else {
       tel().record('run_summary', 'ok', { detail: summaryDetail });

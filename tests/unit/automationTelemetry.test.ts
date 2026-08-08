@@ -333,14 +333,42 @@ describe('failure codes', () => {
     expect('code' in up.all[1]).toBe(false);
   });
 
-  it('reports the dominant code for the run, ties going to the first seen', () => {
+  it('reports the code that explains the run, not the one that occurs most', () => {
     const t = make();
-    expect(t.dominantFailureCode()).toBeUndefined();
+    expect(t.primaryFailureCode()).toBeUndefined();
+
+    // MEAL-123's own scenario. Three confirmation misses and one block: the block
+    // is why the other three happened, and it is the only actionable one. Ranking
+    // by count reported confirm_failed and buried it.
+    t.record('confirm', 'error', { code: 'confirm_failed' });
+    t.record('confirm', 'error', { code: 'confirm_failed' });
+    t.record('confirm', 'error', { code: 'confirm_failed' });
+    t.record('search', 'blocked', { code: 'waf_block' });
+    expect(t.primaryFailureCode()).toBe('waf_block');
+
+    // And frequency is still available, so nothing was traded away for the
+    // ranking — most frequent first.
+    expect(t.failureCodeCounts()).toEqual({ confirm_failed: 3, waf_block: 1 });
+    expect(Object.keys(t.failureCodeCounts())[0]).toBe('confirm_failed');
+  });
+
+  it('outranks a symptom with its cause however lopsided the counts', () => {
+    // selector_miss explains the confirm failures that follow it, so it wins at
+    // any ratio. Under the old count-based rule it lost as soon as a second
+    // confirm_failed arrived.
+    const t = make();
     t.record('confirm', 'error', { code: 'selector_miss' });
-    t.record('confirm', 'error', { code: 'confirm_failed' });
-    expect(t.dominantFailureCode()).toBe('selector_miss');
-    t.record('confirm', 'error', { code: 'confirm_failed' });
-    expect(t.dominantFailureCode()).toBe('confirm_failed');
+    for (let i = 0; i < 20; i++) t.record('confirm', 'error', { code: 'confirm_failed' });
+    expect(t.primaryFailureCode()).toBe('selector_miss');
+  });
+
+  it('falls back to the most frequent when no ranked code was recorded', () => {
+    // Defensive: the severity table is exhaustive over StepFailureCode and the
+    // compiler enforces that, so this path should be unreachable. It exists so a
+    // future code added to the union without a rank still reports something.
+    const t = make();
+    expect(t.primaryFailureCode()).toBeUndefined();
+    expect(t.failureCodeCounts()).toEqual({});
   });
 
   it('keeps the run tally past a flush and past buffer trimming', async () => {
@@ -351,7 +379,7 @@ describe('failure codes', () => {
     t.record('confirm', 'error', { code: 'waf_block' });
     await t.flush();
     for (let i = 0; i < 600; i++) t.record('search', 'ok');
-    expect(t.dominantFailureCode()).toBe('waf_block');
+    expect(t.primaryFailureCode()).toBe('waf_block');
   });
 
   it('carries a code through startTimer', async () => {
