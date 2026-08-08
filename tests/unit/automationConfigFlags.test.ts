@@ -1,4 +1,5 @@
 import fs from 'fs';
+import * as ts from 'typescript';
 import path from 'path';
 import { mergeAutomationConfig } from '../../src/lib/automation-config/merge';
 import { BUNDLED_AUTOMATION_CONFIG } from '../../src/lib/automation-config/schema';
@@ -29,63 +30,69 @@ const src = fs.readFileSync(
 );
 
 /**
- * One line with any `//` comment removed, quote-aware.
+ * `src` with every comment blanked out, using TypeScript's own scanner.
  *
- * Quote-aware because this file is full of `https://` URLs and a naive
- * `/\/\/.*$/` truncates every line carrying one. Tracking string state costs a
- * dozen lines and is the difference between a filter that works and one that
- * silently deletes code it was never meant to touch.
+ * These assertions distinguish a flag the engine READS from one it merely
+ * mentions, and this file mentions all of them in prose — the note beside each
+ * gate names `flags.presearchAdd` in the very comment explaining it. So the
+ * comments have to go before anything is matched.
+ *
+ * This was hand-rolled for three rounds and lost every one of them. Dropping
+ * comment-ONLY lines missed a trailing `//`. Adding a quote-aware `//` stripper
+ * missed `/* … *\/`. Adding block comments missed the multi-line kind, whose
+ * middle lines carry no marker at all — and missed regex literals, which it
+ * truncated. Each fix was correct and each left the next hole, because the thing
+ * being written was a JavaScript lexer one case at a time.
+ *
+ * `ts.createScanner` is the lexer, already a dependency, and it knows what a
+ * comment is — including JSX comments, template literals, regex literals and
+ * escapes. Comments are replaced with equivalent-length whitespace rather than
+ * deleted, so every offset in `code` still lines up with `src` and the windows
+ * the assertions slice stay honest.
  */
-export function stripLineComment(line: string): string {
-  let quote: string | null = null;
-  let out = '';
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (quote) {
-      out += c;
-      if (c === '\\') { out += line[i + 1] ?? ''; i++; continue; }
-      if (c === quote) quote = null;
-      continue;
+function stripComments(source: string): string {
+  // Two steps, and the split is what makes this correct rather than another
+  // heuristic. The PARSER says where the literals are — strings, templates,
+  // regexes, JSX text. Outside those spans, `//` and `/* */` are unambiguously
+  // comments, with no context left to get wrong.
+  //
+  // The ambiguity that beat every hand-rolled version was `/`: division or the
+  // start of a regex, decided by what precedes it, so `!/\/api\//.test(u)` read
+  // as a comment to anything without expression context. Asking for a parse
+  // removes the class instead of adding a fourth special case to it.
+  const sf = ts.createSourceFile('x.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const literal: Array<[number, number]> = [];
+  const collect = (node: ts.Node) => {
+    if (
+      ts.isStringLiteralLike(node) || ts.isRegularExpressionLiteral(node) ||
+      ts.isTemplateLiteral(node) || ts.isJsxText(node)
+    ) literal.push([node.getStart(sf), node.getEnd()]);
+    node.forEachChild(collect);
+  };
+  collect(sf);
+  const inLiteral = (i: number) => literal.some(([lo, hi]) => i >= lo && i < hi);
+
+  // Blanked to whitespace rather than deleted, so every offset in the result
+  // still matches `src` and the windows the assertions slice stay honest.
+  const out = source.split('');
+  for (let i = 0; i < source.length; i++) {
+    if (inLiteral(i)) continue;
+    let end = -1;
+    if (source[i] === '/' && source[i + 1] === '/') {
+      end = source.indexOf('\n', i);
+      if (end === -1) end = source.length;
+    } else if (source[i] === '/' && source[i + 1] === '*') {
+      end = source.indexOf('*/', i + 2);
+      end = end === -1 ? source.length : end + 2;
     }
-    if (c === '"' || c === "'" || c === '`') { quote = c; out += c; continue; }
-    if (c === '/' && line[i + 1] === '/') return out;
-    // Block comments too. The first version of this closed `//` and left `/* */`
-    // wide open, in a commit whose subject was "stop trailing comments faking a
-    // read" — and a review deleted the whole gate behind `/* … */` with all ten
-    // tests green. This file already carries 27 mid-line block comments, so it is
-    // idiomatic camouflage rather than an exotic case.
-    if (c === '/' && line[i + 1] === '*') {
-      const end = line.indexOf('*/', i + 2);
-      if (end === -1) return out;      // runs to end of line
-      i = end + 1;                      // skip it, keep whatever follows
-      continue;
-    }
-    out += c;
+    if (end === -1) continue;
+    for (let j = i; j < end; j++) if (out[j] !== '\n') out[j] = ' ';
+    i = end - 1;
   }
-  return out;
+  return out.join('');
 }
 
-/**
- * `src` with every comment removed — whole lines and trailing ones alike.
- *
- * These assertions have to distinguish a flag the engine READS from one it
- * merely mentions, and this file mentions all of them in prose: the note beside
- * each gate names `flags.presearchAdd` in the very comment explaining it.
- *
- * Dropping comment-ONLY lines is not enough, and the gap was live. A cold review
- * demonstrated that replacing the gate with
- *
- *   if (!FEATURE_PRESEARCH_ADD) return; // gate removed; see cfgFlags.presearchAdd
- *
- * deleted the entire wiring with all ten tests green — the trailing comment
- * carried the string every assertion was looking for. So trailing comments go
- * too, and every assertion below reads `code`, never `src`.
- */
-const code = src
-  .split('\n')
-  .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-  .map(stripLineComment)
-  .join('\n');
+const code = stripComments(src);
 
 /** Does the engine actually read `flags.<key>` off the config snapshot? */
 function readsFlag(key: string): boolean {
@@ -110,67 +117,49 @@ const DELIBERATELY_UNREAD: Record<string, string> = {
   backgroundCart: 'mount-site selection, owned by CartJobContext',
 };
 
-describe('stripLineComment — the oracle\'s own guard', () => {
-  // M8 and M9: deleting `.map(stripLineComment)` or making this an identity
-  // function left the suite green and silently reopened the hole it exists to
-  // close. Hand-rolled parsing with no direct coverage is a guard nobody guards.
+describe('stripComments — the oracle\'s own guard', () => {
+  // Hand-rolled versions of this lost three rounds in a row, each fix correct and
+  // each leaving the next hole. These pin the cases that beat the previous ones.
+  //
+  // Comments are blanked to whitespace rather than deleted, so every offset in
+  // `code` still matches `src` and the windows the assertions slice stay honest.
+  const t = (line: string) => stripComments(line).trimEnd();
+
   it('removes a trailing line comment', () => {
-    expect(stripLineComment('const a = 1; // flags.presearchAdd')).toBe('const a = 1; ');
+    expect(t('const a = 1; // flags.presearchAdd')).toBe('const a = 1;');
   });
 
-  it('removes a trailing block comment but keeps what follows it', () => {
-    expect(stripLineComment('const a = /* flags.presearchAdd */ 1;')).toBe('const a =  1;');
+  it('removes a trailing block comment and keeps what follows', () => {
+    expect(stripComments('const a = /* x */ 1;')).toBe('const a =         1;');
   });
 
-  it('keeps a URL, which is why this is quote-aware at all', () => {
-    const line = "if (u.startsWith('https://x/')) return;";
-    expect(stripLineComment(line)).toBe(line);
+  it('removes a MULTI-LINE block comment, including its middle lines', () => {
+    // The case that beat the line-at-a-time version: interior lines carry no
+    // marker, so a filter keyed on how a line STARTS cannot see them. A gate
+    // quoted verbatim inside one would have voted.
+    const out = stripComments('a();\n/* the gate was\nif (!A || !B) return;\nremoved */\nb();');
+    expect(out).toContain('a();');
+    expect(out).toContain('b();');
+    expect(out).not.toContain('if (!A || !B) return;');
   });
 
-  it('TRUNCATES a regex literal containing a slash pair — a known limitation', () => {
-    // Pinned as the limitation it is, not fixed. `!/\\/api\\//.test(url)` loses its
-    // tail, because a regex is not a string and quote tracking never sees it.
-    //
-    // Telling a regex literal from division needs real expression context — the
-    // same `/` is either, depending on what precedes it. Adding that is another
-    // hand-rolled case in a parser that has now needed three, which is the trend
-    // worth stopping rather than extending.
-    //
-    // Safe today for a reason that is checked, not assumed: the assertions all
-    // slice narrow windows around the flag gates, and `src/components/
-    // WebViewCartSheet.tsx` has exactly one line of this shape, far outside every
-    // one of them. The test below is what notices if that stops being true.
+  it('keeps a regex literal containing a slash pair', () => {
+    // The previous version truncated this, and it was pinned as a limitation.
+    // A real lexer has no such limitation, which is the point of using one.
     const line = 'if (!/\\/api\\//.test(url)) return;';
-    // Truncates at the `//` that ends the regex, keeping the escaped slash before
-    // it — later than you would guess, which is the point of pinning the actual
-    // value rather than an assumed one.
-    expect(stripLineComment(line)).toBe('if (!/\\/api\\');
+    expect(t(line)).toBe(line);
   });
 
-  it('has no regex literal inside any window the assertions read', () => {
-    // The guard on the limitation above. If a regex literal ever lands in a gate
-    // window, the stripper eats the rest of that line and an assertion can start
-    // passing or failing for a reason nobody intended.
-    const windows = [
-      ['presearch gate', 'presearchStartedRef.current = true;'],
-      ['parallel-add gate', 'const beginSearchFlow = useCallback('],
-      ['jitter', 'const jitter'],
-    ] as const;
-    for (const [label, anchor] of windows) {
-      const at = src.indexOf(anchor);
-      expect([label, at > -1]).toEqual([label, true]);
-      const window = src.slice(Math.max(0, at - 2000), at + 2000);
-      // A regex literal opening right after `(`, `!`, `=` or `,` — the positions
-      // where `/` cannot be division.
-      expect([label, /[(!=,]\s*\/[^/*\s]/.test(window)]).toEqual([label, false]);
-    }
+  it('keeps a URL and a string that merely looks like a comment', () => {
+    expect(t("if (u.startsWith('https://x/')) return;")).toBe("if (u.startsWith('https://x/')) return;");
+    expect(t("const s = 'a // b';")).toBe("const s = 'a // b';");
   });
 
-  it('does not strip inside a string that merely looks like a comment', () => {
-    const line = "const s = 'a // b';";
-    expect(stripLineComment(line)).toBe(line);
+  it('keeps a JSX comment out of the text, which the line filter never could', () => {
+    expect(stripComments('<View>{/* if (!A || !B) return; */}</View>')).not.toContain('return;');
   });
 });
+
 
 describe('flags in the merge', () => {
   it('carries the bundled defaults with no override', () => {
