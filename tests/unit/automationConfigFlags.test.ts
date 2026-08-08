@@ -29,6 +29,29 @@ const src = fs.readFileSync(
 );
 
 /**
+ * `src` with comment-only lines dropped.
+ *
+ * The coverage test below has to distinguish a flag the engine READS from one it
+ * merely mentions, and this file mentions all of them in prose — the note beside
+ * each gate names `flags.presearchAdd` in the very comment explaining it. Left
+ * in, that prose satisfies the search and the test passes for a key nothing
+ * consumes, which is precisely the defect it exists to catch.
+ */
+const code = src
+  .split('\n')
+  .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+  .join('\n');
+
+/** Does the engine actually read `flags.<key>` off the config snapshot? */
+function readsFlag(key: string): boolean {
+  // Anchored to the two legal read forms, and \b-terminated. Neither detail is
+  // decoration: a bare `.${key}` search reports `parallelAdd` as read because
+  // `cfgFlags.parallelAddWorkers` — a DIFFERENT key, wired years earlier —
+  // contains it as a prefix. That false positive was live until a mutant found it.
+  return new RegExp(`\\bcfgFlags(?:Ref\\.current)?\\.${key}\\b`).test(code);
+}
+
+/**
  * Flag keys the engine deliberately does NOT read, with the reason.
  *
  * Listed rather than omitted so the coverage test below can tell "decided not
@@ -135,7 +158,7 @@ describe('the engine reads the flags it validates', () => {
     // suite can notice — the merge tests pass on a key no reader exists for.
     for (const key of Object.keys(BUNDLED_AUTOMATION_CONFIG.flags)) {
       if (DELIBERATELY_UNREAD[key]) continue;
-      expect({ key, read: src.includes(`.${key}`) }).toEqual({ key, read: true });
+      expect({ key, read: readsFlag(key) }).toEqual({ key, read: true });
     }
   });
 
@@ -145,6 +168,10 @@ describe('the engine reads the flags it validates', () => {
     // and the next unread key added beside it inherits the excuse.
     for (const key of Object.keys(DELIBERATELY_UNREAD)) {
       expect(Object.keys(BUNDLED_AUTOMATION_CONFIG.flags)).toContain(key);
+      // And that the exemption is still needed. Wiring `backgroundCart` without
+      // deleting its row here would leave a standing excuse for the next unread
+      // key someone adds beside it.
+      expect({ key, read: readsFlag(key) }).toEqual({ key, read: false });
     }
   });
 });
