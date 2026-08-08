@@ -114,26 +114,55 @@ export function getCartPageUrl(storeId: string): string | null {
 // protocol's "unknown — skip validation"; ANY number is taken as authoritative.
 // So a wrong zero is a CONFIDENT WRONG ANSWER.
 //
-// What it actually produces, traced rather than assumed. The redirect is
-// deterministic, so BOTH probes get it: before is `0 / []`, after is `0 / []`,
-// and diffCartItems([], []) is []. That empty array is truthy at
-// cart-reconcile.ts (`if (rows)`), so findUnaddedItems has no added rows to
-// match against and every item the run really did add comes back as `missing`.
-// The done screen then prints
+// What it produces depends on ONE UNMEASURED THING, so read the premise before
+// the conclusion.
+//
+// IF the redirect is symmetric within a run — both probes bounce — then before
+// is `0 / []`, after is `0 / []`, and diffCartItems([], []) is []. That empty
+// array is truthy at cart-reconcile.ts:814 (`if (rows)`), so findUnaddedItems
+// has no added rows to match against and every item the run really did add comes
+// back as `missing`. The done screen prints (WebViewCartSheet.tsx ~:2861)
 //
 //     "N items may not have been added (…). Please double-check your cart."
 //
-// about groceries that are sitting in the cart. Not the over-add copy two lines
-// below it — reaching that needs an asymmetric pair (a before that bounced and
-// an after that landed), which the after-probe cannot produce because it is
-// gated on the baseline it would need. The reachable asymmetry is on the
-// reconcile probe, which is not so gated; that is HEB-only, latent, pre-existing
-// (a timed-out before-probe leaves the same empty ref) and belongs to MEAL-47.
+// about groceries that are sitting in the cart: a positive false claim, which is
+// the reporting side of Stephen's second principle even though nothing was
+// mis-added.
 //
-// So the harm here is a positive false claim, not an invitation to delete
-// anything — and a positive false claim about what did or did not reach the
-// cart is still the reporting side of Stephen's second principle. A wrong answer
-// is worse than no answer, which is the whole trade below.
+// SYMMETRY IS ASSUMED, NOT MEASURED. The 302 was observed once, anonymously,
+// while the app only ever probes logged in. A `/cart` that bounces an empty cart
+// but serves a full one gives the asymmetric pair instead — before `0 / []`,
+// after real items — and then diffCartItems attributes the user's whole cart to
+// this run and the over-add copy fires (~:2867): "N items added that Mealio
+// didn't intend". That is reachable, and it is the narrative 56917aa opened
+// with.
+//
+// What does NOT make it unreachable is the after-probe's gate. An earlier
+// version of this comment claimed that; it is wrong in the very world this
+// paragraph describes. The gate is `hasBaseline: cartCountBeforeRef.current !=
+// null` (WebViewCartSheet.tsx :1558, :4431) and the defect's baseline is 0, not
+// null — `0 != null` is true, so the after-probe runs. Only the guard below
+// closes that gate, by making the unknown case actually null.
+//
+// One more surface, named because it is NOT dormant. The after-probe is at least
+// gated on a baseline; the parallel-add reconcile probe
+// (triggerCartProbe('reconcile'), from finishParallelAdd) is not, so with no
+// baseline it diffs against an empty cartItemsBeforeRef. That path is not
+// HEB-only — an earlier version of this comment said so and it is false. It
+// needs getSearchUrl + buildWorkerScript + !forceSerialSearch
+// (WebViewCartSheet.tsx :2041), which HEB, WALMART, Amazon Fresh and the
+// Albertsons family all satisfy; only ALDI and Wegmans force serial. So it is
+// live on the one store whose redirect is actually demonstrated.
+//
+// After the guard it degrades safely there too: a refusal carries no `items`, so
+// `rows` stays null and the reconcile falls back to worker reports rather than
+// diffing against nothing. The residual needs the same asymmetric pair as above,
+// and it is pre-existing either way — a before-probe that merely times out
+// leaves the identical empty ref — so it stays with MEAL-47 rather than growing
+// this change.
+//
+// Either way the fix is the same and the reason is the same: a wrong answer is
+// worse than no answer.
 //
 // So: a script that cannot tell it is on the cart page reports null.
 //
@@ -809,13 +838,20 @@ export function buildInlineCartScript(storeId: string): string | null {
 // anonymously on 2026-08-07 under the app's mobile UA), so the guard below is
 // a no-op on today's HEB.
 //
-// It is here because HEB is the store with the most to lose from a wrong zero:
-// this snapshot is what the done screen's added-vs-already-there diff is
-// computed against, and HEB is the only store on the parallel-add path, whose
-// reconcile probe diffs against this baseline WITHOUT checking that one was
-// captured. NOT the MEAL-14 cart-query rail, which an earlier version of this
-// comment credited: that rail takes its own per-add baseline in-page via
-// __hebCartRead (heb.ts ~:855, ~:1379) and never reads this snapshot.
+// It is here because this snapshot is what the done screen's added-vs-already-
+// there diff is computed against, and because HEB is one of the four families on
+// the parallel-add path, whose reconcile probe diffs against this baseline
+// WITHOUT checking that one was captured.
+//
+// Two things this comment has now claimed and had to withdraw, both left visible
+// so the next reader does not re-derive them:
+//   • NOT the MEAL-14 cart-query rail. That rail takes its own per-add baseline
+//     in-page via __hebCartRead (heb.ts ~:855, ~:1379) and never reads this
+//     snapshot.
+//   • NOT "HEB is the only store on the parallel-add path". Walmart, Amazon
+//     Fresh and the Albertsons family qualify too (see the reconcile paragraph
+//     above cartPathGuardJs); only ALDI and Wegmans force serial. HEB has no
+//     special standing here beyond being the store this script serves.
 //
 // See the note above cartPathGuardJs.
 const HEB_CART_PAGE_SCRIPT = `(async function() {
