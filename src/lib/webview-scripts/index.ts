@@ -15,6 +15,12 @@ import { getScripts as getWegmansScripts } from './wegmans';
 import { getScripts as getMockStoreScripts, MOCK_STORE_ENABLED } from './mockstore';
 import { buildExtractWorker } from './worker-search';
 import { storeConfig, searchUrlFor, isStoreEnabled } from '../automation-config';
+import {
+  SelectorSurface,
+  albertsonsSelectorSurface,
+  selectorSurfaceFor,
+  withSelectorProbe,
+} from '../selector-health';
 
 export interface StoreScripts {
   storeUrl: string;
@@ -128,6 +134,43 @@ function getHebScripts(): StoreScripts {
   };
 }
 
+// ── Selector health (MEAL-31) ────────────────────────────────────────────────
+
+/**
+ * Prepend the selector probe to every script this adapter hands the WebView.
+ *
+ * Done HERE, at the one seam every store's scripts pass through, rather than in
+ * each of the six adapters: a store added later is measured without anyone
+ * remembering to opt it in, and there is a single place to read to know what is
+ * instrumented. The prefix is a no-op for a script that interpolates none of the
+ * store's configured selectors, so the search-navigation scripts and the mock
+ * store carry nothing.
+ *
+ * PREPENDED, not appended, and that is load-bearing rather than stylistic — see
+ * the module header of selector-health.ts. The parallel-pool wrappers install
+ * postMessage overrides that swallow messages they do not recognise, and running
+ * first is what puts the probe's hook UNDER them, next to the native bridge.
+ *
+ * The builder fields are wrapped lazily so a script is only scanned when it is
+ * actually built. Nothing here can throw: withSelectorProbe returns the original
+ * script on any failure.
+ */
+function withSelectorProbes(surface: SelectorSurface | null, s: StoreScripts): StoreScripts {
+  if (!surface) return s;
+  const wrap = (script: string) => withSelectorProbe(surface, script);
+  return {
+    ...s,
+    checkLoginScript: wrap(s.checkLoginScript),
+    extractProductsScript: wrap(s.extractProductsScript),
+    buildAddToCartScript: (name, pref, qty, weight) => wrap(s.buildAddToCartScript(name, pref, qty, weight)),
+    buildSearchScript: (term) => wrap(s.buildSearchScript(term)),
+    buildSearchAndAddScript: (term, qty, dd) => wrap(s.buildSearchAndAddScript(term, qty, dd)),
+    buildWorkerScript: s.buildWorkerScript
+      ? (workerId: number) => wrap(s.buildWorkerScript!(workerId))
+      : undefined,
+  };
+}
+
 // ── Lookup ───────────────────────────────────────────────────────────────────
 
 export function getStoreScripts(storeId: string): StoreScripts | null {
@@ -146,19 +189,27 @@ export function getStoreScripts(storeId: string): StoreScripts | null {
   // parameterized adapter, so a new banner is a registry entry rather than a case
   // here. Each keeps its own config key — unlike the Albertsons family, these are
   // separate retailers whose selectors can drift apart.
-  if (INSTACART_STORE_IDS.includes(storeId)) return getInstacartScriptsFor(storeId);
+  if (INSTACART_STORE_IDS.includes(storeId)) {
+    const instacart = getInstacartScriptsFor(storeId);
+    return instacart && withSelectorProbes(selectorSurfaceFor(storeId), instacart);
+  }
 
   switch (storeId) {
-    case 'heb':            return getHebScripts();
-    case 'walmart':        return getWalmartScripts();
-    case 'amazon':         return getAmazonFreshScripts();
-    case 'wegmans':        return getWegmansScripts();
+    case 'heb':     return withSelectorProbes(selectorSurfaceFor(storeId), getHebScripts());
+    case 'walmart': return withSelectorProbes(selectorSurfaceFor(storeId), getWalmartScripts());
+    case 'amazon':  return withSelectorProbes(selectorSurfaceFor(storeId), getAmazonFreshScripts());
+    case 'wegmans': return withSelectorProbes(selectorSurfaceFor(storeId), getWegmansScripts());
     // Dev/e2e only: the deterministic mock store for Maestro. Returns null in
     // production (flag unset) so it can never be reached even if a meal carries it.
+    // Deliberately unprobed: it has no automation-config selector table, and a
+    // deterministic fixture store has no drift to catch.
     case 'mockstore':      return MOCK_STORE_ENABLED ? getMockStoreScripts() : null;
     default:
       if (ALBERTSONS_FAMILY_IDS.includes(storeId)) {
-        return getAlbertsonsScripts(storeId);
+        // One selector table serves all 15 banners, so the surface is the shared
+        // 'albertsons' one whichever banner is running — the same key the kill
+        // switch above is checked against.
+        return withSelectorProbes(albertsonsSelectorSurface(), getAlbertsonsScripts(storeId));
       }
       return null;
   }

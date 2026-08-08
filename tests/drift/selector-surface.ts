@@ -32,12 +32,12 @@
 
 import { selectorsFor } from '../../src/lib/automation-config';
 import { FIXTURE_CAPTURE_STORES } from '../../src/lib/fixture-capture-config';
-import { SEL_FALLBACKS as HEB_FALLBACKS } from '../../src/lib/webview-scripts/heb';
-import { SEL_FALLBACKS as WALMART_FALLBACKS } from '../../src/lib/webview-scripts/walmart';
-import { SEL_FALLBACKS as WEGMANS_FALLBACKS } from '../../src/lib/webview-scripts/wegmans';
-import { SEL_FALLBACKS as AMAZON_FALLBACKS } from '../../src/lib/webview-scripts/amazon-fresh';
-import { SEL_FALLBACKS as ALBERTSONS_FALLBACKS } from '../../src/lib/webview-scripts/albertsons';
-import { INSTACART_TENANTS, selFallbacks } from '../../src/lib/webview-scripts/instacart';
+// MEAL-31 needed the same store → fallback-table mapping at RUNTIME, to know
+// which selectors a live cart run should sample. Sourcing both from one registry
+// is what stops the fixture census and the runtime probe watching different
+// surfaces — the failure that would be invisible is the census going quiet on a
+// selector the app still depends on.
+import { albertsonsSelectorSurface, selectorSurfaceFor } from '../../src/lib/selector-health';
 
 export interface StoreSurface {
   /** Fixture directory under tests/fixtures/, and the key in FIXTURE_CAPTURE_STORES. */
@@ -57,27 +57,36 @@ export interface StoreSurface {
   note?: string;
 }
 
+/** The runtime registry's table for a store id, which is the same object the
+ *  store's scripts pass to selectorsFor(). Throws rather than silently censusing
+ *  an empty table if a store is ever dropped from the registry. */
+function fallbacksFor(storeId: string): Record<string, string> {
+  const surface = selectorSurfaceFor(storeId);
+  if (!surface) throw new Error(`no selector surface registered for '${storeId}'`);
+  return surface.fallbacks;
+}
+
 export const STORE_SURFACES: StoreSurface[] = [
   {
     fixtureDir: 'heb',
     configKey: 'heb',
-    fallbacks: HEB_FALLBACKS,
+    fallbacks: fallbacksFor('heb'),
     // MEAL-13 added the `__NEXT_DATA__` reader. HEB is the only store with two
     // extraction surfaces, so it is the only one with a JSON census.
     nextData: true,
   },
-  { fixtureDir: 'walmart', configKey: 'walmart', fallbacks: WALMART_FALLBACKS },
-  { fixtureDir: 'wegmans', configKey: 'wegmans', fallbacks: WEGMANS_FALLBACKS },
+  { fixtureDir: 'walmart', configKey: 'walmart', fallbacks: fallbacksFor('walmart') },
+  { fixtureDir: 'wegmans', configKey: 'wegmans', fallbacks: fallbacksFor('wegmans') },
   {
     fixtureDir: 'amazon-fresh',
     configKey: 'amazon',
-    fallbacks: AMAZON_FALLBACKS,
+    fallbacks: fallbacksFor('amazon'),
     note: 'captures under amazon-fresh/, selectors under the config key `amazon`',
   },
   {
     fixtureDir: 'albertsons',
     configKey: 'albertsons',
-    fallbacks: ALBERTSONS_FALLBACKS,
+    fallbacks: albertsonsSelectorSurface().fallbacks,
     note:
       'one selector table serves all 15 Albertsons banners; the captures are ACME, ' +
       'so a finding here is a finding for every banner on the platform',
@@ -89,7 +98,7 @@ export const STORE_SURFACES: StoreSurface[] = [
     // the tenant rather than a constant — `cardLink` weaves in the /store/ slug.
     // Resolved per banner for that reason; a second Instacart banner registered
     // with fixtures gets its own entry here, not a share of this one.
-    fallbacks: selFallbacks(INSTACART_TENANTS.aldi),
+    fallbacks: fallbacksFor('aldi'),
     note: 'Instacart Storefront tenant; selectors are the platform table with ALDI\'s slug woven in',
   },
 ];

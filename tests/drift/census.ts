@@ -132,45 +132,16 @@ export function ratioBucket(present: number, total: number): RatioBucket {
 /**
  * Split a selector into its top-level comma-separated branches.
  *
- * Depth-aware, because commas also appear INSIDE a branch and splitting on those
- * would produce nonsense that querySelectorAll rejects:
- *   • `:not([type="submit"])` and other functional pseudo-classes take argument
- *     lists — HEB's `searchOpen` has one;
- *   • an attribute value can contain a comma — Amazon's
- *     `button[aria-label^="Add to Cart,"]` does, and naively split it yields
- *     `button[aria-label^="Add to Cart` plus a stray `"]`.
+ * Re-exported rather than defined here since MEAL-31: the runtime selector probe
+ * needs the same split, and it ships in the app, so the implementation moved to
+ * src/lib/selector-health.ts. Both readers have to agree on what "branch 1" is —
+ * this census names a finding `card[1]` and the probe reports a fallback hit on
+ * the same index, and two copies would eventually disagree about which branch
+ * that is. Imported here so every existing caller keeps its import path.
  */
-export function splitSelectorBranches(selector: string): string[] {
-  const out: string[] = [];
-  let buf = '';
-  let depth = 0;
-  let quote: string | null = null;
+import { splitSelectorBranches } from '../../src/lib/selector-health';
 
-  for (const ch of selector) {
-    if (quote) {
-      buf += ch;
-      // CSS string escapes are not handled: merge.ts rejects backslashes in a
-      // configured selector, and no developer-authored fallback contains one.
-      if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      buf += ch;
-      continue;
-    }
-    if (ch === '(' || ch === '[') depth++;
-    else if (ch === ')' || ch === ']') depth--;
-    else if (ch === ',' && depth === 0) {
-      if (buf.trim()) out.push(buf.trim());
-      buf = '';
-      continue;
-    }
-    buf += ch;
-  }
-  if (buf.trim()) out.push(buf.trim());
-  return out;
-}
+export { splitSelectorBranches };
 
 /**
  * The census key for a selector, or for one branch of it.

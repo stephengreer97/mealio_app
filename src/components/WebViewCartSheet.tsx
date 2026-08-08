@@ -42,6 +42,7 @@ import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
+import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-health';
 import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
@@ -633,6 +634,17 @@ export default function WebViewCartSheet({
   // Keyed by worker id; the main WebView uses MAIN_SURFACE.
   const MAIN_SURFACE = -1;
   const extractWhyRef = useRef<Record<number, string | null>>({});
+  // MEAL-31: per-selector resolution, accumulated across every WebView this run
+  // uses — the main one and both worker pools — and reported as ONE row at the
+  // end. A ref rather than state: nothing renders from it, and a setState per
+  // sample would re-render the sheet ~20 times a run to display nothing.
+  const selectorHealthRef = useRef(new SelectorHealthTally());
+  /** Fold a SELECTOR_HEALTH message in. Returns true when it was one. */
+  const ingestSelectorHealth = useCallback((msg: { type?: string; sel?: unknown }): boolean => {
+    if (msg?.type !== SELECTOR_HEALTH_MESSAGE) return false;
+    selectorHealthRef.current.ingest(msg.sel);
+    return true;
+  }, []);
   const takeExtractWhy = useCallback((surface: number): string | null => {
     const why = extractWhyRef.current[surface] ?? null;
     // Consume it: a stale reason attached to a LATER search would be worse than
@@ -861,6 +873,11 @@ export default function WebViewCartSheet({
   const onPresearchWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
+      // MEAL-31. The probe's hook sits UNDER the presearch wrapper's postMessage
+      // override (it is prepended, so it installs first), which is the only
+      // reason a sample survives this path at all — the wrapper swallows every
+      // message type it does not name.
+      if (ingestSelectorHealth(msg)) return;
       if (msg.type === 'WORKER_DEBUG') {
         // The wrappers re-tag the extractor's EXTRACT_DEBUG as WORKER_DEBUG, so
         // MEAL-13's ndReason arrives here — the ONLY place it can be read on this
@@ -888,7 +905,7 @@ export default function WebViewCartSheet({
     } catch (e) {
       console.log(`[Cart ${ts()}]`, 'onPresearchWorkerMessage parse error w', workerId, e);
     }
-  }, [presearchPool, recordWorkerCandidates]);
+  }, [presearchPool, recordWorkerCandidates, ingestSelectorHealth]);
 
   // Emit coarse status (incl. a determinate progress fraction) upward so the
   // provider can drive the floating bubble. No-op in modal mode.
@@ -1127,6 +1144,7 @@ export default function WebViewCartSheet({
   const onAddWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
+      if (ingestSelectorHealth(msg)) return;   // MEAL-31
       if (msg.type === 'WORKER_DEBUG') {
         // Diagnostic (saa_*) steps carry a full DOM snapshot — don't truncate
         // those; keep the 200-char cap only for the noisy per-tick messages.
@@ -1158,7 +1176,7 @@ export default function WebViewCartSheet({
     } catch (e) {
       console.log(`[Cart ${ts()}]`, 'onAddWorkerMessage parse error w', workerId, e);
     }
-  }, [addPool]);
+  }, [addPool, ingestSelectorHealth]);
 
   // Navigate the store WebView. Default: append a `?_t=<ts>` cache-buster so the
   // load is unique (forces a real reload + dodges the onLoadEnd same-URL dedup).
@@ -1185,6 +1203,7 @@ export default function WebViewCartSheet({
   const onWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
+      if (ingestSelectorHealth(msg)) return;   // MEAL-31
       if (msg.type === 'WORKER_DEBUG') {
         console.log(`[Cart ${ts()}]`, 'WORKER_DEBUG w', workerId, JSON.stringify(msg));
         // MEAL-13's extractor reason (see extractWhyRef), re-tagged by the wrapper.
@@ -1201,7 +1220,7 @@ export default function WebViewCartSheet({
     } catch (e) {
       console.log(`[Cart ${ts()}]`, 'onWorkerMessage parse error w', workerId, e);
     }
-  }, [parallelPool, recordWorkerCandidates]);
+  }, [parallelPool, recordWorkerCandidates, ingestSelectorHealth]);
 
   // ── Reset on open ────────────────────────────────────────────────────────
 
@@ -1256,6 +1275,11 @@ export default function WebViewCartSheet({
       blockReasonRef.current = null;
       freshStoreUnavailableRef.current = false;
       extractWhyRef.current = {};
+      // A fresh tally per run. Under !FEATURE_BACKGROUND_CART this component
+      // survives between runs, so without this run 2 would report run 1's
+      // selector samples — and it is a RATE, so carrying a healthy run's
+      // denominator into a broken one is exactly the way to hide the break.
+      selectorHealthRef.current = new SelectorHealthTally();
       console.log(`[Cart ${ts()}]`, 'initial webviewUri=', scriptsRef.current!.storeUrl);
       setWebviewUri(scriptsRef.current!.storeUrl);
       loadQueueRef.current = [];
@@ -1504,6 +1528,28 @@ export default function WebViewCartSheet({
     } else {
       tel().record('run_summary', 'ok', { detail: runSummaryDetail(summaryFacts) });
     }
+    // MEAL-31: what every configured selector did this run, as ONE row.
+    //
+    // Emitted BEFORE run_summary would have been the tidier reading order, but it
+    // goes after deliberately: run_summary is the row most worth keeping if a
+    // batch is dropped, and nothing should be able to delay it. This row is an
+    // 'ok' reconcile so it never lands a code on the run's tally — a store having
+    // half-drifted is not this run failing, and it must not colour the code the
+    // dashboard groups on.
+    //
+    // It rides on `reconcile` rather than a step name of its own because StepName
+    // is a contract shared with the Kroger Brands web extension: a member only
+    // this app emits reads as a hole on the extension's chart. `phase` in the
+    // detail is how it is told apart from the other reconcile rows a run emits
+    // (the cart diff, the MEAL-47 recovery, the north-star correction) — the same
+    // way those already tell each other apart.
+    //
+    // undefined when nothing was sampled: a run that never reached a store page,
+    // or a store with no probed selectors. No row at all is the honest report,
+    // and it is what keeps the volume cost of this feature at zero for a run that
+    // measured nothing.
+    const selectorDetail = selectorHealthRef.current.detail();
+    if (selectorDetail) tel().record('reconcile', 'ok', { detail: selectorDetail });
     void tel().flush();
     // skippedByIdx / unverifiedWeightLines are read above; automationCompletedRef
     // keeps this to one firing per run whatever re-renders the extra dependencies
@@ -2349,6 +2395,11 @@ export default function WebViewCartSheet({
     (event: WebViewMessageEvent) => {
       try {
         const msg = JSON.parse(event.nativeEvent.data);
+        // MEAL-31's samples ride the same bridge as everything else and there is
+        // one per script completion, so they are folded in and dropped BEFORE the
+        // log line — otherwise the console buffer the bug-report path uploads
+        // fills with selector maps nobody reads.
+        if (ingestSelectorHealth(msg)) return;
         console.log(`[Cart ${ts()}]`, 'onMessage type=', msg.type, msg);
 
         // A store's buildSearchScript is about to do window.location.href = target.
@@ -3102,7 +3153,7 @@ export default function WebViewCartSheet({
         // ignore
       }
     },
-    [navigateToSearchItem, navigateToAddItem],
+    [navigateToSearchItem, navigateToAddItem, ingestSelectorHealth],
   );
 
   // ── Review step helpers ──────────────────────────────────────────────────
