@@ -5,6 +5,11 @@ of those claims is actually known.**
 
 MEAL-32. Written 2026-08-08 against `origin/main` (`03da52f`).
 
+**Line numbers** in Parts 1–3 are `origin/main` — that is the state being
+audited, and the findings are about it. Part 5 describes what this branch
+changed, so its line numbers are this branch's. Each part says which it is
+using; nothing mixes them silently.
+
 ---
 
 ## Why this file exists
@@ -189,12 +194,28 @@ so the initial burst is neither simultaneous nor evenly spaced. *(Asserted, as a
 anti-bot measure. The mechanism is real and the intent is documented; no store is
 known to have been measured with and without it.)*
 
-Global defaults were dropped from 5 to 3 "for anti-bot reasons". *(Asserted.)*
-The only *measured* fact about 5 workers is a different failure mode entirely:
-**5 concurrent add WebViews crashed the iOS WKWebView content process** on
-Albertsons — memory, not bot defence. *(Measured, commit `80b3314`.)* Note that
-commit set Albertsons to **4**; today it is **3**. The drop from 4 to 3 has no
-recorded reason.
+Global defaults were dropped from 5 to 3, and the stagger from 0 to 400 ms, in
+commit `cface76` — *"Reduce the concurrent-request burst that aggressive WAFs
+score as automation"*. A reason is stated and no measurement is cited, so:
+*(Asserted.)* That is a grade about the evidence, not about whether anyone
+thought about it.
+
+The nearest thing to a hard fact about 5 workers is a different failure mode
+entirely: **5 concurrent add WebViews crashed the iOS WKWebView content
+process** on Albertsons — memory, not bot defence. *(Observed, commit
+`80b3314`.)* Graded Observed rather than Measured deliberately: the sole record
+is a sentence in a commit message. A content-process crash is unambiguous in a
+way a WAF block is not, but there is no isolated run, no recorded numbers, and
+only one direction was tried. Grading it Measured while grading Walmart's
+provoked block Observed (§1.4) would be applying two standards, and this
+document is worth less than nothing if it does that.
+
+That commit's own comment recorded a range, not a single data point: *"3 was
+safe but slow; 5 crashed"* — which is where the surviving "proven safe" claim
+comes from. It set Albertsons to **4**; the later drop to **3** is commit
+`504bfac`, *"Drop Albertsons parallel workers 4→3 to match the low global
+default"*, reasoning that 3 was already proven safe on iOS and the small speed
+loss was acceptable. *(Asserted, and consistent with `80b3314`'s observation.)*
 
 ### 1.6 How a block is detected, and what gets recorded
 
@@ -346,10 +367,17 @@ staggered workers were still blocked**. That is a real measurement and a
 meaningfully different one from ALDI's — it says the floor is 1, not merely
 "lower than 5". *(Measured, `36b4a46`.)*
 
-**Not measured:** the cache-buster. The commit says *"Also drop the `?_t=`
+**Not measured:** the cache-buster. Two artifacts, and they say different things.
+The code comment (`wegmans.ts:1055-1056`) reads *"Also drop the `?_t=`
 cache-buster on main-webview navs"* — "also", in the same breath as ALDI's fix.
-Read plainly, this was applied **prophylactically by analogy to ALDI**, not
-because a Wegmans request was seen failing on `?_t=`. **Grade: Inferred.**
+The commit (`36b4a46`) is terser and arguably stronger, folding both stores into
+one clause: *"ALDI & Wegmans forced serial (WAF 403s concurrent workers) +
+cacheBustNav:false (drop the `?_t=` query the WAF flagged)"*.
+
+Neither is a Wegmans-specific observation. The only isolated `?_t=` evidence
+anywhere is ALDI's, and the commit's joint phrasing is exactly how one store's
+finding gets read back as two. Applied **by analogy to ALDI**, most likely.
+**Grade: Inferred.**
 
 That matters, because Wegmans is the store where §3.1's inconsistency actually
 lands: it opted out of the cache-buster, and its cart-page navigations still send
@@ -371,14 +399,20 @@ Haggen, Carrs, Kings, Balducci's…) read the single `albertsons` config entry, 
 `schema.ts:385`.
 
 **The worker count here is a memory limit that got explained as an anti-bot
-limit, and the two have been conflated ever since.** What was measured: 5
-concurrent add WebViews **crashed the iOS WKWebView content process** (shared
-memory budget). *(Measured, `80b3314`.)* No Albertsons WAF block has ever been
-recorded. The current comment says 3 "is proven safe and matches the low global
-default for anti-bot reasons" — *proven safe* is **Asserted**; what is proven is
-only that 5 crashes.
+limit, and the two have been conflated ever since.** What was seen: 5 concurrent
+add WebViews **crashed the iOS WKWebView content process** (shared memory
+budget), while 3 was *"safe but slow"*. *(Observed, `80b3314` — a sentence in a
+commit message, not a recorded run. §1.5 explains why this is not Measured.)*
+**No Albertsons WAF block has ever been recorded.**
 
-Also note the undocumented drift: `80b3314` set it to **4**; today it is **3**.
+So the current comment's "3 is proven safe and matches the low global default
+for anti-bot reasons" is two claims of different strength welded together. The
+first traces to a real prior observation. The second is **Asserted** — it
+inherits the global default's reasoning (`cface76`), and no Albertsons-specific
+block motivates it.
+
+`80b3314` set it to **4**; `504bfac` took it to **3** to match that global
+default. Both steps are recorded; neither is measured.
 
 ### Amazon Fresh
 
@@ -456,11 +490,15 @@ produces a wrong baseline, and MEAL-152 shows what wrong cart baselines cost.
 
 | Key | Bundled | Read by the engine? |
 | --- | --- | --- |
-| `flags.parallelAddWorkers` | 3 | **Yes** — `WebViewCartSheet.tsx:712` |
+| `flags.parallelAddWorkers` | 3 | **Yes** — `WebViewCartSheet.tsx:721` |
 | `flags.addCommitJitterMs` | 500 | No — `:801` used the `features.ts` constant |
 | `flags.parallelAdd` | true | No — `:1915` used the `features.ts` constant |
 | `flags.presearchAdd` | true | No — `:1597` used the `features.ts` constant |
 | `flags.backgroundCart` | true | No |
+
+The three "No" rows cite `origin/main`, since they describe the state this audit
+found. `parallelAddWorkers` cites this branch: it is the one row that is still
+true after the change.
 
 They merge, they type-check, they are bounds-checked, `automationConfigMerge.test.ts`
 asserts that malformed values are refused — and then nothing consumes them. A
@@ -575,9 +613,12 @@ Three dead config keys wired to their call sites (§3.2):
 
 | Key | Call site | Effect of a push |
 | --- | --- | --- |
-| `flags.addCommitJitterMs` | `:801` pre-search commit jitter | Spread the commit burst without a release |
-| `flags.parallelAdd` | `:1915` parallel-add path gate | Globally fall back to sequential adds |
-| `flags.presearchAdd` | `:1597` pre-search parking gate | Globally disable parked-page adds |
+| `flags.addCommitJitterMs` | `:815` pre-search commit jitter | Spread the commit burst without a release |
+| `flags.parallelAdd` | `:1949` parallel-add path gate | Globally fall back to sequential adds |
+| `flags.presearchAdd` | `:1623` pre-search parking gate | Globally disable parked-page adds |
+
+(Line numbers in this part are **this branch**, not `origin/main` — it describes
+the post-change state, so the header's convention does not apply here.)
 
 They are read through `cfgFlagsRef`, matching the file's existing idiom for
 values consumed inside `[]`-dependency callbacks, so a stale closure cannot
@@ -614,6 +655,10 @@ Ranked. None acted on.
 4. **Everything we believe about H-E-B comes from an invalid instrument.**
    MEAL-44 (real device, production build) is the only thing that converts it
    into knowledge, and it has not run.
-5. **Two stagger/concurrency values have no recorded reason** — the global 5→3 and
-   Albertsons' 4→3. Both are conservative, so neither is urgent; both are places
-   where a future "cleanup" would find no argument to push back against.
+5. **The concurrency defaults are reasoned but unmeasured.** The global 5→3 plus
+   the 400 ms stagger (`cface76`) and Albertsons' 4→3 (`504bfac`) each state a
+   reason in their commit message; none cites a measurement, and no store's block
+   rate was compared before and after. Both are conservative, so neither is
+   urgent — but a future "cleanup" arguing "there's no evidence 3 beats 5" would
+   be *correct*, and the answer is that there is no evidence either way. That is
+   what item 1 above is for.
