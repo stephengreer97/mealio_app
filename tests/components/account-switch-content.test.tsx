@@ -301,7 +301,12 @@ async function launchSignedInAsA() {
       <RootNavigator />
     </AuthProvider>,
   );
-  await waitFor(() => expect(utils.queryByText(A_MEAL.name)).not.toBeNull());
+  // Explicit timeout, not the RNTL default of 1s. The first test in this file pays
+  // module init plus the first render of the real AuthProvider, RootNavigator,
+  // MyMealsScreen and DiscoverScreen — under parallel workers that exceeds a second,
+  // so this passed alone and failed in a full run. Found by cold review; the author
+  // had only run the file in isolation.
+  await waitFor(() => expect(utils.queryByText(A_MEAL.name)).not.toBeNull(), { timeout: 15_000 });
   return utils;
 }
 
@@ -411,14 +416,35 @@ describe('the same account being re-set', () => {
 
   it("survives the same person's profile coming back with different values", async () => {
     // Not only a new object with identical contents. `refreshUser` runs straight
-    // after a purchase and after a subscription lapses, so the tier genuinely
-    // comes back changed on the same account — which rules out keying on
-    // anything derived from the user's fields rather than on the id alone. It is
-    // also the worst possible moment to throw the screen away: whatever they
-    // were part-way through is still there.
+    // after a purchase, so the tier genuinely comes back changed on the same
+    // account — which rules out keying on anything derived from the user's fields
+    // rather than on the id alone. It is also the worst possible moment to throw
+    // the screen away: whatever they were part-way through is still there.
+    //
+    // (An earlier version of this comment also claimed a subscription lapse calls
+    // `refreshUser`. It does not — `onEntitlementChange` only sets local state. A
+    // lapse reaches the app at the next `auth.verify()`, which is still a
+    // same-id-new-tier re-set, so the argument holds by a different route.)
     const utils = await launchSignedInAsA();
 
     await tapVerificationLinkAs({ ...USER_A, tier: 'free' }, [A_MEAL]);
+
+    expect(utils.queryByText(A_MEAL.name)).not.toBeNull();
+    expect(mounted()).toBe(1);
+  });
+
+  it('survives a changed email on the same account', async () => {
+    // The tier case above rules out one derived field. It does not rule out the
+    // others: cold review mutated the key to `user.email` and every test in this
+    // file, in useSessionEnd and in account-switch-boundary still passed — 32 of 32.
+    //
+    // No live defect today (`User.id` is required and there is no email-change
+    // feature), so this is a coverage gap rather than a bug. It is worth closing
+    // because the whole point of the key is that it tracks IDENTITY, and a reader
+    // adding a field to User should find a test that says so rather than a comment.
+    const utils = await launchSignedInAsA();
+
+    await tapVerificationLinkAs({ ...USER_A, email: 'a-new-address@example.com' }, [A_MEAL]);
 
     expect(utils.queryByText(A_MEAL.name)).not.toBeNull();
     expect(mounted()).toBe(1);
