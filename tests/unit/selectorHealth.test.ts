@@ -349,7 +349,17 @@ function runWorkerInPage(script: string, terminal: Record<string, unknown>) {
     },
     location: { href: 'https://store.test/s?k=milk', pathname: '/s', search: '?k=milk', hash: '', host: 'store.test', origin: 'https://store.test' },
     navigator: { userAgent: 'test' },
-    JSON, setTimeout, clearTimeout, Promise, Date, Math,
+    JSON, Promise, Date, Math,
+    // A setTimeout that never fires, and this is not a shortcut. The store bodies
+    // are polling loops — `for (i=0; i<30; i++) { ...; await wait(200) }` — and
+    // handing them the host's real timer leaves eighteen of them scheduling work
+    // in the jest worker long after this file is done, which starved the
+    // concurrently-running component project and made four unrelated,
+    // timing-sensitive tests flake one at a time. Nothing here needs a timer to
+    // fire: both hooks install synchronously, ahead of any body, and the terminal
+    // message is posted by hand.
+    setTimeout: () => 0,
+    clearTimeout: () => {},
   };
   vm.createContext(ctx);
   ctx.window = ctx;
