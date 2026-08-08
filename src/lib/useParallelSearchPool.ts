@@ -31,6 +31,61 @@
 
 import { useCallback, useRef, useState } from 'react';
 
+/** One item's final result, handed to onSettled. */
+export interface PoolSettled<TResult> {
+  /** Slot that ran the item. Slots are reused, so this is not an item identity. */
+  workerId: number;
+  /** The item's index in the array passed to start(). */
+  itemIndex: number;
+  result: TResult;
+  /** True when no worker reported in time and `emptyResult()` was synthesized. */
+  timedOut: boolean;
+  /**
+   * Whether an add was actually sent to the item's page before it settled.
+   *
+   * It separates "we tried to add this and it didn't land" from "we never got as
+   * far as trying", which is the difference between an item that belongs in the
+   * confirm-rate denominator and one that does not.
+   *
+   * The two pools know this to different depths, and the flag reports what each
+   * one can honestly say:
+   *
+   *   useParallelSearchPool — always true once an item is dispatched. The add
+   *     rides the page load (the worker's URL carries the payload and its script
+   *     fires search+add on load), so dispatch happens inside the page and the RN
+   *     side has no signal that separates "the page never loaded" from "it loaded
+   *     and never answered". Both arrive as silence.
+   *
+   *     The engine resolves that same ambiguity BOTH ways, so neither is a
+   *     precedent to hide behind. `path:'sequential'` emits add_click the moment
+   *     it dispatches, on the stated grounds that a click producing no signal
+   *     would otherwise vanish and flatter the confirm rate. `path:'fused'` —
+   *     structurally the closer analogue, since its add also fires inside an
+   *     injected script — does the opposite: on silence its timeout records
+   *     `search`/`timeout` and no add half at all.
+   *
+   *     True here follows `sequential`, deliberately. Silence over a 35s budget
+   *     that spans search, click AND the cart-badge confirmation poll is far more
+   *     likely to be an add that went unanswered than a page that never loaded,
+   *     and the cost of each error is not symmetric: over-counting reads the
+   *     confirm rate LOW, under-counting reads it high. A metric about whether
+   *     adds land should fail toward admitting failure.
+   *
+   *   usePresearchAddPool — known for its PARKED workers. Injecting the add is
+   *     an explicit RN-side act (injectAdd sets the phase), so a parked item
+   *     whose page was still loading when the run stopped waiting reports false,
+   *     and that is not a guess.
+   *
+   *     NOT known for its COLD slot, which the pool reports true for and should
+   *     not: dispatchColdNext sets phase 'adding' at dispatch, before the page
+   *     has loaded, and the injection happens later in the component's onLoadEnd.
+   *     The pool has no way to see that, so the CALLER corrects it — see
+   *     presearchAddDispatched in lib/pool-add-funnel. Anything reading this flag
+   *     straight off a pre-search settle is wrong on the cold slot.
+   */
+  addDispatched: boolean;
+}
+
 export interface ParallelPoolOptions<TItem, TResult> {
   /** Number of concurrent workers. Each gets its own URI slot. */
   workerCount: number;
@@ -43,6 +98,15 @@ export interface ParallelPoolOptions<TItem, TResult> {
   /** Synthetic empty result used on timeout, so the result map always has
    *  exactly `items.length` entries when the pool finishes. */
   emptyResult: () => TResult;
+  /** Called exactly once per dispatched item, at the moment its result becomes
+   *  final — for a worker-reported result and for a synthesized timeout alike.
+   *  This is the pool's only reporting seam; the pool itself stays
+   *  telemetry-agnostic so it remains reusable, and the caller decides what (if
+   *  anything) to emit. It fires BEFORE onAllDone, so every per-item row precedes
+   *  the run's terminal rows. Errors thrown here are swallowed: a reporting
+   *  mistake must not break a cart run. Items abandoned by reset() never settle
+   *  and are deliberately not reported. */
+  onSettled?: (info: PoolSettled<TResult>) => void;
   /** When > 0, the INITIAL burst is staggered: worker 0 starts immediately and
    *  each subsequent worker starts after ~i * dispatchStaggerMs (plus jitter),
    *  instead of all firing at once. Softens the "N simultaneous requests"
@@ -120,6 +184,11 @@ export function useParallelSearchPool<TItem, TResult>(
     new Array(workerCount).fill(null),
   );
   const onAllDoneRef = useRef<((r: Map<number, TResult>) => void) | null>(null);
+  // Read through a ref, not a dependency: the option is rebuilt on every render
+  // of the caller, and putting it in dispatchToWorker's deps would rebuild the
+  // dispatch closure (and so `start`) on every render.
+  const onSettledRef = useRef(options.onSettled);
+  onSettledRef.current = options.onSettled;
   // Bumped on every start()/reset(). A staggered initial-dispatch timer checks
   // this against the run it was scheduled in, so a reset (or a new run) cancels
   // any still-pending stagger timers without per-timer bookkeeping.
@@ -149,6 +218,12 @@ export function useParallelSearchPool<TItem, TResult>(
       clearTimeout(t);
       workerTimersRef.current[workerId] = null;
     }
+  }, []);
+
+  /** Report one item's final result. Swallows anything the caller throws — the
+   *  pool's job is dispatching adds, and a reporting bug must not stop it. */
+  const notifySettled = useCallback((info: PoolSettled<TResult>) => {
+    try { onSettledRef.current?.(info); } catch { /* reporting must not break the pool */ }
   }, []);
 
   const tryFinish = useCallback(() => {
@@ -184,15 +259,17 @@ export function useParallelSearchPool<TItem, TResult>(
       workerTimersRef.current[workerId] = null;
       const stuckIdx = workerIdxRef.current[workerId];
       if (stuckIdx < 0) return;
-      resultsRef.current.set(stuckIdx, emptyResult());
+      const synthesized = emptyResult();
+      resultsRef.current.set(stuckIdx, synthesized);
       setCompleted(resultsRef.current.size);
       workerBusyRef.current[workerId] = false;
       workerIdxRef.current[workerId] = -1;
+      notifySettled({ workerId, itemIndex: stuckIdx, result: synthesized, timedOut: true, addDispatched: true });
       if (!tryFinish()) {
         dispatchToWorker(workerId);
       }
     }, workerTimeoutMs);
-  }, [getUrl, emptyResult, workerTimeoutMs, setWorkerUri, clearTimer, tryFinish]);
+  }, [getUrl, emptyResult, workerTimeoutMs, setWorkerUri, clearTimer, tryFinish, notifySettled]);
 
   const reportResult = useCallback((workerId: number, result: TResult) => {
     const idx = workerIdxRef.current[workerId];
@@ -205,10 +282,11 @@ export function useParallelSearchPool<TItem, TResult>(
     setCompleted(resultsRef.current.size);
     workerBusyRef.current[workerId] = false;
     workerIdxRef.current[workerId] = -1;
+    notifySettled({ workerId, itemIndex: idx, result, timedOut: false, addDispatched: true });
     if (!tryFinish()) {
       dispatchToWorker(workerId);
     }
-  }, [clearTimer, dispatchToWorker, tryFinish]);
+  }, [clearTimer, dispatchToWorker, tryFinish, notifySettled]);
 
   const reset = useCallback(() => {
     queueRef.current = [];

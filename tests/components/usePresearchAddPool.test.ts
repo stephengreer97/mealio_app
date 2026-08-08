@@ -211,3 +211,157 @@ describe('usePresearchAddPool — cold slot (main WebView as extra worker)', () 
     expect(hook.result.current.workerUris[2]).toBe('');
   });
 });
+
+// ── MEAL-122: the pool's reporting seam ─────────────────────────────────────
+//
+// Same contract as useParallelSearchPool's onSettled, over a state machine with
+// more ways for an item to end: committed and reported, committed and timed out,
+// parked-but-still-loading when the tap came, deselected, or never committed at
+// all. Only the first two are add attempts; the funnel must count those and no
+// others.
+describe('usePresearchAddPool — onSettled', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
+
+  type Settled = { workerId: number; itemIndex: number; result: Result; timedOut: boolean; addDispatched: boolean };
+
+  function setupSettled(overrides: Partial<PresearchPoolOptions<Item, Result>> = {}) {
+    const settled: Settled[] = [];
+    const { hook, injected } = setup({ onSettled: (i) => settled.push(i as Settled), ...overrides });
+    return { hook, injected, settled };
+  }
+
+  it('does not fire during the park phase — nothing has been added yet', () => {
+    const { hook, settled } = setupSettled();
+    act(() => hook.result.current.start(mk(['milk', 'eggs'])));
+    act(() => { hook.result.current.reportSearched(0); hook.result.current.reportSearched(1); });
+    expect(settled).toEqual([]);
+  });
+
+  it('fires once per committed item, carrying the item index and not the slot', () => {
+    const { hook, settled } = setupSettled();
+    act(() => hook.result.current.start(mk(['milk', 'eggs'])));
+    act(() => { hook.result.current.reportSearched(0); hook.result.current.reportSearched(1); });
+    act(() => hook.result.current.commit(mk(['milk', 'eggs']), () => {}));
+    act(() => hook.result.current.reportAdded(1, { success: true, product: 'Eggs' }));
+    act(() => hook.result.current.reportAdded(0, { success: false, product: '' }));
+    expect(settled).toEqual([
+      { workerId: 1, itemIndex: 1, result: { success: true, product: 'Eggs' }, timedOut: false, addDispatched: true },
+      { workerId: 0, itemIndex: 0, result: { success: false, product: '' }, timedOut: false, addDispatched: true },
+    ]);
+  });
+
+  it('fires for an add that timed out, flagged as timed out AND dispatched', () => {
+    const { hook, settled } = setupSettled({ addTimeoutMs: 1000 });
+    act(() => hook.result.current.start(mk(['milk'])));
+    act(() => hook.result.current.reportSearched(0));
+    act(() => hook.result.current.commit(mk(['milk']), () => {}));
+    act(() => jest.advanceTimersByTime(1001));
+    // The add WAS injected here — the page just never answered. Contrast with
+    // the park-timeout case below, which is the one that must not be counted.
+    expect(settled).toEqual([
+      { workerId: 0, itemIndex: 0, result: { success: false, product: '' }, timedOut: true, addDispatched: true },
+    ]);
+  });
+
+  it('reports an item whose park timed out as NOT dispatched — no add ever reached it', () => {
+    // The tap came before this item's results page did, so injectAdd never ran.
+    // It still settles (the result map must be complete), but calling it an add
+    // attempt put an item nobody tried to add into the confirm-rate denominator.
+    const { hook, injected, settled } = setupSettled({ searchTimeoutMs: 1000, addTimeoutMs: 9000 });
+    act(() => hook.result.current.start(mk(['milk'])));
+    act(() => hook.result.current.commit(mk(['milk']), () => {}));
+    act(() => jest.advanceTimersByTime(1001));
+    expect(injected).toEqual([]);   // the proof: no add script was ever injected
+    expect(settled).toEqual([
+      { workerId: 0, itemIndex: 0, result: { success: false, product: '' }, timedOut: true, addDispatched: false },
+    ]);
+  });
+
+  it('fires before onAllDone, so per-item rows precede the run terminal rows', () => {
+    // The one ordering constraint the seam's placement actually carries. Moving
+    // notifySettled below tryFinish would put an item's rows after the reconcile
+    // and run_summary of the run that produced it.
+    const order: string[] = [];
+    const { hook } = setup({
+      onSettled: (i) => order.push(`settled:${i.itemIndex}`),
+    });
+    act(() => hook.result.current.start(mk(['milk', 'eggs'])));
+    act(() => { hook.result.current.reportSearched(0); hook.result.current.reportSearched(1); });
+    act(() => hook.result.current.commit(mk(['milk', 'eggs']), () => order.push('allDone')));
+    act(() => hook.result.current.reportAdded(0, { success: true, product: 'Milk' }));
+    act(() => hook.result.current.reportAdded(1, { success: true, product: 'Eggs' }));
+    expect(order).toEqual(['settled:0', 'settled:1', 'allDone']);
+  });
+
+  it('fires before onAllDone on the timeout path too', () => {
+    const order: string[] = [];
+    const { hook } = setup({
+      addTimeoutMs: 1000,
+      onSettled: (i) => order.push(`settled:${i.itemIndex}`),
+    });
+    act(() => hook.result.current.start(mk(['milk'])));
+    act(() => hook.result.current.reportSearched(0));
+    act(() => hook.result.current.commit(mk(['milk']), () => order.push('allDone')));
+    act(() => jest.advanceTimersByTime(1001));
+    expect(order).toEqual(['settled:0', 'allDone']);
+  });
+
+  it('does not fire for an item deselected before the tap', () => {
+    // Nobody attempted it, so it belongs on neither side of the confirm rate.
+    const { hook, settled } = setupSettled();
+    act(() => hook.result.current.start(mk(['milk', 'eggs'])));
+    act(() => { hook.result.current.reportSearched(0); hook.result.current.reportSearched(1); });
+    act(() => hook.result.current.commit([{ idx: 1, item: { name: 'eggs' } }], () => {}));
+    act(() => hook.result.current.reportAdded(1, { success: true, product: 'Eggs' }));
+    expect(settled).toEqual([
+      { workerId: 1, itemIndex: 1, result: { success: true, product: 'Eggs' }, timedOut: false, addDispatched: true },
+    ]);
+  });
+
+  it('does not fire for a run cancelled by reset()', () => {
+    const { hook, settled } = setupSettled({ addTimeoutMs: 1000 });
+    act(() => hook.result.current.start(mk(['milk'])));
+    act(() => hook.result.current.reportSearched(0));
+    act(() => hook.result.current.commit(mk(['milk']), () => {}));
+    act(() => hook.result.current.reset());
+    act(() => jest.advanceTimersByTime(5000));
+    expect(settled).toEqual([]);
+  });
+
+  it('fires for the cold slot too, keyed to the overflow item it pulled', () => {
+    const injected: Array<{ workerId: number; name: string }> = [];
+    const settled: Settled[] = [];
+    const opts: PresearchPoolOptions<Item, Result> = {
+      workerCount: 2,
+      coldWorkerCount: 1,
+      getUrl: (it) => `https://store/search?q=${it.name}`,
+      emptyResult: () => ({ success: false, product: '' }),
+      onInjectAdd: (workerId, item) => injected.push({ workerId, name: item.name }),
+      onColdDispatch: () => {},
+      onSettled: (i) => settled.push(i as Settled),
+    };
+    const hook = renderHook(() => usePresearchAddPool<Item, Result>(opts));
+    act(() => hook.result.current.start(mk(['milk', 'eggs', 'bread'])));
+    act(() => { hook.result.current.reportSearched(0); hook.result.current.reportSearched(1); });
+    act(() => hook.result.current.commit(mk(['milk', 'eggs', 'bread']), () => {}));
+    act(() => hook.result.current.reportAdded(2, { success: false, product: '' }));
+    expect(settled).toEqual([
+      { workerId: 2, itemIndex: 2, result: { success: false, product: '' }, timedOut: false, addDispatched: true },
+    ]);
+  });
+
+  it('keeps committing when the caller throws', () => {
+    const done = jest.fn();
+    const { hook } = setup({ onSettled: () => { throw new Error('reporter blew up'); } });
+    act(() => hook.result.current.start(mk(['milk', 'eggs'])));
+    act(() => { hook.result.current.reportSearched(0); hook.result.current.reportSearched(1); });
+    act(() => hook.result.current.commit(mk(['milk', 'eggs']), done));
+    act(() => hook.result.current.reportAdded(0, { success: true, product: 'Milk' }));
+    act(() => hook.result.current.reportAdded(1, { success: true, product: 'Eggs' }));
+    expect(done).toHaveBeenCalledTimes(1);
+    const map: Map<number, Result> = done.mock.calls[0][0];
+    expect(map.get(0)).toEqual({ success: true, product: 'Milk' });
+    expect(map.get(1)).toEqual({ success: true, product: 'Eggs' });
+  });
+});

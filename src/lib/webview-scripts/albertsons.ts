@@ -79,16 +79,61 @@ const DOMAIN_MAP: Record<string, string> = {
   carrs:        'carrsqc.com',
   kings:        'kingsfoodmarkets.com',
   balduccis:    'balduccis.com',
-  united:       'unitedsupermarkets.com',
+  // NOT unitedsupermarkets.com (MEAL-136). That host is the banner's Squarespace
+  // MARKETING site: it 301s to https://shopunitedsupermarkets.com **discarding
+  // the path**, which then 301s to www, so every URL we built for this banner —
+  // /erums/cart, /shop/search-results.html — landed on a marketing home page.
+  // No cart, no product tiles, no selectors, and nothing that failed loudly.
+  // shopunitedsupermarkets.com is the storefront: /erums/cart and
+  // /shop/search-results.html both return 200 off the same istio-envoy platform
+  // that serves the other 14 banners. Pinned by tests/unit/webview-scripts/
+  // url-builders.test.ts — a path-discarding redirect is invisible at runtime,
+  // so the host is only ever as right as the test that names it.
+  //
+  // The platform agrees, and we already had it on disk: the captured fixture
+  // tests/fixtures/albertsons/logged-in-home.html:158 carries the storefront's
+  // own `trustedBannerDomains` list, which names shopunitedsupermarkets.com and
+  // does NOT name unitedsupermarkets.com.
+  united:       'shopunitedsupermarkets.com',
 };
 
 export const ALBERTSONS_FAMILY_IDS: string[] = Object.keys(DOMAIN_MAP);
 
-/** Cart page URL for a given Albertsons-family brand. The cart lives at
- *  /erums/cart (a separate Angular app from the /shop storefront). */
+/** The cart's path on every Albertsons banner — a separate Angular app from the
+ *  /shop storefront. Platform-uniform (MEAL-15: endpoint paths need no
+ *  per-banner configuration; only the host list does). Exported so the cart-page
+ *  count script can check it still IS the path it landed on. */
+export const ALBERTSONS_CART_PATH = '/erums/cart';
+
+/** Cart page URL for a given Albertsons-family brand.
+ *
+ *  The `|| 'albertsons.com'` fallback below is UNREACHABLE, and stays only
+ *  because unreachable is cheaper than a throw here. It is not, as it might
+ *  read, a guard against a stale persisted storeId: every caller gates on
+ *  ALBERTSONS_FAMILY_IDS first (cart-count.ts getCartPageUrl, and index.ts
+ *  getStoreScripts for the getScripts twin of this fallback), and that list IS
+ *  `Object.keys(DOMAIN_MAP)` — so an id that would need the fallback never gets
+ *  this far. A stale id gets `null` from those gates and the ordinary
+ *  unsupported-store UI, which is the behaviour we want anyway.
+ *
+ *  Two tests hold the invariant, one for each way it could break, and both live in
+ *  tests/unit/webview-scripts/url-builders.test.ts:
+ *    • "has a verified cart URL for every banner in the family" — catches a
+ *      DOMAIN_MAP row added without a curl-verified host.
+ *    • "has scripts for every store the app says runs the WebView engine" —
+ *      iterates WEBVIEW_STORE_IDS, the hand-maintained list a new banner actually
+ *      gets added to, and catches the opposite mistake: a banner in the app's store
+ *      list with no DOMAIN_MAP row, which is what would silently take a fallback.
+ *
+ *  An earlier version of this note credited tests/unit/generatedScripts.test.ts with
+ *  the second invariant. It does not hold it: that file's `STORES` is a hand-written
+ *  seven-entry array local to the test, not src/constants/stores.ts, so the app's
+ *  real store list was unguarded. Corrected rather than left, because a comment
+ *  naming coverage that does not exist is how the next reader gets misled. */
 export function getAlbertsonsCartPageUrl(storeId: string): string {
+  // Unreachable fallback — see the note above.
   const domain = DOMAIN_MAP[storeId] || 'albertsons.com';
-  return `https://www.${domain}/erums/cart`;
+  return `https://www.${domain}${ALBERTSONS_CART_PATH}`;
 }
 
 /** Albertsons over-constrains on long queries — a full product title (esp. the
@@ -1543,6 +1588,9 @@ function buildSearchAndAddScriptFn(
 // ── Export ───────────────────────────────────────────────────────────────────
 
 export function getScripts(storeId: string): StoreScripts {
+  // Unreachable fallback, for the same reason and held by the same two tests as
+  // the one on getAlbertsonsCartPageUrl — see that note. index.ts only routes
+  // here for ids in ALBERTSONS_FAMILY_IDS, i.e. keys of DOMAIN_MAP.
   const domain = DOMAIN_MAP[storeId] || 'albertsons.com';
   const storeOrigin = `https://www.${domain}`;
   // Read under the shared 'albertsons' key: every banner runs one storefront

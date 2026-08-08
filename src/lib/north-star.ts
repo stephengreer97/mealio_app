@@ -68,9 +68,22 @@
 //
 // Confirmed = the line's full requested quantity is accounted for in the CART,
 // as of the last cart read the run managed. Not "a worker said it clicked" and
-// NOT "a `confirm` step row exists" — four of six stores emit no per-item
-// add_click/confirm rows at all (MEAL-122), so counting confirm rows would make
-// the busiest stores look empty rather than successful.
+// NOT "a `confirm` step row exists".
+//
+// That last exclusion was originally written because four of six stores emitted
+// no per-item add_click/confirm rows for their parallel add pass, so counting
+// confirm rows would have made the busiest stores look empty rather than
+// successful. MEAL-122 closed that: the two worker pools now emit a row per item,
+// so the rows are there on every store.
+//
+// The exclusion stands anyway, on the reason that was always the stronger one. A
+// `confirm` row records what the RUN could observe at the moment it clicked —
+// a cart badge, a per-card label, at best a cart query for one item — and those
+// are known to be wrong in both directions under concurrency (see MEAL-47, and
+// finishParallelAdd's note that a worker can falsely confirm against a shared
+// counter). The cart read is ground truth and the confirm row is evidence toward
+// it. Counting rows would be counting the guess, on every store, however many of
+// them now emit one.
 //
 // Every run therefore ships `confirmedSource`, and the dashboard renders a rate
 // only where the source supports one:
@@ -105,12 +118,11 @@
 //        confirmedSource  'cart_reconcile' | 'worker_reports' | 'none'
 //        weightRequested  of `requested`, how many are presence-confirmed
 //        skippedInReview  lines the user skipped (INSIDE `requested` — see above)
-//        keptInReview     lines where the user answered an in-cart-by-weight
-//                         question with "what I have is enough". Counted apart from
-//                         skips (which pass over an item nobody has) and from
-//                         itemsAdded (Mealio added nothing for these). Whether it
-//                         belongs in the denominator is still open — see the
-//                         checklist item on the item-success rate.
+//        weightRowUnverified  weight lines the run could not verify by presence.
+//                         Counted apart from skips (which pass over an item nobody
+//                         has) and from itemsAdded. Whether it belongs in the
+//                         denominator is still open — see the checklist item on the
+//                         item-success rate.
 //        failureCodes     every code this run recorded, counted, most frequent
 //                         first: "confirm_failed:3,waf_block:1". A STRING, not an
 //                         object — sanitizeDetail drops nested values. Present only
@@ -321,7 +333,7 @@ export interface RunSummaryFacts {
   weightRequested: number;
   skippedInReview: number;
   runComplete: boolean;
-  keptInReview: number;
+  weightRowUnverified: number;
 }
 
 /** The detail for a run that finished without failing. */

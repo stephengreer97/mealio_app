@@ -31,6 +31,8 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 
+import type { PoolSettled } from './useParallelSearchPool';
+
 export interface PresearchItem<TItem> {
   /** Stable identity of the item across park/commit — its index in the caller's
    *  active-items array. Results come back keyed by this. */
@@ -61,6 +63,15 @@ export interface PresearchPoolOptions<TItem, TResult> {
    *  surface (the main WebView): navigate it to the results page and, once
    *  loaded, inject the fused search+add, then feed the result to reportAdded. */
   onColdDispatch?: (slotId: number, item: TItem) => void;
+  /** Called exactly once per COMMITTED item, at the moment its add result becomes
+   *  final — a worker-reported result, or one the pool synthesized when the add
+   *  (or the still-loading park) timed out. Same seam and same contract as
+   *  useParallelSearchPool's: fires before onAllDone, swallows what the caller
+   *  throws, and never fires for an item abandoned by reset() or dropped by
+   *  deselection (neither produced an add attempt). The park phase is not
+   *  reported — nothing has been added yet, and the `candidates` row already
+   *  covers it. */
+  onSettled?: (info: PoolSettled<TResult>) => void;
   /** Park (search) timeout. Defaults to 20_000. */
   searchTimeoutMs?: number;
   /** Commit (add) timeout. Defaults to 20_000. */
@@ -100,7 +111,7 @@ interface Machine<TItem, TResult> {
   dispatchSearch: (workerId: number, entry: PresearchItem<TItem>) => void;
   dispatchNext: (workerId: number) => void;
   dispatchColdNext: (slot: number) => void;
-  settleAdd: (workerId: number, result: TResult) => void;
+  settleAdd: (workerId: number, result: TResult, timedOut: boolean) => void;
   injectAdd: (workerId: number) => void;
   tryFinish: () => boolean;
   freeSlot: (workerId: number) => void;
@@ -148,6 +159,13 @@ export function usePresearchAddPool<TItem, TResult>(
   searchTimeoutRef.current = searchTimeoutMs;
   const addTimeoutRef = useRef(addTimeoutMs);
   addTimeoutRef.current = addTimeoutMs;
+  const onSettledRef = useRef(options.onSettled);
+  onSettledRef.current = options.onSettled;
+  /** Report one item's final add result. Swallows anything the caller throws —
+   *  the pool's job is committing adds, and a reporting bug must not stop it. */
+  const notifySettled = useCallback((info: PoolSettled<TResult>) => {
+    try { onSettledRef.current?.(info); } catch { /* reporting must not break the pool */ }
+  }, []);
 
   const setUri = useCallback((workerId: number, uri: string) => {
     setWorkerUris((prev) => {
@@ -216,16 +234,35 @@ export function usePresearchAddPool<TItem, TResult>(
         timersRef.current[slot] = null;
         if (runIdRef.current !== runId) return;
         if (slotPhaseRef.current[slot] !== 'adding') return;
-        fns.current.settleAdd(slot, emptyResultRef.current());
+        fns.current.settleAdd(slot, emptyResultRef.current(), true);
       }, addTimeoutRef.current);
       if (onColdDispatchRef.current) onColdDispatchRef.current(slot, next.item);
     };
 
-    const settleAdd = (workerId: number, result: TResult) => {
+    const settleAdd = (workerId: number, result: TResult, timedOut: boolean) => {
       const assigned = slotItemRef.current[workerId];
       if (assigned) {
         resultsRef.current.set(assigned.idx, result);
         setCompleted(resultsRef.current.size);
+        // Before tryFinish, which is what fires the run's terminal work: every
+        // per-item row must precede the run's own. (Ordering against freeSlot is
+        // NOT load-bearing — `assigned` is a local, so freeing the slot first
+        // would read the same. Only the tryFinish edge is pinned by a test.)
+        //
+        // A park timeout settles a slot still in phase 'loading': the commit
+        // reached it before its results page did, so onInjectAdd never ran and no
+        // add script ever touched that page. Reporting it as dispatched put an
+        // item nobody tried to add into the confirm-rate denominator.
+        //
+        // The phase says this correctly for the parked workers only. The COLD
+        // slot enters 'adding' at dispatch (see dispatchColdNext), before its
+        // page loads, so it reports true even when nothing was injected — the
+        // same defect, one path over. The pool cannot see that; the component
+        // owns the injection and corrects it at the seam.
+        notifySettled({
+          workerId, itemIndex: assigned.idx, result, timedOut,
+          addDispatched: slotPhaseRef.current[workerId] === 'adding',
+        });
       }
       freeSlot(workerId);
       if (!tryFinish()) dispatchNext(workerId);
@@ -241,7 +278,7 @@ export function usePresearchAddPool<TItem, TResult>(
         timersRef.current[workerId] = null;
         if (runIdRef.current !== runId) return;
         if (slotPhaseRef.current[workerId] !== 'adding') return;
-        fns.current.settleAdd(workerId, emptyResultRef.current());
+        fns.current.settleAdd(workerId, emptyResultRef.current(), true);
       }, addTimeoutRef.current);
       onInjectAddRef.current(workerId, assigned.item);
     };
@@ -258,7 +295,7 @@ export function usePresearchAddPool<TItem, TResult>(
         if (runIdRef.current !== runId) return;
         if (slotPhaseRef.current[workerId] !== 'loading') return;
         if (modeRef.current === 'committing') {
-          fns.current.settleAdd(workerId, emptyResultRef.current());
+          fns.current.settleAdd(workerId, emptyResultRef.current(), true);
         } else {
           freeSlot(workerId);
         }
@@ -331,7 +368,7 @@ export function usePresearchAddPool<TItem, TResult>(
 
   const reportAdded = useCallback((workerId: number, result: TResult) => {
     if (slotPhaseRef.current[workerId] !== 'adding') return;
-    fns.current.settleAdd(workerId, result);
+    fns.current.settleAdd(workerId, result, false);
   }, []);
 
   const commit = useCallback(

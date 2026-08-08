@@ -176,7 +176,137 @@ describe('Albertsons cart-page count (snapshot before/after)', () => {
       expect(basmati && byName[basmati]).toBe(1);
       expect(hunts && byName[hunts]).toBe(1);
     },
+    // The URL matters now: the script refuses to count anywhere but /erums/cart
+    // (MEAL-136). Passing the real cart URL is also just more faithful — this
+    // fixture IS that page, and before this the test ran it on about:blank.
+    { url: 'https://www.acmemarkets.com/erums/cart' },
   );
+});
+
+// MEAL-136. The defect was a DOMAIN_MAP host whose 301 discarded the path, so we
+// asked for /erums/cart and were handed a marketing home page. The script found
+// no product links and posted `count: 0` — which callers TRUST (only `null` means
+// "unknown, skip"), so cart reconciliation concluded the cart was empty.
+//
+// These tests use the real cart fixture and change only the URL it was served
+// from, which is exactly the difference the redirect made. Same DOM, same
+// selectors, same 2 countable items — so anything that changes here is the URL
+// check and nothing else.
+describe('Albertsons cart-page count refuses to count off the cart page (MEAL-136)', () => {
+  itWithFixture(
+    'cart-with-items.html',
+    'posts count:null with a named reason when a redirect dropped the cart path',
+    async (runner) => {
+      await runner.inject(buildCartPageCountScript('united')!);
+      const result = await runner.waitForMessage('CART_COUNT', 8_000);
+      // The bug: this used to be 0 — a trusted, wrong, "your cart is empty".
+      expect(result.count).toBeNull();
+      expect(result.reason).toBe('not_cart_page');
+      // The reason alone doesn't tell you WHICH host misbehaved; the URL does.
+      expect(result.url).toContain('shopunitedsupermarkets.com');
+      // Never invent items alongside an unknown count — the reconcile path keys
+      // off Array.isArray(msg.items) and would diff against an empty cart.
+      expect(result.items).toBeUndefined();
+    },
+    { url: 'https://www.shopunitedsupermarkets.com/' },
+  );
+
+  itWithFixture(
+    'cart-with-items.html',
+    'still counts normally on a cart URL under the corrected United host',
+    async (runner) => {
+      // The other half of the guard: the fix must not make United uncountable.
+      // Same host as above, correct path → the ordinary count.
+      await runner.inject(buildCartPageCountScript('united')!);
+      const result = await runner.waitForMessage('CART_COUNT', 8_000);
+      expect(result.count).toBe(2);
+      expect(result.items).toHaveLength(2);
+    },
+    { url: 'https://www.shopunitedsupermarkets.com/erums/cart' },
+  );
+
+  itWithFixture(
+    'cart-with-items.html',
+    'stays silent on an auth interstitial instead of posting a verdict',
+    async (runner) => {
+      // An SSO bounce is TRANSIENT — both injection sites re-inject on the next
+      // load. A verdict here (even count:null) burns the probe's single pending
+      // slot on a page that was never the cart, so the script must say nothing.
+      await runner.inject(buildCartPageCountScript('acme')!);
+      // Silence is the contract, so the only way to observe it is to wait out a
+      // window in which a verdict would have arrived. The script returns before
+      // its 5s hydration poll on this branch, so 2s is generous.
+      await expect(runner.waitForMessage('CART_COUNT', 2_000)).rejects.toThrow();
+      // waitForMessage resolves on the FIRST message of a type, and
+      // 'alb_cart_start' always posts first — so assert on the step list.
+      const steps = runner.messagesOfType('EXTRACT_DEBUG').map((m) => m.step);
+      expect(steps).toContain('alb_cart_skip_auth_redirect');
+    },
+    { url: 'https://www.acmemarkets.com/bin/safeway/unified/sso/authorize?code=test' },
+  );
+});
+
+// The guard matches the cart path EXACTLY (modulo a trailing slash) rather than
+// as a prefix. Same fixture, same 2 countable items, URL is the only variable —
+// so each case reads as "does this URL count, yes or no".
+//
+// Sub-paths are the reason: `indexOf(path) !== 0` accepts /erums/cart/checkout
+// and /erums/cartoons. Neither exists on the platform today (both 404, while the
+// real sibling /erums/checkout is 200 and was already rejected), so this is a
+// nit closed, not a hole plugged — but a page that merely starts with the cart
+// path is not the cart, and a trusted count off one would be the MEAL-136 bug
+// with a different URL.
+describe('Albertsons cart-page count matches the cart path exactly (MEAL-136)', () => {
+  // Off-cart paths that a prefix test would have counted on. Each must degrade
+  // to the honest unknown rather than post a number.
+  const REFUSES = [
+    ['a deeper path under the cart', 'https://www.acmemarkets.com/erums/cart/checkout'],
+    ['a longer path that merely starts with it', 'https://www.acmemarkets.com/erums/cartoons'],
+  ] as const;
+
+  for (const [label, url] of REFUSES) {
+    itWithFixture(
+      'cart-with-items.html',
+      `posts count:null on ${label}`,
+      async (runner) => {
+        await runner.inject(buildCartPageCountScript('acme')!);
+        const result = await runner.waitForMessage('CART_COUNT', 8_000);
+        expect(result.count).toBeNull();
+        expect(result.reason).toBe('not_cart_page');
+        expect(result.url).toBe(url);
+      },
+      { url },
+    );
+  }
+
+  // The other direction, and the more important one: tightening the match must
+  // not start refusing pages that ARE the cart. A query string and a hash are
+  // not part of location.pathname, so both still count — which matters because
+  // both injection sites append a `_t=` cache-buster to the cart URL, and a
+  // guard that rejected it would take every Albertsons baseline down to null.
+  const COUNTS = [
+    ['a cache-buster query, as both injection sites append', 'https://www.acmemarkets.com/erums/cart?_t=1754500000000'],
+    ['a hash fragment', 'https://www.acmemarkets.com/erums/cart#items'],
+    ['a trailing slash', 'https://www.acmemarkets.com/erums/cart/'],
+    // Precedence: the path wins over the auth-redirect pattern. This URL's
+    // query matches that pattern, but it is the cart, and the pattern is only
+    // consulted once the path has already failed.
+    ['a query that matches the auth-redirect pattern', 'https://www.acmemarkets.com/erums/cart?next=/sso/authorize'],
+  ] as const;
+
+  for (const [label, url] of COUNTS) {
+    itWithFixture(
+      'cart-with-items.html',
+      `still counts with ${label}`,
+      async (runner) => {
+        await runner.inject(buildCartPageCountScript('acme')!);
+        const result = await runner.waitForMessage('CART_COUNT', 8_000);
+        expect(result.count).toBe(2);
+        expect(result.items).toHaveLength(2);
+      },
+      { url },
+    );
+  }
 });
 
 describe('Albertsons regression: product already in cart (collapsed bubble)', () => {

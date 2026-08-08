@@ -249,6 +249,10 @@ export interface StepRecord {
    *  top-level column so the dashboard can group on it without touching detail. */
   code?: StepFailureCode;
   durationMs?: number;
+  /** Position in the run's active-items array at the time the row was recorded.
+   *  NOT a run-wide item identity: the reconcile re-points that array at its
+   *  retry subset and restarts the index, so rows from the top-up reuse low
+   *  indexes for different items. Group by `detail.path` before comparing. */
   itemIndex?: number;
   detail?: Record<string, unknown>;
 }
@@ -524,4 +528,178 @@ export class AutomationTelemetry {
  *  runId, so call sites never need a null check. */
 export function createNoopTelemetry(): AutomationTelemetry {
   return new AutomationTelemetry({ runId: '', upload: async () => true, enabled: false });
+}
+
+/** One item's final outcome as a worker pool settled it. */
+export interface PoolAddOutcome {
+  /** Which pool produced it, for splitting the funnel by add path. */
+  path: 'parallel_add' | 'presearch';
+  /** Pool slot that ran the item. Not stable across items — a slot is reused. */
+  workerId: number;
+  /** The item's index in the run's active-items array. */
+  itemIndex: number;
+  success: boolean;
+  /** The store script's failure reason, or null. Ignored when `success`. */
+  reason?: string | null;
+  /** True when no worker reported and the pool synthesized the result. */
+  timedOut: boolean;
+  /** Whether an add was actually sent to the item's page. False means we never
+   *  got as far as trying — see PoolSettled.addDispatched for what each pool can
+   *  honestly say, and the `search` row below for what that item gets instead. */
+  addDispatched: boolean;
+  /** Extra scalars for the confirm row (the caller's flattened cart verdict).
+   *  Nested values are dropped downstream by sanitizeDetail. */
+  detail?: Record<string, unknown>;
+}
+
+/**
+ * Emit the per-item add funnel rows for ONE item a worker pool has settled.
+ *
+ * MEAL-122. The parallel-add and pre-search pools report every item's outcome
+ * through their pool, not through the sequential engine, so before this the
+ * PARALLEL PASS emitted no add or confirm rows at all on the four stores those
+ * pools serve (HEB, Walmart, Amazon Fresh, Albertsons). Five items failing five
+ * different ways collapsed into the single reconcile row that followed them.
+ *
+ * Not the whole run, though: the serial top-up that follows a shortfall emits
+ * both halves for the subset it retries (`path: 'fused'`), and since the
+ * reconcile exists BECAUSE shortfalls are common, a failing run on these stores
+ * routinely did emit add/confirm rows. What it could not emit was a row for an
+ * item the top-up never retried — anything the cart said had landed, and the
+ * definite failures (out_of_stock, no_results) that route to review instead of
+ * retry. So the funnel's add half was a biased sample: only items that failed at
+ * least once in the parallel pass, never the ones that worked. A confirm rate
+ * computed over it is a rate among items already known to have gone wrong once,
+ * which is not the number anyone thinks they are reading.
+ *
+ * Rows emitted, when an add WAS dispatched, in this order:
+ *   add_click  ok       always — this is the confirm-rate DENOMINATOR
+ *   blocked    blocked  only when the reason is 'blocked' (see below)
+ *   confirm    ok | timeout | error
+ *
+ * And when it was NOT (`addDispatched: false`), one row instead:
+ *   search     timeout | error
+ *
+ * That second case is the pre-search pool's park timeout: the user tapped
+ * add-to-cart while an item's results page was still loading, the pool stopped
+ * waiting, and onInjectAdd never ran — no add script ever touched that page. It
+ * emitted an `add_click` here until it didn't, which put an item nobody had tried
+ * to add into the denominator of the confirm rate. The denominator is a real
+ * number people divide by, so the item is reported for what it is: a `search`
+ * that never finished. It keeps its itemIndex and stays visible in the funnel; it
+ * just is not counted as an attempt.
+ *
+ * (The 'error' variant of that row has no producer today — the only undispatched
+ * settle is a timeout. It exists so that a future one is not silently dropped,
+ * the way STEP_FAILURE_CODES keeps `nav_failed` for a producer it does not have.)
+ *
+ * Both add halves are emitted at SETTLE rather than add_click at dispatch, which
+ * is how the sequential path does it. That is safe here for a reason specific to
+ * the pools: every dispatched item settles exactly once — a real worker result,
+ * or a result the pool synthesizes when its timeout fires — so no attempt can
+ * vanish from the denominator by never being heard from. (The one item that
+ * settles zero times is one abandoned by reset(), i.e. a cancelled run, and an
+ * abandoned attempt is correctly absent from both sides of the rate.) The fused
+ * sequential handler already emits the pair together for the same reason: the
+ * click happens inside the injected script, so there is no click moment to hook.
+ *
+ * The `blocked` row: a worker that hits an app-nudge or robot wall reports
+ * reason 'blocked' and is recorded as a failed add. The engine deliberately does
+ * NOT escalate that to the UI from the worker message handler — the reconcile's
+ * serial retry re-detects the wall and calls surfaceBlocker, and calling it from
+ * the handler would forward-reference it. That restraint is about the USER-FACING
+ * escalation only; it never had a telemetry reason. Recording the row here
+ * surfaces nothing and touches no UI.
+ *
+ * What it adds is attribution, not existence. surfaceBlocker records a `blocked`
+ * row of its own, so a wall was never invisible: a blocked item claims no cart
+ * row, becomes a shortfall, lands in the reconcile's retry set, and the serial
+ * fused retry re-detects the nudge and records it. But that row is RUN-LEVEL —
+ * one per run, no itemIndex, and only after a second page load on a store that
+ * has just refused us. This row is per-item and immediate, so a funnel can say
+ * which items the wall took and how many, without waiting for the re-detect.
+ *
+ * It does land `waf_block` on the run's code tally twice for one item — once
+ * here and once on the confirm row that follows, whose reason is also 'blocked'.
+ * Both rows genuinely failed for that reason, so both are counted rather than one
+ * being suppressed. Concretely, once PR #83 lands: its failureCodeSummary() reads
+ * the same failureCounts map into `run_summary.failureCodes`, so a single blocked
+ * item reads there as `waf_block:2`, and run_summary carries no itemIndex to
+ * de-duplicate against. Only the tally distorts — #83 ranks the run's PRIMARY
+ * code by severity, not by count, so the headline code is immune. A reader
+ * wanting items rather than rows counts distinct itemIndex on the blocked rows.
+ *
+ * That immunity is worth more than it sounds, because these rows RELOCATE what
+ * run_summary's code means. It used to be a run-level verdict derived from one or
+ * two rows; with 2N per-item rows it becomes a vote over them. Under the
+ * frequency rule on main today that is roughly lateral — a run whose code was
+ * `confirm_failed` from the reconcile now reports the modal per-item symptom
+ * instead, which hides no more than it did. Under #83's severity rule it is a
+ * clear gain: a single wall among many ordinary misses wins, where a vote buries
+ * it. So the two changes are complements, and #83 is the one that turns this
+ * volume into an answer rather than a bigger majority.
+ *
+ * Never throws. The pools call this from a worker message handler and from a
+ * timer, and telemetry must never disturb an add — record() already swallows its
+ * own errors, and the outer catch covers building the arguments too.
+ */
+export function recordPoolAddOutcome(tel: AutomationTelemetry, out: PoolAddOutcome): void {
+  try {
+    const base = { path: out.path, workerId: out.workerId };
+    if (!out.addDispatched) {
+      // Never reached its add — report the step it actually died on, and leave
+      // the add funnel alone. See the header for why this is not an add_click.
+      const why = String(out.reason ?? (out.timedOut ? 'timeout' : 'unknown'));
+      // Split rather than a ternary outcome: record()'s overloads require the
+      // code to be decided alongside the outcome, which is the point of them.
+      if (out.timedOut) {
+        tel.record('search', 'timeout', {
+          itemIndex: out.itemIndex, detail: { reason: why, ...base }, code: 'timeout',
+        });
+      } else {
+        tel.record('search', 'error', {
+          itemIndex: out.itemIndex, detail: { reason: why, ...base }, code: addFailureCode(why),
+        });
+      }
+      return;
+    }
+    // Emitted for a timed-out item as well: the add went to the page, so it
+    // counts as an attempt whether or not we ever heard that a button was
+    // pressed. On the parallel-add pool "went to the page" is the page load
+    // itself — see PoolSettled.addDispatched for why that is the honest read.
+    tel.record('add_click', 'ok', { itemIndex: out.itemIndex, detail: { ...base } });
+    if (out.success) {
+      tel.record('confirm', 'ok', {
+        itemIndex: out.itemIndex,
+        detail: { attempt: 1, ...base, ...out.detail },
+      });
+      return;
+    }
+    const reason = String(out.reason ?? (out.timedOut ? 'timeout' : 'unknown'));
+    if (reason === 'blocked') {
+      tel.record('blocked', 'blocked', {
+        itemIndex: out.itemIndex,
+        // blockFailureCode, not addFailureCode. Both return 'waf_block' for this
+        // one reason, so swapping them is a mutant no test can kill and none
+        // pretends to — it is named here instead. blockFailureCode is the entry
+        // point FOR a blocked row, and it is the one that stays right if the
+        // reason set ever widens (it already splits off 'fresh-no-store').
+        detail: { reason, ...base },
+        code: blockFailureCode(reason),
+      });
+    }
+    if (out.timedOut) {
+      tel.record('confirm', 'timeout', {
+        itemIndex: out.itemIndex,
+        detail: { attempt: 1, reason, ...base, ...out.detail },
+        code: 'timeout',
+      });
+      return;
+    }
+    tel.record('confirm', 'error', {
+      itemIndex: out.itemIndex,
+      detail: { attempt: 1, reason, ...base, ...out.detail },
+      code: addFailureCode(reason),
+    });
+  } catch { /* telemetry must never throw into the engine */ }
 }

@@ -278,7 +278,7 @@ describe('the run_summary detail a finished run ships', () => {
     weightRequested: 2,
     skippedInReview: 1,
     runComplete: false,
-    keptInReview: 0,
+    weightRowUnverified: 0,
   };
 
   it('survives sanitizeDetail whole, including the failure tally', () => {
