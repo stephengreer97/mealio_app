@@ -351,13 +351,18 @@ describe("B's link is expired", () => {
     await tapBsLink(utils);
 
     expect(verifyCalls().map((c) => c.authorization)).toContain('Bearer token-user-B');
-    expect(renewCalls()).toHaveLength(0);
     expect(lastLinkError).toBeTruthy();
 
-    // A is still here, still signed in, still A on the wire.
+    // The outcome first: A is still here, still signed in, still A on the wire.
+    // Ahead of the mechanism assertion below deliberately — a mutant that
+    // reintroduces the renew should fail on A having been signed out, which is
+    // the harm, rather than on a request count, which is only the cause.
     expect(utils.getByTestId('who')).toHaveTextContent('user-A');
     expect(storedToken()).toBe('token-user-A');
     expect(storedUserId()).toBe('user-A');
     expect(await tokenOnTheWire()).toBe('Bearer token-user-A');
+
+    // And the mechanism: A's token was never spent trying to answer for B's.
+    expect(renewCalls()).toHaveLength(0);
   });
 });
