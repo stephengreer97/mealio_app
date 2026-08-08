@@ -155,6 +155,15 @@ describe('stripComments — the oracle\'s own guard', () => {
     expect(t("const s = 'a // b';")).toBe("const s = 'a // b';");
   });
 
+  it('is actually wired into `code`, not merely present', () => {
+    // Replacing `stripComments(src)` with `src` left every other test green,
+    // because the cases above call the function directly and pass whether or not
+    // the pipeline uses it. Testing a helper is not testing that anything calls
+    // it — the same shape as the defect this whole file exists for.
+    expect(src).toContain('// MEAL-');
+    expect(code).not.toContain('// MEAL-');
+  });
+
   it('keeps a JSX comment out of the text, which the line filter never could', () => {
     expect(stripComments('<View>{/* if (!A || !B) return; */}</View>')).not.toContain('return;');
   });
