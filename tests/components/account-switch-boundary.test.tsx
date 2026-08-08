@@ -440,6 +440,34 @@ describe('B takes the phone over through the verification link', () => {
     expect(utils.queryByTestId('probe-heb')).toBeNull();
   });
 
+  it('leaves B able to run a cart of their own afterwards', async () => {
+    // The teardown has to end A's session, not disable the feature. This is the
+    // "too eager" direction, and it is the direction the first version of this
+    // fix got wrong on MyMealsScreen: a guard set at the hand-over stayed set,
+    // on a provider that — like this one — is never unmounted by an account
+    // switch. Nothing here latches (the flag this provider sets is cleared by
+    // its own clear-again effect as soon as the job is null), and this is what
+    // says so.
+    const utils = await renderApp();
+    await signInAsA(utils);
+    await startCart(utils);
+
+    await tapVerificationLinkAs(utils, 'user-B');
+    expect(utils.getByTestId('cart')).toHaveTextContent('idle');
+
+    // B starts their own run on the same never-unmounted provider.
+    await startCart(utils);
+    expect(utils.getByTestId('cart')).toHaveTextContent('running');
+    expect(utils.queryByTestId('qty-checkbox-0')).not.toBeNull();
+
+    // B's own run records its own diagnostics — the buffer is B's now, not
+    // permanently muted by A's departure.
+    console.log('[Cart 11:00:00] ADD WORKER_RESULT w 1 success= true product= B Brand Sour Cream');
+    expect(getSessionLogs()).toContain('B Brand Sour Cream');
+
+    await act(async () => { fireEvent.press(utils.getByTestId('close-cart')); });
+  });
+
   it("does not hand A's queued prewarm stores to B", async () => {
     const utils = await renderApp();
     await signInAsA(utils);

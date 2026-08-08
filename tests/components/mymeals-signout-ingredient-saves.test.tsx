@@ -141,6 +141,8 @@ const MEAL = {
 /** The two products A chose before walking away. */
 const A_PRODUCT_1 = 'Kirkland Prenatal Vitamins';
 const A_PRODUCT_2 = 'H-E-B Select Sour Cream';
+/** What B chooses in their own session, after the hand-over. */
+const B_PRODUCT = 'B Brand Sour Cream';
 
 /** `meals.update` never settles on its own — each call parks here. */
 type Deferred = { resolve: (v: unknown) => void; reject: (e: unknown) => void };
@@ -321,6 +323,66 @@ describe('when another account takes over without a sign-out', () => {
     expect(getSessionLogs()).not.toContain(A_PRODUCT_1);
     expect(getSessionLogs()).not.toContain(A_PRODUCT_2);
     expect(getSessionLogs()).not.toContain('prenatal vitamins');
+  });
+
+  it('lets B save on the very same mounted screen instance', async () => {
+    // The other direction, and the one the first version of this fix got wrong.
+    // A sign-out unmounts this screen, so a one-way "saves are abandoned" flag
+    // never had to be un-set — every session got a fresh instance. An account
+    // switch does not unmount it, so that flag became a latch A left behind:
+    // every product B chose was dropped before the PATCH was sent, and the guard
+    // in the catch swallowed the line that would have shown it. Silent, total
+    // data loss on Choose Products for the rest of B's session.
+    //
+    // Measured on that version: `meals.update` called 0 times here, expected 1.
+    const { r, job } = await startChooseRun();
+
+    await act(async () => { r.update(<App user={USER_B} />); });
+    expect(r.queryByText('Beef Tacos')).not.toBeNull(); // same instance, not a remount
+    mockUpdateMeal.mockClear();
+
+    // B chooses a product of their own.
+    void job.onIngredientChosen('sour cream', ['m1'], B_PRODUCT);
+    await act(async () => { await Promise.resolve(); });
+
+    // It goes out.
+    expect(mockUpdateMeal).toHaveBeenCalledTimes(1);
+
+    // And when B's own save fails, B's own report gets to say so — the guard
+    // must not silence the session it belongs to either.
+    await act(async () => {
+      pendingUpdates[pendingUpdates.length - 1].reject(
+        Object.assign(new Error('Server error'), { status: 500 }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getSessionLogs()).toContain(FAILURE_LINE);
+    expect(getSessionLogs()).toContain(B_PRODUCT);
+  });
+
+  it("does not revive A's abandoned saves if A comes back", async () => {
+    // A hand-over is not undone by handing the phone back: the work A queued was
+    // abandoned when A's session ended, and the session A returns in is a new
+    // one. A counter gets this right where restoring a flag would not.
+    const { r, job } = await startChooseRun();
+
+    void job.onIngredientChosen('prenatal vitamins', ['m1'], A_PRODUCT_1);
+    void job.onIngredientChosen('sour cream', ['m1'], A_PRODUCT_2);
+    await act(async () => { await Promise.resolve(); });
+    expect(mockUpdateMeal).toHaveBeenCalledTimes(1);
+
+    await act(async () => { r.update(<App user={USER_B} />); });
+    await act(async () => { r.update(<App user={{ ...USER_A }} />); });
+
+    await act(async () => {
+      pendingUpdates[0].reject(Object.assign(new Error('Unauthorized'), { status: 401 }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockUpdateMeal).toHaveBeenCalledTimes(1);
+    expect(getSessionLogs()).not.toContain(FAILURE_LINE);
   });
 
   it('keeps saving for the same account when its user object is replaced', async () => {

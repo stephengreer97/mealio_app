@@ -113,9 +113,29 @@ export default function MyMealsScreen() {
   //     on the user id rather than on the object, it does NOT fire for a token
   //     renewal or a profile refresh, which would silently drop a live user's
   //     own saves.
-  const savesAbandonedRef = useRef(false);
-  useSessionEnd(() => { savesAbandonedRef.current = true; });
-  useEffect(() => () => { savesAbandonedRef.current = true; }, []);
+  //
+  // A COUNTER, NOT A FLAG, and that distinction is the whole of MEAL-146's
+  // second review. A boolean "saves are abandoned" was safe only while the
+  // premise above was "the screen is unmounted either way": every session got a
+  // fresh instance, so nothing had to un-set it. Removing that premise turns the
+  // same flag into a one-way latch on a screen that outlives the session which
+  // set it — B chooses a product, the latch A left behind drops the PATCH before
+  // it is sent, and the guard in the catch swallows the line that would have
+  // said so. Silent, total data loss on Choose Products for the whole of B's
+  // session, since MainTabs has no `unmountOnBlur`. Measured on the first
+  // version of this fix: `meals.update` called 0 times for B, expected 1.
+  //
+  // So the question a queued save asks is not "have saves been abandoned?" but
+  // "is the session that queued me still the one running?". Each choice captures
+  // the counter as it is made; each save compares before it is sent and again
+  // before it logs a failure. Ending a session bumps it, which invalidates
+  // exactly the work that session queued and nothing else — so the next account
+  // starts able to save on the very same mounted instance, and a hand-over back
+  // again is no different. Same shape as the run generation in WebViewCartSheet,
+  // for the same reason.
+  const saveEpochRef = useRef(0);
+  useSessionEnd(() => { saveEpochRef.current += 1; });
+  useEffect(() => () => { saveEpochRef.current += 1; }, []);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedStore, setSelectedStore] = useState<string>(STORES[0].id);
@@ -459,6 +479,10 @@ export default function MyMealsScreen() {
   }
 
   async function handleIngredientChosen(ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null) {
+    // Whose choice this is. Captured HERE, when the product is picked, rather
+    // than read inside the queued work: the point of the guard is to compare the
+    // session that queued a save against the one running when it comes up.
+    const epoch = saveEpochRef.current;
     await Promise.all(
       mealIds.map((mealId) =>
         // Serialize all saves for this meal: each PATCH runs after (and reads the
@@ -472,7 +496,9 @@ export default function MyMealsScreen() {
           // Whoever chose this product is gone, so this PATCH is doomed. Bail
           // before it is sent, not just before it is logged: guarding only the
           // catch would still fire a 401 and a renew attempt per queued save.
-          if (savesAbandonedRef.current) return;
+          // Whoever is here NOW is unaffected — their own choices carry the
+          // current epoch and go out normally.
+          if (saveEpochRef.current !== epoch) return;
           const meal = allMealsRef.current.find((m) => m.id === mealId);
           if (!meal) return;
           const updatedIngredients = mergeChosenProduct(
@@ -488,11 +514,12 @@ export default function MyMealsScreen() {
             allMealsRef.current = allMealsRef.current.map((m) => (m.id === updated.id ? updated : m));
             setAllMeals((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
           } catch (err) {
-            // A save already in flight when they signed out cannot be recalled,
-            // but its failure must not name their products in a buffer that now
-            // belongs to whoever signed in next. Still signed in, this line is
-            // exactly what a "my chosen product did not stick" report needs.
-            if (savesAbandonedRef.current) return;
+            // A save already in flight when the session ended cannot be
+            // recalled, but its failure must not name their products in a buffer
+            // that now belongs to whoever came next. Within the session that
+            // chose the product, this line is exactly what a "my chosen product
+            // did not stick" report needs.
+            if (saveEpochRef.current !== epoch) return;
             console.warn(`[MyMeals] failed to save chosen product "${productName}" for ingredient "${ingredientName}" (meal ${mealId})`, err);
           }
         }),
