@@ -781,11 +781,17 @@ export function buildInlineCartScript(storeId: string): string | null {
 
 // No redirect has been observed on www.heb.com/cart (200, 0 redirects, measured
 // anonymously on 2026-08-07 under the app's mobile UA), so the guard below is
-// a no-op on today's HEB. It is here because HEB is the store with the most to
-// lose: its before-snapshot is the baseline the MEAL-14 cart-query rail and the
-// done-screen diff both read, and an unguarded zero from a bounced session would
-// present the user's own cart as this run's work. See the note above
-// cartPathGuardJs.
+// a no-op on today's HEB.
+//
+// It is here because HEB is the store with the most to lose from a wrong zero:
+// this snapshot is what the done screen's added-vs-already-there diff is
+// computed against, and HEB is the only store on the parallel-add path, whose
+// reconcile probe diffs against this baseline WITHOUT checking that one was
+// captured. NOT the MEAL-14 cart-query rail, which an earlier version of this
+// comment credited: that rail takes its own per-add baseline in-page via
+// __hebCartRead (heb.ts ~:855, ~:1379) and never reads this snapshot.
+//
+// See the note above cartPathGuardJs.
 const HEB_CART_PAGE_SCRIPT = `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
