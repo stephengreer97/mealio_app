@@ -548,8 +548,16 @@ export function reconcileFromWorkerReports(attempts: AttemptedAdd[]): WorkerRepo
  * Deliberately NOT unconditional. A run that attempted no adds at all — the
  * choose-a-product flow, or every item skipped during review — has no signal to
  * find, and a cart read costs a real page load on a store that is watching for
- * automation. `addsAttempted` is the count of items that reached an add click,
- * which is also the funnel's `add_click` denominator.
+ * automation. `addsAttempted` is the count of items that reached an add click on
+ * the SEQUENTIAL paths only.
+ *
+ * It is no longer the same number as the funnel's `add_click` denominator, which
+ * it used to match. MEAL-122 gave the two worker pools per-item `add_click` rows;
+ * this counter was deliberately left alone, because it is not instrumentation —
+ * it gates a real extra cart page load. A parallel run already reconciles against
+ * the cart with its own probe, so counting its adds here would only add a SECOND
+ * probe, and only in the case where the first one timed out, on a store that is
+ * watching. Whether this gate should follow the funnel is a product call.
  *
  * `hasBaseline` stays a hard requirement: with no before-snapshot every row in
  * the cart diffs as newly added, so the "findings" would be the user's entire
