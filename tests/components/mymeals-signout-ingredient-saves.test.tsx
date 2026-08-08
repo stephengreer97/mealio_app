@@ -286,13 +286,33 @@ describe('when another account takes over without a sign-out', () => {
   // RootNavigator handles the `mealio://verified?token=…` deep link by calling
   // loginWithToken with no signed-in check, from a listener registered app-wide.
   // So B taps the verification link in their own email on A's phone and `user`
-  // goes A → B, never through null. This screen is the guard that notices least:
-  // RootNavigator renders MainTabs `if (user)`, which is still true, so nothing
-  // unmounts — the cleanup that covers a sign-out never runs and A's queued
-  // saves sail into B's session.
+  // goes A → B, never through null.
   //
-  // `r.update` with a different user and the same element types is exactly that:
-  // same screen instance, different account.
+  // WHAT CHANGED UNDER THESE TESTS (MEAL-154). When they were written, `user`
+  // staying truthy meant RootNavigator reconciled the same `<MainTabs />`
+  // element and this screen was never unmounted — so the sign-out cleanup never
+  // ran and A's queued saves sailed on into B's session. RootNavigator now keys
+  // that element on the account id, so a hand-over does remount the tab tree and
+  // A's content no longer stays on B's screen.
+  //
+  // These tests deliberately keep the screen mounted across the switch anyway,
+  // and that is not a stale harness — it is the point. The remount is a property
+  // of where this screen is rendered, and this screen must not depend on it:
+  //
+  //   • the epoch is what a save ALREADY IN FLIGHT is compared against when it
+  //     comes back, and it comes back to a closure that outlives the unmount;
+  //   • one navigator option (`unmountOnBlur`, a `detachInactiveScreens`
+  //     default, anything that hoists this screen) is all it takes for a future
+  //     hand-over to reach a still-mounted instance again.
+  //
+  // So each of these holds the instance across the boundary and checks that it
+  // really did stay — `meals.list` runs once per mount here (useFocusEffect is
+  // mocked to a mount effect), so an unchanged call count is a screen that was
+  // not remounted, which is what makes these tests about the guard rather than
+  // about React discarding the component.
+
+  /** Proves the hand-over below reached the SAME instance, not a fresh one. */
+  const expectNotRemounted = () => expect(mockListMeals).toHaveBeenCalledTimes(1);
 
   it("never sends A's queued saves under B's session", async () => {
     const { r, job } = await startChooseRun();
@@ -302,9 +322,9 @@ describe('when another account takes over without a sign-out', () => {
     await act(async () => { await Promise.resolve(); });
     expect(mockUpdateMeal).toHaveBeenCalledTimes(1);
 
-    // B arrives. A is still on screen — nothing unmounted.
+    // B arrives, on the same mounted instance.
     await act(async () => { r.update(<App user={USER_B} />); });
-    expect(r.queryByText('Beef Tacos')).not.toBeNull();
+    expectNotRemounted();
 
     // A's in-flight save comes back — a 401, or a 404 for a meal that is not B's.
     await act(async () => {
@@ -338,7 +358,7 @@ describe('when another account takes over without a sign-out', () => {
     const { r, job } = await startChooseRun();
 
     await act(async () => { r.update(<App user={USER_B} />); });
-    expect(r.queryByText('Beef Tacos')).not.toBeNull(); // same instance, not a remount
+    expectNotRemounted();
     mockUpdateMeal.mockClear();
 
     // B chooses a product of their own.

@@ -142,7 +142,41 @@ export default function RootNavigator() {
 
   function renderMain() {
     if (isLoading) return null;
-    if (user) return <MainTabs />;
+    // ── The tab tree belongs to ONE account (MEAL-154) ──────────────────────
+    //
+    // `handleDeepLink` above calls `loginWithToken` from a listener registered
+    // app-wide, with no signed-in check. So on a shared phone A is signed in, B
+    // taps the verification link in their own email, and `user` goes A → B
+    // without ever passing through null. `user` stays truthy across that, so
+    // without a key React reconciles the SAME `MainTabs` element and every
+    // screen under it keeps the state it fetched for A. MyMealsScreen reloads
+    // only in a `useFocusEffect` with no deps and DiscoverScreen's saved map and
+    // meal count are the same shape, so B — whose tab did not change and
+    // therefore never refocuses — is looking at A's saved meals and A's
+    // groceries. CreatorPortalScreen and AdminScreen load once on mount and
+    // never reload at all.
+    //
+    // Keying the tree on the account id makes that structural instead of
+    // per-screen: an account change gives every screen under here a fresh mount,
+    // so each one refetches through the load path it already has, and no screen
+    // added later has to remember that this hazard exists. The alternative —
+    // teaching each screen to clear and refetch on `useSessionEnd` — leaves A's
+    // rows rendered for the whole round trip the refetch takes (that IS the
+    // leak), needs every one of ~40 pieces of MyMealsScreen state enumerated,
+    // and is one forgotten screen away from being open again.
+    //
+    // Keyed on the ID, never on the object, for the same reason
+    // `useSessionEnd` and `beginSession` are: a token renewal or a `refreshUser`
+    // hands down a brand new User for the same person several times a session,
+    // and remounting the tabs there would throw away a live user's half-typed
+    // meal form and their place in the list. An unchanged id is an unchanged
+    // key, so React does not remount.
+    //
+    // This does not replace the teardowns MEAL-146 added. Those cover state that
+    // lives ABOVE this element (the log buffer, the cart engine, the prewarm
+    // cache) and work still in flight from a screen that has since been
+    // unmounted — neither of which a remount here reaches.
+    if (user) return <MainTabs key={user.id} />;
     if (showAuth) return <AuthStack onClose={() => setShowAuth(false)} />;
     return (
       <GuestStack.Navigator

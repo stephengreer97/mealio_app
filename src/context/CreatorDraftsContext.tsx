@@ -73,8 +73,20 @@ export function CreatorDraftsProvider({ children }: { children: ReactNode }) {
 
   // On sign-in and on launch. Cleared rather than refreshed on sign-out, so a
   // shared phone does not show the previous account's count to the next one.
+  //
+  // Dropped on ANY change of account, not only on a sign-out (MEAL-154). This
+  // provider sits above the navigator, so the account key that remounts the tab
+  // tree does not reach it, and a hand-over through the verification deep link
+  // takes `user` from A straight to B without passing through null. Refreshing
+  // alone would leave A's number on B's tab bar for the round trip the count
+  // takes — and `isCreator` is not cover for that: it is reset for B at the same
+  // moment, so whichever of the two requests answers first decides, and B being
+  // a creator too makes A's count visible. This effect runs on the ID, so a
+  // token renewal or a `refreshUser` does not flicker a live creator's badge.
   useEffect(() => {
-    if (!user) { setWaiting(0); lastReadAt.current = 0; return; }
+    setWaiting(0);
+    lastReadAt.current = 0;
+    if (!user) return;
     void refresh();
   }, [user?.id, refresh]);
 

@@ -107,6 +107,57 @@ describe('the count', () => {
   });
 });
 
+describe('when the phone changes hands', () => {
+  // The badge is account-scoped, and this provider sits ABOVE the navigator — so
+  // the account key that remounts the tab tree on a hand-over (MEAL-154) does not
+  // reach it. B taps the verification link in their own email and `user` goes
+  // A → B without passing through null, which is why "cleared on sign-out" is not
+  // enough on its own.
+
+  it("drops A's count the moment the account changes, without waiting for B's", async () => {
+    mockCount.mockResolvedValue({ waiting: 7 });
+    const view = await mount();
+    expect(badge(view)).toBe('7');
+
+    // B's own read is still in flight — on a phone that is a network round trip
+    // wide, and it is the whole window. `isCreator` is no cover here: it is reset
+    // for B at the same moment, so whichever request answers first decides, and
+    // B being a creator too puts A's number back on the tab bar.
+    mockCount.mockImplementation(() => new Promise(() => {}));
+    mockAuth.user = { id: 'u2' };
+    await act(async () => {
+      view.rerender(
+        <CreatorDraftsProvider>
+          <Badge />
+        </CreatorDraftsProvider>,
+      );
+    });
+
+    expect(badge(view)).toBe('0');
+  });
+
+  it("keeps a live creator's badge when their own user object is replaced", async () => {
+    // A token renewal and a refreshUser hand down a new User for the same person
+    // several times a session. Zeroing there would flicker the badge of somebody
+    // who has not gone anywhere.
+    mockCount.mockResolvedValue({ waiting: 7 });
+    const view = await mount();
+    expect(badge(view)).toBe('7');
+
+    mockCount.mockImplementation(() => new Promise(() => {}));
+    mockAuth.user = { id: 'u1' }; // same id, new object
+    await act(async () => {
+      view.rerender(
+        <CreatorDraftsProvider>
+          <Badge />
+        </CreatorDraftsProvider>,
+      );
+    });
+
+    expect(badge(view)).toBe('7');
+  });
+});
+
 describe('keeping up without a socket', () => {
   it('re-reads when the app comes back to the foreground', async () => {
     // Deliberately not realtime: a poller that produces drafts every fifteen
