@@ -691,17 +691,28 @@ describe('Albertsons family CHECK_LOGIN_SCRIPT', () => {
     },
   );
 
-  // THE OVERREACH GUARD. The obvious wrong fix for MEAL-140 is a length check,
-  // and a length check tuned to reject "..." (3 chars) rejects "Jo" and "Al"
-  // too. Real names this short exist, and while sending them to the click check
-  // is only a wasted click, doing it to every user with a two-letter first name
-  // is a cost with nothing bought. What separates a placeholder from a name is
-  // LETTERS, not length — so this must still decide passively.
-  itWithFixture(
-    'logged-in-home.html',
-    'a genuinely short name still decides logged-in passively (no length check)',
-    async (runner) => {
-      await setAccountName(runner, 'Jo');
+  // THE OVERREACH GUARDS. There are exactly two ways to "fix" MEAL-140 by
+  // rejecting real names, and one case each:
+  //
+  //   • A LENGTH CHECK is the obvious wrong fix, and one tuned to reject "..."
+  //     (3 chars) rejects "Jo" and "Al" too. What separates a placeholder from
+  //     a name is LETTERS, not length.
+  //   • An ASCII letter test ([a-z] instead of \p{L}) rejects every non-Latin
+  //     name. So does raising the threshold to two letters, which rejects a
+  //     header rendering a bare initial. Every typographic placeholder has ZERO
+  //     letters, so 0-vs-≥1 is the real boundary and a higher bar buys nothing.
+  //
+  // Neither is a wrong ANSWER — they all land on the click check, which gets it
+  // right — but each makes a whole class of user pay for a click on every run
+  // to buy nothing. These must still decide passively.
+  describe.each([
+    ['a bare initial', 'J'],
+    ['a two-letter name', 'Jo'],
+    ['a Cyrillic name', 'Ольга'],
+    ['a single-glyph CJK name', '李'],
+  ])('a genuinely short or non-Latin account name (%s)', (_label, name) => {
+    itWithFixture('logged-in-home.html', 'still decides logged-in passively', async (runner) => {
+      await setAccountName(runner, name);
 
       await runner.inject(scripts.checkLoginScript);
       const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
@@ -711,27 +722,8 @@ describe('Albertsons family CHECK_LOGIN_SCRIPT', () => {
       expect(debug.find((m) => m.step === 'profile_btn')?.nameReady).toBe(true);
       expect(debug.find((m) => m.step === 'passive_decision')?.decided).toBe('loggedIn');
       expect(debug.some((m) => m.step === 'after_click')).toBe(false);
-    },
-  );
-
-  // And a non-Latin name, for the same reason: the letter test is \p{L}, not
-  // [a-z], so a name in Cyrillic/Greek/CJK is a name. If someone "simplifies"
-  // that regex to ASCII, every such user silently starts paying for a click.
-  itWithFixture(
-    'logged-in-home.html',
-    'a non-Latin account name still decides logged-in passively (\\p{L}, not [a-z])',
-    async (runner) => {
-      await setAccountName(runner, 'Ольга');
-
-      await runner.inject(scripts.checkLoginScript);
-      const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
-      expect(status.isLoggedIn).toBe(true);
-
-      const debug = runner.messagesOfType('LOGIN_DEBUG');
-      expect(debug.find((m) => m.step === 'passive_decision')?.decided).toBe('loggedIn');
-      expect(debug.some((m) => m.step === 'after_click')).toBe(false);
-    },
-  );
+    });
+  });
 
   // MEAL-15 found window.AB.userInfo.SWY_SHOP_TOKEN — the session bearer, which
   // Albertsons' own chat code labels okta_token — and proposed it as this check's

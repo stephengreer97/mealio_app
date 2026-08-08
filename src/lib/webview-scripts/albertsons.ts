@@ -298,28 +298,39 @@ function buildCheckLoginScript(domain: string): string {
     // The rule, in two clauses, because placeholders come in two kinds:
     //
     //   1. TYPOGRAPHIC — "...", "…", "-", "—", "•", "*", braille/dot spinners,
-    //      a bare digit. These have no lexical content, so: require two letters.
-    //      \\p{L} rather than [a-z] so a non-Latin name is a name.
-    //   2. LEXICAL — "Loading", "Loading...", "Please wait". These ARE letters,
-    //      so clause 1 cannot see them; they need naming. This list is NOT
-    //      claimed to be exhaustive and cannot be: no test tells a name from a
-    //      word in general. It covers the placeholder vocabulary a header
-    //      actually uses, and clause 1 covers everything without words in it.
+    //      a bare digit. Their defining property is that they carry no lexical
+    //      content at all, so: require a LETTER. \\p{L} rather than [a-z],
+    //      because a name in Cyrillic or CJK is a name.
+    //   2. LEXICAL — "Loading", "Loading...", "Please wait". These are made of
+    //      letters, so clause 1 cannot see them and they have to be named. This
+    //      list is NOT exhaustive and cannot be: no test separates a name from
+    //      a word in general. It covers the placeholder vocabulary a header
+    //      actually uses; clause 1 covers everything without words in it.
+    //
+    // ONE letter, not two, and the threshold is deliberate rather than
+    // arbitrary. Every typographic placeholder above has ZERO letters — that is
+    // what makes it typographic — so a second letter rejects nothing extra in
+    // the class this exists to catch, while it does reject a header that renders
+    // a bare initial ("J") or a single-glyph name. Raising it would be paying a
+    // click, for those users, on every run, to buy nothing. The boundary that
+    // matters is 0 vs ≥1 and that is the one the tests pin.
     //
     // "Sign in" passes this — deliberately. This predicate answers "has the
     // span settled", not "is this a name". A settled "Sign in" is a DEFINITE
     // state, and the caller reads acctIsSignIn before acctIsMenu, so settling
-    // is exactly when both the poll and the decision should act on it.
+    // is exactly when both the poll and the decision should act on it. (Which
+    // is also why "signing in" is absent from the word list below: SIGNIN_RE
+    // matches it — "signin" is a substring of "signing" — so it decides
+    // loggedOut before ever reaching here, and listing it would claim coverage
+    // of a branch that cannot run.)
     //
     // WHAT IT COSTS WHEN IT IS WRONG, which is the whole reason it is shaped
-    // this way. A false negative — a genuinely short name — falls through to
-    // the click check, which opens the panel, finds "Sign Out", and answers
-    // loggedIn: one click and up to 1.5s, right answer. A false positive is a
-    // wrong verdict the whole run then acts on. So the two directions are not
-    // comparable and the predicate leans hard toward "not settled":
-    //   • a one-letter name or initial ("J", a single-glyph CJK name) → click
-    //     check → correct answer, one click. Accepted knowingly.
-    //   • a real user literally named "Loading" → click check → correct answer.
+    // this way. A false negative falls through to the click check, which opens
+    // the panel, finds "Sign Out", and answers loggedIn: one click and up to
+    // 1.5s, right answer. A false positive is a wrong verdict the entire run
+    // then acts on. The two directions are not comparable, so where there is
+    // any doubt this returns false — e.g. a real user literally named "Loading"
+    // takes the click check and still gets the right answer.
     //
     // Rejected alternative: requiring the text to hold STEADY across two polls.
     // It does not separate the cases — a placeholder that persists because auth
@@ -328,8 +339,8 @@ function buildCheckLoginScript(domain: string): string {
     function acctTextResolved(t) {
       var s = (t || '').replace(/\\s+/g, ' ').trim();
       if (!s) return false;
-      if (!/\\p{L}{2}/u.test(s)) return false;
-      if (/^(loading|load|please wait|one moment|updating|signing in|fetching)\\b/i.test(s)) return false;
+      if (!/\\p{L}/u.test(s)) return false;
+      if (/^(loading|please wait|one moment|updating|fetching)\\b/i.test(s)) return false;
       return true;
     }
 
