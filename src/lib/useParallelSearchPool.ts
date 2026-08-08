@@ -54,8 +54,22 @@ export interface PoolSettled<TResult> {
    *     rides the page load (the worker's URL carries the payload and its script
    *     fires search+add on load), so dispatch happens inside the page and the RN
    *     side has no signal that separates "the page never loaded" from "it loaded
-   *     and never answered". Both arrive as silence. True is the same read the
-   *     sequential fused path takes for the same reason.
+   *     and never answered". Both arrive as silence.
+   *
+   *     The engine resolves that same ambiguity BOTH ways, so neither is a
+   *     precedent to hide behind. `path:'sequential'` emits add_click the moment
+   *     it dispatches, on the stated grounds that a click producing no signal
+   *     would otherwise vanish and flatter the confirm rate. `path:'fused'` —
+   *     structurally the closer analogue, since its add also fires inside an
+   *     injected script — does the opposite: on silence its timeout records
+   *     `search`/`timeout` and no add half at all.
+   *
+   *     True here follows `sequential`, deliberately. Silence over a 35s budget
+   *     that spans search, click AND the cart-badge confirmation poll is far more
+   *     likely to be an add that went unanswered than a page that never loaded,
+   *     and the cost of each error is not symmetric: over-counting reads the
+   *     confirm rate LOW, under-counting reads it high. A metric about whether
+   *     adds land should fail toward admitting failure.
    *   usePresearchAddPool — genuinely known. Injecting the add is an explicit
    *     RN-side act (onInjectAdd), so a parked item whose page was still loading
    *     when the run stopped waiting reports false, and it is not a guess.
