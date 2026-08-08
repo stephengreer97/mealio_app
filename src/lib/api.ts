@@ -44,7 +44,7 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
  * anything is committed to the keychain.
  *
  * A request carrying one is also excluded from the 401 renew-and-retry below;
- * see the guard there for why that is not optional.
+ * see the guard there for why.
  */
 type RequestOptions = RequestInit & { timeoutMs?: number; authToken?: string };
 
@@ -114,8 +114,16 @@ async function request<T>(
   // token off the back of it and retry — answering "whose token is this?" with
   // the account already on the phone — and, when the renew failed, clear()
   // below would sign that account out over a link they never tapped. That is
-  // MEAL-155's benign half. Callers pass retry=false too; this is belt and
-  // braces, and it is the belt.
+  // MEAL-155's benign half, and the reported symptom.
+  //
+  // `auth.verify` also passes retry=false, so today either one alone is enough
+  // and neither is pinned by a test on its own: removing just this clause, or
+  // just the retry=false, leaves the suite green (both measured). Removing BOTH
+  // fails token-install-order.test.tsx, "does not renew A's session to answer
+  // for B's token", on A's stored token being null — A signed out. That is not
+  // a coverage gap to paper over: this clause is here for the caller who has
+  // not been written yet and passes an authToken without thinking about retry,
+  // and a mutant cannot demonstrate a caller that does not exist.
   if (response.status === 401 && retry && !authToken) {
     // The server uses a long-lived access token (90 days). /api/auth/renew takes the
     // current access token via Authorization header and returns a fresh one.
