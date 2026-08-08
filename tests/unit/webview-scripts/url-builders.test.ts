@@ -72,9 +72,14 @@ describe('getAlbertsonsCartPageUrl', () => {
 
   // MEAL-151: the same path, twice, in two places that had drifted apart. The
   // probe navigated to ALBERTSONS_CART_PATH while getScripts handed the app
-  // `/shop/cart.html` — which 404s on all 15 banners, verified live. That is not
-  // a dead constant: `cartUrl`'s only consumer is the Linking.openURL behind the
-  // button that opens the user's cart, so every tap landed on a 404.
+  // `/shop/cart.html`, which 404s — spot-checked live on albertsons.com,
+  // safeway.com and vons.com, not on all fifteen. (Distinct from the 2026-08-07
+  // verification above, which is MEAL-136's and does cover every host, for the
+  // /erums/cart path rather than this one.)
+  //
+  // Not a dead constant: `cartUrl`'s only consumer is the Linking.openURL behind
+  // the button that opens the user's cart, so every tap landed on a 404. This
+  // test is the pin for the two paths being one.
   //
   // Pinned as one path rather than two literals, because two copies is how one
   // of them goes stale while the other keeps working.

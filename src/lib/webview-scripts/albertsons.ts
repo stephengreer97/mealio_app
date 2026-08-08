@@ -349,12 +349,23 @@ function buildCheckLoginScript(domain: string): string {
       // spinner glyph in FRONT of the word — a braille dot, a bullet — is
       // covered by neither: clause 1 sees the letters in "Loading" and passes it,
       // and an anchored clause 2 never reaches the word. Cold review drove both
-      // through the real script and got decided:"loggedIn" in ~500ms, which is
+      // through the real script and got a passive loggedIn in ~500ms, which is
       // the original defect intact.
       //
       // A leading run of non-letters is exactly the shape of a spinner, a bullet
       // or an ellipsis, so dropping it costs nothing a real name would miss —
-      // a name does not begin with punctuation.
+      // a name does not begin with punctuation. Measured against ~60 strings:
+      // O'Brien, -Ann, .Stephen, RLM/LRM-prefixed Arabic and Hebrew, Cyrillic,
+      // CJK, Devanagari, Thai and a bare initial all still resolve.
+      //
+      // What it does NOT close, stated so the next reader does not rediscover it:
+      // a LETTER-bearing prefix still defeats the anchor. "Hi, Loading" and
+      // "Welcome, Loading" resolve true and decide loggedIn passively. Not idle
+      // — the span carries class user-greeting, and acctIsMenu's own regex
+      // already lists hi[, ] and welcome, so the code anticipates greeting
+      // content here. Not evidenced on any committed capture, so latent rather
+      // than live, and the honest reason it is unfixed is that stripping words
+      // is where a blacklist over page text stops being defensible.
       var word = s.replace(/^[^\\p{L}]+/u, '');
       if (/^(loading|please wait|one moment|updating|fetching)\\b/i.test(word)) return false;
       return true;

@@ -614,6 +614,14 @@ describe('Albertsons family CHECK_LOGIN_SCRIPT', () => {
     // review drove exactly these through the real script and got `loggedIn`.
     ['a spinner before the word', '⠋ Loading'],
     ['a bullet before the word', '• Loading…'],
+    // Not "Loading". Cold review found that dropping the `u` flag from the strip
+    // degrades `[^\p{L}]` to the literal class `[^p{L}]`, which then eats letters
+    // — and every one of these was accepted while the suite stayed green. The
+    // word "Loading" survived that mutation only because its capital L happens to
+    // be a literal member of the degraded class, so the entire vocabulary's
+    // coverage was resting on the one word both new cases above used.
+    ['a different placeholder word', 'Please wait'],
+    ['a spinner before a different word', '⠙ Please wait'],
   ])('a placeholder account name (%s)', (_label, placeholder) => {
     itWithFixture(
       'logged-in-home.html',
