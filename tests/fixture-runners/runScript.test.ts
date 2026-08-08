@@ -295,4 +295,26 @@ describe('the fixture browser can reach loopback and nothing else', () => {
     );
     await page.close();
   }, 30_000);
+
+  it('refuses an address that would reach the mock store if the wildcard lapsed', async () => {
+    // Retargeting the test above off a public host removed a real ambiguity, and
+    // took something with it: nothing was left asserting that `MAP *` covers the
+    // PUBLIC INTERNET. Narrow the rule to `MAP 127.0.0.2 ~NOTFOUND` — every host on
+    // the internet reachable — and the rest of this file stays green.
+    //
+    // `0.0.0.0` closes that without a name lookup or a packet leaving the machine.
+    // It is not on the exclude list, so the wildcard must refuse it; and Linux
+    // routes it to 127.0.0.1, so the moment the wildcard stops covering it this
+    // navigation REACHES the mock server on the port bound above. Measured: with
+    // the committed rule, ERR_NAME_NOT_RESOLVED; with `MAP 127.0.0.2 ~NOTFOUND`,
+    // with `MAP 127.0.0.* ~NOTFOUND`, and with no rule at all, a 200.
+    //
+    // isLocalUrl already pins `0.0.0.0` as DENIED, so this closes the agreement
+    // loop between the two layers from the refusing side as well as the allowing one.
+    const page = await browser.newPage();
+    await expect(page.goto(`http://0.0.0.0:${port}/`)).rejects.toThrow(
+      /ERR_NAME_NOT_RESOLVED/,
+    );
+    await page.close();
+  }, 30_000);
 });

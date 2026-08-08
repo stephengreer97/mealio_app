@@ -285,12 +285,22 @@ async function main() {
   //
   // The old handler here aborted script/stylesheet/font/image/media and
   // `continue()`d everything else — so `document`, `fetch`, `xhr` and `ping` were
-  // all free to go out. Measured over a full build, what actually left was ten
-  // `document` requests, every one of them a DoubleClick floodlight beacon out of
-  // the HEB captures, carrying cart product ids, prices, quantities and a
-  // persistent ad id in the query string. No fetch/xhr/ping happened to fire. The
-  // distinction matters: the handler's rule is what was wrong, and the ten beacons
-  // are what that rule cost on each run. MEAL-113 established that a resourceType allow-list is the losing half
+  // all free to go out. Measured over a full build, what actually left was **57**
+  // `document` requests, to eight hosts across three stores:
+  //
+  //   31 DoubleClick floodlight beacons  (albertsons 20, heb 10, aldi 1)
+  //   26 others — insight.adsrvr.org x9, safeframe.googlesyndication.com x6,
+  //              websdk.ujet.co x4, www.google.com x4, js.stripe.com x3
+  //
+  // The HEB cart beacons carry the payload in their query string: `u3=` product
+  // ids, `u5=` prices, `u6=` quantities, `auiddc=` a persistent ad id. No
+  // fetch/xhr/ping happened to fire, so `document` was the whole of it in practice.
+  //
+  // An earlier version of this comment said "ten, every one of them DoubleClick out
+  // of the HEB captures". That was one slice — the HEB DoubleClick subset —
+  // written up as the whole build, understating it by 5.7x while presenting itself
+  // as a full measurement. Precisely the kind of confident wrong number this
+  // branch exists to stop, in the comment describing the fix. MEAL-113 established that a resourceType allow-list is the losing half
   // of this: it cannot see a preconnect, a WebSocket or a service worker, because
   // those never reach a route handler. FIXTURE_LAUNCH_OPTIONS refuses at the
   // resolver, which is below all of them.
