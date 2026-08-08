@@ -166,10 +166,14 @@ describe('a finished run uploads its selector health', () => {
    * skips it. `samples` are posted onto the bridge during the run, exactly as
    * the injected probe would post them.
    */
-  async function runToDone(samples: Array<Record<string, number>>) {
-    const view = render(
-      <WebViewCartSheet visible meals={[meal]} storeId="aldi" storeName="ALDI" onClose={() => {}} />,
-    );
+  const sheet = (visible: boolean) => (
+    <WebViewCartSheet visible={visible} meals={[meal]} storeId="aldi" storeName="ALDI" onClose={() => {}} />
+  );
+
+  async function driveRun(
+    view: ReturnType<typeof render>,
+    samples: Array<Record<string, number>>,
+  ) {
     const webview = () => view.getAllByTestId('mock-webview')[0];
     const post = (payload: Record<string, unknown>) =>
       act(() => { webview().props.onMessage({ nativeEvent: { data: JSON.stringify(payload) } }); });
@@ -195,6 +199,11 @@ describe('a finished run uploads its selector health', () => {
     return view;
   }
 
+  /** A fresh mount driven to the done screen. */
+  async function runToDone(samples: Array<Record<string, number>>) {
+    return driveRun(render(sheet(true)), samples);
+  }
+
   it('uploads one reconcile row carrying the run\'s tally', async () => {
     // The end of the chain, asserted on what the upload function RECEIVED. Every
     // link between a bridge message and a server row is real here: the tally, the
@@ -218,6 +227,23 @@ describe('a finished run uploads its selector health', () => {
       samples: 2,
       sel1: 'card:2/1/0,title:2/0/2',
     });
+  });
+
+  it('starts a second run from zero rather than from the first run\'s samples', async () => {
+    // Under !FEATURE_BACKGROUND_CART this component survives between runs. What
+    // it publishes is a RATE, so carrying a healthy run's denominator into the
+    // next one is precisely the way to hide a store that broke between them: run
+    // 1's ten clean samples would drown run 2's single miss.
+    const view = render(sheet(true));
+    await driveRun(view, [{ card: 0 }, { card: 0 }]);
+    act(() => { view.rerender(sheet(false)); });
+    act(() => { view.rerender(sheet(true)); });
+    await driveRun(view, [{ card: -1 }]);
+
+    const health = uploaded().filter((r) => r.detail?.phase === 'selector_health');
+    expect(health).toHaveLength(2);
+    expect(health[0].detail.sel1).toBe('card:2/2/0');
+    expect(health[1].detail.sel1).toBe('card:1/0/0');
   });
 
   it('uploads no such row when the run sampled nothing', async () => {
