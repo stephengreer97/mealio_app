@@ -84,6 +84,17 @@ const CART_PAGE_URL: Record<string, string> = {
   mockstore: MOCK_STORE_URL + '/cart',   // dev/test only
 };
 
+/**
+ * Every store id registered in CART_PAGE_URL, derived from the record itself.
+ *
+ * Exported for tests/unit/webview-scripts/cartPageIdentity.test.ts, which checks
+ * that each of these carries the page-identity guard. That check has to iterate
+ * the REGISTRY — a list of store ids copied out beside it cannot notice a store
+ * added to the registry and not to the list, which is precisely the omission
+ * that ships the MEAL-152 defect on a new store.
+ */
+export const CART_PAGE_URL_STORE_IDS: readonly string[] = Object.keys(CART_PAGE_URL);
+
 /** The cart-page URL for stores that count via the cart page, else null. */
 export function getCartPageUrl(storeId: string): string | null {
   if (CART_PAGE_URL[storeId]) return CART_PAGE_URL[storeId];
