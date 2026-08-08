@@ -61,6 +61,21 @@ describe('ALDI generated WebView scripts (bundled config)', () => {
   it('buildWorkerScript', () => {
     expect(getStoreScripts('aldi')!.buildWorkerScript!(3)).toMatchSnapshot();
   });
+
+  // The other two pools' workers. Snapshotted because their COMPOSITION is what
+  // MEAL-31 got wrong: both were assembled at the call site as
+  // `wrapper(probe + body)`, which put the probe's postMessage hook on top of the
+  // wrapper's instead of underneath it, and the wrapper discards what it does not
+  // name — so both pools reported nothing. Behavioural tests hold that now; this
+  // is the byte-level backstop, and re-inverting the order shows up here as a
+  // reviewable diff rather than as identical-looking silence.
+  it('buildPresearchWorkerScript', () => {
+    expect(getStoreScripts('aldi')!.buildPresearchWorkerScript!(3)).toMatchSnapshot();
+  });
+
+  it('buildAddWorkerScript', () => {
+    expect(getStoreScripts('aldi')!.buildAddWorkerScript!(3)).toMatchSnapshot();
+  });
 });
 
 describe('ALDI StoreScripts non-script fields (bundled config)', () => {

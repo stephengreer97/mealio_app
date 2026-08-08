@@ -35,6 +35,38 @@
 // the hook outside the wrapper and every worker's samples would be eaten in
 // silence. Nothing in worker-search.ts had to change for this.
 //
+// "Prepended" is a property of the FINISHED worker, not of any one step, and that
+// distinction is not pedantic — it is the bug this feature shipped with. The
+// pre-search and parallel-add workers were composed in WebViewCartSheet from
+// scripts it had already been handed, i.e. `wrapper(probe + body)`: each half was
+// individually correct and the result was the one arrangement that discards
+// everything. Both pools reported nothing, on the four stores where they ARE the
+// add path, while the main WebView kept the row looking populated. Composition
+// therefore lives at one seam now — see attachWorkerScripts in
+// webview-scripts/index.ts, which runs before withSelectorProbes.
+//
+// WHAT `queried` ACTUALLY COUNTS, AND WHY THE RAW RATE HAS FLOORS
+// A sample is taken when a script posts its terminal message, and it covers every
+// selector that script's text interpolates. So `queried` means "a script that
+// mentions this selector finished", NOT "the script reached the line that asks
+// for it". Three consequences, none of which break a TREND — the thing this
+// feature is for — but all of which put a permanent sub-100% floor on a raw rate,
+// so the read side must not treat "below 100%" as drift:
+//
+//   • Alternative layouts. Amazon Fresh renders two distinct card layouts and its
+//     add script interpolates all fifteen selectors, both sets. On an A-layout
+//     page the seven B-selectors are honest, permanent misses, and vice versa.
+//     (The script-text filter below prevents this ACROSS phases — the login
+//     selectors are not probed on a search page — but it cannot split a single
+//     script's own alternatives.)
+//   • Shared documents. `CART_COUNT` is a terminal type, and the cart-count
+//     scripts are not probed — they inject into the same main-WebView document,
+//     so their post re-samples whatever the last probed script registered. That
+//     inflates the denominator without a matching query.
+//   • Login state. ALDI's login check probes `menu` and `hamburger`; signed out,
+//     those legitimately do not render, so their rate tracks session state rather
+//     than store drift.
+//
 // WHY "RESOLVED" IS NOT A BOOLEAN
 // Most selectors are alternations — `[data-automation-id="product"], [data-item-id]`
 // — where the first branch is what the store is supposed to render and the rest
@@ -358,8 +390,10 @@ export class SelectorHealthTally {
         if (branch === SELECTOR_INVALID) cur.invalid++;
         else if (branch === 0) cur.primary++;
         else if (branch > 0) cur.fallback++;
-        // SELECTOR_MISS and any other negative fall through as a miss, which is
-        // `queried - primary - fallback - invalid` on the read side.
+        // SELECTOR_MISS and any other negative fall through as a miss. Misses are
+        // not stored: they are `queried - primary - fallback - invalid`. Note the
+        // uploaded term carries only the first three, so what a reader can derive
+        // from the row alone is misses-plus-invalids — see summaryParts().
         this.byKey.set(key, cur);
         counted = true;
       }
@@ -400,9 +434,18 @@ export class SelectorHealthTally {
    *     saying so. Chunking at the sanitizer's own constant means the cap can
    *     move without this quietly starting to lose data.
    *
-   * Misses are not encoded: `queried - primary - fallback` is the miss count, and
-   * spending characters on a derivable number costs chunks. `invalid` is reported
-   * separately by detail() because it should always be zero.
+   * Only three numbers, because the fourth is derivable and chunks cost bytes:
+   * `queried - primary - fallback` is everything that DID NOT RESOLVE. Note that
+   * is misses PLUS invalids, not misses alone — an unparseable selector is
+   * counted in `queried` and in neither of the other two. The two are only
+   * separable from `selInvalid` in detail(), which names the keys but not their
+   * counts and yields its slot to `selDropped` when the tally overflows.
+   *
+   * That is deliberate rather than a gap: `invalid` should always be zero (a
+   * configured selector that does not parse is refused by merge.ts, and a bundled
+   * one that does not parse would fail driftSurface's own check), so the read side
+   * can read the remainder as misses. If `selInvalid` ever appears, the fix is the
+   * selector, not the arithmetic.
    */
   summaryParts(): string[] {
     const terms: string[] = [];

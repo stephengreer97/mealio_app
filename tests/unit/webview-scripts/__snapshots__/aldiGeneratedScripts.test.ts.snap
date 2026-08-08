@@ -206,6 +206,633 @@ exports[`ALDI generated WebView scripts (bundled config) buildAddToCartScript 1`
 })();true;"
 `;
 
+exports[`ALDI generated WebView scripts (bundled config) buildAddWorkerScript 1`] = `
+"(function(){
+  try {
+    var W = window;
+    var T = [["atc",["button[aria-label^=\\"Add 1 \\"]"]],["inc",["button[aria-label^=\\"Increment quantity\\"]","button[aria-label^=\\"Increase quantity\\"]"]],["qtyBubble",["button[aria-label^=\\"Quantity:\\"]"]],["cardLink",["a[href*=\\"/store/aldi/products/\\"]"]],["searchTrigger",["label[class*=\\"e-6xs547\\"]","span[class*=\\"e-1olf6x2\\"]"]],["cardQty",["[data-testid=\\"item-quantity\\"]","[data-testid*=\\"quantity\\" i]"]],["cardQtyBubble",["button[aria-label^=\\"Quantity:\\"]","button[aria-label$=\\" ct\\"]","button[aria-label$=\\" in cart\\"]"]]];
+    var H = W.__mealioSelHealth;
+    if (!H) {
+      var rn = W.ReactNativeWebView;
+      if (!rn || typeof rn.postMessage !== 'function') return;
+      var post = rn.postMessage.bind(rn);
+      var TERM = ["SEARCH_RESULT","ADD_RESULT","SEARCH_AND_ADD_RESULT","WORKER_RESULT","LOGIN_STATUS","CART_COUNT"];
+      H = W.__mealioSelHealth = { targets: [] };
+      rn.postMessage = function(s) {
+        post(s);
+        try {
+          var m = JSON.parse(s);
+          if (!m || TERM.indexOf(m.type) < 0) return;
+          var sel = {};
+          for (var i = 0; i < H.targets.length; i++) {
+            var key = H.targets[i][0];
+            var branches = H.targets[i][1];
+            var v = -1;
+            for (var b = 0; b < branches.length; b++) {
+              try {
+                if (document.querySelector(branches[b])) { v = b; break; }
+              } catch (e) { v = -2; break; }
+            }
+            sel[key] = v;
+          }
+          post(JSON.stringify({ type: 'SELECTOR_HEALTH', sel: sel }));
+        } catch (e) {}
+      };
+    }
+    H.targets = T;
+  } catch (e) {}
+})();
+var WORKER_ID = 3;
+(function() {
+  if (window.__mealioAddWorkerWrapped) return;
+  window.__mealioAddWorkerWrapped = true;
+  var posted = false;
+  var rn = window.ReactNativeWebView;
+  if (!rn || !rn.postMessage) return;
+  var orig = rn.postMessage.bind(rn);
+  rn.postMessage = function(s) {
+    try {
+      var m = JSON.parse(s);
+      if (m && (m.type === 'SEARCH_AND_ADD_RESULT' || m.type === 'ADD_RESULT')) {
+        if (posted) return;
+        posted = true;
+        orig(JSON.stringify({
+          type: 'WORKER_RESULT', workerId: WORKER_ID, isAdd: true,
+          success: !!m.success, productName: m.productName || null,
+          reason: m.reason || null, candidates: m.candidates || [],
+          storeUnavailable: !!m.storeUnavailable,
+          // MEAL-14's per-item cart verdict. This whitelist is why MEAL-13 had to
+          // add 'source' here too: a field dropped at the wrapper is invisible on
+          // every parallel add, which reads as "the rail isn't running".
+          confirm: m.confirm || null
+        }));
+        return;
+      }
+      if (m && (m.type === 'WORKER_DEBUG' || m.type === 'EXTRACT_DEBUG')) {
+        m.type = 'WORKER_DEBUG'; m.workerId = WORKER_ID; orig(JSON.stringify(m)); return;
+      }
+    } catch (e) {}
+    // Swallow the add script's other diagnostics to keep the bridge quiet.
+  };
+})();
+(async function() {
+  function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+  function __noKbd(e) {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'))
+      e.target.setAttribute('inputmode', 'none');
+  }
+  document.addEventListener('focusin', __noKbd, true);
+
+  var SEARCH_TERM = "";
+  var QTY = 1;
+  var ATC_SEL = "button[aria-label^=\\"Add 1 \\"]";
+  var INC_SEL = "button[aria-label^=\\"Increment quantity\\"], button[aria-label^=\\"Increase quantity\\"]";
+  var QTY_BUBBLE_SEL = "button[aria-label^=\\"Quantity:\\"]";
+  var CARD_LINK_SEL = "a[href*=\\"/store/aldi/products/\\"]";
+
+  // Stale detection using card links (works for products in cart too).
+  function getFirstLinkName() {
+    var links = document.querySelectorAll(CARD_LINK_SEL);
+    for (var li = 0; li < links.length; li++) {
+      var t = links[li].textContent.trim();
+      if (t.length > 5) return t.slice(0, 80);
+    }
+    return null;
+  }
+  var staleName = getFirstLinkName();
+
+  // Open search, type term, submit.
+  var trigger = document.querySelector('label[class*="e-6xs547"], span[class*="e-1olf6x2"]');
+  if (!trigger) {
+    var allEls = document.querySelectorAll('label, span, div');
+    for (var ti = 0; ti < allEls.length; ti++) {
+      if (/ask or search/i.test(allEls[ti].textContent) && allEls[ti].textContent.length < 60) {
+        trigger = allEls[ti];
+        break;
+      }
+    }
+  }
+  if (trigger) { trigger.click(); await wait(500); }
+
+  var searchInput = document.getElementById('search-bar-input')
+    || document.querySelector('input[aria-label="Search"]')
+    || document.querySelector('input[placeholder*="search" i]');
+
+  if (searchInput) {
+    searchInput.focus();
+    await wait(100);
+    var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+    var setter = nativeSetter ? nativeSetter.set : null;
+    if (setter) {
+      setter.call(searchInput, '');
+      searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+      await wait(50);
+      setter.call(searchInput, SEARCH_TERM);
+    } else {
+      searchInput.value = SEARCH_TERM;
+    }
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await wait(300);
+    var form = searchInput.closest('form');
+    if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    ['keydown', 'keypress', 'keyup'].forEach(function(type) {
+      searchInput.dispatchEvent(new KeyboardEvent(type, {
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
+      }));
+    });
+  } else {
+    window.location.href = 'https://www.aldi.us/store/aldi/s?k=' + encodeURIComponent(SEARCH_TERM);
+  }
+
+  // Wait for fresh search results (stale detection via card links, up to 10s).
+  var productLinks = [];
+  for (var poll = 0; poll < 50; poll++) {
+    productLinks = Array.from(document.querySelectorAll(CARD_LINK_SEL));
+    if (productLinks.length > 0) {
+      var currentName = getFirstLinkName();
+      if (!staleName || currentName !== staleName) break;
+    }
+    await wait(200);
+  }
+
+  if (productLinks.length === 0) {
+    document.removeEventListener('focusin', __noKbd, true);
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'no_results', candidates: [] }));
+    return;
+  }
+
+  // Score and find best match.
+  var CRITICAL = new Set(['organic','grass','fed','free','range','cage','large','small','jumbo',
+    'medium','extra','spicy','mild','hot','sweet','whole','skim','nonfat','lowfat',
+    'salted','unsalted','sodium','boneless','skinless','lean','ground']);
+  var COMMON = new Set(['the','and','or','of','a','an','in','on','at','to','for','with']);
+
+  // Dual normalization to handle stores that mangle ñ/é/etc. inconsistently
+  // across renderings (Walmart strips ñ entirely on certain queries; others
+  // may NFD-decompose). Score both ways and take the better.
+  function normDiacritic(s) {
+    return s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
+      .replace(/[^a-z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim();
+  }
+  function normStrip(s) {
+    return s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
+      .replace(/[^\\x00-\\x7f]/g, '').replace(/[^a-z0-9 ]/g, ' ')
+      .replace(/\\s+/g, ' ').trim();
+  }
+
+  function scoreOne(nf, nt) {
+    if (nf === nt) return 100;
+    var wt = nt.split(' ').filter(Boolean), wf = new Set(nf.split(' ').filter(Boolean));
+    var critTarget = wt.filter(function(w) { return CRITICAL.has(w); });
+    var critFound = [];
+    wf.forEach(function(w) { if (CRITICAL.has(w)) critFound.push(w); });
+    // Penalize missing critical words instead of hard-rejecting.
+    // ALDI has limited selection — "Organic Broccoli" should still match "Broccoli Crowns".
+    var critPenalty = 0;
+    for (var i = 0; i < critTarget.length; i++) { if (!wf.has(critTarget[i])) critPenalty += 15; }
+    for (var j = 0; j < critFound.length; j++) {
+      var inTarget = false;
+      for (var k = 0; k < critTarget.length; k++) { if (critTarget[k] === critFound[j]) { inTarget = true; break; } }
+      if (!inTarget) critPenalty += 15;
+    }
+    var matching = wt.filter(function(w) { return wf.has(w); });
+    var pct = matching.length / wt.length;
+    if (pct < 0.3) return -1;
+    var extra = [];
+    wf.forEach(function(w) {
+      if (!new Set(wt).has(w) && !COMMON.has(w)) extra.push(w);
+    });
+    var score = Math.round(pct * 100) - (extra.length * 5) - critPenalty;
+    return Math.max(0, score);
+  }
+
+  // The only match test that decides a purchase. Exact after normalization, trying
+  // both normalizers so an accented or non-ASCII title still matches its plain
+  // counterpart — the same pair scoreMatch maxes over, and the same rule as
+  // scoreOne's nf === nt fast path, just without the scoring machinery behind it.
+  //
+  // Symmetric, so the argument-order trap documented at the top of this file cannot
+  // bite here: equality does not care which side is the query.
+  function isExactMatch(found) {
+    // An empty normalized term matches EVERYTHING that also normalizes to empty,
+    // and both normalizers reduce any title without ASCII alphanumerics to "" —
+    // an all-CJK product name, or "★★★". So an empty search term would exact-match
+    // such a tile, and a CJK term would exact-match an unrelated CJK tile: adding
+    // a product nobody named, which is the one direction this gate must never fail
+    // in. normStrip is strictly more aggressive than normDiacritic, so if
+    // normDiacritic leaves nothing then normStrip leaves nothing either, and this
+    // one test covers both branches below.
+    //
+    // Not reachable today, and it was not reachable under the old score gate either
+    // (the nf === nt fast path returned 100, well past MIN_SCORE): the only empty
+    // term in the app is the parallel-add placeholder, and ALDI is pinned to
+    // forceSerialSearch so it never gets one. Closed here anyway, permanently, for
+    // the price of a line.
+    if (!normDiacritic(SEARCH_TERM)) return false;
+    return normDiacritic(found) === normDiacritic(SEARCH_TERM)
+      || normStrip(found) === normStrip(SEARCH_TERM);
+  }
+
+  function scoreMatch(found, target) {
+    var s1 = scoreOne(normDiacritic(found), normDiacritic(target));
+    var s2 = scoreOne(normStrip(found), normStrip(target));
+    return Math.max(s1, s2);
+  }
+
+  function findCard(btn) {
+    var node = btn.parentElement;
+    for (var depth = 0; depth < 10 && node; depth++) {
+      if (node.querySelector('img') && node.textContent.length > 30) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function extractPrice(card) {
+    if (!card) return null;
+    var m = (card.textContent || '').match(/\\$\\d+\\.\\d{2}/);
+    return m ? m[0] : null;
+  }
+
+  // WHERE TO LOOK IF ALDI'S REVIEW RATE RISES IN THE FIELD (unverified, MEAL-121).
+  //
+  // isExactMatch compares the term against whatever this returns, so which of the
+  // three branches wins decides whether a repeat run recognises the product the
+  // user already chose. The first branch is not stable across cart state: once a
+  // tile is in the cart the "Add 1 item …" button is replaced by the quantity
+  // stepper, ATC_SEL matches nothing, and the name falls through to the img alt.
+  //
+  // In the committed fixtures the two agree wherever both exist (the stepper-open
+  // capture has no Add button on the sour cream tile and its alt is exactly
+  // "Friendly Farms Sour Cream", which is why that test passes). The slug fallback
+  // plainly does NOT agree: the same tile's href yields "Friendly Farms Sour Cream
+  // 16 Oz", and the cottage cheese tile is alt "Friendly Farms Regular Cottage
+  // Cheese" against slug "friendly-farms-cottage-cheese-24-oz". A term remembered
+  // from one branch cannot exact-match a name produced by the slug branch, so a
+  // card that exposes neither button nor alt sends the item to review every time.
+  //
+  // That is a safe failure — it asks instead of guessing — and it has not been
+  // observed on a real page, so nothing is changed here. Recorded so the next
+  // person reads it rather than rediscovering it.
+  function getProductName(card) {
+    var addBtn = card.querySelector(ATC_SEL);
+    if (addBtn) {
+      var m = (addBtn.getAttribute('aria-label') || '').match(/^Add 1 (?:item|ct)\\s+(.+)/i);
+      if (m) return m[1].trim();
+    }
+    var img = card.querySelector('img[alt]');
+    if (img) {
+      var alt = img.getAttribute('alt').trim();
+      if (alt.length > 2 && !/placeholder|logo|banner/i.test(alt)) return alt;
+    }
+    var link = card.querySelector(CARD_LINK_SEL);
+    if (link) {
+      var href = link.getAttribute('href') || '';
+      var slugMatch = href.match(/\\/products\\/\\d+-(.+)/);
+      if (slugMatch) {
+        return slugMatch[1].split('-').map(function(w) {
+          return w.charAt(0).toUpperCase() + w.slice(1);
+        }).join(' ');
+      }
+    }
+    return null;
+  }
+
+  var seen = new Set();
+  var candidates = [];
+  var bestCard = null, bestName = null;
+
+  for (var pi = 0; pi < productLinks.length && pi < 20; pi++) {
+    var card = findCard(productLinks[pi]);
+    if (!card) continue;
+    var name = getProductName(card);
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+
+    var addBtn = card.querySelector(ATC_SEL);
+    var oos = addBtn ? (addBtn.disabled || addBtn.getAttribute('aria-disabled') === 'true') : false;
+    var imgEl = card.querySelector('img');
+
+    candidates.push({
+      productName: name,
+      imageUrl: imgEl ? (imgEl.src || null) : null,
+      outOfStock: oos,
+      preferences: null,
+      price: extractPrice(card)
+    });
+
+    // EXACT AFTER NORMALIZATION, and nothing looser. This used to keep the
+    // highest-scoring candidate and buy it if it cleared 30 out of 100 — so a name
+    // sharing under a third of its words with what the user asked for was added to
+    // their cart unattended. Every other store in this codebase requires an exact
+    // match: HEB, Walmart, Wegmans and Amazon Fresh gate on scoreMatch(...) === 100,
+    // which in _scoring.ts means equality and nothing else, because every path but
+    // the na === nb fast path is capped by Math.min(99, …). Albertsons compares
+    // normalized strings directly. ALDI was the exception.
+    //
+    // Note that === 100 would NOT mean equality if it were asked of the scoreOne
+    // above: that copy has no 99 cap, so it also returns a clean 100 for a word
+    // permutation ("cream sour"), a repeated word ("sour cream cream") and extra
+    // COMMON stopwords ("sour cream and", "sour cream of the") against a term of
+    // "sour cream" — all cases where the shared scorer returns 99. Which is exactly
+    // why this gate compares the strings itself instead of asking for a score of
+    // 100: string equality is the property we want, and it cannot drift when
+    // someone tunes a penalty.
+    //
+    // First exact match wins, as at HEB — seen already deduplicates names, so a
+    // second exact candidate would be the same product twice.
+    //
+    // Anything not exact is not a worse guess to be made anyway; it goes back as a
+    // candidate and the user picks. That is the whole point: we do not buy something
+    // nobody asked for, and we do not silently substitute.
+    if (!oos && !bestName && isExactMatch(name)) {
+      bestName = name;
+      bestCard = card;
+    }
+    if (candidates.length >= 8) break;
+  }
+
+  if (!bestName || !bestCard) {
+    // Named for what it is: an exact match that happens to be out of stock. The
+    // previous version called this hasExactOos while testing the same 30-point
+    // threshold, so "out_of_stock" was reported for products that merely resembled
+    // the request.
+    var hasExactOos = candidates.some(function(c) { return isExactMatch(c.productName) && c.outOfStock; });
+    var reason = candidates.length === 0 ? 'no_results' : hasExactOos ? 'out_of_stock' : 'low_confidence';
+    document.removeEventListener('focusin', __noKbd, true);
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: reason, candidates: candidates }));
+    return;
+  }
+
+  // Read the in-cart quantity on a card (see buildAddToCartScript for the DOM
+  // shapes ALDI uses). Number when legible, 0 when only "Add 1" is present,
+  // null when no counter is exposed.
+  function getCardQty(el) {
+    if (!el) return null;
+    var q = el.querySelector('[data-testid="item-quantity"], [data-testid*="quantity" i]');
+    if (q) { var qt = (q.textContent || '').match(/\\d+/); if (qt) return parseInt(qt[0], 10); }
+    var bubble = el.querySelector('button[aria-label^="Quantity:"], button[aria-label$=" ct"], button[aria-label$=" in cart"]');
+    if (bubble) { var bm = (bubble.getAttribute('aria-label') || '').match(/(\\d+)/); if (bm) return parseInt(bm[1], 10); }
+    var inc = el.querySelector(INC_SEL);
+    if (inc) { var im = (inc.getAttribute('aria-label') || '').match(/currently\\s+(\\d+)/i); if (im) return parseInt(im[1], 10); }
+    if (el.querySelector(ATC_SEL)) return 0;
+    return null;
+  }
+
+  // Bounded poll for the cart to reflect the add over the network; presence
+  // fallback when the count is unreadable. False on timeout → honest failure.
+  async function confirmQty(el, target) {
+    for (var ci = 0; ci < 16; ci++) {
+      var q = getCardQty(el);
+      if (q !== null) { if (q >= target) return true; }
+      else if (el && (el.querySelector(INC_SEL) || el.querySelector(QTY_BUBBLE_SEL))) return true;
+      await wait(250);
+    }
+    var qf = getCardQty(el);
+    if (qf !== null) return qf >= target;
+    return !!(el && (el.querySelector(INC_SEL) || el.querySelector(QTY_BUBBLE_SEL)));
+  }
+
+  try {
+    // Baseline before we touch the cart; the add is additive.
+    var beforeQty = getCardQty(bestCard);
+    var target = (beforeQty === null ? 0 : beforeQty) + QTY;
+
+    // Find the add button or qty bubble on the matched card.
+    var addBtn2 = bestCard.querySelector(ATC_SEL);
+    var quantityAdded = 0;
+
+    if (addBtn2) {
+      // Product not yet in cart — click add.
+      addBtn2.scrollIntoView({ behavior: 'instant', block: 'center' });
+      await wait(200);
+      addBtn2.click();
+      await wait(1000);
+      quantityAdded = 1;
+    } else {
+      // Product already in cart — increment button should be visible.
+      // Only click qty bubble if increment isn't directly available (collapsed stepper).
+      var initIncr = bestCard.querySelector(INC_SEL);
+      if (!initIncr) {
+        var initBubble = bestCard.querySelector(QTY_BUBBLE_SEL);
+        if (initBubble) {
+          initBubble.scrollIntoView({ behavior: 'instant', block: 'center' });
+          await wait(200);
+          initBubble.click();
+          await wait(500);
+        }
+      }
+    }
+
+    // Increment for remaining qty.
+    while (quantityAdded < QTY) {
+      var incrBtn = bestCard ? bestCard.querySelector(INC_SEL) : null;
+      if (!incrBtn) break;
+      incrBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      await wait(200);
+      incrBtn.click();
+      await wait(500);
+      quantityAdded++;
+    }
+
+    var confirmed = await confirmQty(bestCard, target);
+    document.removeEventListener('focusin', __noKbd, true);
+    if (confirmed) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName }));
+    } else {
+      // Same shape as the not-found/low-confidence failures above, so an add
+      // that never committed routes into the Review picker like other search
+      // stores instead of reporting a false success.
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'not_confirmed', candidates: candidates }));
+    }
+  } catch(e) {
+    document.removeEventListener('focusin', __noKbd, true);
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'error', candidates: candidates }));
+  }
+})();true;"
+`;
+
+exports[`ALDI generated WebView scripts (bundled config) buildPresearchWorkerScript 1`] = `
+"(function(){
+  try {
+    var W = window;
+    var T = [["atc",["button[aria-label^=\\"Add 1 \\"]"]],["qtyBubble",["button[aria-label^=\\"Quantity:\\"]"]],["cardLink",["a[href*=\\"/store/aldi/products/\\"]"]]];
+    var H = W.__mealioSelHealth;
+    if (!H) {
+      var rn = W.ReactNativeWebView;
+      if (!rn || typeof rn.postMessage !== 'function') return;
+      var post = rn.postMessage.bind(rn);
+      var TERM = ["SEARCH_RESULT","ADD_RESULT","SEARCH_AND_ADD_RESULT","WORKER_RESULT","LOGIN_STATUS","CART_COUNT"];
+      H = W.__mealioSelHealth = { targets: [] };
+      rn.postMessage = function(s) {
+        post(s);
+        try {
+          var m = JSON.parse(s);
+          if (!m || TERM.indexOf(m.type) < 0) return;
+          var sel = {};
+          for (var i = 0; i < H.targets.length; i++) {
+            var key = H.targets[i][0];
+            var branches = H.targets[i][1];
+            var v = -1;
+            for (var b = 0; b < branches.length; b++) {
+              try {
+                if (document.querySelector(branches[b])) { v = b; break; }
+              } catch (e) { v = -2; break; }
+            }
+            sel[key] = v;
+          }
+          post(JSON.stringify({ type: 'SELECTOR_HEALTH', sel: sel }));
+        } catch (e) {}
+      };
+    }
+    H.targets = T;
+  } catch (e) {}
+})();
+var WORKER_ID = 3;
+(function() {
+  if (window.__mealioPresearchWrapped) return;
+  window.__mealioPresearchWrapped = true;
+  var postedSearch = false, postedAdd = false;
+  var rn = window.ReactNativeWebView;
+  if (!rn || !rn.postMessage) return;
+  var orig = rn.postMessage.bind(rn);
+  rn.postMessage = function(s) {
+    try {
+      var m = JSON.parse(s);
+      if (m && m.type === 'SEARCH_RESULT') {
+        if (postedSearch) return;
+        postedSearch = true;
+        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, phase: 'search', candidates: m.candidates || [], source: m.source || null, storeUnavailable: !!m.storeUnavailable }));
+        return;
+      }
+      if (m && (m.type === 'ADD_RESULT' || m.type === 'SEARCH_AND_ADD_RESULT')) {
+        if (postedAdd) return;
+        postedAdd = true;
+        orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, phase: 'add', success: !!m.success, productName: m.productName || null, reason: m.reason || null, candidates: m.candidates || [], storeUnavailable: !!m.storeUnavailable, confirm: m.confirm || null }));
+        return;
+      }
+      if (m && (m.type === 'WORKER_DEBUG' || m.type === 'EXTRACT_DEBUG')) {
+        m.type = 'WORKER_DEBUG'; m.workerId = WORKER_ID; orig(JSON.stringify(m)); return;
+      }
+    } catch (e) {}
+    // Swallow other diagnostics to keep the bridge quiet under concurrency.
+  };
+})();
+(async function() {
+  function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+
+  function __noKbd(e) {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
+      e.target.setAttribute('inputmode', 'none');
+    }
+  }
+  document.addEventListener('focusin', __noKbd, true);
+
+  var ATC_SEL = "button[aria-label^=\\"Add 1 \\"]";
+  var QTY_BUBBLE_SEL = "button[aria-label^=\\"Quantity:\\"]";
+  // Product cards contain either an add button OR a quantity bubble.
+  // Use product card links to find all products regardless of cart state.
+  var CARD_LINK_SEL = "a[href*=\\"/store/aldi/products/\\"]";
+
+  // Stale detection: capture current first product link text.
+  function getFirstLinkName() {
+    var links = document.querySelectorAll(CARD_LINK_SEL);
+    for (var li = 0; li < links.length; li++) {
+      var t = links[li].textContent.trim();
+      if (t.length > 5) return t.slice(0, 80);
+    }
+    return null;
+  }
+  var staleName = getFirstLinkName();
+
+  // Poll for fresh products (up to 10s).
+  var productLinks = [];
+  for (var poll = 0; poll < 50; poll++) {
+    productLinks = Array.from(document.querySelectorAll(CARD_LINK_SEL));
+    if (productLinks.length > 0) {
+      var currentName = getFirstLinkName();
+      if (!staleName || currentName !== staleName) break;
+    }
+    await wait(200);
+  }
+
+  if (productLinks.length === 0) {
+    document.removeEventListener('focusin', __noKbd, true);
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: [] }));
+    return;
+  }
+
+  function findCard(el) {
+    var node = el.parentElement;
+    for (var depth = 0; depth < 10 && node; depth++) {
+      if (node.querySelector('img') && node.textContent.length > 30) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function extractPrice(card) {
+    if (!card) return null;
+    var text = card.textContent || '';
+    var m = text.match(/\\$\\d+\\.\\d{2}/);
+    return m ? m[0] : null;
+  }
+
+  function getProductName(card) {
+    // Try "Add 1" button aria-label first (clean product name).
+    var addBtn = card.querySelector(ATC_SEL);
+    if (addBtn) {
+      var m = (addBtn.getAttribute('aria-label') || '').match(/^Add 1 (?:item|ct)\\s+(.+)/i);
+      if (m) return m[1].trim();
+    }
+    // Try image alt text (usually clean product name).
+    var img = card.querySelector('img[alt]');
+    if (img) {
+      var alt = img.getAttribute('alt').trim();
+      if (alt.length > 2 && !/placeholder|logo|banner/i.test(alt)) return alt;
+    }
+    // Fall back to URL slug: /store/aldi/products/12345-product-name-size
+    var link = card.querySelector(CARD_LINK_SEL);
+    if (link) {
+      var href = link.getAttribute('href') || '';
+      var slugMatch = href.match(/\\/products\\/\\d+-(.+)/);
+      if (slugMatch) {
+        // Convert slug to title: "happy-harvest-crushed-tomatoes-28-oz" → "Happy Harvest Crushed Tomatoes 28 Oz"
+        return slugMatch[1].split('-').map(function(w) {
+          return w.charAt(0).toUpperCase() + w.slice(1);
+        }).join(' ');
+      }
+    }
+    return null;
+  }
+
+  var seen = new Set();
+  var candidates = [];
+
+  // Iterate over product card links to find ALL products (including those already in cart).
+  for (var pi = 0; pi < productLinks.length && pi < 20; pi++) {
+    var card = findCard(productLinks[pi]);
+    if (!card) continue;
+    var name = getProductName(card);
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+
+    var addBtn = card.querySelector(ATC_SEL);
+    var outOfStock = addBtn ? (addBtn.disabled || addBtn.getAttribute('aria-disabled') === 'true') : false;
+    var imgEl = card.querySelector('img');
+    var imageUrl = imgEl ? (imgEl.src || imgEl.getAttribute('srcset')?.split(' ')[0] || null) : null;
+    var price = extractPrice(card);
+
+    candidates.push({ productName: name, imageUrl: imageUrl, outOfStock: outOfStock, preferences: null, price: price });
+    if (candidates.length >= 8) break;
+  }
+
+  document.removeEventListener('focusin', __noKbd, true);
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: candidates }));
+})();true;"
+`;
+
 exports[`ALDI generated WebView scripts (bundled config) buildSearchAndAddScript 1`] = `
 "(function(){
   try {

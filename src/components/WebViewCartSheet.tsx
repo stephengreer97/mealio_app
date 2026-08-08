@@ -36,7 +36,6 @@ import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
 import { useParallelSearchPool, PoolSettled } from '../lib/useParallelSearchPool';
 import { usePresearchAddPool, PresearchItem } from '../lib/usePresearchAddPool';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
-import { buildSearchAndAddWorker, buildPresearchWorker } from '../lib/webview-scripts/worker-search';
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS, FEATURE_PRESEARCH_ADD, ADD_COMMIT_JITTER_MS } from '../constants/features';
 import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
@@ -859,9 +858,14 @@ export default function WebViewCartSheet({
     }
   }, [presearchPool.workerUris, COLD_SLOT_IDX]);
 
+  // Composed by the registry, not here. Wrapping a script this component has
+  // already been handed puts the wrapper's postMessage override UNDER the
+  // selector probe's, and the wrapper swallows what it does not name — which
+  // silently discarded every sample this pool produced (MEAL-31). See
+  // StoreScripts.buildPresearchWorkerScript.
   const presearchScripts = useMemo(
-    () => parallelCfg && scripts?.extractProductsScript
-      ? new Array(PARALLEL_ADD_WORKER_COUNT).fill(0).map((_, i) => buildPresearchWorker(i, scripts.extractProductsScript))
+    () => parallelCfg && scripts?.buildPresearchWorkerScript
+      ? new Array(PARALLEL_ADD_WORKER_COUNT).fill(0).map((_, i) => scripts.buildPresearchWorkerScript!(i))
       : [],
     [parallelCfg, scripts, PARALLEL_ADD_WORKER_COUNT],
   );
@@ -989,14 +993,13 @@ export default function WebViewCartSheet({
     [parallelPool.workerUris],
   );
 
-  // Add-worker scripts: one fixed search-and-add script per worker (placeholder
-  // params; real ones come from the URL hash at runtime). Only stores whose
-  // buildSearchAndAddScript reads the #mealio hash support parallel add today
-  // (HEB pilot); others fall back to sequential via beginSearchFlow's gate.
+  // Add-worker scripts: one fixed search-and-add script per worker. The
+  // placeholder params and the #mealio hash contract now live with the
+  // composition in the registry — see StoreScripts.buildAddWorkerScript, and the
+  // note on presearchScripts above for why composing it here was wrong.
   const addWorkerScripts = useMemo(
-    () => parallelCfg && scripts
-      ? new Array(PARALLEL_ADD_WORKER_COUNT).fill(0).map((_, i) =>
-          buildSearchAndAddWorker(i, scripts.buildSearchAndAddScript('', 1, null)))
+    () => parallelCfg && scripts?.buildAddWorkerScript
+      ? new Array(PARALLEL_ADD_WORKER_COUNT).fill(0).map((_, i) => scripts.buildAddWorkerScript!(i))
       : [],
     [parallelCfg, scripts],
   );
@@ -1283,9 +1286,11 @@ export default function WebViewCartSheet({
       blockReasonRef.current = null;
       freshStoreUnavailableRef.current = false;
       extractWhyRef.current = {};
-      // A fresh tally per run. Under !FEATURE_BACKGROUND_CART this component
-      // survives between runs, so without this run 2 would report run 1's
-      // selector samples — and it is a RATE, so carrying a healthy run's
+      // A fresh tally per run. This component survives between runs in the
+      // SHIPPING configuration: FEATURE_BACKGROUND_CART is on, which is what
+      // mounts the sheet at app root and keeps it alive across runs (the older
+      // MyMealsScreen mount does the same). Without this, run 2 would report run
+      // 1's selector samples — and it is a RATE, so carrying a healthy run's
       // denominator into a broken one is exactly the way to hide the break.
       selectorHealthRef.current = new SelectorHealthTally();
       console.log(`[Cart ${ts()}]`, 'initial webviewUri=', scriptsRef.current!.storeUrl);

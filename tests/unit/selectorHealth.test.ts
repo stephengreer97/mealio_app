@@ -42,7 +42,7 @@ import {
   withSelectorProbe,
 } from '../../src/lib/selector-health';
 import { getStoreScripts } from '../../src/lib/webview-scripts';
-import { buildExtractWorker, buildPresearchWorker } from '../../src/lib/webview-scripts/worker-search';
+import { buildExtractWorker, buildPresearchWorker, buildSearchAndAddWorker } from '../../src/lib/webview-scripts/worker-search';
 import { __resetAutomationConfigForTests } from '../../src/lib/automation-config';
 
 afterEach(() => __resetAutomationConfigForTests());
@@ -234,6 +234,45 @@ describe('the injected probe', () => {
     expect(posted[1].type).toBe(SELECTOR_HEALTH_MESSAGE);
   });
 
+  it('forwards a message it cannot parse at all', () => {
+    // Forward-FIRST, not forward-if-understood. This is the property that makes
+    // the probe safe to prepend to every script on every store: the hook sits on
+    // the bridge every message crosses, so anything it declines to forward is
+    // gone. Moving `post(s)` after the JSON.parse — the obvious tidy-up, since
+    // everything below it needs the parsed message — drops non-JSON traffic
+    // silently, and no other behavioural test in the suite notices.
+    //
+    // No store script posts non-JSON today, so this is latent rather than live.
+    // It is exactly the kind of latent that a refactor turns live.
+    const posted: string[] = [];
+    const ctx: any = {
+      ReactNativeWebView: { postMessage: (s: string) => posted.push(s) },
+      document: { querySelector: () => null },
+      JSON,
+    };
+    vm.createContext(ctx);
+    ctx.window = ctx;
+    vm.runInContext(buildSelectorProbe([CARD]), ctx);
+    vm.runInContext(`window.ReactNativeWebView.postMessage('not json at all');`, ctx);
+    expect(posted).toEqual(['not json at all']);
+  });
+
+  it('propagates a bridge failure the way an unhooked bridge would', () => {
+    // The other side of forward-first: if the native post throws, the store
+    // script's own try/catch must see it, exactly as it did before the hook
+    // existed. Swallowing it here would turn a broken bridge into a silent one.
+    const ctx: any = {
+      ReactNativeWebView: { postMessage: () => { throw new Error('bridge gone'); } },
+      document: { querySelector: () => null },
+      JSON,
+    };
+    vm.createContext(ctx);
+    ctx.window = ctx;
+    vm.runInContext(buildSelectorProbe([CARD]), ctx);
+    expect(() => vm.runInContext(`window.ReactNativeWebView.postMessage('{"type":"SEARCH_RESULT"}');`, ctx))
+      .toThrow('bridge gone');
+  });
+
   it('still delivers the engine\'s message when every selector throws', () => {
     const posted = runInPage(buildSelectorProbe([CARD, TITLE]), {
       throwsOn: [...CARD.branches, ...TITLE.branches],
@@ -281,30 +320,121 @@ describe('the injected probe', () => {
   });
 });
 
-// ── Surviving the worker wrappers ───────────────────────────────────────────
+// ── Surviving the worker wrappers, AS THE REGISTRY COMPOSES THEM ────────────
 
-describe('the probe under the parallel-pool wrappers', () => {
-  const stubExtract = `window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_RESULT', candidates: [{ productName: 'x' }] }));`;
+/**
+ * Run a whole registry-produced worker script in a page stub and return what it
+ * posted, after a terminal message is delivered.
+ *
+ * The REAL composed text, not a re-assembly of its parts. The first version of
+ * these tests built `probe + wrapper(stub)` by hand and asserted on that — an
+ * arrangement production never produced. Two of the three pools actually shipped
+ * `wrapper(probe + body)`, the probe's hook stacked ON TOP of the wrapper's
+ * instead of underneath it, and every sample from the pre-search and parallel-add
+ * pools was swallowed in the page. The suite stayed green because it was grading
+ * its own composition. So these go through getStoreScripts.
+ *
+ * The store's own body runs too, and may throw against a stub DOM. That is caught
+ * and reported rather than hidden: both prefixes are strictly ahead of the body in
+ * the text, so their hooks are installed before anything in the body can fail.
+ */
+function runWorkerInPage(script: string, terminal: Record<string, unknown>) {
+  const posted: Array<Record<string, any>> = [];
+  const el = () => ({ click: () => {}, textContent: '', getAttribute: () => null, querySelector: () => null, querySelectorAll: () => [] });
+  const ctx: any = {
+    ReactNativeWebView: { postMessage: (m: string) => posted.push(JSON.parse(m)) },
+    document: {
+      querySelector: () => el(), querySelectorAll: () => [], getElementById: () => null,
+      addEventListener: () => {}, removeEventListener: () => {}, body: el(),
+    },
+    location: { href: 'https://store.test/s?k=milk', pathname: '/s', search: '?k=milk', hash: '', host: 'store.test', origin: 'https://store.test' },
+    navigator: { userAgent: 'test' },
+    JSON, setTimeout, clearTimeout, Promise, Date, Math,
+  };
+  vm.createContext(ctx);
+  ctx.window = ctx;
+  let bodyThrew: string | null = null;
+  try { vm.runInContext(script, ctx); } catch (e) { bodyThrew = String((e as Error).message); }
+  vm.runInContext(`window.ReactNativeWebView.postMessage(${JSON.stringify(JSON.stringify(terminal))});`, ctx);
+  return { posted, bodyThrew };
+}
 
-  it.each([
-    ['buildExtractWorker', buildExtractWorker],
-    ['buildPresearchWorker', buildPresearchWorker],
-  ])('gets its sample past %s, which swallows what it does not name', (_name, wrap) => {
-    // The reason the prefix is PREPENDED. Text order decides the postMessage
-    // chain: running first puts the probe's hook closest to the native bridge,
-    // under the wrapper, so it posts straight to native instead of into the
-    // wrapper's whitelist. Appended instead, every worker's samples would be
-    // eaten in silence and the four stores that use these pools — HEB, Walmart,
-    // Amazon Fresh, Albertsons — would report nothing on their main add path.
-    const script = buildSelectorProbe([CARD]) + wrap(2, stubExtract);
-    const posted = runInPage(script, { matches: [CARD.branches[1]] });
-    expect(posted.map((m) => m.type)).toEqual(['WORKER_RESULT', SELECTOR_HEALTH_MESSAGE]);
-    expect(health(posted)[0].sel).toEqual({ card: 1 });
+/** Every pool's worker script, named by the field the engine actually renders. */
+const POOL_WORKERS: Array<[string, (s: any) => string, Record<string, unknown>]> = [
+  ['buildWorkerScript (parallel search)', (s) => s.buildWorkerScript!(2), { type: 'SEARCH_RESULT', candidates: [] }],
+  ['buildPresearchWorkerScript (pre-search)', (s) => s.buildPresearchWorkerScript!(2), { type: 'SEARCH_RESULT', candidates: [] }],
+  ['buildAddWorkerScript (parallel add)', (s) => s.buildAddWorkerScript!(2), { type: 'SEARCH_AND_ADD_RESULT', success: true }],
+];
+
+// Walmart uses the generic wrappers in worker-search.ts; ALDI ships a
+// purpose-built parallel-search worker with no postMessage override at all, so
+// between them the two arrangements the probe has to survive are both covered.
+const POOL_STORES = ['heb', 'walmart', 'amazon', 'wegmans', 'aldi', 'safeway'];
+
+describe('a registry-composed pool worker reports its selectors', () => {
+  const cases = POOL_STORES.flatMap((storeId) =>
+    POOL_WORKERS.map(([label, build, terminal]) => [storeId, label, build, terminal] as const),
+  );
+
+  it.each(cases)('%s / %s', (storeId, _label, build, terminal) => {
+    const { posted, bodyThrew } = runWorkerInPage(build(getStoreScripts(storeId)!), terminal);
+    const samples = posted.filter((m) => m.type === SELECTOR_HEALTH_MESSAGE);
+    expect(bodyThrew).toBeNull();
+    expect(samples).toHaveLength(1);
+    // A map, not an empty object: the probe resolved the selectors this worker's
+    // script actually interpolates.
+    expect(Object.keys(samples[0].sel).length).toBeGreaterThan(0);
   });
 
-  it('is prepended, not appended, by the registry that builds worker scripts', () => {
-    const worker = getStoreScripts('walmart')!.buildWorkerScript!(0);
-    expect(worker.indexOf('__mealioSelHealth')).toBeLessThan(worker.indexOf('__mealioWorkerWrapped'));
+  it('puts the probe\'s hook under any override the composition installs', () => {
+    for (const storeId of POOL_STORES) {
+      const scripts = getStoreScripts(storeId)!;
+      for (const [label, build] of POOL_WORKERS) {
+        const script = build(scripts);
+        const probe = script.indexOf('__mealioSelHealth');
+        const wrapper = Math.max(
+          script.indexOf('__mealioWorkerWrapped'),
+          script.indexOf('__mealioPresearchWrapped'),
+          script.indexOf('__mealioAddWorkerWrapped'),
+        );
+        expect(`${storeId}/${label}: probe@${probe}`).toBe(`${storeId}/${label}: probe@${probe}`);
+        expect(probe).toBeGreaterThanOrEqual(0);
+        // -1 means this store ships a purpose-built worker with no override of
+        // its own (Wegmans, the Instacart banners) — nothing to be under.
+        if (wrapper >= 0) expect(probe).toBeLessThan(wrapper);
+      }
+    }
+  });
+});
+
+describe('the failure mode that composition guards against', () => {
+  /** A one-line store script that posts the result its wrapper re-tags. */
+  const stub = (type: string) =>
+    `window.ReactNativeWebView.postMessage(JSON.stringify({ type: '${type}', candidates: [], success: true }));`;
+
+  // The negative control. This is what the two broken pools shipped, and it is
+  // the reason `attachWorkerScripts` runs before `withSelectorProbes` instead of
+  // the composition happening at the call site: wrapping an already-probed script
+  // is silent, total data loss, indistinguishable from a store whose selectors
+  // are all healthy.
+  const WRAPPERS: Array<[string, (id: number, script: string) => string, string]> = [
+    ['buildPresearchWorker', buildPresearchWorker, 'SEARCH_RESULT'],
+    ['buildSearchAndAddWorker', buildSearchAndAddWorker, 'SEARCH_AND_ADD_RESULT'],
+    ['buildExtractWorker', buildExtractWorker, 'SEARCH_RESULT'],
+  ];
+
+  it.each(WRAPPERS)('%s over an already-probed script emits nothing', (_name, wrap, result) => {
+    const inverted = wrap(2, buildSelectorProbe([CARD]) + stub(result));
+    const posted = runInPage(inverted, { matches: [CARD.branches[1]] });
+    expect(posted.map((m) => m.type)).toEqual(['WORKER_RESULT']);
+    expect(health(posted)).toHaveLength(0);
+  });
+
+  it.each(WRAPPERS)('%s over the probe emits the sample', (_name, wrap, result) => {
+    const correct = buildSelectorProbe([CARD]) + wrap(2, stub(result));
+    const posted = runInPage(correct, { matches: [CARD.branches[1]] });
+    expect(posted.map((m) => m.type)).toEqual(['WORKER_RESULT', SELECTOR_HEALTH_MESSAGE]);
+    expect(health(posted)[0].sel).toEqual({ card: 1 });
   });
 });
 

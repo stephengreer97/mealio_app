@@ -160,10 +160,14 @@ describe('SELECTOR_HEALTH from a pool worker', () => {
 
   // Each pool's worker WebView has its OWN onMessage handler, and each swallows
   // what it does not recognise, so a handler missing the branch loses every
-  // sample from that pool in silence. On the four stores these pools serve —
-  // HEB, Walmart, Amazon Fresh, Albertsons — that is the MAIN path, so the loss
-  // would be most of the data while the main WebView kept reporting enough to
-  // look healthy.
+  // sample from that pool in silence, while the main WebView keeps the row
+  // looking populated.
+  //
+  // These cover the RN half only — that a sample arriving on a pool's bridge is
+  // folded into the tally. Whether the injected script ever posts one is the
+  // in-page composition question, and it is tested against the registry's real
+  // output in tests/unit/selectorHealth.test.ts. Both halves are needed: this
+  // file passed unchanged while two of the three pools emitted nothing at all.
   type Ing = Omit<(typeof meal)['ingredients'][number], 'searchTerm'> & { searchTerm?: string };
   const walmartSheet = (ingredient: Ing) => (
     <WebViewCartSheet
