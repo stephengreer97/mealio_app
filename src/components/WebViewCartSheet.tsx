@@ -294,7 +294,8 @@ export default function WebViewCartSheet({
   const tel = useCallback(() => telemetryRef.current, []);
 
   /**
-   * The terminal row for a run that ends WITHOUT reaching 'done' (MEAL-5).
+   * End this run's telemetry: the terminal row a run that never reached 'done'
+   * would otherwise never get, and the dispose() that EVERY run needs (MEAL-5).
    *
    * `run_summary` used to be emitted from exactly one place — the 'done' effect —
    * so it was a row about runs that finished, not a row about runs. Every other
@@ -319,30 +320,46 @@ export default function WebViewCartSheet({
    * `abandonedAt` is the actionable field: a pile of 'qty' is people changing
    * their mind before any automation ran, and a pile of 'robot_challenge' is a
    * store beating us. Those must not be one number.
+   *
+   * Reads nothing but refs, deliberately. It is called from a cleanup with `[]`
+   * deps, so the closure it runs from may be the first render's — a rule that
+   * holds as long as every value here is read through `.current`.
    */
-  const finalizeAbandonedRun = useCallback(() => {
+  const endRun = useCallback(() => {
+    const t = telemetryRef.current;
     // Keyed on the runId, not on the recorder: without one the server issued no
     // run, so there is no `automation_runs` row for this row to be the missing
     // half of, and the recorder is the no-op that drops everything anyway.
-    if (!automationRunIdRef.current || automationCompletedRef.current) return;
-    automationCompletedRef.current = true;
-    const t = telemetryRef.current;
-    t.record('run_summary', 'skipped', {
-      detail: {
-        terminal: 'abandoned',
-        abandonedAt: stepRef.current,
-        kind: runKindRef.current,
-        requested: requestedRef.current.requested,
-        // The same expression every finalize path computes setTotalAdded from,
-        // read off the ref because this runs from a cleanup with no live state.
-        itemsAdded: addResultsRef.current.filter((r) => r.success).length,
-        runComplete: false,
-      },
-    });
-    // dispose(), not flush(): it sends what is buffered AND stops the retry
-    // timer. On the live mount site nothing had ever disposed a recorder (see
-    // the close branch below, which that site never reaches), so a run whose
-    // uploads were failing kept re-arming its retry for the life of the process.
+    // `automationCompletedRef` is what keeps a run that DID reach 'done' from
+    // shipping a second terminal row on its way out — and a second row is not a
+    // harmless duplicate: mealio_central's automation-trace takes the LAST
+    // run_summary as the run's terminal row, so a 'skipped' one landing after a
+    // clean finish blanks that run's code and relabels it in the drilldown.
+    if (automationRunIdRef.current && !automationCompletedRef.current) {
+      automationCompletedRef.current = true;
+      t.record('run_summary', 'skipped', {
+        detail: {
+          terminal: 'abandoned',
+          abandonedAt: stepRef.current,
+          kind: runKindRef.current,
+          requested: requestedRef.current.requested,
+          // The same expression every finalize path computes setTotalAdded from,
+          // read off the ref because this runs from a cleanup with no live state.
+          itemsAdded: addResultsRef.current.filter((r) => r.success).length,
+          runComplete: false,
+        },
+      });
+    }
+    // UNCONDITIONAL, and outside the guard above on purpose. dispose() sends what
+    // is buffered and stops the retry timer; flush() would do only the first, and
+    // a recorder whose uploads are failing re-arms that timer on every refused
+    // attempt — forever, for the life of the process.
+    //
+    // A run that reaches 'done' needs this every bit as much as one that is
+    // abandoned. It is the COMMON path: the done effect records the terminal row
+    // and flushes, then this cleanup runs and takes the early return above, so
+    // scoping the dispose to abandoned runs would have left the leak open on
+    // every successful run and closed it only for the rare ones.
     void t.dispose();
   }, []);
 
@@ -394,7 +411,7 @@ export default function WebViewCartSheet({
     } else {
       // Before the resets below wipe the runId and the completion flag this
       // needs to read.
-      finalizeAbandonedRun();
+      endRun();
       // Retire this open before re-arming the start below, so a response still
       // in flight for it can no longer write anything.
       automationGenRef.current += 1;
@@ -407,7 +424,7 @@ export default function WebViewCartSheet({
       telemetryRef.current = createNoopTelemetry();
       void prev.dispose();
     }
-  }, [visible, storeId, meals.length, cfgTelemetry, finalizeAbandonedRun]);
+  }, [visible, storeId, meals.length, cfgTelemetry, endRun]);
 
   // Being unmounted is an abandonment too, and it is the one that matters most:
   // the live mount site (CartJobContext, FEATURE_BACKGROUND_CART) renders this
@@ -421,10 +438,19 @@ export default function WebViewCartSheet({
   // It is also the ONLY place the live mount site can emit a terminal row from,
   // for the same reason: dropping the job unmounts this, so every run that ends
   // anywhere but the done screen ends here (MEAL-5).
+  //
+  // The `[]` is load-bearing, and it is what enforces both of those — not a
+  // convention. `endRun` is stable, so listing it would buy nothing, but a dep
+  // that ever DID change turns this cleanup into a mid-run event: it bumps the
+  // generation, so the in-flight logAutomationStart response is discarded and
+  // the run never gets a recorder at all. Measured with `[step]`: zero rows for
+  // the whole run, and no test failed. So `endRun` reads refs only (see there)
+  // and this list stays empty.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => () => {
     automationGenRef.current += 1;
-    finalizeAbandonedRun();
-  }, [finalizeAbandonedRun]);
+    endRun();
+  }, []);
 
   // Step: qty
   const [items, setItems] = useState<ConsolidatedIngredient[]>([]);

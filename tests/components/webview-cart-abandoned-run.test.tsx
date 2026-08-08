@@ -15,7 +15,10 @@
 // `record` would prove none of it. `webview-cart-run-generation.test.tsx`
 // substitutes the class instead; it is asking a different question.
 
-import { act, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
+
+/** The main WebView's live props, so a test can post engine messages to it. */
+let mainWebViewProps: any = null;
 
 jest.mock('../../src/lib/purchases', () => ({
   // Only reached transitively — WebViewCartSheet → LoginPrewarmContext →
@@ -29,9 +32,13 @@ jest.mock('../../src/lib/purchases', () => ({
 jest.mock('react-native-webview', () => {
   const RealReact = jest.requireActual('react');
   const RealView = jest.requireActual('react-native').View;
-  const MockWebView = RealReact.forwardRef((props: any, _ref: any) =>
-    RealReact.createElement(RealView, { testID: props.testID || 'mock-webview', ...props }),
-  );
+  const MockWebView = RealReact.forwardRef((props: any, ref: any) => {
+    // The worker tiles render their own WebViews; only the main one is the
+    // engine's message channel.
+    if (!props.testID || props.testID === 'mock-webview') mainWebViewProps = props;
+    RealReact.useImperativeHandle(ref, () => ({ injectJavaScript: () => {} }));
+    return RealReact.createElement(RealView, { testID: props.testID || 'mock-webview', ...props });
+  });
   return { __esModule: true, default: MockWebView, WebView: MockWebView };
 });
 
@@ -76,9 +83,12 @@ jest.mock('../../src/lib/api', () => {
         ((globalThis as any).__pendingStarts ||= []).push({ storeId: data.storeId, resolve });
       })),
       logAutomationComplete: jest.fn(async () => {}),
+      // Returns whatever `__uploadOk` says, so a test can make the server refuse
+      // the batch (a 5xx, the retryable case) and watch what the recorder does
+      // with the timer it re-arms.
       logAutomationSteps: jest.fn(async (batch: any) => {
         ((globalThis as any).__batches ||= []).push(batch);
-        return true;
+        return (globalThis as any).__uploadOk !== false;
       }),
     },
   };
@@ -114,10 +124,30 @@ const meal = {
   ],
 };
 
-const sheet = (props: { visible: boolean; storeId: string }) => (
+/** The same meal with nothing chosen yet. The sheet skips the qty screen for
+ *  this and auto-starts the choose flow, so the run sits on 'login_check'
+ *  without the test touching the UI. */
+const unchosenMeal = {
+  id: 'm2',
+  name: 'Chili',
+  ingredients: [
+    { ingredientName: 'Kidney Beans', searchTerm: null, productQty: 1, qty: 1, unit: 'qty', measure: null },
+  ],
+};
+
+/** Post an engine message to the main WebView. */
+function post(payload: unknown) {
+  act(() => {
+    mainWebViewProps.onMessage({ nativeEvent: { data: JSON.stringify(payload) } });
+  });
+}
+
+const settle = () => act(async () => { await Promise.resolve(); });
+
+const sheet = (props: { visible: boolean; storeId: string; meals?: unknown[] }) => (
   <WebViewCartSheet
     visible={props.visible}
-    meals={[meal] as any}
+    meals={(props.meals ?? [meal]) as any}
     storeId={props.storeId}
     storeName={props.storeId}
     onClose={() => {}}
@@ -127,6 +157,8 @@ const sheet = (props: { visible: boolean; storeId: string }) => (
 beforeEach(() => {
   pendingStarts().length = 0;
   batches().length = 0;
+  (globalThis as any).__uploadOk = true;
+  mainWebViewProps = null;
 });
 
 describe('a cart run that never reaches the done screen', () => {
@@ -152,8 +184,10 @@ describe('a cart run that never reaches the done screen', () => {
       itemsAdded: 0,
     });
     // The actionable field: a pile of 'qty' is people changing their mind before
-    // anything ran; a pile of 'robot_challenge' is a store beating us.
-    expect(typeof summaries[0].detail?.abandonedAt).toBe('string');
+    // anything ran; a pile of 'robot_challenge' is a store beating us. Asserted
+    // as a VALUE — `typeof … === 'string'` passes just as happily on a constant,
+    // and a constant is exactly how this field goes silently wrong.
+    expect(summaries[0].detail?.abandonedAt).toBe('qty');
     // And it is filed under the run the `automation_runs` row is keyed to,
     // which is the whole point of emitting it — the two counts have to line up.
     expect(batches().every((b) => b.runId === 'run-heb')).toBe(true);
@@ -183,6 +217,25 @@ describe('a cart run that never reaches the done screen', () => {
     expect(uploaded().filter((s) => s.step === 'run_summary')).toHaveLength(1);
   });
 
+  it('names the step the run actually stopped on, not the one it started on', async () => {
+    // The other half of the assertion above: every other test in this file
+    // abandons at 'qty', so a hardcoded 'qty' would satisfy all of them. An
+    // ingredient with no chosen product skips the qty screen and auto-starts the
+    // choose flow, which parks the run on 'login_check' with no UI interaction —
+    // a genuinely different value for the field whose whole purpose is to vary.
+    const { unmount } = render(sheet({ visible: true, storeId: 'heb', meals: [unchosenMeal] }));
+    await landStartFor('heb');
+    await act(async () => { unmount(); });
+    await settle();
+
+    const summaries = uploaded().filter((s) => s.step === 'run_summary');
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].detail?.abandonedAt).toBe('login_check');
+    // A choose run has no cart outcome, so it is excluded from both north-star
+    // rates by `requested === 0` — the abandonment row must not invent one.
+    expect(summaries[0].detail).toMatchObject({ kind: 'choose', requested: 0 });
+  });
+
   it('stays silent for a run the server never issued an id for', async () => {
     // No runId means no `automation_runs` row either, so there is nothing for a
     // terminal row to be the missing half of — and the recorder is the no-op
@@ -193,5 +246,71 @@ describe('a cart run that never reaches the done screen', () => {
     await act(async () => { await Promise.resolve(); });
 
     expect(uploaded()).toHaveLength(0);
+  });
+});
+
+// The run that DID finish. Its terminal row is not in question — the done effect
+// has always emitted one — but two things about its teardown are.
+describe('a cart run that reaches the done screen', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  /**
+   * Drive a one-item ALDI run all the way to the done screen: qty CTA, a
+   * logged-in answer, and the fused search-and-add result that finishes it. The
+   * last hop sits behind the add-commit jitter, hence the timer advance.
+   */
+  async function runToDone() {
+    const r = render(sheet({ visible: true, storeId: 'aldi' }));
+    await landStartFor('aldi');
+    await act(async () => { fireEvent.press(r.getByText(/add ingredients to/i)); });
+    post({ type: 'LOGIN_STATUS', loggedIn: true });
+    await settle();
+    post({
+      type: 'SEARCH_AND_ADD_RESULT', success: true, added: 1,
+      productName: 'Sour Cream', term: 'sour cream',
+    });
+    await act(async () => { jest.advanceTimersByTime(30_000); await Promise.resolve(); });
+    // The done screen, so a run that silently stalled cannot pass as finished.
+    expect(r.queryByText(/added to your/i)).toBeTruthy();
+    return r;
+  }
+
+  it('emits exactly one terminal row across done and unmount, and it is the finished one', async () => {
+    // The guard under test is `automationCompletedRef` in endRun. Without it the
+    // teardown ships a SECOND run_summary, outcome 'skipped', for a run that
+    // finished cleanly — and mealio_central's automation-trace takes the LAST
+    // run_summary as the run's terminal row, so the duplicate would blank the
+    // run's code and relabel a clean run in the drilldown. Overcounting the
+    // funnel in the opposite direction to the gap this branch exists to close.
+    const r = await runToDone();
+    await act(async () => { r.unmount(); });
+    await act(async () => { jest.advanceTimersByTime(30_000); await Promise.resolve(); });
+
+    const summaries = uploaded().filter((s) => s.step === 'run_summary');
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].outcome).toBe('ok');
+    expect(summaries[0].detail).not.toHaveProperty('terminal');
+  });
+
+  it('leaves no retry timer running when the run tears down mid-retry', async () => {
+    // The leak the audit's third finding named, on the path that actually
+    // matters. `dispose()` sends what is buffered AND stops the timer; `flush()`
+    // does only the first, and the retry re-arms on every refused upload — so a
+    // recorder nobody disposed keeps posting every flush interval for the life of
+    // the process. Nothing had ever disposed one on the live mount site.
+    //
+    // Observed as behaviour rather than as a spy on dispose: with the server
+    // refusing every batch, a disposed recorder makes no further attempt and a
+    // merely-flushed one makes another on each interval.
+    (globalThis as any).__uploadOk = false;
+    const r = await runToDone();
+    await act(async () => { r.unmount(); });
+    await act(async () => { await Promise.resolve(); });
+
+    const attemptsAtTeardown = batches().length;
+    expect(attemptsAtTeardown).toBeGreaterThan(0); // it really did try
+    await act(async () => { jest.advanceTimersByTime(120_000); await Promise.resolve(); });
+    expect(batches().length).toBe(attemptsAtTeardown);
   });
 });
