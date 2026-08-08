@@ -45,7 +45,7 @@ import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureC
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitTopUpsForReview, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
-import { ConfirmedSource, RequestedCount, RunKind, correctConfirmedFromCart, countRequested, isRunComplete } from '../lib/north-star';
+import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -1613,7 +1613,7 @@ export default function WebViewCartSheet({
     // hung probe would cost the whole run its terminal row). A `reconcile` row
     // with phase 'north_star' follows when the probe finds anything, and the read
     // side coalesces — see the emission site in the CART_COUNT 'after' branch.
-    const summaryDetail = {
+    const summaryFacts: RunSummaryFacts = {
       outcome,
       itemsAdded: totalAdded,
       cartDeltaWarning: !!cartDeltaWarning,
@@ -1622,8 +1622,8 @@ export default function WebViewCartSheet({
       confirmedSource,
       weightRequested,
       skippedInReview,
-      keptInReview,
       runComplete: isRunComplete(requested, totalAdded),
+      keptInReview,
     };
     if (outcome === 'failed') {
       // The run has no failure of its own — it failed because its steps did, so
@@ -1634,25 +1634,17 @@ export default function WebViewCartSheet({
       // report through the pool and emit no step rows: confirm_failed is the only
       // thing still true there (adds were dispatched, nothing evidenced landing).
       const primary = tel().primaryFailureCode();
+      // The whole tally rides along with the chosen code, so ranking by severity
+      // does not hide how often each code actually occurred (MEAL-123). Built in
+      // north-star.ts because the result is at sanitizeDetail's key cap exactly and
+      // the tally is the field the cap would drop — see runSummaryFailureDetail for
+      // both ways it has been lost, and northStar.test.ts for what now holds it.
       tel().record('run_summary', 'error', {
-        detail: {
-          ...summaryDetail,
-          codeSource: primary ? 'severity' : 'fallback',
-          // The whole tally rides along, so ranking by severity above does not
-          // hide how often each code actually occurred (MEAL-123). A flat string
-          // because sanitizeDetail drops nested objects — see failureCodeSummary.
-          //
-          // NOTE ON HEADROOM: summaryDetail is 10 keys, and with codeSource and
-          // this one the row sits at exactly sanitizeDetail's 12-key cap. The cap
-          // truncates SILENTLY and in Object.entries order, so the next key added
-          // here will drop one of these without saying so. Widen MAX_DETAIL_KEYS
-          // or drop a field first.
-          failureCodes: tel().failureCodeSummary(),
-        },
+        detail: runSummaryFailureDetail(summaryFacts, primary, tel().failureCodeSummary()),
         code: primary ?? 'confirm_failed',
       });
     } else {
-      tel().record('run_summary', 'ok', { detail: summaryDetail });
+      tel().record('run_summary', 'ok', { detail: runSummaryDetail(summaryFacts) });
     }
     void tel().flush();
     // skippedByIdx / keptByIdx are read above; automationCompletedRef keeps this to

@@ -90,7 +90,19 @@ export type StepFailureCode = (typeof STEP_FAILURE_CODES)[number];
  *   nav_failed     the page never loaded, so nothing could be read from it.
  *   selector_miss  the page is not the shape we expect. Usually store drift, and
  *                  it explains the misses that follow it.
- *   timeout        genuinely ambiguous — the page may be slow, or wrong.
+ *   timeout        ranked here not because a timeout is itself explanatory — it is
+ *                  ambiguous, and on its own that argues for ranking it LOW — but
+ *                  because in this app it is the catch-all for two conditions that
+ *                  explain a whole run. It absorbs every `nav_failed` case (see
+ *                  above), and a `login_check` timeout means we never established
+ *                  whether the user was signed in, which is `auth_required`'s
+ *                  neighbourhood. Those outrank any per-item answer below.
+ *                  The cost: `selector_miss` sits above it, so a run whose login
+ *                  check timed out and whose one add hit a missing button headlines
+ *                  as store drift. Accepted, because if the user was in fact signed
+ *                  in, drift IS the story. Splitting the code would fix it properly
+ *                  and can't be done unilaterally — the enum is shared with the
+ *                  extension.
  *   no_candidates  the search returned nothing. Often a true answer about stock.
  *   match_rejected we saw products and none matched. A real, actionable answer.
  *   confirm_failed most often a SYMPTOM: the add was dispatched and nothing
@@ -271,7 +283,7 @@ export interface TelemetryOptions {
 const MAX_BUFFER = 500;
 // Detail payloads are for diagnosis, not archival. Cap the key count and value
 // sizes so a well-meaning caller can't attach a page's worth of HTML.
-const MAX_DETAIL_KEYS = 12;
+export const MAX_DETAIL_KEYS = 12;
 const MAX_DETAIL_STRING = 200;
 
 /** Strip a detail payload down to something safe to send. Never throws. */
@@ -305,8 +317,7 @@ export class AutomationTelemetry {
   private buffer: StepRecord[] = [];
   private seq = 0;
   // Every code recorded this run, counted. Feeds primaryFailureCode() and
-  // failureCodeCounts() — see
-  // there for why the run's own terminal row needs it.
+  // failureCodeSummary() — see there for why the run's own terminal row needs it.
   private readonly failureCounts = new Map<StepFailureCode, number>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private flushing = false;
@@ -393,7 +404,7 @@ export class AutomationTelemetry {
    * ordinary confirmation misses, and the row most likely to become the headline
    * number on the dashboard named the symptom instead of the cause.
    *
-   * Frequency is not lost: `failureCodeCounts()` carries the whole tally, and the
+   * Frequency is not lost: `failureCodeSummary()` carries the whole tally, and the
    * caller puts it in the row's detail. So both readings are available and this
    * ranking is a default, not a deletion.
    */

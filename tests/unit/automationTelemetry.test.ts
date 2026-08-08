@@ -10,6 +10,7 @@ import {
   StepRecord,
   STEP_FAILURE_CODES,
 } from '../../src/lib/automation-telemetry';
+import type { StepFailureCode } from '../../src/lib/automation-telemetry';
 
 // The property that matters most here is "telemetry can never break a cart run":
 // bounded buffer, swallowed errors, no throw from any entry point. The second is
@@ -366,13 +367,33 @@ describe('failure codes', () => {
     expect(t.primaryFailureCode()).toBe('selector_miss');
   });
 
-  it('falls back to the most frequent when no ranked code was recorded', () => {
-    // Defensive: the severity table is exhaustive over StepFailureCode and the
-    // compiler enforces that, so this path should be unreachable. It exists so a
-    // future code added to the union without a rank still reports something.
+  it('says nothing when no failure was recorded', () => {
     const t = make();
     expect(t.primaryFailureCode()).toBeUndefined();
     expect(t.failureCodeSummary()).toBeUndefined();
+  });
+
+  it('falls back to the most frequent when no ranked code was recorded', () => {
+    // Defensive: the severity table is exhaustive over StepFailureCode and the
+    // compiler enforces that, so this path should be unreachable today. It exists
+    // so a future code added to the union without a rank still reports something
+    // instead of nothing.
+    //
+    // Which means the only way to test it is to do what that future edit would do
+    // by accident — record a code the table has never heard of. Hence the casts.
+    // Asserting undefined on an empty telemetry would NOT test this: the loop can
+    // be deleted outright and an empty run still reports undefined.
+    const unranked = 'script_error' as StepFailureCode;
+    const alsoUnranked = 'quota_exceeded' as StepFailureCode;
+
+    const t = make();
+    t.record('confirm', 'error', { code: unranked });
+    t.record('confirm', 'error', { code: unranked });
+    t.record('search', 'error', { code: alsoUnranked });
+
+    // Most frequent wins, which is the pre-MEAL-123 behaviour.
+    expect(t.primaryFailureCode()).toBe(unranked);
+    expect(t.failureCodeSummary()).toBe('script_error:2,quota_exceeded:1');
   });
 
   it('keeps the run tally past a flush and past buffer trimming', async () => {

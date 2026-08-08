@@ -105,6 +105,13 @@
 //        confirmedSource  'cart_reconcile' | 'worker_reports' | 'none'
 //        weightRequested  of `requested`, how many are presence-confirmed
 //        skippedInReview  lines the user skipped (INSIDE `requested` — see above)
+//        failureCodes     every code this run recorded, counted, most frequent
+//                         first: "confirm_failed:3,waf_block:1". A STRING, not an
+//                         object — sanitizeDetail drops nested values. Present only
+//                         when the run ended in failure. The row's own `code` is
+//                         the most EXPLANATORY of these, not the most frequent
+//                         (see FAILURE_CODE_SEVERITY), so read this when you want
+//                         the distribution rather than the headline.
 //        outcome, cartDeltaWarning, codeSource  (pre-existing)
 //      → This is where the trust qualifiers live. Join to the run for store_id.
 //
@@ -283,5 +290,63 @@ export function correctConfirmedFromCart(input: {
     recovered,
     recoveredLoose,
     runComplete: isRunComplete(requested, confirmed),
+  };
+}
+
+/**
+ * The facts a finished run reports on its own `run_summary` row — every field of
+ * the detail JSON documented in the header, except the two that describe how the
+ * row's failure code was chosen.
+ *
+ * A named type rather than an inline literal because the row sits at exactly
+ * sanitizeDetail's key cap. Adding a field here is a schema change with a
+ * consequence, and the detail-cap test in tests/unit/northStar.test.ts is what
+ * tells you so.
+ */
+export interface RunSummaryFacts {
+  outcome: 'success' | 'partial' | 'failed';
+  itemsAdded: number;
+  cartDeltaWarning: boolean;
+  kind: RunKind;
+  requested: number;
+  confirmedSource: ConfirmedSource;
+  weightRequested: number;
+  skippedInReview: number;
+  runComplete: boolean;
+  keptInReview: number;
+}
+
+/** The detail for a run that finished without failing. */
+export function runSummaryDetail(facts: RunSummaryFacts): Record<string, unknown> {
+  return { ...facts };
+}
+
+/**
+ * The detail for a failed run: the same facts, plus which rule chose the row's
+ * code and the full tally of codes behind it.
+ *
+ * This is a function, and not the object literal it used to be at the call site,
+ * because of how the two extra fields can be lost. `failureCodes` was first
+ * written as a nested Record and sanitizeDetail dropped it in silence — the row
+ * shipped claiming a tally it did not carry. It is a flat string now, but the
+ * second way to lose it is still open: with these two fields the detail is at
+ * MAX_DETAIL_KEYS exactly, the cap truncates in Object.entries order, and
+ * `failureCodes` is last. So the next field added to RunSummaryFacts would drop the
+ * tally again, the same way, with nothing to say it happened.
+ *
+ * Assembling it in one place lets a test hold the cap instead of a comment asking
+ * the next reader to.
+ */
+export function runSummaryFailureDetail(
+  facts: RunSummaryFacts,
+  primaryCode: string | undefined,
+  failureCodes: string | undefined,
+): Record<string, unknown> {
+  return {
+    ...facts,
+    // Whether the code on this row came from the severity ranking or from the
+    // frequency fallback, so the read side can tell a ranked answer from a guess.
+    codeSource: primaryCode ? 'severity' : 'fallback',
+    failureCodes,
   };
 }
