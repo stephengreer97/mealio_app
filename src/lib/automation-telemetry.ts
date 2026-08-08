@@ -531,6 +531,16 @@ export interface PoolAddOutcome {
  * code by severity, not by count, so the headline code is immune. A reader
  * wanting items rather than rows counts distinct itemIndex on the blocked rows.
  *
+ * That immunity is worth more than it sounds, because these rows RELOCATE what
+ * run_summary's code means. It used to be a run-level verdict derived from one or
+ * two rows; with 2N per-item rows it becomes a vote over them. Under the
+ * frequency rule on main today that is roughly lateral — a run whose code was
+ * `confirm_failed` from the reconcile now reports the modal per-item symptom
+ * instead, which hides no more than it did. Under #83's severity rule it is a
+ * clear gain: a single wall among many ordinary misses wins, where a vote buries
+ * it. So the two changes are complements, and #83 is the one that turns this
+ * volume into an answer rather than a bigger majority.
+ *
  * Never throws. The pools call this from a worker message handler and from a
  * timer, and telemetry must never disturb an add — record() already swallows its
  * own errors, and the outer catch covers building the arguments too.
@@ -571,6 +581,11 @@ export function recordPoolAddOutcome(tel: AutomationTelemetry, out: PoolAddOutco
     if (reason === 'blocked') {
       tel.record('blocked', 'blocked', {
         itemIndex: out.itemIndex,
+        // blockFailureCode, not addFailureCode. Both return 'waf_block' for this
+        // one reason, so swapping them is a mutant no test can kill and none
+        // pretends to — it is named here instead. blockFailureCode is the entry
+        // point FOR a blocked row, and it is the one that stays right if the
+        // reason set ever widens (it already splits off 'fresh-no-store').
         detail: { reason, ...base },
         code: blockFailureCode(reason),
       });
