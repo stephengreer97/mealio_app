@@ -37,15 +37,21 @@
 //           name is stuff the query did not ask for (fewer is better).
 //   Tier 2  scoreMatch === 0 — left in the store's own order.
 //
-// Tier 2 keeps the store's order deliberately. When our matcher recognises
+// Tier 2 keeps the store's order deliberately: when our matcher recognises
 // nothing, the store's relevance ranking is better than any order we can
-// invent, and re-sorting it measurably hurts: on heb's "HEB season chicken
-// thighs for fajitas" every product scores 0, and any reordering of that tier
-// demotes the correct answer.
+// invent.
 //
-// The tiers are separate sort keys rather than one arithmetic score, so no
-// choice of penalty weight can ever float an unrecognised product above a
-// recognised one.
+// **The corpus does not justify the tier split** — a flat single-score ranking
+// scores the same 16/17 at every weight tried. It is kept as a SAFETY property,
+// not a scoring one: the tiers are separate sort keys rather than one
+// arithmetic score, so no choice of penalty weight can float an unrecognised
+// product above a recognised one. That bounds the penalty's blast radius, which
+// is worth having whether or not today's 20 queries can see it.
+//
+// (An earlier version of this comment claimed re-sorting tier 2 "measurably
+// hurts" on heb's "chicken thighs for fajitas". That was measured before
+// unrequestedWordCount deduped via `new Set`, and is false as shipped — the
+// flat ranking's top row on that query is acceptable. Cold review caught it.)
 //
 // ── The unrequested-word penalty ────────────────────────────────────────────
 //
@@ -94,6 +100,9 @@ export function unrequestedWordCount(query: string, productName: string): number
  * is not mutated and no element is added, dropped or altered.
  *
  * Stable: candidates that tie on every key keep the store's original order.
+ * That comes from `Array.prototype.sort` being stable by spec, not from the
+ * explicit `storeOrder` tiebreak below — deleting that line changes nothing.
+ * It is kept to make the intended order readable rather than implied.
  */
 export function rankChoiceCandidates<T extends { productName: string }>(
   query: string,

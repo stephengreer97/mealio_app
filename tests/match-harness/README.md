@@ -241,10 +241,23 @@ visible at all — the add gate is exact-name equality, so `scoreMatch`
 improvements below 100 cannot change a cart.
 
 Before MEAL-28 the choose flow passed the store's candidate list straight to the
-UI in the store's own order (`WebViewCartSheet.tsx`, the `else` branch of
-`isChooseFlow`). Our scorer was never consulted, so the first row — and with it
-the default selection — was whatever the store ranked first, paid placement
-included.
+UI in the store's own order. Our scorer was never consulted, so the first row —
+and with it the default selection — was whatever the store ranked first, paid
+placement included.
+
+**There are two paths to the choose screen, and both had to be fixed.**
+`beginSearchFlow` routes an all-choose run by store capability:
+
+| Path | Builds its results in | Stores |
+| --- | --- | --- |
+| parallel worker pool | `finishParallelSearch` | heb, walmart, albertsons, amazon |
+| sequential | the `SEARCH_RESULT` handler, `else` branch of `isChooseFlow` | aldi, wegmans (`forceSerialSearch`) |
+
+The first revision of this work ranked only the sequential path, which meant the
+ranking never ran for four of the six stores — including walmart (1/3 → 3/3) and
+albertsons (0/2 → 2/2), which between them are most of the measured win. Cold
+review caught it. If you add a store or a third route to the review step, it
+needs the same call.
 
 ```
 store            store order      ranked
@@ -285,7 +298,7 @@ not pay for them again.
 | --- | --- |
 | Rank the choose flow by `scoreMatch` | **Kept.** 10/17 → 15/17. |
 | Unrequested-word tiebreak | **Kept.** 15/17 → 16/17. Insensitive to the weight: −1, −2 and −5 give an identical ranking over the whole corpus. |
-| Unrequested-word penalty applied across *all* candidates, not just recognised ones | **Rejected.** 15/17. Reordering the score-0 tier demotes the right answer on heb's "chicken thighs for fajitas", where every product scores 0 and the store's own order is correct. Hence the two-tier sort. |
+| Unrequested-word penalty applied across *all* candidates, not just recognised ones (i.e. no tier split) | **Costs nothing on this corpus — 16/17 at w = 1, 2 and 5, the same as the shipped two-tier sort.** The tier split is kept as a safety property, bounding the penalty's blast radius so no weight can float an unrecognised product above a recognised one; it is not corpus-justified. An earlier revision of this row claimed 15/17 and a demoted answer on heb's "chicken thighs for fajitas" — that reproduces only if unrequested words are counted non-distinctly, and was measured before `unrequestedWordCount` deduped via `new Set`. Under the shipped function the flat ranking's top row on that query is *"H-E-B Seasoned Boneless Skinless Chicken Thighs for Fajitas, Avg. 2.2 lbs"*, which is acceptable. |
 | Category / prepared-food penalty (`dip`, `chips`, `spread`, `sauce`, …) | **Rejected.** 15/17 — no movement, and it is whack-a-mole: penalising *dip* and *chips* promoted "Sour Cream & Onion **Kettle**" and "**Crema** Salvadorena" instead. The tail of sour-cream-flavoured things is unbounded, so each word added promotes the next word not on the list. |
 | `CRITICAL_WORDS` veto applied in reverse (penalise a critical word in the *candidate* the query did not ask for) | **Rejected, and it actively hurts.** 13/17 alone, 15/17 combined with the tiebreak. The set contains words that are *good* in a candidate: "whole" (whole-milk yogurt is the acceptable one), "large"/"jumbo" (large Hass avocado is acceptable). |
 | Unit / quantity awareness ("2 lbs chicken thighs" prefers a ~2 lb pack) | **Not built — unmeasurable here.** No query in the corpus carries a quantity. Building it would be exactly the unfalsifiable tinkering the ticket forbids. Note the data *is* available in the component (`SearchResult.unit` / `.measure`); what is missing is corpus queries to validate against, which needs capture sessions, not code. |
@@ -302,9 +315,23 @@ Yogurt`) the shortest. No length-based measure can fix it; it needs the rubric's
 rule 5 (an unrequested attribute that changes how the food eats), which means
 knowing "nonfat" and "low-fat" are disqualifying while "whole" and "organic" are
 not. The reverse-`CRITICAL_WORDS` attempt above was that idea, and it lost. It
-also exposed a **tokenisation defect worth fixing on its own**: `CRITICAL_WORDS`
-contains `lowfat` as one token, but "Low-Fat" normalizes to `low` + `fat`, so the
-existing veto never fires on any product written that way.
+also exposed a **tokenisation defect in the live add-path scorer, filed as
+MEAL-160**. `CRITICAL_WORDS` holds `lowfat` as a single token, and the veto is
+checked against the **query's** tokens only (`_scoring.ts:63-66`) — not the
+product's. That gives it two failure faces, both real:
+
+```
+scoreMatch("low fat cottage cheese", "Full Fat Cottage Cheese") = 75   ← veto never fires
+scoreMatch("nonfat cottage cheese",  "Full Fat Cottage Cheese") = 0    ← control, one token
+scoreMatch("lowfat cottage cheese",  "Lowfat Cottage Cheese")   = 100
+scoreMatch("lowfat cottage cheese",  "Low-Fat Cottage Cheese")  = 0    ← fires, wrongly
+```
+
+Written the natural way ("low fat"), the query tokenises to `low` + `fat`,
+neither of which is in the set, so the `lowfat` entry protects nothing and a
+full-fat product scores 75. Written as one token, the veto does fire — but it can
+then only be satisfied by a product whose name also tokenises to `lowfat`, so a
+hyphenated or spaced product name is zeroed even when it is the correct product.
 
 ## Labelling
 

@@ -70,8 +70,10 @@ describe('rankChoiceCandidates', () => {
     });
 
     it('leaves the store order alone among products it recognises none of', () => {
-      // heb's "chicken thighs for fajitas": scoreMatch returns 0 on every
-      // product, and the store's own relevance order is the right answer.
+      // Invented names chosen to reproduce the SHAPE of heb's "chicken thighs
+      // for fajitas" query, where scoreMatch returns 0 on all 19 real products
+      // — not the corpus names themselves. The corpus case is covered by the
+      // harness; what this pins is the property.
       const products = ['Chicken Thigh Fajitas Frozen', 'Chicken Breast Fajitas', 'Diced Chicken Tacos'];
       for (const p of products) expect(scoreMatch('HEB season chicken thighs for fajitas', p)).toBe(0);
       expect(order('HEB season chicken thighs for fajitas', ...products)).toEqual(products);

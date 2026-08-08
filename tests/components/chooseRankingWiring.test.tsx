@@ -55,6 +55,26 @@ jest.mock('react-native-safe-area-context', () => {
   };
 });
 
+// The parallel worker pool, replaced so the test can drive the completion
+// callback directly. `start(items, onAllDone)` is where WebViewCartSheet hands
+// over `finishParallelSearch`; capturing it lets a test call that function with
+// a real result map instead of choreographing four worker WebViews.
+let capturedOnAllDone: ((resultsByIdx: Map<number, any>) => void) | null = null;
+
+jest.mock('../../src/lib/useParallelSearchPool', () => ({
+  __esModule: true,
+  useParallelSearchPool: () => ({
+    workerUris: ['', '', '', ''],
+    workerItems: [],
+    isActive: false,
+    completed: 0,
+    total: 0,
+    start: (_items: any[], onAllDone: (r: Map<number, any>) => void) => { capturedOnAllDone = onAllDone; },
+    reportResult: jest.fn(),
+    reset: jest.fn(),
+  }),
+}));
+
 jest.mock('../../src/lib/api', () => ({
   kroger: { searchProducts: jest.fn(() => new Promise(() => {})) },
   meals: { update: jest.fn(() => new Promise(() => {})) },
@@ -133,5 +153,53 @@ describe('MEAL-28 — the choose screen shows the ranked order', () => {
     // not depend on the store's opinion at all.
     expect(renderChooseScreen([CHIPS, REAL, DIP])[0]).toBe(REAL);
     expect(renderChooseScreen([REAL, DIP, CHIPS])[0]).toBe(REAL);
+  });
+});
+
+// The describe above drives the SEARCH_RESULT handler, which is the SEQUENTIAL
+// choose path — and only aldi and wegmans take it. Every store with a worker
+// pool (heb, walmart, albertsons, amazon) reaches the choose screen through
+// finishParallelSearch instead, and walmart and albertsons are where most of
+// the measured win comes from. Shipping the ranking on one path and measuring
+// it on the other is exactly the gap this covers.
+describe('MEAL-28 — the parallel choose path ranks too', () => {
+  const renderParallelChooseScreen = (storeOrder: string[]) => {
+    const utils = render(
+      <WebViewCartSheet
+        visible
+        meals={[unchosenMeal]}
+        storeId="walmart"
+        storeName="Walmart"
+        onClose={() => {}}
+      />,
+    );
+    // walmart has getSearchUrl + buildWorkerScript and is not forceSerialSearch,
+    // so beginSearchFlow routes an all-choose run to startParallelSearch, which
+    // hands finishParallelSearch to the pool. It has a cart URL, so the
+    // before-snapshot is gated in front of the search and CART_COUNT is what
+    // releases it.
+    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://www.walmart.com/cart' });
+    expect(capturedOnAllDone).toBeTruthy();
+    act(() => {
+      capturedOnAllDone!(new Map([[0, storeOrder.map(candidate)]]));
+    });
+
+    const known = new Set(storeOrder);
+    return utils
+      .queryAllByText(/Sour Cream/)
+      .map((node) => String(node.props.children))
+      .filter((text) => known.has(text));
+  };
+
+  beforeEach(() => { capturedOnAllDone = null; });
+
+  it('reaches the choose screen with all three candidates', () => {
+    expect(renderParallelChooseScreen([DIP, CHIPS, REAL])).toHaveLength(3);
+  });
+
+  it('puts the best match first', () => {
+    expect(renderParallelChooseScreen([DIP, CHIPS, REAL])[0]).toBe(REAL);
+    expect(renderParallelChooseScreen([CHIPS, REAL, DIP])[0]).toBe(REAL);
   });
 });
