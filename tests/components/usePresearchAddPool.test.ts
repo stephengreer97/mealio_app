@@ -278,6 +278,35 @@ describe('usePresearchAddPool — onSettled', () => {
     ]);
   });
 
+  it('fires before onAllDone, so per-item rows precede the run terminal rows', () => {
+    // The one ordering constraint the seam's placement actually carries. Moving
+    // notifySettled below tryFinish would put an item's rows after the reconcile
+    // and run_summary of the run that produced it.
+    const order: string[] = [];
+    const { hook } = setup({
+      onSettled: (i) => order.push(`settled:${i.itemIndex}`),
+    });
+    act(() => hook.result.current.start(mk(['milk', 'eggs'])));
+    act(() => { hook.result.current.reportSearched(0); hook.result.current.reportSearched(1); });
+    act(() => hook.result.current.commit(mk(['milk', 'eggs']), () => order.push('allDone')));
+    act(() => hook.result.current.reportAdded(0, { success: true, product: 'Milk' }));
+    act(() => hook.result.current.reportAdded(1, { success: true, product: 'Eggs' }));
+    expect(order).toEqual(['settled:0', 'settled:1', 'allDone']);
+  });
+
+  it('fires before onAllDone on the timeout path too', () => {
+    const order: string[] = [];
+    const { hook } = setup({
+      addTimeoutMs: 1000,
+      onSettled: (i) => order.push(`settled:${i.itemIndex}`),
+    });
+    act(() => hook.result.current.start(mk(['milk'])));
+    act(() => hook.result.current.reportSearched(0));
+    act(() => hook.result.current.commit(mk(['milk']), () => order.push('allDone')));
+    act(() => jest.advanceTimersByTime(1001));
+    expect(order).toEqual(['settled:0', 'allDone']);
+  });
+
   it('does not fire for an item deselected before the tap', () => {
     // Nobody attempted it, so it belongs on neither side of the confirm rate.
     const { hook, settled } = setupSettled();

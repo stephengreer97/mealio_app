@@ -385,6 +385,30 @@ describe('useParallelSearchPool — onSettled', () => {
     expect(seen).toHaveLength(5);
   });
 
+  it('fires before onAllDone, so per-item rows precede the run terminal rows', () => {
+    // seq is the funnel's only ordering signal. If the seam moved after
+    // tryFinish, an item's rows would land AFTER the reconcile and run_summary
+    // that its own run emitted.
+    const order: string[] = [];
+    const { result } = setup({
+      onSettled: (i) => order.push(`settled:${i.itemIndex}`),
+    });
+    act(() => {
+      result.current.start([{ term: 'a' }, { term: 'b' }], () => order.push('allDone'));
+    });
+    act(() => { result.current.reportResult(0, { hits: 1 }); });
+    act(() => { result.current.reportResult(1, { hits: 2 }); });
+    expect(order).toEqual(['settled:0', 'settled:1', 'allDone']);
+  });
+
+  it('fires before onAllDone on the timeout path too', () => {
+    const order: string[] = [];
+    const { result } = setup({ onSettled: (i) => order.push(`settled:${i.itemIndex}`) });
+    act(() => { result.current.start([{ term: 'a' }], () => order.push('allDone')); });
+    act(() => { jest.advanceTimersByTime(1_001); });
+    expect(order).toEqual(['settled:0', 'allDone']);
+  });
+
   it('does not fire for an item abandoned by reset()', () => {
     // A cancelled run must not inflate either side of the confirm rate.
     const onSettled = jest.fn();

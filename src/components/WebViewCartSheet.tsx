@@ -41,7 +41,8 @@ import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS, FEATURE_PRESEARCH_ADD, ADD_
 import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
-import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode, recordPoolAddOutcome } from '../lib/automation-telemetry';
+import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
+import { confirmDetail, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitTopUpsForReview, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
@@ -146,22 +147,6 @@ interface AddResult {
   /** MEAL-14: the cart's own verdict for this item, when the store has a cart
    *  query we can read. Null = no verdict, NOT a negative one. */
   confirm?: HebAddConfirmation | null;
-}
-
-/**
- * A cart verdict flattened into telemetry `detail` scalars (sanitizeDetail drops
- * nested objects, so a nested confirm would vanish silently). Empty when no rail
- * ran — an absent `confirmVia` in the funnel means the DOM decided, which is a
- * different row from a cart that answered.
- */
-function confirmDetail(confirm: HebAddConfirmation | null | undefined): Record<string, unknown> {
-  if (!confirm) return {};
-  return {
-    confirmVia: confirm.via,
-    confirmState: confirm.state,
-    confirmWhy: confirm.reason ?? undefined,
-    confirmSku: confirm.skuId ?? confirm.productId ?? undefined,
-  };
 }
 
 interface PickedItem {
@@ -864,40 +849,17 @@ export default function WebViewCartSheet({
   /**
    * MEAL-122. The add funnel for the two worker POOLS.
    *
-   * The pools call this once per item as its result becomes final — a worker's
-   * WORKER_RESULT, or the result the pool synthesizes when its timeout fires —
-   * so the parallel pass reports every item it handled, not just the subset the
-   * serial top-up later retried. See recordPoolAddOutcome for the row set, why
-   * both halves are emitted at settle, and why a worker's `blocked` becomes a
-   * per-item row here even though the run-level one already existed.
-   *
-   * Bound to the pools through their generic onSettled seam rather than to the
-   * message handlers, because a worker that never answers at all sends no
-   * message — and that item is precisely the one the funnel most needs to show.
+   * The body lives in lib/pool-add-funnel so a test can call the real mapping
+   * with a real recorder — see the note there. What stays here is the one thing
+   * only this file knows: which pool is which.
    */
-  const recordPoolAdd = useCallback(
-    (path: 'parallel_add' | 'presearch', info: PoolSettled<AddResult>) => {
-      recordPoolAddOutcome(tel(), {
-        path,
-        workerId: info.workerId,
-        itemIndex: info.itemIndex,
-        success: !!info.result.success,
-        reason: info.result.reason,
-        timedOut: info.timedOut,
-        addDispatched: info.addDispatched,
-        // MEAL-14's cart verdict, flattened — sanitizeDetail keeps scalars only.
-        detail: confirmDetail(info.result.confirm),
-      });
-    },
+  const onAddPoolSettled = useCallback(
+    (info: PoolSettled<AddResult>) => recordPoolAdd(tel(), 'parallel_add', info),
     [tel],
   );
-  const onAddPoolSettled = useCallback(
-    (info: PoolSettled<AddResult>) => recordPoolAdd('parallel_add', info),
-    [recordPoolAdd],
-  );
   const onPresearchPoolSettled = useCallback(
-    (info: PoolSettled<AddResult>) => recordPoolAdd('presearch', info),
-    [recordPoolAdd],
+    (info: PoolSettled<AddResult>) => recordPoolAdd(tel(), 'presearch', info),
+    [tel],
   );
 
   // Last script popped from the queue and injected. Re-injected if onLoadEnd

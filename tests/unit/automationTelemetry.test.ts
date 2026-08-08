@@ -534,7 +534,11 @@ describe('recordPoolAddOutcome', () => {
     expect(rows[0].code).toBeUndefined();      // the attempt itself did not fail
     expect(rows[1].outcome).toBe('error');
     expect(rows[1].code).toBe('selector_miss');
-    expect(rows[1].detail).toMatchObject({ reason: 'no_button' });
+    // toEqual, not toMatchObject: `attempt` is the field a dashboard reads to
+    // separate a first try from a retry, and a loose matcher let it drift.
+    expect(rows[1].detail).toEqual({
+      attempt: 1, path: 'parallel_add', workerId: 2, reason: 'no_button',
+    });
   });
 
   it('still emits the add_click denominator row for an item that never reported', async () => {
@@ -553,7 +557,9 @@ describe('recordPoolAddOutcome', () => {
     const rows = await upload({ ...base, success: false, reason: null, timedOut: true });
     expect(rows[1].outcome).toBe('timeout');
     expect(rows[1].code).toBe('timeout');
-    expect(rows[1].detail).toMatchObject({ reason: 'timeout' });
+    expect(rows[1].detail).toEqual({
+      attempt: 1, path: 'parallel_add', workerId: 2, reason: 'timeout',
+    });
   });
 
   it('emits a blocked row for a worker that hit a wall — the row that did not exist before', async () => {
@@ -667,21 +673,39 @@ describe('WebViewCartSheet wires both pools to the funnel', () => {
     return src.slice(open, close);
   }
 
-  it('passes onSettled to the parallel ADD pool', () => {
-    // The SEARCH pool (parallelPool) deliberately does not — it adds nothing, and
-    // its `candidates` rows are recorded from the message handler instead. So the
-    // assertion is on the add pool's block specifically, found by its result type.
-    expect(optionsBlock('useParallelSearchPool<ConsolidatedIngredient, AddResult>'))
-      .toContain('onSettled:');
+  /** The handler wired to a pool's onSettled, and the path literal it carries. */
+  function wiredHandler(hook: string): { name: string; body: string } {
+    const m = /onSettled:\s*(\w+)\s*,/.exec(optionsBlock(hook));
+    expect(m).not.toBeNull();
+    const name = m![1];
+    const at = src.indexOf(`const ${name} = useCallback(`);
+    expect(at).toBeGreaterThan(-1);
+    return { name, body: src.slice(at, src.indexOf('\n  );', at)) };
+  }
+
+  it('wires the parallel ADD pool to a handler that tags path parallel_add', () => {
+    // The SEARCH pool (parallelPool) deliberately has no onSettled — it adds
+    // nothing, and its `candidates` rows come from the message handler. So this
+    // finds the add pool's block by its result type.
+    //
+    // The path literal is pinned, not just the option: swapping the two handlers
+    // makes both pools report as one path, and every other test still passes
+    // because each handler works perfectly — for the wrong pool.
+    const { body } = wiredHandler('useParallelSearchPool<ConsolidatedIngredient, AddResult>');
+    expect(body).toContain("'parallel_add'");
+    expect(body).not.toContain("'presearch'");
   });
 
-  it('passes onSettled to the pre-search pool', () => {
-    expect(optionsBlock('usePresearchAddPool<ConsolidatedIngredient, AddResult>'))
-      .toContain('onSettled:');
+  it('wires the pre-search pool to a handler that tags path presearch', () => {
+    const { body } = wiredHandler('usePresearchAddPool<ConsolidatedIngredient, AddResult>');
+    expect(body).toContain("'presearch'");
+    expect(body).not.toContain("'parallel_add'");
   });
 
-  it('routes them through recordPoolAddOutcome', () => {
-    expect(src).toContain('recordPoolAddOutcome(');
+  it('routes them through the extracted mapping rather than an inline one', () => {
+    // recordPoolAdd is what poolAddFunnel.test.ts covers directly. An inline
+    // re-implementation here would be untested again.
+    expect(src).toContain('recordPoolAdd(tel()');
   });
 });
 
