@@ -148,13 +148,14 @@ import { PrewarmedCart } from '../../src/components/SilentLoginProbe';
 import { AuthProvider, useAuth } from '../../src/context/AuthContext';
 import { CartJobProvider, useCartJob } from '../../src/context/CartJobContext';
 import { LoginPrewarmProvider, useLoginPrewarm, LoginPrewarmStatus } from '../../src/context/LoginPrewarmContext';
-import { auth, bugReport } from '../../src/lib/api';
+import { auth, bugReport, creators } from '../../src/lib/api';
 import { clearSessionLogs, getSessionLogs, installConsoleCapture } from '../../src/lib/logBuffer';
 import { clearLastAutomationRun, getLastAutomationRun, setLastAutomationRun } from '../../src/lib/lastAutomationRun';
 
 const submit = bugReport.submit as jest.Mock;
 const verify = auth.verify as jest.Mock;
 const login = auth.login as jest.Mock;
+const getMe = creators.getMe as jest.Mock;
 
 type ProbeProps = {
   storeId: string;
@@ -196,12 +197,13 @@ const meal = {
 let prewarm: ReturnType<typeof useLoginPrewarm>;
 
 function Screens() {
-  const { user, login: doLogin, loginWithToken, logout, refreshUser } = useAuth();
+  const { user, isCreator, login: doLogin, loginWithToken, logout, refreshUser } = useAuth();
   const cartJob = useCartJob();
   prewarm = useLoginPrewarm();
   return (
     <>
       <Text testID="who">{user?.id ?? 'signed-out'}</Text>
+      <Text testID="creator">{isCreator ? 'creator' : 'not-creator'}</Text>
       <Text testID="cart">{cartJob.isActive ? 'running' : 'idle'}</Text>
       <TouchableOpacity testID="login-a" onPress={() => { void doLogin('a@example.com', 'pw'); }}>
         <Text>login A</Text>
@@ -332,6 +334,8 @@ beforeEach(() => {
   login.mockReset();
   verify.mockReset();
   verify.mockRejectedValue(new Error('no session')); // the launch-time initAuth
+  getMe.mockReset();
+  getMe.mockResolvedValue({ creator: null });
   mockKeychain.clear();
   probes().length = 0;
   clearSessionLogs();
@@ -438,6 +442,33 @@ describe('B takes the phone over through the verification link', () => {
     expect(prewarm.getStatus('heb')).toBe<LoginPrewarmStatus>('unknown');
     expect(prewarm.takePrewarmedCart('heb')).toBeNull();
     expect(utils.queryByTestId('probe-heb')).toBeNull();
+  });
+
+  it("does not leave B wearing A's creator status", async () => {
+    // Small next to the log buffer, but the same shape and a disclosure of its
+    // own: `isCreator` is AuthContext state, not something the teardown effects
+    // reach, so without resetting it here B's tab bar shows a Creator tab for as
+    // long as it takes checkCreatorStatus to answer for B — telling B that
+    // whoever had the phone before them is a Mealio creator, and offering B a
+    // tab into a portal that is not theirs. logout has always reset it; the
+    // account boundary now does the same.
+    getMe.mockResolvedValueOnce({ creator: { id: 'creator-A' } });
+    const utils = await renderApp();
+    await signInAsA(utils);
+    await waitFor(() => expect(utils.getByTestId('creator')).toHaveTextContent('creator'));
+
+    // B's own answer is still in flight when B is installed — which is the whole
+    // window, and on a real phone it is a network round trip wide.
+    let answerForB: (v: unknown) => void = () => {};
+    getMe.mockImplementationOnce(() => new Promise((resolve) => { answerForB = resolve; }));
+
+    await tapVerificationLinkAs(utils, 'user-B');
+    expect(utils.getByTestId('creator')).toHaveTextContent('not-creator');
+
+    // And B's own answer still decides, once it arrives.
+    getMe.mockResolvedValue({ creator: { id: 'creator-B' } });
+    await act(async () => { answerForB({ creator: { id: 'creator-B' } }); });
+    await waitFor(() => expect(utils.getByTestId('creator')).toHaveTextContent('creator'));
   });
 
   it('leaves B able to run a cart of their own afterwards', async () => {
