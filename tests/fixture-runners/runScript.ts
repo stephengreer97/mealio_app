@@ -89,11 +89,16 @@ export const FIXTURE_CONTEXT_OPTIONS = {
  * below all three holes at once: a preconnect, a WebSocket and a service worker all
  * have to resolve a name first, and none of them can. `EXCLUDE localhost` keeps the
  * mock store (tests/mock-store) reachable when it is served — but only by NAME.
- * `MAP * ~NOTFOUND` clobbers IP literals and `EXCLUDE localhost` does not cover them,
- * so `http://127.0.0.1:PORT/` fails `ERR_NAME_NOT_RESOLVED` while `http://localhost:PORT/`
- * answers. That contradicts `isLocalUrl` below, whose own tests pin `127.0.0.1`, `[::1]`
- * and `2130706433` as allowed. Nothing reaches it today — no fixture test touches
- * loopback — and the fix is more EXCLUDE clauses, tracked separately.
+ * `MAP * ~NOTFOUND` clobbers IP literals and a name EXCLUDE does not cover them, so
+ * each loopback spelling needs its own clause (MEAL-149). Without them
+ * `http://127.0.0.1:PORT/` failed `ERR_NAME_NOT_RESOLVED` while `http://localhost:PORT/`
+ * answered — which contradicted `isLocalUrl` below, whose own tests pin `127.0.0.1`,
+ * `[::1]` and `2130706433` as ALLOWED. Two layers disagreeing about what counts as
+ * local is how a boundary ends up being trusted for something it does not do.
+ *
+ * `2130706433` needs no clause of its own: WHATWG URL normalises the integer form to
+ * `127.0.0.1` before the browser ever resolves it, which is the same reason
+ * `isLocalUrl` can compare against the dotted form alone.
  *
  * Run time is unchanged, not faster: 75.45 s vs 74.89 s on albertsons, 52.84 s vs
  * 51.97 s on aldi. An earlier version of this comment claimed a speedup; it is noise.
@@ -103,7 +108,7 @@ export const FIXTURE_CONTEXT_OPTIONS = {
  * network error, which is what the tests read.
  */
 export const FIXTURE_LAUNCH_OPTIONS: LaunchOptions = {
-  args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost'],
+  args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE [::1]'],
 };
 
 /**

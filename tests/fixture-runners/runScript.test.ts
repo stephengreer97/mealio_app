@@ -10,7 +10,7 @@ import { mkdirSync, writeFileSync } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-import { isLocalUrl, loadFixture } from './runScript';
+import { FIXTURE_LAUNCH_OPTIONS, isLocalUrl, loadFixture } from './runScript';
 
 const TMP = path.join(os.tmpdir(), 'mealio-fixture-runner-test');
 
@@ -168,4 +168,87 @@ describe('loadFixture', () => {
       await runner.close();
     }
   });
+});
+
+/**
+ * The resolver boundary itself, exercised rather than described.
+ *
+ * Everything above this is pure — `isLocalUrl` is the predicate the route handler
+ * consults, and its tests never launch anything. But the predicate is only half of
+ * the boundary. The other half is `FIXTURE_LAUNCH_OPTIONS`, a single string handed
+ * to Chromium, and until now nothing anywhere ran a browser with it and checked
+ * what that browser could actually reach. MEAL-113 built the boundary; the claim
+ * that it works was carried by a comment.
+ *
+ * That gap is what let MEAL-149 sit undetected: `MAP * ~NOTFOUND` clobbers IP
+ * literals and `EXCLUDE localhost` covers only the name, so the two layers
+ * disagreed — `isLocalUrl` said `127.0.0.1` was allowed while the browser could not
+ * resolve it. A test that only reads the predicate can never see that.
+ *
+ * This lives here rather than in tests/unit because it needs Chromium, and the CI
+ * matrix already runs this file in a browser-capable job for exactly that reason.
+ *
+ * NOT covered: `[::1]`. It is excluded by the same clause and the same mechanism,
+ * but binding an IPv6 loopback server is not something every CI image and WSL
+ * kernel will do, and a test that skips itself when the environment is unfriendly
+ * reports coverage it does not have. Said plainly instead.
+ */
+describe('the fixture browser can reach loopback and nothing else', () => {
+  let server: import('http').Server;
+  let port: number;
+  let browser: import('playwright').Browser;
+
+  beforeAll(async () => {
+    const http = await import('http');
+    const { chromium } = await import('playwright');
+
+    server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<!doctype html><title>mock</title><body>reached</body>');
+    });
+    // 127.0.0.1 explicitly, not the default wildcard: the point of the test is
+    // which SPELLING of loopback the browser resolves, so the server must answer
+    // on the literal rather than on whatever the host maps `localhost` to.
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as import('net').AddressInfo).port;
+
+    browser = await chromium.launch(FIXTURE_LAUNCH_OPTIONS);
+  }, 60_000);
+
+  afterAll(async () => {
+    await browser?.close();
+    await new Promise<void>((resolve) => server?.close(() => resolve()));
+  });
+
+  it('reaches the mock store by IP literal, which is what MEAL-149 fixed', async () => {
+    // This is the assertion that fails on the pre-MEAL-149 arg: without
+    // `EXCLUDE 127.0.0.1` the navigation dies with ERR_NAME_NOT_RESOLVED, even
+    // though isLocalUrl has always called this address local.
+    const page = await browser.newPage();
+    const res = await page.goto(`http://127.0.0.1:${port}/`);
+    expect(res?.status()).toBe(200);
+    expect(await page.evaluate(() => document.body.textContent)).toBe('reached');
+    await page.close();
+  }, 30_000);
+
+  it('still reaches the mock store by name', async () => {
+    // The case that already worked. Here so a future edit to the arg cannot fix
+    // the IP literal by breaking the name.
+    const page = await browser.newPage();
+    const res = await page.goto(`http://localhost:${port}/`);
+    expect(res?.status()).toBe(200);
+    await page.close();
+  }, 30_000);
+
+  it('refuses a real host at the resolver', async () => {
+    // The boundary doing its job, and the reason this file can assert it without
+    // touching the network: the name is never looked up, so nothing leaves the
+    // machine even when the test fails. An ad-tech host is used deliberately —
+    // these are the hosts the captured storefronts actually reference.
+    const page = await browser.newPage();
+    await expect(page.goto('https://www.google-analytics.com/')).rejects.toThrow(
+      /ERR_NAME_NOT_RESOLVED/,
+    );
+    await page.close();
+  }, 30_000);
 });
