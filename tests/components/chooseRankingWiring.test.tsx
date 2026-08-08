@@ -6,7 +6,7 @@
 // line a refactor drops. This drives a real SEARCH_RESULT into the sheet and
 // reads the order back off the rendered list.
 
-import { act, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 
 jest.mock('../../src/lib/purchases', () => ({
   // Reached transitively via LoginPrewarmContext → AuthContext; the real module
@@ -201,5 +201,57 @@ describe('MEAL-28 — the parallel choose path ranks too', () => {
   it('puts the best match first', () => {
     expect(renderParallelChooseScreen([DIP, CHIPS, REAL])[0]).toBe(REAL);
     expect(renderParallelChooseScreen([CHIPS, REAL, DIP])[0]).toBe(REAL);
+  });
+
+  it('scores each item against its OWN name, not the first item\'s', () => {
+    // The one hazard this path has and the sequential path does not: the pool
+    // returns a Map keyed by item index, so a term read from the wrong index
+    // ranks item 1's candidates against item 0's ingredient. Every other test
+    // here uses a one-ingredient meal, where index 0 and index N are the same
+    // thing and the mistake is invisible — cold review mutated the term to
+    // `active[0].ingredientName` and all 1154 tests passed.
+    //
+    // Two ingredients whose right answers are each other's worst answers, so
+    // crossing them is unambiguous rather than a near-miss.
+    const CHEESE = 'Kraft Shredded Cheddar Cheese, 8 oz';
+    const CHEESE_DIP = 'Tostitos Salsa Con Queso Cheese Dip, 15 oz';
+    const twoItems = {
+      id: 'm1', name: 'Tacos',
+      ingredients: [
+        { ingredientName: 'sour cream', productQty: 1, qty: 1, unit: 'qty', measure: null },
+        { ingredientName: 'cheddar cheese', productQty: 1, qty: 1, unit: 'qty', measure: null },
+      ],
+    } as any;
+
+    const utils = render(
+      <WebViewCartSheet
+        visible
+        meals={[twoItems]}
+        storeId="walmart"
+        storeName="Walmart"
+        onClose={() => {}}
+      />,
+    );
+    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://www.walmart.com/cart' });
+    expect(capturedOnAllDone).toBeTruthy();
+    act(() => {
+      capturedOnAllDone!(new Map([
+        [0, [DIP, REAL].map(candidate)],
+        [1, [CHEESE_DIP, CHEESE].map(candidate)],
+      ]));
+    });
+
+    // The choose screen is a queue — `searchResults[reviewIdx]` — so item 1 is not
+    // rendered until item 0 is resolved. Skip advances the index without a PATCH.
+    act(() => { fireEvent.press(utils.getAllByText('Skip this ingredient')[0]); });
+
+    // Item 1's list must be ranked against 'cheddar cheese'. Scored against
+    // 'sour cream' instead, the dip wins on the shared word and leads.
+    const cheeseRows = utils
+      .queryAllByText(/Cheese/)
+      .map((node) => String(node.props.children))
+      .filter((t) => t === CHEESE || t === CHEESE_DIP);
+    expect(cheeseRows[0]).toBe(CHEESE);
   });
 });
