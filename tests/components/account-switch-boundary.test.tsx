@@ -403,6 +403,28 @@ describe('B takes the phone over through the verification link', () => {
     expect(report.logs).not.toContain(A_PRODUCT);
   });
 
+  it("clears A's state before B is installed, not after B has started writing", async () => {
+    // Order, which is the one thing a teardown like this can get exactly
+    // backwards and still look right. The instant `user` becomes B, B's session
+    // starts — the creator check, the RevenueCat identify, every screen keyed on
+    // `user?.id` — and any of it can log. A teardown that ran a tick LATER would
+    // be clearing B's fresh state in place of A's stale state: the leak intact,
+    // plus B's own diagnostics destroyed.
+    //
+    // No cart run here on purpose. CartJobProvider deliberately clears a second
+    // time after tearing a run down, which costs B their first lines whichever
+    // order this runs in; with no run to tear down, what survives is decided by
+    // the order alone.
+    const utils = await renderApp(() => { console.log('[Prewarm] B first line, B session'); });
+    await signInAsA(utils);
+    console.log(A_CART_LINE);
+
+    await tapVerificationLinkAs(utils, 'user-B');
+
+    expect(getSessionLogs()).not.toContain(A_PRODUCT);   // A's is gone…
+    expect(getSessionLogs()).toContain('B first line');  // …and B's is not
+  });
+
   it("tears down A's prewarm probe, cached login and cart baseline", async () => {
     const utils = await renderApp();
     await signInAsA(utils);
