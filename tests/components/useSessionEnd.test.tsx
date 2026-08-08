@@ -40,26 +40,47 @@ type U = { id: string } | null;
 
 /** Every time the hook decided a session had ended. */
 let ends = 0;
+/**
+ * Mount-effect runs of a plain sibling in the same tree. Only read by the
+ * StrictMode test, to prove React really did double-invoke there rather than
+ * the test passing because nothing ran twice.
+ */
+let effectRuns = 0;
 
 function Consumer() {
   useSessionEnd(() => { ends += 1; });
   return null;
 }
 
-function Host({ user, strict = false }: { user: U; strict?: boolean }) {
-  const tree = (
+function Witness() {
+  React.useEffect(() => { effectRuns += 1; }, []);
+  return null;
+}
+
+function Host({ user }: { user: U }) {
+  return (
     <AuthTestContext.Provider value={{ user }}>
       <Consumer />
+      <Witness />
     </AuthTestContext.Provider>
   );
-  return strict ? <React.StrictMode>{tree}</React.StrictMode> : tree;
 }
+
+/**
+ * StrictMode has to be the ELEMENT handed to `render`, not returned from a
+ * component that is. Measured under this runner: a StrictMode one level down
+ * runs a mount effect once, a top-level one runs it twice — so wrapping it in a
+ * component would have made the double-invocation test below silently vacuous,
+ * which is what `Witness` is there to catch.
+ */
+const strictly = (user: U) => <React.StrictMode><Host user={user} /></React.StrictMode>;
 
 const A = () => ({ id: 'user-A' });
 const B = () => ({ id: 'user-B' });
 
 function mount(user: U) {
   ends = 0;
+  effectRuns = 0;
   return render(<Host user={user} />);
 }
 
@@ -129,11 +150,13 @@ describe('useSessionEnd', () => {
     // unchanged one. Without that branch, a development build would tear down a
     // live session on mount.
     ends = 0;
-    const r = render(<Host user={A()} strict />);
+    effectRuns = 0;
+    const r = render(strictly(A()));
+    expect(effectRuns).toBeGreaterThan(1); // the double-invocation really happened
     expect(ends).toBe(0);
-    await act(async () => { r.update(<Host user={A()} strict />); });
+    await act(async () => { r.update(strictly(A())); });
     expect(ends).toBe(0);
-    await act(async () => { r.update(<Host user={B()} strict />); });
+    await act(async () => { r.update(strictly(B())); });
     expect(ends).toBe(1);
   });
 });
