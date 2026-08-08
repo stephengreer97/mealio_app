@@ -25,19 +25,26 @@ import { useAuth } from './AuthContext';
  * WHAT THIS DOES NOT CLOSE, because the name invites the wrong assumption. This
  * closes the DIAGNOSTIC leak chain across the account boundary — the ring
  * buffer, the recorded cart run, the cart engine, the prewarm cache and the
- * ingredient-save queue. The account boundary itself is still open in two ways
- * that are filed separately and are not addressed here:
+ * ingredient-save queue. The account boundary itself is still open here:
  *
  *   • MEAL-154 — the previous account's CONTENT stays on screen. Nothing
  *     unmounts on a hand-over (MainTabs is rendered while `user` is truthy) and
  *     MyMealsScreen reloads only on focus, so B can be looking at A's saved
  *     meals. DiscoverScreen has the same shape. That is a bigger hole than this
  *     one: it is directly visible and needs no bug report to surface it.
- *   • MEAL-155 — `loginWithToken` writes the new token to SecureStore BEFORE
- *     validating it, and lib/api reads the token per request. A transient
- *     verify failure therefore leaves `user` as A in React state while every
- *     request authenticates as B, which bypasses this mechanism entirely
- *     because `beginSession` never runs.
+ *
+ * And one that WAS open and is now closed, kept here because it is the reason
+ * this mechanism cannot be assumed to see every hand-over on its own:
+ *
+ *   • MEAL-155 — `loginWithToken` used to write the new token to SecureStore
+ *     BEFORE validating it, and lib/api reads the token per request. A transient
+ *     verify failure therefore left `user` as A in React state while every
+ *     request authenticated as B, bypassing this mechanism entirely because
+ *     `beginSession` never ran. Fixed by validating first: the token now reaches
+ *     the keychain only after `auth.verify(token)` has answered, so the stored
+ *     token and `user` cannot disagree. The general point stands — this hook
+ *     only fires on what reaches `beginSession`, so any future path that can
+ *     change who the app authenticates as must go through it.
  *
  * What this deliberately does NOT fire on:
  *
