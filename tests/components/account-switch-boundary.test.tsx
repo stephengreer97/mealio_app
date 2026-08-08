@@ -133,12 +133,6 @@ jest.mock('../../src/lib/api', () => {
   };
 });
 
-jest.mock('../../src/lib/purchases', () => ({
-  initPurchases: jest.fn(),
-  identifyUser: jest.fn(async () => {}),
-  resetUser: jest.fn(async () => {}),
-}));
-
 jest.mock('../../src/lib/push', () => ({
   unregisterDevice: jest.fn(async () => {}),
 }));

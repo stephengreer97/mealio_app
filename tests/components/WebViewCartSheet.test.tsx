@@ -13,16 +13,6 @@ import { act, fireEvent, render } from '@testing-library/react-native';
 
 // Mock factories cannot reference outer-scope variables (jest hoists them).
 // All React / View imports must happen INSIDE the factory via requireActual.
-jest.mock('../../src/lib/purchases', () => ({
-  // Only reached transitively — WebViewCartSheet → LoginPrewarmContext →
-  // AuthContext (the prewarm has to know about sign-out, MEAL-142). The real
-  // module pulls react-native-purchases' ESM dist, which this project's
-  // transform does not cover, so the suite fails to load without this.
-  initPurchases: jest.fn(),
-  identifyUser: jest.fn(async () => {}),
-  resetUser: jest.fn(async () => {}),
-}));
-
 jest.mock('react-native-webview', () => {
   const RealReact = jest.requireActual('react');
   const RealView = jest.requireActual('react-native').View;
