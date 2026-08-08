@@ -169,14 +169,25 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
       console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — injecting check script');
       webviewRef.current?.injectJavaScript(scripts.checkLoginScript);
     } else if ((cartMethodRef.current === 'url' || cartMethodRef.current === 'click') && !cartCountInjectedRef.current) {
-      // Same skip as the login branch above, and for a sharper reason: this
-      // branch LATCHES on its first injection. Injecting on an auth/SSO
-      // interstitial would set the latch, the script's own guard would then bail
-      // silently (correctly — a verdict there would burn our single pending
-      // slot), and the real cart page that loads next would never get the
-      // script. The probe would sit out CART_TIMEOUT_MS and report logged-in
-      // with no baseline. Skip before the latch so the landing page still gets
-      // its one injection. (MEAL-136)
+      // Same skip as the login branch above, and two tickets converge on it.
+      //
+      // This branch LATCHES on its first injection (cartCountInjectedRef below,
+      // set once per capture and never cleared), and the count scripts REFUSE to
+      // answer on a page that is not the cart — silently, when that page is an
+      // auth interstitial, because a verdict there would burn the probe's one
+      // pending slot.
+      //
+      // Without this check: cart URL -> interstitial -> inject -> latch set ->
+      // script returns silently -> the real cart page that loads next never gets
+      // the script -> the probe sits out CART_TIMEOUT_MS (15s) and reports
+      // logged-in with no baseline. The guard would have turned a wrong answer
+      // into no answer AND no retry, which is not the trade it is supposed to
+      // make. Skipping before the latch keeps the single injection for the
+      // landing page.
+      //
+      // MEAL-136 needed it for a redirect landing off /erums/cart; MEAL-152 for
+      // the same shape on Walmart, HEB and Wegmans. Both branches wrote this skip
+      // independently and identically, which is why the merge kept one copy.
       if (isAuthRedirectUrl(url)) {
         console.log('[Prewarm] probe', storeId, 'onLoadEnd (cart) — skipping auth redirect page', url);
         return;
@@ -210,8 +221,11 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
           // Log reason/url, not just the count: a bare "count= null" is
           // indistinguishable from a selector miss, whereas
           // `reason=not_cart_page url=<host>` names a wrong DOMAIN_MAP host as a
-          // wrong host. `finish` below drops both from the cached baseline, so
-          // this line is the only place they survive. (MEAL-136)
+          // wrong host (MEAL-136) and a redirect off the cart page as a redirect
+          // (MEAL-152). This is the likelier of the two log sites to hit it — the
+          // prewarm probe is where most before-baselines come from — and `finish`
+          // below drops both fields from the cached baseline, so this line is the
+          // only place they survive.
           console.log('[Prewarm] probe', storeId, 'CART_COUNT count=', msg.count, 'reason=', msg.reason ?? null, 'url=', msg.url);
           finish({
             isLoggedIn: true,

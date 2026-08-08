@@ -507,8 +507,13 @@ export interface WorkerReportOutcome {
 /**
  * The reconcile decision when the cart gave no per-item data to diff against
  * (a header-badge store): trust the worker results, because there is nothing
- * better to trust. Parallel add is HEB-only today — a per-item cart store — so
- * this is a safety fallback, not the normal path.
+ * better to trust.
+ *
+ * NOT a rare path, and an earlier version of this comment said it was. Parallel add
+ * covers HEB, Walmart, Amazon Fresh and the Albertsons family — only ALDI and
+ * Wegmans force serial — and since MEAL-152 a cart page that cannot prove it is the
+ * cart posts no per-item rows on purpose, which routes here by design rather than
+ * by accident.
  *
  * MEAL-14 gives it one thing better to trust. Where an item carries a cart
  * verdict, that verdict wins over the worker's own claim — the worker inferred

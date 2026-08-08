@@ -278,10 +278,12 @@ describe('failure codes', () => {
       // one by one so a genuinely new ADD_RESULT reason still fails this test.
       'http_error', 'shape', 'graphql_error', 'network', 'no_read', 'no_baseline',
       'cart_query', 'cart_query_confirm', 'cart_query_crosscheck', 'missing', 'unknown',
-      // MEAL-136: a CART_COUNT reason, not an ADD_RESULT one. The Albertsons
-      // cart-page script posts it alongside `count: null` when a redirect landed
-      // us somewhere other than /erums/cart, so it explains why a COUNT is
-      // unknown — it never describes an add, and addFailureCode never sees it.
+      // A CART_COUNT reason, not an ADD_RESULT one. The cart-page scripts post it
+      // alongside `count: null` when the page they landed on is not the cart — the
+      // Albertsons guard for a redirect off /erums/cart (MEAL-136), and the
+      // Walmart/HEB/Wegmans guards for the same shape (MEAL-152). It explains why
+      // a COUNT is unknown; it never describes an add, and addFailureCode never
+      // sees it.
       'not_cart_page',
     ]);
 

@@ -43,7 +43,7 @@ import { getAutomationConfig, getConfigVersion } from '../lib/automation-config'
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
-import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, correctConfirmedFromCart, countRequested, isRunComplete } from '../lib/north-star';
@@ -1930,7 +1930,21 @@ export default function WebViewCartSheet({
     // Fast path: a fresh cart baseline was pre-captured during the silent login
     // check, so skip the cart round-trip entirely and go straight to the search.
     const prewarmed = loginPrewarm.takePrewarmedCart(probeStoreId);
-    if (prewarmed) {
+    // A cached baseline with no COUNT is not a baseline (MEAL-152). The probe
+    // caches its result either way, so before this a prewarm that could not read
+    // the cart — now more likely, since the cart-page scripts refuse to answer
+    // off the cart page — permanently forfeited the run's own before-snapshot:
+    // the fast path consumed the empty result and returned, and the live probe
+    // below never ran. Fall through instead, which is exactly what happens when
+    // there is no prewarmed cart at all. Still one-shot: takePrewarmedCart has
+    // already dropped the entry, so this cannot loop, and the cost is one cart
+    // navigation bounded by CART_PROBE_TIMEOUT_MS.
+    //
+    // Via the named predicate, not `prewarmed.count`: the truthiness slip is
+    // invisible here and would throw away every EMPTY cart (count 0) — the same
+    // 0-vs-null confusion this branch is about. isCountedCartSnapshot carries
+    // that rule and is pinned by its own unit test.
+    if (prewarmed && isCountedCartSnapshot(prewarmed)) {
       console.log(`[Cart ${ts()}]`, 'snapshotBefore: using PREWARMED baseline count=', prewarmed.count, 'lines=', prewarmed.items.length);
       cartCountBeforeRef.current = prewarmed.count;
       cartItemsBeforeRef.current = prewarmed.items;
@@ -2388,10 +2402,14 @@ export default function WebViewCartSheet({
           cartCountPendingRef.current = null;
           if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
           const count = typeof msg.count === 'number' ? msg.count : null;
-          // reason/url are what make a `count: null` diagnosable (MEAL-136): the
-          // count alone says "unknown", while `reason=not_cart_page url=<host>`
-          // says a wrong DOMAIN_MAP host sent us somewhere that was never the
-          // cart. Log them or the script's named reason reaches nobody.
+          // reason/url are what make a `count: null` diagnosable: the count alone
+          // says "unknown", while `reason=not_cart_page url=<href>` says a wrong
+          // DOMAIN_MAP host sent us somewhere that was never the cart (MEAL-136),
+          // or that the cart URL itself redirected away (MEAL-152). Nothing
+          // downstream stores either field, so this line and SilentLoginProbe's
+          // are the whole audit trail — log them or the script's named reason
+          // reaches nobody, and a redirect stays indistinguishable from a
+          // selector miss.
           console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count, 'reason=', msg.reason ?? null, 'url=', msg.url);
           if (phase === 'before') {
             cartCountBeforeRef.current = count;
@@ -2438,9 +2456,17 @@ export default function WebViewCartSheet({
                 'unverified=', verdicts.unknown.length);
             }
             if (!rows) {
-              // Can't diff per-item (header-badge store) → trust the worker
-              // results. Parallel add is HEB-only today (a per-item cart store),
-              // so this is just a safety fallback.
+              // Can't diff per-item → trust the worker results, because there is
+              // nothing better to trust.
+              //
+              // This used to say "parallel add is HEB-only, so this is just a
+              // safety fallback". Both halves are wrong now. Walmart, Amazon Fresh
+              // and the Albertsons family are all on the parallel-add path (only
+              // ALDI and Wegmans force serial) — and MEAL-152 makes this branch the
+              // EXPECTED outcome rather than a rarity: a cart page that cannot
+              // prove it is the cart now posts no `items` at all, deliberately, so
+              // a Walmart /cart redirect lands here every time. That is the
+              // degradation the guard promises, and this is where it is paid.
               const { confirmed: wins, failed: lost } = reconcileFromWorkerReports(attempts);
               addResultsRef.current = wins.map((w) => ({ name: w.name, success: true }));
               setTotalAdded(wins.length);
