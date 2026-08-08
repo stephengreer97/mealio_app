@@ -2586,9 +2586,17 @@ export default function WebViewCartSheet({
                 'unverified=', verdicts.unknown.length);
             }
             if (!rows) {
-              // Can't diff per-item (header-badge store) → trust the worker
-              // results. Parallel add is HEB-only today (a per-item cart store),
-              // so this is just a safety fallback.
+              // Can't diff per-item → trust the worker results, because there is
+              // nothing better to trust.
+              //
+              // This used to say "parallel add is HEB-only, so this is just a
+              // safety fallback". Both halves are wrong now. Walmart, Amazon Fresh
+              // and the Albertsons family are all on the parallel-add path (only
+              // ALDI and Wegmans force serial) — and MEAL-152 makes this branch the
+              // EXPECTED outcome rather than a rarity: a cart page that cannot
+              // prove it is the cart now posts no `items` at all, deliberately, so
+              // a Walmart /cart redirect lands here every time. That is the
+              // degradation the guard promises, and this is where it is paid.
               const { confirmed: wins, failed: lost } = reconcileFromWorkerReports(attempts);
               addResultsRef.current = wins.map((w) => ({ name: w.name, success: true }));
               setTotalAdded(wins.length);

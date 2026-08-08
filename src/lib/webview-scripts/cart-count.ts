@@ -144,7 +144,7 @@ export function isCountedCartSnapshot(
 // is `0 / []`, after is `0 / []`, and diffCartItems([], []) is []. That empty
 // array is truthy at cart-reconcile.ts:814 (`if (rows)`), so findUnaddedItems
 // has no added rows to match against and every item the run really did add comes
-// back as `missing`. The done screen prints (WebViewCartSheet.tsx ~:2861)
+// back as `missing`. The done screen prints (WebViewCartSheet.tsx ~:2874)
 //
 //     "N items may not have been added (…). Please double-check your cart."
 //
@@ -156,14 +156,14 @@ export function isCountedCartSnapshot(
 // while the app only ever probes logged in. A `/cart` that bounces an empty cart
 // but serves a full one gives the asymmetric pair instead — before `0 / []`,
 // after real items — and then diffCartItems attributes the user's whole cart to
-// this run and the over-add copy fires (~:2867): "N items added that Mealio
+// this run and the over-add copy fires (~:2756): "N items added that Mealio
 // didn't intend". That is reachable, and it is the narrative 56917aa opened
 // with.
 //
 // What does NOT make it unreachable is the after-probe's gate. An earlier
 // version of this comment claimed that; it is wrong in the very world this
 // paragraph describes. The gate is `hasBaseline: cartCountBeforeRef.current !=
-// null` (WebViewCartSheet.tsx :1558, :4431) and the defect's baseline is 0, not
+// null` (WebViewCartSheet.tsx :1558, :4444) and the defect's baseline is 0, not
 // null — `0 != null` is true, so the after-probe runs. Only the guard below
 // closes that gate, by making the unknown case actually null.
 //
@@ -204,8 +204,8 @@ export function isCountedCartSnapshot(
 //     do different things — an earlier draft of this comment said "both
 //     re-inject on the next load", which was true of one of them:
 //       – WebViewCartSheet.onLoadEnd re-injects the count script on a later load
-//         (~line 2350). It also refuses to inject anything on an auth
-//         interstitial in the first place (~line 2231), so this branch is in
+//         (~line 2353). It also refuses to inject anything on an auth
+//         interstitial in the first place (~line 2242), so this branch is in
 //         fact unreachable from there.
 //       – SilentLoginProbe.onLoadEnd injects ONCE per cart capture and latches;
 //         it does not re-inject. Its safety comes from skipping interstitials so
@@ -866,15 +866,10 @@ export function buildInlineCartScript(storeId: string): string | null {
 // the parallel-add path, whose reconcile probe diffs against this baseline
 // WITHOUT checking that one was captured.
 //
-// Two things this comment has now claimed and had to withdraw, both left visible
-// so the next reader does not re-derive them:
-//   • NOT the MEAL-14 cart-query rail. That rail takes its own per-add baseline
-//     in-page via __hebCartRead (heb.ts ~:855, ~:1379) and never reads this
-//     snapshot.
-//   • NOT "HEB is the only store on the parallel-add path". Walmart, Amazon
-//     Fresh and the Albertsons family qualify too (see the reconcile paragraph
-//     above cartPathGuardJs); only ALDI and Wegmans force serial. HEB has no
-//     special standing here beyond being the store this script serves.
+// One thing this comment claimed and had to withdraw, left visible because it is
+// a link a reader would otherwise re-derive: this snapshot is NOT what the MEAL-14
+// cart-query rail reads. That rail takes its own per-add baseline in-page via
+// __hebCartRead (heb.ts ~:855, ~:1379) and never touches this one.
 //
 // See the note above cartPathGuardJs.
 const HEB_CART_PAGE_SCRIPT = `(async function() {
