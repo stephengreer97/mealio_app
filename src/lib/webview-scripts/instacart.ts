@@ -663,17 +663,33 @@ function buildSearchScript(t: InstacartTenant, term: string): string {
 //   • −5 per extra candidate word here; no such term there
 //   • a COMMON stopword set here with no counterpart there
 //
-// Measured over 469 real product/query pairs the two disagree on 427. Swapping
-// in the shared function would change which product lands in a customer's cart
-// on every one of those, so it is a product decision, not a cleanup.
+// Measured over 469 real product/query pairs the two disagree on 427.
+//
+// NONE OF THAT DECIDES A PURCHASE ANY MORE (MEAL-121). This scorer used to gate the
+// add — keep the highest scorer, buy it if it cleared 30 out of 100 — so a name
+// sharing under a third of its words with the request went into a cart unattended.
+// `isExactMatch` gates the add now, exact after normalization like every other
+// store, so a divergence in the scoring curve cannot change which product anyone
+// ends up buying. What remains of these two functions is unreachable from the
+// decision path.
+//
+// What deleting them WOULD touch, precisely: the generated-script snapshot
+// (tests/unit/webview-scripts/__snapshots__/aldiGeneratedScripts.test.ts.snap),
+// which pins the emitted text — and nothing else. The match harness imports
+// _scoring.ts and only _scoring.ts; it never calls the copy below. So
+// tests/match-harness describes this divergence in prose and in its README but does
+// not execute it, and would not go red. That makes removal a documentation-and-
+// snapshot job rather than a behavioural one; still its own change, though, rather
+// than part of a correctness fix.
 //
 // If you ever do reconcile them, note the ARGUMENT ORDER. This scoreOne(nf, nt)
-// reads its SECOND parameter as the query and is called as scoreMatch(name,
-// SEARCH_TERM); _scoring.ts's scoreMatch(a, b) scores candidate `b` against
-// term `a`. The orientations agree only because both the function and its call
-// site are written this way. Substituting the shared function without also
-// flipping the call site silently inverts the comparison — and it will still
-// return plausible-looking numbers, so nothing will fail loudly.
+// reads its SECOND parameter as the query, and until MEAL-121 deleted the call
+// site it WAS called as scoreMatch(name, SEARCH_TERM); _scoring.ts's
+// scoreMatch(a, b) scores candidate `b` against term `a`. The orientations agreed
+// only because the function and that call site were written to match. Any future
+// call site has to keep that up: substituting the shared function without also
+// writing the arguments the other way round silently inverts the comparison — and
+// it will still return plausible-looking numbers, so nothing will fail loudly.
 
 function buildSearchAndAddScript(
   t: InstacartTenant,
@@ -816,6 +832,33 @@ function buildSearchAndAddScript(
     return Math.max(0, score);
   }
 
+  // The only match test that decides a purchase. Exact after normalization, trying
+  // both normalizers so an accented or non-ASCII title still matches its plain
+  // counterpart — the same pair scoreMatch maxes over, and the same rule as
+  // scoreOne's nf === nt fast path, just without the scoring machinery behind it.
+  //
+  // Symmetric, so the argument-order trap documented at the top of this file cannot
+  // bite here: equality does not care which side is the query.
+  function isExactMatch(found) {
+    // An empty normalized term matches EVERYTHING that also normalizes to empty,
+    // and both normalizers reduce any title without ASCII alphanumerics to "" —
+    // an all-CJK product name, or "★★★". So an empty search term would exact-match
+    // such a tile, and a CJK term would exact-match an unrelated CJK tile: adding
+    // a product nobody named, which is the one direction this gate must never fail
+    // in. normStrip is strictly more aggressive than normDiacritic, so if
+    // normDiacritic leaves nothing then normStrip leaves nothing either, and this
+    // one test covers both branches below.
+    //
+    // Not reachable today, and it was not reachable under the old score gate either
+    // (the nf === nt fast path returned 100, well past MIN_SCORE): the only empty
+    // term in the app is the parallel-add placeholder, and ALDI is pinned to
+    // forceSerialSearch so it never gets one. Closed here anyway, permanently, for
+    // the price of a line.
+    if (!normDiacritic(SEARCH_TERM)) return false;
+    return normDiacritic(found) === normDiacritic(SEARCH_TERM)
+      || normStrip(found) === normStrip(SEARCH_TERM);
+  }
+
   function scoreMatch(found, target) {
     var s1 = scoreOne(normDiacritic(found), normDiacritic(target));
     var s2 = scoreOne(normStrip(found), normStrip(target));
@@ -837,6 +880,26 @@ function buildSearchAndAddScript(
     return m ? m[0] : null;
   }
 
+  // WHERE TO LOOK IF ALDI'S REVIEW RATE RISES IN THE FIELD (unverified, MEAL-121).
+  //
+  // isExactMatch compares the term against whatever this returns, so which of the
+  // three branches wins decides whether a repeat run recognises the product the
+  // user already chose. The first branch is not stable across cart state: once a
+  // tile is in the cart the "Add 1 item …" button is replaced by the quantity
+  // stepper, ATC_SEL matches nothing, and the name falls through to the img alt.
+  //
+  // In the committed fixtures the two agree wherever both exist (the stepper-open
+  // capture has no Add button on the sour cream tile and its alt is exactly
+  // "Friendly Farms Sour Cream", which is why that test passes). The slug fallback
+  // plainly does NOT agree: the same tile's href yields "Friendly Farms Sour Cream
+  // 16 Oz", and the cottage cheese tile is alt "Friendly Farms Regular Cottage
+  // Cheese" against slug "friendly-farms-cottage-cheese-24-oz". A term remembered
+  // from one branch cannot exact-match a name produced by the slug branch, so a
+  // card that exposes neither button nor alt sends the item to review every time.
+  //
+  // That is a safe failure — it asks instead of guessing — and it has not been
+  // observed on a real page, so nothing is changed here. Recorded so the next
+  // person reads it rather than rediscovering it.
   function getProductName(card) {
     var addBtn = card.querySelector(ATC_SEL);
     if (addBtn) {
@@ -863,7 +926,7 @@ function buildSearchAndAddScript(
 
   var seen = new Set();
   var candidates = [];
-  var bestCard = null, bestName = null, bestScore = -1;
+  var bestCard = null, bestName = null;
 
   for (var pi = 0; pi < productLinks.length && pi < 20; pi++) {
     var card = findCard(productLinks[pi]);
@@ -884,20 +947,43 @@ function buildSearchAndAddScript(
       price: extractPrice(card)
     });
 
-    if (!oos) {
-      var sc = scoreMatch(name, SEARCH_TERM);
-      if (sc > bestScore) {
-        bestScore = sc;
-        bestName = name;
-        bestCard = card;
-      }
+    // EXACT AFTER NORMALIZATION, and nothing looser. This used to keep the
+    // highest-scoring candidate and buy it if it cleared 30 out of 100 — so a name
+    // sharing under a third of its words with what the user asked for was added to
+    // their cart unattended. Every other store in this codebase requires an exact
+    // match: HEB, Walmart, Wegmans and Amazon Fresh gate on scoreMatch(...) === 100,
+    // which in _scoring.ts means equality and nothing else, because every path but
+    // the na === nb fast path is capped by Math.min(99, …). Albertsons compares
+    // normalized strings directly. ALDI was the exception.
+    //
+    // Note that === 100 would NOT mean equality if it were asked of the scoreOne
+    // above: that copy has no 99 cap, so it also returns a clean 100 for a word
+    // permutation ("cream sour"), a repeated word ("sour cream cream") and extra
+    // COMMON stopwords ("sour cream and", "sour cream of the") against a term of
+    // "sour cream" — all cases where the shared scorer returns 99. Which is exactly
+    // why this gate compares the strings itself instead of asking for a score of
+    // 100: string equality is the property we want, and it cannot drift when
+    // someone tunes a penalty.
+    //
+    // First exact match wins, as at HEB — seen already deduplicates names, so a
+    // second exact candidate would be the same product twice.
+    //
+    // Anything not exact is not a worse guess to be made anyway; it goes back as a
+    // candidate and the user picks. That is the whole point: we do not buy something
+    // nobody asked for, and we do not silently substitute.
+    if (!oos && !bestName && isExactMatch(name)) {
+      bestName = name;
+      bestCard = card;
     }
     if (candidates.length >= 8) break;
   }
 
-  var MIN_SCORE = 30;
-  if (!bestName || bestScore < MIN_SCORE || !bestCard) {
-    var hasExactOos = candidates.some(function(c) { return scoreMatch(c.productName, SEARCH_TERM) >= MIN_SCORE && c.outOfStock; });
+  if (!bestName || !bestCard) {
+    // Named for what it is: an exact match that happens to be out of stock. The
+    // previous version called this hasExactOos while testing the same 30-point
+    // threshold, so "out_of_stock" was reported for products that merely resembled
+    // the request.
+    var hasExactOos = candidates.some(function(c) { return isExactMatch(c.productName) && c.outOfStock; });
     var reason = candidates.length === 0 ? 'no_results' : hasExactOos ? 'out_of_stock' : 'low_confidence';
     document.removeEventListener('focusin', __noKbd, true);
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SEARCH_AND_ADD_RESULT', success: false, reason: reason, candidates: candidates }));

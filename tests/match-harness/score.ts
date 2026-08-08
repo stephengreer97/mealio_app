@@ -51,11 +51,20 @@ const DIR = path.resolve(__dirname);
 
 /**
  * The score at which each store's live flow will auto-add without asking.
- * Every store except ALDI requires an exact normalized name match (`=== 100`)
- * — see buildSearchAndAddScript in each store script and the auto-pick branch
- * in WebViewCartSheet. ALDI is the only store that acts on a fuzzy score
- * (`MIN_SCORE = 30` in aldi.ts, which in practice means "70 or better",
- * scoreOne emitting nothing between 1 and 69).
+ *
+ * EVERY store requires an exact normalized name match — see
+ * buildSearchAndAddScript in each store script and the auto-pick branch in
+ * WebViewCartSheet. Four of them spell that as `scoreMatch(...) === 100`, which
+ * in _scoring.ts means equality and nothing else because every path but the
+ * `na === nb` fast path is capped by `Math.min(99, …)`; Albertsons and ALDI
+ * compare the normalized strings themselves.
+ *
+ * ALDI used to be the exception, acting on a fuzzy score (`MIN_SCORE = 30` in
+ * instacart.ts, in practice "70 or better" since its scoreOne emitted nothing
+ * between 1 and 69). MEAL-121 removed that: its gate is now `isExactMatch`, an OR
+ * over the same two normalizations scoreMatch maxes over, which accepts exactly
+ * the strings `=== 100` accepts. So 100 is the faithful threshold for every row
+ * here, and ALDI's accept-match column describes live behaviour again.
  */
 const AUTO_ADD_THRESHOLD: Record<string, number> = {
   heb: 100,
@@ -63,7 +72,7 @@ const AUTO_ADD_THRESHOLD: Record<string, number> = {
   albertsons: 100,
   'amazon-fresh': 100,
   wegmans: 100,
-  aldi: 30,
+  aldi: 100,
 };
 
 /**
@@ -73,14 +82,20 @@ const AUTO_ADD_THRESHOLD: Record<string, number> = {
  * scoreOne + scoreMatch, so their rows describe live behaviour.
  *
  * ALDI does NOT, despite the "must stay byte-identical" note at the top of
- * _scoring.ts. aldi.ts carries its own scoreOne (a 0.3 overlap floor, a −5
- * penalty per extra word in the candidate, and a critical-word penalty instead
- * of a hard veto) and calls it as scoreMatch(candidateName, searchTerm) —
- * the arguments the other way round from every other store. Its row below is
- * therefore "what _scoring.ts would do on ALDI's result pages", not what ALDI
- * does today. Left in the corpus because the pages are real labelled data for
- * the scorer under test; flagged so the number is never read as ALDI's
- * live match quality.
+ * _scoring.ts. instacart.ts carries its own scoreOne (a 0.3 overlap floor, a −5
+ * penalty per extra word in the candidate, and a critical-word penalty instead of
+ * a hard veto), and until MEAL-121 it called that scorer as
+ * scoreMatch(candidateName, searchTerm) — the arguments the other way round from
+ * every other store — to decide what to add.
+ *
+ * It no longer decides anything: the add gate is string equality, and the local
+ * scorer is unreachable from it. So the false flag below now means something
+ * narrower than it used to. ALDI's accept-match and abstain columns are live-
+ * accurate (see AUTO_ADD_THRESHOLD). What is still not a statement about ALDI is
+ * the RANKING: P@1 and the pair columns are _scoring.ts measured on ALDI's result
+ * pages, and ALDI ranks nothing — it takes the first exactly-named tile. Left in
+ * the corpus because the pages are real labelled data for the scorer under test;
+ * flagged so the ranking numbers are never read as ALDI's live match quality.
  */
 const USES_SHARED_SCORER: Record<string, boolean> = {
   heb: true,
@@ -150,9 +165,15 @@ function fingerprint(products: string[]): string {
 }
 
 /**
- * Ranks candidates the way the store scripts do: highest score wins, and the
- * FIRST card at that score wins a tie (every store's loop uses `>` / a
- * `!bestName` guard, so the store's own relevance order is the tiebreak).
+ * Ranks candidates: highest score wins, and the FIRST card at that score wins a
+ * tie, so the store's own relevance order is the tiebreak.
+ *
+ * No store script actually ranks. Every one of them scans in result order behind a
+ * `!bestName` guard and stops at the first card that clears its gate — which at a
+ * threshold of 100 gives the same answer as this function, since the tie it breaks
+ * is a tie among exact matches. The max-score loop this mirrors was ALDI's, and
+ * MEAL-121 replaced it. Ranking therefore only shows up in the P@1 and pair
+ * columns, which describe what _scoring.ts WOULD do if a store ranked.
  */
 function topCandidate(query: string, products: string[]): { name: string; score: number } {
   let best = { name: products[0], score: -1 };
@@ -306,9 +327,11 @@ function print(report: Report) {
 
   if (Object.values(report.stores).some((m) => m.usesSharedScorer === false)) {
     console.log(
-      '\n  * aldi.ts runs its own scorer (different overlap floor, extra-word penalty,\n' +
-      '    reversed argument order), so its row is _scoring.ts measured on ALDI pages,\n' +
-      '    not ALDI\'s live match quality.',
+      '\n  * instacart.ts still carries ALDI\'s own scorer (different overlap floor,\n' +
+      '    extra-word penalty, reversed argument order), but since MEAL-121 nothing\n' +
+      '    calls it: ALDI gates the add on string equality like every other store. So\n' +
+      '    the accept-match and abstain columns are live-accurate, while P@1 and the\n' +
+      '    pair columns are _scoring.ts measured on ALDI pages — ALDI ranks nothing.',
     );
   }
 
