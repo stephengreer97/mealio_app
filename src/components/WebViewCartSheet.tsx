@@ -866,10 +866,10 @@ export default function WebViewCartSheet({
    *
    * The pools call this once per item as its result becomes final — a worker's
    * WORKER_RESULT, or the result the pool synthesizes when its timeout fires —
-   * so the add/confirm half of the funnel is no longer empty on the stores those
-   * pools serve. See recordPoolAddOutcome for the row set, why both halves are
-   * emitted at settle, and why a worker's `blocked` becomes a row here even
-   * though it is not escalated to the UI from the message handler.
+   * so the parallel pass reports every item it handled, not just the subset the
+   * serial top-up later retried. See recordPoolAddOutcome for the row set, why
+   * both halves are emitted at settle, and why a worker's `blocked` becomes a
+   * per-item row here even though the run-level one already existed.
    *
    * Bound to the pools through their generic onSettled seam rather than to the
    * message handlers, because a worker that never answers at all sends no
@@ -2751,6 +2751,13 @@ export default function WebViewCartSheet({
               // a claim the metric can make. The after-probe corrects it.
               cartReconciledRef.current = false;
               addResultsRef.current = confirmed;
+              // NOTE for the funnel (MEAL-122): this re-points the run's active
+              // items at the retry subset and restarts the index, so every
+              // telemetry row the top-up emits from here carries an `itemIndex`
+              // in a NARROWED space. A 5-item run with a 2-item top-up emits
+              // itemIndex 0-4 under path 'parallel_add' and 0-1 under 'fused',
+              // and index 1 means a different item in each. `path` disambiguates
+              // them, but "count distinct itemIndex" does not work across a run.
               activeItemsRef.current = retryItems;
               searchIdxRef.current = 0;
               onSearchPageRef.current = false;

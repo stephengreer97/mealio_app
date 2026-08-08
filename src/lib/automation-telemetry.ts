@@ -192,6 +192,10 @@ export interface StepRecord {
    *  top-level column so the dashboard can group on it without touching detail. */
   code?: StepFailureCode;
   durationMs?: number;
+  /** Position in the run's active-items array at the time the row was recorded.
+   *  NOT a run-wide item identity: the reconcile re-points that array at its
+   *  retry subset and restarts the index, so rows from the top-up reuse low
+   *  indexes for different items. Group by `detail.path` before comparing. */
   itemIndex?: number;
   detail?: Record<string, unknown>;
 }
@@ -457,11 +461,18 @@ export interface PoolAddOutcome {
  *
  * MEAL-122. The parallel-add and pre-search pools report every item's outcome
  * through their pool, not through the sequential engine, so before this the
- * add/confirm half of the funnel was empty on the four stores those pools serve
- * (HEB, Walmart, Amazon Fresh, Albertsons) — a run emitted login_check, one
- * reconcile and run_summary, and five items failing five different ways
- * collapsed into a single reconcile code. Per-store funnels read clean for those
- * stores because they emitted no failure rows, not because they had no failures.
+ * PARALLEL PASS emitted no add or confirm rows at all on the four stores those
+ * pools serve (HEB, Walmart, Amazon Fresh, Albertsons). Five items failing five
+ * different ways collapsed into the single reconcile row that followed them.
+ *
+ * Not the whole run, though: the serial top-up that follows a shortfall emits
+ * both halves for the subset it retries (`path: 'fused'`), and since the
+ * reconcile exists BECAUSE shortfalls are common, a failing run on these stores
+ * routinely did emit add/confirm rows. What it could not emit was a row for an
+ * item the top-up never retried — anything the cart said had landed, and anything
+ * routed to review rather than retry. So the funnel's add half was a biased
+ * sample of the run: the items that failed twice, and never the ones that failed
+ * once. That is the shape that reads clean and is not.
  *
  * Rows emitted, when an add WAS dispatched, in this order:
  *   add_click  ok       always — this is the confirm-rate DENOMINATOR
