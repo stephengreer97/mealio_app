@@ -164,7 +164,8 @@ describe('SELECTOR_HEALTH from a pool worker', () => {
   // HEB, Walmart, Amazon Fresh, Albertsons — that is the MAIN path, so the loss
   // would be most of the data while the main WebView kept reporting enough to
   // look healthy.
-  const walmartSheet = (ingredient: Record<string, unknown>) => (
+  type Ing = Omit<(typeof meal)['ingredients'][number], 'searchTerm'> & { searchTerm?: string };
+  const walmartSheet = (ingredient: Ing) => (
     <WebViewCartSheet
       visible
       meals={[{ id: 'm1', name: 'Tacos', ingredients: [ingredient] }]}
