@@ -483,6 +483,12 @@ describe('useParallelSearchPool — end-to-end funnel through a real recorder', 
       // Confirm-rate denominator: one add_click per item, no more and no fewer.
       expect(rows.filter((r) => r.step === 'add_click')).toHaveLength(3);
       // And the run's headline code is now the wall rather than nothing at all.
+      // NOTE for whoever merges PR #83 (fix/meal-123-dominant-severity): that
+      // branch renames dominantFailureCode() to primaryFailureCode(). This line
+      // is the rename's only reach into MEAL-122, and it is not a git conflict —
+      // different file — so it will break at compile time rather than at merge.
+      // The assertion holds either way: waf_block is both the most frequent code
+      // here and the most severe.
       expect(tel.dominantFailureCode()).toBe('waf_block');
     } finally {
       await tel.dispose();
