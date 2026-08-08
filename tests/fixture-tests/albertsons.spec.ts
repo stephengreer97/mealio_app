@@ -107,6 +107,49 @@ async function emptyAccountName(runner: FixtureRunner): Promise<void> {
 }
 
 /**
+ * The MEAL-140 state: the name span holds a LOADING PLACEHOLDER rather than a
+ * name. Same shape as emptyAccountName — only span[data-qa="hdr-accnt-nm"]
+ * changes, aria-label stays "Account menu" — but with characters in it, which
+ * is the whole point: MEAL-124's `!!acctText` conjunct is satisfied by any
+ * character at all, so this state read as a signed-in user.
+ */
+async function placeholderAccountName(runner: FixtureRunner, placeholder: string): Promise<void> {
+  await runner.page.evaluate((text) => {
+    const span = document.querySelector('span[data-qa="hdr-accnt-nm"]');
+    if (!span) throw new Error('fixture drift: span[data-qa="hdr-accnt-nm"] is gone');
+    span.textContent = text;
+  }, placeholder);
+  // Guards, so no test built on this state can pass vacuously. The control must
+  // still announce itself as the account menu (the static half of the rule, and
+  // what the buggy version matched on), the span must genuinely hold the
+  // placeholder, and — the one that matters — the placeholder must be NON-EMPTY,
+  // or this would just be re-testing MEAL-124's empty span.
+  const state = await runner.page.evaluate(() => {
+    const link = document.querySelector('[data-qa="hdr-accnt-lnk"]');
+    return {
+      aria: link ? link.getAttribute('aria-label') : null,
+      text: link ? (link.textContent || '').trim() : null,
+    };
+  });
+  expect(state.aria).toMatch(/account\s*menu/i);
+  expect(state.text).toBe(placeholder);
+  expect(state.text).not.toBe('');
+}
+
+/** Put a real (if short) name in the span, with the same anti-vacuity guards. */
+async function setAccountName(runner: FixtureRunner, name: string): Promise<void> {
+  await runner.page.evaluate((text) => {
+    const span = document.querySelector('span[data-qa="hdr-accnt-nm"]');
+    if (!span) throw new Error('fixture drift: span[data-qa="hdr-accnt-nm"] is gone');
+    span.textContent = text;
+  }, name);
+  const text = await runner.page.evaluate(
+    () => (document.querySelector('[data-qa="hdr-accnt-lnk"]')?.textContent || '').trim(),
+  );
+  expect(text).toBe(name);
+}
+
+/**
  * Strip every "Sign Out"/"Log Out" string from the page. The click fallback's
  * terminal condition is that text appearing in body innerText, and the fixture
  * runner blocks stylesheets so the CSS-hidden account flyout is "visible" to
@@ -537,6 +580,155 @@ describe('Albertsons family CHECK_LOGIN_SCRIPT', () => {
       const decision = debug.find((m) => m.step === 'passive_decision');
       expect(decision?.decided).toBe('loggedOut');
       // Decided off the name that rendered, not the click fallback.
+      expect(debug.some((m) => m.step === 'after_click')).toBe(false);
+    },
+  );
+
+  // ── MEAL-140: the name span holds a placeholder, not a name ──────────────
+  //
+  // MEAL-124 closed the EMPTY span. It left the same window open one step
+  // narrower, because the conjunct it added was `!!acctText` and the regex it
+  // gates runs against aria-label + text — and aria-label="Account menu" is in
+  // the raw markup in both auth states. So the text only had to contain SOME
+  // character. A skeleton placeholder produced "Account menu Loading", matched
+  // /account\s*menu/, and answered loggedIn with no user in sight, exactly as
+  // the empty span had.
+  //
+  // Every case below is run against the LOGGED-IN capture, which means the
+  // correct final answer is `true` — and that is deliberate. A test that only
+  // showed the placeholder no longer says loggedIn could be satisfied by a rule
+  // that broke passive detection outright. These assert the answer is still
+  // right AND that it came from the click check (real evidence) rather than
+  // from static markup.
+  // Both kinds of placeholder, since the predicate handles them with different
+  // clauses: typographic ones have no letters, lexical ones need naming.
+  describe.each([
+    ['an ellipsis', '...'],
+    ['an em dash', '—'],
+    ['a spinner glyph', '⠋'],
+    ['the word Loading', 'Loading'],
+    ['Loading with trailing dots', 'Loading...'],
+  ])('a placeholder account name (%s)', (_label, placeholder) => {
+    itWithFixture(
+      'logged-in-home.html',
+      'decides nothing passively and falls through to the click check',
+      async (runner) => {
+        await placeholderAccountName(runner, placeholder);
+
+        await runner.inject(scripts.checkLoginScript);
+        const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
+
+        const debug = runner.messagesOfType('LOGIN_DEBUG');
+        const decision = debug.find((m) => m.step === 'passive_decision');
+        // Was 'loggedIn', off nothing but aria-label and a non-empty string.
+        expect(decision?.decided).toBe('ambiguous_unresolved_acct_name');
+        // Not the MEAL-124 state: the span really does have text in it.
+        expect(decision?.acctText).toBe(placeholder);
+        // The poll refused to call the placeholder ready and spent its budget.
+        expect(debug.find((m) => m.step === 'profile_btn')?.nameReady).toBe(false);
+        // And the verdict came from opening the panel, which on this capture
+        // finds "Sign Out" — so the answer is right, just paid for with a click.
+        expect(debug.some((m) => m.step === 'after_click')).toBe(true);
+        expect(status.isLoggedIn).toBe(true);
+      },
+    );
+  });
+
+  // THE DIRECTION THAT MATTERS, as for MEAL-124: a placeholder plus no evidence
+  // either way must resolve to signed OUT. Before the fix this was `true`, which
+  // sends a signed-out session through every search and every add, and the
+  // failure surfaces as "nothing could be added" rather than "you are not
+  // logged in" — which is the one thing this check exists to prevent.
+  itWithFixture(
+    'logged-in-home.html',
+    'a placeholder name with no other evidence resolves to signed OUT (fail closed)',
+    async (runner) => {
+      await stubSessionStorage(runner);
+      await placeholderAccountName(runner, 'Loading...');
+      await stripSignOutEvidence(runner);
+
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
+      expect(status.isLoggedIn).toBe(false);
+
+      const debug = runner.messagesOfType('LOGIN_DEBUG');
+      expect(debug.find((m) => m.step === 'passive_decision')?.decided).toBe(
+        'ambiguous_unresolved_acct_name',
+      );
+      expect(debug.find((m) => m.step === 'after_click')?.isLoggedIn).toBe(false);
+      // Nothing positive cached off a verdict we could not justify.
+      expect(await readCachedLoginState(runner)).toBeNull();
+    },
+  );
+
+  // The poll, not just the decision. A placeholder that is replaced by the real
+  // name mid-poll must be waited for and then followed — the placeholder must
+  // not end the loop early. This is the half of the fix that lets the passive
+  // fast path still work on a slow auth bootstrap: without it the loop stops on
+  // the placeholder, reports nameReady:true, and every such user pays for a
+  // click even once the name arrives.
+  itWithFixture(
+    'logged-in-home.html',
+    'waits through a placeholder for the real name and then decides passively',
+    async (runner) => {
+      await placeholderAccountName(runner, '...');
+      await runner.page.evaluate(() => {
+        setTimeout(() => {
+          const span = document.querySelector('span[data-qa="hdr-accnt-nm"]');
+          if (span) span.textContent = 'Stephen';
+        }, 600);
+      });
+
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
+      expect(status.isLoggedIn).toBe(true);
+
+      const debug = runner.messagesOfType('LOGIN_DEBUG');
+      expect(debug.find((m) => m.step === 'profile_btn')?.nameReady).toBe(true);
+      expect(debug.find((m) => m.step === 'passive_decision')?.decided).toBe('loggedIn');
+      // Passive: the name that eventually rendered was enough, no click needed.
+      expect(debug.some((m) => m.step === 'after_click')).toBe(false);
+    },
+  );
+
+  // THE OVERREACH GUARD. The obvious wrong fix for MEAL-140 is a length check,
+  // and a length check tuned to reject "..." (3 chars) rejects "Jo" and "Al"
+  // too. Real names this short exist, and while sending them to the click check
+  // is only a wasted click, doing it to every user with a two-letter first name
+  // is a cost with nothing bought. What separates a placeholder from a name is
+  // LETTERS, not length — so this must still decide passively.
+  itWithFixture(
+    'logged-in-home.html',
+    'a genuinely short name still decides logged-in passively (no length check)',
+    async (runner) => {
+      await setAccountName(runner, 'Jo');
+
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
+      expect(status.isLoggedIn).toBe(true);
+
+      const debug = runner.messagesOfType('LOGIN_DEBUG');
+      expect(debug.find((m) => m.step === 'profile_btn')?.nameReady).toBe(true);
+      expect(debug.find((m) => m.step === 'passive_decision')?.decided).toBe('loggedIn');
+      expect(debug.some((m) => m.step === 'after_click')).toBe(false);
+    },
+  );
+
+  // And a non-Latin name, for the same reason: the letter test is \p{L}, not
+  // [a-z], so a name in Cyrillic/Greek/CJK is a name. If someone "simplifies"
+  // that regex to ASCII, every such user silently starts paying for a click.
+  itWithFixture(
+    'logged-in-home.html',
+    'a non-Latin account name still decides logged-in passively (\\p{L}, not [a-z])',
+    async (runner) => {
+      await setAccountName(runner, 'Ольга');
+
+      await runner.inject(scripts.checkLoginScript);
+      const status = await runner.waitForMessage('LOGIN_STATUS', 12_000);
+      expect(status.isLoggedIn).toBe(true);
+
+      const debug = runner.messagesOfType('LOGIN_DEBUG');
+      expect(debug.find((m) => m.step === 'passive_decision')?.decided).toBe('loggedIn');
       expect(debug.some((m) => m.step === 'after_click')).toBe(false);
     },
   );
