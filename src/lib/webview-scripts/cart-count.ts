@@ -112,13 +112,28 @@ export function getCartPageUrl(storeId: string): string | null {
 //
 // That zero is the defect, not the missing selector. `count: null` is the
 // protocol's "unknown — skip validation"; ANY number is taken as authoritative.
-// So a wrong zero is a CONFIDENT WRONG ANSWER, and it propagates:
-// cartItemsBeforeRef is set to [], and diffCartItems([], after) then attributes
-// the user's entire pre-existing cart to this run — after which the done screen
-// can tell them Mealio added items it did not intend and invite them to delete
-// their own groceries. Both of Stephen's cart principles are about what reaches
-// the cart; this is the reporting side of the same rule, and a wrong answer here
-// asks the USER to break the second one.
+// So a wrong zero is a CONFIDENT WRONG ANSWER.
+//
+// What it actually produces, traced rather than assumed. The redirect is
+// deterministic, so BOTH probes get it: before is `0 / []`, after is `0 / []`,
+// and diffCartItems([], []) is []. That empty array is truthy at
+// cart-reconcile.ts (`if (rows)`), so findUnaddedItems has no added rows to
+// match against and every item the run really did add comes back as `missing`.
+// The done screen then prints
+//
+//     "N items may not have been added (…). Please double-check your cart."
+//
+// about groceries that are sitting in the cart. Not the over-add copy two lines
+// below it — reaching that needs an asymmetric pair (a before that bounced and
+// an after that landed), which the after-probe cannot produce because it is
+// gated on the baseline it would need. The reachable asymmetry is on the
+// reconcile probe, which is not so gated; that is HEB-only, latent, pre-existing
+// (a timed-out before-probe leaves the same empty ref) and belongs to MEAL-47.
+//
+// So the harm here is a positive false claim, not an invitation to delete
+// anything — and a positive false claim about what did or did not reach the
+// cart is still the reporting side of Stephen's second principle. A wrong answer
+// is worse than no answer, which is the whole trade below.
 //
 // So: a script that cannot tell it is on the cart page reports null.
 //
