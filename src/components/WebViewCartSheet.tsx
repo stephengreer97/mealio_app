@@ -42,7 +42,7 @@ import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
-import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitTopUpsForReview, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, correctConfirmedFromCart, countRequested, isRunComplete } from '../lib/north-star';
@@ -2080,7 +2080,12 @@ export default function WebViewCartSheet({
     // there is no prewarmed cart at all. Still one-shot: takePrewarmedCart has
     // already dropped the entry, so this cannot loop, and the cost is one cart
     // navigation bounded by CART_PROBE_TIMEOUT_MS.
-    if (prewarmed && prewarmed.count != null) {
+    //
+    // Via the named predicate, not `prewarmed.count`: the truthiness slip is
+    // invisible here and would throw away every EMPTY cart (count 0) — the same
+    // 0-vs-null confusion this branch is about. isCountedCartSnapshot carries
+    // that rule and is pinned by its own unit test.
+    if (prewarmed && isCountedCartSnapshot(prewarmed)) {
       console.log(`[Cart ${ts()}]`, 'snapshotBefore: using PREWARMED baseline count=', prewarmed.count, 'lines=', prewarmed.items.length);
       cartCountBeforeRef.current = prewarmed.count;
       cartItemsBeforeRef.current = prewarmed.items;

@@ -102,6 +102,29 @@ export function getCartPageUrl(storeId: string): string | null {
   return null;
 }
 
+/**
+ * Did this cart snapshot actually COUNT something — i.e. is it usable as a
+ * baseline?
+ *
+ * ZERO IS A BASELINE. An empty cart is the most common one there is, and a
+ * `count: 0` read off a page the script confirmed is the cart is a fact. Only
+ * `null` means "unknown". This module exists because a redirect made those two
+ * indistinguishable, so the test must never be written as truthiness:
+ * `if (cart.count)` silently discards every empty cart — the same 0-vs-null
+ * confusion, pointing the other way.
+ *
+ * Named, exported and pinned rather than inlined at its call site
+ * (WebViewCartSheet's prewarmed-baseline fast path) because that call site has
+ * no test harness today — MEAL-158 covers building one — and a predicate can be
+ * pinned on its own in the meantime. The point is not indirection; it is that
+ * `isCountedCartSnapshot(cart)` cannot be misread the way `cart.count` can.
+ */
+export function isCountedCartSnapshot(
+  snapshot: { count: number | null } | null | undefined,
+): boolean {
+  return typeof snapshot?.count === 'number';
+}
+
 // ── Page identity for cart-page counting (MEAL-152) ──────────────────────────
 //
 // Navigating to a cart URL is not the same as ARRIVING on the cart page.

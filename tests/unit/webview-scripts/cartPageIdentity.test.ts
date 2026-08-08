@@ -34,6 +34,7 @@ import {
   buildCartPageCountScript,
   getCartPageUrl,
   getCartPagePath,
+  isCountedCartSnapshot,
   CART_PAGE_URL_STORE_IDS,
 } from '../../../src/lib/webview-scripts/cart-count';
 
@@ -95,6 +96,36 @@ describe('cart-page identity guard (MEAL-152)', () => {
       expect(CART_PAGE_URL_STORE_IDS).toContain(storeId);
       expect(getCartPagePath(storeId)).toBeNull();
       expect(buildCartPageCountScript(storeId)).not.toContain('not_cart_page');
+    });
+  });
+
+  // The same 0-vs-null rule the guard enforces, pointing the other way.
+  //
+  // WebViewCartSheet's prewarmed-baseline fast path asks "did the probe count
+  // anything?" before consuming a cached snapshot. Written as `if (cart.count)`
+  // that silently discards every EMPTY cart — the most common baseline there is
+  // — and the whole suite stays green, because that call site has no harness
+  // (MEAL-158). The predicate carries the rule so the slip is not expressible
+  // there, and these four cases are what make it a rule rather than a name.
+  describe('isCountedCartSnapshot — zero is a baseline, null is not', () => {
+    it('accepts an empty cart (count 0)', () => {
+      // The mutant killer: `!!snapshot.count` fails exactly here.
+      expect(isCountedCartSnapshot({ count: 0 })).toBe(true);
+    });
+
+    it('accepts a counted cart', () => {
+      expect(isCountedCartSnapshot({ count: 4 })).toBe(true);
+    });
+
+    it('rejects an unknown count', () => {
+      // What the page-identity guard posts when it refuses. Taking this as a
+      // baseline is what forfeits the run's own before-probe.
+      expect(isCountedCartSnapshot({ count: null })).toBe(false);
+    });
+
+    it('rejects a missing snapshot', () => {
+      expect(isCountedCartSnapshot(null)).toBe(false);
+      expect(isCountedCartSnapshot(undefined)).toBe(false);
     });
   });
 
