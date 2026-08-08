@@ -182,8 +182,19 @@ describe('ALDI regression: stepper already open', () => {
  * `runner.page.evaluate` trick the login tests above use to turn the captured
  * Main Menu into a signed-out one — and then differ only in the search term. One
  * term names that tile exactly and must be reported out of stock; the other
- * merely resembles it and must not be. Together they pin both halves of the
- * condition: drop either and one of them fails.
+ * merely resembles it and must not be.
+ *
+ * What they pin, precisely: the `isExactMatch` half. Delete it and the second test
+ * fails, reporting out_of_stock for a product that merely resembles the request —
+ * the misnaming this ticket fixed.
+ *
+ * The `&& c.outOfStock` half is NOT pinned, and cannot be. The gate is evaluated
+ * for every candidate before the `candidates.length >= 8` break, so reaching this
+ * branch at all implies every candidate satisfies `oos || !isExactMatch(name)` —
+ * which makes `isExactMatch(c) ⟹ c.outOfStock` true here by construction. Dropping
+ * that conjunct produces a logically identical expression, so no test can separate
+ * them. An equivalent mutant, not a coverage gap; recorded so nobody spends an
+ * afternoon trying to kill it.
  */
 describe('ALDI regression: out_of_stock is claimed only for an exact match', () => {
   itWithFixture(
