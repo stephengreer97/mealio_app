@@ -133,12 +133,15 @@ export function getCartPageUrl(storeId: string): string | null {
 // conversion is trusted-zero → honest-unknown.
 
 /**
- * Exact pathname each cart URL above is expected to settle on. Kept beside
- * CART_PAGE_URL because the two must agree — pinned by
- * tests/unit/webview-scripts/cartPagePath.test.ts, which parses every
- * CART_PAGE_URL and asserts the path here matches, so moving a cart URL without
- * moving its path fails the build rather than silently making a store
- * uncountable.
+ * Exact pathname each guarded cart URL above is expected to settle on. Kept
+ * beside CART_PAGE_URL because the two must agree — pinned by
+ * tests/unit/webview-scripts/cartPageIdentity.test.ts, which parses each
+ * guarded store's CART_PAGE_URL and asserts the path here is its pathname, so
+ * moving a cart URL without moving its path fails the suite rather than
+ * silently making that store uncountable.
+ *
+ * `mockstore` is absent on purpose: it is the dev/test harness, served from a
+ * local server that does not redirect, and its script is not guarded.
  */
 const CART_PAGE_PATH: Record<string, string> = {
   heb: '/cart',
@@ -560,6 +563,17 @@ ${cartPathGuardJs(CART_PAGE_PATH.walmart)}
 // Verified against tests/fixtures/amazon-fresh/cart-fresh-full.html (Perdue
 // Portions x2, Daisy x2, Mission x1, Perdue Harvestland x2 = 7) and the
 // collapsed cart-with-items.html (0 cards, expand link present).
+//
+// NOT GUARDED, RECORDED (MEAL-152). This script has the same shape as the one
+// the ticket is about: with no line-item cards and no expand link it falls
+// through and posts `count: 0`, which callers trust. The path guard the other
+// cart-page scripts use does not fit — Amazon is reached by CLICKING the cart
+// icon and legitimately traverses several paths on the way (/gp/aw/c →
+// /cart/localmarket → whatever the expand link resolves to), so there is no
+// single pathname to assert, and a loose "looks cart-ish" test would be a guess.
+// The honest guard needs a positive signal for "this IS the Amazon cart, and it
+// is empty", which needs a captured empty-Fresh-cart fixture we do not hold.
+// Written up for Stephen rather than guessed at.
 const AMAZON_CART_PAGE_SCRIPT = `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
@@ -655,6 +669,14 @@ export function buildOpenCartScript(storeId: string): string | null {
 // Every selector here is the white-labelled platform's, observed on ALDI (the
 // only banner we hold fixtures for). It is shared by every tenant in
 // INSTACART_TENANTS because the side panel is Instacart's, not the banner's.
+//
+// NOT GUARDED, RECORDED (MEAL-152). There is no navigation and therefore no URL
+// to check, but the same trusted-zero exists in a different form: if the opener
+// is missing or the panel never renders its rows, the poll expires and this
+// posts `count: 0` — "your cart is empty" and "the panel did not open" are the
+// same number. The fix is a positive open-signal (the panel dialog present with
+// its own empty-state), which needs a captured empty-panel fixture we do not
+// hold. Written up for Stephen rather than guessed at.
 const INSTACART_CART_PANEL_SCRIPT = `(async function() {
   function wait(ms){return new Promise(function(r){setTimeout(r,ms);});}
   function norm(s){return (s||'').trim().replace(/\\s+/g,' ');}
@@ -828,6 +850,13 @@ ${cartPathGuardJs(CART_PAGE_PATH.heb)}
 // mirrored by the visible .stepper-qty text. The page renders each item twice
 // (responsive desktop/mobile), so dedupe by product id. Verified against
 // tests/fixtures/albertsons/cart-with-items.html (Basmati x2, Hunt's x1).
+//
+// UNGUARDED HERE ON PURPOSE (MEAL-152). This script has the same defect, and it
+// is the one where it was first observed and diagnosed — a DOMAIN_MAP host whose
+// 301 dropped the path. PR #81 (fix/meal-136-united-domain) fixes it with the
+// guard this file's cart-page scripts now share; adding a second copy on this
+// branch would only conflict with it. If that PR is ever abandoned, this script
+// still needs the guard.
 const ALBERTSONS_CART_PAGE_SCRIPT = `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
