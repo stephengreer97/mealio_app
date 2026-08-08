@@ -30,6 +30,7 @@
 // candidate cap or the timing machinery.
 
 import { chromium } from 'playwright';
+import { FIXTURE_LAUNCH_OPTIONS, installResourceBlocking } from '../fixture-runners/runScript';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -273,16 +274,55 @@ export interface Corpus {
 }
 
 async function main() {
-  const browser = await chromium.launch();
+  // Same two layers the fixture runner uses, for the same reason (MEAL-150).
+  //
+  // This script never fetches anything: it reads the committed captures off disk
+  // and `setContent`s them below. But the captures are real storefronts, and their
+  // inline markup still points at the store's live bundles, trackers and beacons —
+  // so a browser with no boundary will go and get them, carrying whatever those
+  // pages carry. The corpus fixtures include cart contents, prices, an Albertsons
+  // loyalty id and an email hash.
+  //
+  // The old handler here aborted script/stylesheet/font/image/media and
+  // `continue()`d everything else — so `document`, `fetch`, `xhr` and `ping` were
+  // all free to go out.
+  //
+  // What a real build actually issued: **10** `document` requests, every one a
+  // DoubleClick floodlight beacon out of the HEB captures. No fetch/xhr/ping fired.
+  // All ten carry `auiddc=`, a persistent ad id; two of them — from
+  // search-results-product-in-cart and search-results-stepper-open — also carry
+  // `u3=` product ids, `u5=` prices and `u6=` quantities.
+  //
+  // Ten and not more, for a reason worth knowing before anyone measures this file
+  // again: the loop below reuses ONE page across all 30 fixtures, and the Walmart
+  // captures carry a `<meta http-equiv="Content-Security-Policy">`. Walmart is
+  // second in STORES, so from that fixture onward the page is locked and every
+  // later `setContent` is muzzled — 164 CSP console errors on albertsons alone, and
+  // zero requests. Load albertsons first and it attempts 40 by itself. Give each
+  // fixture a fresh page and the captures attempt 57 in total, to eleven hosts
+  // across three stores: 31 floodlight beacons plus insight.adsrvr.org,
+  // safeframe.googlesyndication.com, websdk.ujet.co, www.google.com and
+  // js.stripe.com.
+  //
+  // So 57 is what these captures WANT to send and 10 is what this builder sent. The
+  // blocking happens in the renderer, before any route handler, so the 47 were never
+  // the old handler's to forward either. Two earlier versions of this comment got
+  // this wrong in both directions — first reporting 10 as though it were the whole
+  // story, then "correcting" it to 57 and accusing the first of measuring one slice,
+  // when 57 was the number from a harness this file does not use.
+  //
+  // The CSP muzzle is its own problem: 21 of 30 fixtures are parsed with none of
+  // their inline machinery running. Extraction is DOM-only so the corpus is
+  // unaffected, but any measurement taken through this loop is measuring a gagged
+  // browser. Filed separately.
+
+  // Keep both. The resolver rule is the boundary; installResourceBlocking is what
+  // makes an intercepted navigation land on a known empty page instead of a network
+  // error — which is also what keeps a live bundle from navigating the page away
+  // mid-extraction, the thing the comment this replaces was worried about.
+  const browser = await chromium.launch(FIXTURE_LAUNCH_OPTIONS);
   const context = await browser.newContext();
-  // Block subresources: fixture HTML still references the store's live bundles,
-  // and letting those run navigates the page away mid-extraction.
-  await context.route('**/*', (route) => {
-    const t = route.request().resourceType();
-    return t === 'script' || t === 'stylesheet' || t === 'font' || t === 'image' || t === 'media'
-      ? route.abort()
-      : route.continue();
-  });
+  await installResourceBlocking(context);
   const page = await context.newPage();
 
   const stores: Record<string, CorpusQuery[]> = {};
