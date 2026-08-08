@@ -96,6 +96,13 @@ export const FIXTURE_CONTEXT_OPTIONS = {
  * `[::1]` and `2130706433` as ALLOWED. Two layers disagreeing about what counts as
  * local is how a boundary ends up being trusted for something it does not do.
  *
+ * `::1` is spelled WITHOUT brackets, and that is not cosmetic. Chromium stores the
+ * pattern literally and compares it against a hostname that carries no brackets, so
+ * `EXCLUDE [::1]` never matches anything — it is inert, and an inert clause here
+ * reads exactly like a working one. Measured: with the bracketed form a real server
+ * on `::1` is unreachable; with the bare form it answers. Both spellings refuse
+ * everything else either way, so the bug failed closed rather than open.
+ *
  * `2130706433` needs no clause of its own: WHATWG URL normalises the integer form to
  * `127.0.0.1` before the browser ever resolves it, which is the same reason
  * `isLocalUrl` can compare against the dotted form alone.
@@ -108,7 +115,7 @@ export const FIXTURE_CONTEXT_OPTIONS = {
  * network error, which is what the tests read.
  */
 export const FIXTURE_LAUNCH_OPTIONS: LaunchOptions = {
-  args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE [::1]'],
+  args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE ::1'],
 };
 
 /**

@@ -284,8 +284,13 @@ async function main() {
   // loyalty id and an email hash.
   //
   // The old handler here aborted script/stylesheet/font/image/media and
-  // `continue()`d everything else, which forwarded `document`, `fetch`, `xhr` and
-  // `ping`. MEAL-113 established that a resourceType allow-list is the losing half
+  // `continue()`d everything else — so `document`, `fetch`, `xhr` and `ping` were
+  // all free to go out. Measured over a full build, what actually left was ten
+  // `document` requests, every one of them a DoubleClick floodlight beacon out of
+  // the HEB captures, carrying cart product ids, prices, quantities and a
+  // persistent ad id in the query string. No fetch/xhr/ping happened to fire. The
+  // distinction matters: the handler's rule is what was wrong, and the ten beacons
+  // are what that rule cost on each run. MEAL-113 established that a resourceType allow-list is the losing half
   // of this: it cannot see a preconnect, a WebSocket or a service worker, because
   // those never reach a route handler. FIXTURE_LAUNCH_OPTIONS refuses at the
   // resolver, which is below all of them.

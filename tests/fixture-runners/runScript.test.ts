@@ -188,12 +188,22 @@ describe('loadFixture', () => {
  * This lives here rather than in tests/unit because it needs Chromium, and the CI
  * matrix already runs this file in a browser-capable job for exactly that reason.
  *
- * NOT covered: `[::1]`. It is excluded by the same clause and the same mechanism,
- * but binding an IPv6 loopback server is not something every CI image and WSL
- * kernel will do, and a test that skips itself when the environment is unfriendly
- * reports coverage it does not have. Said plainly instead.
+ * Every excluded spelling is covered, including `::1`. An earlier version of this
+ * block left `::1` out, reasoning that binding an IPv6 loopback is not something
+ * every CI image will do and that a self-skipping test claims coverage it does not
+ * have. The second half of that is true; the conclusion was wrong, and wrong in the
+ * way that costs something — the one clause with no test was the one that did not
+ * work. `EXCLUDE [::1]` is inert, and it shipped saying otherwise.
+ *
+ * It needs no IPv6 server. What the rule decides is whether a name RESOLVES, and a
+ * resolver refusal has its own error code — so asserting on the error rather than on
+ * a 200 covers the clause on any machine, with or without IPv6.
  */
 describe('the fixture browser can reach loopback and nothing else', () => {
+  /** A port nothing binds. Used where the assertion is about NAME RESOLUTION, so
+   *  what happens after the resolver answers is irrelevant. */
+  const UNBOUND_PORT = 49_999;
+
   let server: import('http').Server;
   let port: number;
   let browser: import('playwright').Browser;
@@ -217,7 +227,10 @@ describe('the fixture browser can reach loopback and nothing else', () => {
 
   afterAll(async () => {
     await browser?.close();
-    await new Promise<void>((resolve) => server?.close(() => resolve()));
+    // `server?.close(cb)` would short-circuit if beforeAll died before createServer
+    // returned, leaving the promise unresolved and hanging this hook to the jest
+    // timeout instead of surfacing the real error.
+    await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
   });
 
   it('reaches the mock store by IP literal, which is what MEAL-149 fixed', async () => {
@@ -234,19 +247,50 @@ describe('the fixture browser can reach loopback and nothing else', () => {
   it('still reaches the mock store by name', async () => {
     // The case that already worked. Here so a future edit to the arg cannot fix
     // the IP literal by breaking the name.
+    //
+    // The body assertion is not decoration. On a host where `localhost` resolves to
+    // `::1` first, this reaches our 127.0.0.1 server only via Happy Eyeballs
+    // fallback; a status check alone would keep passing while quietly proving
+    // something other than what it says. Reading the body pins that we got OUR page.
     const page = await browser.newPage();
     const res = await page.goto(`http://localhost:${port}/`);
     expect(res?.status()).toBe(200);
+    expect(await page.evaluate(() => document.body.textContent)).toBe('reached');
     await page.close();
   }, 30_000);
 
-  it('refuses a real host at the resolver', async () => {
-    // The boundary doing its job, and the reason this file can assert it without
-    // touching the network: the name is never looked up, so nothing leaves the
-    // machine even when the test fails. An ad-tech host is used deliberately —
-    // these are the hosts the captured storefronts actually reference.
+  it('reaches loopback by its IPv6 spelling', async () => {
+    // No IPv6 server, deliberately. The rule decides whether a name RESOLVES, and
+    // that is the only thing that can produce ERR_NAME_NOT_RESOLVED here. Once it
+    // resolves, the connection is free to fail however this machine likes —
+    // refused, unreachable, no IPv6 stack at all — and the clause has done its job.
+    //
+    // With `EXCLUDE [::1]` (the bracketed form that shipped) this fails: the
+    // pattern never matches, the wildcard applies, and the error IS a resolver
+    // refusal.
     const page = await browser.newPage();
-    await expect(page.goto('https://www.google-analytics.com/')).rejects.toThrow(
+    await expect(page.goto(`http://[::1]:${UNBOUND_PORT}/`))
+      .rejects.not.toThrow(/ERR_NAME_NOT_RESOLVED/);
+    await page.close();
+  }, 30_000);
+
+  it('refuses an address the wildcard still covers', async () => {
+    // The boundary doing its job. The target is a LOOPBACK address that is not on
+    // the exclude list, and that choice is the whole point.
+    //
+    // This first asserted against a real ad-tech host, which was wrong twice over.
+    // ERR_NAME_NOT_RESOLVED is also what an ordinary NXDOMAIN produces, so on any
+    // machine behind a filtering resolver — Pi-hole, NextDNS, a corporate DNS — the
+    // test passed with the boundary DELETED. Measured, not supposed. And proving it
+    // was load-bearing meant removing the rule and letting a real request leave the
+    // machine, every single time anyone mutation-tested this file.
+    //
+    // 127.0.0.2 has neither problem. No DNS is involved at all, so the resolver
+    // refusal can only come from our rule: with it, ERR_NAME_NOT_RESOLVED; without
+    // it, ERR_CONNECTION_REFUSED from a local address with nothing listening.
+    // Nothing can leave the machine under any mutation.
+    const page = await browser.newPage();
+    await expect(page.goto(`http://127.0.0.2:${UNBOUND_PORT}/`)).rejects.toThrow(
       /ERR_NAME_NOT_RESOLVED/,
     );
     await page.close();
