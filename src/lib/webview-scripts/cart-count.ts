@@ -118,10 +118,24 @@ export function getCartPageUrl(storeId: string): string | null {
 // elegance:
 //
 //   • An auth/SSO interstitial is TRANSIENT. Post nothing and let the landing
-//     page decide — both injection sites (WebViewCartSheet.onLoadEnd and
-//     SilentLoginProbe.onLoadEnd) re-inject on the next load, and a verdict here
-//     would burn the probe's single pending slot on a page that was never the
-//     cart. The probe timeouts already cover silence.
+//     page decide: a verdict here would burn the probe's single pending slot on
+//     a page that was never the cart, and the probe timeouts already cover
+//     silence.
+//
+//     SILENCE IS ONLY SAFE BECAUSE OF WHAT THE TWO INJECTION SITES DO, and they
+//     do different things — an earlier draft of this comment said "both
+//     re-inject on the next load", which was true of one of them:
+//       – WebViewCartSheet.onLoadEnd re-injects the count script on a later load
+//         (~line 2350). It also refuses to inject anything on an auth
+//         interstitial in the first place (~line 2231), so this branch is in
+//         fact unreachable from there.
+//       – SilentLoginProbe.onLoadEnd injects ONCE per cart capture and latches;
+//         it does not re-inject. Its safety comes from skipping interstitials so
+//         that single injection lands on the real page. That skip is a
+//         dependency of this branch, not a nicety: without it, silence here
+//         means no answer AND no retry, i.e. a 15s stall and no baseline.
+//     So the invariant to preserve is "the count script is never injected on an
+//     interstitial", not "someone will re-inject".
 //   • Anything else is TERMINAL — nothing further is loading. Post
 //     `count: null` with a named reason, so the run degrades to "unknown"
 //     instead of "empty" and the log says WHY. Both CART_COUNT handlers print

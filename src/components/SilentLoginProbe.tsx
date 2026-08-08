@@ -169,6 +169,29 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
       console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — injecting check script');
       webviewRef.current?.injectJavaScript(scripts.checkLoginScript);
     } else if ((cartMethodRef.current === 'url' || cartMethodRef.current === 'click') && !cartCountInjectedRef.current) {
+      // Same skip as the login branch above, and MEAL-152 is what makes it
+      // load-bearing rather than tidy. This branch LATCHES on its first
+      // injection (cartCountInjectedRef below, set once per capture and never
+      // cleared), and the count scripts now REFUSE to answer on a page that is
+      // not the cart — silently, when that page is an auth interstitial, because
+      // a verdict there would burn the probe's one pending slot.
+      //
+      // Put together without this check: cart URL → interstitial → inject →
+      // latch set → script returns silently → the real cart page that loads next
+      // never gets the script → the probe sits out CART_TIMEOUT_MS (15s) and
+      // reports logged-in with no baseline. The guard would have turned a wrong
+      // answer into no answer AND no retry, which is not the trade it is
+      // supposed to make. Skipping before the latch keeps the single injection
+      // for the landing page.
+      //
+      // PR #81 (fix/meal-136-united-domain) adds this same skip for MEAL-136, so
+      // one copy survives the merge — the conflict here is expected and either
+      // side is correct. Deliberately duplicated rather than depended on: merge
+      // order is not ours to control, and the failure it prevents is silent.
+      if (isAuthRedirectUrl(url)) {
+        console.log('[Prewarm] probe', storeId, 'onLoadEnd (cart) — skipping auth redirect page', url);
+        return;
+      }
       // Cart page has loaded — count it.
       const countScript = buildCartPageCountScript(storeId);
       if (countScript) {
