@@ -31,6 +31,17 @@
 
 import { useCallback, useRef, useState } from 'react';
 
+/** One item's final result, handed to onSettled. */
+export interface PoolSettled<TResult> {
+  /** Slot that ran the item. Slots are reused, so this is not an item identity. */
+  workerId: number;
+  /** The item's index in the array passed to start(). */
+  itemIndex: number;
+  result: TResult;
+  /** True when no worker reported in time and `emptyResult()` was synthesized. */
+  timedOut: boolean;
+}
+
 export interface ParallelPoolOptions<TItem, TResult> {
   /** Number of concurrent workers. Each gets its own URI slot. */
   workerCount: number;
@@ -43,6 +54,15 @@ export interface ParallelPoolOptions<TItem, TResult> {
   /** Synthetic empty result used on timeout, so the result map always has
    *  exactly `items.length` entries when the pool finishes. */
   emptyResult: () => TResult;
+  /** Called exactly once per dispatched item, at the moment its result becomes
+   *  final — for a worker-reported result and for a synthesized timeout alike.
+   *  This is the pool's only reporting seam; the pool itself stays
+   *  telemetry-agnostic so it remains reusable, and the caller decides what (if
+   *  anything) to emit. It fires BEFORE onAllDone, so every per-item row precedes
+   *  the run's terminal rows. Errors thrown here are swallowed: a reporting
+   *  mistake must not break a cart run. Items abandoned by reset() never settle
+   *  and are deliberately not reported. */
+  onSettled?: (info: PoolSettled<TResult>) => void;
   /** When > 0, the INITIAL burst is staggered: worker 0 starts immediately and
    *  each subsequent worker starts after ~i * dispatchStaggerMs (plus jitter),
    *  instead of all firing at once. Softens the "N simultaneous requests"
@@ -120,6 +140,11 @@ export function useParallelSearchPool<TItem, TResult>(
     new Array(workerCount).fill(null),
   );
   const onAllDoneRef = useRef<((r: Map<number, TResult>) => void) | null>(null);
+  // Read through a ref, not a dependency: the option is rebuilt on every render
+  // of the caller, and putting it in dispatchToWorker's deps would rebuild the
+  // dispatch closure (and so `start`) on every render.
+  const onSettledRef = useRef(options.onSettled);
+  onSettledRef.current = options.onSettled;
   // Bumped on every start()/reset(). A staggered initial-dispatch timer checks
   // this against the run it was scheduled in, so a reset (or a new run) cancels
   // any still-pending stagger timers without per-timer bookkeeping.
@@ -149,6 +174,12 @@ export function useParallelSearchPool<TItem, TResult>(
       clearTimeout(t);
       workerTimersRef.current[workerId] = null;
     }
+  }, []);
+
+  /** Report one item's final result. Swallows anything the caller throws — the
+   *  pool's job is dispatching adds, and a reporting bug must not stop it. */
+  const notifySettled = useCallback((info: PoolSettled<TResult>) => {
+    try { onSettledRef.current?.(info); } catch { /* reporting must not break the pool */ }
   }, []);
 
   const tryFinish = useCallback(() => {
@@ -184,15 +215,17 @@ export function useParallelSearchPool<TItem, TResult>(
       workerTimersRef.current[workerId] = null;
       const stuckIdx = workerIdxRef.current[workerId];
       if (stuckIdx < 0) return;
-      resultsRef.current.set(stuckIdx, emptyResult());
+      const synthesized = emptyResult();
+      resultsRef.current.set(stuckIdx, synthesized);
       setCompleted(resultsRef.current.size);
       workerBusyRef.current[workerId] = false;
       workerIdxRef.current[workerId] = -1;
+      notifySettled({ workerId, itemIndex: stuckIdx, result: synthesized, timedOut: true });
       if (!tryFinish()) {
         dispatchToWorker(workerId);
       }
     }, workerTimeoutMs);
-  }, [getUrl, emptyResult, workerTimeoutMs, setWorkerUri, clearTimer, tryFinish]);
+  }, [getUrl, emptyResult, workerTimeoutMs, setWorkerUri, clearTimer, tryFinish, notifySettled]);
 
   const reportResult = useCallback((workerId: number, result: TResult) => {
     const idx = workerIdxRef.current[workerId];
@@ -205,10 +238,11 @@ export function useParallelSearchPool<TItem, TResult>(
     setCompleted(resultsRef.current.size);
     workerBusyRef.current[workerId] = false;
     workerIdxRef.current[workerId] = -1;
+    notifySettled({ workerId, itemIndex: idx, result, timedOut: false });
     if (!tryFinish()) {
       dispatchToWorker(workerId);
     }
-  }, [clearTimer, dispatchToWorker, tryFinish]);
+  }, [clearTimer, dispatchToWorker, tryFinish, notifySettled]);
 
   const reset = useCallback(() => {
     queueRef.current = [];

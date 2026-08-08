@@ -33,7 +33,7 @@ import {
 import { ingredientAmount } from '../lib/formatMeasurement';
 import { isChooseRun as isChooseRunItems } from '../lib/chooseRun';
 import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
-import { useParallelSearchPool } from '../lib/useParallelSearchPool';
+import { useParallelSearchPool, PoolSettled } from '../lib/useParallelSearchPool';
 import { usePresearchAddPool, PresearchItem } from '../lib/usePresearchAddPool';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
 import { buildSearchAndAddWorker, buildPresearchWorker } from '../lib/webview-scripts/worker-search';
@@ -41,7 +41,7 @@ import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS, FEATURE_PRESEARCH_ADD, ADD_
 import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
-import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
+import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode, recordPoolAddOutcome } from '../lib/automation-telemetry';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitTopUpsForReview, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
@@ -861,6 +861,44 @@ export default function WebViewCartSheet({
     [tel, takeExtractWhy],
   );
 
+  /**
+   * MEAL-122. The add funnel for the two worker POOLS.
+   *
+   * The pools call this once per item as its result becomes final — a worker's
+   * WORKER_RESULT, or the result the pool synthesizes when its timeout fires —
+   * so the add/confirm half of the funnel is no longer empty on the stores those
+   * pools serve. See recordPoolAddOutcome for the row set, why both halves are
+   * emitted at settle, and why a worker's `blocked` becomes a row here even
+   * though it is not escalated to the UI from the message handler.
+   *
+   * Bound to the pools through their generic onSettled seam rather than to the
+   * message handlers, because a worker that never answers at all sends no
+   * message — and that item is precisely the one the funnel most needs to show.
+   */
+  const recordPoolAdd = useCallback(
+    (path: 'parallel_add' | 'presearch', info: PoolSettled<AddResult>) => {
+      recordPoolAddOutcome(tel(), {
+        path,
+        workerId: info.workerId,
+        itemIndex: info.itemIndex,
+        success: !!info.result.success,
+        reason: info.result.reason,
+        timedOut: info.timedOut,
+        // MEAL-14's cart verdict, flattened — sanitizeDetail keeps scalars only.
+        detail: confirmDetail(info.result.confirm),
+      });
+    },
+    [tel],
+  );
+  const onAddPoolSettled = useCallback(
+    (info: PoolSettled<AddResult>) => recordPoolAdd('parallel_add', info),
+    [recordPoolAdd],
+  );
+  const onPresearchPoolSettled = useCallback(
+    (info: PoolSettled<AddResult>) => recordPoolAdd('presearch', info),
+    [recordPoolAdd],
+  );
+
   // Last script popped from the queue and injected. Re-injected if onLoadEnd
   // fires AGAIN for the same URL during the `searching` step before a result
   // arrives — this handles SSO/MSAL bootstrap reloads (e.g. Wegmans's first
@@ -931,6 +969,7 @@ export default function WebViewCartSheet({
       return s.getSearchUrl(item.searchTerm) + '#mealio=' + payload;
     },
     emptyResult: () => ({ success: false, productName: null, reason: 'timeout', candidates: [] }),
+    onSettled: onAddPoolSettled,
   });
 
   // ── Pre-search parking pool (FEATURE_PRESEARCH_ADD) ─────────────────────────
@@ -993,6 +1032,7 @@ export default function WebViewCartSheet({
     emptyResult: () => ({ success: false, productName: null, reason: 'timeout', candidates: [] }),
     onInjectAdd: presearchOnInjectAdd,
     onColdDispatch: presearchOnColdDispatch,
+    onSettled: onPresearchPoolSettled,
   });
 
   // The cold slot is done (queue drained) → release the main WebView back to the
@@ -1297,6 +1337,11 @@ export default function WebViewCartSheet({
         // the reconcile's serial retry re-detects the nudge and surfaces it (the
         // serial SEARCH_AND_ADD_RESULT handler calls surfaceBlocker). Handling it
         // here would forward-reference surfaceBlocker (defined later) → TDZ.
+        //
+        // That is about the USER-FACING escalation only. MEAL-122: the funnel row
+        // for a blocked worker is emitted from the pool's onSettled seam (see
+        // recordPoolAdd), which surfaces nothing and has no TDZ problem — so a
+        // wall is now visible in telemetry without changing what the user sees.
         if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
         addPool.reportResult(workerId, {
           success: !!msg.success, productName: msg.productName ?? null,
@@ -1578,10 +1623,13 @@ export default function WebViewCartSheet({
     const { requested, weightRequested } = requestedRef.current;
     const kind = runKindRef.current;
     // Where the numerator came from, decided by how the run finalized rather than
-    // by which store it was: `confirm` step rows are absent on four of six stores
-    // (MEAL-122), so a store-keyed guess would be wrong for exactly the stores
-    // that matter most. `requested === 0` is the choose-run / nothing-requested
-    // case, which has no cart outcome to source.
+    // by which store it was. It was a store-keyed guess that this avoided when
+    // `confirm` rows were absent on four of six stores; MEAL-122 has since made
+    // the pools emit them, so the rows are there now — but the reason to key off
+    // finalization stands on its own: a run's numerator comes from whichever rail
+    // actually decided it, and the same store can finalize either way.
+    // `requested === 0` is the choose-run / nothing-requested case, which has no
+    // cart outcome to source.
     const confirmedSource: ConfirmedSource =
       kind === 'choose' || requested === 0
         ? 'none'
@@ -1627,10 +1675,15 @@ export default function WebViewCartSheet({
     };
     if (outcome === 'failed') {
       // The run has no failure of its own — it failed because its steps did, so
-      // it reports whichever code dominated them. A run that added nothing while
-      // recording no coded failure at all is the parallel add path, whose workers
-      // report through the pool and emit no step rows: confirm_failed is the only
-      // thing still true there (adds were dispatched, nothing evidenced landing).
+      // it reports whichever code dominated them.
+      //
+      // The fallback used to carry the parallel add path, which emitted no step
+      // rows at all: confirm_failed was the only thing still true there. MEAL-122
+      // gave those pools per-item rows, so that path now has real codes and the
+      // fallback should be reached only by a run that failed without recording a
+      // single coded step — a login_check that never resolved, or a run abandoned
+      // before any item settled. `codeSource: 'fallback'` in the detail is how the
+      // read side can tell how often that is still happening.
       const dominant = tel().dominantFailureCode();
       tel().record('run_summary', 'error', {
         detail: { ...summaryDetail, codeSource: dominant ? 'dominant' : 'fallback' },

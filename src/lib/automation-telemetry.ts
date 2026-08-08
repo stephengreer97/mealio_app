@@ -429,3 +429,101 @@ export class AutomationTelemetry {
 export function createNoopTelemetry(): AutomationTelemetry {
   return new AutomationTelemetry({ runId: '', upload: async () => true, enabled: false });
 }
+
+/** One item's final outcome as a worker pool settled it. */
+export interface PoolAddOutcome {
+  /** Which pool produced it, for splitting the funnel by add path. */
+  path: 'parallel_add' | 'presearch';
+  /** Pool slot that ran the item. Not stable across items — a slot is reused. */
+  workerId: number;
+  /** The item's index in the run's active-items array. */
+  itemIndex: number;
+  success: boolean;
+  /** The store script's failure reason, or null. Ignored when `success`. */
+  reason?: string | null;
+  /** True when no worker reported and the pool synthesized the result. */
+  timedOut: boolean;
+  /** Extra scalars for the confirm row (the caller's flattened cart verdict).
+   *  Nested values are dropped downstream by sanitizeDetail. */
+  detail?: Record<string, unknown>;
+}
+
+/**
+ * Emit the per-item add funnel rows for ONE item a worker pool has settled.
+ *
+ * MEAL-122. The parallel-add and pre-search pools report every item's outcome
+ * through their pool, not through the sequential engine, so before this the
+ * add/confirm half of the funnel was empty on the four stores those pools serve
+ * (HEB, Walmart, Amazon Fresh, Albertsons) — a run emitted login_check, one
+ * reconcile and run_summary, and five items failing five different ways
+ * collapsed into a single reconcile code. Per-store funnels read clean for those
+ * stores because they emitted no failure rows, not because they had no failures.
+ *
+ * Rows emitted, in this order:
+ *   add_click  ok       always — this is the confirm-rate DENOMINATOR
+ *   blocked    blocked  only when the reason is 'blocked' (see below)
+ *   confirm    ok | timeout | error
+ *
+ * Both halves are emitted at SETTLE rather than add_click at dispatch, which is
+ * how the sequential path does it. That is safe here for a reason specific to
+ * the pools: every dispatched item settles exactly once — a real worker result,
+ * or a result the pool synthesizes when its timeout fires — so no attempt can
+ * vanish from the denominator by never being heard from. (The one item that
+ * settles zero times is one abandoned by reset(), i.e. a cancelled run, and an
+ * abandoned attempt is correctly absent from both sides of the rate.) The fused
+ * sequential handler already emits the pair together for the same reason: the
+ * click happens inside the injected script, so there is no click moment to hook.
+ *
+ * The `blocked` row: a worker that hits an app-nudge or robot wall reports
+ * reason 'blocked' and is recorded as a failed add. The engine deliberately does
+ * NOT escalate that to the UI from the worker message handler — the reconcile's
+ * serial retry re-detects the wall and calls surfaceBlocker, and calling it from
+ * the handler would forward-reference it. That restraint is about the USER-FACING
+ * escalation only; it never had a telemetry reason. Recording the row here
+ * surfaces nothing, touches no UI, and is what makes a wall visible at all on
+ * these four stores. Note it lands `waf_block` on the run's code tally TWICE for
+ * one item — once from this row and once from the confirm row that follows it,
+ * whose reason is also 'blocked'. Both rows genuinely failed for that reason, so
+ * they are both counted rather than one being suppressed; a reader wanting items
+ * rather than rows counts distinct itemIndex on the blocked rows.
+ *
+ * Never throws. The pools call this from a worker message handler and from a
+ * timer, and telemetry must never disturb an add — record() already swallows its
+ * own errors, and the outer catch covers building the arguments too.
+ */
+export function recordPoolAddOutcome(tel: AutomationTelemetry, out: PoolAddOutcome): void {
+  try {
+    const base = { path: out.path, workerId: out.workerId };
+    // Emitted for a timed-out item as well: we dispatched the add, so it counts
+    // as an attempt whether or not we ever heard that a button was pressed.
+    tel.record('add_click', 'ok', { itemIndex: out.itemIndex, detail: { ...base } });
+    if (out.success) {
+      tel.record('confirm', 'ok', {
+        itemIndex: out.itemIndex,
+        detail: { attempt: 1, ...base, ...out.detail },
+      });
+      return;
+    }
+    const reason = String(out.reason ?? (out.timedOut ? 'timeout' : 'unknown'));
+    if (reason === 'blocked') {
+      tel.record('blocked', 'blocked', {
+        itemIndex: out.itemIndex,
+        detail: { reason, ...base },
+        code: blockFailureCode(reason),
+      });
+    }
+    if (out.timedOut) {
+      tel.record('confirm', 'timeout', {
+        itemIndex: out.itemIndex,
+        detail: { attempt: 1, reason, ...base, ...out.detail },
+        code: 'timeout',
+      });
+      return;
+    }
+    tel.record('confirm', 'error', {
+      itemIndex: out.itemIndex,
+      detail: { attempt: 1, reason, ...base, ...out.detail },
+      code: addFailureCode(reason),
+    });
+  } catch { /* telemetry must never throw into the engine */ }
+}

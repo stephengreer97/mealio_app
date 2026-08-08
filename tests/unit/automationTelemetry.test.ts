@@ -6,6 +6,7 @@ import {
   addFailureCode,
   blockFailureCode,
   createNoopTelemetry,
+  recordPoolAddOutcome,
   sanitizeDetail,
   StepRecord,
   STEP_FAILURE_CODES,
@@ -486,6 +487,172 @@ describe('AutomationTelemetry dispose', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+// MEAL-122. Every assertion here reads the batch the UPLOAD function actually
+// received, never a spy on record(). The distinction is not academic on this
+// library: `sanitizeDetail` silently drops anything that is not a scalar, so a
+// detail payload can be "passed" by a call site and still never reach the
+// server. Only the uploaded rows prove what a dashboard would be able to group on.
+describe('recordPoolAddOutcome', () => {
+  const base = { path: 'parallel_add' as const, workerId: 2, itemIndex: 4 };
+
+  /** Record one outcome on a real recorder and return the rows the server saw. */
+  async function upload(out: Parameters<typeof recordPoolAddOutcome>[1]): Promise<StepRecord[]> {
+    const up = okUpload();
+    const t = make({ upload: up.fn });
+    recordPoolAddOutcome(t, out);
+    await t.flush();
+    return up.all;
+  }
+
+  it('emits add_click + confirm for a successful add, and carries the cart verdict', async () => {
+    const rows = await upload({
+      ...base, success: true, timedOut: false,
+      detail: { confirmVia: 'cart_sku', confirmState: 'present' },
+    });
+    expect(rows.map((r) => [r.step, r.outcome])).toEqual([
+      ['add_click', 'ok'],
+      ['confirm', 'ok'],
+    ]);
+    // itemIndex is what ties a row back to its item — without it, five items
+    // failing five ways are indistinguishable in the funnel.
+    expect(rows.every((r) => r.itemIndex === 4)).toBe(true);
+    expect(rows.every((r) => r.code === undefined)).toBe(true);
+    expect(rows[0].detail).toEqual({ path: 'parallel_add', workerId: 2 });
+    // The MEAL-14 verdict, read off the uploaded row rather than the argument.
+    expect(rows[1].detail).toEqual({
+      attempt: 1, path: 'parallel_add', workerId: 2,
+      confirmVia: 'cart_sku', confirmState: 'present',
+    });
+  });
+
+  it('codes a reported failure through ADD_REASON_CODES and keeps the raw reason', async () => {
+    const rows = await upload({ ...base, success: false, reason: 'no_button', timedOut: false });
+    expect(rows.map((r) => r.step)).toEqual(['add_click', 'confirm']);
+    expect(rows[0].code).toBeUndefined();      // the attempt itself did not fail
+    expect(rows[1].outcome).toBe('error');
+    expect(rows[1].code).toBe('selector_miss');
+    expect(rows[1].detail).toMatchObject({ reason: 'no_button' });
+  });
+
+  it('still emits the add_click denominator row for an item that never reported', async () => {
+    // The whole point of settling at the pool: an item nobody heard back about is
+    // the one most worth counting, and it would otherwise vanish from both sides
+    // of the confirm rate.
+    const rows = await upload({ ...base, success: false, reason: 'timeout', timedOut: true });
+    expect(rows.map((r) => [r.step, r.outcome])).toEqual([
+      ['add_click', 'ok'],
+      ['confirm', 'timeout'],
+    ]);
+    expect(rows[1].code).toBe('timeout');
+  });
+
+  it('reads a timeout as a timeout even when the pool synthesized no reason', async () => {
+    const rows = await upload({ ...base, success: false, reason: null, timedOut: true });
+    expect(rows[1].outcome).toBe('timeout');
+    expect(rows[1].code).toBe('timeout');
+    expect(rows[1].detail).toMatchObject({ reason: 'timeout' });
+  });
+
+  it('emits a blocked row for a worker that hit a wall — the row that did not exist before', async () => {
+    const rows = await upload({ ...base, success: false, reason: 'blocked', timedOut: false });
+    expect(rows.map((r) => [r.step, r.outcome, r.code])).toEqual([
+      ['add_click', 'ok', undefined],
+      ['blocked', 'blocked', 'waf_block'],
+      ['confirm', 'error', 'waf_block'],
+    ]);
+    // itemIndex on the blocked row is what lets a reader count blocked ITEMS
+    // rather than blocked rows, which is why waf_block landing twice is legible.
+    expect(rows[1].itemIndex).toBe(4);
+    expect(rows[1].detail).toEqual({ reason: 'blocked', path: 'parallel_add', workerId: 2 });
+  });
+
+  it('tags the pool that produced each row', async () => {
+    const rows = await upload({ ...base, path: 'presearch', success: true, timedOut: false });
+    expect(rows.every((r) => (r.detail as Record<string, unknown>).path === 'presearch')).toBe(true);
+  });
+
+  it('numbers an item\'s rows consecutively, so parallel workers cannot interleave one item', async () => {
+    const up = okUpload();
+    const t = make({ upload: up.fn });
+    // Two workers settling back to back, as they do under a real pool.
+    recordPoolAddOutcome(t, { path: 'parallel_add', workerId: 0, itemIndex: 0, success: false, reason: 'blocked', timedOut: false });
+    recordPoolAddOutcome(t, { path: 'parallel_add', workerId: 1, itemIndex: 1, success: true, timedOut: false });
+    await t.flush();
+    expect(up.all.map((r) => r.seq)).toEqual([0, 1, 2, 3, 4]);
+    expect(up.all.map((r) => r.itemIndex)).toEqual([0, 0, 0, 1, 1]);
+  });
+
+  it('never throws, and records nothing it cannot build', async () => {
+    const up = okUpload();
+    const t = make({ upload: up.fn });
+    // A detail whose enumeration throws — telemetry runs inside a worker message
+    // handler and a timer callback, and a throw there would disturb a cart run.
+    const hostile = Object.defineProperty({}, 'boom', {
+      enumerable: true, get() { throw new Error('detail exploded'); },
+    }) as Record<string, unknown>;
+    expect(() => recordPoolAddOutcome(t, {
+      path: 'presearch', workerId: 0, itemIndex: 0, success: true, timedOut: false, detail: hostile,
+    })).not.toThrow();
+    await t.flush();
+    // The add_click row precedes the throw and survives; the confirm row is lost.
+    // Losing telemetry is always preferable to disturbing an add.
+    expect(up.all.map((r) => r.step)).toEqual(['add_click']);
+  });
+
+  it('is a no-op on a recorder that is not reporting', async () => {
+    const up = okUpload();
+    const t = track(new AutomationTelemetry({ runId: 'r', upload: up.fn, enabled: false }));
+    recordPoolAddOutcome(t, { path: 'presearch', workerId: 0, itemIndex: 0, success: false, reason: 'blocked', timedOut: false });
+    await t.flush();
+    expect(up.all).toEqual([]);
+  });
+});
+
+// The reporter and the pools are each covered on their own; nothing above holds
+// them TOGETHER. Deleting `onSettled` from either pool in the cart sheet would
+// restore the exact defect MEAL-122 is about — an add path that emits no rows —
+// and every other test here would still pass, because each half still works.
+//
+// This is a source scan, and it is worth being clear about what that buys: it
+// proves the option is passed, not that the rows come out right for a real run.
+// Driving a parallel add end-to-end through the rendered sheet means getting
+// through login_check, the qty screen and a mocked WebView's onMessage, which is
+// a harness this suite does not have. The scan is the cheap guard against the
+// wiring silently going away; it is not a substitute for that harness.
+describe('WebViewCartSheet wires both pools to the funnel', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '../../src/components/WebViewCartSheet.tsx'), 'utf8',
+  );
+
+  /** The option-object body of a hook call, from `<hook>({` to its closing `});`. */
+  function optionsBlock(hook: string): string {
+    const at = src.indexOf(hook);
+    expect(at).toBeGreaterThan(-1);          // the call itself must still exist
+    const open = src.indexOf('({', at);
+    expect(open).toBeGreaterThan(-1);
+    const close = src.indexOf('\n  });', open);
+    expect(close).toBeGreaterThan(open);
+    return src.slice(open, close);
+  }
+
+  it('passes onSettled to the parallel ADD pool', () => {
+    // The SEARCH pool (parallelPool) deliberately does not — it adds nothing, and
+    // its `candidates` rows are recorded from the message handler instead. So the
+    // assertion is on the add pool's block specifically, found by its result type.
+    expect(optionsBlock('useParallelSearchPool<ConsolidatedIngredient, AddResult>'))
+      .toContain('onSettled:');
+  });
+
+  it('passes onSettled to the pre-search pool', () => {
+    expect(optionsBlock('usePresearchAddPool<ConsolidatedIngredient, AddResult>'))
+      .toContain('onSettled:');
+  });
+
+  it('routes them through recordPoolAddOutcome', () => {
+    expect(src).toContain('recordPoolAddOutcome(');
   });
 });
 
