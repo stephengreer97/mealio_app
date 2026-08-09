@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -38,20 +38,41 @@ interface IngredientForm {
   /**
    * Preparation (MEAL-102). Carried, displayed, and NOT editable here.
    *
-   * It has to live on the form even though nothing in this editor can change it,
-   * because of what `emit` does: every keystroke on any row runs the WHOLE list
-   * back through `fromFormIng`, which builds each `Ingredient` from scratch. A
-   * field the form does not hold is therefore not merely un-editable — it is
-   * deleted, on every row, by correcting a typo in an unrelated meal name. That
-   * write reaches storage through three callers (`MealDetailSheet.handleSave`,
-   * `CreatorPortalScreen`, and `creatorDrafts.edit` from the draft review
-   * queue), and the last of those is the screen where the restored prep first
-   * appears to the creator whose recipe it came from.
-   *
    * How a creator TYPES a preparation is a separate, open question — see the
    * read-only row below.
    */
   prep?: string;
+  /**
+   * The row this form was built from, carried so `fromFormIng` can put back
+   * everything the form does not own (MEAL-164).
+   *
+   * This exists because of what `emit` does: every keystroke on any row runs the
+   * WHOLE list back through `fromFormIng`. That used to build each `Ingredient`
+   * from a literal, so any field the form did not hold was not merely
+   * un-editable — it was DELETED, on every row, by correcting a typo in one
+   * ingredient's name. Three fields were being lost that way:
+   *
+   *   • `purchaseWeight` — the weight a shopper CHOSE for a sold-by-weight item
+   *     (H-E-B Deli, Fish Market, bulk), remembered so the next run auto-adds
+   *     that amount instead of re-prompting. Losing it means the next run adds a
+   *     different amount than the user picked, which is the over/under-add
+   *     failure the cart's governing principles exist to prevent — arriving
+   *     through an edit screen rather than through the cart.
+   *   • `weightStep` — the increment that weight is chosen in.
+   *   • `dropdown` — the product preference the shopper selected.
+   *
+   * The write reaches storage through three callers (`MealDetailSheet.handleSave`,
+   * `CreatorPortalScreen`, and `creatorDrafts.edit` from the draft review queue).
+   *
+   * Carrying the source row rather than adding a fourth field to the literal is
+   * the point: the defect is a form that silently owns MORE than it displays, so
+   * the fix has to invert the default. Fields are now preserved unless the form
+   * explicitly owns them, and the list of what it owns is right there in
+   * `fromFormIng`.
+   *
+   * Absent on a row the editor itself created, which has no source to preserve.
+   */
+  source?: Ingredient;
 }
 
 function toFormIng(ing: Ingredient): IngredientForm {
@@ -76,10 +97,31 @@ function toFormIng(ing: Ingredient): IngredientForm {
     // Spread, so a row with no preparation still has no `prep` key when
     // `fromFormIng` puts it back together — see the field's note above.
     ...(ing.prep ? { prep: ing.prep } : {}),
+    source: ing,
   };
 }
 
-function fromFormIng(form: IngredientForm): Ingredient {
+/**
+ * Everything this form owns. Anything NOT listed here is preserved from the row
+ * the form was built from — see `IngredientForm.source`.
+ *
+ * Typed as the exact key set rather than `Partial<Ingredient>` so that dropping
+ * one is a compile error. `Partial` would let a field silently fall out of both
+ * returns and be picked up from a stale `source` instead, which is a quieter
+ * version of the bug this file is fixing.
+ *
+ * `Required` is doing real work here and is not decoration. `searchTerm` and
+ * `measure` are OPTIONAL on `Ingredient`, so a bare `Pick` accepts a return that
+ * omits them — a cold review measured exactly that, dropping each from the type
+ * and from both returns with `tsc` still exiting 0. `searchTerm` is the one that
+ * matters: unowned, it comes from the stale `source`, so `updateField`'s
+ * "clear the chosen product when the name changes" stops persisting and a
+ * cleared product resurrects. Both are `T | null` already, so requiring them
+ * costs nothing at runtime.
+ */
+type OwnedFields = Required<Pick<Ingredient, 'ingredientName' | 'qty' | 'unit' | 'productQty' | 'measure' | 'searchTerm'>>;
+
+function ownedFields(form: IngredientForm): OwnedFields {
   if (form.unit === 'qty') {
     // Radix 10 so leading-zero input isn't parsed as octal. A qty of 0 isn't a
     // valid cart quantity, so an empty/NaN/0 measure defaults to 1.
@@ -92,7 +134,6 @@ function fromFormIng(form: IngredientForm): Ingredient {
       measure: null,
       searchTerm: form.searchTerm ?? null,
       productQty: qty,
-      ...(form.prep ? { prep: form.prep } : {}),
     };
   }
   return {
@@ -102,8 +143,37 @@ function fromFormIng(form: IngredientForm): Ingredient {
     measure: form.measure.trim() || null,
     searchTerm: form.searchTerm ?? null,
     productQty: 1,
-    ...(form.prep ? { prep: form.prep } : {}),
   };
+}
+
+/**
+ * The three fields that belong to the CHOSEN PRODUCT rather than to the recipe
+ * line, and so cannot outlive it.
+ *
+ * `saveChosenIngredient` writes all three in the same breath as `searchTerm`,
+ * when a shopper picks a product. Editing an ingredient's name already clears
+ * `searchTerm` — the row goes back to being unchosen — and a remembered weight
+ * or preference left behind would then be applied to whatever product is chosen
+ * NEXT. Preserving them there would swap one over/under-add for another.
+ */
+const PRODUCT_BOUND_FIELDS = ['dropdown', 'purchaseWeight', 'weightStep'] as const;
+
+function fromFormIng(form: IngredientForm): Ingredient {
+  // No cast: `ownedFields` supplies every required key of `Ingredient`, so this
+  // stops compiling the moment one is dropped from it.
+  const next: Ingredient = { ...form.source, ...ownedFields(form) };
+
+  // `prep` is owned but optional, and the spread above may have carried an old
+  // one in. Absent has to stay absent (MEAL-102), so clearing it deletes the key
+  // rather than writing null.
+  if (form.prep) next.prep = form.prep;
+  else delete next.prep;
+
+  if (!next.searchTerm) {
+    for (const field of PRODUCT_BOUND_FIELDS) delete next[field];
+  }
+
+  return next;
 }
 
 interface IngredientEditorProps {
@@ -131,10 +201,58 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
   const insets = useSafeAreaInsets();
   const [forms, setForms] = useState<IngredientForm[]>(() => ingredients.map(toFormIng));
   const [unitPickerIndex, setUnitPickerIndex] = useState<number | null>(null);
+  /**
+   * The exact array this editor last handed to `onChange`.
+   *
+   * Seeded with the incoming list rather than `null` so the effect below is a
+   * no-op on mount — `forms` was just built from this same array, and starting
+   * at `null` made every mount rebuild all of them from a state already equal to
+   * the seed.
+   */
+  const lastEmittedRef = useRef<Ingredient[]>(ingredients);
+
+  /**
+   * Re-read the list when something OTHER than this editor changes it.
+   *
+   * `forms` is seeded once, and it is not the only writer of the array it edits.
+   * `MealDetailSheet` renders this editor and its "Products" section against the
+   * same `ingredients` state at the same time, and that section clears
+   * `searchTerm` and steps `purchaseWeight`. Without this, the next keystroke
+   * anywhere in the editor rebuilt every row from the seed and silently reverted
+   * those edits.
+   *
+   * That was already true for `searchTerm`, which the form held a stale copy of.
+   * Carrying `source` would have widened it to `purchaseWeight` — and reverting
+   * a CLEARED product to a remembered weight is worse than the bug this ticket
+   * fixes, because `WebViewCartSheet` auto-adds a row that has a `searchTerm`
+   * without prompting. So the seed has to stop being a seed.
+   *
+   * Identity, not deep equality, is what separates the two cases: `emit` hands
+   * `onChange` an array and the parent stores that same array, so our own echo
+   * arrives reference-equal. Any other writer builds a new one.
+   *
+   * THAT IS A CONTRACT ON THE CONSUMER, and it is invisible from their side, so
+   * it is written down here. All four store the array unchanged today
+   * (`MealDetailSheet`, `MyMealsScreen`, `CreatorPortalScreen` pass `setState`
+   * directly; `CreatorReviewQueueScreen` wraps it in a new object but keeps the
+   * same array). A parent that stored a COPY — a `[...ings]`, or the
+   * `normalizeIngredients` pass CLAUDE.md tells people to put on ingredient
+   * data — would never match, so every keystroke would resync and a shopper
+   * could not type a multi-digit amount: the first digit renders as an empty box
+   * and vanishes under the cursor. Measured by a cold review with a copying
+   * parent. If a consumer ever needs to transform the array, this guard has to
+   * become value-equality first.
+   */
+  useEffect(() => {
+    if (lastEmittedRef.current === ingredients) return;
+    setForms(ingredients.map(toFormIng));
+  }, [ingredients]);
 
   function emit(updated: IngredientForm[]) {
     setForms(updated);
-    onChange(updated.map(fromFormIng));
+    const next = updated.map(fromFormIng);
+    lastEmittedRef.current = next;
+    onChange(next);
   }
 
   function updateField(index: number, field: keyof IngredientForm, value: string | number | null) {
