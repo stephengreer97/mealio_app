@@ -119,11 +119,27 @@ const built = () => ((globalThis as any).__built ?? []) as Array<{ key: string; 
 const injected = () => ((globalThis as any).__injected ?? []) as string[];
 const navigated = () => ((globalThis as any).__navigated ?? []) as string[];
 
+/** Every sheet rendered in a test, unmounted afterwards. A cart run arms real
+ *  timeouts (the cart probe, the add jitter); left mounted across a dozen
+ *  per-store cases they outlive the suite and jest force-exits the worker. */
+const mounted: Array<{ unmount: () => void }> = [];
+
 beforeEach(() => {
+  // Fake timers, cleared below. A cart run arms real timeouts — the cart probe,
+  // the add jitter — and twelve per-store runs leave enough of them pending that
+  // jest force-exits the worker at the end of the suite. Nothing here waits on a
+  // timer: the search is dispatched synchronously off the CART_COUNT message.
+  jest.useFakeTimers();
   (globalThis as any).__terms = [];
   (globalThis as any).__built = [];
   (globalThis as any).__injected = [];
   (globalThis as any).__navigated = [];
+});
+
+afterEach(() => {
+  while (mounted.length) mounted.pop()!.unmount();
+  jest.clearAllTimers();
+  jest.useRealTimers();
 });
 
 /** Two meals, four prepped rows: chosen and unchosen, single and shared. */
@@ -149,6 +165,24 @@ const PREPPED_MEALS = [
   },
 ];
 
+/**
+ * The stores whose search really is a NAVIGATION, and the ones that type into
+ * the page instead.
+ *
+ * The split is not cosmetic and cost this file a surviving mutant. Asserting
+ * "no URL carries a preparation" against ALDI passes for a store that never
+ * builds a search URL at all — it injects `buildSearchScript` and types. A
+ * mutant that folded the prep into the ingredient name sailed through that
+ * assertion while the term it searched for was "Onion, finely diced".
+ *
+ * So the navigating stores are asserted on their URLs (the server half's
+ * standard: what actually went upstream), the typing stores on the script text,
+ * and both on a guard that the search happened at all.
+ */
+const URL_STORES = ['heb', 'walmart', 'albertsons', 'amazon'];
+const SCRIPT_STORES = ['aldi', 'wegmans'];
+const ALL_STORES = [...URL_STORES, ...SCRIPT_STORES];
+
 /** Render the sheet, start the run, and return a way to post bridge messages. */
 function startRun(storeId = 'aldi') {
   const view = render(
@@ -156,10 +190,11 @@ function startRun(storeId = 'aldi') {
       visible
       meals={PREPPED_MEALS as any}
       storeId={storeId}
-      storeName="ALDI"
+      storeName={storeId}
       onClose={() => {}}
     />,
   );
+  mounted.push(view);
   const post = (payload: Record<string, unknown>) => {
     const webview = view.getAllByTestId('mock-webview')[0];
     act(() => {
@@ -176,41 +211,42 @@ function startRun(storeId = 'aldi') {
    */
   const beginSearching = () => {
     post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://www.aldi.us/cart' });
+    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://example.test/cart' });
   };
 
   return { ...view, post, beginSearching };
 }
 
 describe('the cart never asks a store for a preparation', () => {
-  it('records terms at all — the recorder is wired to the real registry', () => {
-    // Guards every assertion below from passing vacuously: if the sheet never
-    // reached the registry, "no prep in any term" would be trivially true.
-    const { beginSearching } = startRun();
-    beginSearching();
-    expect(terms().length).toBeGreaterThan(0);
-  });
-
-  it('hands the builders only bare product terms', () => {
-    const { beginSearching } = startRun();
+  it.each(ALL_STORES)('hands %s\'s builders only bare product terms', (storeId) => {
+    const { beginSearching } = startRun(storeId);
     beginSearching();
 
     const asked = terms().map((t) => String(t.term));
+    // Not vacuous: the run really reached the registry, and asked for the
+    // products by name. Without this a cart that searched for nothing would
+    // satisfy every assertion below.
     expect(asked.length).toBeGreaterThan(0);
+    expect(asked).toContain('Onion');
+
     for (const term of asked) {
       for (const phrase of PREP_PHRASES) {
         expect(term.toLowerCase()).not.toContain(phrase);
       }
     }
-    // And they are the terms we expect, so "bare" is not "empty".
-    expect(asked.some((t) => t === 'Onion' || t === 'Land O Lakes Butter')).toBe(true);
   });
 
-  it('navigates to no URL carrying a preparation', () => {
-    const { beginSearching } = startRun();
+  it.each(URL_STORES)('navigates %s to a search URL with no preparation in it', (storeId) => {
+    const { beginSearching } = startRun(storeId);
     beginSearching();
 
     const urls = [...navigated(), ...built().filter((b) => b.key === 'getSearchUrl').map((b) => b.out)];
+    // The store was really searched, by a URL, for the bare product. This is the
+    // guard the surviving mutant needed: without it "no URL carries a prep" is
+    // true of a run that navigated nowhere.
+    const searches = urls.filter((u) => /Onion/i.test(u));
+    expect(searches.length).toBeGreaterThan(0);
+
     for (const url of urls) {
       for (const phrase of [...PREP_PHRASES, 'prep']) {
         expect(url.toLowerCase()).not.toContain(phrase);
@@ -219,12 +255,14 @@ describe('the cart never asks a store for a preparation', () => {
     }
   });
 
-  it('injects no script carrying a preparation', () => {
-    const { beginSearching } = startRun();
+  it.each(SCRIPT_STORES)('injects %s no script carrying a preparation', (storeId) => {
+    const { beginSearching } = startRun(storeId);
     beginSearching();
 
     const scripts = [...injected(), ...built().map((b) => b.out)];
-    expect(scripts.length).toBeGreaterThan(0);
+    // These stores type the term into the page, so the term is INSIDE the
+    // script — which is what makes the negative assertion meaningful here.
+    expect(scripts.some((s) => s.includes('Onion'))).toBe(true);
     for (const script of scripts) {
       for (const phrase of PREP_PHRASES) {
         expect(script.toLowerCase()).not.toContain(phrase);
