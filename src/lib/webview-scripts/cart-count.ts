@@ -29,8 +29,9 @@
 // INSTACART_TENANTS shares them — rather than to ALDI, which is merely the
 // tenant they were first read off.
 
-import { ALBERTSONS_FAMILY_IDS, getAlbertsonsCartPageUrl, ALBERTSONS_CART_PATH } from './albertsons';
+import { ALBERTSONS_FAMILY_IDS, getAlbertsonsCartPageUrl } from './albertsons';
 import { AUTH_REDIRECT_URL_PATTERN } from './auth-urls';
+import { cartUrlFor } from '../automation-config';
 import { isInstacartStore } from './instacart';
 import { MOCK_STORE_URL } from './mockstore';
 
@@ -95,8 +96,36 @@ const CART_PAGE_URL: Record<string, string> = {
  */
 export const CART_PAGE_URL_STORE_IDS: readonly string[] = Object.keys(CART_PAGE_URL);
 
-/** The cart-page URL for stores that count via the cart page, else null. */
+/**
+ * The cart-page URL for stores that count via the cart page, else null.
+ *
+ * The bundled table is the FALLBACK, not the answer (MEAL-156). A remote
+ * `cartUrl` override wins, because a cart URL is the one piece of this subsystem
+ * that a store can invalidate unilaterally and without notice: MEAL-152 was
+ * Walmart's /cart starting to 302, MEAL-136 was United's cart host dropping the
+ * path. Both were code fixes that a config push could have covered in minutes,
+ * and both are exactly the shape of thing that happens again.
+ *
+ * The override REPOINTS, it does not PROMOTE. A store with no bundled cart URL
+ * returns null no matter what config says, because null here is not "no URL
+ * known" — it is the branch selector for a different counting strategy. Callers
+ * read `!getCartPageUrl(id)` to mean "reach the cart by clicking" (Amazon Fresh
+ * traverses /gp/aw/c → /cart/localmarket) or "the cart is a side panel, don't
+ * navigate at all" (Instacart). Honouring a cartUrl there would put a store on a
+ * navigation path its script was never written for AND leave it unguarded, since
+ * those stores have no single pathname to assert — reintroducing the trusted
+ * zero MEAL-152 removed, from a config push, on a store nobody was looking at.
+ * Adding a store to cart-page counting stays a code change with a guard and a
+ * fixture.
+ */
 export function getCartPageUrl(storeId: string): string | null {
+  const bundled = bundledCartPageUrl(storeId);
+  if (!bundled) return null;
+  return cartUrlFor(storeId, bundled);
+}
+
+/** What this build ships for a store, before any remote override. */
+function bundledCartPageUrl(storeId: string): string | null {
   if (CART_PAGE_URL[storeId]) return CART_PAGE_URL[storeId];
   if (ALBERTSONS_FAMILY_IDS.includes(storeId)) return getAlbertsonsCartPageUrl(storeId);
   return null;
@@ -235,15 +264,57 @@ export function isCountedCartSnapshot(
  * `mockstore` is absent on purpose: it is the dev/test harness, served from a
  * local server that does not redirect, and its script is not guarded.
  */
-const CART_PAGE_PATH: Record<string, string> = {
-  heb: '/cart',
-  walmart: '/cart',
-  wegmans: '/cart',
-};
+/**
+ * Store ids whose cart-page script carries the identity guard.
+ *
+ * A SET OF IDS, NOT A TABLE OF PATHS (MEAL-156). The expected path used to be
+ * written out beside each id, which made it a second source of truth for the
+ * same fact: repointing `cartUrl` from remote config then moved the URL and left
+ * the guard demanding the old path, so every load answered `not_cart_page` and
+ * the store went permanently uncountable. Safe — null is "unknown" — but it
+ * would have made the config lever useless on the exact incident it exists for.
+ * The path is now DERIVED from whichever URL is actually in force, so the two
+ * cannot drift by construction.
+ *
+ * The Albertsons banners are guarded too, by their own script; they are absent
+ * here because membership is tested via ALBERTSONS_FAMILY_IDS rather than
+ * enumerated. `mockstore` and `amazon` are the documented exemptions.
+ */
+const GUARDED_CART_STORE_IDS = new Set(['heb', 'walmart', 'wegmans']);
 
-/** The pathname a store's cart page must be on to be counted, else null. */
+/**
+ * The pathname of an absolute cart URL, trailing slash stripped, else null.
+ *
+ * Hand-parsed rather than `new URL(...)`: this value is spliced into injected
+ * JavaScript, and Hermes' URL is a partial polyfill whose behaviour has moved
+ * between React Native versions. A regex over a string merge.ts has already
+ * constrained to `^https://` is deterministic on every engine. The tests keep
+ * `new URL().pathname` as their oracle precisely so the check is an independent
+ * implementation rather than a restatement of this one.
+ *
+ * Trailing slashes are stripped because the guard strips them from
+ * `location.pathname` before comparing; an expected `/cart/` would otherwise
+ * never match a real `/cart`.
+ */
+function cartPathnameOf(url: string): string | null {
+  const m = /^https?:\/\/[^/?#]+([^?#]*)/i.exec(url);
+  if (!m) return null;
+  let path = m[1] || '/';
+  while (path.length > 1 && path.charAt(path.length - 1) === '/') path = path.slice(0, -1);
+  return path;
+}
+
+/**
+ * The pathname a store's cart page must be on to be counted, else null.
+ *
+ * Derived from the effective (possibly remote-overridden) cart URL, so a config
+ * push repoints the navigation and the guard together or not at all.
+ */
 export function getCartPagePath(storeId: string): string | null {
-  return CART_PAGE_PATH[storeId] ?? null;
+  const guarded = GUARDED_CART_STORE_IDS.has(storeId) || ALBERTSONS_FAMILY_IDS.includes(storeId);
+  if (!guarded) return null;
+  const url = getCartPageUrl(storeId);
+  return url ? cartPathnameOf(url) : null;
 }
 
 /**
@@ -520,12 +591,25 @@ export function diffCartItems(beforeRaw: CartItem[], afterRaw: CartItem[]): Cart
  * per-script notes.
  */
 export function buildCartPageCountScript(storeId: string): string | null {
-  if (storeId === 'heb') return HEB_CART_PAGE_SCRIPT;
-  if (storeId === 'walmart') return WALMART_CART_PAGE_SCRIPT;
-  if (storeId === 'wegmans') return WEGMANS_CART_PAGE_SCRIPT;
+  // Guarded stores are built PER CALL, not read from a module constant
+  // (MEAL-156). The expected path comes from the cart URL in force right now, so
+  // a remote `cartUrl` push repoints the navigation and the guard together. A
+  // module-level constant would have frozen the guard at the bundled path at
+  // import time and made every post-push load answer `not_cart_page`.
+  //
+  // If the guard path cannot be derived, the store is not counted at all rather
+  // than counted unguarded: a malformed override must not silently downgrade a
+  // store to the trusted-zero behaviour MEAL-152 removed.
+  const guarded = (build: (cartPath: string) => string): string | null => {
+    const cartPath = getCartPagePath(storeId);
+    return cartPath ? build(cartPath) : null;
+  };
+  if (storeId === 'heb') return guarded(HEB_CART_PAGE_SCRIPT);
+  if (storeId === 'walmart') return guarded(WALMART_CART_PAGE_SCRIPT);
+  if (storeId === 'wegmans') return guarded(WEGMANS_CART_PAGE_SCRIPT);
   if (storeId === 'amazon') return AMAZON_CART_PAGE_SCRIPT;
   if (storeId === 'mockstore') return MOCKSTORE_CART_PAGE_SCRIPT;
-  if (ALBERTSONS_FAMILY_IDS.includes(storeId)) return ALBERTSONS_CART_PAGE_SCRIPT;
+  if (ALBERTSONS_FAMILY_IDS.includes(storeId)) return guarded(ALBERTSONS_CART_PAGE_SCRIPT);
   return null;
 }
 
@@ -569,10 +653,10 @@ const MOCKSTORE_CART_PAGE_SCRIPT = `(async function() {
 // cause: this script's "cart is empty" and "we are not on the cart" are the
 // same zero, so any future redirect — or an expired session bounced to a sign-in
 // wall — reads as an empty cart. See the note above cartPathGuardJs.
-const WEGMANS_CART_PAGE_SCRIPT = `(async function() {
+const WEGMANS_CART_PAGE_SCRIPT = (cartPath: string) => `(async function() {
   function wait(ms){return new Promise(function(r){setTimeout(r,ms);});}
   function norm(s){return (s||'').trim().replace(/\\s+/g,' ');}
-${cartPathGuardJs(CART_PAGE_PATH.wegmans)}
+${cartPathGuardJs(cartPath)}
   var ITEM_RE = /to (\\d+) ea of (.+?) in the cart/i;
   // Poll for cart line items (each increment button names item + current qty).
   var btns = [];
@@ -608,10 +692,10 @@ ${cartPathGuardJs(CART_PAGE_PATH.wegmans)}
 // the homepage, discarding the path, and the homepage has no quantity-label —
 // so without it this script posts a trusted `count: 0`. See the note above
 // cartPathGuardJs.
-const WALMART_CART_PAGE_SCRIPT = `(async function() {
+const WALMART_CART_PAGE_SCRIPT = (cartPath: string) => `(async function() {
   function wait(ms){return new Promise(function(r){setTimeout(r,ms);});}
   function norm(s){return (s||'').trim().replace(/\\s+/g,' ');}
-${cartPathGuardJs(CART_PAGE_PATH.walmart)}
+${cartPathGuardJs(cartPath)}
   // Poll for line items (each has a quantity-label) to hydrate.
   var labels = [];
   for (var i=0;i<25;i++){
@@ -872,10 +956,10 @@ export function buildInlineCartScript(storeId: string): string | null {
 // __hebCartRead (heb.ts ~:855, ~:1379) and never touches this one.
 //
 // See the note above cartPathGuardJs.
-const HEB_CART_PAGE_SCRIPT = `(async function() {
+const HEB_CART_PAGE_SCRIPT = (cartPath: string) => `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
-${cartPathGuardJs(CART_PAGE_PATH.heb)}
+${cartPathGuardJs(cartPath)}
   function rowQty(row) {
     var inp = row.querySelector('[data-qe-id="cartQuantityCounterValue"]');
     if (!inp) return 0;
@@ -999,7 +1083,10 @@ ${cartPathGuardJs(CART_PAGE_PATH.heb)}
 //
 // The check needs no per-banner configuration — ALBERTSONS_CART_PATH is uniform
 // across all 15 banners, which is the MEAL-15 finding restated: paths generalise,
-// hosts do not.
+// hosts do not. The path is nevertheless passed in rather than read from that
+// constant (MEAL-156), so that a remote `cartUrl` override for one banner moves
+// that banner's guard with it; absent an override it derives back to exactly
+// ALBERTSONS_CART_PATH, via getAlbertsonsCartPageUrl.
 //
 // This was the only guarded script when it was written, and the sentence here
 // said the others had "no reported defect of this kind". They did. MEAL-152
@@ -1008,7 +1095,7 @@ ${cartPathGuardJs(CART_PAGE_PATH.heb)}
 // with no redirect to trigger it yet. All three now carry the guard via
 // cartPathGuardJs(); this script keeps its own copy because it predates the
 // shared helper and its path comes from the banner registry.
-const ALBERTSONS_CART_PAGE_SCRIPT = `(async function() {
+const ALBERTSONS_CART_PAGE_SCRIPT = (cartPath: string) => `(async function() {
   function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
   function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
   try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'alb_cart_start', url: location.href })); } catch (e) {}
@@ -1029,7 +1116,7 @@ const ALBERTSONS_CART_PAGE_SCRIPT = `(async function() {
   // path wins because we only consult that pattern once the path has failed.
   var __path = location.pathname;
   while (__path.length > 1 && __path.charAt(__path.length - 1) === '/') __path = __path.slice(0, -1);
-  if (__path !== ${JSON.stringify(ALBERTSONS_CART_PATH)}) {
+  if (__path !== ${JSON.stringify(cartPath)}) {
     if (new RegExp(${JSON.stringify(AUTH_REDIRECT_URL_PATTERN)}).test(location.href)) {
       try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'alb_cart_skip_auth_redirect', url: location.href })); } catch (e) {}
       return;
