@@ -496,7 +496,6 @@ produces a wrong baseline, and MEAL-152 shows what wrong cart baselines cost.
 | `flags.addCommitJitterMs` | 500 | No — `:801` used the `features.ts` constant |
 | `flags.parallelAdd` | true | No — `:1915` used the `features.ts` constant |
 | `flags.presearchAdd` | true | No — `:1597` used the `features.ts` constant |
-| `flags.backgroundCart` | true | No |
 
 Every row cites `origin/main`, like the rest of Parts 1–3 — this table describes
 the state the audit found, and `parallelAddWorkers` was already read there. An
@@ -508,7 +507,7 @@ They merge, they type-check, they are bounds-checked, `automationConfigMerge.tes
 asserts that malformed values are refused — and then nothing consumes them. A
 config push setting `flags.parallelAdd: false` did nothing at all.
 
-The first three are fixed in this change (Part 5). `flags.backgroundCart` is left
+The first three are fixed in this change (Part 5). `flags.backgroundCart` was left
 alone: it selects the mount site for the cart engine, not a request pattern, and
 belongs to whoever owns `CartJobContext`.
 
@@ -634,7 +633,7 @@ tests the pre-search path *before* the parallel-add path, so wiring
 concurrent adds" and does not: parked workers would still fire their concurrent
 commit.
 
-Deliberately **not** touched: `flags.backgroundCart` (§3.2), the `|| 500` stagger
+Deliberately **not** touched then: `flags.backgroundCart` (§3.2, since deleted — it was never read by anything), the `|| 500` stagger
 fallback (§3.3), the cold-slot count (§3.4), the cache-bust call sites (§3.1),
 and every user agent, injected script and stagger value in the engine.
 

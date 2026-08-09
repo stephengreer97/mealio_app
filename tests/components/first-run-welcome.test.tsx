@@ -128,19 +128,31 @@ describe('the pitch says what mealio_central says', () => {
     expect(PITCH_FREE_TIER).toBe('Free for up to three saved meals.');
   });
 
-  it('names every store, because on mobile every one of them works', () => {
-    // The web build has a second, shorter list (PITCH_STORES_WEB) because cart
-    // automation for everything except Kroger runs in THIS app. Here the full
-    // list is the true one — WEBVIEW_STORE_IDS plus the Kroger banners in
-    // src/constants/stores.ts — so step 2 must interpolate PITCH_STORES.
+  it('names no store in the three-step pitch', () => {
+    // Step 2 used to recite a list, and the list had to differ per surface — the
+    // web could only honestly promise Kroger. It now points at the picker, which
+    // shows exactly what the build in front of you supports, and is therefore
+    // true read from either surface.
+    expect(PITCH_STEPS[1].body).toBe(
+      "Mealio supports most major grocery retailers — you'll see the full list when you pick yours.",
+    );
+    // No brand may creep back in: a named store in a three-step introduction is
+    // a promise that has to be re-checked on every surface that renders it.
+    for (const brand of ['H-E-B', 'Walmart', 'Kroger', 'Albertsons', 'Safeway', 'ALDI', 'Amazon', 'Wegmans']) {
+      expect(PITCH_STEPS[1].body).not.toContain(brand);
+    }
+    // The giveaway for an accidental copy of the web original: it used to say
+    // "in the mobile app", which is nonsense when read inside the mobile app.
+    expect(PITCH_STEPS[1].body).not.toMatch(/mobile app/i);
+  });
+
+  it('still keeps the full store list for the surfaces that enumerate it', () => {
+    // Help's FAQ answers "which stores" directly, and there the list IS the
+    // answer. Dropping it from step 2 must not drop it from the module.
     expect(PITCH_STORES).toBe(
       'H-E-B, Walmart, Kroger and its banners, Albertsons, Safeway, ALDI, Amazon '
       + 'Fresh and Wegmans',
     );
-    expect(PITCH_STEPS[1].body).toBe(`Mealio works with ${PITCH_STORES}.`);
-    // The giveaway for an accidental copy of the web list: it says "in the
-    // mobile app", which is nonsense when read inside the mobile app.
-    expect(PITCH_STEPS[1].body).not.toMatch(/mobile app/i);
   });
 });
 
@@ -149,7 +161,7 @@ describe('WelcomeSheet', () => {
     const r = render(<WelcomeSheet visible onDismiss={jest.fn()} />);
     expect(r.getByText(PITCH_HEADLINE)).toBeTruthy();
     expect(r.getByText(PITCH_SUBHEAD)).toBeTruthy();
-    expect(r.getByText(`Mealio works with ${PITCH_STORES}.`)).toBeTruthy();
+    expect(r.getByText(PITCH_STEPS[1].body)).toBeTruthy();
     expect(r.getByText(PITCH_NOTHING_ORDERED)).toBeTruthy();
     expect(r.getByText(PITCH_FREE_TIER)).toBeTruthy();
   });

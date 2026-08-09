@@ -2,15 +2,16 @@
 //
 // ─── This file is a copy, with one deliberate difference. ────────────────────
 // The original is `lib/pitch.ts` in `mealio_central` (MEAL-86). The two repos
-// share no package, so the strings are duplicated here the same way the store
-// list is — diff the two files whenever either changes, and expect the diff to
-// be non-empty: the store list is *supposed* to differ. Cart automation for every
-// store except Kroger runs in this app, so the web build narrows its list to
-// `PITCH_STORES_WEB` and mobile must not follow. Taking the web's `PITCH_STEPS`
-// wholesale would tell someone reading it inside the app that their store only
-// works on the website. Read the `PITCH_STORES` docblock below before resolving
-// that hunk in either direction; every other string here should match the web
-// original character for character.
+// share no package, so the strings are duplicated here — diff the two files
+// whenever either changes, and expect the diff to be EMPTY for every string.
+//
+// It was not always. Step 2 used to interpolate a store list, and the list had
+// to differ per surface: cart automation for everything except Kroger runs in
+// this app, so the web build narrowed its list to `PITCH_STORES_WEB` and mobile
+// deliberately did not follow. Step 2 now names no store at all, which removed
+// the divergence and the constant with it. `PITCH_STORES` survives here because
+// the full list is still true of this app and still worth stating where someone
+// has gone looking for it.
 //
 // The point of a shared module is that both surfaces tell one story. The web
 // front door (`/discover`) and this app's first run describe the same product;
@@ -63,8 +64,13 @@ export const PITCH_STEPS: ReadonlyArray<{ title: string; body: string }> = [
     body: 'Browse recipes from cooks and creators. No account needed to look.',
   },
   {
+    // Names no store, and is now identical to the web original — see the header.
+    // Someone meeting the product wants to know a store like theirs is covered;
+    // the honest answer to "is MY store here" is the picker, which shows exactly
+    // what this build supports. `PITCH_STORES` still enumerates them for the
+    // surfaces where someone has gone looking.
     title: 'Pick the store you shop at',
-    body: `Mealio works with ${PITCH_STORES}.`,
+    body: 'Mealio supports most major grocery retailers — you\'ll see the full list when you pick yours.',
   },
   {
     title: 'Mealio fills your cart',
