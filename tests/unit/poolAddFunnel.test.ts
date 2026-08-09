@@ -118,7 +118,11 @@ describe('recordPoolAdd — attribution', () => {
     }));
     expect(rows.map((r) => [r.step, r.outcome, r.code])).toEqual([
       ['add_click', 'ok', undefined],
-      ['confirm', 'error', 'match_rejected'],
+      // MEAL-29: was 'match_rejected'. The `add_click` above stays 'ok' and stays
+      // in the confirm-rate denominator — the pool did dispatch an add — so this
+      // row is the ONLY signal that the item was unavailable rather than misjudged,
+      // and it is what the server subtracts out of the item success rate.
+      ['confirm', 'error', 'out_of_stock'],
     ]);
     expect(rows[1].detail).toEqual({
       attempt: 1, path: 'presearch', workerId: 3, reason: 'out_of_stock',

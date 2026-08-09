@@ -44,11 +44,18 @@ export type StepOutcome =
  * nothing to do with the other two. The code names the fix family, so the funnel
  * can be grouped into work rather than into a single "failures" bar.
  *
- * This list is a CONTRACT shared with the Kroger Brands web extension, which
- * emits the same vocabulary into the same table. Adding a code means agreeing on
- * it in both places first; a code that only one side emits reads as a regression
- * on the other's chart. Codes are only ever appended — the dashboard groups on
- * the raw string, so renaming one silently splits a metric's history.
+ * Codes are only ever APPENDED. The dashboard groups on the raw string and the
+ * server orders its breakdown by position, so renaming or reordering one splits
+ * a metric's history in a way nothing fails on.
+ *
+ * This list used to be described here as a contract shared with the Kroger
+ * Brands web extension, needing agreement on both sides before a code could be
+ * added. That is no longer true and had become a standing block on work (MEAL-29):
+ * the extensions are retired, the Kroger Brands integration writes no
+ * `automation_steps` rows at all, the ingest route stores the string as-is
+ * without checking it against any enum, and the server's copy of this list says
+ * in its own docblock that it is for display ordering and NOT a filter. This app
+ * is the only producer, so appending here is a one-repo change.
  *
  *   selector_miss   element not found              → selector config / healing
  *   waf_block       challenge or robot wall        → backoff, fingerprint, handoff
@@ -58,11 +65,18 @@ export type StepOutcome =
  *   confirm_failed  clicked, no evidence it landed → confirmation rail
  *   timeout         step exceeded its budget       → timeouts, perf
  *   nav_failed      navigation never completed     → URL / routing
+ *   out_of_stock    the store does not have it     → nothing. Not our failure.
+ *
+ * `out_of_stock` is the one code here that does not name a fix family, because
+ * there is no fix: the store is out of the item. It exists so that outcome stops
+ * being counted as one of ours — before this it rode `match_rejected`, which put
+ * the store's inventory on the same bar as our scoring being wrong (MEAL-29).
  *
  * `nav_failed` has no producer in this app: the WebView engine can't distinguish
  * a nav that never completed from a page that loaded and never answered, so
  * those land on `timeout` instead (see the search/add safety timeouts). It is
- * kept here because the extension, which drives real navigations, does emit it.
+ * kept because removing a code is the one edit this list does not allow, and
+ * because rows carrying it already exist from when the extension emitted it.
  */
 export const STEP_FAILURE_CODES = [
   'selector_miss',
@@ -73,6 +87,8 @@ export const STEP_FAILURE_CODES = [
   'confirm_failed',
   'timeout',
   'nav_failed',
+  // Appended, and append-only — see above. MEAL-29.
+  'out_of_stock',
 ] as const;
 
 export type StepFailureCode = (typeof STEP_FAILURE_CODES)[number];
@@ -100,10 +116,19 @@ export type StepFailureCode = (typeof STEP_FAILURE_CODES)[number];
  *                  The cost: `selector_miss` sits above it, so a run whose login
  *                  check timed out and whose one add hit a missing button headlines
  *                  as store drift. Accepted, because if the user was in fact signed
- *                  in, drift IS the story. Splitting the code would fix it properly
- *                  and can't be done unilaterally — the enum is shared with the
- *                  extension.
+ *                  in, drift IS the story. Splitting the code would fix it
+ *                  properly, and now that this enum has no second party (see
+ *                  STEP_FAILURE_CODES) nothing outside this repo stops that.
  *   no_candidates  the search returned nothing. Often a true answer about stock.
+ *   out_of_stock   the store told us it has none. Ranked above match_rejected
+ *                  because when a run fails for several reasons at once, "the
+ *                  store was out of it" is a better headline than "we didn't like
+ *                  any of the matches": it is the store's own answer about that
+ *                  item rather than our judgement of it, so there is nothing to
+ *                  go and check. Below no_candidates, which is the same answer
+ *                  arriving less certainly — an empty search result MIGHT be
+ *                  stock and might be our search term, and the ambiguous one is
+ *                  the one worth looking at first.
  *   match_rejected we saw products and none matched. A real, actionable answer.
  *   confirm_failed most often a SYMPTOM: the add was dispatched and nothing
  *                  evidenced it landing, which is what any of the above causes
@@ -119,6 +144,7 @@ const FAILURE_CODE_SEVERITY = [
   'selector_miss',
   'timeout',
   'no_candidates',
+  'out_of_stock',
   'match_rejected',
   'confirm_failed',
 ] as const satisfies readonly StepFailureCode[];
@@ -146,14 +172,16 @@ export type FailureOutcome = Exclude<StepOutcome, 'ok' | 'skipped'>;
  * them, so a new store script only has to reuse an existing reason to be
  * grouped correctly.
  *
- * Two of these are honest-but-imperfect fits, kept rather than growing the
- * enum unilaterally (the extension would not know a ninth code):
- *   • out_of_stock — the store had the item and we declined it, which is the
- *     shape of match_rejected even though the fix is substitution, not scoring.
- *   • needs_weight — a sold-by-weight item bailed to the review picker for a
- *     poundage. It's a handoff, not a failure of any family here.
- * Both keep their raw reason in the row's detail, so the dashboard can split
- * them back out without a schema change.
+ * `out_of_stock` maps to itself (MEAL-29). It used to ride `match_rejected` —
+ * listed here as an honest-but-imperfect fit, kept because growing the enum was
+ * believed to need a second party's agreement — which meant an item the store
+ * does not stock was counted on the same bar as our scorer refusing every
+ * candidate. Those are not the same problem and only one of them is ours.
+ *
+ * `needs_weight` is still an imperfect fit: a sold-by-weight item bailed to the
+ * review picker for a poundage, which is a handoff rather than a failure of any
+ * family here. It keeps its raw reason in the row's detail, so the dashboard can
+ * split it back out without a schema change.
  *
  * Two more are genuinely ambiguous at the source and take the conservative read:
  *   • click_failed — Walmart's click loop returns the same reason whether the
@@ -167,7 +195,7 @@ export type FailureOutcome = Exclude<StepOutcome, 'ok' | 'skipped'>;
 export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   no_results: 'no_candidates',
   low_confidence: 'match_rejected',
-  out_of_stock: 'match_rejected',
+  out_of_stock: 'out_of_stock',
   needs_weight: 'match_rejected',
   not_found: 'selector_miss',
   no_button: 'selector_miss',
@@ -208,10 +236,12 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   partial: 'match_rejected',
   // A store script threw and its catch reported out (ALDI's search-and-add).
   // Not a confirm failure — nothing was confirmed because nothing completed —
-  // but there is no `script_error` code and adding one is a schema change the
-  // extension would have to agree to. `confirm_failed` explicitly, so that at
-  // least it is a decision on the record rather than the fallback silently
-  // swallowing an exception class.
+  // but there is no `script_error` code. Adding one was described here as a
+  // schema change needing the extension's agreement; that was wrong and is now
+  // corrected at STEP_FAILURE_CODES, so this stays `confirm_failed` on its own
+  // merits and not because anything blocks it. Explicit rather than left to the
+  // fallback, so that it is a decision on the record rather than a silently
+  // swallowed exception class.
   error: 'confirm_failed',
 };
 
