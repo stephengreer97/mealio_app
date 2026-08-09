@@ -40,7 +40,7 @@ const UNITS = ['qty', 'cups', 'fl oz', 'g', 'kg', 'L', 'lb', 'mg', 'ml', 'oz', '
  * without this a creator could paste a method step, get a success, and watch the
  * text vanish (MEAL-165 found exactly that on the website).
  */
-const MAX_PREP_CHARS = 120;
+export const MAX_PREP_CHARS = 120;
 
 interface IngredientForm {
   ingredientName: string;

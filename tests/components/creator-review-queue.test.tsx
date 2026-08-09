@@ -78,6 +78,7 @@ const edit = mockEdit;
 const setWaiting = mockSetWaiting;
 
 import CreatorReviewQueueScreen from '../../src/screens/creator/CreatorReviewQueueScreen';
+import { MAX_PREP_CHARS } from '../../src/components/IngredientEditor';
 
 /**
  * One queued draft, in the shape the server sends: the recipe, the counts, and
@@ -569,6 +570,23 @@ describe('a creator can fix a preparation from the queue', () => {
 
     expect(patched()[0].prep).toBe('finely diced');
     expect(patched()[1].prep).toBeUndefined();
+  });
+
+  it('stops typing at the cap, because over it the SERVER deletes the text', async () => {
+    // Not a style rule. A draft saved from here goes back through
+    // `creatorDrafts.edit` -> `editableDraft` -> `canonicalPrep`, which DROPS an
+    // over-cap preparation rather than truncating it — so without the cap a
+    // creator could paste a method step, get a success, and watch it vanish.
+    // MEAL-165 found exactly that on the website, and then found the fix itself
+    // unpinned: deleting the attribute from both prep boxes left the whole suite
+    // green. This is that assertion, written the first time rather than the
+    // second.
+    list.mockResolvedValue({ drafts: [prepped()], totals: { waiting: 1, flagged: 1 } });
+
+    const view = await mount();
+    fireEvent.press(view.getByText('Edit first'));
+
+    expect(view.getByTestId('ingredient-prep-0').props.maxLength).toBe(MAX_PREP_CHARS);
   });
 
   it('sends no prep key when the creator clears it', async () => {
