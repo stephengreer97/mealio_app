@@ -1,6 +1,3 @@
-import fs from 'fs';
-import * as ts from 'typescript';
-import path from 'path';
 import { mergeAutomationConfig } from '../../src/lib/automation-config/merge';
 import { BUNDLED_AUTOMATION_CONFIG } from '../../src/lib/automation-config/schema';
 
@@ -18,189 +15,25 @@ import { BUNDLED_AUTOMATION_CONFIG } from '../../src/lib/automation-config/schem
 // inert. It is worse than a missing knob, because someone reaches for it in the
 // middle of a live block and believes it worked.
 //
-// Two halves, and both are needed. The merge half is ordinary config coverage.
-// The wiring half asserts against the SOURCE of WebViewCartSheet, which is
-// unusual and deserves its reason stated: there is no harness that can drive a
-// cart run (MEAL-158), so the only thing available that can tell "reads the
-// config" from "reads the build constant" is the text. `automationTelemetry.test.ts`
-// establishes the same pattern for the same reason.
-
-const src = fs.readFileSync(
-  path.join(__dirname, '../../src/components/WebViewCartSheet.tsx'), 'utf8',
-);
-
-/**
- * `src` with every comment blanked out, using TypeScript's own parser.
- *
- * These assertions distinguish a flag the engine READS from one it merely
- * mentions, and this file mentions all of them in prose — the note beside each
- * gate names `flags.presearchAdd` in the very comment explaining it. So the
- * comments have to go before anything is matched.
- *
- * This was hand-rolled for three rounds and lost every one of them. Dropping
- * comment-ONLY lines missed a trailing `//`. Adding a quote-aware `//` stripper
- * missed `/* … *\/`. Adding block comments missed the multi-line kind, whose
- * middle lines carry no marker at all — and missed regex literals, which it
- * truncated. Each fix was correct and each left the next hole, because the thing
- * being written was a JavaScript lexer one case at a time.
- *
- * `ts.createSourceFile` is the parser, already a dependency, and it knows what a
- * comment is — including JSX comments, template literals, regex literals and
- * escapes. Comments are replaced with equivalent-length whitespace rather than
- * deleted, so every offset in `code` still lines up with `src` and the windows
- * the assertions slice stay honest.
- */
-function stripComments(source: string): string {
-  // Two steps, and the split is what makes this correct rather than another
-  // heuristic. The PARSER says where the literals are — strings, templates,
-  // regexes, JSX text. Outside those spans, `//` and `/* */` are unambiguously
-  // comments, with no context left to get wrong.
-  //
-  // The ambiguity that beat every hand-rolled version was `/`: division or the
-  // start of a regex, decided by what precedes it, so `!/\/api\//.test(u)` read
-  // as a comment to anything without expression context. Asking for a parse
-  // removes the class instead of adding a fourth special case to it.
-  const sf = ts.createSourceFile('x.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const literal: Array<[number, number]> = [];
-  const collect = (node: ts.Node) => {
-    if (
-      ts.isStringLiteralLike(node) || ts.isRegularExpressionLiteral(node) ||
-      ts.isTemplateHead(node) || ts.isTemplateMiddle(node) ||
-      ts.isTemplateTail(node) || ts.isJsxText(node)
-    ) literal.push([node.getStart(sf), node.getEnd()]);
-    node.forEachChild(collect);
-  };
-  collect(sf);
-  const inLiteral = (i: number) => literal.some(([lo, hi]) => i >= lo && i < hi);
-
-  // Blanked to whitespace rather than deleted, so every offset in the result
-  // still matches `src` and the windows the assertions slice stay honest.
-  const out = source.split('');
-  for (let i = 0; i < source.length; i++) {
-    if (inLiteral(i)) continue;
-    let end = -1;
-    if (source[i] === '/' && source[i + 1] === '/') {
-      end = source.indexOf('\n', i);
-      if (end === -1) end = source.length;
-    } else if (source[i] === '/' && source[i + 1] === '*') {
-      end = source.indexOf('*/', i + 2);
-      end = end === -1 ? source.length : end + 2;
-    }
-    if (end === -1) continue;
-    for (let j = i; j < end; j++) if (out[j] !== '\n') out[j] = ' ';
-    i = end - 1;
-  }
-  return out.join('');
-}
-
-const code = stripComments(src);
-
-/** The same file, parsed. `readsFlag` walks this instead of matching text. */
-const sourceFile = ts.createSourceFile(
-  'WebViewCartSheet.tsx', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX,
-);
-
-/** Does the engine actually read `flags.<key>` off the config snapshot? */
-function readsFlag(key: string): boolean {
-  // An AST walk, not a text match, and that difference is the whole point.
-  //
-  // This guard has now had four rounds of review find four ways to fool a text
-  // oracle: a trailing `//`, a `/* */`, a multi-line block whose interior lines
-  // carry no marker, and a comment inside a template substitution. Each fix was
-  // right and each left another member of the family — and the family does not
-  // end at comments. A plain string works too:
-  //
-  //   const _doc = 'if (!FEATURE_PRESEARCH_ADD || !cfgFlags.presearchAdd) return;';
-  //
-  // No amount of comment-stripping reaches that, because the oracle reads text
-  // and a string is text it must keep. Stripping strings as well would only move
-  // the target to identifiers and dead branches.
-  //
-  // A property access is not any of those things. `cfgFlags.presearchAdd` inside
-  // a comment, a string or a template substitution is not a
-  // PropertyAccessExpression, so all of those classes disappear at once rather
-  // than one per round. It also keeps the prefix precision the regex needed the
-  // `\b` for: the node's name is `parallelAdd` or it is `parallelAddWorkers`,
-  // and there is no such thing as a partial match.
-  let found = false;
-  const visit = (node: ts.Node) => {
-    if (found) return;
-    if (ts.isPropertyAccessExpression(node) && node.name.text === key) {
-      const base = node.expression.getText(sourceFile);
-      if (base === 'cfgFlags' || base === 'cfgFlagsRef.current') { found = true; return; }
-    }
-    node.forEachChild(visit);
-  };
-  visit(sourceFile);
-  return found;
-}
-
-/**
- * Flag keys the engine deliberately does NOT read, with the reason.
- *
- * Listed rather than omitted so the coverage test below can tell "decided not
- * to" from "forgot to" — the distinction the original defect erased. A new key
- * added to FlagConfig fails that test until it is either wired or named here.
- */
-const DELIBERATELY_UNREAD: Record<string, string> = {
-  // Selects the cart engine's MOUNT SITE (root CartJobProvider vs inline on the
-  // screen), not a request pattern. Not an anti-bot lever, and it belongs to
-  // whoever owns CartJobContext rather than to this file.
-  backgroundCart: 'mount-site selection, owned by CartJobContext',
-};
-
-describe('stripComments — the oracle\'s own guard', () => {
-  // Hand-rolled versions of this lost three rounds in a row, each fix correct and
-  // each leaving the next hole. These pin the cases that beat the previous ones.
-  //
-  // Comments are blanked to whitespace rather than deleted, so every offset in
-  // `code` still matches `src` and the windows the assertions slice stay honest.
-  const t = (line: string) => stripComments(line).trimEnd();
-
-  it('removes a trailing line comment', () => {
-    expect(t('const a = 1; // flags.presearchAdd')).toBe('const a = 1;');
-  });
-
-  it('removes a trailing block comment and keeps what follows', () => {
-    expect(stripComments('const a = /* x */ 1;')).toBe('const a =         1;');
-  });
-
-  it('removes a MULTI-LINE block comment, including its middle lines', () => {
-    // The case that beat the line-at-a-time version: interior lines carry no
-    // marker, so a filter keyed on how a line STARTS cannot see them. A gate
-    // quoted verbatim inside one would have voted.
-    const out = stripComments('a();\n/* the gate was\nif (!A || !B) return;\nremoved */\nb();');
-    expect(out).toContain('a();');
-    expect(out).toContain('b();');
-    expect(out).not.toContain('if (!A || !B) return;');
-  });
-
-  it('keeps a regex literal containing a slash pair', () => {
-    // The previous version truncated this, and it was pinned as a limitation.
-    // A real lexer has no such limitation, which is the point of using one.
-    const line = 'if (!/\\/api\\//.test(url)) return;';
-    expect(t(line)).toBe(line);
-  });
-
-  it('keeps a URL and a string that merely looks like a comment', () => {
-    expect(t("if (u.startsWith('https://x/')) return;")).toBe("if (u.startsWith('https://x/')) return;");
-    expect(t("const s = 'a // b';")).toBe("const s = 'a // b';");
-  });
-
-  it('is actually wired into `code`, not merely present', () => {
-    // Replacing `stripComments(src)` with `src` left every other test green,
-    // because the cases above call the function directly and pass whether or not
-    // the pipeline uses it. Testing a helper is not testing that anything calls
-    // it — the same shape as the defect this whole file exists for.
-    expect(src).toContain('// MEAL-');
-    expect(code).not.toContain('// MEAL-');
-  });
-
-  it('keeps a JSX comment out of the text, which the line filter never could', () => {
-    expect(stripComments('<View>{/* if (!A || !B) return; */}</View>')).not.toContain('return;');
-  });
-});
-
+// ── The wiring half has moved (MEAL-162) ────────────────────────────────────
+//
+// This file used to carry a second half that asserted against the SOURCE TEXT of
+// `WebViewCartSheet.tsx`, because no harness could drive a cart run and the text
+// was the only thing that could tell "reads the config" from "reads the build
+// constant".
+//
+// It lost five review rounds. A trailing `//`, a `/* */`, a multi-line block and
+// a comment inside a template substitution each hid a gate from it; an AST walk
+// killed that family, and then two value-flow mutants beat the AST too — an
+// unwired `const _unused = cfgFlags.parallelAddWorkers;`, and a second live
+// pre-search arming site placed before the gate. Source can show that a property
+// access exists. It cannot show that the value goes anywhere.
+//
+// So the decisions moved into pure functions and the wiring half is now
+// `automationConfigDecisions.test.ts`, which calls them with real values and
+// asks the question of the OUTPUT: change a flag, and some decision must answer
+// differently. What remains here is ordinary config coverage — the merge half,
+// which was always sound.
 
 describe('flags in the merge', () => {
   it('carries the bundled defaults with no override', () => {
@@ -244,96 +77,5 @@ describe('flags in the merge', () => {
     // is the burst the value exists to prevent — so refusal, not clamping.
     const { warnings } = mergeAutomationConfig({ flags: { addCommitJitterMs: -1 } });
     expect(warnings.join()).toMatch(/addCommitJitterMs/);
-  });
-});
-
-describe('the engine reads the flags it validates', () => {
-  it('has exactly one place that arms pre-search, so gating it there is total', () => {
-    // The gate below is only "the kill switch for the whole path" because this
-    // is true: every downstream branch (commit arming, beginSearchFlow, the
-    // tiles) is conditioned on presearchStartedRef. A second arming site would
-    // route around the flag, so the claim is pinned rather than trusted.
-    const arms = code.match(/presearchStartedRef\.current\s*=\s*true/g) ?? [];
-    expect(arms.length).toBe(1);
-  });
-
-  it('gates pre-search parking on flags.presearchAdd, in the right direction', () => {
-    const arm = code.indexOf('presearchStartedRef.current = true;');
-    const open = code.lastIndexOf('useEffect(() => {', arm);
-    expect(open).toBeGreaterThan(-1);
-    const body = code.slice(open, arm);
-    // POLARITY, not just presence. `toContain('cfgFlags.presearchAdd')` cannot
-    // see a dropped `!`, and a cold review showed what that costs: with
-    // `|| cfgFlags.presearchAdd` the switch runs backwards — the bundled default
-    // `true` disables pre-search on every build, and publishing `false` turns it
-    // ON. All ten tests passed. A ticket that exists because a switch did nothing
-    // must not ship one that does the opposite of what it says.
-    //
-    // Anchored to the WHOLE statement, not a substring of it. An unanchored match
-    // reports a fully inverted gate as fine, because the inversion wraps the
-    // matched text rather than altering it — `if (!(!A || !B)) return;` and a
-    // hoisted `const off = !A || !B; if (!off) return;` both contain this
-    // sequence verbatim, and both ship the switch backwards. The second is an
-    // ordinary extract-a-const refactor with one `!` misplaced, which is exactly
-    // how this would really arrive.
-    expect(body).toMatch(/if\s*\(\s*!FEATURE_PRESEARCH_ADD\s*\|\|\s*!cfgFlags\.presearchAdd\s*\)\s*return;/);
-  });
-
-  it('gates the parallel-add branch on flags.parallelAdd', () => {
-    const at = code.indexOf('const beginSearchFlow = useCallback(');
-    expect(at).toBeGreaterThan(-1);
-    const body = code.slice(at, code.indexOf('\n  }, [', at));
-    // Both halves on the same branch: dropping the constant would ship the
-    // pilot flag's decision to config, and dropping the config read is the
-    // regression this whole file is about.
-    expect(body).toMatch(/FEATURE_PARALLEL_ADD && cfgFlagsRef\.current\.parallelAdd/);
-  });
-
-  it('computes the pre-search commit jitter from flags.addCommitJitterMs', () => {
-    const at = code.indexOf('const presearchOnInjectAdd = useCallback(');
-    expect(at).toBeGreaterThan(-1);
-    const body = code.slice(at, code.indexOf('\n  }, [', at));
-    expect(body).toContain('cfgFlagsRef.current.addCommitJitterMs');
-    // The RANDOMISATION, not just the source of the base. `const jitter = base`
-    // reads the config correctly and still turns every worker's commit into a
-    // fixed 500ms metronome — which is the exact property §1.5 of
-    // docs/store-fingerprint-profiles.md calls load-bearing, and it passed all
-    // ten tests. `base` has to appear on both sides of the arithmetic.
-    expect(body).toMatch(/jitter\s*=\s*base\s*\+\s*Math\.floor\(Math\.random\(\)\s*\*\s*base\)/);
-    // And that the value is USED. Computing it and then passing the constant to
-    // setTimeout leaves every other assertion here green while both the config
-    // read and the randomisation stop reaching the wire — a mutant found exactly
-    // that. Asserting a value is derived says nothing about whether anything
-    // consumes it.
-    expect(body).toMatch(/,\s*jitter\s*\);/);
-    // Reading the config and then doing the arithmetic on the build constant
-    // anyway is the mutation a `toContain` alone cannot see: the config read
-    // would still be right there in the source. So the constant must appear
-    // ONLY as the `??` fallback, never as an operand of the jitter itself.
-    expect(body).not.toMatch(/ADD_COMMIT_JITTER_MS\s*\+/);
-    expect(body).not.toMatch(/\*\s*ADD_COMMIT_JITTER_MS/);
-  });
-
-  it('reads every flag it declares, or says why not', () => {
-    // The test that stops the original defect reopening. A key added to
-    // FlagConfig is inert until something consumes it, and nothing else in the
-    // suite can notice — the merge tests pass on a key no reader exists for.
-    for (const key of Object.keys(BUNDLED_AUTOMATION_CONFIG.flags)) {
-      if (DELIBERATELY_UNREAD[key]) continue;
-      expect({ key, read: readsFlag(key) }).toEqual({ key, read: true });
-    }
-  });
-
-  it('keeps the deliberately-unread list honest', () => {
-    // A stale exemption is the other way this rots: `backgroundCart` sitting
-    // here after someone wires it would exempt a key that no longer needs it,
-    // and the next unread key added beside it inherits the excuse.
-    for (const key of Object.keys(DELIBERATELY_UNREAD)) {
-      expect(Object.keys(BUNDLED_AUTOMATION_CONFIG.flags)).toContain(key);
-      // And that the exemption is still needed. Wiring `backgroundCart` without
-      // deleting its row here would leave a standing excuse for the next unread
-      // key someone adds beside it.
-      expect({ key, read: readsFlag(key) }).toEqual({ key, read: false });
-    }
   });
 });
