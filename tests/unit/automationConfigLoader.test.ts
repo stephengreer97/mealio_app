@@ -123,6 +123,33 @@ describe('loadAutomationConfig', () => {
       expect(cache.write).not.toHaveBeenCalled();
     });
 
+    it('refuses a served version 0 rather than exempting it from the ordering', async () => {
+      // Found in MEAL-23's copy of this clause and fixed in both files, which
+      // must stay identical. The guard was `version > 0 && version < currentVersion`,
+      // which EXEMPTED 0 from the ordering rather than refusing it: a served v0
+      // overwrote a cached v9, reset the version to 0, and got persisted —
+      // leaving no rollback protection until the next positive version, on the
+      // config that carries the store selectors and the kill switches.
+      const { cache } = fakeCache({ version: 9, raw: { timeouts: { addMs: 11_000 } } });
+      await loadAutomationConfig(async () => ({ version: 0, config: { timeouts: { addMs: 33_000 } } }), cache);
+      expect(getConfigVersion()).toBe(9);
+      expect(getAutomationConfig().timeouts.addMs).toBe(11_000);
+      expect(cache.write).not.toHaveBeenCalled();
+    });
+
+    it('refuses a negative version too', async () => {
+      const { cache } = fakeCache({ version: 9, raw: { timeouts: { addMs: 11_000 } } });
+      await loadAutomationConfig(async () => ({ version: -1, config: { timeouts: { addMs: 33_000 } } }), cache);
+      expect(getConfigVersion()).toBe(9);
+      expect(getAutomationConfig().timeouts.addMs).toBe(11_000);
+    });
+
+    it('a version 0 does not apply even from a cold start', async () => {
+      await loadAutomationConfig(async () => ({ version: 0, config: { timeouts: { addMs: 33_000 } } }));
+      expect(getConfigVersion()).toBe(0);
+      expect(getAutomationConfig()).toEqual(BUNDLED_AUTOMATION_CONFIG);
+    });
+
     it('re-applies the same version idempotently', async () => {
       const { cache } = fakeCache({ version: 5, raw: { timeouts: { addMs: 11_000 } } });
       await loadAutomationConfig(async () => ({ version: 5, config: { timeouts: { addMs: 11_000 } } }), cache);

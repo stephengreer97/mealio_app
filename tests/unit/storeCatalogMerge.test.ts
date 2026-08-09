@@ -162,7 +162,46 @@ describe('a bad name — identity is required, so the entry goes', () => {
   });
 });
 
-describe('a bad colour — decoration degrades, the store survives', () => {
+describe('a bad colour on a store the bundle already has', () => {
+  // The colour already on file is strictly better information than the neutral,
+  // so a row that fails to supply one must not overwrite it. The failure this
+  // avoids is a publishing failure, not a coding one: if colour is ever absent
+  // for a subset of rows, substituting here would make the FIRST FULL CATALOG
+  // PUBLISH grey out exactly those stores across the whole picker, with no
+  // client release to blame it on.
+  const bundledHeb = BUNDLED_STORES.find((s) => s.id === 'heb')!;
+
+  it.each([
+    ['missing', undefined],
+    ['not a string', 123],
+    ['no hash', 'dd0031'],
+    ['a named colour', 'red'],
+    ['rgba()', 'rgba(0,0,0,0.5)'],
+  ])('keeps the bundled colour: %s', (_label, color) => {
+    const { stores, warnings } = mergeStoreCatalog([{ id: 'heb', name: 'H-E-B Plus!', color }]);
+    // The rename still lands — only the colour is declined.
+    expect(byId(stores, 'heb')).toEqual({ id: 'heb', name: 'H-E-B Plus!', color: bundledHeb.color });
+    expect(bundledHeb.color).not.toBe(FALLBACK_STORE_COLOR);
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('never substitutes the neutral for a store that has a real colour', () => {
+    // The whole-picker version of the same claim: a catalog that supplies no
+    // colours at all must leave every bundled brand colour exactly as shipped.
+    const colourless = BUNDLED_STORES.map((s) => ({ id: s.id, name: s.name }));
+    const { stores } = mergeStoreCatalog(colourless);
+    expect(stores).toEqual(BUNDLED_STORES);
+    expect(stores.some((s) => s.color === FALLBACK_STORE_COLOR)).toBe(false);
+  });
+
+  it('still takes a GOOD colour from a row that has one', () => {
+    const { stores, warnings } = mergeStoreCatalog([{ id: 'heb', name: 'H-E-B', color: '#123456' }]);
+    expect(byId(stores, 'heb')!.color).toBe('#123456');
+    expect(warnings).toEqual([]);
+  });
+});
+
+describe('a bad colour on a store with no history — decoration degrades', () => {
   it.each([
     ['missing', undefined],
     ['not a string', 123],
@@ -211,13 +250,12 @@ describe('a malformed entry does not cost its neighbours', () => {
     expect(warnings).toHaveLength(4);
   });
 
-  it('takes what it needs from a full server row and drops the rest', () => {
-    // The shape GET /api/stores actually serves. Five of its nine fields are
-    // descriptive and this build renders none of them, so they must not survive
-    // into the app — least of all `platform`, which partitions the catalog
-    // exactly like the capability sets today and is therefore the most
-    // convincing wrong thing to start gating on. Capability comes from the
-    // binary; see isSupportedStore.
+  it('takes what it needs from a wide server row and drops the rest', () => {
+    // Not a transcript of today's response — `platform` and `bannerGroup` were
+    // both withdrawn from it during MEAL-23. That is exactly why they are still
+    // here: this asserts the rule (keep three, drop everything else) against a
+    // row wider than any the server currently sends, so a column coming BACK
+    // cannot reach the app without someone editing merge.ts on purpose.
     const { stores, warnings } = mergeStoreCatalog([{
       id: 'king_soopers',
       name: 'King Soopers',
@@ -235,9 +273,9 @@ describe('a malformed entry does not cost its neighbours', () => {
     for (const store of stores) expect(Object.keys(store).sort()).toEqual(['color', 'id', 'name']);
   });
 
-  it('renders a row whose nullable descriptive fields are all null', () => {
-    // servingArea is NULL on every row today, and the other three are nullable.
-    // Nothing may depend on them being present.
+  it('renders a row whose descriptive fields are all null', () => {
+    // The descriptive columns are nullable, and nothing may depend on any of
+    // them being present — or on their being absent, which is the same rule.
     const { stores, warnings } = mergeStoreCatalog([{
       id: 'publix', name: 'Publix', color: '#008542',
       slug: 'publix', bannerGroup: null, platform: null, host: null, servingArea: null,
@@ -254,6 +292,39 @@ describe('a malformed entry does not cost its neighbours', () => {
     ]);
     expect(byId(stores, 'publix')).toEqual({ id: 'publix', name: 'Publix', color: '#008542' });
     expect(warnings).toEqual([]);
+  });
+});
+
+// Every limit in merge.ts was exercised only from the REJECTING side — 201
+// entries but never 200, a 61-character name but never 60, a 41-character id but
+// never 40. That leaves each boundary free to drift by one in the conservative
+// direction without a single test noticing: `>` slipping to `>=` would start
+// refusing a catalog that is exactly at the limit, which is a silently smaller
+// product rather than an unsafe one, and therefore the kind of change nobody
+// goes looking for. These pin the accepting side.
+describe('the limits, at exactly their limit', () => {
+  it('accepts a payload of exactly MAX_CATALOG_STORES entries', () => {
+    const exactly200 = Array.from({ length: 200 }, (_, i) => ({
+      id: `store_${i}`, name: `Store ${i}`, color: '#008542',
+    }));
+    const { stores, warnings } = mergeStoreCatalog(exactly200);
+    expect(warnings).toEqual([]);
+    expect(stores).toHaveLength(BUNDLED_STORES.length + 200);
+  });
+
+  it('accepts a name of exactly MAX_NAME_LENGTH characters', () => {
+    const name = 'N'.repeat(60);
+    const { stores, warnings } = mergeStoreCatalog([{ id: 'publix', name, color: '#008542' }]);
+    expect(warnings).toEqual([]);
+    expect(byId(stores, 'publix')!.name).toBe(name);
+  });
+
+  it('accepts an id of exactly the longest permitted length', () => {
+    const id = `a${'b'.repeat(39)}`;   // 1 + 39 = the 40 STORE_ID allows
+    expect(id).toHaveLength(40);
+    const { stores, warnings } = mergeStoreCatalog([{ id, name: 'Long', color: '#008542' }]);
+    expect(warnings).toEqual([]);
+    expect(byId(stores, id)).toBeDefined();
   });
 });
 

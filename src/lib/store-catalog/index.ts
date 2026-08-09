@@ -101,7 +101,15 @@ function apply(version: number, raw: unknown, source: string): boolean {
   if (!Array.isArray(list) || list.length === 0) return false;
   // Refuse to go backwards: a cached v9 beats a fetched v7, which happens when a
   // rollback is in flight or a CDN serves a stale body.
-  if (version > 0 && version < currentVersion) return false;
+  //
+  // `version <= 0` is refused for the same reason and not as a special case. A
+  // version is an ordering, and 0 (or a negative) carries no position in it —
+  // "no instruction", exactly as the header says. The earlier form was
+  // `version > 0 && version < currentVersion`, which EXEMPTED 0 from the
+  // ordering check instead of refusing it: a served v0 overwrote a cached v9,
+  // reset currentVersion to 0, and got persisted, leaving the client with no
+  // rollback protection at all until the next positive version.
+  if (version <= 0 || version < currentVersion) return false;
 
   const { stores, warnings } = mergeStoreCatalog(raw);
   merged = stores;

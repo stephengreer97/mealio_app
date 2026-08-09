@@ -57,8 +57,18 @@ function apply(version: number, raw: unknown, source: string): boolean {
   // Empty/absent overrides carry no instruction — see the "keep what you have"
   // rule above. Also refuse to go backwards: a cached v9 beats a fetched v7,
   // which happens when a rollback is in flight or a CDN serves a stale body.
+  //
+  // `version <= 0` is refused for the same reason and not as a special case. A
+  // version is an ordering, and 0 (or a negative) carries no position in it —
+  // "no instruction", exactly as the header above says. The earlier form was
+  // `version > 0 && version < currentVersion`, which EXEMPTED 0 from the
+  // ordering check instead of refusing it: a served v0 overwrote a cached v9,
+  // reset currentVersion to 0, and got persisted, leaving the client with no
+  // rollback protection at all until the next positive version — on the config
+  // that carries the store selectors and the kill switches. Found in MEAL-23's
+  // copy of this clause and fixed in both; the two must stay identical.
   if (raw == null || (typeof raw === 'object' && Object.keys(raw as object).length === 0)) return false;
-  if (version > 0 && version < currentVersion) return false;
+  if (version <= 0 || version < currentVersion) return false;
 
   const { config, warnings } = mergeAutomationConfig(raw);
   current = config;

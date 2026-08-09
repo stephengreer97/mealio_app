@@ -163,6 +163,34 @@ describe('the "keep what you have" rule', () => {
     expect(cache.write).not.toHaveBeenCalled();
   });
 
+  it('refuses a served version 0 rather than exempting it from the ordering', async () => {
+    // A version is an ordering, and 0 carries no position in it. The earlier
+    // guard was `version > 0 && version < currentVersion`, which exempted 0
+    // instead of refusing it — so a served v0 overwrote a cached v9, reset the
+    // version to 0, and got persisted, leaving the client with NO rollback
+    // protection until the next positive version.
+    const { cache } = fakeCache({ version: 9, raw: [{ id: 'heb', name: 'Cached', color: '#dd0031' }] });
+    await loadStoreCatalog(async () => ({ version: 0, stores: [{ id: 'heb', name: 'Served v0', color: '#dd0031' }] }), cache);
+    expect(getCatalogVersion()).toBe(9);
+    expect(byId('heb')!.name).toBe('Cached');
+    expect(cache.write).not.toHaveBeenCalled();
+  });
+
+  it('refuses a negative version too', async () => {
+    const { cache } = fakeCache({ version: 9, raw: [{ id: 'heb', name: 'Cached', color: '#dd0031' }] });
+    await loadStoreCatalog(async () => ({ version: -1, stores: [{ id: 'heb', name: 'Served', color: '#dd0031' }] }), cache);
+    expect(getCatalogVersion()).toBe(9);
+    expect(byId('heb')!.name).toBe('Cached');
+  });
+
+  it('a version 0 does not apply even from a cold start', async () => {
+    // Nothing to protect here, but "0 means no instruction" must not depend on
+    // there being something newer to compare against.
+    await loadStoreCatalog(async () => ({ version: 0, stores: [{ id: 'heb', name: 'Served v0', color: '#dd0031' }] }));
+    expect(getCatalogVersion()).toBe(0);
+    expect(getStores()).toEqual(BUNDLED_STORES);
+  });
+
   it('re-applies the same version idempotently', async () => {
     const { cache } = fakeCache({ version: 5, raw: [{ id: 'heb', name: 'Cached', color: '#dd0031' }] });
     await loadStoreCatalog(async () => ({ version: 5, stores: [{ id: 'heb', name: 'Cached', color: '#dd0031' }] }), cache);

@@ -823,10 +823,9 @@ export const automation = {
 // the caller keeps what it has.
 //
 // The BOUNDARY, not the truth: `stores` is deliberately `unknown`. Everything
-// past this line is validated by mergeStoreCatalog, which owns the decision
-// about what is safe to believe — including the four nullable descriptive
-// fields (slug, bannerGroup, platform, host, servingArea) that this build reads
-// none of. See the note in merge.ts about `platform` in particular.
+// past this line is validated by mergeStoreCatalog, which keeps three fields per
+// row and drops the descriptive ones this build renders none of. See the note
+// there on `platform` — withdrawn from the response, and worth reading anyway.
 export const storeCatalog = {
   get: async (): Promise<{ version: number; stores: unknown } | null> => {
     try {

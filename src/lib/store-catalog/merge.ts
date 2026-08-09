@@ -34,19 +34,24 @@
 // is visible rather than silently missing.
 //
 // WHAT WE READ, AND WHAT WE THROW AWAY
-// GET /api/stores serves nine fields per row. This build keeps three — id, name,
-// color — and drops slug, bannerGroup, host, servingArea and platform, because
-// nothing renders them and inventing a use for them here would be inventing
-// product. Unknown fields are dropped silently and by the same rule, so the
-// server can grow columns without a client release.
+// This build keeps exactly three fields — id, name, color — and drops every
+// other one GET /api/stores sends, whether or not this file has heard of it.
+// Descriptive columns are dropped because nothing renders them and inventing a
+// use for them here would be inventing product; unknown columns are dropped by
+// the same rule, so the server can grow without a client release. Deliberately
+// stated without a field count: the response has already gained and lost columns
+// once, and a number here would only ever be a comment that goes stale quietly.
 //
-// `platform` is dropped LOUDLY in prose because it is the one that will tempt
-// someone. It partitions the catalog exactly like the capability sets today —
-// platform 'kroger' is precisely KROGER_BRAND_IDS — which makes it look like a
-// remote source of truth for what the app can drive. It is not, and it must
-// never be gated on: capability is whether the automation scripts are in this
-// binary (isSupportedStore), and a server field that currently happens to agree
-// is the most convincing possible way to get that wrong later.
+// `platform` deserves its own paragraph even though it no longer ships, because
+// what it nearly caused is the trap this whole file is guarding. It partitioned
+// the catalog exactly like the capability sets — platform 'kroger' was precisely
+// KROGER_BRAND_IDS — which makes such a field look like a remote source of truth
+// for what the app can drive. It is not, and no successor may be gated on:
+// capability is whether the automation scripts are in THIS BINARY
+// (isSupportedStore), and a server field that currently happens to agree is the
+// most convincing possible way to get that wrong later. The server author
+// reached the same conclusion independently and withdrew `bannerGroup` for the
+// identical reason. If a column like this reappears, it is still data.
 
 import { BUNDLED_STORES, Store } from '../../constants/stores';
 
@@ -103,13 +108,23 @@ function takeName(id: string, value: unknown, warnings: string[]): string | null
   return name;
 }
 
-function takeColor(id: string, value: unknown, warnings: string[]): string {
+/**
+ * The row's colour, or null when there is nothing usable in it.
+ *
+ * Returns null rather than substituting, because the right substitute depends on
+ * what the caller already has: a bundled entry's own colour beats the neutral,
+ * and only an entry with no history at all should get the neutral. Deciding that
+ * here would mean throwing away the better answer before anyone could ask for it.
+ *
+ * Either way the entry is NOT dropped: a store with the wrong dot colour is
+ * still a store the user can pick, and failing the whole row over decoration
+ * would make a typo in one column of one database row look like the feature not
+ * working.
+ */
+function takeColor(id: string, value: unknown, warnings: string[]): string | null {
   if (typeof value === 'string' && HEX_COLOR.test(value)) return value;
-  // Not a dropped entry: a store with the wrong dot colour is still a store the
-  // user can pick, and failing the whole row over decoration would make a typo
-  // in one column of one database row look like the feature not working.
-  warnings.push(`stores.${id}.color: not a #rgb/#rrggbb hex colour — using the neutral fallback`);
-  return FALLBACK_STORE_COLOR;
+  warnings.push(`stores.${id}.color: not a #rgb/#rrggbb hex colour — keeping the colour already on file`);
+  return null;
 }
 
 /**
@@ -173,10 +188,19 @@ export function mergeStoreCatalog(
       // That is the rebrand path — a store changing its name or brand colour
       // stops needing a release. It can never remove the entry, so the worst a
       // bad row can do to a shipped store is mislabel it.
-      stores[existing] = { id, name, color };
+      //
+      // An unusable colour keeps the one ALREADY ON FILE rather than taking the
+      // neutral. The bundled value is strictly better information than grey, and
+      // the failure this avoids is not hypothetical: if colour is ever absent
+      // for a subset of rows, substituting here would make the first full
+      // catalog publish grey out exactly those stores, right across the picker,
+      // with no client release to blame it on.
+      stores[existing] = { id, name, color: color ?? stores[existing].color };
     } else {
+      // Nothing on file, so the neutral is the best available. It reads as "no
+      // brand colour", never as another store's brand.
       indexById.set(id, stores.length);
-      stores.push({ id, name, color });
+      stores.push({ id, name, color: color ?? FALLBACK_STORE_COLOR });
     }
   }
 
