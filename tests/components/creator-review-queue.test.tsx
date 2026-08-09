@@ -531,3 +531,76 @@ describe('the draft shows what the recipe asked be done to an ingredient', () =>
     expect(getByText('lime juice, 2 tbsp')).toBeTruthy();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MEAL-170 — the preparation is correctable HERE, not only on the website.
+//
+// `prep` is the one extracted field nothing verifies: the row assessment grades
+// the product name and the amount, never the preparation. MEAL-165 gave the
+// website's review card and publish form a box to fix a wrong one. This screen
+// is the same review, on a phone, and it showed prep as read-only text — so a
+// creator looking at their own draft could see an instruction the model invented
+// and could only delete the whole ingredient row to be rid of it.
+//
+// Driven through the queue screen rather than through `IngredientEditor` alone.
+// The editor is not used alone anywhere, and the MEAL-164 review made exactly
+// that point about the last set of tests written against it: what ships is the
+// screen, and what matters is the body that reaches `creatorDrafts.edit`.
+describe('a creator can fix a preparation from the queue', () => {
+  const prepped = () => draft('d1', {
+    ingredients: [
+      { ingredientName: 'onion', qty: 1, unit: 'qty', measure: null, prep: 'julienned on a mandoline' },
+      { ingredientName: 'lime juice', qty: 1, unit: 'tbsp', measure: '2' },
+    ],
+  });
+
+  /** The ingredients in the body the screen PATCHed. */
+  const patched = () => (edit.mock.calls[edit.mock.calls.length - 1][1] as any).ingredients;
+
+  it('sends the correction', async () => {
+    list.mockResolvedValue({ drafts: [prepped()], totals: { waiting: 1, flagged: 1 } });
+    edit.mockResolvedValue({ draft: prepped() });
+
+    const view = await mount();
+    fireEvent.press(view.getByText('Edit first'));
+    fireEvent.changeText(view.getByTestId('ingredient-prep-0'), 'finely diced');
+    fireEvent.press(view.getByText('Save edits'));
+    await act(async () => {});
+
+    expect(patched()[0].prep).toBe('finely diced');
+    expect(patched()[1].prep).toBeUndefined();
+  });
+
+  it('sends no prep key when the creator clears it', async () => {
+    // The whole reason the field exists in this shape: absent, never empty. A
+    // `prep: ''` would render as a stray trailing comma everywhere the line is
+    // printed, and marks a row as changed that nobody meaningfully changed.
+    list.mockResolvedValue({ drafts: [prepped()], totals: { waiting: 1, flagged: 1 } });
+    edit.mockResolvedValue({ draft: prepped() });
+
+    const view = await mount();
+    fireEvent.press(view.getByText('Edit first'));
+    fireEvent.changeText(view.getByTestId('ingredient-prep-0'), '   ');
+    fireEvent.press(view.getByText('Save edits'));
+    await act(async () => {});
+
+    expect('prep' in patched()[0]).toBe(false);
+    expect(JSON.stringify(patched()[0])).not.toContain('prep');
+  });
+
+  it('keeps a preparation an unrelated edit passes over', async () => {
+    // `emit` rebuilds the WHOLE list on every keystroke, so the row at risk is
+    // the one nobody touched — the shape MEAL-164 was filed for.
+    list.mockResolvedValue({ drafts: [prepped()], totals: { waiting: 1, flagged: 1 } });
+    edit.mockResolvedValue({ draft: prepped() });
+
+    const view = await mount();
+    fireEvent.press(view.getByText('Edit first'));
+    fireEvent.changeText(view.getAllByPlaceholderText('Ingredient name')[1], 'lime');
+    fireEvent.press(view.getByText('Save edits'));
+    await act(async () => {});
+
+    expect(patched()[0].prep).toBe('julienned on a mandoline');
+    expect(patched()[1].ingredientName).toBe('lime');
+  });
+});

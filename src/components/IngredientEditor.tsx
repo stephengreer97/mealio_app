@@ -29,6 +29,19 @@ const UNITS = ['qty', 'cups', 'fl oz', 'g', 'kg', 'L', 'lb', 'mg', 'ml', 'oz', '
   // Kept in step with the same list in mealio_central.
   'cloves', 'cans', 'bunches', 'sprigs', 'pinches', 'handfuls', 'grinds', 'slices'];
 
+/**
+ * Longest preparation this box accepts, in step with `MAX_PREP_CHARS` in
+ * mealio_central (`lib/import/ingredients.ts`).
+ *
+ * Duplicated rather than fetched, the same way the unit list above is. It has to
+ * be here because of what the SERVER does over the cap: `canonicalPrep` DROPS an
+ * over-cap preparation rather than truncating it, and a draft edited here goes
+ * back through `creatorDrafts.edit` → `editableDraft` → that canonicaliser. So
+ * without this a creator could paste a method step, get a success, and watch the
+ * text vanish (MEAL-165 found exactly that on the website).
+ */
+const MAX_PREP_CHARS = 120;
+
 interface IngredientForm {
   ingredientName: string;
   measure: string;
@@ -36,10 +49,14 @@ interface IngredientForm {
   searchTerm: string | null;
   qty: number;
   /**
-   * Preparation (MEAL-102). Carried, displayed, and NOT editable here.
+   * Preparation — "finely diced" (MEAL-102), editable as of MEAL-170.
    *
-   * How a creator TYPES a preparation is a separate, open question — see the
-   * read-only row below.
+   * It was read-only here while how a creator types one was still open. MEAL-165
+   * settled that on the website — its own box, on the review card and the
+   * publish form — and this is the same screen on a phone, so it gets the same
+   * box. Until now a creator looking at their own draft in the app could SEE a
+   * preparation the model invented and could only delete the whole ingredient
+   * row to be rid of it.
    */
   prep?: string;
   /**
@@ -166,7 +183,11 @@ function fromFormIng(form: IngredientForm): Ingredient {
   // `prep` is owned but optional, and the spread above may have carried an old
   // one in. Absent has to stay absent (MEAL-102), so clearing it deletes the key
   // rather than writing null.
-  if (form.prep) next.prep = form.prep;
+  // Trimmed, and absent rather than empty. Whitespace-only is no preparation —
+  // the same rule `canonicalPrep` and `withPrep` apply on the server, so the box
+  // cannot introduce a value they would strip later.
+  const prep = form.prep?.trim();
+  if (prep) next.prep = prep;
   else delete next.prep;
 
   if (!next.searchTerm) {
@@ -327,16 +348,21 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
             <Ionicons name="trash-outline" size={18} color={Colors.error} />
           </TouchableOpacity>
           </View>
-          {/* The preparation the recipe gave, shown so a creator can SEE that
-              editing the row beside it does not throw it away (MEAL-102).
-              Read-only on purpose: how a preparation gets typed — its own box,
-              or split off the name at a comma — is an open product question,
-              and this ticket renders what exists rather than deciding it.
-              Plain, and no label of its own: the string is the recipe's own
-              words and any wrapper here would be copy nobody wrote. */}
-          {form.prep ? (
-            <Text style={styles.prepText} testID={`ingredient-prep-${index}`}>{form.prep}</Text>
-          ) : null}
+          {/* What the line asks be DONE to the product (MEAL-170).
+              Its own row rather than a fourth control on the one above, because
+              a preparation is a phrase and the name/amount/unit row is already
+              three controls wide on a phone. No label: the placeholder says what
+              belongs here, and a labelled empty box on every ingredient would
+              read as something missing — prep is null far more often than not. */}
+          <TextInput
+            style={styles.prepInput}
+            placeholder="finely diced"
+            placeholderTextColor={Colors.text3}
+            value={form.prep ?? ''}
+            onChangeText={(v) => updateField(index, 'prep', v)}
+            maxLength={MAX_PREP_CHARS}
+            testID={`ingredient-prep-${index}`}
+          />
           {isDup && (
             <Text style={styles.dupError}>Duplicate ingredient name</Text>
           )}
@@ -445,13 +471,17 @@ const styles = StyleSheet.create({
   nameInputError: {
     borderColor: Colors.error,
   },
-  prepText: {
+  prepInput: {
     fontSize: 12,
     fontFamily: 'Inter_400Regular',
-    color: Colors.text3,
-    marginTop: -4,
+    color: Colors.text2,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.input,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    marginTop: -2,
     marginBottom: 6,
-    marginLeft: 2,
   },
   dupError: {
     fontSize: 11,

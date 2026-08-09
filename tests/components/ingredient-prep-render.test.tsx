@@ -60,25 +60,27 @@ function mount(ingredients: Ingredient[]) {
   return { ...view, onChange, emitted };
 }
 
-describe('the editor shows a preparation it cannot edit', () => {
+describe('the editor shows a preparation, and lets it be corrected', () => {
   it('renders the preparation the row arrived with', () => {
-    const { getByText } = mount([dicedOnion()]);
-    expect(getByText('finely diced')).toBeTruthy();
+    const { getByTestId } = mount([dicedOnion()]);
+    expect(getByTestId('ingredient-prep-0').props.value).toBe('finely diced');
   });
 
-  it('shows nothing for a row that has none', () => {
-    const { queryByTestId } = mount([plainSalt()]);
-    expect(queryByTestId('ingredient-prep-0')).toBeNull();
+  it('offers an empty box for a row that has none', () => {
+    // It used to render nothing at all. The box is now always there, because a
+    // row with no preparation is the row most likely to need one typed into it.
+    const { getByTestId } = mount([plainSalt()]);
+    expect(getByTestId('ingredient-prep-0').props.value).toBe('');
   });
 
-  it('offers no way to type one', () => {
-    // Deliberate: whether a creator gets their own box, or types it inline and
-    // we split on the comma, is Stephen's call and is on his checklist. This
-    // ticket renders what exists rather than inventing the input.
+  it('offers a way to type one (MEAL-170)', () => {
+    // The inverse of what this file used to assert. Whether a creator gets their
+    // own box was open when MEAL-102 shipped; MEAL-165 settled it on the website
+    // and this is the same screen on a phone.
     const { UNSAFE_getAllByType } = mount([dicedOnion()]);
     const { TextInput } = require('react-native');
-    // Name, measure — and no third box. The unit is a button, not an input.
-    expect(UNSAFE_getAllByType(TextInput)).toHaveLength(2);
+    // Name, measure, prep. The unit is a button, not an input.
+    expect(UNSAFE_getAllByType(TextInput)).toHaveLength(3);
   });
 });
 
@@ -136,8 +138,8 @@ describe('an unrelated edit does not erase the preparation', () => {
 describe('a preparation that is awkward text is still just text', () => {
   it('renders a preparation containing commas whole', () => {
     const prep = 'drained, rinsed and patted dry';
-    const { getByText } = mount([{ ...dicedOnion(), prep }]);
-    expect(getByText(prep)).toBeTruthy();
+    const { getByTestId } = mount([{ ...dicedOnion(), prep }]);
+    expect(getByTestId('ingredient-prep-0').props.value).toBe(prep);
   });
 
   it('renders markup literally, and carries it through a save unchanged', () => {
@@ -145,8 +147,8 @@ describe('a preparation that is awkward text is still just text', () => {
     // that the string comes out exactly as it went in — nothing interpreted,
     // nothing stripped, and nothing that could reach a store query.
     const prep = '<b>finely</b> diced *and* salted';
-    const { getByText, getAllByPlaceholderText, emitted } = mount([{ ...dicedOnion(), prep }]);
-    expect(getByText(prep)).toBeTruthy();
+    const { getByTestId, getAllByPlaceholderText, emitted } = mount([{ ...dicedOnion(), prep }]);
+    expect(getByTestId('ingredient-prep-0').props.value).toBe(prep);
     fireEvent.changeText(getAllByPlaceholderText('1')[0], '3');
     expect(emitted()[0].prep).toBe(prep);
     expect(emitted()[0].ingredientName).toBe('Onion');
