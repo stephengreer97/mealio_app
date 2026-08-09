@@ -166,7 +166,6 @@ export interface TimeoutConfig {
 export interface FlagConfig {
   parallelAdd: boolean;
   presearchAdd: boolean;
-  backgroundCart: boolean;
   parallelAddWorkers: number;
   addCommitJitterMs: number;
 }
@@ -215,7 +214,6 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
   flags: {
     parallelAdd: true,
     presearchAdd: true,
-    backgroundCart: true,
     parallelAddWorkers: 3,
     addCommitJitterMs: 500,
   },

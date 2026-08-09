@@ -239,18 +239,22 @@ describe('every declared flag reaches a decision', () => {
   // exists and is genuinely unread, and cannot confirm its REASON is true. That
   // is exactly how `backgroundCart` sat here describing itself as owned
   // elsewhere while nothing read it at all.
-  const DELIBERATELY_UNREAD: Record<string, string> = {
-    // Read by NOTHING, anywhere. `grep -rn backgroundCart src/ tests/` returns
-    // its two schema lines and this row — `CartJobContext` never mentions it.
-    //
-    // The previous wording here said "mount-site selection, owned by
-    // CartJobContext", which reads as *consumed somewhere else* and is how this
-    // row survived a ticket whose entire subject is declared-and-inert flags. It
-    // is inherited from the retired oracle, not introduced here, but describing
-    // it accurately is the least this file owes: it is a published, validated,
-    // bounded flag that does nothing, and it should be wired or dropped.
-    backgroundCart: 'DECLARED AND INERT — read nowhere in src/; wire it or drop it',
-  };
+  /**
+   * Flags a decision deliberately does not consume.
+   *
+   * EMPTY, and worth keeping that way. It held one row — `backgroundCart` —
+   * described as "mount-site selection, owned by CartJobContext". Nothing read
+   * it anywhere, `CartJobContext` never mentioned it, and it was published,
+   * validated and bounded the entire time. On a ticket whose subject is
+   * declared-and-inert flags, the exemption was describing the thing it hid.
+   * The flag is gone rather than excused.
+   *
+   * A row here is a reviewer's judgement, not a check: the test below can
+   * confirm a key is genuinely unread and cannot confirm the REASON is true.
+   * That asymmetry is how the last one survived, so add one only when nothing
+   * else will do.
+   */
+  const DELIBERATELY_UNREAD: Record<string, string> = {};
 
   /** Everything the decisions answer, for one set of flags. */
   const observe = (flags: Record<string, unknown>) => JSON.stringify({
