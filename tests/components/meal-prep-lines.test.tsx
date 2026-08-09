@@ -5,10 +5,17 @@
 // it — that question is Stephen's and is on his checklist), and a row with none
 // reads exactly the string it read before the field existed.
 //
-// The meal sheet and the draft review queue are asserted together because they
-// are the two screens a preparation is actually FOR: the sheet is where a cook
-// reads the meal, and the queue is where a creator sees what we extracted from
-// their own recipe — the screen the loss was reported from.
+// This file asserts the MEAL SHEET — where a cook reads the meal. It said it
+// covered the draft review queue too, and never rendered it; a cold review
+// caught that by mutating the queue's line and watching nothing fail. The other
+// two surfaces a preparation is FOR are now asserted where each screen already
+// has a harness, rather than duplicating one here:
+//
+//   • the creator's draft queue — `creator-review-queue.test.tsx`, the screen
+//     the loss was reported from, where a creator sees what we extracted from
+//     their own recipe;
+//   • the shared-meal page — `shared-meal-prep.test.tsx`, the only one a person
+//     with no account sees.
 
 import { render } from '@testing-library/react-native';
 

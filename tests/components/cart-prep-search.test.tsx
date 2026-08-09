@@ -183,12 +183,43 @@ const URL_STORES = ['heb', 'walmart', 'albertsons', 'amazon'];
 const SCRIPT_STORES = ['aldi', 'wegmans'];
 const ALL_STORES = [...URL_STORES, ...SCRIPT_STORES];
 
+/**
+ * A single CHOSEN row, on its own.
+ *
+ * The consolidated queue is searched in order and `PREPPED_MEALS` puts the
+ * unchosen onion first, so driving that fixture only ever exercises
+ * `item.ingredientName`. This fixture puts the other branch of
+ * `item.searchTerm ?? item.ingredientName` first instead, and is alone in the
+ * meal so the search queue finishes on one message.
+ */
+const CHOSEN_PREPPED_MEAL = [
+  {
+    id: 'm3',
+    name: 'Cookies',
+    ingredients: [
+      { ingredientName: 'Butter', searchTerm: 'Land O Lakes Butter', qty: 1, productQty: 1, unit: 'qty', measure: '1', prep: 'at room temperature' },
+    ],
+  },
+];
+
+/** The exact in-stock match for the row above — the add gate is equality. */
+const BUTTER_CANDIDATE = {
+  productName: 'Land O Lakes Butter',
+  imageUrl: null,
+  outOfStock: false,
+  preferences: null,
+  price: '$4.99',
+};
+
+/** The builders that run AFTER a product is picked. */
+const ADD_PATH = ['buildSearchScript', 'buildAddToCartScript', 'buildSearchAndAddScript'];
+
 /** Render the sheet, start the run, and return a way to post bridge messages. */
-function startRun(storeId = 'aldi') {
+function startRun(storeId = 'aldi', meals: unknown[] = PREPPED_MEALS) {
   const view = render(
     <WebViewCartSheet
       visible
-      meals={PREPPED_MEALS as any}
+      meals={meals as any}
       storeId={storeId}
       storeName={storeId}
       onClose={() => {}}
@@ -266,6 +297,50 @@ describe('the cart never asks a store for a preparation', () => {
     for (const script of scripts) {
       for (const phrase of PREP_PHRASES) {
         expect(script.toLowerCase()).not.toContain(phrase);
+      }
+    }
+  });
+
+  it.each(ALL_STORES)('adds to %s\'s cart under the bare product name', (storeId) => {
+    // The tests above never reach an add, for a structural reason worth stating.
+    // The sheet only AUTO-STARTS when something is unchosen, and that branch
+    // sets `activeItemsRef` to the unchosen items alone (WebViewCartSheet.tsx
+    // :1456-1460). So on the auto-start route `item.searchTerm` is null by
+    // construction, `scoreTarget` always takes `ingredientName`, `isChooseFlow`
+    // is always true — and the add branch under it is unreachable. Every builder
+    // those tests record is a SEARCH.
+    //
+    // A row that already has a product takes the other entrance: the qty screen,
+    // and the button below. That is the route where a prep can be added to a
+    // cart rather than merely searched for, so it is the one that matters most.
+    // `scoreTarget` is both the gate deciding whether a product may be added at
+    // all (exact-after-normalisation equality) and the term carried into the add
+    // script.
+    //
+    // One chosen row and its exact match. A prep folded into `scoreTarget` fails
+    // that equality, so the product is never picked and no add script is built —
+    // which is what the guard below sees. All six stores are driven because they
+    // do not share a route: aldi and wegmans force serial search and land in the
+    // sequential SEARCH_RESULT handler, while the other four are parallel-capable
+    // and reach the add through the pool.
+    const view = startRun(storeId, CHOSEN_PREPPED_MEAL);
+    act(() => {
+      fireEvent.press(view.getByText(`Add Ingredients to ${storeId} Cart →`));
+    });
+    view.beginSearching();
+    view.post({ type: 'SEARCH_RESULT', candidates: [BUTTER_CANDIDATE] });
+
+    const addCalls = terms().filter((t) => ADD_PATH.includes(t.kind));
+    // Not vacuous: the exact match really was accepted and really was dispatched
+    // to the store. Without this, "no add script carries a prep" is true of a
+    // run that added nothing.
+    expect(addCalls.length).toBeGreaterThan(0);
+    expect(addCalls.map((t) => String(t.term))).toContain('Land O Lakes Butter');
+
+    // And nothing anywhere in the run — either term or built script text.
+    for (const text of [...terms().map((t) => String(t.term)), ...built().map((b) => b.out), ...injected()]) {
+      for (const phrase of PREP_PHRASES) {
+        expect(text.toLowerCase()).not.toContain(phrase);
       }
     }
   });
