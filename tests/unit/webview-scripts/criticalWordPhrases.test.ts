@@ -68,6 +68,27 @@ describe('the collapse does not quietly weaken the veto', () => {
     expect(scoreMatch('cage free eggs', 'Free Eggs')).toBe(0);
   });
 
+  it('vetoes a long request whose concept the product lacks', () => {
+    // These are the cases that prove the canonical tokens are in CRITICAL_WORDS
+    // and doing work, rather than being decoration.
+    //
+    // The short requests above return 0 from the 70% overlap FLOOR, not from the
+    // veto — "grass fed beef" against "Grain Fed Beef" is 1 matching token out of
+    // 2. So they pass whether or not `grassfed` is critical, and a mutant that
+    // deleted the three canonical entries survived the entire suite until these
+    // existed. Add a few more words and the floor stops covering for it:
+    //
+    //   "organic grass fed ground beef chuck" vs "Organic Ground Beef Chuck"
+    //       4 of 5 tokens match = 80, and 80 is eligible for auto-pick.
+    //   "cage free large brown eggs" vs "Large Brown Eggs" = 75.
+    //
+    // Both are a plain product answering a request that specifically asked for
+    // something it is not.
+    expect(scoreMatch('organic grass fed ground beef chuck', 'Organic Ground Beef Chuck')).toBe(0);
+    expect(scoreMatch('cage free large brown eggs', 'Large Brown Eggs')).toBe(0);
+    expect(scoreMatch('free range whole chicken breast', 'Whole Chicken Breast')).toBe(0);
+  });
+
   it('leaves unrelated critical words firing', () => {
     expect(scoreMatch('organic boneless chicken', 'Boneless Chicken')).toBe(0);
     expect(scoreMatch('large eggs', 'Small Eggs')).toBe(0);
