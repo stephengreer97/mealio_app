@@ -74,7 +74,6 @@ jest.mock('../../src/components/ProductChooserSheet', () => () => null);
 jest.mock('../../src/components/PhotoPicker', () => () => null);
 
 jest.mock('expo-web-browser', () => ({ openAuthSessionAsync: jest.fn() }));
-jest.mock('../../src/lib/purchases', () => ({ getOffering: jest.fn(), purchasePackage: jest.fn() }));
 
 jest.mock('../../src/context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', tier: 'paid' }, isCreator: false, refreshUser: jest.fn() }),

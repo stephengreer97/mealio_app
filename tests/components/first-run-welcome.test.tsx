@@ -73,7 +73,6 @@ jest.mock('../../src/components/FilterSheet', () => ({
   EMPTY_FILTERS: { tags: [], difficulty: [], authors: [], ingredients: [], excludeIngredients: [] },
 }));
 
-jest.mock('../../src/lib/purchases', () => ({ getOffering: jest.fn(), purchasePackage: jest.fn() }));
 jest.mock('../../src/context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', tier: 'paid' }, refreshUser: jest.fn() }),
 }));

@@ -80,7 +80,6 @@ jest.mock('../../src/components/ProductChooserSheet', () => () => null);
 jest.mock('../../src/components/PhotoPicker', () => () => null);
 
 jest.mock('expo-web-browser', () => ({ openAuthSessionAsync: jest.fn() }));
-jest.mock('../../src/lib/purchases', () => ({ getOffering: jest.fn(), purchasePackage: jest.fn() }));
 
 /**
  * A real context, so `user` can go away the way it really does — from above.
