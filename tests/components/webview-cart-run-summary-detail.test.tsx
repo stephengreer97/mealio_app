@@ -74,7 +74,10 @@ jest.mock('../../src/lib/api', () => {
       ...actual.usage,
       logAutomationStart: jest.fn(async () => 'run-summary-detail'),
       logAutomationComplete: jest.fn(async () => {}),
-      logAutomationSteps: jest.fn(async () => true),
+      logAutomationSteps: jest.fn(async (batch: any) => {
+        ((globalThis as any).__batches ||= []).push(batch);
+        return true;
+      }),
     },
   };
 });
@@ -92,29 +95,13 @@ jest.mock('../../src/lib/automation-config', () => {
   };
 });
 
-// The REAL telemetry, with every row recorded on its way through. Subclassed
-// rather than stubbed on purpose: `record` is what populates the failure counts
-// that `primaryFailureCode()` and `failureCodeSummary()` read, so a stub would
-// hand the component the same `undefined` the mutant does and this file would
-// pass against the defect it exists to catch.
-jest.mock('../../src/lib/automation-telemetry', () => {
-  const actual = jest.requireActual('../../src/lib/automation-telemetry');
-  class RecordingTelemetry extends actual.AutomationTelemetry {
-    record(...args: unknown[]) {
-      ((globalThis as any).__rows ||= []).push(args);
-      return (actual.AutomationTelemetry.prototype.record as any).apply(this, args);
-    }
-    // The network, and only the network.
-    async flush() {}
-  }
-  return { ...actual, AutomationTelemetry: RecordingTelemetry };
-});
-
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 
-type Row = [string, string, Record<string, any>?];
-const rows = () => ((globalThis as any).__rows ?? []) as Row[];
-const runSummary = () => rows().filter((r) => r[0] === 'run_summary');
+type Batch = { runId: string; steps: Array<Record<string, any>> };
+const batches = () => ((globalThis as any).__batches ?? []) as Batch[];
+/** Every row that reached the upload function, in the order it was sent. */
+const uploaded = () => batches().flatMap((b) => b.steps);
+const runSummary = () => uploaded().filter((r) => r.step === 'run_summary');
 
 const chosen = (name: string) => ({
   ingredientName: name, searchTerm: name, productQty: 1, qty: 1, unit: 'qty', measure: null,
@@ -138,7 +125,6 @@ const sheet = (...ingredients: unknown[]) => (
  * differs across.
  */
 async function runOneItem({ addSucceeds }: { addSucceeds: boolean }) {
-  (globalThis as any).__rows = [];
   const view = render(sheet(chosen('Sour Cream')));
   const post = (payload: Record<string, unknown>) => act(() => {
     view.getAllByTestId('mock-webview')[0].props.onMessage({
@@ -165,15 +151,36 @@ async function runOneItem({ addSucceeds }: { addSucceeds: boolean }) {
   act(() => { jest.advanceTimersByTime(30_000); });
   // The terminal row lands with the cart snapshot that closes the run.
   post({ type: 'CART_COUNT', count: addSucceeds ? 1 : 0, items: [], url: 'https://heb.test/cart' });
+  // The terminal rows land in a LATER batch than the per-item ones: the run
+  // emits run_summary and reconcile after the closing cart snapshot, then calls
+  // `void tel().flush()`. So this needs both — the timers to reach the terminal
+  // path, and a microtask turn for the upload promise to settle. Reading one
+  // batch too early is why the first version of this file saw only
+  // login_check..confirm and no run_summary at all.
   act(() => { jest.advanceTimersByTime(30_000); });
   await act(async () => {});
 
+  // Read BEFORE teardown. Unmount emits its own 'skipped' abandonment row, and
+  // a guard test that cannot tell that row from the terminal one would not
+  // notice if the terminal path stopped emitting — measured: with the driver
+  // truncated, the old version of this file still passed on
+  // {"outcome":"skipped","detail":{"terminal":"abandoned"}}.
+  // Teardown, then read. The terminal row is RECORDED during the run but only
+  // UPLOADED when `dispose()` makes its final flush, so a read before unmount
+  // sees the per-item rows and no run_summary at all — measured.
+  //
+  // That is why the tests below assert the row IS the terminal one rather than
+  // relying on when it was read: unmount also emits an abandonment row, and a
+  // guard that could not tell them apart would not notice if the terminal path
+  // stopped emitting. `outcome: 'error'` with no `detail.terminal` is the
+  // terminal row; the abandoned one is `'skipped'` with `terminal: 'abandoned'`.
   view.unmount();
+  await act(async () => {});
   return runSummary();
 }
 
-beforeEach(() => { jest.useFakeTimers(); (globalThis as any).__rows = []; });
-afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); (globalThis as any).__rows = []; });
+beforeEach(() => { jest.useFakeTimers(); (globalThis as any).__batches = []; });
+afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); (globalThis as any).__batches = []; });
 
 describe('the run_summary row a failing run emits', () => {
   it('is emitted at all, exactly once', async () => {
@@ -181,6 +188,9 @@ describe('the run_summary row a failing run emits', () => {
     // assertion below is vacuously true of a run that never reported.
     const summaries = await runOneItem({ addSucceeds: false });
     expect(summaries).toHaveLength(1);
+    // ...and it is the row the run finished with, not the one teardown emits.
+    expect(summaries[0].outcome).toBe('error');
+    expect(summaries[0].detail?.terminal).toBeUndefined();
   });
 
   it('carries the failure tally the component was asked for', async () => {
@@ -188,36 +198,40 @@ describe('the run_summary row a failing run emits', () => {
     // `undefined` at the call site left the whole suite green, so a row could
     // claim a code while carrying no distribution behind it — which is the shape
     // that shipped broken once already.
-    const [, outcome, extra] = (await runOneItem({ addSucceeds: false }))[0];
+    const row = (await runOneItem({ addSucceeds: false }))[0];
 
-    expect(outcome).toBe('error');
-    expect(extra?.code).toBeTruthy();
-    expect(typeof extra?.detail?.failureCodes).toBe('string');
-    expect(extra?.detail?.failureCodes).toContain(String(extra?.code));
+    expect(row.outcome).toBe('error');
+    expect(row.code).toBeTruthy();
+    expect(typeof row.detail?.failureCodes).toBe('string');
+    expect(row.detail?.failureCodes).toContain(String(row.code));
   });
 
   it('says which code it chose and where the code came from', async () => {
-    const [, , extra] = (await runOneItem({ addSucceeds: false }))[0];
-    expect(extra?.detail?.codeSource).toBeTruthy();
+    // `toBeTruthy()` was the whole assertion here, and `codeSource` is either
+    // 'severity' or 'fallback' — both truthy. A mutant that turned the severity
+    // ranking into a permanent guess left it green.
+    const row = (await runOneItem({ addSucceeds: false }))[0];
+    expect(row.code).toBe('confirm_failed');
+    expect(row.detail?.codeSource).toBe('severity');
   });
 
   it('reports the run as failing rather than as merely finished', async () => {
     // The counts the funnel divides by. `requested` is the denominator and
     // `itemsAdded` the numerator, so a row that carried the code but not these
     // would put a failure in the charts with nothing to weigh it against.
-    const [, , extra] = (await runOneItem({ addSucceeds: false }))[0];
+    const row = (await runOneItem({ addSucceeds: false }))[0];
 
-    expect(extra?.detail?.outcome).toBe('failed');
-    expect(extra?.detail?.requested).toBe(1);
-    expect(extra?.detail?.itemsAdded).toBe(0);
+    expect(row.detail?.outcome).toBe('failed');
+    expect(row.detail?.requested).toBe(1);
+    expect(row.detail?.itemsAdded).toBe(0);
   });
 
   it('counts the code rather than merely naming it', async () => {
     // `failureCodes` is the tally, flattened to a string because a nested Record
     // is what `sanitizeDetail` silently discarded the first time this shipped.
     // One confirm failure on a one-item run reads exactly this way.
-    const [, , extra] = (await runOneItem({ addSucceeds: false }))[0];
-    expect(extra?.detail?.failureCodes).toBe('confirm_failed:1');
+    const row = (await runOneItem({ addSucceeds: false }))[0];
+    expect(row.detail?.failureCodes).toBe('confirm_failed:1');
   });
 });
 
@@ -228,9 +242,9 @@ describe('the run_summary row a clean run emits', () => {
     const summaries = await runOneItem({ addSucceeds: true });
     expect(summaries).toHaveLength(1);
 
-    const [, outcome, extra] = summaries[0];
-    expect(outcome).toBe('ok');
-    expect(extra?.code).toBeUndefined();
-    expect(extra?.detail?.failureCodes).toBeUndefined();
+    const row = summaries[0];
+    expect(row.outcome).toBe('ok');
+    expect(row.code).toBeUndefined();
+    expect(row.detail?.failureCodes).toBeUndefined();
   });
 });
