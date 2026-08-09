@@ -32,7 +32,21 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
-type RequestOptions = RequestInit & { timeoutMs?: number };
+/**
+ * `authToken` — authenticate this ONE request with the token supplied, instead
+ * of whatever is in SecureStore.
+ *
+ * For validating a token the app has not adopted yet (MEAL-155). Every request
+ * otherwise reads the stored token, so the only way to ask "whose token is
+ * this?" used to be to store it first — and a verify that then failed
+ * transiently left the unvalidated token installed while React still showed the
+ * previous account. Passing it explicitly is what lets the check happen before
+ * anything is committed to the keychain.
+ *
+ * A request carrying one is also excluded from the 401 renew-and-retry below;
+ * see the guard there for why.
+ */
+type RequestOptions = RequestInit & { timeoutMs?: number; authToken?: string };
 
 // Single-flight renew: concurrent 401s share one in-flight renewal instead of
 // each firing their own /renew (and a failure clearing the session mid-session).
@@ -77,8 +91,8 @@ async function request<T>(
   options: RequestOptions = {},
   retry = true
 ): Promise<T> {
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options;
-  const accessToken = await getAccessToken();
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, authToken, ...fetchOptions } = options;
+  const accessToken = authToken ?? await getAccessToken();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -94,7 +108,23 @@ async function request<T>(
     headers,
   }, timeoutMs);
 
-  if (response.status === 401 && retry) {
+  // `!authToken`: the renew path is about the STORED session, and a request
+  // carrying an explicit token is by definition not it. Without this guard,
+  // validating a stranger's expired token would renew the signed-in user's
+  // token off the back of it and retry — answering "whose token is this?" with
+  // the account already on the phone — and, when the renew failed, clear()
+  // below would sign that account out over a link they never tapped. That is
+  // MEAL-155's benign half, and the reported symptom.
+  //
+  // `auth.verify` also passes retry=false, so today either one alone is enough
+  // and neither is pinned by a test on its own: removing just this clause, or
+  // just the retry=false, leaves the suite green (both measured). Removing BOTH
+  // fails token-install-order.test.tsx, "does not renew A's session to answer
+  // for B's token", on A's stored token being null — A signed out. That is not
+  // a coverage gap to paper over: this clause is here for the caller who has
+  // not been written yet and passes an authToken without thinking about retry,
+  // and a mutant cannot demonstrate a caller that does not exist.
+  if (response.status === 401 && retry && !authToken) {
     // The server uses a long-lived access token (90 days). /api/auth/renew takes the
     // current access token via Authorization header and returns a fresh one.
     // Concurrent 401s coalesce onto a single in-flight renewal (see renewOnce).
@@ -141,8 +171,18 @@ export const auth = {
       body: JSON.stringify({ firstName, lastName, email, password }),
     }),
 
-  verify: () =>
-    request<{ user: User }>('/api/auth/verify', { method: 'GET' }),
+  /**
+   * Whose session is this? With no argument, the stored one. With a token, that
+   * token — used to validate one before it is stored (see loginWithToken).
+   *
+   * retry=false when a token is supplied: an explicit token that comes back 401
+   * is a verdict, not a session to repair. Renewing and retrying would answer
+   * for the stored account instead.
+   */
+  verify: (accessToken?: string) =>
+    accessToken
+      ? request<{ user: User }>('/api/auth/verify', { method: 'GET', authToken: accessToken }, false)
+      : request<{ user: User }>('/api/auth/verify', { method: 'GET' }),
 
   renew: (accessToken: string) =>
     fetchWithTimeout(`${BASE_URL}/api/auth/renew`, {
