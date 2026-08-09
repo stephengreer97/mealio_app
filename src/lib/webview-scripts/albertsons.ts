@@ -25,7 +25,7 @@
 //   Add to cart button: button[aria-label^="Add 1 unit of"]
 //   Collapsed bubble:   button[data-qa="qty-stppr-bbl"]
 //   Increment button:   button[data-qa="prdctincrmntr"]
-//   Cart URL fallback:  /shop/cart.html
+//   Cart URL:           /erums/cart  (ALBERTSONS_CART_PATH)
 
 import type { StoreScripts } from './index';
 import { buildExtractWorker } from './worker-search';
@@ -284,6 +284,93 @@ function buildCheckLoginScript(domain: string): string {
       return el ? (el.textContent || '').trim() : '';
     }
 
+    // Has that span RESOLVED to one of its two real states, or is it still a
+    // loading placeholder? (MEAL-140.)
+    //
+    // MEAL-124 made the positive verdict require a non-empty name. Non-empty is
+    // too weak, because the regex it gates runs against aria-label + text, and
+    // aria-label="Account menu" is static markup present in BOTH auth states —
+    // so the text only had to contain SOME character. A skeleton placeholder
+    // ("...", "—", a spinner glyph, "Loading") produced "Account menu Loading",
+    // matched /account\\s*menu/, and resolved to loggedIn. Same window as
+    // MEAL-124, one step narrower: empty was closed, meaningless was not.
+    //
+    // The rule, in two clauses, because placeholders come in two kinds:
+    //
+    //   1. TYPOGRAPHIC — "...", "…", "-", "—", "•", "*", braille/dot spinners,
+    //      a bare digit. Their defining property is that they carry no lexical
+    //      content at all, so: require a LETTER. \\p{L} rather than [a-z],
+    //      because a name in Cyrillic or CJK is a name.
+    //   2. LEXICAL — "Loading", "Loading...", "Please wait". These are made of
+    //      letters, so clause 1 cannot see them and they have to be named. This
+    //      list is NOT exhaustive and cannot be: no test separates a name from
+    //      a word in general. It covers the placeholder vocabulary a header
+    //      actually uses; clause 1 covers everything without words in it.
+    //
+    // ONE letter, not two, and the threshold is deliberate rather than
+    // arbitrary. Every typographic placeholder above has ZERO letters — that is
+    // what makes it typographic — so a second letter rejects nothing extra in
+    // the class this exists to catch, while it does reject a header that renders
+    // a bare initial ("J") or a single-glyph name. Raising it would be paying a
+    // click, for those users, on every run, to buy nothing. The boundary that
+    // matters is 0 vs ≥1 and that is the one the tests pin.
+    //
+    // "Sign in" passes this — deliberately. This predicate answers "has the
+    // span settled", not "is this a name". A settled "Sign in" is a DEFINITE
+    // state, and the caller reads acctIsSignIn before acctIsMenu, so settling
+    // is exactly when both the poll and the decision should act on it. (Which
+    // is also why "signing in" is absent from the word list below: SIGNIN_RE
+    // matches it — "signin" is a substring of "signing" — so it decides
+    // loggedOut before ever reaching here, and listing it would claim coverage
+    // of a branch that cannot run.)
+    //
+    // WHAT IT COSTS WHEN IT IS WRONG, which is the whole reason it is shaped
+    // this way. A false negative falls through to the click check, which opens
+    // the panel, finds "Sign Out", and answers loggedIn — the right answer, at a
+    // cost of up to ~4.5s: the poll below spends its full 3s budget first,
+    // because acctTextResolved never returns true, and only then does the panel
+    // wait add up to 1.5s. Measured: placeholder cases 3.8-4.9s against 0.5s for
+    // a genuine name. An earlier version of this comment said "one click and up
+    // to 1.5s", counting only the second half. A false positive is a wrong verdict the entire run
+    // then acts on. The two directions are not comparable, so where there is
+    // any doubt this returns false — e.g. a real user literally named "Loading"
+    // takes the click check and still gets the right answer.
+    //
+    // Rejected alternative: requiring the text to hold STEADY across two polls.
+    // It does not separate the cases — a placeholder that persists because auth
+    // never resolves is just as steady as a name — and it would put 200ms on
+    // the passive path for every signed-in user to buy nothing.
+    function acctTextResolved(t) {
+      var s = (t || '').replace(/\\s+/g, ' ').trim();
+      if (!s) return false;
+      if (!/\\p{L}/u.test(s)) return false;
+      // Leading non-letters stripped before the word test, because the two clauses
+      // do not partition the space the way the comment above first claimed. A
+      // spinner glyph in FRONT of the word — a braille dot, a bullet — is
+      // covered by neither: clause 1 sees the letters in "Loading" and passes it,
+      // and an anchored clause 2 never reaches the word. Cold review drove both
+      // through the real script and got a passive loggedIn in ~500ms, which is
+      // the original defect intact.
+      //
+      // A leading run of non-letters is exactly the shape of a spinner, a bullet
+      // or an ellipsis, so dropping it costs nothing a real name would miss —
+      // a name does not begin with punctuation. Measured against ~60 strings:
+      // O'Brien, -Ann, .Stephen, RLM/LRM-prefixed Arabic and Hebrew, Cyrillic,
+      // CJK, Devanagari, Thai and a bare initial all still resolve.
+      //
+      // What it does NOT close, stated so the next reader does not rediscover it:
+      // a LETTER-bearing prefix still defeats the anchor. "Hi, Loading" and
+      // "Welcome, Loading" resolve true and decide loggedIn passively. Not idle
+      // — the span carries class user-greeting, and acctIsMenu's own regex
+      // already lists hi[, ] and welcome, so the code anticipates greeting
+      // content here. Not evidenced on any committed capture, so latent rather
+      // than live, and the honest reason it is unfixed is that stripping words
+      // is where a blacklist over page text stops being defensible.
+      var word = s.replace(/^[^\\p{L}]+/u, '');
+      if (/^(loading|please wait|one moment|updating|fetching)\\b/i.test(word)) return false;
+      return true;
+    }
+
     // Poll for the profile button (up to 3s, usually < 1s).
     //
     // MEAL-124: the loop used to stop the moment the ELEMENT existed. That is
@@ -292,6 +379,14 @@ function buildCheckLoginScript(domain: string): string {
     // milliseconds with no user in sight. Keep polling, within the same 3s
     // budget, until the name inside it has actually rendered. A name that never
     // arrives is not treated as a name: it falls through to the click check.
+    //
+    // MEAL-140: "has rendered" is acctTextResolved, not "is non-empty" — the
+    // same predicate the decision below uses. That matters in both directions.
+    // Stopping on non-empty made a placeholder look READY, so the loop handed
+    // the decision a settled-looking span 200ms in and reported nameReady:true
+    // in the log; now a placeholder spends the full 3s budget waiting for the
+    // real text, and if it never comes, nameReady stays false and the verdict
+    // falls through to the click check on its own.
     var profileBtn = null;
     var acctNameReady = false;
     for (var pi = 0; pi < 15; pi++) {
@@ -300,7 +395,7 @@ function buildCheckLoginScript(domain: string): string {
         var aria = (candidates[ci].getAttribute('aria-label') || '').toLowerCase();
         if (!aria.includes('close')) { profileBtn = candidates[ci]; break; }
       }
-      if (profileBtn && acctNameOf(profileBtn)) { acctNameReady = true; break; }
+      if (profileBtn && acctTextResolved(acctNameOf(profileBtn))) { acctNameReady = true; break; }
       await wait(200);
     }
     if (!profileBtn) {
@@ -380,6 +475,16 @@ function buildCheckLoginScript(domain: string): string {
     //     resolves to signed OUT when it finds no "sign out" — the direction that
     //     shows a login wall rather than failing every add in silence.
     //
+    //     MEAL-140 closed the rest of that window. "Non-empty" was the wrong
+    //     standard: the regex it gated matches the static aria-label on its own,
+    //     so the text only had to contain SOME character, and a skeleton
+    //     placeholder ("...", a spinner glyph, "Loading") read as a signed-in
+    //     user just as an empty span had. Both the poll and the decision now use
+    //     acctTextResolved — text that has SETTLED, letters and not a loading
+    //     word — so an unsettled span spends the full budget and then takes the
+    //     same click-check path an empty one does. See acctTextResolved for why
+    //     it is deliberately quick to say "not settled".
+    //
     //   • headerSignIn is the only independent second signal, and it is weaker
     //     than it looks: on the real capture Albertsons ships NO <header>, <nav>
     //     or [role="banner"] at all — the account control lives in a
@@ -401,13 +506,21 @@ function buildCheckLoginScript(domain: string): string {
           return SIGNIN_RE.test(n);
         });
       var acctIsSignIn = SIGNIN_RE.test(acctName);
-      // MEAL-124: the acctText conjunct is the fix. Without it this matched
-      // aria-label="Account menu" alone, which is in the raw markup in BOTH auth
-      // states, so an empty name span — pre-hydration, mid-render, or a slow auth
-      // bootstrap — resolved to loggedIn. An empty name is NOT evidence of a
-      // signed-in user; it is no evidence at all, and it now falls through to the
-      // click check rather than short-circuiting to the answer that fails silently.
-      var acctIsMenu = !!acctText && /account\\s*menu|my\\s*account|account & lists|hi[, ]|welcome/i.test(acctName);
+      // The regex half of this is satisfied by aria-label ALONE — "Account menu"
+      // is in the raw markup signed in or out — so it carries no information
+      // about auth state and the whole verdict rests on the conjunct in front
+      // of it. That conjunct is therefore the rule, and the regex is only
+      // "is this an account control rather than something else in the header".
+      //
+      // MEAL-124 made the conjunct !!acctText: an empty name is no evidence,
+      // so it must not decide. MEAL-140: neither is a non-empty MEANINGLESS
+      // name. !!acctText accepted "..." or "Loading" as the per-state
+      // evidence this rule has none of otherwise, and answered loggedIn off a
+      // skeleton. acctTextResolved is the same conjunct with the standard
+      // raised from "some character" to "text that has actually settled" —
+      // see its definition for what that means and what it costs when wrong.
+      var acctResolved = acctTextResolved(acctText);
+      var acctIsMenu = acctResolved && /account\\s*menu|my\\s*account|account & lists|hi[, ]|welcome/i.test(acctName);
       if (acctIsSignIn || headerSignIn) {
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'LOGIN_DEBUG', step: 'passive_decision', decided: 'loggedOut', acctName: acctName.slice(0, 60) }));
         postStatus(false);
@@ -426,13 +539,23 @@ function buildCheckLoginScript(domain: string): string {
         postStatus(true);
         return;
       }
-      // else: ambiguous → click check below. An empty account name is called out
-      // separately because it is the MEAL-124 state and the one we most want to
-      // be able to recognise in a log: everything is rendered except the thing
-      // that distinguishes the two states.
+      // else: ambiguous → click check below. Three labels, not one, because
+      // these are three different things and a log that conflates them cannot
+      // tell a rule that is thin from a header that has moved:
+      //   • empty       — MEAL-124: everything rendered except the one thing
+      //                   that distinguishes the two states.
+      //   • unresolved  — MEAL-140: that thing rendered, but as a placeholder.
+      //                   Distinct from empty because it means the span exists
+      //                   and is being written to; the auth bootstrap is just
+      //                   slower than our 3s. It is also the label that says
+      //                   acctTextResolved rejected something, so a placeholder
+      //                   vocabulary we have not seen shows up here by name.
+      //   • click       — a settled name that simply matched no known pattern.
       window.ReactNativeWebView.postMessage(JSON.stringify({
         type: 'LOGIN_DEBUG', step: 'passive_decision',
-        decided: acctText ? 'ambiguous_click_fallback' : 'ambiguous_empty_acct_name',
+        decided: !acctText
+          ? 'ambiguous_empty_acct_name'
+          : (acctResolved ? 'ambiguous_click_fallback' : 'ambiguous_unresolved_acct_name'),
         acctName: acctName.slice(0, 60),
         acctText: acctText.slice(0, 60),
         nameReady: acctNameReady,
@@ -1601,7 +1724,20 @@ export function getScripts(storeId: string): StoreScripts {
   return {
     storeUrl: storeOrigin,
     loginUrl: storeOrigin,
-    cartUrl: `${storeOrigin}/shop/cart.html`,
+    // MEAL-151: was `/shop/cart.html`, which 404s while `/erums/cart` returns 200
+    // — spot-checked live on albertsons.com, safeway.com and vons.com. Not all
+    // fifteen were probed; the path is uniform across the family (pinned by
+    // url-builders.test.ts), so there is no reason to expect the rest to differ,
+    // but the comment should say what was measured rather than what follows. This is not a dead
+    // constant: `cartUrl` has exactly one consumer, the Linking.openURL that opens
+    // the user's cart in the real app (WebViewCartSheet), so every tap of that
+    // button landed on a 404 page.
+    //
+    // ALBERTSONS_CART_PATH rather than another literal, because it is the same
+    // path the cart-count probe already navigates to and MEAL-136 already proved
+    // uniform across the family. Two copies of a path is how one of them goes
+    // stale without the other noticing.
+    cartUrl: `${storeOrigin}${ALBERTSONS_CART_PATH}`,
     domain: domain,
     isSearchUrl: (url: string) => url.includes(domain) && url.includes('/shop/search-results.html'),
     // Albertsons login is a popup on the same page — login success is detected via

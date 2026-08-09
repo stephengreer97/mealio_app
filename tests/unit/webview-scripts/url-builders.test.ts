@@ -70,6 +70,29 @@ describe('getAlbertsonsCartPageUrl', () => {
     expect(getAlbertsonsCartPageUrl('united')).not.toContain('www.unitedsupermarkets.com');
   });
 
+  // MEAL-151: the same path, twice, in two places that had drifted apart. The
+  // probe navigated to ALBERTSONS_CART_PATH while getScripts handed the app
+  // `/shop/cart.html`, which 404s — spot-checked live on albertsons.com,
+  // safeway.com and vons.com, not on all fifteen. (Distinct from the 2026-08-07
+  // verification above, which is MEAL-136's and does cover every host, for the
+  // /erums/cart path rather than this one.)
+  //
+  // Not a dead constant: `cartUrl`'s only consumer is the Linking.openURL behind
+  // the button that opens the user's cart, so every tap landed on a 404. This
+  // test is the pin for the two paths being one.
+  //
+  // Pinned as one path rather than two literals, because two copies is how one
+  // of them goes stale while the other keeps working.
+  it('opens the same cart path the probe navigates to', () => {
+    for (const id of ALBERTSONS_FAMILY_IDS) {
+      const scripts = getStoreScripts(id);
+      expect(scripts).not.toBeNull();
+      expect(scripts!.cartUrl).toBe(getAlbertsonsCartPageUrl(id));
+      expect(scripts!.cartUrl).toContain(ALBERTSONS_CART_PATH);
+      expect(scripts!.cartUrl).not.toContain('/shop/cart.html');
+    }
+  });
+
   const EXPECTED_CART_URLS: Record<string, string> = {
     albertsons: 'https://www.albertsons.com/erums/cart',
     safeway: 'https://www.safeway.com/erums/cart',
