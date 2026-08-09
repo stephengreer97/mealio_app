@@ -109,8 +109,17 @@ function toFormIng(ing: Ingredient): IngredientForm {
  * one is a compile error. `Partial` would let a field silently fall out of both
  * returns and be picked up from a stale `source` instead, which is a quieter
  * version of the bug this file is fixing.
+ *
+ * `Required` is doing real work here and is not decoration. `searchTerm` and
+ * `measure` are OPTIONAL on `Ingredient`, so a bare `Pick` accepts a return that
+ * omits them — a cold review measured exactly that, dropping each from the type
+ * and from both returns with `tsc` still exiting 0. `searchTerm` is the one that
+ * matters: unowned, it comes from the stale `source`, so `updateField`'s
+ * "clear the chosen product when the name changes" stops persisting and a
+ * cleared product resurrects. Both are `T | null` already, so requiring them
+ * costs nothing at runtime.
  */
-type OwnedFields = Pick<Ingredient, 'ingredientName' | 'qty' | 'unit' | 'productQty' | 'measure' | 'searchTerm'>;
+type OwnedFields = Required<Pick<Ingredient, 'ingredientName' | 'qty' | 'unit' | 'productQty' | 'measure' | 'searchTerm'>>;
 
 function ownedFields(form: IngredientForm): OwnedFields {
   if (form.unit === 'qty') {
