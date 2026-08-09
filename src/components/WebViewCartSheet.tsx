@@ -293,6 +293,76 @@ export default function WebViewCartSheet({
   /** Stable accessor for the recorder. Cheap enough to call on every step. */
   const tel = useCallback(() => telemetryRef.current, []);
 
+  /**
+   * End this run's telemetry: the terminal row a run that never reached 'done'
+   * would otherwise never get, and the dispose() that EVERY run needs (MEAL-5).
+   *
+   * `run_summary` used to be emitted from exactly one place — the 'done' effect —
+   * so it was a row about runs that finished, not a row about runs. Every other
+   * way a run ends produced none: the user closing the sheet at the qty screen,
+   * at a login, at a robot wall it was never going to get past, a sign-out ending
+   * the job, a store that wedged until the user gave up. `logAutomationStart` has
+   * already written an `automation_runs` row for all of those, so they were
+   * present in the run table and absent from the funnel — the shape of gap that
+   * reads as a smaller, healthier funnel rather than as missing data.
+   *
+   * It biases OPTIMISTICALLY, and that is the direction that matters: a run a
+   * user abandons is not a random run. It is disproportionately one that was
+   * going badly, so the rows that vanished are the failures.
+   *
+   * Outcome 'skipped', not 'error': the run did not fail, it stopped. 'skipped'
+   * is the one non-success outcome that carries no failure code, so these rows
+   * cannot leak into the code tally or the failure charts, and `detail.terminal`
+   * lets the read side count or exclude them deliberately. Nothing here needs a
+   * new member of StepOutcome or StepName — both are vocabulary shared with the
+   * Kroger Brands web extension, and neither can be extended one-sidedly.
+   *
+   * `abandonedAt` is the actionable field: a pile of 'qty' is people changing
+   * their mind before any automation ran, and a pile of 'robot_challenge' is a
+   * store beating us. Those must not be one number.
+   *
+   * Reads nothing but refs, deliberately. It is called from a cleanup with `[]`
+   * deps, so the closure it runs from may be the first render's — a rule that
+   * holds as long as every value here is read through `.current`.
+   */
+  const endRun = useCallback(() => {
+    const t = telemetryRef.current;
+    // Keyed on the runId, not on the recorder: without one the server issued no
+    // run, so there is no `automation_runs` row for this row to be the missing
+    // half of, and the recorder is the no-op that drops everything anyway.
+    // `automationCompletedRef` is what keeps a run that DID reach 'done' from
+    // shipping a second terminal row on its way out — and a second row is not a
+    // harmless duplicate: mealio_central's automation-trace takes the LAST
+    // run_summary as the run's terminal row, so a 'skipped' one landing after a
+    // clean finish blanks that run's code and relabels it in the drilldown.
+    if (automationRunIdRef.current && !automationCompletedRef.current) {
+      automationCompletedRef.current = true;
+      t.record('run_summary', 'skipped', {
+        detail: {
+          terminal: 'abandoned',
+          abandonedAt: stepRef.current,
+          kind: runKindRef.current,
+          requested: requestedRef.current.requested,
+          // The same expression every finalize path computes setTotalAdded from,
+          // read off the ref because this runs from a cleanup with no live state.
+          itemsAdded: addResultsRef.current.filter((r) => r.success).length,
+          runComplete: false,
+        },
+      });
+    }
+    // UNCONDITIONAL, and outside the guard above on purpose. dispose() sends what
+    // is buffered and stops the retry timer; flush() would do only the first, and
+    // a recorder whose uploads are failing re-arms that timer on every refused
+    // attempt — forever, for the life of the process.
+    //
+    // A run that reaches 'done' needs this every bit as much as one that is
+    // abandoned. It is the COMMON path: the done effect records the terminal row
+    // and flushes, then this cleanup runs and takes the early return above, so
+    // scoping the dispose to abandoned runs would have left the leak open on
+    // every successful run and closed it only for the rare ones.
+    void t.dispose();
+  }, []);
+
   useEffect(() => {
     if (visible) {
       if (!automationStartedRef.current) {
@@ -339,6 +409,9 @@ export default function WebViewCartSheet({
           });
       }
     } else {
+      // Before the resets below wipe the runId and the completion flag this
+      // needs to read.
+      endRun();
       // Retire this open before re-arming the start below, so a response still
       // in flight for it can no longer write anything.
       automationGenRef.current += 1;
@@ -351,7 +424,7 @@ export default function WebViewCartSheet({
       telemetryRef.current = createNoopTelemetry();
       void prev.dispose();
     }
-  }, [visible, storeId, meals.length, cfgTelemetry]);
+  }, [visible, storeId, meals.length, cfgTelemetry, endRun]);
 
   // Being unmounted is an abandonment too, and it is the one that matters most:
   // the live mount site (CartJobContext, FEATURE_BACKGROUND_CART) renders this
@@ -361,7 +434,30 @@ export default function WebViewCartSheet({
   // outlives it, so a response landing after teardown could still name a run
   // nobody is watching. Its own effect, not a cleanup on the one above, which
   // would fire on every dependency change and cancel a legitimate start.
-  useEffect(() => () => { automationGenRef.current += 1; }, []);
+  //
+  // It is also the ONLY place the live mount site can emit a terminal row from,
+  // for the same reason: dropping the job unmounts this, so every run that ends
+  // anywhere but the done screen ends here (MEAL-5).
+  //
+  // The `[]` is load-bearing, and it is what enforces both of those — not a
+  // convention. `endRun` is stable, so listing it would buy nothing, but a dep
+  // that ever DID change turns this cleanup into a mid-run event: it bumps the
+  // generation, so the in-flight logAutomationStart response is discarded and
+  // the run never gets a recorder at all.
+  //
+  // Measured with `[step]`, and the outcome depends on a race: if a step change
+  // beats the logAutomationStart response the run uploads NOTHING, and if the
+  // start lands first the run ships a false `skipped` terminal row for a run that
+  // actually finished — losing login_check, add_click, confirm and the real `ok`
+  // summary. The second is the worse one, and it is exactly the corruption the
+  // single-terminal-row guard above exists to prevent. Neither failed a test
+  // before this commit; both do now. So `endRun` reads refs only (see there) and
+  // this list stays empty.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => {
+    automationGenRef.current += 1;
+    endRun();
+  }, []);
 
   // Step: qty
   const [items, setItems] = useState<ConsolidatedIngredient[]>([]);

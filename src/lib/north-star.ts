@@ -133,6 +133,23 @@
 //        outcome, cartDeltaWarning, codeSource  (pre-existing)
 //      → This is where the trust qualifiers live. Join to the run for store_id.
 //
+//      ABANDONED RUNS (MEAL-5) also ship a `run_summary`, and it is a DIFFERENT
+//      row: outcome 'skipped', and a detail of
+//        terminal      'abandoned'  — present only on these
+//        abandonedAt   the step the run stopped on ('qty', 'login',
+//                      'robot_challenge', 'adding', …)
+//        kind, requested, itemsAdded, runComplete (always false)
+//      A run that never reached the done screen — the user closed the sheet, a
+//      sign-out ended the job, a store wedged until they gave up — emitted no
+//      terminal row at all before this. It still had an `automation_runs` row, so
+//      the funnel was a strict subset of the runs and the missing ones were
+//      disproportionately the bad ones. Filter `terminal = 'abandoned'` OUT of
+//      both rates (they have no cart outcome to score) and chart the count beside
+//      them: it is the completeness check, and a rate drawn without it is drawn
+//      over runs that chose to finish.
+//      They carry no failure `code` by construction, so they cannot move the code
+//      distribution or the `failureCodes` tally.
+//
 //   3. `reconcile` step row with detail.phase === 'north_star', at most one per
 //      run, present only when an after-run cart probe returned per-item rows:
 //        requested, summaryConfirmed, confirmed, runComplete, overstated,
