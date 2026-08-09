@@ -248,3 +248,74 @@ describe('the run_summary row a clean run emits', () => {
     expect(row.detail?.failureCodes).toBeUndefined();
   });
 });
+
+describe('a run that fails more than one way', () => {
+  // The one-item run above cannot tell a real tally from several broken ones.
+  // A cold review measured it: with a single failure, `confirm_failed:1` is
+  // produced identically by a tally that hardcodes every count to 1, by one
+  // truncated to its first entry, and by one with the severity ranking removed.
+  // Three items failing two different ways separates all of them — one code with
+  // a count of 2, one with 1, and a chosen code that is NOT the most frequent.
+  const runThree = async () => {
+    (globalThis as any).__batches = [];
+    const view = render(sheet(chosen('Sour Cream'), chosen('Tortillas'), chosen('Cheese')));
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    await act(async () => {});
+    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
+
+    // Every item is searched before any is added, so all three answers come
+    // first. Posting an ADD_RESULT before that ends the run one item in.
+    for (const productName of ['Sour Cream', 'Tortillas', 'Cheese']) {
+      post({
+        type: 'SEARCH_RESULT',
+        candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2' }],
+      });
+    }
+    // Two answer with a failure; the third never answers and hits the 10s add
+    // timeout, which is a different code.
+    post({ type: 'ADD_RESULT', success: false, reason: 'add button not found' });
+    post({ type: 'ADD_RESULT', success: false, reason: 'add button not found' });
+    act(() => { jest.advanceTimersByTime(12_000); });
+    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
+    act(() => { jest.advanceTimersByTime(5_000); });
+    await act(async () => {});
+    view.unmount();
+    await act(async () => {});
+    return runSummary();
+  };
+
+  it('counts each code, and keeps them all', async () => {
+    // Both halves matter. A tally that hardcoded `:1` would read
+    // "confirm_failed:1,timeout:1"; one truncated to the primary would read
+    // "confirm_failed:2". Neither is this string.
+    const summaries = await runThree();
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].detail?.failureCodes).toBe('confirm_failed:2,timeout:1');
+  });
+
+  it('ranks by severity rather than by how often a code happened', async () => {
+    // `confirm_failed` happened twice and `timeout` once, and the row is coded
+    // `timeout` — so the code is chosen by severity, not frequency. With the
+    // ranking removed the frequency fallback would pick `confirm_failed`, which
+    // on a one-item run is the same answer and invisible.
+    const [row] = await runThree();
+    expect(row.code).toBe('timeout');
+    expect(row.detail?.codeSource).toBe('severity');
+  });
+
+  it('still reports the run totals alongside the codes', async () => {
+    const [row] = await runThree();
+    expect(row.detail?.requested).toBe(3);
+    expect(row.detail?.itemsAdded).toBe(0);
+    // `kind` tells the funnel this was an add run rather than a choose run, and
+    // was asserted by nothing anywhere before this.
+    expect(row.detail?.kind).toBe('add');
+  });
+});
