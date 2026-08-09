@@ -20,7 +20,7 @@ import { useDraggablePreview } from '../lib/useDraggablePreview';
 import FloatingPreviewImage from './FloatingPreviewImage';
 import ProductImageViewer from './ProductImageViewer';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
-import { STORES } from '../constants/stores';
+import { useStores } from '../lib/store-catalog/useStores';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -203,7 +203,7 @@ export default function KrogerCartReviewSheet({
   onClose,
   onMealUpdated,
 }: KrogerCartReviewSheetProps) {
-  const storeColor = STORES.find((s) => s.id === storeId)?.color ?? '#003087';
+  const storeColor = useStores().find((s) => s.id === storeId)?.color ?? '#003087';
 
   const [step, setStep] = useState<Step>('qty');
   const [error, setError] = useState('');

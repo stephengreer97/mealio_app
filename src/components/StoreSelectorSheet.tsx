@@ -11,7 +11,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as SecureStore from 'expo-secure-store';
 import { Colors, Radius } from '../constants/colors';
-import { STORES } from '../constants/stores';
+import { Store } from '../constants/stores';
+import { useStores } from '../lib/store-catalog/useStores';
 import { presetMeals, meals as mealsApi } from '../lib/api';
 import { PresetMeal } from '../types';
 import Button from './ui/Button';
@@ -35,15 +36,18 @@ async function recordRecentStore(storeId: string): Promise<void> {
   } catch {}
 }
 
-type StoreItem = (typeof STORES)[number];
+type StoreItem = Store;
 type SectionHeader = { type: 'header'; label: string };
 type ListItem = StoreItem | SectionHeader;
 
-function buildListItems(recentIds: string[]): ListItem[] {
+// `stores` is passed rather than read from the module, so the list rebuilds
+// against the catalog that is live when the sheet opens — including one that
+// arrived after this module was first imported.
+function buildListItems(recentIds: string[], stores: StoreItem[]): ListItem[] {
   const recent = recentIds
-    .map((id) => STORES.find((s) => s.id === id))
+    .map((id) => stores.find((s) => s.id === id))
     .filter(Boolean) as StoreItem[];
-  const all = STORES.slice().sort((a, b) => a.name.localeCompare(b.name));
+  const all = stores.slice().sort((a, b) => a.name.localeCompare(b.name));
   if (recent.length === 0) return all;
   const recentIdSet = new Set(recent.map((s) => s.id));
   return [
@@ -64,13 +68,14 @@ interface StoreSelectorSheetProps {
 export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: StoreSelectorSheetProps) {
   const [selectedStore, setSelectedStore] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [listItems, setListItems] = useState<ListItem[]>(STORES);
+  const stores = useStores();
+  const [listItems, setListItems] = useState<ListItem[]>(stores);
 
   useEffect(() => {
     if (visible) {
-      getRecentStores().then((recent) => setListItems(buildListItems(recent)));
+      getRecentStores().then((recent) => setListItems(buildListItems(recent, stores)));
     }
-  }, [visible]);
+  }, [visible, stores]);
 
   async function handleSave() {
     if (!meal || !selectedStore) return;

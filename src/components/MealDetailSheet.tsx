@@ -25,7 +25,7 @@ import Input from './ui/Input';
 import IngredientEditor from './IngredientEditor';
 import PhotoPicker from './PhotoPicker';
 import TagPicker from './TagPicker';
-import { STORES } from '../constants/stores';
+import { useStores } from '../lib/store-catalog/useStores';
 
 interface MealDetailSheetProps {
   visible: boolean;
@@ -76,6 +76,7 @@ export default function MealDetailSheet({
   onNeedKrogerStore,
   hideShare = false,
 }: MealDetailSheetProps) {
+  const stores = useStores();
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -291,8 +292,8 @@ export default function MealDetailSheet({
               >
                 {editStoreId ? (
                   <View style={styles.dropdownSelected}>
-                    <View style={[styles.storeDot, { backgroundColor: STORES.find(s => s.id === editStoreId)?.color ?? Colors.border }]} />
-                    <Text style={styles.dropdownSelectedText}>{STORES.find(s => s.id === editStoreId)?.name ?? editStoreId}</Text>
+                    <View style={[styles.storeDot, { backgroundColor: stores.find(s => s.id === editStoreId)?.color ?? Colors.border }]} />
+                    <Text style={styles.dropdownSelectedText}>{stores.find(s => s.id === editStoreId)?.name ?? editStoreId}</Text>
                   </View>
                 ) : (
                   <Text style={styles.dropdownPlaceholder}>Select a store…</Text>
@@ -484,7 +485,7 @@ export default function MealDetailSheet({
                       onChangeText={setStoreSearch}
                     />
                     <ScrollView keyboardShouldPersistTaps="handled">
-                      {STORES.filter(s => !storeSearch.trim() || s.name.toLowerCase().includes(storeSearch.toLowerCase())).map(item => (
+                      {stores.filter(s => !storeSearch.trim() || s.name.toLowerCase().includes(storeSearch.toLowerCase())).map(item => (
                         <TouchableOpacity
                           key={item.id}
                           style={[styles.pickerRow, editStoreId === item.id && styles.pickerRowActive]}

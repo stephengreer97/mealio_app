@@ -2,9 +2,9 @@
 //
 // ─── This file is a copy, with one deliberate difference. ────────────────────
 // The original is `lib/pitch.ts` in `mealio_central` (MEAL-86). The two repos
-// share no package, so the strings are duplicated here the same way `STORES` is
-// — diff the two files whenever either changes, and expect the diff to be
-// non-empty: the store list is *supposed* to differ. Cart automation for every
+// share no package, so the strings are duplicated here the same way the store
+// list is — diff the two files whenever either changes, and expect the diff to
+// be non-empty: the store list is *supposed* to differ. Cart automation for every
 // store except Kroger runs in this app, so the web build narrows its list to
 // `PITCH_STORES_WEB` and mobile must not follow. Taking the web's `PITCH_STEPS`
 // wholesale would tell someone reading it inside the app that their store only

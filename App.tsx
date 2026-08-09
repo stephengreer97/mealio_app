@@ -24,6 +24,7 @@ import FingerprintProbe from './src/components/FingerprintProbe';
 import PushRegistrar from './src/components/PushRegistrar';
 import { configureNotificationHandler } from './src/lib/push';
 import AutomationConfigLoader from './src/components/AutomationConfigLoader';
+import StoreCatalogLoader from './src/components/StoreCatalogLoader';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -52,6 +53,11 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <WebViewVersionProbe />
+      {/* Outside AuthProvider on purpose: GET /api/stores is public, and the
+          signed-out deep link into a shared meal offers the same store picker.
+          Gates nothing — the picker renders from the bundled list until this
+          lands, and forever if it never does. */}
+      <StoreCatalogLoader />
       {__DEV__ && <FingerprintProbe />}
       <AuthProvider>
         {/* Inside AuthProvider (needs a token) but outside the cart tree, so the
