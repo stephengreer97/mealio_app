@@ -32,9 +32,18 @@ jest.mock('../../src/lib/purchases', () => ({
 jest.mock('react-native-webview', () => {
   const RealReact = jest.requireActual('react');
   const RealView = jest.requireActual('react-native').View;
-  const MockWebView = RealReact.forwardRef((props: any, _ref: any) =>
-    RealReact.createElement(RealView, { testID: props.testID || 'mock-webview', ...props }),
-  );
+  // A ref that records injections. The other cart tests hand back no ref at all,
+  // so `injectJavaScript` is a no-op there and nothing sees the scripts. Kept
+  // here because it is half of what the jitter assertion needs (see the note at
+  // the end of this file) — the missing half is driving a parked worker's search
+  // result, which is MEAL-158's problem.
+  const MockWebView = RealReact.forwardRef((props: any, ref: any) => {
+    RealReact.useImperativeHandle(ref, () => ({
+      injectJavaScript: () => { ((globalThis as any).__injectedAt ||= []).push(Date.now()); },
+      stopLoading: () => {}, goBack: () => {}, reload: () => {},
+    }));
+    return RealReact.createElement(RealView, { testID: props.testID || 'mock-webview', ...props });
+  });
   return { __esModule: true, default: MockWebView, WebView: MockWebView };
 });
 
@@ -217,3 +226,20 @@ describe('flags.parallelAdd reaches the add route', () => {
     expect(serial).toBe(1);
   });
 });
+
+// NOT COVERED HERE: that `commitJitterMs`'s result is the delay `setTimeout`
+// actually receives.
+//
+// A cold review found that passing the build constant to `setTimeout` while
+// still computing the jitter survives every test — both the config read and the
+// randomisation stop reaching the store and nothing goes red. The old
+// source-text oracle pinned it with `/,\s*jitter\s*\);/`; that assertion is
+// gone with the rest of the oracle and this file does not replace it.
+//
+// I tried. The injection happens inside `presearchOnInjectAdd`, which the pool
+// calls only after a parked worker has loaded AND reported a search result;
+// firing `onLoadEnd` on the parked tiles is not enough, and driving each
+// worker's search result from here is the cart-harness problem MEAL-158 exists
+// for. Rather than assert something weaker and call it covered, it is written
+// down: the jitter's VALUE is proven in `automationConfigDecisions.test.ts`, its
+// journey to `setTimeout` is not, and MEAL-158 is where that gets closed.
