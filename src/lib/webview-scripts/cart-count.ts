@@ -600,6 +600,15 @@ export function buildCartPageCountScript(storeId: string): string | null {
   // If the guard path cannot be derived, the store is not counted at all rather
   // than counted unguarded: a malformed override must not silently downgrade a
   // store to the trusted-zero behaviour MEAL-152 removed.
+  //
+  // That branch is UNREACHABLE TODAY and is kept deliberately — a mutant that
+  // replaces it with `build(cartPath ?? '/')` survives the suite, which is the
+  // honest statement of its coverage. Reaching it needs a guarded store whose
+  // effective URL does not parse, and both routes are closed: merge.ts admits
+  // only `^https://` strings, and every id in GUARDED_CART_STORE_IDS has a
+  // bundled URL to fall back to. It guards the next editor, not today's config —
+  // adding a guarded store with a malformed bundled URL should make that store
+  // uncountable, not make it count unguarded.
   const guarded = (build: (cartPath: string) => string): string | null => {
     const cartPath = getCartPagePath(storeId);
     return cartPath ? build(cartPath) : null;
