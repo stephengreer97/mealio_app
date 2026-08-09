@@ -1200,7 +1200,24 @@ function buildSearchAndAddScriptFn(
 
   var CRITICAL = new Set(['organic','grass','fed','free','range','cage','large','small','jumbo',
     'medium','extra','spicy','mild','hot','sweet','whole','skim','nonfat','lowfat',
-    'salted','unsalted','sodium','boneless','skinless','lean','ground']);
+    'salted','unsalted','sodium','boneless','skinless','lean','ground',
+    'grassfed','cagefree','freerange']);
+  // MEAL-160: two-words-on-one-label, one-word-on-the-next. The critical-word
+  // check is a token membership test, so 'lowfat' as a lone entry both failed to
+  // fire for the natural query spelling ("low fat" tokenises to two non-critical
+  // words) and punished the RIGHT product when it did fire (no hyphenated label
+  // can contain it). Collapsed on both sides so the entry means the concept, not
+  // one spelling of it. Longest first — 'cage free' and 'free range' share a
+  // word. Same rule as CRITICAL_PHRASES in _scoring.ts.
+  var CRITICAL_PHRASES = [[/\\bcage free\\b/g,'cagefree'],[/\\bfree range\\b/g,'freerange'],
+    [/\\bgrass fed\\b/g,'grassfed'],[/\\blow fat\\b/g,'lowfat'],[/\\bnon fat\\b/g,'nonfat']];
+  function collapseCriticalPhrases(s) {
+    var out = s;
+    for (var ci = 0; ci < CRITICAL_PHRASES.length; ci++) {
+      out = out.replace(CRITICAL_PHRASES[ci][0], CRITICAL_PHRASES[ci][1]);
+    }
+    return out;
+  }
   // Dual normalization to handle stores that mangle ñ/é/etc. inconsistently
   // across renderings (Walmart strips ñ entirely on certain queries; others
   // may NFD-decompose). Score both ways and take the better.
@@ -1213,7 +1230,8 @@ function buildSearchAndAddScriptFn(
       .replace(/[^\\x00-\\x7f]/g, '').replace(/[^a-z0-9 ]/g, ' ')
       .replace(/\\s+/g, ' ').trim();
   }
-  function scoreOne(na, nb) {
+  function scoreOne(rawA, rawB) {
+    var na = collapseCriticalPhrases(rawA), nb = collapseCriticalPhrases(rawB);
     if (na === nb) return 100;
     var wa = na.split(' ').filter(Boolean), sb = new Set(nb.split(' ').filter(Boolean));
     for (var i = 0; i < wa.length; i++) { if (CRITICAL.has(wa[i]) && !sb.has(wa[i])) return 0; }

@@ -790,7 +790,24 @@ function buildSearchAndAddScript(
   // Score and find best match.
   var CRITICAL = new Set(['organic','grass','fed','free','range','cage','large','small','jumbo',
     'medium','extra','spicy','mild','hot','sweet','whole','skim','nonfat','lowfat',
-    'salted','unsalted','sodium','boneless','skinless','lean','ground']);
+    'salted','unsalted','sodium','boneless','skinless','lean','ground',
+    'grassfed','cagefree','freerange']);
+  // MEAL-160: two-words-on-one-label, one-word-on-the-next. The critical-word
+  // check is a token membership test, so 'lowfat' as a lone entry both failed to
+  // fire for the natural query spelling ("low fat" tokenises to two non-critical
+  // words) and punished the RIGHT product when it did fire (no hyphenated label
+  // can contain it). Collapsed on both sides so the entry means the concept, not
+  // one spelling of it. Longest first — 'cage free' and 'free range' share a
+  // word. Same rule as CRITICAL_PHRASES in _scoring.ts.
+  var CRITICAL_PHRASES = [[/\\bcage free\\b/g,'cagefree'],[/\\bfree range\\b/g,'freerange'],
+    [/\\bgrass fed\\b/g,'grassfed'],[/\\blow fat\\b/g,'lowfat'],[/\\bnon fat\\b/g,'nonfat']];
+  function collapseCriticalPhrases(s) {
+    var out = s;
+    for (var ci = 0; ci < CRITICAL_PHRASES.length; ci++) {
+      out = out.replace(CRITICAL_PHRASES[ci][0], CRITICAL_PHRASES[ci][1]);
+    }
+    return out;
+  }
   var COMMON = new Set(['the','and','or','of','a','an','in','on','at','to','for','with']);
 
   // Dual normalization to handle stores that mangle ñ/é/etc. inconsistently
@@ -806,7 +823,8 @@ function buildSearchAndAddScript(
       .replace(/\\s+/g, ' ').trim();
   }
 
-  function scoreOne(nf, nt) {
+  function scoreOne(rawF, rawT) {
+    var nf = collapseCriticalPhrases(rawF), nt = collapseCriticalPhrases(rawT);
     if (nf === nt) return 100;
     var wt = nt.split(' ').filter(Boolean), wf = new Set(nf.split(' ').filter(Boolean));
     var critTarget = wt.filter(function(w) { return CRITICAL.has(w); });

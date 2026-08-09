@@ -13,7 +13,56 @@ const CRITICAL_WORDS = new Set([
   'jumbo', 'medium', 'extra', 'spicy', 'mild', 'hot', 'sweet', 'whole',
   'skim', 'nonfat', 'lowfat', 'salted', 'unsalted', 'sodium', 'boneless',
   'skinless', 'lean', 'ground',
+  // Canonical joined forms of the phrases below. Nothing reaches the veto
+  // spelled any other way once `collapseCriticalPhrases` has run.
+  'grassfed', 'cagefree', 'freerange',
 ]);
+
+/**
+ * Concepts that are TWO words on one label and ONE word on the next.
+ *
+ * The veto is a set-membership test on tokens, so it is only as good as the
+ * agreement between how a shopper writes an ingredient and how a store writes a
+ * product. "lowfat" and "nonfat" were in the set as single tokens while the
+ * normalisers turn every hyphen into a space — so the entries misfired in both
+ * directions at once, measured (MEAL-160):
+ *
+ *   scoreMatch("low fat cottage cheese", "Full Fat Cottage Cheese") = 75
+ *       The natural spelling of the query tokenises to `low` + `fat`, neither
+ *       of which is critical, so the entry protected NOTHING: a full-fat
+ *       product stayed eligible for auto-pick against a low-fat request.
+ *
+ *   scoreMatch("lowfat cottage cheese", "Low-Fat Cottage Cheese") = 0
+ *       And when the joined spelling DID appear in the query, no hyphenated or
+ *       spaced product could ever satisfy it, so the RIGHT product scored zero.
+ *
+ * The audit the ticket asked for found the same shape on the two-token entries,
+ * reproduced the same way: `grassfed beef` vs "Grass Fed Beef" scored 0, and
+ * `cagefree eggs` vs "Cage Free Eggs" scored 0.
+ *
+ * Collapsing every spelling to one canonical token on BOTH sides before the
+ * membership test is what makes the entry mean the concept rather than one
+ * spelling of it. Ordered longest-first, since "cage free" and "free range"
+ * share a word.
+ *
+ * Deliberately NOT extended here: `sodium` is a single word that works as a
+ * single word, and adding a `lowsodium` concept would newly veto "Reduced
+ * Sodium" against a "low sodium" request — a real behaviour change, not a
+ * spelling fix, and not what this ticket measured.
+ */
+const CRITICAL_PHRASES: Array<[RegExp, string]> = [
+  [/\bcage free\b/g, 'cagefree'],
+  [/\bfree range\b/g, 'freerange'],
+  [/\bgrass fed\b/g, 'grassfed'],
+  [/\blow fat\b/g, 'lowfat'],
+  [/\bnon fat\b/g, 'nonfat'],
+];
+
+function collapseCriticalPhrases(s: string): string {
+  let out = s;
+  for (const [pattern, canonical] of CRITICAL_PHRASES) out = out.replace(pattern, canonical);
+  return out;
+}
 
 /**
  * Lowercases, NFD-decomposes, strips combining-mark codepoints (so "ñ"
@@ -54,7 +103,13 @@ export function normStrip(s: string): string {
     .trim();
 }
 
-function scoreOne(na: string, nb: string): number {
+function scoreOne(rawA: string, rawB: string): number {
+  // Both sides, so the veto compares concepts rather than spellings. Applied
+  // here rather than inside the normalisers because `chooseRanking` tokenises
+  // with `normDiacritic` for its own overlap score, which is a different
+  // mechanism and not what MEAL-160 measured.
+  const na = collapseCriticalPhrases(rawA);
+  const nb = collapseCriticalPhrases(rawB);
   if (na === nb) return 100;
   const wa = na.split(' ').filter(Boolean);
   const sb = new Set(nb.split(' ').filter(Boolean));
