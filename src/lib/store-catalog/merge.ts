@@ -21,9 +21,11 @@
 //
 //   • IDENTITY IS REQUIRED, DECORATION DEGRADES. `id` and `name` are what make
 //     an entry usable — an entry without them is dropped. `color` is a dot next
-//     to the name, so an absent or malformed one falls back to a neutral rather
-//     than costing us the store. That asymmetry is the whole reason this file
-//     validates field by field instead of accepting or rejecting whole rows.
+//     to the name, so an absent or malformed one costs us the colour rather than
+//     the store: the entry keeps whatever colour is already on file, and only an
+//     entry with no history at all falls back to a neutral. That asymmetry is the
+//     whole reason this file validates field by field instead of accepting or
+//     rejecting whole rows.
 //
 //   • THE ID SHAPE IS NARROW ON PURPOSE. Ids are compared, persisted on meals,
 //     and used as React keys. `^[a-z0-9][a-z0-9_]{0,39}$` is exactly the shape
@@ -84,10 +86,11 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 /**
  * Pull the entry list out of whatever the endpoint returned.
  *
- * Accepts the bare array and the `{ stores: [...] }` envelope, because the
- * server half of MEAL-23 is being built in parallel and either shape is a
- * reasonable thing for it to have chosen. Tolerating both here costs four lines
- * and removes a reason for the two halves to have to ship together.
+ * Accepts the bare array and the `{ stores: [...] }` envelope. Written while the
+ * server half of MEAL-23 was still being built, so that neither half had to wait
+ * on the other to agree; the shipped endpoint serves the envelope. Kept rather
+ * than narrowed — it costs four lines, and it is what makes the loader's raw
+ * cache readable by a build whose endpoint has been reshaped under it.
  */
 function entryList(remote: unknown): unknown[] | null {
   if (Array.isArray(remote)) return remote;
