@@ -233,12 +233,23 @@ describe('every declared flag reaches a decision', () => {
   // OUTPUT: change the flag, and some decision must answer differently.
   //
   // Generic on purpose. There is no per-flag mapping to go stale, so a new flag
-  // that nothing consumes fails here the day it is added.
+  // that nothing consumes fails here the day it is added — UNLESS someone also
+  // writes it an exemption row below, which three lines can do. The list is a
+  // reviewer's call, not a check: the test underneath can confirm a row's key
+  // exists and is genuinely unread, and cannot confirm its REASON is true. That
+  // is exactly how `backgroundCart` sat here describing itself as owned
+  // elsewhere while nothing read it at all.
   const DELIBERATELY_UNREAD: Record<string, string> = {
-    // Selects the cart engine's MOUNT SITE (root CartJobProvider vs inline on
-    // the screen), not a request pattern. Not an anti-bot lever, and it belongs
-    // to whoever owns CartJobContext rather than to these decisions.
-    backgroundCart: 'mount-site selection, owned by CartJobContext',
+    // Read by NOTHING, anywhere. `grep -rn backgroundCart src/ tests/` returns
+    // its two schema lines and this row — `CartJobContext` never mentions it.
+    //
+    // The previous wording here said "mount-site selection, owned by
+    // CartJobContext", which reads as *consumed somewhere else* and is how this
+    // row survived a ticket whose entire subject is declared-and-inert flags. It
+    // is inherited from the retired oracle, not introduced here, but describing
+    // it accurately is the least this file owes: it is a published, validated,
+    // bounded flag that does nothing, and it should be wired or dropped.
+    backgroundCart: 'DECLARED AND INERT — read nowhere in src/; wire it or drop it',
   };
 
   /** Everything the decisions answer, for one set of flags. */
