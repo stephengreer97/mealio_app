@@ -42,6 +42,7 @@ import { useParallelSearchPool, PoolSettled } from '../lib/useParallelSearchPool
 import { usePresearchAddPool, PresearchItem } from '../lib/usePresearchAddPool';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS, FEATURE_PRESEARCH_ADD, ADD_COMMIT_JITTER_MS } from '../constants/features';
+import { chooseAddStrategy, commitJitterMs, parallelAddWorkerCount, shouldStartPresearch } from '../lib/automation-config/decisions';
 import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
@@ -838,7 +839,11 @@ export default function WebViewCartSheet({
   // Parallel-ADD worker count: honor the per-store workerCount (a heavy store
   // like Albertsons crashed the iOS WKWebView content process with 5 concurrent
   // add WebViews), falling back to the global pilot default.
-  const PARALLEL_ADD_WORKER_COUNT = scripts?.workerCount ?? cfgFlags.parallelAddWorkers ?? PARALLEL_ADD_WORKERS;
+  const PARALLEL_ADD_WORKER_COUNT = parallelAddWorkerCount({
+    scriptWorkerCount: scripts?.workerCount,
+    flags: cfgFlags,
+    fallback: PARALLEL_ADD_WORKERS,
+  });
   // A store opts into the worker-pool choose-product path by exposing BOTH
   // getSearchUrl and buildWorkerScript on its StoreScripts. Null otherwise →
   // sequential single-WebView flow. (WAF note: HEB/Walmart/Albertsons run 5
@@ -932,8 +937,7 @@ export default function WebViewCartSheet({
     // so the documented way to spread a commit burst against a store that started
     // scoring it did nothing. Bundled default is 500, the value this constant
     // already held, so no build behaves differently until a push lands.
-    const base = cfgFlagsRef.current.addCommitJitterMs ?? ADD_COMMIT_JITTER_MS;
-    const jitter = base + Math.floor(Math.random() * base);
+    const jitter = commitJitterMs(cfgFlagsRef.current, ADD_COMMIT_JITTER_MS);
     console.log(`[Cart ${ts()}]`, 'presearch commit: worker', workerId, 'term=', term, 'in', jitter, 'ms');
     setTimeout(() => { presearchWorkerRefs.current[workerId]?.injectJavaScript(script); }, jitter);
   }, []);
@@ -1787,14 +1791,19 @@ export default function WebViewCartSheet({
     // qty screen and then fires N adds within ~1s of the tap. That is a distinct
     // request pattern from the fused search+add path, and this is the only way to
     // drop back to the latter without a release.
-    if (!FEATURE_PRESEARCH_ADD || !cfgFlags.presearchAdd) return;
-    if (step !== 'qty' || presearchStartedRef.current) return;
-    if (!parallelCfg) return;
-    if (loginPrewarm.getStatus(lockedStoreIdRef.current) !== 'loggedIn') return;
     const chosen: PresearchItem<ConsolidatedIngredient>[] = items
       .map((item, idx) => ({ idx, item }))
       .filter((e) => !!e.item.searchTerm);
-    if (chosen.length === 0 || chosen.length !== items.length) return;
+    if (!shouldStartPresearch({
+      features: { presearchAdd: FEATURE_PRESEARCH_ADD },
+      flags: cfgFlags,
+      step,
+      alreadyStarted: presearchStartedRef.current,
+      hasParallelCfg: !!parallelCfg,
+      loginStatus: loginPrewarm.getStatus(lockedStoreIdRef.current),
+      itemCount: items.length,
+      chosenCount: chosen.length,
+    })) return;
     presearchStartedRef.current = true;
     console.log(`[Cart ${ts()}]`, 'presearch: parking first', PARALLEL_ADD_WORKER_COUNT, 'of', chosen.length, 'chosen items');
     presearchPool.start(chosen);
@@ -2099,21 +2108,26 @@ export default function WebViewCartSheet({
     const s = getStoreScripts(lockedStoreIdRef.current);
     const canParallel = !!(s && s.getSearchUrl && s.buildWorkerScript && !s.forceSerialSearch);
     console.log(`[Cart ${ts()}]`, 'beginSearchFlow: parallel=', canParallel, 'allChoose=', allChoose, 'activeLen=', active.length, 'store=', lockedStoreIdRef.current);
-    if (canParallel && !allChoose && FEATURE_PRESEARCH_ADD && presearchCommitArmedRef.current) {
+    // The route itself is decided by `chooseAddStrategy`, which is a pure
+    // function tested by calling it — see `src/lib/automation-config/decisions.ts`
+    // for why these conditions no longer live inline. Flags are read off the ref
+    // for the same reason `s` is resolved live above: this callback's deps do not
+    // include the config.
+    const strategy = chooseAddStrategy({
+      canParallel,
+      allChoose,
+      presearchCommitArmed: presearchCommitArmedRef.current,
+      features: { presearchAdd: FEATURE_PRESEARCH_ADD, parallelAdd: FEATURE_PARALLEL_ADD },
+      flags: cfgFlagsRef.current,
+    });
+    console.log(`[Cart ${ts()}]`, 'beginSearchFlow: strategy=', strategy);
+    if (strategy === 'presearch') {
       // Parked pre-search workers are ready — commit their adds instead of the
       // fused pool. The before-snapshot already ran, so the reconcile is sound.
       startPresearchCommit();
-    } else if (canParallel && allChoose) {
+    } else if (strategy === 'parallelSearch') {
       startParallelSearch();
-      // Remote kill switch for concurrent adds (MEAL-32), read off the ref for
-      // the same reason `s` is resolved live above: this callback's deps do not
-      // include the config. Defaults true, so nothing changes without a push.
-      //
-      // It is checked AFTER the pre-search branch on purpose, and the two flags
-      // have to be published together to mean "stop adding concurrently":
-      // parked workers commit their adds through startPresearchCommit, which
-      // this branch never reaches. `flags.presearchAdd:false` is the other half.
-    } else if (canParallel && !allChoose && FEATURE_PARALLEL_ADD && cfgFlagsRef.current.parallelAdd) {
+    } else if (strategy === 'parallelAdd') {
       // Regular add flow through the parallel pool: each worker searches AND
       // adds one product concurrently. Unconfirmed items fall to review.
       startParallelAdd();
