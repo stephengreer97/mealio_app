@@ -24,6 +24,7 @@ import FingerprintProbe from './src/components/FingerprintProbe';
 import PushRegistrar from './src/components/PushRegistrar';
 import { configureNotificationHandler } from './src/lib/push';
 import AutomationConfigLoader from './src/components/AutomationConfigLoader';
+import StoreCatalogLoader from './src/components/StoreCatalogLoader';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -57,6 +58,9 @@ export default function App() {
         {/* Inside AuthProvider (needs a token) but outside the cart tree, so the
             remote store config is already in memory before any cart run starts. */}
         <AutomationConfigLoader />
+        {/* Same placement and the same rules: needs a token, gates nothing. The
+            picker renders from the bundled list until this lands. */}
+        <StoreCatalogLoader />
         {/* Inside AuthProvider (needs a user and a token) and outside the
             navigator, because MainTabs reads the count to badge the Creator tab
             and the review screen writes it back after a decision. */}

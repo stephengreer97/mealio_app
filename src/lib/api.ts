@@ -809,4 +809,25 @@ export const automation = {
   },
 };
 
+// Remote store catalog (id, name, colour) — which stores the picker offers, so
+// adding one is a database row instead of an App Store release (MEAL-23).
+// Returns null on any failure; the caller keeps its cached or bundled list.
+//
+// The BOUNDARY, not the truth: `stores` is deliberately `unknown`. Everything
+// past this line is validated by mergeStoreCatalog, which owns the decision
+// about what is safe to believe. Two shapes are accepted downstream — a bare
+// array and a `{ stores: [...] }` envelope — so this call does not have to be in
+// lockstep with the server half.
+export const storeCatalog = {
+  get: async (): Promise<{ version: number; stores: unknown } | null> => {
+    try {
+      const r = await request<{ version: number; stores: unknown }>('/api/stores/catalog', {
+        method: 'GET',
+        timeoutMs: 10_000,
+      });
+      return r && typeof r.version === 'number' ? r : null;
+    } catch { return null; }
+  },
+};
+
 export { ApiError };

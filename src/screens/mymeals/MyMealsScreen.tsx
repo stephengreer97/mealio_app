@@ -25,7 +25,9 @@ import { getOffering, purchasePackage } from '../../lib/purchases';
 import { mergeChosenProduct, createMealSaveQueue } from '../../lib/saveChosenIngredient';
 import { useAuth } from '../../context/AuthContext';
 import { useSessionEnd } from '../../context/useSessionEnd';
-import { STORES, isKrogerBrand, isWebViewStore } from '../../constants/stores';
+import { isKrogerBrand, isWebViewStore } from '../../constants/stores';
+import { getStores } from '../../lib/store-catalog';
+import { useStores } from '../../lib/store-catalog/useStores';
 import MealCard from '../../components/MealCard';
 import MealDetailSheet from '../../components/MealDetailSheet';
 import KrogerCartReviewSheet from '../../components/KrogerCartReviewSheet';
@@ -143,9 +145,10 @@ export default function MyMealsScreen() {
   const saveEpochRef = useRef(0);
   useSessionEnd(() => { saveEpochRef.current += 1; });
   useEffect(() => () => { saveEpochRef.current += 1; }, []);
+  const stores = useStores();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedStore, setSelectedStore] = useState<string>(STORES[0].id);
+  const [selectedStore, setSelectedStore] = useState<string>(stores[0].id);
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
   const [krogerConnected, setKrogerConnected] = useState(false);
@@ -547,7 +550,7 @@ export default function MyMealsScreen() {
       // is most likely to add to before they ever tap add-to-cart).
       const counts: Record<string, number> = {};
       for (const m of active) if (m.storeId) counts[m.storeId] = (counts[m.storeId] ?? 0) + 1;
-      const topStore = STORES.reduce<{ id: string; count: number } | null>((best, s) => {
+      const topStore = getStores().reduce<{ id: string; count: number } | null>((best, s) => {
         const c = counts[s.id] ?? 0;
         return c > 0 && (!best || c > best.count) ? { id: s.id, count: c } : best;
       }, null);
@@ -670,7 +673,7 @@ export default function MyMealsScreen() {
   }
 
   const storeMeals = allMeals.filter((m) => m.storeId === selectedStore);
-  const storesWithMeals = STORES
+  const storesWithMeals = stores
     .filter((s) => allMeals.some((m) => m.storeId === s.id))
     .sort((a, b) => allMeals.filter((m) => m.storeId === b.id).length - allMeals.filter((m) => m.storeId === a.id).length);
   const displayStores = loading ? [] : storesWithMeals;
@@ -678,7 +681,7 @@ export default function MyMealsScreen() {
   const isWebView = isWebViewStore(selectedStore);
   const isCartEnabled = isKroger || isWebView;
   const selectedMeals = storeMeals.filter((m) => selectedMealIds.has(m.id));
-  const selectedStore_ = STORES.find((s) => s.id === selectedStore);
+  const selectedStore_ = stores.find((s) => s.id === selectedStore);
 
   function openMeal(meal: Meal) {
     setSelectedMeal(meal);
@@ -862,7 +865,7 @@ export default function MyMealsScreen() {
                   cartJob.startJob({
                     meals: selectedMeals,
                     storeId: selectedStore,
-                    storeName: STORES.find((s) => s.id === selectedStore)?.name ?? 'Store',
+                    storeName: stores.find((s) => s.id === selectedStore)?.name ?? 'Store',
                     onIngredientChosen: handleIngredientChosen,
                     onClose: endWebViewRun,
                   });
@@ -927,7 +930,7 @@ export default function MyMealsScreen() {
           visible={webViewCartVisible}
           meals={selectedMeals}
           storeId={cartStoreId || selectedStore}
-          storeName={STORES.find((s) => s.id === (cartStoreId || selectedStore))?.name ?? 'Store'}
+          storeName={stores.find((s) => s.id === (cartStoreId || selectedStore))?.name ?? 'Store'}
           onClose={() => { setWebViewCartVisible(false); endWebViewRun(); }}
           onIngredientChosen={handleIngredientChosen}
         />
@@ -1029,8 +1032,8 @@ export default function MyMealsScreen() {
               >
                 {formStore ? (
                   <View style={styles.dropdownSelected}>
-                    <View style={[styles.storeDot, { backgroundColor: STORES.find(s => s.id === formStore)?.color ?? Colors.border }]} />
-                    <Text style={styles.dropdownSelectedText}>{STORES.find(s => s.id === formStore)?.name}</Text>
+                    <View style={[styles.storeDot, { backgroundColor: stores.find(s => s.id === formStore)?.color ?? Colors.border }]} />
+                    <Text style={styles.dropdownSelectedText}>{stores.find(s => s.id === formStore)?.name}</Text>
                   </View>
                 ) : (
                   <Text style={styles.dropdownPlaceholder}>Select a store…</Text>
@@ -1157,7 +1160,7 @@ export default function MyMealsScreen() {
                     onChangeText={setStoreSearch}
                   />
                   <FlatList
-                    data={STORES.filter((s) =>
+                    data={stores.filter((s) =>
                       !storeSearch.trim() || s.name.toLowerCase().includes(storeSearch.toLowerCase())
                     )}
                     keyExtractor={(s) => s.id}

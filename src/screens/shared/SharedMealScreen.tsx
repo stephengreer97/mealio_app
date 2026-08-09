@@ -18,7 +18,8 @@ import { Colors, Radius } from '../../constants/colors';
 import { shared as sharedApi, normalizeIngredients } from '../../lib/api';
 import { ingredientAmount } from '../../lib/formatMeasurement';
 import { useAuth } from '../../context/AuthContext';
-import { STORES } from '../../constants/stores';
+import { Store } from '../../constants/stores';
+import { useStores } from '../../lib/store-catalog/useStores';
 import { Ingredient } from '../../types';
 import Button from '../../components/ui/Button';
 import * as SecureStore from 'expo-secure-store';
@@ -40,9 +41,11 @@ async function recordRecentStore(storeId: string) {
   } catch {}
 }
 
-function sortedStores(recentIds: string[]) {
-  const recent = recentIds.map(id => STORES.find(s => s.id === id)).filter(Boolean) as typeof STORES;
-  const rest = STORES.filter(s => !recentIds.includes(s.id)).slice().sort((a, b) => a.name.localeCompare(b.name));
+// `stores` is passed rather than read from the module, so the picker orders the
+// catalog that is live when it opens, not the one bundled at import time.
+function sortedStores(recentIds: string[], stores: Store[]): Store[] {
+  const recent = recentIds.map(id => stores.find(s => s.id === id)).filter(Boolean) as Store[];
+  const rest = stores.filter(s => !recentIds.includes(s.id)).slice().sort((a, b) => a.name.localeCompare(b.name));
   return [...recent, ...rest];
 }
 
@@ -72,7 +75,8 @@ export default function SharedMealScreen({ token, onClose }: Props) {
   // Store picker state
   const [pickerVisible, setPickerVisible] = useState(false);
   const [selectedStore, setSelectedStore] = useState<string | null>(null);
-  const [orderedStores, setOrderedStores] = useState(STORES);
+  const stores = useStores();
+  const [orderedStores, setOrderedStores] = useState(stores);
   const [saving, setSaving] = useState(false);
 
   const visible = !!token;
@@ -90,9 +94,9 @@ export default function SharedMealScreen({ token, onClose }: Props) {
 
   useEffect(() => {
     if (pickerVisible) {
-      getRecentStores().then(recent => setOrderedStores(sortedStores(recent)));
+      getRecentStores().then(recent => setOrderedStores(sortedStores(recent, stores)));
     }
-  }, [pickerVisible]);
+  }, [pickerVisible, stores]);
 
   async function fetchMeal(t: string) {
     try {

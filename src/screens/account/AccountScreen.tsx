@@ -17,7 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors, Radius } from '../../constants/colors';
-import { STORES } from '../../constants/stores';
+import { useStores } from '../../lib/store-catalog/useStores';
 import { useAuth } from '../../context/AuthContext';
 import { auth as authApi, account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
 import * as tokenStorage from '../../lib/tokenStorage';
@@ -38,6 +38,7 @@ function formatExpiry(iso: string): string {
 
 export default function AccountScreen() {
   const { user, isCreator, logout, refreshUser } = useAuth();
+  const stores = useStores();
   const [following, setFollowing] = useState<Creator[]>([]);
   const [deletedMeals, setDeletedMeals] = useState<Meal[]>([]);
 
@@ -675,7 +676,7 @@ export default function AccountScreen() {
                 ) : (
                   Object.entries(krogerLocations).map(([sid, loc]) => (
                     <Text key={sid} style={styles.krogerConnectedDesc}>
-                      {STORES.find(s => s.id === sid)?.name ?? sid}: {loc.locationName}
+                      {stores.find(s => s.id === sid)?.name ?? sid}: {loc.locationName}
                     </Text>
                   ))
                 )}

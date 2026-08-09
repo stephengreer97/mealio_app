@@ -19,7 +19,12 @@ import ProductImageViewer from './ProductImageViewer';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Meal } from '../types';
-import { STORES } from '../constants/stores';
+// Two entry points on purpose: useStores() where the value is rendered, and
+// getStores() at the two message-handler sites, which read the CURRENT catalog
+// at call time for the same reason they read lockedStoreIdRef — a value captured
+// in those closures can be several renders stale.
+import { getStores } from '../lib/store-catalog';
+import { useStores } from '../lib/store-catalog/useStores';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
 import { useLoginPrewarm } from '../context/LoginPrewarmContext';
@@ -232,7 +237,7 @@ export default function WebViewCartSheet({
   // from an earlier render); reading this ref makes the worker URL resolve to
   // the CURRENT locked store at call time, immune to closure staleness.
   const lockedStoreIdRef = useRef(storeId);
-  const storeColor = STORES.find((s) => s.id === lockedStoreId)?.color ?? '#dd0031';
+  const storeColor = useStores().find((s) => s.id === lockedStoreId)?.color ?? '#dd0031';
   // May be null if a meal ever carries a non-WebView store id (e.g. a
   // Kroger-family store handled by the web integration, or mockstore in prod).
   // Consumers guard against null and the sheet closes gracefully on open rather
@@ -2809,7 +2814,7 @@ export default function WebViewCartSheet({
             // isn't reported as unwanted on top of being reported as unverified.
             const unexplainedOver = dropExplainedOverAdds(outcome.overAdds, unverifiedCartNamesRef.current);
             if (unexplainedOver.length > 0) {
-              const lockedName = STORES.find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
+              const lockedName = getStores().find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
               const list = unexplainedOver.map(overAddLabel).join(', ');
               const units = unexplainedOver.reduce((n, o) => n + o.qty, 0);
               console.log(`[Cart ${ts()}]`, 'reconcile: OVER-ADD detected', unexplainedOver);
@@ -2833,7 +2838,7 @@ export default function WebViewCartSheet({
           } else if (phase === 'after') {
             // Name the warning after the LOCKED store (source of truth), so the
             // text can't drift from the brand the cart actually ran on.
-            const lockedName = STORES.find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
+            const lockedName = getStores().find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
             // Per-line breakdown for the done screen (cart-page stores only):
             // added qty in green, pre-existing qty in grey.
             let rows: CartRow[] | null = null;

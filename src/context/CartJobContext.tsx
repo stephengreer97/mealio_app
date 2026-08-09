@@ -13,7 +13,7 @@ import WebViewCartSheet, {
   WebViewCartSheetProps,
 } from '../components/WebViewCartSheet';
 import CartStatusBubble from '../components/CartStatusBubble';
-import { STORES } from '../constants/stores';
+import { useStores } from '../lib/store-catalog/useStores';
 import { Colors } from '../constants/colors';
 import { useSessionEnd } from './useSessionEnd';
 import { clearSessionLogs } from '../lib/logBuffer';
@@ -206,8 +206,9 @@ export function CartJobProvider({ children }: { children: React.ReactNode }) {
     [startJob, closeJob, job],
   );
 
+  const stores = useStores();
   const storeColor = job
-    ? STORES.find((s) => s.id === job.storeId)?.color ?? Colors.brand
+    ? stores.find((s) => s.id === job.storeId)?.color ?? Colors.brand
     : Colors.brand;
 
   return (

@@ -20,7 +20,7 @@ import { PresetMeal, Creator, Meal } from '../../types';
 import { presetMeals as presetMealsApi, creators as creatorsApi, meals as mealsApi } from '../../lib/api';
 import { getOffering, purchasePackage } from '../../lib/purchases';
 import { useAuth } from '../../context/AuthContext';
-import { STORES } from '../../constants/stores';
+import { getStores } from '../../lib/store-catalog';
 import MealCard from '../../components/MealCard';
 import MealDetailSheet from '../../components/MealDetailSheet';
 import CreatorProfileSheet from '../../components/CreatorProfileSheet';
@@ -131,7 +131,10 @@ export default function DiscoverScreen() {
       const map: Record<string, string[]> = {};
       for (const m of active) {
         if (!m.presetMealId) continue;
-        const storeName = STORES.find((s) => s.id === m.storeId)?.name ?? m.storeId;
+        // getStores(), not useStores(): this runs inside an async loader, not in
+        // render, so there is no subscription to hold — the map it builds is
+        // written to state and repaints on its own.
+        const storeName = getStores().find((s) => s.id === m.storeId)?.name ?? m.storeId;
         if (!map[m.presetMealId]) map[m.presetMealId] = [];
         if (!map[m.presetMealId].includes(storeName)) map[m.presetMealId].push(storeName);
       }
