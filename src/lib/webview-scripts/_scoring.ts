@@ -13,7 +13,104 @@ const CRITICAL_WORDS = new Set([
   'jumbo', 'medium', 'extra', 'spicy', 'mild', 'hot', 'sweet', 'whole',
   'skim', 'nonfat', 'lowfat', 'salted', 'unsalted', 'sodium', 'boneless',
   'skinless', 'lean', 'ground',
+  // Canonical joined forms of the phrases below. Nothing reaches the veto
+  // spelled any other way once `collapseCriticalPhrases` has run.
+  'grassfed', 'cagefree', 'freerange',
 ]);
+
+/**
+ * Concepts that are TWO words on one label and ONE word on the next.
+ *
+ * The veto is a set-membership test on tokens, so it is only as good as the
+ * agreement between how a shopper writes an ingredient and how a store writes a
+ * product. "lowfat" and "nonfat" were in the set as single tokens while the
+ * normalisers turn every hyphen into a space — so the entries misfired in both
+ * directions at once, measured (MEAL-160):
+ *
+ *   scoreMatch("low fat cottage cheese", "Full Fat Cottage Cheese") = 75
+ *       The natural spelling of the query tokenises to `low` + `fat`, neither
+ *       of which is critical, so the entry protected NOTHING: a full-fat
+ *       product stayed eligible for auto-pick against a low-fat request.
+ *
+ *   scoreMatch("lowfat cottage cheese", "Low-Fat Cottage Cheese") = 0
+ *       And when the joined spelling DID appear in the query, no hyphenated or
+ *       spaced product could ever satisfy it, so the RIGHT product scored zero.
+ *
+ * The audit the ticket asked for found the same shape on the two-token entries,
+ * reproduced the same way: `grassfed beef` vs "Grass Fed Beef" scored 0, and
+ * `cagefree eggs` vs "Cage Free Eggs" scored 0.
+ *
+ * Collapsing every spelling to one canonical token on BOTH sides before the
+ * membership test is what makes the entry mean the concept rather than one
+ * spelling of it.
+ *
+ * Order matters, and not for the reason an earlier version of this comment gave
+ * ("longest first" — which was both wrong about the lengths and unpinned by any
+ * test). `cage free` and `free range` share a word, so whichever runs first eats
+ * it. The three-word rule below settles that case explicitly instead.
+ *
+ * Deliberately NOT extended to `sodium`: it is a single word that works as a
+ * single word, and adding a `lowsodium` concept would newly veto "Reduced
+ * Sodium" against a "low sodium" request — a real behaviour change, not a
+ * spelling fix, and not what this ticket measured.
+ *
+ * NOT a complete audit of `CRITICAL_WORDS`, and the docblock should not be read
+ * as claiming one. A cold review found the same defect shape on families that
+ * are not in the set at all, so this change does not touch them:
+ *
+ *   "glutenfree white sandwich bread" vs "White Sandwich Bread"  = 75
+ *   "fatfree greek vanilla yogurt"    vs "Greek Vanilla Yogurt"  = 75
+ *   "dairyfree almond vanilla milk"   vs "Almond Vanilla Milk"   = 75
+ *
+ * Those are "the entry protects nothing" on an allergen attribute — the same
+ * shape MEAL-160 exists to fix, one family over. They score 75, not 100, so
+ * nothing auto-adds: it is a wrong suggestion, not a wrong add. Adding them
+ * means introducing new veto concepts rather than reconciling spellings of
+ * existing ones, which changes matching broadly and wants its own measurement.
+ * Filed as MEAL-168.
+ */
+const CRITICAL_PHRASES: Array<[RegExp, string]> = [
+  // "Cage Free Range Eggs" is a real label, and the two concepts in it SHARE the
+  // word `free`. A plain left-to-right pass collapses `cage free` first, eats
+  // that word, and leaves `cagefree range` — so a "free range eggs" request
+  // vetoes the very product it was looking for. This rule runs first and hands
+  // both concepts their own token.
+  [/\bcage free range\b/g, 'cagefree freerange'],
+  [/\bcage free\b/g, 'cagefree'],
+  [/\bfree range\b/g, 'freerange'],
+  [/\bgrass fed\b/g, 'grassfed'],
+  [/\blow fat\b/g, 'lowfat'],
+  [/\bnon fat\b/g, 'nonfat'],
+];
+
+/** The canonical tokens the phrases above collapse TO. Each stands for two words. */
+const CANONICAL_TOKENS = new Set(['cagefree', 'freerange', 'grassfed', 'lowfat', 'nonfat']);
+
+/**
+ * How much a token is worth in the overlap fraction.
+ *
+ * A collapsed token replaced two words, so counting it as one shrinks BOTH
+ * sides of `matchCount / wa.length` and quietly raises the bar. `3/4 = 0.75`
+ * passes the 70% floor; the same match after a collapse is `2/3 = 0.667` and
+ * fails. Measured: "2% low fat milk" against "Low Fat Milk" scored 75 before
+ * this change and 0 after — a correct product dropped out of the ranked list
+ * because the request carried one extra word, which is the common real shape (a
+ * percentage, a brand).
+ *
+ * Weighting a canonical token as the two words it stands for leaves the
+ * denominator where it was. It is weighted whether the query wrote it joined or
+ * spaced, so the two spellings cannot score differently — which is the entire
+ * point of collapsing them.
+ */
+function tokenWeight(token: string): number {
+  return CANONICAL_TOKENS.has(token) ? 2 : 1;
+}
+
+export function collapseCriticalPhrases(s: string): string {
+  let out = s;
+  for (const [pattern, canonical] of CRITICAL_PHRASES) out = out.replace(pattern, canonical);
+  return out;
+}
 
 /**
  * Lowercases, NFD-decomposes, strips combining-mark codepoints (so "ñ"
@@ -54,7 +151,13 @@ export function normStrip(s: string): string {
     .trim();
 }
 
-function scoreOne(na: string, nb: string): number {
+function scoreOne(rawA: string, rawB: string): number {
+  // Both sides, so the veto compares concepts rather than spellings. Applied
+  // here rather than inside the normalisers because `chooseRanking` tokenises
+  // with `normDiacritic` for its own overlap score, which is a different
+  // mechanism and not what MEAL-160 measured.
+  const na = collapseCriticalPhrases(rawA);
+  const nb = collapseCriticalPhrases(rawB);
   if (na === nb) return 100;
   const wa = na.split(' ').filter(Boolean);
   const sb = new Set(nb.split(' ').filter(Boolean));
@@ -64,8 +167,11 @@ function scoreOne(na: string, nb: string): number {
   for (const w of wa) {
     if (CRITICAL_WORDS.has(w) && !sb.has(w)) return 0;
   }
-  const matchCount = wa.filter((w) => sb.has(w)).length;
-  const p = matchCount / wa.length;
+  // Weighted, so a collapsed token counts for the two words it replaced — see
+  // `tokenWeight`. With every weight 1 this is the arithmetic it always was.
+  const total = wa.reduce((sum, w) => sum + tokenWeight(w), 0);
+  const matched = wa.reduce((sum, w) => sum + (sb.has(w) ? tokenWeight(w) : 0), 0);
+  const p = matched / total;
   if (p < 0.7) return 0;
   return Math.min(99, Math.round(p * 100));
 }

@@ -795,7 +795,30 @@ function buildSearchAndAddScript(
   // 3. Score matcher. 100 = exact tokens; 0 if a CRITICAL token is missing.
   var CRITICAL = new Set(['organic','grass','fed','free','range','cage','large','small','jumbo',
     'medium','extra','spicy','mild','hot','sweet','whole','skim','nonfat','lowfat',
-    'salted','unsalted','sodium','boneless','skinless','lean','ground']);
+    'salted','unsalted','sodium','boneless','skinless','lean','ground',
+    'grassfed','cagefree','freerange']);
+  // MEAL-160: two-words-on-one-label, one-word-on-the-next. The critical-word
+  // check is a token membership test, so 'lowfat' as a lone entry both failed to
+  // fire for the natural query spelling ("low fat" tokenises to two non-critical
+  // words) and punished the RIGHT product when it did fire (no hyphenated label
+  // can contain it). Collapsed on both sides so the entry means the concept, not
+  // one spelling of it. Longest first — 'cage free' and 'free range' share a
+  // word. Same rule as CRITICAL_PHRASES in _scoring.ts.
+  // "Cage Free Range Eggs" is a real label and the two concepts SHARE the word
+  // 'free'. A plain left-to-right pass collapses 'cage free' first, eats it, and
+  // leaves 'cagefree range' - so a "free range" request vetoed the exact product
+  // it wanted. The three-word rule runs first and gives both their own token.
+  var CRITICAL_PHRASES = [[/\\bcage free range\\b/g,'cagefree freerange'],
+    [/\\bcage free\\b/g,'cagefree'],[/\\bfree range\\b/g,'freerange'],
+    [/\\bgrass fed\\b/g,'grassfed'],[/\\blow fat\\b/g,'lowfat'],[/\\bnon fat\\b/g,'nonfat']];
+  var CANONICAL_TOKENS = new Set(['cagefree','freerange','grassfed','lowfat','nonfat']);
+  function collapseCriticalPhrases(s) {
+    var out = s;
+    for (var ci = 0; ci < CRITICAL_PHRASES.length; ci++) {
+      out = out.replace(CRITICAL_PHRASES[ci][0], CRITICAL_PHRASES[ci][1]);
+    }
+    return out;
+  }
   // Normalize for comparison. Two forms to handle Walmart's inconsistent ñ
   // rendering — sometimes "Jalapeño", sometimes "Jalapeo" (ñ dropped) on the
   // same product card depending on search context:
@@ -812,12 +835,21 @@ function buildSearchAndAddScript(
       .replace(/[^\\x00-\\x7f]/g, '').replace(/[^a-z0-9 ]/g, ' ')
       .replace(/\\s+/g, ' ').trim();
   }
-  function scoreOne(na, nb) {
+  function scoreOne(rawA, rawB) {
+    var na = collapseCriticalPhrases(rawA), nb = collapseCriticalPhrases(rawB);
     if (na === nb) return 100;
     var wa = na.split(' ').filter(Boolean), sb = new Set(nb.split(' ').filter(Boolean));
     for (var i = 0; i < wa.length; i++) { if (CRITICAL.has(wa[i]) && !sb.has(wa[i])) return 0; }
-    var m = wa.filter(function(w) { return sb.has(w); }).length;
-    var p = m / wa.length;
+    // Weighted: a collapsed token stands for two words, so counting it once
+    // would shrink both sides of the fraction and raise the 70% bar. Same rule
+    // as tokenWeight in _scoring.ts.
+    var total = 0, matched = 0;
+    for (var wi = 0; wi < wa.length; wi++) {
+      var tw = CANONICAL_TOKENS.has(wa[wi]) ? 2 : 1;
+      total += tw;
+      if (sb.has(wa[wi])) matched += tw;
+    }
+    var p = matched / total;
     if (p < 0.7) return 0;
     return Math.min(99, Math.round(p * 100));
   }
