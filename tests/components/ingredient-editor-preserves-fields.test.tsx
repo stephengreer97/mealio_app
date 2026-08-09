@@ -131,6 +131,19 @@ describe('the chosen weight survives an edit somewhere else', () => {
 
     expect((emitted()[0] as any).someFutureField).toBe('keep me');
   });
+
+  it('does not persist the form\'s own bookkeeping', () => {
+    // `source` is a form-only field. Structurally it cannot escape — the spread
+    // is of the Ingredient, never of the form — but this is what gets written to
+    // the database by three callers, so the shape is worth asserting outright
+    // rather than reasoning about. A nested `source` would also mean every saved
+    // row carried a copy of its own previous version, forever.
+    const { getAllByPlaceholderText, emitted } = mount([deliTurkey()]);
+    fireEvent.changeText(getAllByPlaceholderText('amt')[0], '2');
+
+    expect('source' in emitted()[0]).toBe(false);
+    expect(JSON.stringify(emitted()[0])).not.toContain('source');
+  });
 });
 
 describe('but the chosen product\'s fields do not outlive the chosen product', () => {
