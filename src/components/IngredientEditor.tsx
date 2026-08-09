@@ -38,20 +38,41 @@ interface IngredientForm {
   /**
    * Preparation (MEAL-102). Carried, displayed, and NOT editable here.
    *
-   * It has to live on the form even though nothing in this editor can change it,
-   * because of what `emit` does: every keystroke on any row runs the WHOLE list
-   * back through `fromFormIng`, which builds each `Ingredient` from scratch. A
-   * field the form does not hold is therefore not merely un-editable — it is
-   * deleted, on every row, by correcting a typo in an unrelated meal name. That
-   * write reaches storage through three callers (`MealDetailSheet.handleSave`,
-   * `CreatorPortalScreen`, and `creatorDrafts.edit` from the draft review
-   * queue), and the last of those is the screen where the restored prep first
-   * appears to the creator whose recipe it came from.
-   *
    * How a creator TYPES a preparation is a separate, open question — see the
    * read-only row below.
    */
   prep?: string;
+  /**
+   * The row this form was built from, carried so `fromFormIng` can put back
+   * everything the form does not own (MEAL-164).
+   *
+   * This exists because of what `emit` does: every keystroke on any row runs the
+   * WHOLE list back through `fromFormIng`. That used to build each `Ingredient`
+   * from a literal, so any field the form did not hold was not merely
+   * un-editable — it was DELETED, on every row, by correcting a typo in one
+   * ingredient's name. Three fields were being lost that way:
+   *
+   *   • `purchaseWeight` — the weight a shopper CHOSE for a sold-by-weight item
+   *     (H-E-B Deli, Fish Market, bulk), remembered so the next run auto-adds
+   *     that amount instead of re-prompting. Losing it means the next run adds a
+   *     different amount than the user picked, which is the over/under-add
+   *     failure the cart's governing principles exist to prevent — arriving
+   *     through an edit screen rather than through the cart.
+   *   • `weightStep` — the increment that weight is chosen in.
+   *   • `dropdown` — the product preference the shopper selected.
+   *
+   * The write reaches storage through three callers (`MealDetailSheet.handleSave`,
+   * `CreatorPortalScreen`, and `creatorDrafts.edit` from the draft review queue).
+   *
+   * Carrying the source row rather than adding a fourth field to the literal is
+   * the point: the defect is a form that silently owns MORE than it displays, so
+   * the fix has to invert the default. Fields are now preserved unless the form
+   * explicitly owns them, and the list of what it owns is right there in
+   * `fromFormIng`.
+   *
+   * Absent on a row the editor itself created, which has no source to preserve.
+   */
+  source?: Ingredient;
 }
 
 function toFormIng(ing: Ingredient): IngredientForm {
@@ -76,10 +97,15 @@ function toFormIng(ing: Ingredient): IngredientForm {
     // Spread, so a row with no preparation still has no `prep` key when
     // `fromFormIng` puts it back together — see the field's note above.
     ...(ing.prep ? { prep: ing.prep } : {}),
+    source: ing,
   };
 }
 
-function fromFormIng(form: IngredientForm): Ingredient {
+/**
+ * Everything this form owns. Anything NOT listed here is preserved from the row
+ * the form was built from — see `IngredientForm.source`.
+ */
+function ownedFields(form: IngredientForm): Partial<Ingredient> {
   if (form.unit === 'qty') {
     // Radix 10 so leading-zero input isn't parsed as octal. A qty of 0 isn't a
     // valid cart quantity, so an empty/NaN/0 measure defaults to 1.
@@ -92,7 +118,6 @@ function fromFormIng(form: IngredientForm): Ingredient {
       measure: null,
       searchTerm: form.searchTerm ?? null,
       productQty: qty,
-      ...(form.prep ? { prep: form.prep } : {}),
     };
   }
   return {
@@ -102,8 +127,35 @@ function fromFormIng(form: IngredientForm): Ingredient {
     measure: form.measure.trim() || null,
     searchTerm: form.searchTerm ?? null,
     productQty: 1,
-    ...(form.prep ? { prep: form.prep } : {}),
   };
+}
+
+/**
+ * The three fields that belong to the CHOSEN PRODUCT rather than to the recipe
+ * line, and so cannot outlive it.
+ *
+ * `saveChosenIngredient` writes all three in the same breath as `searchTerm`,
+ * when a shopper picks a product. Editing an ingredient's name already clears
+ * `searchTerm` — the row goes back to being unchosen — and a remembered weight
+ * or preference left behind would then be applied to whatever product is chosen
+ * NEXT. Preserving them there would swap one over/under-add for another.
+ */
+const PRODUCT_BOUND_FIELDS = ['dropdown', 'purchaseWeight', 'weightStep'] as const;
+
+function fromFormIng(form: IngredientForm): Ingredient {
+  const next: Ingredient = { ...(form.source ?? {}), ...ownedFields(form) } as Ingredient;
+
+  // `prep` is owned but optional, and the spread above may have carried an old
+  // one in. Absent has to stay absent (MEAL-102), so clearing it deletes the key
+  // rather than writing null.
+  if (form.prep) next.prep = form.prep;
+  else delete next.prep;
+
+  if (!next.searchTerm) {
+    for (const field of PRODUCT_BOUND_FIELDS) delete next[field];
+  }
+
+  return next;
 }
 
 interface IngredientEditorProps {
