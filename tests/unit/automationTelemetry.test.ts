@@ -252,10 +252,17 @@ describe('AutomationTelemetry recording', () => {
 describe('failure codes', () => {
   // The dashboard groups on the raw string, so a renamed or mistyped code
   // silently splits a metric's history rather than failing anywhere visible.
-  it('exposes exactly the eight agreed codes', () => {
+  // Membership is what matters here — every code is stored as a raw string on
+  // rows that already exist, so renaming or dropping one splits or orphans a
+  // metric's history. The literal is written in list order because that is how
+  // the file reads, NOT because anything consumes the position: no consumer does.
+  // (The order that IS load-bearing is FAILURE_CODE_SEVERITY's, asserted below by
+  // the tests that check which code headlines a run.)
+  it('exposes exactly the nine codes, out_of_stock among them', () => {
     expect([...STEP_FAILURE_CODES]).toEqual([
       'selector_miss', 'waf_block', 'auth_required', 'no_candidates',
       'match_rejected', 'confirm_failed', 'timeout', 'nav_failed',
+      'out_of_stock',
     ]);
   });
 
@@ -263,7 +270,10 @@ describe('failure codes', () => {
     const expected: Record<string, string> = {
       no_results: 'no_candidates',
       low_confidence: 'match_rejected',
-      out_of_stock: 'match_rejected',
+      // MEAL-29: its own code, not match_rejected. The store not having the item
+      // is not our scorer refusing every candidate, and counting them together
+      // put the store's inventory on our reliability numbers.
+      out_of_stock: 'out_of_stock',
       needs_weight: 'match_rejected',
       not_found: 'selector_miss',
       no_button: 'selector_miss',
@@ -401,6 +411,51 @@ describe('failure codes', () => {
     expect(t.failureCodeSummary()).toBe('confirm_failed:3,waf_block:1');
     expect(sanitizeDetail({ failureCodes: t.failureCodeSummary() }))
       .toEqual({ failureCodes: 'confirm_failed:3,waf_block:1' });
+  });
+
+  it('headlines a run with out_of_stock over match_rejected, and never over no_candidates', () => {
+    // MEAL-29 placed out_of_stock between these two, and the placement is the
+    // whole decision — it is what a mixed run reports on its run_summary row.
+    //
+    // Above match_rejected: the store's own answer about the item beats our
+    // judgement of the candidates, because there is nothing to go and check.
+    const beatsRejection = make();
+    for (let i = 0; i < 5; i++) beatsRejection.record('confirm', 'error', { code: 'match_rejected' });
+    beatsRejection.record('confirm', 'error', { code: 'out_of_stock' });
+    expect(beatsRejection.primaryFailureCode()).toBe('out_of_stock');
+
+    // Below no_candidates: an empty search might be stock and might be our search
+    // term, and the ambiguous answer is the one worth reading first.
+    const losesToEmptySearch = make();
+    for (let i = 0; i < 5; i++) losesToEmptySearch.record('confirm', 'error', { code: 'out_of_stock' });
+    losesToEmptySearch.record('candidates', 'empty', { code: 'no_candidates' });
+    expect(losesToEmptySearch.primaryFailureCode()).toBe('no_candidates');
+
+    // And a wall still outranks it, as it outranks everything: behind a WAF we
+    // never asked the store about stock, so an out_of_stock read there is not
+    // evidence of anything.
+    const walled = make();
+    for (let i = 0; i < 5; i++) walled.record('confirm', 'error', { code: 'out_of_stock' });
+    walled.record('search', 'blocked', { code: 'waf_block' });
+    expect(walled.primaryFailureCode()).toBe('waf_block');
+  });
+
+  it('lets an out_of_stock row reach the run tally under its own name', () => {
+    // Narrow on purpose, and NOT an end-to-end claim: the call below is
+    // hand-written, so it proves the tally and the summary handle the new code,
+    // not that any call site emits it. The wiring from a store script's
+    // `reason: 'out_of_stock'` through to a real row is covered where the wiring
+    // lives — poolAddFunnel.test.ts drives recordPoolAddOutcome for the pool
+    // paths. The fused and sequential call sites in WebViewCartSheet have no
+    // telemetry coverage at all, which predates this change and is not fixed here.
+    const t = make();
+    t.record('confirm', 'error', {
+      itemIndex: 2,
+      detail: { attempt: 1, path: 'parallel_add', reason: 'out_of_stock' },
+      code: addFailureCode('out_of_stock'),
+    });
+    expect(t.primaryFailureCode()).toBe('out_of_stock');
+    expect(t.failureCodeSummary()).toBe('out_of_stock:1');
   });
 
   it('outranks a symptom with its cause however lopsided the counts', () => {
