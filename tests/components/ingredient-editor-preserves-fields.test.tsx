@@ -172,6 +172,59 @@ describe('but the chosen product\'s fields do not outlive the chosen product', (
   });
 });
 
+describe('when something else edits the same list', () => {
+  // The editor is not the only writer of the array it edits. `MealDetailSheet`
+  // renders it and its "Products" section against the same `ingredients` state
+  // at once; that section clears `searchTerm` and steps `purchaseWeight`.
+  //
+  // A cold review caught this: seeding `forms` once meant the next keystroke
+  // rebuilt every row from the seed and reverted whatever the other writer had
+  // done. Carrying `source` would have widened that from `searchTerm` (already
+  // stale before MEAL-164) to `purchaseWeight` — and restoring a weight to a row
+  // whose product was just CLEARED is worse than the bug this ticket fixes,
+  // because `WebViewCartSheet` auto-adds a row that has a `searchTerm` without
+  // prompting. A silent add at a stale weight is the over/under-add the
+  // governing principles forbid.
+
+  /** Re-render with a new array, the way a parent's `setIngredients` would. */
+  function externallyEdited(view: ReturnType<typeof mount>, next: Ingredient[]) {
+    view.rerender(<IngredientEditor ingredients={next} onChange={view.onChange} />);
+  }
+
+  it('does not resurrect a product the other writer cleared', () => {
+    const view = mount([deliTurkey()]);
+    // The Products section's X button: clears the chosen product on that row.
+    externallyEdited(view, [{ ...deliTurkey(), searchTerm: null, productQty: 1 }]);
+    // Now any keystroke in the editor rewrites the whole array.
+    fireEvent.changeText(view.getAllByPlaceholderText('amt')[0], '2');
+
+    expect(view.emitted()[0].searchTerm).toBeNull();
+    expect('purchaseWeight' in view.emitted()[0]).toBe(false);
+    expect('dropdown' in view.emitted()[0]).toBe(false);
+  });
+
+  it('does not revert a weight the other writer stepped', () => {
+    const view = mount([deliTurkey()]);
+    // The Products section's +/− stepper on a dropdown-weight item.
+    externallyEdited(view, [{ ...deliTurkey(), purchaseWeight: 2.25 }]);
+    fireEvent.changeText(view.getAllByPlaceholderText('amt')[0], '2');
+
+    expect(view.emitted()[0].purchaseWeight).toBe(2.25);
+  });
+
+  it('still treats its own emission as its own, and does not clobber typing', () => {
+    // The other half: the parent stores exactly the array we handed it, so our
+    // own echo must not be mistaken for an outside edit and reset the form.
+    const view = mount([deliTurkey()]);
+    fireEvent.changeText(view.getAllByPlaceholderText('Ingredient name')[0], 'Turkey Breast Sliced');
+    externallyEdited(view, view.emitted());
+    fireEvent.changeText(view.getAllByPlaceholderText('amt')[0], '3');
+
+    expect(view.emitted()[0].ingredientName).toBe('Turkey Breast Sliced');
+    expect(view.emitted()[0].measure).toBe('3');
+  });
+});
+
 describe('a row the editor created has nothing to preserve', () => {
   it('carries none of the product fields', () => {
     const { getByText, emitted } = mount([plainSalt()]);

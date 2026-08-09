@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -104,8 +104,15 @@ function toFormIng(ing: Ingredient): IngredientForm {
 /**
  * Everything this form owns. Anything NOT listed here is preserved from the row
  * the form was built from — see `IngredientForm.source`.
+ *
+ * Typed as the exact key set rather than `Partial<Ingredient>` so that dropping
+ * one is a compile error. `Partial` would let a field silently fall out of both
+ * returns and be picked up from a stale `source` instead, which is a quieter
+ * version of the bug this file is fixing.
  */
-function ownedFields(form: IngredientForm): Partial<Ingredient> {
+type OwnedFields = Pick<Ingredient, 'ingredientName' | 'qty' | 'unit' | 'productQty' | 'measure' | 'searchTerm'>;
+
+function ownedFields(form: IngredientForm): OwnedFields {
   if (form.unit === 'qty') {
     // Radix 10 so leading-zero input isn't parsed as octal. A qty of 0 isn't a
     // valid cart quantity, so an empty/NaN/0 measure defaults to 1.
@@ -143,7 +150,9 @@ function ownedFields(form: IngredientForm): Partial<Ingredient> {
 const PRODUCT_BOUND_FIELDS = ['dropdown', 'purchaseWeight', 'weightStep'] as const;
 
 function fromFormIng(form: IngredientForm): Ingredient {
-  const next: Ingredient = { ...(form.source ?? {}), ...ownedFields(form) } as Ingredient;
+  // No cast: `ownedFields` supplies every required key of `Ingredient`, so this
+  // stops compiling the moment one is dropped from it.
+  const next: Ingredient = { ...form.source, ...ownedFields(form) };
 
   // `prep` is owned but optional, and the spread above may have carried an old
   // one in. Absent has to stay absent (MEAL-102), so clearing it deletes the key
@@ -183,10 +192,39 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
   const insets = useSafeAreaInsets();
   const [forms, setForms] = useState<IngredientForm[]>(() => ingredients.map(toFormIng));
   const [unitPickerIndex, setUnitPickerIndex] = useState<number | null>(null);
+  /** The exact array this editor last handed to `onChange`. */
+  const lastEmittedRef = useRef<Ingredient[] | null>(null);
+
+  /**
+   * Re-read the list when something OTHER than this editor changes it.
+   *
+   * `forms` is seeded once, and it is not the only writer of the array it edits.
+   * `MealDetailSheet` renders this editor and its "Products" section against the
+   * same `ingredients` state at the same time, and that section clears
+   * `searchTerm` and steps `purchaseWeight`. Without this, the next keystroke
+   * anywhere in the editor rebuilt every row from the seed and silently reverted
+   * those edits.
+   *
+   * That was already true for `searchTerm`, which the form held a stale copy of.
+   * Carrying `source` would have widened it to `purchaseWeight` — and reverting
+   * a CLEARED product to a remembered weight is worse than the bug this ticket
+   * fixes, because `WebViewCartSheet` auto-adds a row that has a `searchTerm`
+   * without prompting. So the seed has to stop being a seed.
+   *
+   * Identity, not deep equality, is what separates the two cases: `emit` hands
+   * `onChange` an array and the parent stores that same array, so our own echo
+   * arrives reference-equal. Any other writer builds a new one.
+   */
+  useEffect(() => {
+    if (lastEmittedRef.current === ingredients) return;
+    setForms(ingredients.map(toFormIng));
+  }, [ingredients]);
 
   function emit(updated: IngredientForm[]) {
     setForms(updated);
-    onChange(updated.map(fromFormIng));
+    const next = updated.map(fromFormIng);
+    lastEmittedRef.current = next;
+    onChange(next);
   }
 
   function updateField(index: number, field: keyof IngredientForm, value: string | number | null) {
