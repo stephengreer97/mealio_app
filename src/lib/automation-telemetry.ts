@@ -288,7 +288,11 @@ const MAX_BUFFER = 500;
 // Detail payloads are for diagnosis, not archival. Cap the key count and value
 // sizes so a well-meaning caller can't attach a page's worth of HTML.
 export const MAX_DETAIL_KEYS = 12;
-const MAX_DETAIL_STRING = 200;
+// Exported so a caller that has to pre-chunk a long value can chunk against the
+// REAL cap rather than a copy of it. Truncation here is silent — a payload that
+// overruns arrives parseable and short — so anything building a flat string long
+// enough to hit this must be able to see where it is (see SelectorHealthTally).
+export const MAX_DETAIL_STRING = 200;
 
 /** Strip a detail payload down to something safe to send. Never throws. */
 export function sanitizeDetail(detail: unknown): Record<string, unknown> | undefined {

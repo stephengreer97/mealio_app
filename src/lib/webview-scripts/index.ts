@@ -13,8 +13,14 @@ import { getInstacartScriptsFor, INSTACART_STORE_IDS } from './instacart';
 import { getScripts as getAmazonFreshScripts } from './amazon-fresh';
 import { getScripts as getWegmansScripts } from './wegmans';
 import { getScripts as getMockStoreScripts, MOCK_STORE_ENABLED } from './mockstore';
-import { buildExtractWorker } from './worker-search';
+import { buildExtractWorker, buildPresearchWorker, buildSearchAndAddWorker } from './worker-search';
 import { storeConfig, searchUrlFor, isStoreEnabled } from '../automation-config';
+import {
+  SelectorSurface,
+  albertsonsSelectorSurface,
+  selectorSurfaceFor,
+  withSelectorProbe,
+} from '../selector-health';
 
 export interface StoreScripts {
   storeUrl: string;
@@ -59,6 +65,28 @@ export interface StoreScripts {
   getSearchUrl?: (term: string) => string;
   /** Injected JS for one worker; posts WORKER_RESULT with the workerId. */
   buildWorkerScript?: (workerId: number) => string;
+  // ── The other two pools' worker scripts ─────────────────────────────────
+  // These are `buildPresearchWorker` / `buildSearchAndAddWorker` already applied
+  // to this store's own scripts. They exist as FIELDS, rather than being composed
+  // at the call site in WebViewCartSheet the way they used to be, because
+  // composition order is load-bearing and having it happen in two places is what
+  // let the two of them silently diverge (MEAL-31).
+  //
+  // The wrappers emit their own IIFE and interpolate the store script AFTER it.
+  // Composing at the call site meant wrapping an ALREADY-PROBED script, which put
+  // the probe's postMessage hook on TOP of the wrapper's — and the wrapper
+  // swallows what it does not name, so every sample from the pre-search and
+  // parallel-add pools was discarded in the page. On the four stores those pools
+  // serve that is the add path, i.e. where addBtn / incBtn / stepperA live.
+  //
+  // Built here from the UNPROBED script, so the probe is prepended to the
+  // finished worker and its hook sits underneath the wrapper's. See
+  // withSelectorProbes, and the registry-driven ordering tests in
+  // tests/unit/selectorHealth.test.ts — which now compose exactly this way.
+  /** One pre-search parking worker's script. Posts WORKER_RESULT in two phases. */
+  buildPresearchWorkerScript?: (workerId: number) => string;
+  /** One parallel-add worker's script. Posts WORKER_RESULT with the add verdict. */
+  buildAddWorkerScript?: (workerId: number) => string;
   /** Number of concurrent worker WebViews for this store's parallel pool.
    *  Defaults to 5. Lower it for stores with aggressive anti-bot (ALDI: 3). */
   workerCount?: number;
@@ -128,6 +156,87 @@ function getHebScripts(): StoreScripts {
   };
 }
 
+// ── Worker composition ───────────────────────────────────────────────────────
+
+/**
+ * Attach the pre-search and parallel-add worker scripts.
+ *
+ * These used to be composed in WebViewCartSheet, from the scripts it had already
+ * been handed. That is what broke MEAL-31: the scripts it had were probed, and
+ * the wrappers put their own IIFE FIRST, so the composed worker read
+ * `wrapper(probe + body)` — the probe's hook on top of the wrapper's rather than
+ * underneath it, which is the one arrangement the wrapper's swallow discards. The
+ * parallel-SEARCH worker was unaffected only because its adapter happens to
+ * compose it before the probe is applied.
+ *
+ * Composing all of them at this one seam is what makes "the probe goes on the
+ * FINISHED worker" a property of the registry instead of a rule three call sites
+ * have to remember. See StoreScripts.buildPresearchWorkerScript.
+ */
+function attachWorkerScripts(s: StoreScripts): StoreScripts {
+  return {
+    ...s,
+    buildPresearchWorkerScript: (workerId: number) =>
+      buildPresearchWorker(workerId, s.extractProductsScript),
+    // Placeholder params: one fixed search-and-add script is built per worker and
+    // the real term/qty/preference arrive in the page URL's #mealio hash at
+    // runtime. Only stores whose buildSearchAndAddScript reads that hash support
+    // parallel add; the others are gated out by beginSearchFlow, not here.
+    buildAddWorkerScript: (workerId: number) =>
+      buildSearchAndAddWorker(workerId, s.buildSearchAndAddScript('', 1, null)),
+  };
+}
+
+// ── Selector health (MEAL-31) ────────────────────────────────────────────────
+
+/**
+ * Prepend the selector probe to every script this adapter hands the WebView.
+ *
+ * Done HERE, at the one seam every store's scripts pass through, rather than in
+ * each of the six adapters: a store added later is measured without anyone
+ * remembering to opt it in, and there is a single place to read to know what is
+ * instrumented. The prefix is a no-op only for a script that interpolates none of
+ * the store's configured selectors — which today is the mock store, and Amazon
+ * Fresh's search-navigation script. The other five stores' search-navigation
+ * scripts DO name a selector or two and so do carry a probe (~1.3 KB); they
+ * navigate away immediately and the probe dies with the page, so it samples
+ * nothing and costs only the injected bytes.
+ *
+ * PREPENDED, not appended, and that is load-bearing rather than stylistic — see
+ * the module header of selector-health.ts. The parallel-pool wrappers install
+ * postMessage overrides that swallow messages they do not recognise, and running
+ * first is what puts the probe's hook UNDER them, next to the native bridge.
+ * That only holds if what is wrapped is the FINISHED worker, which is why
+ * attachWorkerScripts runs before this and not after.
+ *
+ * The builder fields are wrapped lazily so a script is only scanned when it is
+ * actually built. Nothing here can throw: withSelectorProbe returns the original
+ * script on any failure.
+ */
+function withSelectorProbes(surface: SelectorSurface | null, s: StoreScripts): StoreScripts {
+  if (!surface) return s;
+  const wrap = (script: string) => withSelectorProbe(surface, script);
+  const wrapWorker = (build: ((workerId: number) => string) | undefined) =>
+    build ? (workerId: number) => wrap(build(workerId)) : undefined;
+  return {
+    ...s,
+    checkLoginScript: wrap(s.checkLoginScript),
+    extractProductsScript: wrap(s.extractProductsScript),
+    buildAddToCartScript: (name, pref, qty, weight) => wrap(s.buildAddToCartScript(name, pref, qty, weight)),
+    buildSearchScript: (term) => wrap(s.buildSearchScript(term)),
+    buildSearchAndAddScript: (term, qty, dd) => wrap(s.buildSearchAndAddScript(term, qty, dd)),
+    buildWorkerScript: wrapWorker(s.buildWorkerScript),
+    buildPresearchWorkerScript: wrapWorker(s.buildPresearchWorkerScript),
+    buildAddWorkerScript: wrapWorker(s.buildAddWorkerScript),
+  };
+}
+
+/** Everything the registry does to a store's raw scripts, in the order it
+ *  matters: compose the workers, THEN probe the finished text. */
+function finish(surface: SelectorSurface | null, s: StoreScripts): StoreScripts {
+  return withSelectorProbes(surface, attachWorkerScripts(s));
+}
+
 // ── Lookup ───────────────────────────────────────────────────────────────────
 
 export function getStoreScripts(storeId: string): StoreScripts | null {
@@ -146,19 +255,27 @@ export function getStoreScripts(storeId: string): StoreScripts | null {
   // parameterized adapter, so a new banner is a registry entry rather than a case
   // here. Each keeps its own config key — unlike the Albertsons family, these are
   // separate retailers whose selectors can drift apart.
-  if (INSTACART_STORE_IDS.includes(storeId)) return getInstacartScriptsFor(storeId);
+  if (INSTACART_STORE_IDS.includes(storeId)) {
+    const instacart = getInstacartScriptsFor(storeId);
+    return instacart && finish(selectorSurfaceFor(storeId), instacart);
+  }
 
   switch (storeId) {
-    case 'heb':            return getHebScripts();
-    case 'walmart':        return getWalmartScripts();
-    case 'amazon':         return getAmazonFreshScripts();
-    case 'wegmans':        return getWegmansScripts();
+    case 'heb':     return finish(selectorSurfaceFor(storeId), getHebScripts());
+    case 'walmart': return finish(selectorSurfaceFor(storeId), getWalmartScripts());
+    case 'amazon':  return finish(selectorSurfaceFor(storeId), getAmazonFreshScripts());
+    case 'wegmans': return finish(selectorSurfaceFor(storeId), getWegmansScripts());
     // Dev/e2e only: the deterministic mock store for Maestro. Returns null in
     // production (flag unset) so it can never be reached even if a meal carries it.
-    case 'mockstore':      return MOCK_STORE_ENABLED ? getMockStoreScripts() : null;
+    // Deliberately unprobed: it has no automation-config selector table, and a
+    // deterministic fixture store has no drift to catch.
+    case 'mockstore':      return MOCK_STORE_ENABLED ? finish(null, getMockStoreScripts()) : null;
     default:
       if (ALBERTSONS_FAMILY_IDS.includes(storeId)) {
-        return getAlbertsonsScripts(storeId);
+        // One selector table serves all 15 banners, so the surface is the shared
+        // 'albertsons' one whichever banner is running — the same key the kill
+        // switch above is checked against.
+        return finish(albertsonsSelectorSurface(), getAlbertsonsScripts(storeId));
       }
       return null;
   }
