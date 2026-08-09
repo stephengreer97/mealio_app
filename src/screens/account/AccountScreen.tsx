@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors, Radius } from '../../constants/colors';
+import { resetFirstRun } from '../../lib/firstRun';
 import { useStores } from '../../lib/store-catalog/useStores';
 import { useAuth } from '../../context/AuthContext';
 import { auth as authApi, account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
@@ -882,6 +883,26 @@ export default function AccountScreen() {
           style={styles.signOutBtn}
         />
 
+        {/*
+          Dev-only: put the one-time explainers back.
+          `resetFirstRun()` existed for the tests and had no caller in the app, so
+          re-reading the first-run copy meant editing code or reinstalling — and on
+          iOS a reinstall may not even clear it, because the keychain entry can
+          outlive the app. Behind `__DEV__`, so it is compiled out of every release
+          build and cannot be reached by a user.
+        */}
+        {__DEV__ && (
+          <TouchableOpacity
+            onPress={async () => {
+              await resetFirstRun();
+              Alert.alert('First run reset', 'Restart the app to see the welcome pitch and the Choose Products explainer again.');
+            }}
+            style={styles.devResetBtn}
+          >
+            <Text style={styles.devResetText}>Reset first-run explainers (dev)</Text>
+          </TouchableOpacity>
+        )}
+
         {/* Delete Account */}
         <TouchableOpacity onPress={handleDeleteAccount} disabled={deleteLoading} style={styles.deleteAccountBtn}>
           <Text style={styles.deleteAccountText}>{deleteLoading ? 'Deleting…' : 'Delete Account'}</Text>
@@ -1012,6 +1033,8 @@ const styles = StyleSheet.create({
   },
   restoreLink: { alignItems: 'center', paddingVertical: 8 },
   restoreLinkText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text3 },
+  devResetBtn: { alignItems: 'center', paddingVertical: 10, marginTop: 4 },
+  devResetText: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3 },
   deleteAccountBtn: { alignItems: 'center', paddingVertical: 12, marginTop: 4, marginBottom: 8 },
   deleteAccountText: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text3, textDecorationLine: 'underline' },
   deleteModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 28 },
