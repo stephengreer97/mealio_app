@@ -19,6 +19,24 @@ export interface Ingredient {
   productQty: number;
   unit: string;
   measure?: string | null;
+  /**
+   * What the recipe asks be done to the product — "finely diced", "drained and
+   * rinsed" (MEAL-102). Rendered after the name the way a recipe writes it.
+   *
+   * **Never a search term, and never part of one.** The add gate in
+   * `WebViewCartSheet` is exact-after-normalisation equality against
+   * `searchTerm ?? ingredientName`; prep reaching either field does not fetch a
+   * worse product, it matches nothing at all and drops the item into review
+   * looking like a matching bug rather than the data bug it is. So prep is
+   * carried beside the name and concatenated into it at no point.
+   *
+   * **Optional, and absent rather than null when there is none** — `string`,
+   * not `string | null`. Every ingredient written before this field existed has
+   * no `prep` key, and a row with nothing to say has to serialise identically to
+   * one of those, because these objects are written straight back on save. See
+   * `normalizeIngredients`, which omits the key rather than writing `prep: null`.
+   */
+  prep?: string;
   dropdown?: { type: string; selectedText: string; selectedValue: string } | null;
   // For sold-by-weight products (HEB Deli / Fish Market / bulk): the weight in
   // lb the user chose to BUY, remembered across runs. Distinct from measure/unit

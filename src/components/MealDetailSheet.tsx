@@ -18,7 +18,7 @@ import { Image } from 'expo-image';
 import { Colors, Radius } from '../constants/colors';
 import { Meal, PresetMeal, Ingredient } from '../types';
 import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
-import { ingredientAmount } from '../lib/formatMeasurement';
+import { ingredientAmount, withPrep } from '../lib/formatMeasurement';
 import { meals as mealsApi, images as imagesApi } from '../lib/api';
 import Button from './ui/Button';
 import Input from './ui/Input';
@@ -45,7 +45,15 @@ function fmtMeasurement(ing: Ingredient): string {
   // so "salt to taste" — which arrives as a countable 1 like every unquantified
   // line — read "Salt, 1".
   const amount = ingredientAmount(ing);
-  return amount ? `${ing.ingredientName}, ${amount}` : ing.ingredientName;
+  // Preparation trails the whole line, comma-separated, where the recipe put it
+  // (MEAL-102). Appended once at the end because the name-then-amount order is
+  // this screen's, and a row with no prep returns exactly the string it did
+  // before the field existed.
+  //
+  // Note this reads "Onion, 1, finely diced" where the website reads "1 onion,
+  // finely diced" — the two platforms already disagree about which of the name
+  // and the amount comes first, and MEAL-102 is not the ticket that settles it.
+  return withPrep(amount ? `${ing.ingredientName}, ${amount}` : ing.ingredientName, ing.prep);
 }
 
 function DifficultyDots({ level }: { level: number }) {

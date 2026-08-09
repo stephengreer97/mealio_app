@@ -35,6 +35,23 @@ interface IngredientForm {
   unit: string;
   searchTerm: string | null;
   qty: number;
+  /**
+   * Preparation (MEAL-102). Carried, displayed, and NOT editable here.
+   *
+   * It has to live on the form even though nothing in this editor can change it,
+   * because of what `emit` does: every keystroke on any row runs the WHOLE list
+   * back through `fromFormIng`, which builds each `Ingredient` from scratch. A
+   * field the form does not hold is therefore not merely un-editable — it is
+   * deleted, on every row, by correcting a typo in an unrelated meal name. That
+   * write reaches storage through three callers (`MealDetailSheet.handleSave`,
+   * `CreatorPortalScreen`, and `creatorDrafts.edit` from the draft review
+   * queue), and the last of those is the screen where the restored prep first
+   * appears to the creator whose recipe it came from.
+   *
+   * How a creator TYPES a preparation is a separate, open question — see the
+   * read-only row below.
+   */
+  prep?: string;
 }
 
 function toFormIng(ing: Ingredient): IngredientForm {
@@ -56,6 +73,9 @@ function toFormIng(ing: Ingredient): IngredientForm {
     unit: ing.unit ?? 'qty',
     searchTerm: ing.searchTerm ?? null,
     qty: ing.qty ?? 1,
+    // Spread, so a row with no preparation still has no `prep` key when
+    // `fromFormIng` puts it back together — see the field's note above.
+    ...(ing.prep ? { prep: ing.prep } : {}),
   };
 }
 
@@ -72,6 +92,7 @@ function fromFormIng(form: IngredientForm): Ingredient {
       measure: null,
       searchTerm: form.searchTerm ?? null,
       productQty: qty,
+      ...(form.prep ? { prep: form.prep } : {}),
     };
   }
   return {
@@ -81,6 +102,7 @@ function fromFormIng(form: IngredientForm): Ingredient {
     measure: form.measure.trim() || null,
     searchTerm: form.searchTerm ?? null,
     productQty: 1,
+    ...(form.prep ? { prep: form.prep } : {}),
   };
 }
 
@@ -187,6 +209,16 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
             <Ionicons name="trash-outline" size={18} color={Colors.error} />
           </TouchableOpacity>
           </View>
+          {/* The preparation the recipe gave, shown so a creator can SEE that
+              editing the row beside it does not throw it away (MEAL-102).
+              Read-only on purpose: how a preparation gets typed — its own box,
+              or split off the name at a comma — is an open product question,
+              and this ticket renders what exists rather than deciding it.
+              Plain, and no label of its own: the string is the recipe's own
+              words and any wrapper here would be copy nobody wrote. */}
+          {form.prep ? (
+            <Text style={styles.prepText} testID={`ingredient-prep-${index}`}>{form.prep}</Text>
+          ) : null}
           {isDup && (
             <Text style={styles.dupError}>Duplicate ingredient name</Text>
           )}
@@ -294,6 +326,14 @@ const styles = StyleSheet.create({
   deleteBtn: { padding: 4 },
   nameInputError: {
     borderColor: Colors.error,
+  },
+  prepText: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text3,
+    marginTop: -4,
+    marginBottom: 6,
+    marginLeft: 2,
   },
   dupError: {
     fontSize: 11,

@@ -14,7 +14,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
 import { Meal, Ingredient } from '../types';
-import { ingredientAmount } from '../lib/formatMeasurement';
+import { ingredientAmount, withPrep } from '../lib/formatMeasurement';
+import { prepOf } from '../lib/consolidateIngredients';
 import { isZeroedOut } from '../lib/cart-reconcile';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
 import FloatingPreviewImage from './FloatingPreviewImage';
@@ -46,6 +47,13 @@ interface MealIngredientQty {
   mealId: string;
   mealName: string;
   qty: number;
+  /**
+   * This meal's preparation for the row (MEAL-102). Per meal for the reason
+   * `measure` is, in the sibling sheet: two meals can share an onion and want it
+   * diced and sliced. Display only — the product name above these lines is what
+   * Kroger is searched for, and nothing reads this.
+   */
+  prep?: string;
 }
 
 /**
@@ -165,7 +173,7 @@ export function consolidateIngredients(meals: Array<Pick<Meal, 'id' | 'name' | '
         if (existing) {
           existing.qty += qty;
         } else {
-          e.mealIngredients.push({ mealId: meal.id, mealName: meal.name, qty });
+          e.mealIngredients.push({ mealId: meal.id, mealName: meal.name, qty, ...prepOf(ing) });
           e.mealIds.push(meal.id);
           e.mealNames.push(meal.name);
         }
@@ -178,7 +186,7 @@ export function consolidateIngredients(meals: Array<Pick<Meal, 'id' | 'name' | '
           searchTerm: ing.searchTerm ?? null,
           mealIds: [meal.id],
           mealNames: [meal.name],
-          mealIngredients: [{ mealId: meal.id, mealName: meal.name, qty }],
+          mealIngredients: [{ mealId: meal.id, mealName: meal.name, qty, ...prepOf(ing) }],
         });
       }
     }
@@ -553,7 +561,9 @@ export default function KrogerCartReviewSheet({
                         const measurement = ingredientAmount(mi);
                         return (
                           <Text key={mIdx} style={styles.mealNames}>
-                            {mi.mealName} calls for {measurement || `${mi.qty}`}
+                            {/* Trails this meal's amount, never the product name
+                                above — that name is the search term (MEAL-102). */}
+                            {mi.mealName} calls for {withPrep(measurement || `${mi.qty}`, mi.prep)}
                           </Text>
                         );
                       })}

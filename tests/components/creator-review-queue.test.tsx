@@ -90,7 +90,7 @@ function draft(id: string, over: Partial<Record<string, any>> = {}) {
     sourceUrl: 'https://chefsarah.test/guacamole',
     draft: {
       name: over.name ?? 'Best Guacamole',
-      ingredients: [
+      ingredients: over.ingredients ?? [
         { ingredientName: 'avocados', qty: 3, unit: 'qty', measure: null },
         { ingredientName: 'lime juice', qty: 1, unit: 'tbsp', measure: '2' },
       ],
@@ -499,5 +499,35 @@ describe('arriving from a notification that named a recipe', () => {
     await act(async () => {});
 
     expect(view.getByTestId('queue-position').props.children.join('')).toBe('2 of 2');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MEAL-102 — the preparation, on the screen the loss was reported from.
+//
+// This is the card that shows a creator what we extracted from their own
+// recipe, so "1 onion, finely diced" arriving here as "1 onion" is the exact
+// complaint the ticket was filed for. `tests/components/meal-prep-lines.test.tsx`
+// holds the published meal sheet to the same wording; this holds the draft.
+describe('the draft shows what the recipe asked be done to an ingredient', () => {
+  const prepped = () => draft('d1', {
+    ingredients: [
+      { ingredientName: 'onion', qty: 1, unit: 'qty', measure: null, prep: 'finely diced' },
+      { ingredientName: 'lime juice', qty: 1, unit: 'tbsp', measure: '2' },
+    ],
+  });
+
+  it('trails the preparation after the line', async () => {
+    list.mockResolvedValue({ drafts: [prepped()], totals: { waiting: 1, flagged: 1 } });
+    const { getByText } = await mount();
+    expect(getByText('onion, finely diced')).toBeTruthy();
+  });
+
+  it('leaves a row with no preparation reading exactly as it did', async () => {
+    // The additive guarantee on this screen: character for character what the
+    // queue printed before MEAL-102, for the row that has no prep.
+    list.mockResolvedValue({ drafts: [prepped()], totals: { waiting: 1, flagged: 1 } });
+    const { getByText } = await mount();
+    expect(getByText('lime juice, 2 tbsp')).toBeTruthy();
   });
 });

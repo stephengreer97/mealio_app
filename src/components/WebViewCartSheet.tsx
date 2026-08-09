@@ -35,7 +35,7 @@ import {
   ConsolidatedIngredient,
   consolidateIngredients,
 } from '../lib/consolidateIngredients';
-import { ingredientAmount } from '../lib/formatMeasurement';
+import { ingredientAmount, withPrep } from '../lib/formatMeasurement';
 import { isChooseRun as isChooseRunItems } from '../lib/chooseRun';
 import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
 import { useParallelSearchPool, PoolSettled } from '../lib/useParallelSearchPool';
@@ -61,6 +61,13 @@ interface MealIngredientQty {
   mealId: string;
   mealName: string;
   qty: number;
+  /**
+   * This meal's preparation for the row (MEAL-102). Per meal, not on the
+   * consolidated entry, because two meals sharing an onion can want it diced and
+   * sliced. Display only — nothing that builds a search term reads it, and the
+   * "you searched for" line above deliberately prints `term` untouched.
+   */
+  prep?: string;
 }
 
 interface Candidate {
@@ -3867,7 +3874,10 @@ export default function WebViewCartSheet({
                         const measurement = w ? weightLabelLb(w.lb) : ingredientAmount(mi);
                         return (
                           <Text key={mIdx} style={styles.mealNames}>
-                            {mi.mealName} calls for {measurement || `${mi.qty}`}
+                            {/* The preparation trails this meal's amount, not the
+                                product name above it (MEAL-102) — the name on
+                                this row is what we search the store for. */}
+                            {mi.mealName} calls for {withPrep(measurement || `${mi.qty}`, mi.prep)}
                           </Text>
                         );
                       })}
@@ -4049,7 +4059,7 @@ export default function WebViewCartSheet({
                         const isQty = (currentReview.unit ?? 'qty') === 'qty';
                         const measurement = isQty ? `${mi.qty} qty` : `${currentReview.measure} ${currentReview.unit}`;
                         return (
-                          <Text key={mIdx} style={styles.searchedMeals}>{mi.mealName} • {measurement}</Text>
+                          <Text key={mIdx} style={styles.searchedMeals}>{mi.mealName} • {withPrep(measurement, mi.prep)}</Text>
                         );
                       })}
                     </>

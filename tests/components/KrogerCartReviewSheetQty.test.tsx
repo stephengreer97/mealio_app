@@ -240,3 +240,40 @@ describe('Kroger qty item shape — no weight fields (MEAL-65 invariant)', () =>
     }
   });
 });
+
+// ── MEAL-102: the preparation, where it belongs and where it does not ────────
+//
+// This sheet builds its own consolidated items (it does not share the WebView
+// sheet's builder), so both halves have to be pinned here separately: the prep
+// reaches the per-meal "calls for" line, and reaches neither the product name
+// above it nor the item Kroger is actually searched for. That name IS the search
+// term — `searchTerm ?? ingredientName` — and prep in it would not fetch a worse
+// product, it would match nothing and drop the row into review.
+
+describe('a preparation shows per meal, and never on the product line', () => {
+  const dicedOnion = (overrides: Record<string, unknown> = {}) =>
+    ingredient({ ingredientName: 'Onion', searchTerm: 'Yellow Onion', measure: '1', prep: 'finely diced', ...overrides });
+
+  it('trails this meal\'s amount with what the meal asks be done', () => {
+    const { getByText } = renderIngredients([dicedOnion()]);
+    expect(getByText('Tacos calls for 1, finely diced')).toBeTruthy();
+  });
+
+  it('leaves a row with no preparation reading exactly as it did', () => {
+    const { getByText } = renderIngredients([ingredient({ ingredientName: 'Onion', searchTerm: 'Yellow Onion', productQty: 2, qty: 2 })]);
+    expect(getByText('Tacos calls for 2')).toBeTruthy();
+  });
+
+  it('keeps it off the product name, which is the search term', () => {
+    const { getByText, queryByText } = renderIngredients([dicedOnion()]);
+    expect(getByText('Yellow Onion')).toBeTruthy();
+    expect(queryByText('Yellow Onion, finely diced')).toBeNull();
+  });
+
+  it('keeps it off the consolidated item Kroger is asked for', () => {
+    const [item] = consolidateIngredients([{ ...meal, ingredients: [dicedOnion()] }]);
+    const { mealIngredients, ...searched } = item;
+    expect(JSON.stringify(searched).toLowerCase()).not.toContain('diced');
+    expect(mealIngredients[0].prep).toBe('finely diced');
+  });
+});
