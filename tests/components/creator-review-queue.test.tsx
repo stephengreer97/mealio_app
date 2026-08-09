@@ -587,6 +587,13 @@ describe('a creator can fix a preparation from the queue', () => {
     fireEvent.press(view.getByText('Edit first'));
 
     expect(view.getByTestId('ingredient-prep-0').props.maxLength).toBe(MAX_PREP_CHARS);
+    // And the VALUE, restated rather than imported. Asserting against the
+    // constant under test pins the wiring and is tautological about the number —
+    // a cold review changed 120 to 500 and nothing failed, which is exactly the
+    // drift the constant's own comment worries about. 120 is
+    // `MAX_PREP_CHARS` in mealio_central `lib/import/ingredients.ts`; over it,
+    // `canonicalPrep` deletes the preparation rather than shortening it.
+    expect(MAX_PREP_CHARS).toBe(120);
   });
 
   it('sends no prep key when the creator clears it', async () => {

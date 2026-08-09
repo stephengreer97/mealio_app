@@ -183,9 +183,15 @@ function fromFormIng(form: IngredientForm): Ingredient {
   // `prep` is owned but optional, and the spread above may have carried an old
   // one in. Absent has to stay absent (MEAL-102), so clearing it deletes the key
   // rather than writing null.
-  // Trimmed, and absent rather than empty. Whitespace-only is no preparation —
-  // the same rule `canonicalPrep` and `withPrep` apply on the server, so the box
-  // cannot introduce a value they would strip later.
+  // Trimmed, and absent rather than empty: whitespace-only is no preparation,
+  // which is the one rule this box shares with the server.
+  //
+  // NOT the same rule as `canonicalPrep`, which also collapses internal
+  // whitespace and strips leading/trailing `,;:-` — so a value this box accepts
+  // can still be rewritten server-side, and a lone "," passes `trim()` here and
+  // canonicalises to nothing there. Matching that normaliser exactly would mean
+  // a second copy of it drifting in a second repo; the honest scope is that the
+  // box refuses only what is obviously empty.
   const prep = form.prep?.trim();
   if (prep) next.prep = prep;
   else delete next.prep;
@@ -280,7 +286,16 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
     const updated = forms.map((f, i) => {
       if (i !== index) return f;
       const next = { ...f, [field]: value };
-      // When ingredientName changes, clear searchTerm
+      // ONLY the name clears the chosen product. Renaming a row means it is a
+      // different ingredient, so the product picked for the old one no longer
+      // applies — and `fromFormIng` then drops `dropdown`, `purchaseWeight` and
+      // `weightStep` with it.
+      //
+      // Adding `prep` to this condition would therefore delete a shopper's
+      // remembered deli weight because they typed "thin sliced", which is the
+      // over/under-add MEAL-164 exists to prevent, arriving through the box
+      // MEAL-170 added. A preparation is not a product choice: "finely diced"
+      // says nothing about which onion was picked.
       if (field === 'ingredientName') {
         next.searchTerm = null;
       }
@@ -348,6 +363,12 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
             <Ionicons name="trash-outline" size={18} color={Colors.error} />
           </TouchableOpacity>
           </View>
+          {/* The name field's error, kept directly under the row it describes —
+              putting it below the preparation box separates it from the input it
+              is about by an unrelated control. */}
+          {isDup && (
+            <Text style={styles.dupError}>Duplicate ingredient name</Text>
+          )}
           {/* What the line asks be DONE to the product (MEAL-170).
               Its own row rather than a fourth control on the one above, because
               a preparation is a phrase and the name/amount/unit row is already
@@ -361,11 +382,9 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
             value={form.prep ?? ''}
             onChangeText={(v) => updateField(index, 'prep', v)}
             maxLength={MAX_PREP_CHARS}
+            accessibilityLabel={`Ingredient ${index + 1} preparation`}
             testID={`ingredient-prep-${index}`}
           />
-          {isDup && (
-            <Text style={styles.dupError}>Duplicate ingredient name</Text>
-          )}
         </View>
         );
       })}
