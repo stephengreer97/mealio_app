@@ -201,8 +201,15 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
   const insets = useSafeAreaInsets();
   const [forms, setForms] = useState<IngredientForm[]>(() => ingredients.map(toFormIng));
   const [unitPickerIndex, setUnitPickerIndex] = useState<number | null>(null);
-  /** The exact array this editor last handed to `onChange`. */
-  const lastEmittedRef = useRef<Ingredient[] | null>(null);
+  /**
+   * The exact array this editor last handed to `onChange`.
+   *
+   * Seeded with the incoming list rather than `null` so the effect below is a
+   * no-op on mount — `forms` was just built from this same array, and starting
+   * at `null` made every mount rebuild all of them from a state already equal to
+   * the seed.
+   */
+  const lastEmittedRef = useRef<Ingredient[]>(ingredients);
 
   /**
    * Re-read the list when something OTHER than this editor changes it.
@@ -223,6 +230,18 @@ export default function IngredientEditor({ ingredients, onChange }: IngredientEd
    * Identity, not deep equality, is what separates the two cases: `emit` hands
    * `onChange` an array and the parent stores that same array, so our own echo
    * arrives reference-equal. Any other writer builds a new one.
+   *
+   * THAT IS A CONTRACT ON THE CONSUMER, and it is invisible from their side, so
+   * it is written down here. All four store the array unchanged today
+   * (`MealDetailSheet`, `MyMealsScreen`, `CreatorPortalScreen` pass `setState`
+   * directly; `CreatorReviewQueueScreen` wraps it in a new object but keeps the
+   * same array). A parent that stored a COPY — a `[...ings]`, or the
+   * `normalizeIngredients` pass CLAUDE.md tells people to put on ingredient
+   * data — would never match, so every keystroke would resync and a shopper
+   * could not type a multi-digit amount: the first digit renders as an empty box
+   * and vanishes under the cursor. Measured by a cold review with a copying
+   * parent. If a consumer ever needs to transform the array, this guard has to
+   * become value-equality first.
    */
   useEffect(() => {
     if (lastEmittedRef.current === ingredients) return;
