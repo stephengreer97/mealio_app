@@ -223,6 +223,23 @@ describe('when something else edits the same list', () => {
     expect(view.emitted()[0].ingredientName).toBe('Turkey Breast Sliced');
     expect(view.emitted()[0].measure).toBe('3');
   });
+
+  it('leaves a half-typed amount in the box when its own echo returns', () => {
+    // The case that actually needs the echo guard, and the reason the test above
+    // is not enough: most values survive a round trip, so resyncing from our own
+    // emission is invisible. A countable amount does not.
+    //
+    // "0" is not a valid cart quantity, so `ownedFields` stores qty 1 and
+    // `measure: null` — and `toFormIng` renders that back as an EMPTY box. Treat
+    // our own echo as an outside edit and the digit a shopper just typed
+    // disappears from under the cursor, mid-number, before they can finish
+    // typing "0.5" or "10".
+    const view = mount([plainSalt()]);
+    fireEvent.changeText(view.getAllByPlaceholderText('1')[0], '0');
+    externallyEdited(view, view.emitted());
+
+    expect(view.getAllByPlaceholderText('1')[0].props.value).toBe('0');
+  });
 });
 
 describe('a row the editor created has nothing to preserve', () => {
