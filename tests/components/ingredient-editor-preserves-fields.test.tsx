@@ -121,6 +121,32 @@ describe('the chosen weight survives an edit somewhere else', () => {
     expect(emitted()[0].purchaseWeight).toBe(1.5);
   });
 
+  it('survives its own preparation being typed (MEAL-170)', () => {
+    // The prep box is a new writer into `updateField`, and that function clears
+    // `searchTerm` for the field that means "this is a different ingredient" —
+    // which then drops the three product-bound fields with it. A cold review
+    // added `|| field === 'prep'` to that condition and the ENTIRE suite stayed
+    // green: a shopper's remembered deli weight deleted because they typed
+    // "thin sliced". A preparation is not a product choice; "finely diced" says
+    // nothing about which turkey was picked.
+    const { getByTestId, emitted } = mount([deliTurkey()]);
+    fireEvent.changeText(getByTestId('ingredient-prep-0'), 'thin sliced');
+
+    expect(emitted()[0].prep).toBe('thin sliced');
+    expect(emitted()[0].searchTerm).toBe('H-E-B Deli Oven Roasted Turkey Breast');
+    expect(emitted()[0].purchaseWeight).toBe(1.5);
+    expect(emitted()[0].weightStep).toBe(0.25);
+    expect(emitted()[0].dropdown).toBeTruthy();
+  });
+
+  it('trims the preparation it stores', () => {
+    // The trim was only half pinned: whitespace-only became absent, but a value
+    // with padding was stored verbatim.
+    const { getByTestId, emitted } = mount([deliTurkey()]);
+    fireEvent.changeText(getByTestId('ingredient-prep-0'), '   thin sliced   ');
+    expect(emitted()[0].prep).toBe('thin sliced');
+  });
+
   it('carries a field this editor has never heard of', () => {
     // The rule, not the three names. `fromFormIng` preserves by default now, so
     // a field added to `Ingredient` later survives without anyone remembering
