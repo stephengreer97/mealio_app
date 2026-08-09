@@ -47,6 +47,21 @@ describe('rankChoiceCandidates', () => {
       expect(order(q, dip, real)).toEqual([real, dip]);
     });
 
+    it('does not dock the exact match for the spelling the scorer forgave', () => {
+      // MEAL-160. `scoreMatch` collapses "low fat" and "lowfat" to one token, so
+      // "Low Fat Milk" is a perfect 100 for the query "lowfat milk". The penalty
+      // used to tokenise without that collapse, charging the product two
+      // unrequested words for `low` and `fat` — enough to drop a 100 below a 99
+      // and hand the top row to an organic variant. The exact match coming
+      // second is the one outcome this module exists to prevent.
+      const q = 'lowfat milk';
+      const exact = 'Low Fat Milk';
+      const organic = 'Organic Lowfat Milk';
+      expect(scoreMatch(q, exact)).toBe(100);
+      expect(unrequestedWordCount(q, exact)).toBe(0);
+      expect(order(q, organic, exact, 'Whole Milk')[0]).toBe(exact);
+    });
+
     it('keeps the store order when candidates tie on every key', () => {
       expect(order('sour cream', 'Sour Cream A', 'Sour Cream B', 'Sour Cream C'))
         .toEqual(['Sour Cream A', 'Sour Cream B', 'Sour Cream C']);
