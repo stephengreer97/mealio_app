@@ -25,26 +25,27 @@ import { useAuth } from './AuthContext';
  * WHAT THIS DOES NOT CLOSE, because the name invites the wrong assumption. This
  * closes the DIAGNOSTIC leak chain across the account boundary — the ring
  * buffer, the recorded cart run, the cart engine, the prewarm cache and the
- * ingredient-save queue. The account boundary itself is still open here:
+ * ingredient-save queue. Two neighbours were open alongside it and both are now
+ * closed — kept here because neither was closed by this hook, and that is the
+ * point: this mechanism only ever sees what reaches `beginSession`.
  *
- *   • MEAL-154 — the previous account's CONTENT stays on screen. Nothing
- *     unmounts on a hand-over (MainTabs is rendered while `user` is truthy) and
- *     MyMealsScreen reloads only on focus, so B can be looking at A's saved
- *     meals. DiscoverScreen has the same shape. That is a bigger hole than this
- *     one: it is directly visible and needs no bug report to surface it.
+ *   • MEAL-154 — the previous account's CONTENT staying on screen. Closed by
+ *     RootNavigator keying the tab tree on the account id (<MainTabs key={user.id} />),
+ *     so a hand-over remounts every screen under it and each refetches for the new
+ *     account. That covers what a screen holds in its own state; it does not cover
+ *     state living ABOVE the key, nor work already in flight from a screen since
+ *     unmounted, which is what the consumers here are for. Both are needed.
+ *   • MEAL-155 — `loginWithToken` wrote the new token to SecureStore BEFORE
+ *     validating it, and lib/api reads the token per request. A transient verify
+ *     failure therefore left `user` as A in React state while every request
+ *     authenticated as B, bypassing this mechanism entirely because `beginSession`
+ *     never ran. Closed by validating first: the token reaches the keychain only
+ *     after `auth.verify(token)` has answered, so the stored token and `user`
+ *     cannot disagree.
  *
- * And one that WAS open and is now closed, kept here because it is the reason
- * this mechanism cannot be assumed to see every hand-over on its own:
- *
- *   • MEAL-155 — `loginWithToken` used to write the new token to SecureStore
- *     BEFORE validating it, and lib/api reads the token per request. A transient
- *     verify failure therefore left `user` as A in React state while every
- *     request authenticated as B, bypassing this mechanism entirely because
- *     `beginSession` never ran. Fixed by validating first: the token now reaches
- *     the keychain only after `auth.verify(token)` has answered, so the stored
- *     token and `user` cannot disagree. The general point stands — this hook
- *     only fires on what reaches `beginSession`, so any future path that can
- *     change who the app authenticates as must go through it.
+ * The general point outlives both fixes. Any future path that can change who the
+ * app authenticates as has to go through `beginSession`, or this hook will not
+ * fire and none of the teardown below will run.
  *
  * What this deliberately does NOT fire on:
  *
