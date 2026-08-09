@@ -48,6 +48,7 @@ import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
+import { rankChoiceCandidates } from '../lib/chooseRanking';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -1084,7 +1085,14 @@ export default function WebViewCartSheet({
       const candidates = resultsByIdx.get(idx) ?? [];
       results.push({
         term: item.ingredientName,
-        candidates,
+        // Ranked for the same reason as the sequential choose branch below, and
+        // this is the path that matters most: every store with a worker pool
+        // (heb, walmart, albertsons, amazon) reaches the choose screen through
+        // HERE, not through the SEARCH_RESULT handler. Only the forced-serial
+        // stores (aldi, wegmans) take the other one. `item.ingredientName` is
+        // the same value the sequential branch scores as `scoreTarget` — a
+        // choose-flow item has no searchTerm, which is what makes it a choose.
+        candidates: rankChoiceCandidates(item.ingredientName, candidates),
         mealIngredients: item.mealIngredients,
         unit: item.unit,
         measure: item.measure,
@@ -3135,9 +3143,15 @@ export default function WebViewCartSheet({
               }
             } else {
               // Choose-product flow: always show candidates to user, never auto-pick.
+              // Ordered best-match-first rather than in the store's own order,
+              // which is the store's relevance ranking and carries its paid
+              // placement. Presentational only — this flow adds nothing to the
+              // cart, it saves the picked product as the ingredient's searchTerm
+              // for future runs, and those still have to clear the exact-match
+              // add gate. See src/lib/chooseRanking.ts.
               const newResult: SearchResult = {
                 term: scoreTarget,
-                candidates,
+                candidates: rankChoiceCandidates(scoreTarget, candidates),
                 mealIngredients: item.mealIngredients,
                 unit: item.unit,
                 measure: item.measure,
