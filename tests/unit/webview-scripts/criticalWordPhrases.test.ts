@@ -94,10 +94,38 @@ describe('the collapse does not quietly weaken the veto', () => {
     expect(scoreMatch('large eggs', 'Small Eggs')).toBe(0);
   });
 
-  it('does not collapse across a word boundary it should not', () => {
-    // "low" and "fat" adjacent by accident in a longer name must still collapse
-    // the same way on both sides, which is the whole point — but a name where
-    // they are NOT adjacent must not.
-    expect(scoreMatch('low sodium fat free broth', 'Low Sodium Fat Free Broth')).toBe(100);
+  it('collapses only on whole words', () => {
+    // The previous version of this test compared two strings that normalise
+    // identically, so it returned 100 from the `na === nb` fast path whether the
+    // collapse ran or not — a mutant that stripped the \b boundaries from every
+    // phrase left the whole suite green. These pairs are asymmetric, so the
+    // boundary is what decides them.
+    //
+    // Without \b, "marshmallow fat" contains "low fat" and would collapse,
+    // making a marshmallow spread an exact match for a low-fat one.
+    expect(scoreMatch('low fat spread', 'Marshmallow Fat Spread')).toBe(0);
+    expect(scoreMatch('lowfat spread', 'Marshmallow Fat Spread')).toBe(0);
+  });
+
+  it('gives both concepts their own token when they share a word', () => {
+    // "Cage Free Range Eggs" is a real label and the two concepts share `free`.
+    // A plain left-to-right pass collapses `cage free` first, eats the shared
+    // word, and leaves `cagefree range` — so a "free range" request vetoed the
+    // exact product it was looking for. Measured at 0 before the three-word rule
+    // and 99 after.
+    expect(scoreMatch('free range eggs', 'Cage Free Range Eggs')).toBeGreaterThanOrEqual(70);
+    expect(scoreMatch('free range large eggs', 'Cage Free Range Large Eggs')).toBeGreaterThanOrEqual(70);
+    // And the other concept in the same label still matches.
+    expect(scoreMatch('cage free eggs', 'Cage Free Range Eggs')).toBeGreaterThanOrEqual(70);
+  });
+
+  it('does not raise the overlap bar just because a phrase collapsed', () => {
+    // A collapsed token replaced two words, so counting it once shrinks both
+    // sides of the overlap fraction: 3/4 = 0.75 passes the 70% floor, and the
+    // same match as 2/3 = 0.667 does not. Measured before the weighting, both of
+    // these fell from 75 to 0 — a correct product dropped out of the ranked list
+    // because the request carried one ordinary extra word.
+    expect(scoreMatch('2% low fat milk', 'Low Fat Milk')).toBe(75);
+    expect(scoreMatch('horizon low fat milk', 'Low Fat Milk')).toBe(75);
   });
 });

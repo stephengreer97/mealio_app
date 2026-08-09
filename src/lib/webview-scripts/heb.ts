@@ -1289,8 +1289,14 @@ ${hebWaitFreshFn()}
   // can contain it). Collapsed on both sides so the entry means the concept, not
   // one spelling of it. Longest first — 'cage free' and 'free range' share a
   // word. Same rule as CRITICAL_PHRASES in _scoring.ts.
-  var CRITICAL_PHRASES = [[/\\bcage free\\b/g,'cagefree'],[/\\bfree range\\b/g,'freerange'],
+  // "Cage Free Range Eggs" is a real label and the two concepts SHARE the word
+  // 'free'. A plain left-to-right pass collapses 'cage free' first, eats it, and
+  // leaves 'cagefree range' - so a "free range" request vetoed the exact product
+  // it wanted. The three-word rule runs first and gives both their own token.
+  var CRITICAL_PHRASES = [[/\\bcage free range\\b/g,'cagefree freerange'],
+    [/\\bcage free\\b/g,'cagefree'],[/\\bfree range\\b/g,'freerange'],
     [/\\bgrass fed\\b/g,'grassfed'],[/\\blow fat\\b/g,'lowfat'],[/\\bnon fat\\b/g,'nonfat']];
+  var CANONICAL_TOKENS = new Set(['cagefree','freerange','grassfed','lowfat','nonfat']);
   function collapseCriticalPhrases(s) {
     var out = s;
     for (var ci = 0; ci < CRITICAL_PHRASES.length; ci++) {
@@ -1315,8 +1321,16 @@ ${hebWaitFreshFn()}
     if (na === nb) return 100;
     var wa = na.split(' ').filter(Boolean), sb = new Set(nb.split(' ').filter(Boolean));
     for (var i = 0; i < wa.length; i++) { if (CRITICAL.has(wa[i]) && !sb.has(wa[i])) return 0; }
-    var m = wa.filter(function(w) { return sb.has(w); }).length;
-    var p = m / wa.length;
+    // Weighted: a collapsed token stands for two words, so counting it once
+    // would shrink both sides of the fraction and raise the 70% bar. Same rule
+    // as tokenWeight in _scoring.ts.
+    var total = 0, matched = 0;
+    for (var wi = 0; wi < wa.length; wi++) {
+      var tw = CANONICAL_TOKENS.has(wa[wi]) ? 2 : 1;
+      total += tw;
+      if (sb.has(wa[wi])) matched += tw;
+    }
+    var p = matched / total;
     if (p < 0.7) return 0;
     return Math.min(99, Math.round(p * 100));
   }

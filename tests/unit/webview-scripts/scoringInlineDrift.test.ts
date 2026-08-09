@@ -84,6 +84,15 @@ const CASES: Array<[string, string]> = [
   ['cagefree eggs', 'Cage Free Eggs'],
   ['cage free eggs', 'Free Eggs'],
   ['freerange chicken', 'Free Range Chicken'],
+  // The shared-word case: 'cage free' and 'free range' both want the same word.
+  ['free range eggs', 'Cage Free Range Eggs'],
+  ['cage free eggs', 'Cage Free Range Eggs'],
+  // The weighted overlap: one filler token must not push a real match under the
+  // 70% floor. These are the pairs that separate a copy that collapsed but did
+  // not re-weight.
+  ['2% low fat milk', 'Low Fat Milk'],
+  ['horizon low fat milk', 'Low Fat Milk'],
+  ['organic grass fed ground beef chuck', 'Organic Ground Beef Chuck'],
   ['organic boneless chicken', 'Boneless Chicken'],
   ['large brown eggs', 'Large Brown Eggs'],
   ['jalapeño peppers', 'Jalapeno Peppers'],

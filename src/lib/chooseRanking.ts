@@ -12,7 +12,13 @@
 // `scoreMatch` is copied verbatim into six injected store scripts, and each
 // store's add-to-cart gate is `scoreMatch(term, name) === 100` (or the
 // equivalent string equality). 100 is reachable only via the `na === nb` fast
-// path, so the gate is exact-equality-after-normalization and nothing else.
+// path, so the gate is exact equality after normalisation AND critical-phrase
+// collapse — the second half added by MEAL-160, which is what makes
+// `scoreMatch('lowfat milk', 'Low Fat Milk') === 100` even though the two
+// normalise differently. That is the intended widening: the strings name one
+// product in two spellings, exactly as the diacritic normalisation already
+// assumed. It is worth stating precisely, because this comment is what a future
+// reader consults to conclude the add path is safe.
 // Changing `_scoring.ts` risks widening or narrowing what the add gate accepts,
 // which is the one governing-principle breach this work could cause.
 //
@@ -67,7 +73,7 @@
 // store order 10/17 → score-ranked 15/17 → with this tiebreak 16/17. See
 // tests/match-harness/README.md for what was tried and rejected.
 
-import { normDiacritic, scoreMatch } from './webview-scripts/_scoring';
+import { collapseCriticalPhrases, normDiacritic, scoreMatch } from './webview-scripts/_scoring';
 
 /**
  * Per-word penalty for a word in the product name that the query did not ask
@@ -78,8 +84,18 @@ import { normDiacritic, scoreMatch } from './webview-scripts/_scoring';
  */
 const UNREQUESTED_WORD_PENALTY = 1;
 
+/**
+ * The same tokens the scorer sees, collapse included (MEAL-160).
+ *
+ * Without the collapse this penalty charges a product for exactly the spelling
+ * `scoreMatch` has just declared equivalent. Measured for the query "lowfat
+ * milk": "Low Fat Milk" scores a perfect 100 and is then docked two unrequested
+ * words (`low`, `fat`), losing the top row to "Organic Lowfat Milk" at 99. The
+ * exact match ends up second, which is the one thing this module exists to
+ * prevent.
+ */
 function tokens(s: string): string[] {
-  return normDiacritic(s).split(' ').filter(Boolean);
+  return collapseCriticalPhrases(normDiacritic(s)).split(' ').filter(Boolean);
 }
 
 /**

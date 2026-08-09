@@ -374,7 +374,12 @@ var WORKER_ID = 3;
   // can contain it). Collapsed on both sides so the entry means the concept, not
   // one spelling of it. Longest first — 'cage free' and 'free range' share a
   // word. Same rule as CRITICAL_PHRASES in _scoring.ts.
-  var CRITICAL_PHRASES = [[/\\bcage free\\b/g,'cagefree'],[/\\bfree range\\b/g,'freerange'],
+  // "Cage Free Range Eggs" is a real label and the two concepts SHARE the word
+  // 'free'. A plain left-to-right pass collapses 'cage free' first, eats it, and
+  // leaves 'cagefree range' - so a "free range" request vetoed the exact product
+  // it wanted. The three-word rule runs first and gives both their own token.
+  var CRITICAL_PHRASES = [[/\\bcage free range\\b/g,'cagefree freerange'],
+    [/\\bcage free\\b/g,'cagefree'],[/\\bfree range\\b/g,'freerange'],
     [/\\bgrass fed\\b/g,'grassfed'],[/\\blow fat\\b/g,'lowfat'],[/\\bnon fat\\b/g,'nonfat']];
   function collapseCriticalPhrases(s) {
     var out = s;
@@ -545,9 +550,12 @@ var WORKER_ID = 3;
     // sharing under a third of its words with what the user asked for was added to
     // their cart unattended. Every other store in this codebase requires an exact
     // match: HEB, Walmart, Wegmans and Amazon Fresh gate on scoreMatch(...) === 100,
-    // which in _scoring.ts means equality and nothing else, because every path but
-    // the na === nb fast path is capped by Math.min(99, …). Albertsons compares
-    // normalized strings directly. ALDI was the exception.
+    // which in _scoring.ts means equality after normalization and critical-phrase
+    // collapse and nothing else, because every path but the na === nb fast path is
+    // capped by Math.min(99, …). The collapse half is MEAL-160: "lowfat milk" and
+    // "Low Fat Milk" are one product spelled two ways, and the gate now treats
+    // them as such. Albertsons compares normalized strings directly. ALDI was the
+    // exception.
     //
     // Note that === 100 would NOT mean equality if it were asked of the scoreOne
     // above: that copy has no 99 cap, so it also returns a clean 100 for a word
@@ -986,7 +994,12 @@ exports[`ALDI generated WebView scripts (bundled config) buildSearchAndAddScript
   // can contain it). Collapsed on both sides so the entry means the concept, not
   // one spelling of it. Longest first — 'cage free' and 'free range' share a
   // word. Same rule as CRITICAL_PHRASES in _scoring.ts.
-  var CRITICAL_PHRASES = [[/\\bcage free\\b/g,'cagefree'],[/\\bfree range\\b/g,'freerange'],
+  // "Cage Free Range Eggs" is a real label and the two concepts SHARE the word
+  // 'free'. A plain left-to-right pass collapses 'cage free' first, eats it, and
+  // leaves 'cagefree range' - so a "free range" request vetoed the exact product
+  // it wanted. The three-word rule runs first and gives both their own token.
+  var CRITICAL_PHRASES = [[/\\bcage free range\\b/g,'cagefree freerange'],
+    [/\\bcage free\\b/g,'cagefree'],[/\\bfree range\\b/g,'freerange'],
     [/\\bgrass fed\\b/g,'grassfed'],[/\\blow fat\\b/g,'lowfat'],[/\\bnon fat\\b/g,'nonfat']];
   function collapseCriticalPhrases(s) {
     var out = s;
@@ -1157,9 +1170,12 @@ exports[`ALDI generated WebView scripts (bundled config) buildSearchAndAddScript
     // sharing under a third of its words with what the user asked for was added to
     // their cart unattended. Every other store in this codebase requires an exact
     // match: HEB, Walmart, Wegmans and Amazon Fresh gate on scoreMatch(...) === 100,
-    // which in _scoring.ts means equality and nothing else, because every path but
-    // the na === nb fast path is capped by Math.min(99, …). Albertsons compares
-    // normalized strings directly. ALDI was the exception.
+    // which in _scoring.ts means equality after normalization and critical-phrase
+    // collapse and nothing else, because every path but the na === nb fast path is
+    // capped by Math.min(99, …). The collapse half is MEAL-160: "lowfat milk" and
+    // "Low Fat Milk" are one product spelled two ways, and the gate now treats
+    // them as such. Albertsons compares normalized strings directly. ALDI was the
+    // exception.
     //
     // Note that === 100 would NOT mean equality if it were asked of the scoreOne
     // above: that copy has no 99 cap, so it also returns a clean 100 for a word
