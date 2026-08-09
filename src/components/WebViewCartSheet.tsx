@@ -336,8 +336,10 @@ export default function WebViewCartSheet({
    * is the one non-success outcome that carries no failure code, so these rows
    * cannot leak into the code tally or the failure charts, and `detail.terminal`
    * lets the read side count or exclude them deliberately. Nothing here needs a
-   * new member of StepOutcome or StepName — both are vocabulary shared with the
-   * Kroger Brands web extension, and neither can be extended one-sidedly.
+   * new member of StepOutcome or StepName, and that is on its own merits: this
+   * app is the only producer of either (MEAL-29 retired the shared-vocabulary
+   * claim that used to be the reason given here), so the reason not to add one is
+   * that 'skipped' already says it, not that anything forbids it.
    *
    * `abandonedAt` is the actionable field: a pile of 'qty' is people changing
    * their mind before any automation ran, and a pile of 'robot_challenge' is a
@@ -1673,10 +1675,14 @@ export default function WebViewCartSheet({
     // half-drifted is not this run failing, and it must not colour the code the
     // dashboard groups on.
     //
-    // It rides on `reconcile` rather than a step name of its own because StepName
-    // is a contract shared with the Kroger Brands web extension: a member only
-    // this app emits reads as a hole on the extension's chart. `phase` in the
-    // detail is how it is told apart from the other reconcile rows a run emits
+    // It rides on `reconcile` rather than a step name of its own. The reason
+    // recorded here was that StepName is a contract shared with the Kroger Brands
+    // web extension and a member only this app emits would read as a hole on the
+    // extension's chart; MEAL-29 established that there is no such counterparty,
+    // so that is no longer a constraint and a step name of its own is available
+    // to whoever wants one. It stays on `reconcile` because it IS a reconcile —
+    // splitting it would need a reason of its own, and nobody has offered one.
+    // `phase` in the detail is how it is told apart from the other reconcile rows
     // (the cart diff, the MEAL-47 recovery, the north-star correction) — the same
     // way those already tell each other apart.
     //

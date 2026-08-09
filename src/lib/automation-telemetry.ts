@@ -44,9 +44,13 @@ export type StepOutcome =
  * nothing to do with the other two. The code names the fix family, so the funnel
  * can be grouped into work rather than into a single "failures" bar.
  *
- * Codes are only ever APPENDED. The dashboard groups on the raw string and the
- * server orders its breakdown by position, so renaming or reordering one splits
- * a metric's history in a way nothing fails on.
+ * Codes are only ever APPENDED, and never renamed or removed. The code is stored
+ * as a raw string on every row ever written, so a rename splits a metric's
+ * history and a removal orphans the rows already carrying it — neither of which
+ * fails anywhere visible. Appending is a convention on top of that: it keeps this
+ * list readable as the order the codes were introduced in. Nothing reads the
+ * ORDER of this array. What is order-sensitive is FAILURE_CODE_SEVERITY below,
+ * which is a separate list for exactly that reason.
  *
  * This list used to be described here as a contract shared with the Kroger
  * Brands web extension, needing agreement on both sides before a code could be
@@ -71,6 +75,20 @@ export type StepOutcome =
  * there is no fix: the store is out of the item. It exists so that outcome stops
  * being counted as one of ours — before this it rode `match_rejected`, which put
  * the store's inventory on the same bar as our scoring being wrong (MEAL-29).
+ *
+ * It is also the only code that makes a store's numbers look BETTER: the server
+ * subtracts these items from the item-success denominator, so a store reporting
+ * more of them reports a higher success rate. That puts weight on the store
+ * scripts being right about which items get it, and they are not simply reading a
+ * flag — the shape is "the page says out of stock" AND "this is the item we
+ * asked for", and the second half is our own exact-match judgement (see
+ * `hasExactOos` in instacart.ts, whose comment records a version that tested a
+ * 30-point similarity threshold and so reported out_of_stock for products that
+ * merely resembled the request). A regression that loosens exact-match therefore
+ * does not show up as a failure; it shows up as a store getting quietly better.
+ * The count is reported on the dashboard tile and in the alert email next to the
+ * rate it adjusted, so the inflation is at least visible, but the honest summary
+ * is that this code is only as trustworthy as the exact-match gate feeding it.
  *
  * `nav_failed` has no producer in this app: the WebView engine can't distinguish
  * a nav that never completed from a page that loaded and never answered, so
@@ -474,7 +492,8 @@ export class AutomationTelemetry {
    * made the claim that ranking by severity loses nothing quietly false. Measured,
    * not assumed: `sanitizeDetail({a:1, failureCodes:{x:1}})` returns `{a:1}`.
    *
-   * Eight codes at worst is ~120 characters, inside the 200-char string cap.
+   * All nine codes at worst is ~150 characters, inside the 200-char string cap.
+   * Two more codes would put it at the edge; a tenth should re-measure this.
    */
   failureCodeSummary(): string | undefined {
     if (this.failureCounts.size === 0) return undefined;

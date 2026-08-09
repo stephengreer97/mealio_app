@@ -252,10 +252,13 @@ describe('AutomationTelemetry recording', () => {
 describe('failure codes', () => {
   // The dashboard groups on the raw string, so a renamed or mistyped code
   // silently splits a metric's history rather than failing anywhere visible.
-  // Order is asserted, not just membership: the server orders its breakdown by
-  // position in this list, so moving a code re-labels a column on the dashboard.
-  // A new code therefore has to arrive at the END, and this test is what says so.
-  it('exposes exactly the nine codes, in order, with out_of_stock appended last', () => {
+  // Membership is what matters here — every code is stored as a raw string on
+  // rows that already exist, so renaming or dropping one splits or orphans a
+  // metric's history. The literal is written in list order because that is how
+  // the file reads, NOT because anything consumes the position: no consumer does.
+  // (The order that IS load-bearing is FAILURE_CODE_SEVERITY's, asserted below by
+  // the tests that check which code headlines a run.)
+  it('exposes exactly the nine codes, out_of_stock among them', () => {
     expect([...STEP_FAILURE_CODES]).toEqual([
       'selector_miss', 'waf_block', 'auth_required', 'no_candidates',
       'match_rejected', 'confirm_failed', 'timeout', 'nav_failed',
@@ -437,12 +440,14 @@ describe('failure codes', () => {
     expect(walled.primaryFailureCode()).toBe('waf_block');
   });
 
-  it('codes a store-reported out-of-stock as out_of_stock end to end', () => {
-    // The path that actually produces these rows: a store script reports
-    // `reason: 'out_of_stock'`, addFailureCode translates it, and the row carries
-    // the code the server subtracts on. Asserted through record() rather than
-    // through addFailureCode alone, because the mapping being right does not by
-    // itself put the code on a row.
+  it('lets an out_of_stock row reach the run tally under its own name', () => {
+    // Narrow on purpose, and NOT an end-to-end claim: the call below is
+    // hand-written, so it proves the tally and the summary handle the new code,
+    // not that any call site emits it. The wiring from a store script's
+    // `reason: 'out_of_stock'` through to a real row is covered where the wiring
+    // lives — poolAddFunnel.test.ts drives recordPoolAddOutcome for the pool
+    // paths. The fused and sequential call sites in WebViewCartSheet have no
+    // telemetry coverage at all, which predates this change and is not fixed here.
     const t = make();
     t.record('confirm', 'error', {
       itemIndex: 2,
