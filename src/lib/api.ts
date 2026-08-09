@@ -813,15 +813,24 @@ export const automation = {
 // adding one is a database row instead of an App Store release (MEAL-23).
 // Returns null on any failure; the caller keeps its cached or bundled list.
 //
+// PUBLIC — no token. request() attaches one if the user happens to be signed in
+// and the server ignores it, which is why this can run before sign-in and why
+// StoreCatalogLoader sits outside the auth tree.
+//
+// Served as `{ version, stores, updatedAt }`. Every server-side failure is a
+// 5xx, and a 200 never carries an empty list, so there is no success response
+// that could be mistaken for "no stores" — !response.ok throws, we catch, and
+// the caller keeps what it has.
+//
 // The BOUNDARY, not the truth: `stores` is deliberately `unknown`. Everything
 // past this line is validated by mergeStoreCatalog, which owns the decision
-// about what is safe to believe. Two shapes are accepted downstream — a bare
-// array and a `{ stores: [...] }` envelope — so this call does not have to be in
-// lockstep with the server half.
+// about what is safe to believe — including the four nullable descriptive
+// fields (slug, bannerGroup, platform, host, servingArea) that this build reads
+// none of. See the note in merge.ts about `platform` in particular.
 export const storeCatalog = {
   get: async (): Promise<{ version: number; stores: unknown } | null> => {
     try {
-      const r = await request<{ version: number; stores: unknown }>('/api/stores/catalog', {
+      const r = await request<{ version: number; stores: unknown }>('/api/stores', {
         method: 'GET',
         timeoutMs: 10_000,
       });

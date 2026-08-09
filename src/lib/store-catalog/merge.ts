@@ -32,6 +32,21 @@
 //
 // Every rejection lands in `warnings`, so a catalog row that did not take effect
 // is visible rather than silently missing.
+//
+// WHAT WE READ, AND WHAT WE THROW AWAY
+// GET /api/stores serves nine fields per row. This build keeps three — id, name,
+// color — and drops slug, bannerGroup, host, servingArea and platform, because
+// nothing renders them and inventing a use for them here would be inventing
+// product. Unknown fields are dropped silently and by the same rule, so the
+// server can grow columns without a client release.
+//
+// `platform` is dropped LOUDLY in prose because it is the one that will tempt
+// someone. It partitions the catalog exactly like the capability sets today —
+// platform 'kroger' is precisely KROGER_BRAND_IDS — which makes it look like a
+// remote source of truth for what the app can drive. It is not, and it must
+// never be gated on: capability is whether the automation scripts are in this
+// binary (isSupportedStore), and a server field that currently happens to agree
+// is the most convincing possible way to get that wrong later.
 
 import { BUNDLED_STORES, Store } from '../../constants/stores';
 

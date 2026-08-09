@@ -211,6 +211,41 @@ describe('a malformed entry does not cost its neighbours', () => {
     expect(warnings).toHaveLength(4);
   });
 
+  it('takes what it needs from a full server row and drops the rest', () => {
+    // The shape GET /api/stores actually serves. Five of its nine fields are
+    // descriptive and this build renders none of them, so they must not survive
+    // into the app — least of all `platform`, which partitions the catalog
+    // exactly like the capability sets today and is therefore the most
+    // convincing wrong thing to start gating on. Capability comes from the
+    // binary; see isSupportedStore.
+    const { stores, warnings } = mergeStoreCatalog([{
+      id: 'king_soopers',
+      name: 'King Soopers',
+      color: '#005DAA',
+      slug: 'king-soopers',
+      bannerGroup: 'Kroger',
+      platform: 'kroger',
+      host: 'kingsoopers.com',
+      servingArea: null,
+    }]);
+    expect(warnings).toEqual([]);
+    expect(byId(stores, 'king_soopers')).toEqual({
+      id: 'king_soopers', name: 'King Soopers', color: '#005DAA',
+    });
+    for (const store of stores) expect(Object.keys(store).sort()).toEqual(['color', 'id', 'name']);
+  });
+
+  it('renders a row whose nullable descriptive fields are all null', () => {
+    // servingArea is NULL on every row today, and the other three are nullable.
+    // Nothing may depend on them being present.
+    const { stores, warnings } = mergeStoreCatalog([{
+      id: 'publix', name: 'Publix', color: '#008542',
+      slug: 'publix', bannerGroup: null, platform: null, host: null, servingArea: null,
+    }]);
+    expect(warnings).toEqual([]);
+    expect(byId(stores, 'publix')).toEqual({ id: 'publix', name: 'Publix', color: '#008542' });
+  });
+
   it('ignores extra fields a newer server publishes', () => {
     // Forward compatibility: an older app must not choke on a column it has
     // never heard of, and must not carry it into the app either.
