@@ -124,10 +124,8 @@ function takeName(id: string, value: unknown, warnings: string[]): string | null
  * would make a typo in one column of one database row look like the feature not
  * working.
  */
-function takeColor(id: string, value: unknown, warnings: string[]): string | null {
-  if (typeof value === 'string' && HEX_COLOR.test(value)) return value;
-  warnings.push(`stores.${id}.color: not a #rgb/#rrggbb hex colour — keeping the colour already on file`);
-  return null;
+function takeColor(value: unknown): string | null {
+  return typeof value === 'string' && HEX_COLOR.test(value) ? value : null;
 }
 
 /**
@@ -183,7 +181,12 @@ export function mergeStoreCatalog(
 
     const name = takeName(id, raw.name, warnings);
     if (name === null) continue;
-    const color = takeColor(id, raw.color, warnings);
+    // The warning is raised at the two call sites below, not in takeColor, because
+    // what an unusable colour COSTS differs between them and a single message was
+    // wrong for one of them: it said "keeping the colour already on file", which a
+    // brand-new store has none of. An operator omitting `color` on a new row was
+    // told their colour was preserved while the store rendered grey.
+    const color = takeColor(raw.color);
 
     const existing = indexById.get(id);
     if (existing !== undefined) {
@@ -198,10 +201,16 @@ export function mergeStoreCatalog(
       // for a subset of rows, substituting here would make the first full
       // catalog publish grey out exactly those stores, right across the picker,
       // with no client release to blame it on.
+      if (color === null) {
+        warnings.push(`stores.${id}.color: not a #rgb/#rrggbb hex colour — keeping the colour already on file`);
+      }
       stores[existing] = { id, name, color: color ?? stores[existing].color };
     } else {
       // Nothing on file, so the neutral is the best available. It reads as "no
       // brand colour", never as another store's brand.
+      if (color === null) {
+        warnings.push(`stores.${id}.color: not a #rgb/#rrggbb hex colour — falling back to a neutral`);
+      }
       indexById.set(id, stores.length);
       stores.push({ id, name, color: color ?? FALLBACK_STORE_COLOR });
     }

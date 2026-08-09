@@ -196,6 +196,12 @@ describe('the "keep what you have" rule', () => {
     await loadStoreCatalog(async () => ({ version: 5, stores: [{ id: 'heb', name: 'Cached', color: '#dd0031' }] }), cache);
     expect(getCatalogVersion()).toBe(5);
     expect(byId('heb')!.name).toBe('Cached');
+    // The line this asserts is `version < currentVersion`. Without this, mutating
+    // it to `<=` — refusing the server's copy of a version already applied from
+    // cache — passes, because the cached apply already installed identical content
+    // and nothing above notices which of the two put it there. Asserting the write
+    // happened is what distinguishes "re-applied" from "silently declined".
+    expect(cache.write).toHaveBeenCalled();
   });
 });
 

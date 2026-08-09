@@ -155,7 +155,13 @@ describe('loadAutomationConfig', () => {
       await loadAutomationConfig(async () => ({ version: 5, config: { timeouts: { addMs: 11_000 } } }), cache);
       expect(getConfigVersion()).toBe(5);
       expect(getAutomationConfig().timeouts.addMs).toBe(11_000);
-    });
+      // The line this asserts is `version < currentVersion`. Without this, mutating
+    // it to `<=` — refusing the server's copy of a version already applied from
+    // cache — passes, because the cached apply already installed identical content
+    // and nothing above notices which of the two put it there. Asserting the write
+    // happened is what distinguishes "re-applied" from "silently declined".
+    expect(cache.write).toHaveBeenCalled();
+  });
   });
 });
 
