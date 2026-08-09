@@ -163,11 +163,37 @@ export function normalizeIngredients(raw: any): Ingredient[] {
         unit,
         measure: item.measure ?? null,
         dropdown: item.dropdown ?? null,
+        // Preparation (MEAL-102), spread so "none" stays ABSENT.
+        //
+        // One spelling, not four. The name needs `ingredientName` /
+        // `productName` / `product_name` / `name` folded because that tolerance
+        // reconciles camelCase with snake_case across three years of writers;
+        // `prep` is a single word, so both cases are the same six characters and
+        // every writer already agrees. (It is why the field is not `prepNote`.)
+        //
+        // `{ prep }` rather than `prep: item.prep ?? null` is load-bearing here
+        // in a way it is not on the website. What this function returns is not
+        // only displayed — `MealDetailSheet.startEdit` seeds its edit state from
+        // it and `handleSave` PUTs it straight back, as do the chooser and the
+        // preset→meal save. Writing `prep: null` onto every row would push a key
+        // no ingredient in the catalogue carries into every meal anyone opened,
+        // so a row with no preparation has to serialise byte-for-byte the way it
+        // did before this field existed — key order included, which is why it is
+        // spread last rather than sitting beside `measure`.
         // Sold-by-weight remembered weight (lb) + its dropdown increment. Must be
         // carried through or the saved choice is lost on every read — the meal
         // card can't show it and the cart re-prompts for weight every run.
         ...(item.purchaseWeight != null ? { purchaseWeight: item.purchaseWeight } : {}),
         ...(item.weightStep != null ? { weightStep: item.weightStep } : {}),
+        ...(typeof item.prep === 'string' && item.prep.trim()
+          // Trimmed because the value round-trips to storage. The server
+          // canonicalises before it ever reaches us (collapsed whitespace,
+          // joining commas stripped, dropped over 120 chars), so this is a
+          // no-op on real rows and a guard against a writer that skipped it —
+          // and whitespace-only prep is no prep rather than a row that renders
+          // a bare trailing comma.
+          ? { prep: item.prep.trim() }
+          : {}),
       };
     }
     return { ingredientName: String(item), qty: 1, productQty: 1, unit: 'qty', measure: null };

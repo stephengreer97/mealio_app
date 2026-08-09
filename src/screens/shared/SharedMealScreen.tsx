@@ -16,7 +16,7 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../../constants/colors';
 import { shared as sharedApi, normalizeIngredients } from '../../lib/api';
-import { ingredientAmount } from '../../lib/formatMeasurement';
+import { ingredientAmount, withPrep } from '../../lib/formatMeasurement';
 import { useAuth } from '../../context/AuthContext';
 import { STORES } from '../../constants/stores';
 import { Ingredient } from '../../types';
@@ -203,7 +203,11 @@ export default function SharedMealScreen({ token, onClose }: Props) {
                     <View key={idx} style={styles.ingredientRow}>
                       <View style={styles.bullet} />
                       <Text style={styles.ingredientText}>
-                        {amount ? `${amount} ` : ''}{ing.ingredientName}
+                        {/* Preparation trails the line the way the recipe wrote
+                            it — "1 onion, finely diced" (MEAL-102). This screen
+                            is already amount-first, so it reads exactly as the
+                            website does. */}
+                        {withPrep(`${amount ? `${amount} ` : ''}${ing.ingredientName}`, ing.prep)}
                       </Text>
                     </View>
                   );

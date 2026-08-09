@@ -5,6 +5,7 @@ import { Feather } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
 import { Colors, Radius } from '../../constants/colors';
 import { creatorDrafts, type CreatorDraft, type CreatorDraftBody, type DraftNotice } from '../../lib/api';
+import { withPrep } from '../../lib/formatMeasurement';
 import { useCreatorDrafts } from '../../context/CreatorDraftsContext';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -82,7 +83,20 @@ function hostOf(url: string): string {
   return match ? match[1] : url;
 }
 
-function measurementOf(ing: { ingredientName: string; qty: number; unit: string; measure: string | null }): string {
+/**
+ * The draft's ingredient line, with its preparation (MEAL-102).
+ *
+ * This screen is where losing prep actually cost a creator something: it is the
+ * card that shows what we extracted from their recipe, and "1 onion, finely
+ * diced" reached them here as "1 onion" with the cooking instruction gone. The
+ * prep trails the line the way their source wrote it, and is the same string the
+ * meal reads with once it is published.
+ */
+function measurementOf(ing: { ingredientName: string; qty: number; unit: string; measure: string | null; prep?: string }): string {
+  return withPrep(bareMeasurementOf(ing), ing.prep);
+}
+
+function bareMeasurementOf(ing: { ingredientName: string; qty: number; unit: string; measure: string | null }): string {
   if (!ing.unit || ing.unit === 'qty') return (ing.qty ?? 1) > 1 ? `${ing.ingredientName}, ${ing.qty}` : ing.ingredientName;
   return ing.measure ? `${ing.ingredientName}, ${ing.measure} ${ing.unit}` : `${ing.ingredientName}, ${ing.unit}`;
 }

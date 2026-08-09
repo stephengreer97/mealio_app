@@ -614,6 +614,13 @@ export interface DraftIngredient {
   measure: string | null;
   searchTerm?: string | null;
   productQty?: number;
+  /**
+   * Preparation extracted from the creator's own recipe — "finely diced"
+   * (MEAL-102). Optional and absent, never null, matching `DraftIngredient` on
+   * the server: a row with none has to serialise the way every draft written
+   * before the field existed does.
+   */
+  prep?: string;
 }
 
 export interface CreatorDraftBody {

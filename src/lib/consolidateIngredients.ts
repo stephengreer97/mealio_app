@@ -29,12 +29,30 @@ export interface ConsolidatedIngredient {
    * merges in and its own amount was dropped. Two meals sharing chicken then
    * both claimed the first one's "2 lb", on the one screen whose entire job is
    * asking how much to buy.
+   *
+   * `prep` is here for the same reason and one more (MEAL-102). Two meals can
+   * share a product and want different things done to it — one dices the onion,
+   * the other slices it — so a preparation on the merged entry would state one
+   * meal's instruction under both meals' names. Keeping it per-meal also keeps
+   * it structurally away from `ingredientName` and `searchTerm`, which are what
+   * the cart searches for; nothing that builds a store query reads this array.
    */
-  mealIngredients: Array<{ mealId: string; mealName: string; qty: number; measure: string | null; unit: string }>;
+  mealIngredients: Array<{ mealId: string; mealName: string; qty: number; measure: string | null; unit: string; prep?: string }>;
 }
 
 export function normIngName(ing: any): string {
   return ing.ingredientName ?? ing.productName ?? ing.product_name ?? ing.name ?? '';
+}
+
+/**
+ * This row's preparation, as a spreadable so "none" stays absent (MEAL-102).
+ *
+ * Read off the row rather than assigned, for the same reason `normalizeIngredients`
+ * omits the key: a per-meal entry with no `prep` has to look exactly like one
+ * written before the field existed.
+ */
+export function prepOf(ing: any): { prep?: string } {
+  return typeof ing?.prep === 'string' && ing.prep.trim() ? { prep: ing.prep.trim() } : {};
 }
 
 export function normProductQty(ing: any): number {
@@ -84,7 +102,7 @@ export function consolidateIngredients(
         if (existing) {
           existing.qty += qty;
         } else {
-          e.mealIngredients.push({ mealId: meal.id, mealName: meal.name, qty, measure: ing.measure ?? null, unit: ing.unit ?? 'qty' });
+          e.mealIngredients.push({ mealId: meal.id, mealName: meal.name, qty, measure: ing.measure ?? null, unit: ing.unit ?? 'qty', ...prepOf(ing) });
           e.mealIds.push(meal.id);
           e.mealNames.push(meal.name);
         }
@@ -100,7 +118,7 @@ export function consolidateIngredients(
           weightStep: ing.weightStep ?? null,
           mealIds: [meal.id],
           mealNames: [meal.name],
-          mealIngredients: [{ mealId: meal.id, mealName: meal.name, qty, measure: ing.measure ?? null, unit: ing.unit ?? 'qty' }],
+          mealIngredients: [{ mealId: meal.id, mealName: meal.name, qty, measure: ing.measure ?? null, unit: ing.unit ?? 'qty', ...prepOf(ing) }],
         });
       }
     }

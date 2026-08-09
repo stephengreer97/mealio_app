@@ -57,6 +57,37 @@ function unitLabel(unit: string, amount: string): string {
   return one ? (SINGULAR[unit] ?? unit) : unit;
 }
 
+/**
+ * Trails a preparation after a rendered ingredient line — "1 onion, finely
+ * diced" (MEAL-102).
+ *
+ * One function, called by every surface that prints an ingredient, for the same
+ * reason `ingredientAmount` is one function: there were three amount rules and
+ * they disagreed, and a second rule for the comma would disagree the same way.
+ * It mirrors `withPrep` in mealio_central's `components/MealCard.tsx`, so the
+ * same meal reads the same on both platforms.
+ *
+ * The comma is added HERE and not stored, so the data holds the phrase a cook
+ * wrote ("finely diced") and not the punctuation joining it to something else —
+ * store the comma and a row reads "1 onion, , finely diced" the moment both
+ * agree. Whitespace-only prep is no prep, and a row with none returns `line`
+ * unchanged, character for character.
+ *
+ * Plain text, not italic. The ticket wrote `1 onion, *finely diced*` to mark
+ * WHICH part is the preparation, not to specify styling; whether it should be
+ * emphasised is Stephen's call and is on his checklist.
+ *
+ * **Only ever applied to a line already rendered for a human.** Prep must never
+ * reach `searchTerm` or `ingredientName` — the cart's add gate is
+ * exact-after-normalisation equality against `searchTerm ?? ingredientName`, so
+ * prep in either does not buy a worse product, it matches nothing and routes the
+ * item to review looking like a matching bug.
+ */
+export function withPrep(line: string, prep?: string | null): string {
+  const trailer = (prep ?? '').trim();
+  return trailer ? `${line}, ${trailer}` : line;
+}
+
 export function ingredientAmount(ing: Measurable): string {
   const measure = (ing.measure ?? '').toString().trim();
 
