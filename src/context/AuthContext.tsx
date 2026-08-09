@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { AppState, Platform } from 'react-native';
 import Constants from 'expo-constants';
-import * as SecureStore from 'expo-secure-store';
 import { User } from '../types';
 import * as tokenStorage from '../lib/tokenStorage';
 import { auth, creators, usage } from '../lib/api';
@@ -184,10 +183,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return result;
   }
 
+  /**
+   * Adopt a token the app was handed from outside — the email-verification deep
+   * link (`mealio://verified?token=…`, RootNavigator) and the Google/Apple
+   * sign-in exchanges (LoginScreen).
+   *
+   * VALIDATE FIRST, INSTALL SECOND (MEAL-155). This used to write the token to
+   * SecureStore and then call `auth.verify()`, because verify — like every other
+   * request — reads the token from SecureStore. On a shared phone that ordering
+   * is a cross-account leak, and it runs in the opposite direction from the one
+   * MEAL-146 closed:
+   *
+   *   A is signed in. B taps the link in their own email. B's token is written
+   *   to the keychain, and then verify fails TRANSIENTLY — a blip, not a bad
+   *   token. RootNavigator swallows it, `user` is still A, and every request
+   *   from that moment authenticates as B. A is shown B's meals and B's account
+   *   under A's name, with no visible transition. `beginSession` never ran, so
+   *   the account-boundary teardown never learns the identity changed and the
+   *   MEAL-146 mechanism is bypassed entirely rather than defeated.
+   *
+   * So the token is passed to verify explicitly and reaches the keychain only
+   * once verify has answered. `auth.verify(token)` sends it as a one-request
+   * override and does NOT renew-and-retry on a 401 (see lib/api) — otherwise a
+   * bad link would renew A's session to answer for B's token, and then sign A
+   * out when that failed. That was the originally-reported symptom: the benign
+   * half of the same ordering bug.
+   *
+   * On ANY failure this function throws having written nothing. A keeps their
+   * token, their user, their creator flag and their diagnostics; the next
+   * request still goes out as A. That is the whole point — a token nobody has
+   * vouched for must not be able to change who the app is.
+   *
+   * What this does NOT decide is what B is told. An expired link and a dead
+   * network both throw from here, and both callers currently swallow or show a
+   * generic sign-in failure. Telling them apart is a product question (see the
+   * MEAL-155 note for Stephen), not a correctness one, and inventing copy for it
+   * here would be the wrong place anyway.
+   */
   async function loginWithToken(accessToken: string) {
-    // Store the token first so auth.verify() can read it
-    await SecureStore.setItemAsync('mealio_access_token', accessToken);
-    const { user: verifiedUser } = await auth.verify();
+    const { user: verifiedUser } = await auth.verify(accessToken);
     await tokenStorage.save(accessToken, null, verifiedUser);
     beginSession(verifiedUser);
     await Promise.all([checkCreatorStatus(), identifyUser(verifiedUser.id)]);
