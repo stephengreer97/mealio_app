@@ -191,17 +191,23 @@ export type HebCartReadFailure =
  *
  * They are genuinely different findings and the log cannot tell them apart:
  *
- *  • `auth` — 401/403. **The H-E-B session died mid-run**, which explains failing
- *    adds and a dead reconcile probe with no anti-bot involvement whatsoever.
- *  • `incident` — an Imperva incident body (`incidentId`/`errorCode`). ABP.
+ *  • `incident` — an Imperva incident body (`incidentId`/`errorCode`). ABP,
+ *    measured: MEAL-12 got exactly this from a plain React Native HTTP client.
  *  • `interstitial` — "Pardon Our Interruption" served as a page. Also ABP, but a
  *    challenge the user could in principle clear rather than a refusal.
+ *  • `unauthorized` — a 401/403 carrying NEITHER of those fingerprints. Consistent
+ *    with **the H-E-B session having died mid-run**, which would explain failing
+ *    adds and a dead reconcile probe with no anti-bot involvement whatsoever —
+ *    but it does NOT prove that, because ABP can also refuse with a bare
+ *    401/403. It is named for what was observed rather than for the conclusion
+ *    we would like to draw from it; the read carries a slice of the response body
+ *    in `detail` so a human can tell which it was.
  *
- * HTTP `status` alone does not separate them: the incident body arrives on a 200
- * as readily as on a 401, which is why the parse orders its checks the way it
- * does and why this field exists at all.
+ * HTTP `status` alone does not separate them, which is why this field exists at
+ * all: the incident body arrives on a 200 as readily as on a 401, and the
+ * interstitial can be served on a 403.
  */
-export type HebCartBlockCause = 'auth' | 'incident' | 'interstitial';
+export type HebCartBlockCause = 'unauthorized' | 'incident' | 'interstitial';
 
 export type HebCartSnapshot =
   | {
@@ -459,10 +465,10 @@ export function buildHebCartQueryFn(): string {
   // \`reason\` stays the single word 'blocked' it has always been. Splitting the
   // reason instead would have been a verdict change — 'blocked' is vocabulary the
   // callers and the funnel read — and this ticket is diagnostic only. The
-  // distinction is not cosmetic: an \`auth\` block means the H-E-B SESSION died
-  // mid-run and ABP was never involved, which explains a run's failing adds all
-  // by itself, and \`status\` cannot stand in for it because the incident body
-  // arrives on a 200 as readily as on a 401.
+  // distinction is not cosmetic: a wall that is really the H-E-B SESSION dying
+  // mid-run explains a run's failing adds all by itself, with no anti-bot
+  // involvement, and \`status\` cannot stand in for the difference because the
+  // incident body arrives on a 200 as readily as on a 401.
   //
   // The block tests were reordered to label them, and ONLY to label them: every
   // input that produced 'blocked' before produces 'blocked' now, with the same
@@ -470,8 +476,8 @@ export function buildHebCartQueryFn(): string {
   // two responses we have actually MEASURED Imperva producing — an incidentId
   // body, and the interstitial page — are consulted BEFORE the status, because
   // MEAL-12 measured the wall as a 401 CARRYING an incidentId and the
-  // interstitial can be served on a 403. Reading either as 'auth' would report
-  // "the session died, ABP was never involved" about the wall itself.
+  // interstitial can be served on a 403. Calling either of those a session
+  // problem would point the investigation away from the wall itself.
   //
   // Strongest evidence first, which is why a bare errorCode is the exception and
   // sits BELOW the status: incidentId and the interstitial string are
@@ -482,10 +488,19 @@ export function buildHebCartQueryFn(): string {
     if (typeof text === 'string' && text.indexOf('Pardon Our Interruption') !== -1) {
       return { ok: false, reason: 'blocked', status: status, block: 'interstitial' };
     }
-    // A 401/403 with neither Imperva fingerprint on it: the H-E-B session, not
-    // the wall — and that is a finding, not a shrug. It explains a run's failing
-    // adds and a dead reconcile probe with no anti-bot involvement at all.
-    if (status === 401 || status === 403) return { ok: false, reason: 'blocked', status: status, block: 'auth' };
+    // A 401/403 carrying neither Imperva fingerprint. Named for what was
+    // OBSERVED, not for the conclusion: this is what a dead H-E-B session looks
+    // like, but ABP can refuse with a bare 401/403 too, and a label that asserted
+    // "the session died, no wall involved" would point the investigation the
+    // wrong way exactly as often as it pointed it the right one. So the refusal
+    // brings its own words along — the one thing that can still separate the two,
+    // and the only place any of a blocked read's body survived.
+    if (status === 401 || status === 403) {
+      return {
+        ok: false, reason: 'blocked', status: status, block: 'unauthorized',
+        detail: (typeof text === 'string') ? text.replace(/\\s+/g, ' ').trim().slice(0, 120) : null
+      };
+    }
     // errorCode without an incidentId — the incident body shape minus the id, and
     // blocked exactly as it has always been.
     if (json && json.errorCode) return { ok: false, reason: 'blocked', status: status, block: 'incident' };

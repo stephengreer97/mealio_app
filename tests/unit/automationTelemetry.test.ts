@@ -338,19 +338,19 @@ describe('failure codes', () => {
 
     /**
      * The same, but scoped to the ONE file that legitimately carries the literal.
-     * `auth` is a plausible ADD_RESULT reason for some future store script, and
-     * putting it in the flat set above would disarm this test for that script
-     * without anyone noticing.
+     * `unauthorized` is a plausible ADD_RESULT reason for some future store
+     * script, and putting it in the flat set above would disarm this test for
+     * that script without anyone noticing.
      *
      * These three are MEAL-16's `block`: WHICH wall a 'blocked' cart read hit — a
-     * bare 401/403 (the H-E-B session died), an Imperva incident body, or the
-     * interstitial. They share a line with `reason: 'blocked'` because they are
+     * bare 401/403, an Imperva incident body, or the interstitial. They share a
+     * line with `reason: 'blocked'` because they are
      * the diagnostic BESIDE that reason, deliberately not three new reasons:
      * splitting the rail's verdict vocabulary would have been a behaviour change,
      * and 'blocked' is what the callers read.
      */
     const IGNORED_IN = new Map<string, string>([
-      ['auth', 'heb-cart-query.ts'],
+      ['unauthorized', 'heb-cart-query.ts'],
       ['incident', 'heb-cart-query.ts'],
       ['interstitial', 'heb-cart-query.ts'],
     ]);

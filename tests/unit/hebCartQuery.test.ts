@@ -373,15 +373,15 @@ describe('MEAL-16 which wall a `blocked` read hit', () => {
     // The two shapes we have actually measured Imperva producing outrank the
     // status, and these two rows are why: MEAL-12 measured the wall as a 401
     // CARRYING an incidentId, and the interstitial can be served on a 403.
-    // Labelled 'auth', either would report "the session died, ABP was not
-    // involved" about the wall itself.
+    // Labelled a session problem, either would point the investigation away
+    // from the wall itself.
     ['an Imperva 401 with an incident body', 'incident', 401, { incidentId: '1318000700134302733-80225616898953604', errorCode: '15' }],
     ['the interstitial served as a 403', 'interstitial', 403, '<html>Pardon Our Interruption…</html>'],
     ['an incident body served as 200', 'incident', 200, { incidentId: 'abc' }],
     ['the ABP interstitial served as 200 HTML', 'interstitial', 200, '<html>Pardon Our Interruption…</html>'],
     // A generic errorCode is weaker evidence than the status, so it sits below it.
-    ['a bare 401 — the H-E-B session died mid-run', 'auth', 401, {}],
-    ['a bare 403', 'auth', 403, {}],
+    ['a bare 401 — no Imperva fingerprint on it', 'unauthorized', 401, {}],
+    ['a bare 403', 'unauthorized', 403, {}],
     ['an errorCode body with no incident id, on a 200', 'incident', 200, { errorCode: '15' }],
   ])('reports %s as %s', (_label, block, status, body) => {
     const json = typeof body === 'string' ? null : body;
@@ -393,10 +393,27 @@ describe('MEAL-16 which wall a `blocked` read hit', () => {
     expect(snap.status).toBe(status);
   });
 
+  it('brings the refusal’s own words along when neither fingerprint is on it', () => {
+    // 'unauthorized' is named for what was observed, not for the conclusion: a
+    // dead H-E-B session looks exactly like this, and so does a bare ABP refusal.
+    // The body is the one thing left that can still tell them apart, and it was
+    // the only part of a blocked read that nothing kept.
+    const snap = rail.parse(401, { message: 'Session expired' }, '{\n  "message":  "Session expired"\n}');
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block: 'unauthorized' });
+    // Whitespace-collapsed so a pretty-printed body does not spend the 120 chars
+    // on newlines.
+    expect(snap.detail).toBe('{ "message": "Session expired" }');
+  });
+
+  it('caps that body at the same 120 chars as every other detail', () => {
+    const snap = rail.parse(403, null, 'x'.repeat(500));
+    expect(snap.detail).toHaveLength(120);
+  });
+
   it('carries the cause and the status onto the verdict, where a human can read them', () => {
     const target = { skuId: null, productId: LAVASH, name: null };
     const conf = rail.confirm(target, null, rail.parse(401, {}));
-    expect(conf).toMatchObject({ state: 'unknown', reason: 'blocked', block: 'auth', status: 401 });
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'blocked', block: 'unauthorized', status: 401 });
   });
 
   it('leaves `block` null on every failure that is not a wall', () => {
@@ -479,7 +496,7 @@ describe('MEAL-16 every verdict reports the status of the read its reason names'
     const before = rail.parse(200, full);
     const after = rail.parse(401, {});
     const conf = rail.confirm(target, before, after);
-    expect(conf).toMatchObject({ state: 'unknown', reason: 'blocked', status: 401, block: 'auth' });
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'blocked', status: 401, block: 'unauthorized' });
     expect(conf.detail).toBeNull();
   });
 
