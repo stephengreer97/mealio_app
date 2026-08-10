@@ -738,7 +738,12 @@ var WORKER_ID = 3;
         orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, phase: 'add', success: !!m.success, productName: m.productName || null, reason: m.reason || null, candidates: m.candidates || [], storeUnavailable: !!m.storeUnavailable, confirm: m.confirm || null }));
         return;
       }
-      if (m && (m.type === 'WORKER_DEBUG' || m.type === 'EXTRACT_DEBUG')) {
+      // PREF_DEBUG included for MEAL-180 — the presearch worker runs the same
+      // extract script, so it runs the same preference probe, and swallowing its
+      // messages would leave a second blind Choose Products path behind. See
+      // buildExtractWorker below.
+      if (m && (m.type === 'WORKER_DEBUG' || m.type === 'EXTRACT_DEBUG' || m.type === 'PREF_DEBUG')) {
+        if (m.type === 'PREF_DEBUG') m.pref = true;
         m.type = 'WORKER_DEBUG'; m.workerId = WORKER_ID; orig(JSON.stringify(m)); return;
       }
     } catch (e) {}
