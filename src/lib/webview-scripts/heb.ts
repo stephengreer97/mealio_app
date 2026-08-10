@@ -1412,6 +1412,34 @@ ${hebWaitFreshFn()}
     bestBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
     await wait(100);
     if (__cartBeforeP) __cartQueryBefore = await __cartBeforeP;
+
+    // How many units of THIS product the cart already holds, read BEFORE the
+    // click (MEAL-185).
+    //
+    // The card's button label reads "N added", and N is the product's
+    // CART-ABSOLUTE quantity — it counts units this run never touched. The
+    // multi-quantity loop below used it as though it were a run-relative
+    // counter, so a product already sitting in the cart stopped the loop early:
+    // with one unit already there and QTY 2, the first click took the label to
+    // "2 added", the guard prevQty >= QTY was satisfied, and the second unit
+    // was never clicked. One unit added, every check agreeing it worked.
+    //
+    // Baselining here makes the loop relative, which is what the SERIAL script
+    // has always been (buildAddToCartScript just runs for j = 1; j < QTY).
+    // That asymmetry is why this only ever bit the parallel path, and why the
+    // under-added item then fell through to the serial top-up and got fixed
+    // there — slowly, one item at a time, hiding the defect behind a retry.
+    var __cardAddedQty = function() {
+      var b = bestCard.querySelector('button[data-qe-id="addToCart"]');
+      var m = (b ? (b.textContent || '') : '').match(/(\\d+)\\s*added/i);
+      return m ? parseInt(m[1], 10) : 0;
+    };
+    var __qtyBase = __cardAddedQty();
+    // EXTRACT_DEBUG, not DEBUG: the worker wrappers forward only EXTRACT_DEBUG /
+    // WORKER_DEBUG and swallow the add script's other diagnostics, so a DEBUG line
+    // here would be invisible on the PARALLEL path — the one this defect lives on.
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: '0_qty_baseline', base: __qtyBase, want: QTY, name: bestName }));
+
     bestBtn.click();
 
     if (bestHasPopup && DROPDOWN) {
@@ -1506,19 +1534,21 @@ ${hebWaitFreshFn()}
         // each time (with one retry) so a dropped click is caught instead of
         // silently under-adding. (qty 1 needs none of this — the cart-increase gate
         // below confirms the single unit.)
-        var __cardAddedQty = function() {
-          var b = bestCard.querySelector('button[data-qe-id="addToCart"]');
-          var m = (b ? (b.textContent || '') : '').match(/(\\d+)\\s*added/i);
-          return m ? parseInt(m[1], 10) : 0;
-        };
+        //
+        // EVERY TARGET HERE IS RELATIVE TO __qtyBase, the label read before the
+        // first click (MEAL-185). The label is cart-absolute: it counts units
+        // this run never added. Written against QTY directly, a product already
+        // in the cart satisfied the loop's exit before the loop had added
+        // anything past the first click.
         var __waitAddedQty = async function(target, ticks) {
           for (var w = 0; w < ticks; w++) { if (__cardAddedQty() >= target) return true; await wait(200); }
           return false;
         };
-        await __waitAddedQty(1, 15);   // let the first unit's label settle (~3s max)
+        var __qtyGoal = __qtyBase + QTY;
+        await __waitAddedQty(__qtyBase + 1, 15);   // let the first unit's label settle (~3s max)
         for (var j = 1; j < QTY; j++) {
           var prevQty = __cardAddedQty();
-          if (prevQty >= QTY) break;
+          if (prevQty >= __qtyGoal) break;
           var incrBtn = bestCard.querySelector('button[data-qe-id="cartQuantityCounterIncrement"]')
                      || bestCard.querySelector('button[data-qe-id="addToCart"]');
           if (!incrBtn || incrBtn.disabled || incrBtn.getAttribute('aria-disabled') === 'true') break;

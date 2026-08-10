@@ -814,3 +814,136 @@ ${buildHebCartQueryFn()}
     },
   );
 });
+
+// ── MEAL-185: multi-quantity adds are RELATIVE to what the cart already holds ──
+//
+// Stephen's run added one unit of a two-unit item and every check agreed it had
+// worked. The card's button label reads "N added", and N is the product's
+// CART-ABSOLUTE quantity — it counts units this run never touched. The
+// multi-quantity loop drove itself to that absolute number, so a product already
+// in the cart satisfied the loop's exit before the second unit was ever clicked.
+//
+// WHY THIS TEST DRIVES A LIVE LABEL. The captured page is static, so a click
+// cannot move anything: with a frozen "1 added" the buggy loop reads prevQty 1,
+// compares against QTY 2, and happily keeps clicking — the defect is invisible.
+// It only appears once the label tracks the cart the way the real storefront's
+// does, which is precisely the property the code comment relies on when it calls
+// the label "the quantity for THIS product". So the simulator below is not a
+// convenience; without it the fixture agrees with the bug.
+//
+// The observable is UNITS ADDED, never the result flag. The buggy path reports
+// success — that is what made this silent — so a test written against
+// SEARCH_AND_ADD_RESULT would agree with the bug too.
+describe('HEB multi-quantity add (MEAL-185)', () => {
+  /**
+   * Make the target card's "N added" label behave like the live one: each click
+   * on its addToCart button bumps the count. Returns nothing; read the tally
+   * back through `window.__mealioAdded`.
+   */
+  async function installLiveQtyLabel(
+    runner: FixtureRunner,
+    productName: string,
+    opts: { latencyMs?: number; dropClicks?: number[] } = {},
+  ) {
+    await runner.page.evaluate(
+      (arg: { name: string; latencyMs: number; dropClicks: number[] }) => {
+        const btns = Array.from(document.querySelectorAll('button[data-qe-id="addToCart"]'));
+        const target = btns.find((b) => (b.textContent || '').includes(arg.name));
+        if (!target) throw new Error('fixture no longer has an in-cart card for ' + arg.name);
+        const label = target.querySelector('div[class*="AddByQuantityButton_label"]');
+        if (!label) throw new Error('fixture no longer has an "N added" label for ' + arg.name);
+        const m = (label.textContent || '').match(/(\d+)\s*added/i);
+        const w = window as any;
+        w.__mealioAdded = m ? parseInt(m[1], 10) : 0;
+        w.__mealioClicks = 0;
+        const paint = () => {
+          label.textContent = w.__mealioAdded + ' added, ' + arg.name + ', add 1 more';
+        };
+        target.addEventListener('click', () => {
+          w.__mealioClicks += 1;
+          // A dropped click: the store took the click and did nothing with it.
+          // This is the failure the label wait exists to catch, so it has to be
+          // expressible or the wait is untested.
+          if (arg.dropClicks.indexOf(w.__mealioClicks) !== -1) return;
+          w.__mealioAdded += 1;
+          if (arg.latencyMs > 0) setTimeout(paint, arg.latencyMs); else paint();
+        });
+      },
+      { name: productName, latencyMs: opts.latencyMs ?? 0, dropClicks: opts.dropClicks ?? [] },
+    );
+  }
+
+  const IN_CART_PRODUCT = 'H-E-B Regular Sour Cream, 16 oz';
+
+  itWithFixture(
+    'search-results-product-in-cart.html',
+    'adds the full quantity when the cart already holds one unit',
+    async (runner) => {
+      await installLiveQtyLabel(runner, IN_CART_PRODUCT);
+      // The exact scenario from the log: one unit already in the cart, two asked
+      // for. Before the fix this added ONE — the first click took the label to
+      // "2 added", `prevQty >= QTY` was satisfied, and the loop stopped.
+      await runner.inject(scripts.buildSearchAndAddScript(IN_CART_PRODUCT, 2, null));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 25_000).catch(() => undefined);
+      const added = await runner.page.evaluate(() => (window as any).__mealioAdded);
+      // 1 already there + 2 this run.
+      expect(added).toBe(3);
+    },
+    { url: 'https://www.heb.com/search?q=sour%20cream' },
+  );
+
+  itWithFixture(
+    'search-results-product-in-cart.html',
+    'still adds exactly one unit for a qty-1 item already in the cart',
+    async (runner) => {
+      // The other side of the same rule, and the one an over-correction breaks:
+      // driving to `base + QTY` must not turn a single-unit add into a top-up to
+      // some absolute target. Over-adding is the same governing principle as
+      // under-adding, pointing the other way.
+      await installLiveQtyLabel(runner, IN_CART_PRODUCT);
+      await runner.inject(scripts.buildSearchAndAddScript(IN_CART_PRODUCT, 1, null));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 25_000).catch(() => undefined);
+      const clicks = await runner.page.evaluate(() => (window as any).__mealioClicks);
+      expect(clicks).toBe(1);
+    },
+    { url: 'https://www.heb.com/search?q=sour%20cream' },
+  );
+  itWithFixture(
+    'search-results-product-in-cart.html',
+    'recovers a dropped increment click instead of under-adding',
+    async (runner) => {
+      // WHY THIS TEST EXISTS, and it is about the fix's OTHER half.
+      //
+      // The loop waits for the label to reach base+1 before it starts
+      // incrementing, and then waits for prevQty+1 after each click, retrying
+      // once if the label does not move. That retry is the only thing standing
+      // between a dropped click and a silent under-add.
+      //
+      // Leaving that first wait at the absolute `1` — as the pre-fix code did —
+      // looks harmless because the arithmetic still comes out right when every
+      // click lands. It is not harmless: with a unit already in the cart the wait
+      // returns INSTANTLY, so prevQty is read before the first click has painted,
+      // and the post-click wait for prevQty+1 is then satisfied by the FIRST
+      // click's own label update rather than the increment's. The retry never
+      // fires and the dropped unit is lost.
+      //
+      // A synchronous label cannot show this: the stale read and the fresh read
+      // are the same number. So this drives a 400ms label latency AND drops the
+      // increment click, which is the combination that separates the two.
+      // 2000ms, chosen against the script's own clock rather than picked round.
+      // The script waits 600ms after the first click before it reaches this branch,
+      // so a latency under that paints the label BEFORE prevQty is read and the
+      // stale-read bug cannot express itself — a 400ms version of this test passed
+      // against the mutant. It also has to stay under the first-unit wait's 3s
+      // budget (15 x 200ms) or the correct code times out too and both sides fail
+      // alike. 2000ms sits in that window with margin at both ends.
+      await installLiveQtyLabel(runner, IN_CART_PRODUCT, { latencyMs: 2000, dropClicks: [2] });
+      await runner.inject(scripts.buildSearchAndAddScript(IN_CART_PRODUCT, 2, null));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 30_000).catch(() => undefined);
+      const added = await runner.page.evaluate(() => (window as any).__mealioAdded);
+      // 1 already there + 2 asked for, with the retry recovering the dropped one.
+      expect(added).toBe(3);
+    },
+    { url: 'https://www.heb.com/search?q=sour%20cream' },
+  );
+});
