@@ -414,7 +414,20 @@ describe('MEAL-16 which wall a `blocked` read hit', () => {
     const body = { incidentId: '1318000700134302733-80225616898953604', errorCode: '15' };
     const snap = rail.parse(401, body, JSON.stringify(body));
     expect(snap).toMatchObject({ block: 'incident' });
-    expect(snap.detail).toContain('1318000700134302733-80225616898953604');
+    expect(snap.detail).toBe('incident id 1318000700134302733-80225616898953604 errorCode 15');
+  });
+
+  it('names the id rather than slicing the body, so a wordy incident cannot bury it', () => {
+    // 120 chars of a blind prefix is not enough to reach an id that Imperva put
+    // after a description — and the id is the whole reason this branch keeps
+    // anything at all.
+    const body = {
+      description: 'x'.repeat(200),
+      hostName: 'www.heb.com',
+      incidentId: '1318000700134302733-80225616898953604',
+    };
+    expect(rail.parse(403, body, JSON.stringify(body)).detail)
+      .toContain('1318000700134302733-80225616898953604');
   });
 
   it('finds the incident id printed into an HTML refusal, where JSON.parse gives nothing', () => {
@@ -426,6 +439,15 @@ describe('MEAL-16 which wall a `blocked` read hit', () => {
     const snap = rail.parse(403, null, page);
     expect(snap).toMatchObject({ ok: false, reason: 'blocked', block: 'incident' });
     expect(snap.detail).toBe('incident id 1318000700134302733-80225616898953604');
+  });
+
+  it('reaches an id that markup and entities sit between', () => {
+    // `Incident ID:</b>&nbsp;1318…` is as common as the bare form, and a gap that
+    // excluded letters would fall through to 'unauthorized' — which is the
+    // misdiagnosis, not a smaller version of it.
+    const snap = rail.parse(403, null, '<html><b>Incident ID:</b>&nbsp;1318000700134302733-8022 </html>');
+    expect(snap).toMatchObject({ block: 'incident' });
+    expect(snap.detail).toBe('incident id 1318000700134302733-8022');
   });
 
   it('still calls a "Pardon Our Interruption" page the interstitial, id or no id', () => {

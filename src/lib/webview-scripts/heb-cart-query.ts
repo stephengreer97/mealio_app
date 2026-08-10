@@ -509,9 +509,13 @@ export function buildHebCartQueryFn(): string {
 
   function __hebCartParse(status, json, text) {
     if (json && json.incidentId) {
+      // Named, not sliced. A blind 120-char prefix of the body would truncate the
+      // id away the moment Imperva puts a description or a hostName in front of
+      // it, and the id is the whole reason this branch keeps anything.
       return {
         ok: false, reason: 'blocked', status: status, block: 'incident',
-        detail: __hebCartBlockText(text)
+        detail: ('incident id ' + String(json.incidentId)
+          + (json.errorCode ? (' errorCode ' + String(json.errorCode)) : '')).slice(0, 120)
       };
     }
     if (typeof text === 'string' && text.indexOf('Pardon Our Interruption') !== -1) {
@@ -527,8 +531,12 @@ export function buildHebCartQueryFn(): string {
     //
     // The id goes into \`detail\` on its own rather than as the leading slice of
     // the page, whose first 120 characters are a doctype.
+    // The gap between the label and the id is ANY characters, lazily and briefly:
+    // the id is wrapped in markup as often as not (\`Incident ID:</b>&nbsp;1318…\`),
+    // and a gap that excluded letters would miss those and fall through to
+    // 'unauthorized' — which is the misdiagnosis, not a smaller version of it.
     var __inc = (typeof text === 'string')
-      ? text.match(/incident\\s*id[^0-9a-z]{0,8}([0-9][0-9a-z-]{5,})/i) : null;
+      ? text.match(/incident\\s*id\\b[\\s\\S]{0,40}?([0-9][0-9a-z-]{5,})/i) : null;
     if (__inc) {
       return {
         ok: false, reason: 'blocked', status: status, block: 'incident',
