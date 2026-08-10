@@ -86,9 +86,10 @@ describe('ExpandableNotice (MEAL-177)', () => {
     const body = view.getByTestId('n-body');
     expect(String(body.type)).toMatch(/ScrollView/);
     expect(body.props.style).toMatchObject({ maxHeight: 120 });
-    // Nested inside the done screen's own ScrollView, iOS gives the gesture to
-    // the outer one unless this is set, and the list cannot be scrolled at all.
-    expect(body.props.nestedScrollEnabled).toBe(true);
+    // Deliberately NOT nestedScrollEnabled — it is Android-only and nothing
+    // competes for this gesture. Pinned so it does not come back with the wrong
+    // rationale attached, which is how it arrived the first time.
+    expect(body.props.nestedScrollEnabled).toBeFalsy();
   });
 
   it('tells a screen reader what the tap does', () => {
@@ -99,6 +100,17 @@ describe('ExpandableNotice (MEAL-177)', () => {
     expect(toggle.props.accessibilityLabel).toBe('6 items skipped. Show details');
     fireEvent.press(toggle);
     expect(view.getByTestId('n-toggle').props.accessibilityLabel).toBe('6 items skipped. Hide details');
+  });
+
+  it('announces as a button and reports its expanded state', () => {
+    // Both were deletable with every other test still green. The role is what
+    // makes it announce as a control at all; the state is what tells a reader
+    // whether the detail is already open.
+    const view = render(<ExpandableNotice testID="n" title="6 items skipped" body={NAMES} />);
+    expect(view.getByTestId('n-toggle').props.accessibilityRole).toBe('button');
+    expect(view.getByTestId('n-toggle').props.accessibilityState).toMatchObject({ expanded: false });
+    fireEvent.press(view.getByTestId('n-toggle'));
+    expect(view.getByTestId('n-toggle').props.accessibilityState).toMatchObject({ expanded: true });
   });
 });
 

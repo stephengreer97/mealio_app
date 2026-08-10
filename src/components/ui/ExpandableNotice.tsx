@@ -14,12 +14,16 @@
 // collapsed state, or hiding the detail hides the problem. Only the list folds.
 //
 // When expanded the body scrolls inside its own bounded height rather than
-// growing the sheet: these banners sit above the cart-result rows on a screen
-// that already scrolls, and a banner that pushes the rows off-screen trades one
-// truncation for another.
+// growing the sheet. The reason is stronger than "tidier": the done screen's
+// banner column is NOT inside a ScrollView — it is a direct child of the
+// SafeAreaView, and its siblings do not shrink — so an unbounded body has
+// nowhere to overflow to and pushes the cart rows, and eventually the Done
+// button, off the screen. An earlier version of this comment claimed the column
+// already scrolled; it does not. MEAL-193 covers making that true.
 
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import type { StyleProp, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/colors';
 
@@ -28,13 +32,10 @@ interface Props {
   title: string;
   /** Revealed on tap. The unbounded part — usually a joined list of names. */
   body: string;
-  /** Optional leading icon, for the warning-toned banners. */
-  icon?: React.ReactNode;
   testID?: string;
-  /** Styling hooks so callers keep their existing banner look. */
-  containerStyle?: object;
-  titleStyle?: object;
-  bodyStyle?: object;
+  /** So the caller keeps its existing banner frame. Typed, not `object`: an
+   *  untyped style prop accepts a TextStyle on a View and says nothing. */
+  containerStyle?: StyleProp<ViewStyle>;
   /** Tallest the expanded body gets before it scrolls. */
   maxBodyHeight?: number;
 }
@@ -42,11 +43,8 @@ interface Props {
 export default function ExpandableNotice({
   title,
   body,
-  icon,
   testID,
   containerStyle,
-  titleStyle,
-  bodyStyle,
   maxBodyHeight = 150,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
@@ -67,8 +65,7 @@ export default function ExpandableNotice({
         accessibilityLabel={`${title}. ${expanded ? 'Hide' : 'Show'} details`}
         testID={testID ? `${testID}-toggle` : undefined}
       >
-        {icon}
-        <Text style={[styles.title, titleStyle]}>{title}</Text>
+        <Text style={styles.title}>{title}</Text>
         <Ionicons
           name={expanded ? 'chevron-up' : 'chevron-down'}
           size={16}
@@ -78,13 +75,16 @@ export default function ExpandableNotice({
       {expanded && (
         <ScrollView
           style={{ maxHeight: maxBodyHeight }}
-          // The banner lives inside the done screen's own ScrollView. Without
-          // this the outer one claims the gesture and the inner list cannot be
-          // scrolled at all on iOS.
-          nestedScrollEnabled
+          // No nestedScrollEnabled: an earlier version set it and justified it as
+          // required on iOS, which is backwards — RN documents it as Android-only
+          // and iOS nests by default. Nothing competes for the gesture anyway,
+          // because the done screen's banner column is NOT inside a ScrollView
+          // (it is a direct child of the SafeAreaView). That last fact is also why
+          // the height cap below matters more than it looks: the column cannot
+          // scroll, so an unbounded body has nowhere to overflow to. See MEAL-193.
           testID={testID ? `${testID}-body` : undefined}
         >
-          <Text style={[styles.body, bodyStyle]}>{body}</Text>
+          <Text style={styles.body}>{body}</Text>
         </ScrollView>
       )}
     </View>
@@ -96,6 +96,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    // The row's own height is ~18pt (a 13px line beside a 16pt chevron), well
+    // under the 44pt/48dp minimums. The container's padding sits OUTSIDE the
+    // Pressable, so it does not count. This does.
+    minHeight: 44,
   },
   title: {
     flex: 1,
@@ -108,6 +112,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     color: Colors.text3,
     lineHeight: 18,
-    marginTop: 4,
+    marginTop: 2,
   },
 });
