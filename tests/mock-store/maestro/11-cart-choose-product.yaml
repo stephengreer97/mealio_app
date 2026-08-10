@@ -44,7 +44,7 @@ env:
 - extendedWaitUntil: { visible: "Items Not Added", timeout: 30000 }
 - tapOn: "Review .* Item.*"          # "Review 1 Item →" (trailing arrow + count)
 
-# Review Ingredients: pick the store's first suggestion, bump qty 0→1, add it.
+# Pick a Substitute: pick the store's first suggestion, bump qty 0→1, add it.
 - extendedWaitUntil: { visible: "No exact match found", timeout: 15000 }
 - tapOn: { id: "candidate-0" }
 - tapOn: "+"                          # qty defaults to 0; one ingredient → one stepper

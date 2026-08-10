@@ -446,7 +446,11 @@ export default function KrogerCartReviewSheet({
     }
     try {
       await krogerApi.addToCartDirect(cartItems, locationId);
-      setTotalAdded(cartItems.length);
+      // Units, not lines (MEAL-178) — "N items added to your cart" has to mean
+      // the same thing on the Kroger path as on every other store, and this API
+      // path hands us the quantities outright. Nothing here is sold by weight:
+      // the REST cart takes a discrete `quantity` per UPC.
+      setTotalAdded(cartItems.reduce((n, i) => n + Math.max(1, i.quantity || 1), 0));
       setAddedItems(cartItems.map((i) => ({ description: i.description ?? '', quantity: i.quantity })));
       setCartError('');
     } catch (err: any) {
@@ -472,10 +476,16 @@ export default function KrogerCartReviewSheet({
   // ── Title ────────────────────────────────────────────────────────────────
 
   const titleMap: Record<Step, string> = {
-    qty: 'Review Ingredients',
+    // This is the ingredient LIST — check/uncheck and set quantities before
+    // anything runs. It was called "Review Ingredients", which is what the OTHER
+    // sheet called its unmatched-item step (MEAL-182): one name, two unrelated
+    // screens, across the two sheets. Renaming it here rather than carrying the
+    // new name is the point — this screen is not where you pick a substitute.
+    // Named for what it does, matching WebViewCartSheet's qty step.
+    qty: 'Add to Cart',
     searching: 'Finding Products…',
     searchResult: 'Items Not Added',
-    review: `Review Unmatched Ingredients (${reviewIdx + 1} of ${reviewQueue.length})`,
+    review: `Pick a Substitute (${reviewIdx + 1} of ${reviewQueue.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
   };
@@ -617,6 +627,10 @@ export default function KrogerCartReviewSheet({
         {step === 'searchResult' && (() => {
           const needsReview = searchResults.filter((r) => !r.exact);
           const autoAdded = searchResults.filter((r) => r.exact && r.upc);
+          // Units, not lines (MEAL-178). The queue LENGTH still drives the button
+          // below — that is how many review screens follow, and inflating it by
+          // quantity would promise five screens and show three.
+          const units = (rs: SearchResult[]) => rs.reduce((n, r) => n + Math.max(1, r.quantity || 1), 0);
           return (
             <>
               <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.listContent, { alignItems: 'center' }]}>
@@ -624,14 +638,14 @@ export default function KrogerCartReviewSheet({
                   <Ionicons name="alert-circle" size={48} color="#f59e0b" />
                 </View>
                 <Text style={[styles.doneTitle, { marginBottom: 8 }]}>
-                  {needsReview.length} item{needsReview.length !== 1 ? 's' : ''} could not be added to cart
+                  {units(needsReview)} item{units(needsReview) !== 1 ? 's' : ''} could not be added to cart
                 </Text>
                 <Text style={[styles.doneSub, { marginBottom: 20 }]}>
                   This may be because the item is out of stock or the store no longer carries it.
                 </Text>
                 {autoAdded.length > 0 && (
                   <Text style={[styles.doneSub, { marginBottom: 20 }]}>
-                    {autoAdded.length} item{autoAdded.length !== 1 ? 's' : ''} matched and will be added automatically.
+                    {units(autoAdded)} item{units(autoAdded) !== 1 ? 's' : ''} matched and will be added automatically.
                   </Text>
                 )}
                 <View style={{ width: '100%', borderRadius: 12, borderWidth: 1, borderColor: Colors.border, overflow: 'hidden' }}>
@@ -658,7 +672,7 @@ export default function KrogerCartReviewSheet({
                   style={[styles.primaryBtn, { backgroundColor: storeColor }]}
                 >
                   <Text style={styles.primaryBtnText}>
-                    Review {needsReview.length} Item{needsReview.length !== 1 ? 's' : ''} →
+                    Review {needsReview.length} Ingredient{needsReview.length !== 1 ? 's' : ''} →
                   </Text>
                 </TouchableOpacity>
               </View>

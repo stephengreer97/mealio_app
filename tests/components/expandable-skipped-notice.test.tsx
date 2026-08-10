@@ -1,6 +1,6 @@
 // MEAL-177 — the skipped-items list must be reachable, not truncated.
 //
-// The done screen told the user "N items skipped during review" and then rendered
+// The done screen told the user "N items you skipped" (was "skipped during review" and then rendered
 // the names with numberOfLines={3}. A run that skipped a dozen items showed three
 // of them, with no affordance to see the rest — and looked complete while doing
 // it, which is the part that makes silent truncation worse than either honest
@@ -214,14 +214,18 @@ describe('the done screen uses it for skipped items (MEAL-177 wiring)', () => {
     });
     // The run stops on the "Items Not Added" gate first — that screen is the
     // handoff into review, not the review itself.
-    act(() => { fireEvent.press(view.getByText(/review 1 item/i)); });
+    // "Ingredient", not "Item": MEAL-178 renamed this gate button, because once
+    // "item" counts UNITS everywhere else on the screen, a review row is not one.
+    act(() => { fireEvent.press(view.getByText(/review 1 ingredient/i)); });
     act(() => { fireEvent.press(view.getByText(/skip this ingredient/i)); });
 
     // The done screen: the count is visible, the name is still visible, and
     // there is now a toggle that lifts the line cap. Before this change the name
     // rendered in a truncating <Text> with no toggle at all — everything past
     // the third line was simply unreachable.
-    expect(view.queryByText(/1 item skipped during review/i)).toBeTruthy();
+    // Wording from MEAL-182, count in UNITS from MEAL-178 — both landed on main
+    // while this branch was open. One skipped ingredient at qty 1, so 1 unit.
+    expect(view.queryByText(/1 item you skipped/i)).toBeTruthy();
     expect(view.queryByTestId('snapshot-skipped-toggle')).toBeTruthy();
     const preview = view.getByTestId('snapshot-skipped-preview');
     expect(preview.props.numberOfLines).toBe(3);

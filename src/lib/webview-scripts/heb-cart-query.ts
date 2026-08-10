@@ -173,7 +173,8 @@ export interface HebCartLine {
 
 /** Why a cart read produced no cart. Never means "the item is absent". */
 export type HebCartReadFailure =
-  /** Imperva ABP: 401/403, or an `incidentId` body, or the interstitial. */
+  /** A wall, of one of three kinds — see `HebCartBlockCause`, which is carried
+   *  BESIDE this rather than folded into it. */
   | 'blocked'
   | 'http_error'
   | 'graphql_error'
@@ -181,6 +182,44 @@ export type HebCartReadFailure =
   | 'shape'
   | 'network'
   | 'timeout';
+
+/**
+ * Which of the three walls a `blocked` read hit. Reported as its own field and
+ * NOT as three separate `reason` values, because `reason` is the rail's verdict
+ * vocabulary — callers and the funnel read it, and MEAL-16 is a diagnostic that
+ * must leave every verdict exactly as it found it.
+ *
+ * They are genuinely different findings and the log cannot tell them apart:
+ *
+ *  • `incident` — an `incidentId` in the JSON body at any status, an incident id
+ *    printed into an HTML refusal page on a 401/403, or an `errorCode` body on a
+ *    status that is not 401/403. ABP, measured: MEAL-12 got exactly this shape
+ *    from a plain React Native HTTP client. The HTML form is read only where the
+ *    read was already `blocked`, so that it labels a wall rather than promoting a
+ *    500 error page that happens to print a reference id into one.
+ *  • `interstitial` — "Pardon Our Interruption" served as a page, at any status.
+ *    Also ABP, but a challenge the user could in principle clear rather than a
+ *    refusal.
+ *  • `unauthorized` — a 401/403 with no `incidentId` and no interstitial text.
+ *    Consistent with **the H-E-B session having died mid-run**, which would
+ *    explain failing adds and a dead reconcile probe with no anti-bot involvement
+ *    whatsoever — but it does NOT prove that, because ABP can also refuse with a
+ *    bare 401/403. It is named for what was observed rather than for the
+ *    conclusion we would like to draw from it.
+ *
+ * The one deliberate asymmetry, spelled out because the boundary is otherwise
+ * invisible: a 401/403 whose body carries an `errorCode` but no `incidentId`
+ * reads as `unauthorized`, not `incident`. `incidentId` is Imperva-specific and
+ * outranks any status; a bare `errorCode` is a generic key that H-E-B's own auth
+ * layer may well send with a 401, so there the status is the better evidence.
+ * Neither call is free, which is why both labels ship beside `status` and a slice
+ * of the body rather than instead of them.
+ *
+ * HTTP `status` alone does not separate the three, which is why this field exists
+ * at all: the incident body arrives on a 200 as readily as on a 401, and the
+ * interstitial can be served on a 403.
+ */
+export type HebCartBlockCause = 'unauthorized' | 'incident' | 'interstitial';
 
 export type HebCartSnapshot =
   | {
@@ -194,7 +233,23 @@ export type HebCartSnapshot =
     itemCount: number | null;
     status: number | null;
   }
-  | { ok: false; reason: HebCartReadFailure; status: number | null; detail?: string | null };
+  | {
+    ok: false;
+    reason: HebCartReadFailure;
+    status: number | null;
+    detail?: string | null;
+    /** Only on `blocked`. Which wall — see HebCartBlockCause. */
+    block?: HebCartBlockCause | null;
+    /** Only on `graphql_error`: `errors[0].extensions.code`. A gateway that
+     *  resolves our `operationName` against a safelist instead of executing the
+     *  document we sent says so here and nowhere else. */
+    code?: string | null;
+    /** Only on `graphql_error`: `errors[0].locations[0]` as `line:col`. Says
+     *  WHERE in the document the gateway's complaint lands, which is what
+     *  separates "they validated the text we sent" from "they validated
+     *  something else". */
+    loc?: string | null;
+  };
 
 /** The product an add targeted, as far as the cart can identify it. */
 export interface HebCartTarget {
@@ -230,6 +285,35 @@ export interface HebAddConfirmation {
    *  send MEAL-16 in three different directions and are otherwise
    *  indistinguishable from outside the WebView. */
   detail?: string | null;
+  /**
+   * MEAL-16. HTTP status of the read this verdict is about, and the first of four
+   * diagnostics taken off the SAME read `detail` came from — the one the verdict's
+   * own `reason` names. They are set together, from one snapshot, precisely so no
+   * verdict can pair one read's status with another read's message (see the note
+   * in `__hebCartConfirm`).
+   *
+   * WHICH READ THAT IS depends on the reason, and it is worth saying out loud
+   * because nothing in these four names says it: on `no_baseline` — the one verdict
+   * whose reason is about the BEFORE read — a `status: 401` describes the baseline,
+   * while `qtyAfter`/`weightAfter` in the same object are the after-read's, because
+   * on `no_baseline` the after read is the one that SUCCEEDED. That is the pairing
+   * the verdict is reporting, not a mix-up: the baseline hit a wall, so the cart we
+   * can see cannot be vouched for. Everywhere else the four describe the after read.
+   *
+   * Null when there was no read to have a status — and null is not 0: a
+   * `no_read`/`no_target` verdict never had a response at all.
+   *
+   * Diagnostic only, all four: `confirmDetail` (pool-add-funnel) picks its
+   * telemetry fields by name and forwards none of these, so they reach a human
+   * on a debug log line and nowhere else.
+   */
+  status?: number | null;
+  /** `errors[0].extensions.code`, on a `graphql_error`. */
+  code?: string | null;
+  /** `errors[0].locations[0]` as `line:col`, on a `graphql_error`. */
+  loc?: string | null;
+  /** Which wall a `blocked` read hit — see HebCartBlockCause. */
+  block?: HebCartBlockCause | null;
 }
 
 /**
@@ -320,6 +404,45 @@ export function buildHebCartQueryFn(): string {
     return JSON.stringify({ operationName: __HEB_CART_OP, variables: {}, query: __HEB_CART_QUERY });
   }
 
+  // MEAL-16 — log the body we ACTUALLY send, exactly once per injected script.
+  //
+  // The 2026-08-10 run came back "Field \\"cartV2\\" of type \\"Query\\" must have a
+  // selection of subfields" on every read. HEB_CART_QUERY has a selection set, so
+  // a validator that received our text cannot have written that sentence: either
+  // the text is mangled between here and the wire, or the gateway validated
+  // something other than what we sent. This line is what kills the first half of
+  // that — it prints the string handed to fetch, after both JSON.stringify hops.
+  //
+  // ONCE, not once per read: __hebCartConfirmAdd polls up to five times per add,
+  // and 30 adds would bury the run in a repeated ~350-char line that says the
+  // same thing every time. The latch is a plain var in this script's own IIFE, so
+  // it leaves NOTHING on H-E-B's origin — not a sessionStorage key and not a
+  // window global, either of which would be a self-identifying Mealio artifact
+  // their own scripts could read, the same fingerprint argument that renamed the
+  // operation. Every add is its own injection, so the grain is one line per add
+  // and the poll retries share it. That is the noise we accept; per-poll is not.
+  //
+  // Guarded on every side because this module is also evaluated in a sandbox with
+  // no window and no bridge (tests/unit/hebCartQuery.test.ts), and a diagnostic
+  // that can throw inside the read path would take the rail down with it.
+  var __hebCartBodyLogged = false;
+  function __hebCartLogBody(body) {
+    try {
+      if (__hebCartBodyLogged) return;
+      if (typeof window === 'undefined' || !window || !window.ReactNativeWebView) return;
+      __hebCartBodyLogged = true;
+      // EXTRACT_DEBUG: the only debug type the worker wrappers forward (they
+      // re-tag it WORKER_DEBUG and swallow ADD_DEBUG), and the main WebView logs
+      // it too — so this one type is visible from every surface that adds. The
+      // 'cart_query' step prefix is what exempts it from the add worker's
+      // 200-char WORKER_DEBUG cap and what the pre-search handler logs on.
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'EXTRACT_DEBUG', step: 'cart_query_body',
+        endpoint: __HEB_CART_ENDPOINT, op: __HEB_CART_OP, body: body
+      }));
+    } catch (e) {}
+  }
+
   // "item#6454594#" / "item#3454081#<prefId>" → "6454594". A fallback for the
   // product id when the selection set's product{id} is absent; verified against
   // both committed cart fixtures, where the segment always equals Product.id.
@@ -359,18 +482,198 @@ export function buildHebCartQueryFn(): string {
   // Classify one HTTP answer. The ordering matters: an ABP block can arrive as a
   // 401 with a JSON incident body OR as a 200 serving the interstitial, and
   // either must read as 'blocked' rather than as an empty/odd cart.
+  //
+  // MEAL-16: each of those now records WHICH wall it was in \`block\`, while
+  // \`reason\` stays the single word 'blocked' it has always been. Splitting the
+  // reason instead would have been a verdict change — 'blocked' is vocabulary the
+  // callers and the funnel read — and this ticket is diagnostic only. The
+  // distinction is not cosmetic: a wall that is really the H-E-B SESSION dying
+  // mid-run explains a run's failing adds all by itself, with no anti-bot
+  // involvement, and \`status\` cannot stand in for the difference because the
+  // incident body arrives on a 200 as readily as on a 401.
+  //
+  // The block tests were reordered to label them, and ONLY to label them: every
+  // input that produced 'blocked' before produces 'blocked' now, with the same
+  // precedence over the non-block classifications below. What changed is that the
+  // two responses we have actually MEASURED Imperva producing — an incidentId
+  // body, and the interstitial page — are consulted BEFORE the status, because
+  // MEAL-12 measured the wall as a 401 CARRYING an incidentId and the
+  // interstitial can be served on a 403. Calling either of those a session
+  // problem would point the investigation away from the wall itself.
+  //
+  // Strongest evidence first, which is why a bare errorCode is the exception and
+  // sits BELOW the status: incidentId and the interstitial string are
+  // Imperva-specific, while \`errorCode\` is a generic key that any gateway might
+  // send. On a 401/403 the status is the better evidence of the two.
+  //
+  // A blocked read was the only failure that kept NONE of its body, so two of the
+  // three now carry a whitespace-collapsed 120-char slice of it in \`detail\`. On
+  // an incident that slice holds the incidentId itself — the one string that
+  // names a specific Imperva refusal, and the one you would quote to anybody
+  // asking about it. The interstitial is the exception: its label already says
+  // everything the slice would.
+  //
+  // The markup comes off first when the body IS a page. 'unauthorized' is the one
+  // label that cannot stand on its own — a dead H-E-B session and a bare ABP
+  // refusal are the same 401 — so its body is the whole evidence, and the first
+  // 120 characters of an HTML refusal are a doctype and a <head> that name
+  // neither. Stripped, the same 120 characters hold what a human would have read
+  // off the screen. Script and style bodies go with the tags: a refusal page
+  // carries far more of those than prose, and one inline script would spend the
+  // budget by itself.
+  //
+  // Only when the body actually opens as markup, so a JSON body that happens to
+  // contain a '<' is never run through a tag stripper that would eat what follows
+  // it. Imperva's pages open with a doctype or an <html>; a JSON body cannot.
+  //
+  // Uncapped, because the incident-id scan below reads this too and needs the
+  // whole page: \`__hebCartBlockText\` is where the 120-char budget is spent.
+  function __hebCartPlain(text) {
+    if (typeof text !== 'string') return null;
+    var t = text;
+    if (/^\\s*</.test(t)) {
+      t = t.replace(/<(script|style)\\b[\\s\\S]*?<\\/\\1>/gi, ' ')
+        .replace(/<[^>]*>/g, ' ')
+        // Numeric entities go with the named one, because a page is as likely to
+        // write its non-breaking space as \`&#160;\` — and the digits inside that
+        // would sit between the incident label and the id, where the scan below
+        // reads the first number it finds as the id. Anything else numeric-encoded
+        // is spacing too, at the only place this text is read.
+        .replace(/&nbsp;|&#x?[0-9a-f]+;/gi, ' ');
+    }
+    t = t.replace(/\\s+/g, ' ').trim();
+    return t || null;
+  }
+
+  function __hebCartBlockText(text) {
+    var t = __hebCartPlain(text);
+    return t ? t.slice(0, 120) : null;
+  }
+
   function __hebCartParse(status, json, text) {
-    if (status === 401 || status === 403) return { ok: false, reason: 'blocked', status: status };
-    if (json && (json.incidentId || json.errorCode)) return { ok: false, reason: 'blocked', status: status };
+    if (json && json.incidentId) {
+      // Named, not sliced. A blind 120-char prefix of the body would truncate the
+      // id away the moment Imperva puts a description or a hostName in front of
+      // it, and the id is the whole reason this branch keeps anything.
+      return {
+        ok: false, reason: 'blocked', status: status, block: 'incident',
+        detail: ('incident id ' + String(json.incidentId)
+          + (json.errorCode ? (' errorCode ' + String(json.errorCode)) : '')).slice(0, 120)
+      };
+    }
     if (typeof text === 'string' && text.indexOf('Pardon Our Interruption') !== -1) {
-      return { ok: false, reason: 'blocked', status: status };
+      return { ok: false, reason: 'blocked', status: status, block: 'interstitial' };
+    }
+    // Everything from here down reads the page as words rather than as markup;
+    // \`__plain\` is computed once and shared by the two scans below. Gated to
+    // 401/403 for the reason each of them repeats: those two statuses were walls
+    // before MEAL-16 and still are, so a scan that only runs there can pick the
+    // LABEL without ever inventing a verdict. At any other status a page reads
+    // exactly as it did before this ticket.
+    var __plain = (status === 401 || status === 403) ? __hebCartPlain(text) : null;
+    // The interstitial again, with tags through the middle of the phrase —
+    // \`Pardon <b>Our</b> Interruption\` defeats the indexOf above. Left where it
+    // is rather than replacing that check, because moving the whole test onto the
+    // stripped text WOULD be a verdict change: a split phrase on a 200 is 'shape'
+    // today, and promoting it to 'blocked' is not this ticket's to do.
+    //
+    // Worth the four lines even so. Without it a 403 interstitial that splits the
+    // phrase is labelled 'unauthorized' — "the session died" — while carrying
+    // "Pardon Our Interruption" in its own \`detail\`, a verdict arguing with its
+    // own evidence, which is worse for a reader than either answer alone.
+    if (__plain && __plain.indexOf('Pardon Our Interruption') !== -1) {
+      return { ok: false, reason: 'blocked', status: status, block: 'interstitial' };
+    }
+    // The same wall wearing an HTML page instead of a JSON body: Imperva's
+    // "Access Denied" variants print the incident id into the markup and carry no
+    // interruption text, so JSON.parse gives null, neither check above fires, and
+    // the 401/403 below would call an ABP refusal a dead session — the exact
+    // misdiagnosis this field exists to prevent. Read after the interstitial
+    // check, not before: a "Pardon Our Interruption" page usually carries an
+    // incident id too, and 'interstitial' is the more specific answer for it.
+    //
+    // ONLY on a 401/403, which is what keeps this a label and not a verdict
+    // change: those two statuses already read as 'blocked' before MEAL-16 and
+    // still do, so all this branch decides is which wall to call them. At any
+    // other status the same page is 'http_error' or 'shape' exactly as it was —
+    // and it has to be, because "incident id" in a body is not proof of Imperva:
+    // a 500 origin error page printing its own reference id under that label
+    // would otherwise be promoted to a measured ABP refusal, which is the
+    // opposite misdiagnosis and a reason no caller asked for.
+    //
+    // The id goes into \`detail\` on its own rather than as the leading slice of
+    // the page, whose first 120 characters are a doctype.
+    //
+    // Scanned over the STRIPPED text, not the markup, because the id is wrapped in
+    // tags as often as not (\`Incident ID:</b>&nbsp;1318…\`) and reading the raw
+    // page gets that wrong in both directions. A number inside an attribute
+    // between the label and the id — \`<span data-ts="1755301234">\` — would be
+    // captured AS the incident id, printing a timestamp as the one string you
+    // would quote to Imperva and dropping the real one. And a gap of any fixed
+    // length is too short for a tag carrying a class and a data attribute, so the
+    // page falls through to 'unauthorized': the "session died" reading this field
+    // exists to prevent. With the tags gone, what separates the label from the id
+    // is punctuation and spaces.
+    //
+    // Which is also why the gap holds NO digits: after stripping, the first number
+    // following the label is the id, and anything that made us skip past a number
+    // to find a later one would be guessing.
+    var __inc = __plain
+      ? __plain.match(/incident\\s*id\\b[^0-9]{0,40}([0-9][0-9a-z-]{5,})/i) : null;
+    if (__inc) {
+      return {
+        ok: false, reason: 'blocked', status: status, block: 'incident',
+        detail: ('incident id ' + __inc[1]).slice(0, 120)
+      };
+    }
+    // A 401/403 carrying neither Imperva fingerprint. Named for what was
+    // OBSERVED, not for the conclusion: this is what a dead H-E-B session looks
+    // like, but ABP can refuse with a bare 401/403 too, and a label that asserted
+    // "the session died, no wall involved" would point the investigation the
+    // wrong way exactly as often as it pointed it the right one. So the refusal
+    // brings its own words along — the one thing that can still separate the two.
+    //
+    // This is also the branch a 401/403 with a bare \`errorCode\` lands on rather
+    // than the one below; see the note on HebCartBlockCause for why the status
+    // outranks that key and the incidentId outranks the status.
+    if (status === 401 || status === 403) {
+      return {
+        ok: false, reason: 'blocked', status: status, block: 'unauthorized',
+        // \`__plain\` rather than __hebCartBlockText(text): reaching here means the
+        // status was 401/403, so the page has already been stripped once just
+        // above, and this is that same string with the budget taken off it.
+        detail: __plain ? __plain.slice(0, 120) : null
+      };
+    }
+    // errorCode without an incidentId — the incident body shape minus the id, and
+    // blocked exactly as it has always been.
+    if (json && json.errorCode) {
+      return {
+        ok: false, reason: 'blocked', status: status, block: 'incident',
+        detail: __hebCartBlockText(text)
+      };
     }
     if (!json || typeof json !== 'object') {
       return { ok: false, reason: (status >= 400 ? 'http_error' : 'shape'), status: status };
     }
     if (json.errors && json.errors.length > 0) {
-      var m = (json.errors[0] && json.errors[0].message) ? String(json.errors[0].message) : '';
-      return { ok: false, reason: 'graphql_error', status: status, detail: m.slice(0, 120) };
+      // MEAL-16 keeps three fields off errors[0], not one. The message alone
+      // could not tell us whether the gateway EXECUTED our document or resolved
+      // our operationName against a registry — a safelist wearing a different
+      // error message — and could not say where in the document it was looking.
+      // extensions.code answers the first; locations answers the second (our own
+      // cartV2 sits at line 2, column 3).
+      var e0 = json.errors[0] || null;
+      var m = (e0 && e0.message) ? String(e0.message) : '';
+      var ext = (e0 && e0.extensions) || null;
+      var loc0 = (e0 && e0.locations && e0.locations.length > 0) ? e0.locations[0] : null;
+      return {
+        ok: false, reason: 'graphql_error', status: status, detail: m.slice(0, 120),
+        code: (ext && ext.code != null && ext.code !== '') ? String(ext.code).slice(0, 60) : null,
+        loc: (loc0 && loc0.line != null)
+          ? (String(loc0.line) + ':' + (loc0.column == null ? '?' : String(loc0.column)))
+          : null
+      };
     }
     if (status >= 400) return { ok: false, reason: 'http_error', status: status };
     var cart = json.data && json.data.cartV2;
@@ -446,29 +749,35 @@ export function buildHebCartQueryFn(): string {
     return out;
   }
 
-  // The failing read's own words, if it left any. The parse captures
-  // errors[0].message and the catch captures the exception message, both already
-  // sliced to 120 — and until now every one of them died here, so a run could
-  // only ever report a bare 'graphql_error' with no way to tell WHICH contract
-  // with the gateway had broken.
-  function __hebCartDetail(snap) {
-    return (snap && snap.ok === false && snap.detail) ? String(snap.detail) : null;
-  }
-
   // The decision. Pure: two snapshots in, one confirmation out.
   function __hebCartConfirm(target, before, after) {
     var idsku = target ? target.skuId : null;
     var idprod = target ? target.productId : null;
-    // The message must belong to the read whose failure the verdict's own reason
-    // names, or it is worse than nothing: a baseline that failed with a
-    // graphql_error, paired with a confirm read that failed as 'blocked' (which
-    // carries no message of its own), would print
+    // ONE READ'S DIAGNOSTICS, and it must be the read whose failure the verdict's
+    // own reason names, or they are worse than nothing: a baseline that failed
+    // with a graphql_error, paired with a confirm read that failed as 'blocked'
+    // (which carries no message of its own), would print
     // "unknown/blocked … PersistedQueryNotFound" and send the investigation after
-    // safelisting when the real answer was a wall. So each verdict below sets
-    // this to the message of the read it is actually about, and every verdict
-    // that is not about a failed read — no_target, landed, missing, and the
-    // cart_changed pair — leaves it null.
-    var detail = null;
+    // safelisting when the real answer was a wall. The same trap is open one
+    // field wider now that status/code/loc/block travel too — a 200 from the
+    // baseline printed beside a 401 verdict would be a lie about which wall we
+    // hit — so they are adopted TOGETHER, from one snapshot, by __hebCartTake.
+    //
+    // The parse captures errors[0].message and the catch captures the exception
+    // message, both already sliced to 120; before MEAL-16's first half every one
+    // of them died here, so a run could only ever report a bare 'graphql_error'
+    // with no way to tell WHICH contract with the gateway had broken.
+    var diag = { detail: null, status: null, code: null, loc: null, block: null };
+    function __hebCartTake(snap) {
+      if (!snap) return;
+      diag.status = (snap.status == null) ? null : snap.status;
+      if (snap.ok === false) {
+        diag.detail = snap.detail ? String(snap.detail) : null;
+        diag.code = snap.code ? String(snap.code) : null;
+        diag.loc = snap.loc ? String(snap.loc) : null;
+        diag.block = snap.block ? String(snap.block) : null;
+      }
+    }
     function out(state, reason, line) {
       return {
         state: state, via: 'cart_query', reason: reason,
@@ -476,15 +785,17 @@ export function buildHebCartQueryFn(): string {
         productId: (line && line.productId) || idprod || null,
         qtyAfter: line ? line.qty : null,
         weightAfter: line ? line.weight : null,
-        detail: detail
+        detail: diag.detail, status: diag.status,
+        code: diag.code, loc: diag.loc, block: diag.block
       };
     }
     // No target: nothing was compared and neither read is what went wrong, so
-    // this verdict carries no message even if a read did fail.
+    // this verdict borrows from neither, even if a read did fail. Same for
+    // no_read, where there is no response to have had a status.
     if (!target || (!idsku && !idprod)) return out('unknown', 'no_target', null);
     if (!after) return out('unknown', 'no_read', null);
     if (!after.ok) {
-      detail = __hebCartDetail(after);
+      __hebCartTake(after);
       return out('unknown', after.reason || 'no_read', null);
     }
     var a = __hebCartMatch(after.lines, target);
@@ -494,11 +805,21 @@ export function buildHebCartQueryFn(): string {
     // unreadable baseline plus a cart we cannot vouch for is not evidence that
     // the item is missing — it is the DOM rail's turn.
     // The one verdict whose reason is about the BEFORE read, so the one place
-    // its message is the right one to carry.
+    // its message — and its status, and its block cause — are the right ones to
+    // carry. Which means this is also the one verdict where the diagnostics and
+    // the line fields come from DIFFERENT reads: \`status\` is the baseline's,
+    // \`qtyAfter\` is the after-read's, and both are right, because on
+    // 'no_baseline' the after read is the one that succeeded. Called out here and
+    // on HebAddConfirmation.status because nothing in the field names says it.
     if (!before || !before.ok) {
-      detail = __hebCartDetail(before);
+      __hebCartTake(before);
       return out('unknown', 'no_baseline', a);
     }
+    // Past here both reads succeeded and the verdict is about the AFTER read, so
+    // that is the one whose status the verdict reports. It carries no detail,
+    // code, loc or block: __hebCartTake reads those only off a failure, and this
+    // snapshot is not one.
+    __hebCartTake(after);
     // SAME CART? A valid answer about a different cart reads as "every item
     // failed" — the one outcome this rail must never produce, and not a read
     // failure, so nothing else catches it. MEAL-12's probes prove an anonymous
@@ -543,6 +864,10 @@ export function buildHebCartQueryFn(): string {
     try { ctl = new AbortController(); } catch (e) { ctl = null; }
     var timer = null;
     try {
+      // Built once and both SENT and LOGGED, so the line on Metro is the string
+      // that went to fetch rather than a second call that could differ from it.
+      var body = __hebCartBody();
+      __hebCartLogBody(body);
       var init = {
         method: 'POST',
         credentials: 'include',
@@ -551,7 +876,7 @@ export function buildHebCartQueryFn(): string {
           'accept': '*/*',
           'apollographql-client-name': __HEB_CART_CLIENT
         },
-        body: __hebCartBody()
+        body: body
       };
       if (ctl) init.signal = ctl.signal;
       var p = fetch(__HEB_CART_ENDPOINT, init);
@@ -600,7 +925,14 @@ export function buildHebCartQueryFn(): string {
       reason: why || 'contradicted',
       skuId: conf.skuId, productId: conf.productId,
       qtyAfter: conf.qtyAfter, weightAfter: conf.weightAfter,
-      detail: (conf.detail == null) ? null : conf.detail
+      // Every diagnostic the withdrawn verdict carried survives the withdrawal:
+      // a contradiction is the signal that should make us turn this flag off, so
+      // it is the last verdict that can afford to arrive without its evidence.
+      detail: (conf.detail == null) ? null : conf.detail,
+      status: (conf.status == null) ? null : conf.status,
+      code: (conf.code == null) ? null : conf.code,
+      loc: (conf.loc == null) ? null : conf.loc,
+      block: (conf.block == null) ? null : conf.block
     };
   }
 
@@ -625,7 +957,10 @@ export function buildHebCartQueryFn(): string {
       if (!after.ok && after.reason !== 'network' && after.reason !== 'timeout') return last;
       if (i < tries - 1) await __hebCartWait(gap);
     }
-    return last || { state: 'unknown', via: 'cart_query', reason: 'no_read', skuId: null, productId: null, detail: null };
+    return last || {
+      state: 'unknown', via: 'cart_query', reason: 'no_read', skuId: null, productId: null,
+      detail: null, status: null, code: null, loc: null, block: null
+    };
   }
 
   // The identity a result card can give us. H-E-B's cards carry NO sku anywhere

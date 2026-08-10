@@ -118,7 +118,12 @@ export function buildPresearchWorker(workerId: number, extractScript: string): s
         orig(JSON.stringify({ type: 'WORKER_RESULT', workerId: WORKER_ID, phase: 'add', success: !!m.success, productName: m.productName || null, reason: m.reason || null, candidates: m.candidates || [], storeUnavailable: !!m.storeUnavailable, confirm: m.confirm || null }));
         return;
       }
-      if (m && (m.type === 'WORKER_DEBUG' || m.type === 'EXTRACT_DEBUG')) {
+      // PREF_DEBUG included for MEAL-180 — the presearch worker runs the same
+      // extract script, so it runs the same preference probe, and swallowing its
+      // messages would leave a second blind Choose Products path behind. See
+      // buildExtractWorker below.
+      if (m && (m.type === 'WORKER_DEBUG' || m.type === 'EXTRACT_DEBUG' || m.type === 'PREF_DEBUG')) {
+        if (m.type === 'PREF_DEBUG') m.pref = true;
         m.type = 'WORKER_DEBUG'; m.workerId = WORKER_ID; orig(JSON.stringify(m)); return;
       }
     } catch (e) {}
@@ -149,14 +154,24 @@ export function buildExtractWorker(workerId: number, extractScript: string): str
       }
       // Forward the extractor's diagnostic messages (tagged with the worker
       // id) so cold-start behavior is visible in the RN logs during dev.
-      if (m && (m.type === 'EXTRACT_DEBUG' || m.type === 'WORKER_DEBUG')) {
+      //
+      // PREF_DEBUG is here for MEAL-180. The preference probe runs on THIS path
+      // — the parallel search workers — and swallowing its messages left the
+      // Choose Products pass the one pass with no evidence: a candidate arriving
+      // with preferences:null was indistinguishable from a probe that never ran,
+      // a card whose Add button had not hydrated yet, and a probe that threw.
+      // The sequential pass, which does reach the log, is exactly the pass the
+      // bug does NOT reproduce on. Bounded per search: at most one line per
+      // card, plus three per probed card, and the probe itself is capped at 5.
+      if (m && (m.type === 'EXTRACT_DEBUG' || m.type === 'WORKER_DEBUG' || m.type === 'PREF_DEBUG')) {
+        if (m.type === 'PREF_DEBUG') m.pref = true;
         m.type = 'WORKER_DEBUG';
         m.workerId = WORKER_ID;
         orig(JSON.stringify(m));
         return;
       }
     } catch (e) {}
-    // Other messages (PRICE_DEBUG, PREF_DEBUG, …) — swallow to keep the bridge quiet.
+    // Other messages (PRICE_DEBUG, …) — swallow to keep the bridge quiet.
   };
 })();
 ${extractScript}`;

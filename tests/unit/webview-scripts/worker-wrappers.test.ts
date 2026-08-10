@@ -80,4 +80,36 @@ describe.each(WRAPPERS)('%s forwards the search metadata', (_name, wrap) => {
     expect(dbg.step).toBe('next_data');
     expect(dbg.ndReason).toBe('stale');
   });
+
+  // MEAL-180. The preference probe only runs on the search path, and these
+  // wrappers ARE the search path for every parallel flow — so while they
+  // swallowed PREF_DEBUG, a candidate arriving with preferences:null had no
+  // evidence behind it at all. "The probe was capped out", "the Add button had
+  // not hydrated so hasPopup read false" and "the probe threw" all looked
+  // identical from RN, which is why the bug sat on a guess.
+  it('forwards the preference probe, tagged so it is not mistaken for an extractor step', () => {
+    const probe = `window.ReactNativeWebView.postMessage(JSON.stringify(
+      { type: 'PREF_DEBUG', step: 'skipped', name: 'H-E-B Deli Oven Roasted Turkey Breast, lb',
+        ci: 6, hasPopup: false, outOfStock: false, hasAddBtn: true, candidatesLen: 5 }));`;
+    const posted = runWrapped(wrap(3, probe + stubExtract({ source: 'dom' })));
+    const dbg = posted.find((m) => m.type === 'WORKER_DEBUG' && m.pref)!;
+    expect(dbg).toBeDefined();
+    expect(dbg.workerId).toBe(3);
+    expect(dbg.step).toBe('skipped');
+    // The two fields that separate the causes: where the card sat in DOM order,
+    // and how many candidates had already been accepted when it was reached.
+    expect(dbg.ci).toBe(6);
+    expect(dbg.candidatesLen).toBe(5);
+    expect(dbg.hasPopup).toBe(false);
+  });
+
+  it('still swallows the noisy per-card diagnostics', () => {
+    // PRICE_DEBUG carries an 800-char DOM dump per card. Forwarding PREF_DEBUG
+    // was a targeted decision, not the removal of the quiet-bridge rule.
+    const noise = `window.ReactNativeWebView.postMessage(JSON.stringify(
+      { type: 'PRICE_DEBUG', dbg: { cardHtml: '<div/>' } }));`;
+    const posted = runWrapped(wrap(0, noise + stubExtract({ source: 'dom' })));
+    expect(posted.find((m) => m.type === 'PRICE_DEBUG')).toBeUndefined();
+    expect(posted.find((m) => m.dbg)).toBeUndefined();
+  });
 });

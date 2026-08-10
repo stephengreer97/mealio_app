@@ -52,7 +52,7 @@ import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-he
 import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
-import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
+import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
@@ -196,14 +196,27 @@ function ts(): string {
 // HTTP statuses anti-bot systems (Akamai, DataDome, PerimeterX) use to block.
 const ANTI_BOT_STATUSES = [403, 429, 503];
 
-// Extra downward offset (px) for the floating preview's default rest in the Review
-// Ingredients flow so it doesn't sit too high vs Choose Product. Tune on-device.
+// Extra downward offset (px) for the floating preview's default rest in the Pick
+// a Substitute flow so it doesn't sit too high vs Choose Product. Tune on-device.
 const REVIEW_PREVIEW_Y_OFFSET = 28;
 
 // Cart-check copy for one over-added product: bare name, or "name ×N" when more
 // than one unclaimed unit of it landed.
 function overAddLabel(o: OverAdd): string {
   return o.qty > 1 ? `${o.name} ×${o.qty}` : o.name;
+}
+
+// What to say when the run could not read the cart at all (MEAL-190).
+//
+// One string for every way it happens — the probe never answered, or it answered
+// "I cannot prove this page is the cart" — because the user's situation is
+// identical in all of them: we could not check your cart, go look. WHY we could
+// not read it belongs in the log, which already carries `reason=` and `url=`.
+//
+// Deliberately not the cart-check wording. Those messages report something the
+// cart SAID; this one reports that there is nothing to report.
+function unverifiedCartMessage(storeName: string): string {
+  return `Couldn't verify your ${storeName} cart — please double-check it.`;
 }
 
 // onHttpError fires for subresources too (images, XHR, assets). Only a top-level
@@ -530,8 +543,8 @@ export default function WebViewCartSheet({
   // right). Tapping it opens the full-screen viewer (MEAL-64).
   const [viewerOpen, setViewerOpen] = useState(false);
   const preview = useDraggablePreview(88, 88, 12, () => setViewerOpen(true));
-  // Re-center the thumbnail on each new ingredient being reviewed. The Review
-  // Ingredients flow rests slightly lower than Choose Product — its search box has
+  // Re-center the thumbnail on each new ingredient being reviewed. The Pick a
+  // Substitute flow rests slightly lower than Choose Product — its search box has
   // a reason line above it, so the centered default otherwise reads as too high.
   useEffect(() => {
     const rev = searchResultsRef.current[reviewIdx];
@@ -541,9 +554,9 @@ export default function WebViewCartSheet({
     setViewerOpen(false);
     preview.reset();
   }, [reviewIdx, preview.reset, preview.setDefaultOffset]);
-  // Ingredients the user explicitly skipped during review, keyed by reviewIndex
-  // so re-deciding after Back clears the earlier skip. Reported on the done
-  // snapshot — distinct from items the automation failed to add.
+  // Ingredients the user explicitly skipped while picking substitutes, keyed by
+  // reviewIndex so re-deciding after Back clears the earlier skip. Reported on
+  // the done snapshot — distinct from items the automation failed to add.
   const [skippedByIdx, setSkippedByIdx] = useState<Record<number, string>>({});
   // MEAL-119: count items whose cart line came back sold-by-weight — neither
   // re-added nor confirmed, only reported (see UnverifiedWeightLine). Held apart
@@ -606,6 +619,24 @@ export default function WebViewCartSheet({
   const [cartRowsTimedOut, setCartRowsTimedOut] = useState(false);
   const cartRowsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [cartDeltaWarning, setCartDeltaWarning] = useState<string | null>(null);
+  // The run could not read the cart AT ALL — held apart from cartDeltaWarning
+  // rather than folded into it (MEAL-190).
+  //
+  // They read the same on the done screen, and they are opposite facts. A
+  // cartDeltaWarning is something the cart SAID: it was read, and it disagreed
+  // with the run. This is the absence of any reading, so nothing could have
+  // disagreed — the item counts on such a run are the run's own report of itself,
+  // and the cart diff is the only check that has ever contradicted one (MEAL-185,
+  // MEAL-187, MEAL-188 all reported success on their own internal checks).
+  //
+  // Telling them apart is what the run's `outcome` rides on. Recorded as
+  // `partial`, an unverified run claims a cart was checked and came up short — a
+  // claim about a cart nobody saw, indistinguishable from a real under-add. On a
+  // store whose cart URL redirects (Walmart today, HEB while heb.com/cart 302s)
+  // that is potentially EVERY run, so the two have to be countable apart or one
+  // store's redirect reads as a fleet-wide regression. mealio_central accepts
+  // `unverified` as its own outcome; see app/api/usage/automation/route.ts there.
+  const [cartUnverified, setCartUnverified] = useState<string | null>(null);
   const [addedNames, setAddedNames] = useState<string[]>([]);
   // Names of items that could not be added, shown on the done screen so the
   // failure is specific ("Sour Cream could not be added") instead of a bare count.
@@ -686,6 +717,13 @@ export default function WebViewCartSheet({
     setFailedNames(failures.map((f) => f.name));
   }, []);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
+  // What every "N items" on screen is counted against (MEAL-178). "items" means
+  // UNITS — the total quantity, weight-priced lines counting 1 by presence — so
+  // the labels measure the same thing the cart counters and the cart check do.
+  // Separate from activeItemsRef because that one is re-pointed at the retry
+  // subset by the reconcile top-up: counting off it would tell the user the run
+  // added 2 items when it added 7, and only on the runs that went wrong.
+  const runIntendedRef = useRef<IntendedItem[]>([]);
   // ── North-star metric (MEAL-3) ─────────────────────────────────────────────
   // The DENOMINATOR, counted once when the add phase commits its item set. It
   // cannot be read off activeItemsRef at run_summary time: the parallel
@@ -1026,7 +1064,12 @@ export default function WebViewCartSheet({
         // confirmDetail picks its telemetry fields by name and does not forward
         // it. Without this the parked pre-search workers, which are where most
         // adds actually happen, produce no evidence of the failure.
-        if (typeof msg.step === 'string' && msg.step.indexOf('cart_query') === 0) {
+        // MEAL-180 adds the preference probe (`pref`) to the same list. The
+        // presearch wrapper forwards it now, but this handler logs by name — so
+        // without naming it here the forwarding is inert: the lines cross the
+        // bridge and are dropped, paying the cost and answering nothing.
+        const isLogged = typeof msg.step === 'string' && msg.step.indexOf('cart_query') === 0;
+        if (isLogged || msg.pref) {
           console.log(`[Cart ${ts()}]`, 'presearch WORKER_DEBUG w', workerId, JSON.stringify(msg));
         }
         return;
@@ -1215,7 +1258,7 @@ export default function WebViewCartSheet({
       cartCountPendingRef.current = null;
       if (phase === 'reconcile') {
         parallelReconcileArmedRef.current = false;
-        setCartDeltaWarning(`Couldn't verify your ${storeName} cart — please double-check it.`);
+        setCartUnverified(unverifiedCartMessage(storeName));
         setStep('done');
       }
     }, CART_PROBE_RESULT_TIMEOUT_MS);
@@ -1473,6 +1516,7 @@ export default function WebViewCartSheet({
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
       reconcileIntendedRef.current = [];
+      runIntendedRef.current = [];
       // North-star counters. 'add' is the default because it is the reading that
       // cannot silently hide a run: a shopping run mislabelled 'choose' would
       // vanish from the metric, while a choose run mislabelled 'add' shows up as
@@ -1484,6 +1528,7 @@ export default function WebViewCartSheet({
       setCartRowsTimedOut(false);
       if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
       setCartDeltaWarning(null);
+      setCartUnverified(null);
 
       // Reset Wegmans parallel worker state. The hook clears its queue,
       // active flag, timers, and worker URIs in one call — workers unmount
@@ -1499,6 +1544,7 @@ export default function WebViewCartSheet({
         const unchosen = consolidated.filter((it) => !it.searchTerm);
         const active = unchosen.filter((it) => it.productQty > 0);
         activeItemsRef.current = active.length > 0 ? active : unchosen;
+        runIntendedRef.current = activeItemsRef.current.map(toIntendedItem);
         // No north-star outcome: this branch only ever searches the UNCHOSEN
         // items and the review it ends in offers "choose", not "add", so the run
         // adds nothing to a cart. Excluded whole — scoring it against a cart
@@ -1596,8 +1642,18 @@ export default function WebViewCartSheet({
   useEffect(() => {
     if (step !== 'done' || automationCompletedRef.current) return;
     automationCompletedRef.current = true;
-    const outcome: 'success' | 'partial' | 'failed' =
-      totalAdded === 0 ? 'failed' : cartDeltaWarning ? 'partial' : 'success';
+    // `unverified` sits between partial and success and is neither (MEAL-190). It
+    // is checked AFTER cartDeltaWarning because a cart that was read and disagreed
+    // is the louder, better-evidenced fact — the two are mutually exclusive in
+    // practice, and if they ever co-occur the reading wins.
+    //
+    // Not folded into 'partial': that claims the cart was checked and came up
+    // short, about a cart nobody saw. Not left as 'success' either — that was the
+    // silence this ticket is about. mealio_central has to know the word before a
+    // build sending it ships, or its allowlist stores NULL; see
+    // app/api/usage/automation/route.ts there.
+    const outcome: 'success' | 'partial' | 'unverified' | 'failed' =
+      totalAdded === 0 ? 'failed' : cartDeltaWarning ? 'partial' : cartUnverified ? 'unverified' : 'success';
     const runId = automationRunIdRef.current;
     // ── North-star metric (MEAL-3) ───────────────────────────────────────────
     // itemsAdded is the NUMERATOR and `requested` the DENOMINATOR of the item
@@ -1715,7 +1771,7 @@ export default function WebViewCartSheet({
     // skippedByIdx / unverifiedWeightLines are read above; automationCompletedRef
     // keeps this to one firing per run whatever re-renders the extra dependencies
     // cause.
-  }, [step, totalAdded, cartDeltaWarning, skippedByIdx, unverifiedWeightLines, tel]);
+  }, [step, totalAdded, cartDeltaWarning, cartUnverified, skippedByIdx, unverifiedWeightLines, tel]);
 
   // Clear all safety timers on unmount. Without this, closing the sheet mid
   // login-check / search / add leaves a real setTimeout running that later
@@ -1844,6 +1900,7 @@ export default function WebViewCartSheet({
     // zeroed lines were already filtered out above — they were never requested.
     runKindRef.current = 'add';
     requestedRef.current = countRequested(active);
+    runIntendedRef.current = active.map(toIntendedItem);
     searchIdxRef.current = 0;
     // Arm the parked-worker commit (if any). We still run the normal login +
     // before-snapshot path below; only the add step changes (see beginSearchFlow).
@@ -2715,6 +2772,35 @@ export default function WebViewCartSheet({
               // prove it is the cart now posts no `items` at all, deliberately, so
               // a Walmart /cart redirect lands here every time. That is the
               // degradation the guard promises, and this is where it is paid.
+              // SAY SO. The run just fell back to believing its own workers, and
+              // until MEAL-190 it did that in silence (MEAL-190).
+              //
+              // The two ways a reconcile can fail to read the cart were reported
+              // asymmetrically, and the silent one is the LIKELY one. A probe that
+              // never answers hits the timeout in triggerCartProbe, which sets
+              // exactly this warning. A probe that answers "I cannot prove this is
+              // the cart" — `count: null`, no `items`, which is what the MEAL-152
+              // page-identity guard posts — landed here and went to the done screen
+              // with no warning at all. The comment below calls that the EXPECTED
+              // outcome rather than a rarity, so the quieter path was also the
+              // more common one.
+              //
+              // It matters because this is the state in which nothing can
+              // contradict the run: every silent add defect (MEAL-185's multi-qty
+              // under-add, MEAL-187's unhydrated zero, MEAL-188's over-adding
+              // retry) reports success on its own internal checks, and the cart
+              // diff is the only thing that ever disagreed. A run with no diff and
+              // no warning presents a guess as a verified result.
+              //
+              // Same string as the timeout path, deliberately: the user's
+              // situation is identical — we could not check your cart, go look.
+              // Splitting hairs about WHY we could not read it belongs in the log,
+              // which already carries `reason=` and `url=`.
+              //
+              // Held in its own state rather than in cartDeltaWarning, because the
+              // two say opposite things about the cart and the run's `outcome` is
+              // computed from which one is set — see the state declaration.
+              setCartUnverified(unverifiedCartMessage(storeName));
               const { confirmed: wins, failed: lost } = reconcileFromWorkerReports(attempts);
               addResultsRef.current = wins.map((w) => ({ name: w.name, success: true }));
               setTotalAdded(wins.length);
@@ -2867,7 +2953,14 @@ export default function WebViewCartSheet({
               // Top-up owns the last 15%: reset the counter so it fills 85% → 100%
               // across this reconcile subset (see the progress effect).
               setProcessedCount(0);
-              setSearchingLabel(`Topping up ${retryItems.length} item${retryItems.length === 1 ? '' : 's'} we couldn't confirm…`);
+              // Units, not lines (MEAL-178) — and here they genuinely differ:
+              // each retry item's productQty is its SHORTFALL, so one line short
+              // by three is three items being topped up.
+              const topUpUnits = unitsForNames(
+                retryItems.map((i) => i.searchTerm || i.ingredientName),
+                retryItems.map(toIntendedItem),
+              );
+              setSearchingLabel(`Topping up ${topUpUnits} item${topUpUnits === 1 ? '' : 's'} we couldn't confirm…`);
               setStep('searching');
               navigateToSearchItem(0);
               return;
@@ -3530,6 +3623,26 @@ export default function WebViewCartSheet({
       setStep('done');
       return;
     }
+    // The review decision supersedes the pre-run intent (MEAL-178). A reviewed
+    // item's quantity is `PickedItem.qty` — seeded at 0 and set by the user on
+    // the review screen — and its identity is the store title that was picked,
+    // which is also the name the run will report back. Counting these off the
+    // pre-run productQty instead reads a x3 request against a x1 pick and tells
+    // the user "3 items added to your cart!" when one landed; on a header-badge
+    // store it also raises a cart-check warning against a correct run, because
+    // the per-item audit that would have caught the discrepancy needs cart rows.
+    // Matched on searchTerm, which is exactly the `name` toIntendedItem built.
+    const superseded = new Set(itemsToAdd.map((p) => p.searchTerm));
+    runIntendedRef.current = [
+      // Items settled before review (added inline on the combined path) keep the
+      // intent they ran with — no pick ever revised them.
+      ...runIntendedRef.current.filter((i) => !superseded.has(i.name)),
+      ...itemsToAdd.map((p) => ({
+        name: p.productName || p.searchTerm,
+        expectedQty: Math.max(1, p.qty || 1),
+        isWeight: p.purchaseWeight != null,
+      })),
+    ];
     // Don't reset addResultsRef — may already contain results from the combined search+add phase.
     addingItemsRef.current = itemsToAdd;
     addingIdxRef.current = 0;
@@ -3565,9 +3678,17 @@ export default function WebViewCartSheet({
     login: `Log in to ${storeName}`,
     searching: currentReview?.isChoose ? 'Choosing Products…' : 'Finding Products…',
     searchResult: 'Items Not Added',
+    // Three things land on this one step and only two of them are substitutions.
+    // A `needs_weight` item is NOT a failed match — Mealio found the product
+    // exactly and is asking for a poundage (the body says "Sold by weight —
+    // choose how much to add"). Heading that "Pick a Substitute" tells the user
+    // the match failed when nothing failed. The old name was vague enough to
+    // cover both; a name that says what to DO cannot be, so it branches.
     review: currentReview?.isChoose
       ? `Choose Product (${reviewIdx + 1} of ${searchResults.length})`
-      : `Review Ingredients (${reviewIdx + 1} of ${searchResults.length})`,
+      : currentReview?.reason === 'needs_weight'
+        ? `Choose an Amount (${reviewIdx + 1} of ${searchResults.length})`
+        : `Pick a Substitute (${reviewIdx + 1} of ${searchResults.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
     // One generic title for every "Mealio can't drive the store" state — the
@@ -3969,6 +4090,12 @@ export default function WebViewCartSheet({
         {/* ── Step: searchResult ──────────────────────────────────────────── */}
         {step === 'searchResult' && (() => {
           const autoAdded = autoPickedItemsRef.current;
+          // Units, not rows (MEAL-178). The queue LENGTH still drives the button
+          // below — how many screens the user is about to step through is a count
+          // of ingredients, and inflating it by quantity would promise five
+          // screens and show three.
+          const unaddedUnits = unitsForNames(searchResults.map((r) => r.term), runIntendedRef.current);
+          const autoAddedUnits = unitsForNames(autoAdded.map((p) => p.searchTerm), runIntendedRef.current);
           return (
             <>
               <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.listContent, { alignItems: 'center' }]}>
@@ -3976,14 +4103,14 @@ export default function WebViewCartSheet({
                   <Ionicons name="alert-circle" size={48} color="#f59e0b" />
                 </View>
                 <Text style={[styles.doneTitle, { marginBottom: 8 }]}>
-                  {searchResults.length} item{searchResults.length !== 1 ? 's' : ''} could not be added to cart
+                  {unaddedUnits} item{unaddedUnits !== 1 ? 's' : ''} could not be added to cart
                 </Text>
                 <Text style={[styles.doneSub, { marginBottom: 20 }]}>
                   This may be because the item is out of stock or the store no longer carries it.
                 </Text>
                 {autoAdded.length > 0 && (
                   <Text style={[styles.doneSub, { marginBottom: 20 }]}>
-                    {autoAdded.length} item{autoAdded.length !== 1 ? 's' : ''} matched and will be added automatically.
+                    {autoAddedUnits} item{autoAddedUnits !== 1 ? 's' : ''} matched and will be added automatically.
                   </Text>
                 )}
                 <View style={{ width: '100%', borderRadius: 12, borderWidth: 1, borderColor: Colors.border, overflow: 'hidden' }}>
@@ -4007,8 +4134,15 @@ export default function WebViewCartSheet({
                   onPress={() => setStep('review')}
                   style={[styles.primaryBtn, { backgroundColor: storeColor }]}
                 >
+                  {/* MEAL-182 left this alone deliberately. It now shares no word
+                      with the step it opens, which is a real gap — but the queue
+                      behind it is mixed (substitutions AND sold-by-weight amount
+                      choices, see the title branch above), so no single verb
+                      covers it, and inventing a third one beside "substitute"
+                      would be worse than the gap. Naming is Stephen's call;
+                      raised on the ticket rather than guessed at here. */}
                   <Text style={styles.primaryBtnText}>
-                    Review {searchResults.length} Item{searchResults.length !== 1 ? 's' : ''} →
+                    Review {searchResults.length} Ingredient{searchResults.length !== 1 ? 's' : ''} →
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -4388,6 +4522,34 @@ export default function WebViewCartSheet({
           const wasChooseFlow = searchResults.length > 0 && searchResults.every(r => r.isChoose);
           const skippedNames = Object.values(skippedByIdx).filter(Boolean);
           const unverified = unverifiedWeightLines;
+          // Every "N item(s)" below is a UNIT count (MEAL-178). `totalAdded` and
+          // `totalFailed` stay product counts — the north-star metric and the
+          // telemetry rows are defined on them — so the units are derived here,
+          // at the display boundary, from the names each count was built from.
+          // Same fallback as failedUnits below: this branch renders only when
+          // totalAdded > 0, and a headline reading "0 items added" would be a
+          // worse lie than the product count it replaced.
+          const addedUnits = addedNames.length > 0
+            ? unitsForNames(addedNames, runIntendedRef.current)
+            : totalAdded;
+          // Only reachable with no names at all (every finalize path compiles
+          // them), and with no names there is nothing to resolve quantities
+          // against — the product count is then the most that is true.
+          const failedUnits = failedNames.length > 0
+            ? unitsForNames(failedNames, runIntendedRef.current)
+            : totalFailed;
+          const skippedUnits = unitsForNames(skippedNames, runIntendedRef.current);
+          // ONE banner for both cart-check outcomes, because the user's next move
+          // is the same either way: go look at your cart. They are separate STATE
+          // (see the declarations) because the run's telemetry outcome turns on
+          // which one is set — a cart that was read and disagreed is not the same
+          // fact as a cart that was never read — but that distinction is for the
+          // fleet view, not for someone standing in a kitchen.
+          //
+          // The reading wins when both are somehow set: it says something specific
+          // about the cart, and "we couldn't check" would be a strictly weaker
+          // claim rendered over a stronger one.
+          const cartCheckMessage = cartDeltaWarning ?? cartUnverified;
           return (
             <>
               <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 32, paddingBottom: 16 }}>
@@ -4410,19 +4572,19 @@ export default function WebViewCartSheet({
                       <Ionicons name="cart" size={56} color={storeColor} />
                     </View>
                     <Text style={styles.doneTitle}>
-                      {totalAdded} item{totalAdded !== 1 ? 's' : ''} added to your {storeName} cart!
+                      {addedUnits} item{addedUnits !== 1 ? 's' : ''} added to your {storeName} cart!
                     </Text>
                     {totalFailed > 0 && (
                       <Text style={[styles.doneSub, { color: '#b45309' }]}>
                         {failedNames.length > 0
                           ? `Could not add: ${failedNames.join(', ')}`
-                          : `${totalFailed} item${totalFailed !== 1 ? 's' : ''} could not be added.`}
+                          : `${failedUnits} item${failedUnits !== 1 ? 's' : ''} could not be added.`}
                       </Text>
                     )}
-                    {cartDeltaWarning && (
+                    {cartCheckMessage && (
                       <View style={styles.cartCheckBanner} testID="cart-check-warning">
                         <Ionicons name="alert-circle" size={18} color="#b45309" />
-                        <Text style={styles.cartCheckBannerText}>{cartDeltaWarning}</Text>
+                        <Text style={styles.cartCheckBannerText}>{cartCheckMessage}</Text>
                       </View>
                     )}
                   </>
@@ -4434,8 +4596,9 @@ export default function WebViewCartSheet({
                     <Text style={styles.doneTitle}>No items were added.</Text>
                     {/* Two different runs land here and they need different
                         words. If nothing was ever attempted (choose-a-product,
-                        or every item skipped in review) the cart was never
-                        touched. If adds WERE attempted and all came back failed,
+                        or every item skipped while picking substitutes) the
+                        cart was never touched. If adds WERE attempted and all
+                        came back failed,
                         "no products were selected" is simply false — and it is
                         exactly the run the cart check below probes, so it can
                         contradict the banner it sits above. */}
@@ -4451,10 +4614,10 @@ export default function WebViewCartSheet({
                         finding had nowhere to render — the banner only existed
                         on the added>0 branch — and the user would re-add an item
                         already in their cart. */}
-                    {cartDeltaWarning && (
+                    {cartCheckMessage && (
                       <View style={styles.cartCheckBanner} testID="cart-check-warning">
                         <Ionicons name="alert-circle" size={18} color="#b45309" />
-                        <Text style={styles.cartCheckBannerText}>{cartDeltaWarning}</Text>
+                        <Text style={styles.cartCheckBannerText}>{cartCheckMessage}</Text>
                       </View>
                     )}
                   </>
@@ -4471,10 +4634,14 @@ export default function WebViewCartSheet({
                 // that the cap now LIFTS: before, a run that skipped a dozen
                 // items showed three of them with no way to reach the rest, and
                 // looked complete while doing it.
+                //
+                // Count and wording come from main, not from this branch: the
+                // count is UNITS (MEAL-178) and the phrasing is MEAL-182's. Taking
+                // this branch's title wholesale would have silently reverted both.
                 <ExpandableNotice
                   testID="snapshot-skipped"
                   containerStyle={styles.skippedBanner}
-                  title={`${skippedNames.length} item${skippedNames.length !== 1 ? 's' : ''} skipped during review`}
+                  title={`${skippedUnits} item${skippedUnits !== 1 ? 's' : ''} you skipped`}
                   body={skippedNames.join(', ')}
                 />
               )}
@@ -4490,6 +4657,9 @@ export default function WebViewCartSheet({
                   silent one. */}
               {unverified.length > 0 && (
                 <View style={styles.skippedBanner} testID="snapshot-unverified-weight">
+                  {/* Already a unit count under MEAL-178's definition and left
+                      alone deliberately: each of these IS one sold-by-weight
+                      line, and a weight line counts 1 by presence. */}
                   <Text style={styles.skippedBannerTitle}>
                     {unverified.length} item{unverified.length !== 1 ? 's' : ''} we could not verify
                   </Text>

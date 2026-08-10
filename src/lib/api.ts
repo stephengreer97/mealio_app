@@ -750,7 +750,12 @@ export const usage = {
     } catch { return null; }
   },
 
-  logAutomationComplete: async (data: { runId: string; itemsAdded?: number; itemsRequested?: number; outcome: 'success' | 'partial' | 'failed' }): Promise<void> => {
+  // `outcome` is an allowlist on the server, not a free-text field: a value
+  // mealio_central does not recognise is stored as NULL, so a run reporting one
+  // this deploy predates loses the fact rather than degrading to a near-enough
+  // one. 'unverified' (MEAL-190) — the run finished but never read the cart —
+  // landed there first, in app/api/usage/automation/route.ts.
+  logAutomationComplete: async (data: { runId: string; itemsAdded?: number; itemsRequested?: number; outcome: 'success' | 'partial' | 'unverified' | 'failed' }): Promise<void> => {
     if (!data.runId) return;
     try {
       await request<{ ok: boolean }>('/api/usage/automation', {

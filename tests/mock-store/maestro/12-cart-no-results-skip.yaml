@@ -42,7 +42,7 @@ env:
 - extendedWaitUntil: { visible: "Items Not Added", timeout: 30000 }
 - tapOn: "Review .* Item.*"
 
-# Review Ingredients: no candidates → skip the ingredient.
+# Pick a Substitute: no candidates → skip the ingredient.
 - extendedWaitUntil: { visible: "No products found.*", timeout: 15000 }
 - tapOn: "Skip this ingredient"
 - extendedWaitUntil: { notVisible: "Skip this ingredient", timeout: 30000 }

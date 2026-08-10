@@ -42,7 +42,7 @@ env:
 - extendedWaitUntil: { visible: "Items Not Added", timeout: 30000 }
 - tapOn: "Review .* Item.*"
 
-# Review Ingredients: the only candidate is out of stock → skip the ingredient.
+# Pick a Substitute: the only candidate is out of stock → skip the ingredient.
 # The candidate rows are badged "Out of stock"; the row touchable absorbs the
 # badge into a combined label, so wrap the match in .* (anchored regex).
 - extendedWaitUntil: { visible: ".*Out of stock.*", timeout: 15000 }

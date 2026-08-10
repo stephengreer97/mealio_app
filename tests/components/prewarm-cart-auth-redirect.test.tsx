@@ -1,10 +1,12 @@
 // The prewarm probe's cart branch must skip auth/SSO interstitials too (MEAL-136).
 //
 // The login branch has skipped them since MEAL-42. The cart branch never did, and
-// it is the branch where skipping matters MORE, because it LATCHES:
-// cartCountInjectedRef is set on the first injection and never cleared for the
-// rest of the probe's life. So an Albertsons SSO bounce landing while the probe
-// is in its cart phase used to mean:
+// at the time this was written it was the branch where skipping mattered MORE,
+// because it latched: one injection per capture, never cleared. MEAL-189 replaced
+// that with a bounded retry, so an interstitial now spends a retry rather than
+// the only injection — the skip is still right, its stakes are just lower. So an
+// Albertsons SSO bounce landing while the probe is in its cart phase used to
+// mean:
 //
 //   1. onLoadEnd fires for …/sso/authorize, injects the count script, latches.
 //   2. The script's own guard (correctly) posts no verdict on an interstitial —
@@ -109,9 +111,11 @@ describe('SilentLoginProbe cart phase on an auth redirect (MEAL-136)', () => {
   });
 
   it('still injects on the real cart page that loads after the interstitial', () => {
-    // The regression this pins. Without the skip, the interstitial latches
-    // cartCountInjectedRef and the cart page below is never injected — the probe
-    // then times out with no baseline. The skip has to happen BEFORE the latch.
+    // The regression this pins. Without the skip, the interstitial consumes an
+    // injection and answers nothing, and the cart page below has to spend a retry
+    // to recover it. Before MEAL-189 there were no retries and it was never
+    // injected at all — the probe timed out with no baseline. The skip still has
+    // to happen BEFORE the budget is spent.
     //
     // The WHICH-load assertion is the whole test. An earlier version only checked
     // the total was 1 at the end, which passes either way: the broken path also
@@ -130,13 +134,26 @@ describe('SilentLoginProbe cart phase on an auth redirect (MEAL-136)', () => {
     expect(injected().filter(isCountScript)).toHaveLength(1);
   });
 
-  it('still injects exactly once when the cart page loads twice', () => {
-    // The latch itself is not what changed: a real cart page is still counted
-    // once, no matter how many loads it reports.
+  it('stops injecting once the cart page has answered, however many times it loads', () => {
+    // This asserted "exactly once when the cart page loads twice" and read the
+    // latch as the invariant. MEAL-189 replaced the latch: a page can re-render
+    // under a good injection, and one-shot made that silence terminal, so loads
+    // now retry until something posts.
+    //
+    // The invariant worth keeping is the one MEAL-136 actually needs — a real
+    // cart page is COUNTED once — and that is bounded by the answer, not by the
+    // injection. So: answer first, then load again, and nothing more is injected.
     renderProbeInCartPhase();
 
     act(() => {
       webviewProps().onLoadEnd({ nativeEvent: { url: CART_URL } });
+    });
+    expect(injected().filter(isCountScript)).toHaveLength(1);
+
+    act(() => {
+      webviewProps().onMessage({
+        nativeEvent: { data: JSON.stringify({ type: 'CART_COUNT', count: 0, items: [], url: CART_URL }) },
+      });
     });
     act(() => {
       webviewProps().onLoadEnd({ nativeEvent: { url: CART_URL } });
