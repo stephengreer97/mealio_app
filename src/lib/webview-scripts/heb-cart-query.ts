@@ -459,12 +459,17 @@ export function buildHebCartQueryFn(): string {
   function __hebCartConfirm(target, before, after) {
     var idsku = target ? target.skuId : null;
     var idprod = target ? target.productId : null;
-    // After-read first, then before-read: every failure this can report except
-    // no_baseline comes off the after-read, and no_baseline is exactly the case
-    // where the before-read is the one that failed. So the message named here is
-    // always the one belonging to the verdict's own reason. Both reads ok → null,
-    // which is every landed/missing verdict.
-    var detail = __hebCartDetail(after) || __hebCartDetail(before);
+    // The message must belong to the read the verdict's own reason names, or it
+    // is worse than nothing: a baseline that failed with a graphql_error, paired
+    // with a confirm read that failed as 'blocked' (which carries no message of
+    // its own), would print "unknown/blocked … PersistedQueryNotFound" and send
+    // the investigation after safelisting when the real answer was a wall. So the
+    // before-read's message is used ONLY when the after-read succeeded, which is
+    // precisely the no_baseline case. Both reads ok → null, i.e. every
+    // landed/missing verdict.
+    var detail = (after && after.ok)
+      ? __hebCartDetail(before)
+      : __hebCartDetail(after);
     function out(state, reason, line) {
       return {
         state: state, via: 'cart_query', reason: reason,
@@ -578,6 +583,11 @@ export function buildHebCartQueryFn(): string {
     if (!conf) return conf;
     return {
       state: 'unknown',
+      // 'via' was omitted here, and confirmDetail reads an absent confirmVia as
+      // "the DOM decided, no rail ran" — so a cart-vs-label disagreement, the one
+      // signal that should make us turn this flag back off, was telemetered as
+      // though the rail had never spoken. The rail DID speak; it was overruled.
+      via: 'cart_query',
       reason: why || 'contradicted',
       skuId: conf.skuId, productId: conf.productId,
       qtyAfter: conf.qtyAfter, weightAfter: conf.weightAfter,

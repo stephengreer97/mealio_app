@@ -294,6 +294,17 @@ describe('MEAL-16 the gateway’s own error message survives to the confirmation
     expect(conf.detail).toBe('Cannot query field "cartV2" on type "Query"');
   });
 
+  it('never pairs the baseline’s message with a different failure’s reason', () => {
+    // A message attached to the wrong reason is worse than no message: this one
+    // would read `unknown/blocked … PersistedQueryNotFound` and send the whole
+    // investigation after safelisting when the answer was an anti-bot wall.
+    const before = rail.parse(200, { data: null, errors: [{ message: 'PersistedQueryNotFound' }] });
+    const after = rail.parse(403, {});
+    const conf = rail.confirm(target, before, after);
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'blocked' });
+    expect(conf.detail).toBeNull();
+  });
+
   it('is null on every verdict where both reads succeeded', () => {
     const full = cartResponseFrom(CART);
     const before = rail.parse(200, withoutProduct(full, LAVASH));
@@ -609,6 +620,15 @@ describe('MEAL-14 withdrawing a verdict a second signal contradicts', () => {
     const out = rail.contradicted(missing, 'contradicted_by_card');
     expect(out).toMatchObject({ state: 'unknown', reason: 'contradicted_by_card', skuId: LAVASH_SKU, productId: LAVASH });
     expect(out.state).not.toBe('landed');
+  });
+
+  it('still says the rail spoke, so the disagreement is not telemetered as a DOM-only add', () => {
+    // confirmDetail (pool-add-funnel) reads an absent confirmVia as "no rail
+    // ran". A contradiction is the signal that should make us turn the flag off;
+    // it must not arrive looking like a row where the cart was never asked.
+    const rail = makeRail();
+    const out = rail.contradicted({ state: 'missing', reason: 'absent_from_cart', skuId: null, productId: LAVASH }, 'contradicted_by_card');
+    expect(out.via).toBe('cart_query');
   });
 
   it('names the disagreement even without a reason, so it is never silently confirmed', () => {
