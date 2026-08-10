@@ -52,7 +52,7 @@ import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-he
 import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
-import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
+import { auditCartAfterRun, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
@@ -641,6 +641,16 @@ export default function WebViewCartSheet({
   // Names of items that could not be added, shown on the done screen so the
   // failure is specific ("Sour Cream could not be added") instead of a bare count.
   const [failedNames, setFailedNames] = useState<string[]>([]);
+  // Mirror of the above for onMessage, which is created once (deps []) and so
+  // closes over this run's initial []. The after-probe corrects this list from
+  // the cart read (see the RECOVERED branch), and it has to start from what the
+  // screen is currently claiming. Written only through setFailedItems, so the
+  // two cannot drift.
+  const failedNamesRef = useRef<string[]>([]);
+  const setFailedItems = useCallback((names: string[]) => {
+    failedNamesRef.current = names;
+    setFailedNames(names);
+  }, []);
 
   // WebView refs
   const webviewRef = useRef<WebView>(null);
@@ -714,8 +724,8 @@ export default function WebViewCartSheet({
     if (failures.length > 0) {
       console.log(`[Cart ${ts()}]`, 'failed adds:', JSON.stringify(failures.map((f) => ({ name: f.name, reason: f.reason ?? 'unknown' }))));
     }
-    setFailedNames(failures.map((f) => f.name));
-  }, []);
+    setFailedItems(failures.map((f) => f.name));
+  }, [setFailedItems]);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
   // What every "N items" on screen is counted against (MEAL-178). "items" means
   // UNITS — the total quantity, weight-priced lines counting 1 by presence — so
@@ -1468,7 +1478,7 @@ export default function WebViewCartSheet({
       setProcessedCount(0);
       setTotalFailed(0);
       setAddedNames([]);
-      setFailedNames([]);
+      setFailedItems([]);
       setBlockReason(null);
       blockReasonRef.current = null;
       freshStoreUnavailableRef.current = false;
@@ -2806,7 +2816,7 @@ export default function WebViewCartSheet({
               setTotalAdded(wins.length);
               setTotalFailed(lost.length);
               setAddedNames(wins.map((w) => w.name));
-              setFailedNames(lost.map((l) => l.name));
+              setFailedItems(lost.map((l) => l.name));
               reconcileFinalizedRef.current = true;
               setStep('done');
               return;
@@ -3048,6 +3058,29 @@ export default function WebViewCartSheet({
                 detail: { phase: 'after', recovered: recovered.length, reportedAdded: reportedAddedCount },
                 code: 'confirm_failed',
               });
+              // Correct what the screen SAYS, not just what the fleet records
+              // (MEAL-177). "Could not add: Sour Cream" is printed one line above
+              // this banner, and it is the only place the user is ever told an
+              // item failed — there is no live per-item failure rail, and the
+              // mid-run "Items Not Added" gate carries search failures, which are
+              // held out of the intended set and so can never come back as a
+              // recovery. So the banner was a rebuttal of the sentence directly
+              // above it, or (on the nothing-added branch, the likelier one for a
+              // recovery) a correction to a claim that never named anything.
+              //
+              // Dropped from failed, deliberately not moved to added: a `loose`
+              // recovery is a name match and the added headline is the run's own
+              // claim about what it put there. The banner says what holds either
+              // way — it is in your cart, don't add it again.
+              const stillFailed = dropRecoveredFailures(failedNamesRef.current, recovered);
+              if (stillFailed.length !== failedNamesRef.current.length) {
+                setFailedItems(stillFailed);
+                // Kept in step by hand because the two are set together on every
+                // finalize path (see compileFailedNames' callers); totalFailed
+                // alone gates the "Could not add" line, so leaving it behind
+                // would re-print the corrected items as a bare count.
+                setTotalFailed(stillFailed.length);
+              }
             }
             // ── North-star correction (MEAL-3 × MEAL-47) ─────────────────────
             //
@@ -3098,8 +3131,16 @@ export default function WebViewCartSheet({
             if (missing.length > 0 || short.length > 0 || over.length > 0 || recovered.length > 0) {
               const parts: string[] = [];
               if (recovered.length > 0) {
-                const names = recovered.map((r) => r.cartName || r.name).join(', ');
-                parts.push(`${recovered.length} item${recovered.length === 1 ? ' we reported as not added is' : 's we reported as not added are'} in your cart already (${names}) — don't add ${recovered.length === 1 ? 'it' : 'them'} again`);
+                // Says what the CART holds, and nothing about what the run
+                // claimed (MEAL-177). The old wording — "N items we reported as
+                // not added are in your cart already" — cited a report the user
+                // could not be assumed to have read: it was either the line
+                // directly above, now corrected, or nothing at all. What is left
+                // is the fact and the action, which is all this ever had to be.
+                const names = recovered.map((r) => r.cartName || r.name);
+                parts.push(recovered.length === 1
+                  ? `${names[0]} is already in your cart — don't add it again`
+                  : `${recovered.length} items are already in your cart (${names.join(', ')}) — don't add them again`);
               }
               if (missing.length > 0) {
                 parts.push(`${missing.length} item${missing.length === 1 ? '' : 's'} may not have been added (${missing.join(', ')})`);
