@@ -4465,11 +4465,12 @@ export default function WebViewCartSheet({
                   the automation-failure count above — these were passed over on
                   purpose, so we surface them plainly rather than as a warning. */}
               {skippedNames.length > 0 && (
-                // Tap to see WHICH ones (MEAL-177). The count stays visible
-                // collapsed; only the name list folds. It used to render with
-                // numberOfLines={3}, so a run that skipped a dozen items showed
-                // three of them and no way to reach the rest — and looked
-                // complete while doing it.
+                // Tap to see ALL of them (MEAL-177). Collapsed it renders what it
+                // always did — the count, and the names under a 3-line cap — so
+                // nothing that used to be readable stopped being. What is new is
+                // that the cap now LIFTS: before, a run that skipped a dozen
+                // items showed three of them with no way to reach the rest, and
+                // looked complete while doing it.
                 <ExpandableNotice
                   testID="snapshot-skipped"
                   containerStyle={styles.skippedBanner}

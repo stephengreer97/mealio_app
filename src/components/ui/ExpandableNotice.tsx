@@ -1,5 +1,5 @@
-// A notice whose SUMMARY is always visible and whose detail expands on tap
-// (MEAL-177).
+// A notice whose SUMMARY and a preview of its detail are always visible, and
+// whose full detail expands on tap (MEAL-177).
 //
 // The done screen's banners each carry a count and then a comma-joined list of
 // product names. Those lists are unbounded — a 30-item run can skip a dozen — and
@@ -8,10 +8,18 @@
 // to see the rest. Truncation with no affordance is the worst of both, because it
 // looks complete.
 //
-// THE SUMMARY IS NEVER COLLAPSED. That is the load-bearing rule, and it is why
-// this takes `title` and `body` separately rather than one blob to elide. The
-// verdict — how many, and that something needs attention — has to survive the
-// collapsed state, or hiding the detail hides the problem. Only the list folds.
+// THE FIX IS THE AFFORDANCE, NOT THE HIDING. The first cut collapsed the list
+// away entirely and that was the wrong trade: three lines hold roughly ten
+// comma-joined grocery names, so truncation only bit on runs that skipped a
+// dozen items, while collapsing hid the names on every run — including the
+// one-item case the user could simply read before. Bug surface 12+, regression
+// surface 1-11. So the collapsed state keeps exactly what it always showed, and
+// the trailing ellipsis (RN's own, only drawn when the text really does
+// overflow) is what says there is more behind the tap.
+//
+// THE SUMMARY IS NEVER COLLAPSED either. That is why this takes `title` and
+// `body` separately rather than one blob to elide: the verdict — how many, and
+// that something needs attention — has to survive whatever the body does.
 //
 // When expanded the body scrolls inside its own bounded height rather than
 // growing the sheet. The reason is stronger than "tidier": the done screen's
@@ -30,7 +38,8 @@ import { Colors } from '../../constants/colors';
 interface Props {
   /** Always visible, collapsed or not. The count and the verdict belong here. */
   title: string;
-  /** Revealed on tap. The unbounded part — usually a joined list of names. */
+  /** The unbounded part — usually a joined list of names. Previewed collapsed,
+   *  shown whole on tap. */
   body: string;
   testID?: string;
   /** So the caller keeps its existing banner frame. Typed, not `object`: an
@@ -38,6 +47,9 @@ interface Props {
   containerStyle?: StyleProp<ViewStyle>;
   /** Tallest the expanded body gets before it scrolls. */
   maxBodyHeight?: number;
+  /** Lines of body kept visible while collapsed. Defaults to the 3 the skipped
+   *  banner already used, so collapsing costs the user nothing they had. */
+  collapsedLines?: number;
 }
 
 export default function ExpandableNotice({
@@ -46,6 +58,7 @@ export default function ExpandableNotice({
   testID,
   containerStyle,
   maxBodyHeight = 150,
+  collapsedLines = 3,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
 
@@ -72,7 +85,7 @@ export default function ExpandableNotice({
           color={Colors.text3}
         />
       </Pressable>
-      {expanded && (
+      {expanded ? (
         <ScrollView
           style={{ maxHeight: maxBodyHeight }}
           // No nestedScrollEnabled: an earlier version set it and justified it as
@@ -86,6 +99,22 @@ export default function ExpandableNotice({
         >
           <Text style={styles.body}>{body}</Text>
         </ScrollView>
+      ) : (
+        // The preview, and the affordance. `ellipsizeMode="tail"` is explicit
+        // rather than left to the default because the trailing "…" is the whole
+        // signal that there is more here — it is the only thing distinguishing a
+        // list that ends from a list that was cut, and RN draws it only when the
+        // text genuinely overflows, so a short list makes no promise it cannot
+        // keep. The chevron in the header says the same thing for the case where
+        // a screen reader never sees the glyph.
+        <Text
+          style={styles.body}
+          numberOfLines={collapsedLines}
+          ellipsizeMode="tail"
+          testID={testID ? `${testID}-preview` : undefined}
+        >
+          {body}
+        </Text>
       )}
     </View>
   );

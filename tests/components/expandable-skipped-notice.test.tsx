@@ -6,11 +6,18 @@
 // it, which is the part that makes silent truncation worse than either honest
 // alternative.
 //
+// The fix is the affordance, not the hiding. Collapsing the names away entirely
+// would have been a worse trade — three lines hold about ten comma-joined
+// grocery names, so truncation only bit at 12+ skipped items while collapsing
+// would have hidden the names on every run, including the one-item case. So the
+// collapsed state shows exactly what it always showed, RN's trailing ellipsis
+// appears when (and only when) there is genuinely more, and the tap reaches it.
+//
 // Two levels here, deliberately:
 //
-//   1. The component's behaviour — collapsed hides the list, tapping reveals it,
-//      and the revealed list scrolls inside a bounded height instead of growing
-//      the sheet.
+//   1. The component's behaviour — collapsed previews the list under a line cap,
+//      tapping reveals all of it, and the revealed list scrolls inside a bounded
+//      height instead of growing the sheet.
 //   2. The WIRING — a real run, a real skip, a real done screen. Without this the
 //      component could be perfect and unused; the previous code path rendered
 //      plain <Text> and would have passed every test in group 1.
@@ -60,20 +67,40 @@ import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 describe('ExpandableNotice (MEAL-177)', () => {
   const NAMES = 'Sour Cream, Tortillas, Cheese, Salsa, Limes, Cilantro';
 
-  it('shows the summary and hides the detail until tapped', () => {
+  it('shows the summary AND a preview of the list while collapsed', () => {
     const view = render(<ExpandableNotice testID="n" title="6 items skipped" body={NAMES} />);
     // The count is the part that must survive collapsing — hiding it would hide
     // the fact that anything happened.
     expect(view.queryByText('6 items skipped')).toBeTruthy();
-    expect(view.queryByText(NAMES)).toBeNull();
+    // And the names are still there. This is the assertion that inverts the
+    // first cut: collapsing them away regressed every run under a dozen items.
+    expect(view.queryByText(NAMES)).toBeTruthy();
   });
 
-  it('reveals the detail on tap and hides it again', () => {
+  it('caps the collapsed preview and marks the cut with a trailing ellipsis', () => {
+    // The "..." is what makes the row read as tappable, so it is asserted rather
+    // than left to RN's default. ellipsizeMode only draws it when the text
+    // actually overflows the cap, which is why a short list promises nothing.
+    const view = render(<ExpandableNotice testID="n" title="6 items skipped" body={NAMES} />);
+    const preview = view.getByTestId('n-preview');
+    expect(preview.props.numberOfLines).toBe(3);
+    expect(preview.props.ellipsizeMode).toBe('tail');
+  });
+
+  it('honours a caller-set preview height', () => {
+    const view = render(<ExpandableNotice testID="n" title="t" body={NAMES} collapsedLines={5} />);
+    expect(view.getByTestId('n-preview').props.numberOfLines).toBe(5);
+  });
+
+  it('drops the cap on tap so the whole list is reachable, and restores it', () => {
     const view = render(<ExpandableNotice testID="n" title="6 items skipped" body={NAMES} />);
     fireEvent.press(view.getByTestId('n-toggle'));
+    // Expanded: no line cap at all — the point of the ticket.
+    expect(view.queryByTestId('n-preview')).toBeNull();
+    expect(view.getByTestId('n-body')).toBeTruthy();
     expect(view.queryByText(NAMES)).toBeTruthy();
     fireEvent.press(view.getByTestId('n-toggle'));
-    expect(view.queryByText(NAMES)).toBeNull();
+    expect(view.getByTestId('n-preview').props.numberOfLines).toBe(3);
   });
 
   it('scrolls the revealed detail inside a bounded height', () => {
@@ -93,8 +120,8 @@ describe('ExpandableNotice (MEAL-177)', () => {
   });
 
   it('tells a screen reader what the tap does', () => {
-    // Collapsed, the only text is the count — which the reader already announced.
-    // Without this label the control is invisible to it.
+    // The ellipsis is a visual signal only, so the label carries the affordance
+    // for a reader that never sees it.
     const view = render(<ExpandableNotice testID="n" title="6 items skipped" body={NAMES} />);
     const toggle = view.getByTestId('n-toggle');
     expect(toggle.props.accessibilityLabel).toBe('6 items skipped. Show details');
@@ -115,7 +142,7 @@ describe('ExpandableNotice (MEAL-177)', () => {
 });
 
 describe('the done screen uses it for skipped items (MEAL-177 wiring)', () => {
-  it('collapses the skipped names behind the count after a real skip', () => {
+  it('previews the skipped names under a cap, with a toggle to the rest, after a real skip', () => {
     const ing = {
       ingredientName: 'Sour Cream', searchTerm: 'sour cream',
       productQty: 1, qty: 1, unit: 'qty', measure: null,
@@ -149,14 +176,21 @@ describe('the done screen uses it for skipped items (MEAL-177 wiring)', () => {
     act(() => { fireEvent.press(view.getByText(/review 1 item/i)); });
     act(() => { fireEvent.press(view.getByText(/skip this ingredient/i)); });
 
-    // The done screen: the count is visible, the name is not, and there is a
-    // toggle to reach it. Before this change the name rendered immediately in a
-    // truncating <Text> and there was no toggle at all.
+    // The done screen: the count is visible, the name is still visible, and
+    // there is now a toggle that lifts the line cap. Before this change the name
+    // rendered in a truncating <Text> with no toggle at all — everything past
+    // the third line was simply unreachable.
     expect(view.queryByText(/1 item skipped during review/i)).toBeTruthy();
     expect(view.queryByTestId('snapshot-skipped-toggle')).toBeTruthy();
-    expect(view.queryByText(/sour cream/i)).toBeNull();
+    const preview = view.getByTestId('snapshot-skipped-preview');
+    expect(preview.props.numberOfLines).toBe(3);
+    expect(view.queryByText(/sour cream/i)).toBeTruthy();
 
+    // Reverting the wiring to a plain <Text> fails here: there is no toggle to
+    // press, and nothing lifts the cap.
     fireEvent.press(view.getByTestId('snapshot-skipped-toggle'));
+    expect(view.queryByTestId('snapshot-skipped-preview')).toBeNull();
+    expect(view.getByTestId('snapshot-skipped-body')).toBeTruthy();
     expect(view.queryByText(/sour cream/i)).toBeTruthy();
   });
 });
