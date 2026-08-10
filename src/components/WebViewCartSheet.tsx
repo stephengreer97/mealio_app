@@ -18,6 +18,7 @@ import FloatingPreviewImage from './FloatingPreviewImage';
 import ProductImageViewer from './ProductImageViewer';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
+import ExpandableNotice from './ui/ExpandableNotice';
 import { Meal } from '../types';
 // Two entry points on purpose: useStores() where the value is rendered, and
 // getStores() at the two message-handler sites, which read the CURRENT catalog
@@ -4464,14 +4465,17 @@ export default function WebViewCartSheet({
                   the automation-failure count above — these were passed over on
                   purpose, so we surface them plainly rather than as a warning. */}
               {skippedNames.length > 0 && (
-                <View style={styles.skippedBanner} testID="snapshot-skipped">
-                  <Text style={styles.skippedBannerTitle}>
-                    {skippedNames.length} item{skippedNames.length !== 1 ? 's' : ''} skipped during review
-                  </Text>
-                  <Text style={styles.skippedBannerBody} numberOfLines={3}>
-                    {skippedNames.join(', ')}
-                  </Text>
-                </View>
+                // Tap to see WHICH ones (MEAL-177). The count stays visible
+                // collapsed; only the name list folds. It used to render with
+                // numberOfLines={3}, so a run that skipped a dozen items showed
+                // three of them and no way to reach the rest — and looked
+                // complete while doing it.
+                <ExpandableNotice
+                  testID="snapshot-skipped"
+                  containerStyle={styles.skippedBanner}
+                  title={`${skippedNames.length} item${skippedNames.length !== 1 ? 's' : ''} skipped during review`}
+                  body={skippedNames.join(', ')}
+                />
               )}
 
               {/* MEAL-119: count items whose cart line came back priced by weight.
