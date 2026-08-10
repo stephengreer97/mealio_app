@@ -515,6 +515,23 @@ describe('MEAL-16 which wall a `blocked` read hit', () => {
     expect(snap).toMatchObject({ block: 'interstitial' });
   });
 
+  it('still calls it the interstitial when tags run through the phrase', () => {
+    // `Pardon <b>Our</b> Interruption` defeats a raw indexOf, and the 403 would
+    // otherwise be labelled 'unauthorized' — "the session died" — while carrying
+    // the interruption text in its own `detail`, a verdict arguing with its own
+    // evidence.
+    const snap = rail.parse(403, null, '<html><h2>Pardon <b>Our</b> Interruption…</h2></html>');
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block: 'interstitial' });
+  });
+
+  it('leaves a split phrase on a status that was never a wall exactly where it was', () => {
+    // The stripped check is gated to 401/403 like the incident scan, and for the
+    // same reason: promoting a split phrase on a 200 from 'shape' to 'blocked'
+    // would be a verdict change, which this ticket does not get to make.
+    expect(rail.parse(200, null, '<html><h2>Pardon <b>Our</b> Interruption…</h2></html>'))
+      .toMatchObject({ ok: false, reason: 'shape' });
+  });
+
   it('spends nothing on the interstitial’s HTML, whose label already says it all', () => {
     const snap = rail.parse(200, null, '<!DOCTYPE html><html><body>Pardon Our Interruption…</body></html>');
     expect(snap).toMatchObject({ block: 'interstitial' });

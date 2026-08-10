@@ -554,6 +554,26 @@ export function buildHebCartQueryFn(): string {
     if (typeof text === 'string' && text.indexOf('Pardon Our Interruption') !== -1) {
       return { ok: false, reason: 'blocked', status: status, block: 'interstitial' };
     }
+    // Everything from here down reads the page as words rather than as markup;
+    // \`__plain\` is computed once and shared by the two scans below. Gated to
+    // 401/403 for the reason each of them repeats: those two statuses were walls
+    // before MEAL-16 and still are, so a scan that only runs there can pick the
+    // LABEL without ever inventing a verdict. At any other status a page reads
+    // exactly as it did before this ticket.
+    var __plain = (status === 401 || status === 403) ? __hebCartPlain(text) : null;
+    // The interstitial again, with tags through the middle of the phrase —
+    // \`Pardon <b>Our</b> Interruption\` defeats the indexOf above. Left where it
+    // is rather than replacing that check, because moving the whole test onto the
+    // stripped text WOULD be a verdict change: a split phrase on a 200 is 'shape'
+    // today, and promoting it to 'blocked' is not this ticket's to do.
+    //
+    // Worth the four lines even so. Without it a 403 interstitial that splits the
+    // phrase is labelled 'unauthorized' — "the session died" — while carrying
+    // "Pardon Our Interruption" in its own \`detail\`, a verdict arguing with its
+    // own evidence, which is worse for a reader than either answer alone.
+    if (__plain && __plain.indexOf('Pardon Our Interruption') !== -1) {
+      return { ok: false, reason: 'blocked', status: status, block: 'interstitial' };
+    }
     // The same wall wearing an HTML page instead of a JSON body: Imperva's
     // "Access Denied" variants print the incident id into the markup and carry no
     // interruption text, so JSON.parse gives null, neither check above fires, and
@@ -588,7 +608,6 @@ export function buildHebCartQueryFn(): string {
     // Which is also why the gap holds NO digits: after stripping, the first number
     // following the label is the id, and anything that made us skip past a number
     // to find a later one would be guessing.
-    var __plain = (status === 401 || status === 403) ? __hebCartPlain(text) : null;
     var __inc = __plain
       ? __plain.match(/incident\\s*id\\b[^0-9]{0,40}([0-9][0-9a-z-]{5,})/i) : null;
     if (__inc) {
