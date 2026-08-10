@@ -27,11 +27,14 @@
 import {
   loadAutomationConfig,
   __resetAutomationConfigForTests,
+  BUNDLED_AUTOMATION_CONFIG,
 } from '../../../src/lib/automation-config';
 import {
   buildCartPageCountScript,
   getCartPageUrl,
   getCartPagePath,
+  CART_PAGE_URL,
+  CART_PAGE_URL_STORE_IDS,
 } from '../../../src/lib/webview-scripts/cart-count';
 
 /** Push a config exactly as the loader would, through real validation. */
@@ -50,9 +53,26 @@ beforeEach(() => __resetAutomationConfigForTests());
 afterAll(() => __resetAutomationConfigForTests());
 
 describe('cart URL from remote config (MEAL-156)', () => {
-  it('reads the bundled URL when config says nothing', () => {
+  it('reads the bundled URL when no push has happened', () => {
     expect(getCartPageUrl('walmart')).toBe('https://www.walmart.com/cart');
     expect(guardPathIn(buildCartPageCountScript('walmart'))).toBe('/cart');
+  });
+
+  it('resolves the two bundled sources to the same URL', () => {
+    // There are TWO bundled sources for this fact and the resolver prefers the
+    // config one, so CART_PAGE_URL's heb and walmart entries are shadowed and
+    // never resolve. Editing the table to fix an incident on those stores does
+    // nothing — a silent no-op of exactly the kind this ticket removed on the
+    // guard path. schema.ts cannot import from webview-scripts (the dependency
+    // runs the other way), so the duplication is pinned rather than deleted:
+    // this fails the moment the two disagree and names which to change.
+    // Compared against the TABLE, not against getCartPageUrl — the resolver
+    // prefers the config value, so asking it would compare the config with
+    // itself and pass no matter how far the table had drifted.
+    const divergent = CART_PAGE_URL_STORE_IDS
+      .map((id) => ({ id, table: CART_PAGE_URL[id], config: BUNDLED_AUTOMATION_CONFIG.stores[id]?.cartUrl }))
+      .filter((r) => r.config !== undefined && r.config !== r.table);
+    expect(divergent).toEqual([]);
   });
 
   it('repoints the probe URL from a config push', async () => {
@@ -99,9 +119,61 @@ describe('cart URL from remote config (MEAL-156)', () => {
     expect(guardPathIn(buildCartPageCountScript('heb'))).toBe('/cart');
   });
 
-  it('uses the site root when an override names a bare origin', async () => {
+  it('refuses to count when an override names a bare origin', async () => {
+    // THE DANGEROUS ONE. An earlier revision of this file asserted the guard
+    // became '/' here and called that correct. It is the MEAL-152 defect wearing
+    // the fix's clothes: '/' is satisfied by the store HOMEPAGE, which carries no
+    // line items, so the script counts zero and posts it as fact. A trusted zero
+    // reached through the config lever built to prevent trusted zeros.
+    //
+    // Verified against the captured homepage fixture rather than argued: with a
+    // guard of '/' this scenario posts `count: 0` on tests/fixtures/walmart/
+    // logged-in-home.html. Refusing to build the script is what keeps it null.
     await pushConfig({ heb: { cartUrl: 'https://www.heb.com' } });
-    expect(guardPathIn(buildCartPageCountScript('heb'))).toBe('/');
+    expect(getCartPagePath('heb')).toBeNull();
+    expect(buildCartPageCountScript('heb')).toBeNull();
+  });
+
+  describe('paths that cannot be matched are refused, not guessed', () => {
+    // Every case here is ACCEPTED by merge.ts — `^https://` does not imply a
+    // parseable host — so each reaches cartPathnameOf and must fail closed.
+    // Building a script for any of them means guarding on '/' or on a literal
+    // the page can never report, and the first of those posts a trusted zero.
+    it.each([
+      ['no authority at all', 'https:///cart'],
+      ['scheme only', 'https://'],
+      ['authority replaced by a query', 'https://?q=1'],
+      ['authority replaced by a fragment', 'https://#frag'],
+      ['dot segments the browser resolves away', 'https://www.heb.com/cart/../checkout'],
+      ['a malformed percent-escape', 'https://www.heb.com/ca%rt'],
+    ])('refuses %s', async (_label, cartUrl) => {
+      await pushConfig({ heb: { cartUrl } });
+      expect(getCartPagePath('heb')).toBeNull();
+      expect(buildCartPageCountScript('heb')).toBeNull();
+    });
+  });
+
+  describe('percent-encoding matches what location.pathname reports', () => {
+    // location.pathname is ALWAYS encoded. A raw override compared literally
+    // never matches its own page, so the store goes quietly uncountable — a
+    // config push that looks like it worked and did nothing, which is the
+    // failure this ticket removes rather than relocates.
+    it.each([
+      ['a space', 'https://www.heb.com/my cart', '/my%20cart'],
+      ['non-ASCII', 'https://www.heb.com/café', '/caf%C3%A9'],
+      ['an emoji-class codepoint', 'https://www.heb.com/❤', '/%E2%9D%A4'],
+    ])('encodes %s', async (_label, cartUrl, expected) => {
+      await pushConfig({ heb: { cartUrl } });
+      expect(guardPathIn(buildCartPageCountScript('heb'))).toBe(expected);
+    });
+
+    it('leaves an already-encoded override alone rather than double-encoding', async () => {
+      // encodeURI(decodeURIComponent(x)) has to be idempotent, or an operator
+      // who writes the encoded form — the form they would copy out of a browser
+      // address bar — gets '/caf%25C3%25A9' and a permanently uncountable store.
+      await pushConfig({ heb: { cartUrl: 'https://www.heb.com/caf%C3%A9' } });
+      expect(guardPathIn(buildCartPageCountScript('heb'))).toBe('/caf%C3%A9');
+    });
   });
 
   describe('overrides that must be refused', () => {

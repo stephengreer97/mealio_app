@@ -78,9 +78,24 @@ function extractorFor(storeId: string): CountExtractor | null {
 // Selectors verified against tests/fixtures/heb/cart-with-items.html:
 //   itemRow                  one per cart line item
 //   cartQuantityCounterValue <input value="N"> — the unit qty for that line
-const CART_PAGE_URL: Record<string, string> = {
-  heb: 'https://www.heb.com/cart',
-  walmart: 'https://www.walmart.com/cart',
+//
+// READ THIS BEFORE EDITING A URL HERE (MEAL-156). This table is the FALLBACK,
+// consulted only when the automation config has no `cartUrl` for the store — and
+// BUNDLED_AUTOMATION_CONFIG already carries one for `heb` and for `walmart`
+// (schema.ts). Their entries below are therefore shadowed and never resolve:
+// editing them to fix an incident changes nothing, which is the same class of
+// silent no-op this ticket removed on the guard path. `wegmans` and `mockstore`
+// have no bundled config entry, so they do still resolve from here.
+//
+// The duplication is not removable in this direction — schema.ts cannot import
+// from webview-scripts, which imports it — so it is pinned instead:
+// cartUrlFromConfig.test.ts asserts that wherever both sources name a store,
+// they name the same URL. That turns a silent divergence into a failing suite
+// and tells the next editor which of the two they actually need to change.
+/** Exported for the drift check in cartUrlFromConfig.test.ts — see the note above. */
+export const CART_PAGE_URL: Readonly<Record<string, string>> = {
+  heb: 'https://www.heb.com/cart',        // shadowed by BUNDLED_AUTOMATION_CONFIG
+  walmart: 'https://www.walmart.com/cart', // shadowed by BUNDLED_AUTOMATION_CONFIG
   wegmans: 'https://www.wegmans.com/cart',
   mockstore: MOCK_STORE_URL + '/cart',   // dev/test only
 };
@@ -254,17 +269,6 @@ export function isCountedCartSnapshot(
 // conversion is trusted-zero → honest-unknown.
 
 /**
- * Exact pathname each guarded cart URL above is expected to settle on. Kept
- * beside CART_PAGE_URL because the two must agree — pinned by
- * tests/unit/webview-scripts/cartPageIdentity.test.ts, which parses each
- * guarded store's CART_PAGE_URL and asserts the path here is its pathname, so
- * moving a cart URL without moving its path fails the suite rather than
- * silently making that store uncountable.
- *
- * `mockstore` is absent on purpose: it is the dev/test harness, served from a
- * local server that does not redirect, and its script is not guarded.
- */
-/**
  * Store ids whose cart-page script carries the identity guard.
  *
  * A SET OF IDS, NOT A TABLE OF PATHS (MEAL-156). The expected path used to be
@@ -283,14 +287,40 @@ export function isCountedCartSnapshot(
 const GUARDED_CART_STORE_IDS = new Set(['heb', 'walmart', 'wegmans']);
 
 /**
- * The pathname of an absolute cart URL, trailing slash stripped, else null.
+ * The pathname a cart URL must settle on, canonically encoded, else null.
  *
  * Hand-parsed rather than `new URL(...)`: this value is spliced into injected
  * JavaScript, and Hermes' URL is a partial polyfill whose behaviour has moved
- * between React Native versions. A regex over a string merge.ts has already
- * constrained to `^https://` is deterministic on every engine. The tests keep
- * `new URL().pathname` as their oracle precisely so the check is an independent
- * implementation rather than a restatement of this one.
+ * between React Native versions. A regex is deterministic on every engine. The
+ * tests keep `new URL().pathname` as their oracle precisely so the check is an
+ * independent implementation rather than a restatement of this one.
+ *
+ * NULL IS THE SAFE ANSWER and every rejection below prefers it. A null path
+ * makes buildCartPageCountScript refuse to build a script at all, so the store
+ * reports no count; a WRONG path makes the guard admit a page that is not the
+ * cart, and the count it then posts is trusted. That asymmetry — `count: null`
+ * is "unknown, skip validation" while any number is believed — is the whole
+ * reason MEAL-152's guard exists, so this function fails closed four ways:
+ *
+ *   • No parseable authority. `^https://` does NOT imply a host: merge.ts
+ *     accepts `https:///cart`, `https://`, `https://?q=1` and `https://#frag`,
+ *     all of which have nothing between the slashes for `[^/?#]+` to match.
+ *   • The site root. A cart page is never `/`, and this is the dangerous one:
+ *     an override naming a bare origin would otherwise emit a guard of `"/"`,
+ *     which the STORE HOMEPAGE satisfies. The homepage carries no line items,
+ *     so the script would count zero and post it as fact — reintroducing the
+ *     exact trusted zero of MEAL-152 through the config lever meant to fix it.
+ *   • Dot segments. The browser resolves `/cart/../checkout` to `/checkout`
+ *     before `location.pathname` is read, so the literal could never match.
+ *   • A malformed percent-escape, which decodeURIComponent throws on.
+ *
+ * Otherwise the path is canonicalised to the form `location.pathname` reports:
+ * that property is ALWAYS percent-encoded, so an override of `/my cart` or
+ * `/café` compared raw would never match its own page and the store would go
+ * quietly uncountable — a config push that appears to work and does nothing,
+ * which is the failure this ticket exists to remove rather than relocate.
+ * Round-tripping through decode→encode is idempotent, so an override already
+ * written as `/caf%C3%A9` is left alone rather than double-encoded.
  *
  * Trailing slashes are stripped because the guard strips them from
  * `location.pathname` before comparing; an expected `/cart/` would otherwise
@@ -301,7 +331,13 @@ function cartPathnameOf(url: string): string | null {
   if (!m) return null;
   let path = m[1] || '/';
   while (path.length > 1 && path.charAt(path.length - 1) === '/') path = path.slice(0, -1);
-  return path;
+  if (path === '/') return null;
+  if (/(^|\/)\.\.?(\/|$)/.test(path)) return null;
+  try {
+    return encodeURI(decodeURIComponent(path));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -601,14 +637,15 @@ export function buildCartPageCountScript(storeId: string): string | null {
   // than counted unguarded: a malformed override must not silently downgrade a
   // store to the trusted-zero behaviour MEAL-152 removed.
   //
-  // That branch is UNREACHABLE TODAY and is kept deliberately — a mutant that
-  // replaces it with `build(cartPath ?? '/')` survives the suite, which is the
-  // honest statement of its coverage. Reaching it needs a guarded store whose
-  // effective URL does not parse, and both routes are closed: merge.ts admits
-  // only `^https://` strings, and every id in GUARDED_CART_STORE_IDS has a
-  // bundled URL to fall back to. It guards the next editor, not today's config —
-  // adding a guarded store with a malformed bundled URL should make that store
-  // uncountable, not make it count unguarded.
+  // This branch is REACHABLE from a config push, and an earlier revision of this
+  // comment claimed the opposite — that `^https://` in merge.ts closed every
+  // route to it. It does not: `https://` is not a URL with a host, so
+  // `https:///cart`, `https://`, `https://?q=1` and `https://#frag` are all
+  // accepted by merge and all fail to parse here. A bare origin and a dot-segment
+  // path reach it too. Substituting `build(cartPath ?? '/')` here turns every one
+  // of those into a script guarded on `"/"`, which the store HOMEPAGE satisfies —
+  // a trusted zero. Pinned in cartUrlFromConfig.test.ts under "overrides that
+  // must be refused".
   const guarded = (build: (cartPath: string) => string): string | null => {
     const cartPath = getCartPagePath(storeId);
     return cartPath ? build(cartPath) : null;
