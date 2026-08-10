@@ -24,6 +24,23 @@
 
 import { act, fireEvent, render } from '@testing-library/react-native';
 
+// A cart run logs its completion through `usage`, and with the real module that
+// is a live POST to https://mealio.co/api/usage/automation — a production
+// automation-run row written by the test suite, and a suite that fails when the
+// box is offline. Both sibling sheet tests stub it for the same reason.
+jest.mock('../../src/lib/api', () => {
+  const actual = jest.requireActual('../../src/lib/api');
+  return {
+    ...actual,
+    usage: {
+      ...actual.usage,
+      logAutomationStart: jest.fn(async () => 'expandable-skipped'),
+      logAutomationComplete: jest.fn(async () => {}),
+      logAutomationSteps: jest.fn(async () => true),
+    },
+  };
+});
+
 jest.mock('../../src/lib/purchases', () => ({
   initPurchases: jest.fn(),
   identifyUser: jest.fn(async () => {}),
@@ -139,9 +156,32 @@ describe('ExpandableNotice (MEAL-177)', () => {
     fireEvent.press(view.getByTestId('n-toggle'));
     expect(view.getByTestId('n-toggle').props.accessibilityState).toMatchObject({ expanded: true });
   });
+
+  it('expands when the ellipsized preview itself is tapped', () => {
+    // The "…" is what the collapsed state offers as the signal that there is
+    // more, so it has to be inside the target. An affordance that ignores the
+    // finger teaches the user there is nothing behind it.
+    const view = render(<ExpandableNotice testID="n" title="6 items skipped" body={NAMES} />);
+    fireEvent.press(view.getByTestId('n-preview'));
+    expect(view.queryByTestId('n-preview')).toBeNull();
+    expect(view.getByTestId('n-body')).toBeTruthy();
+  });
 });
 
 describe('the done screen uses it for skipped items (MEAL-177 wiring)', () => {
+  const mounted: Array<{ unmount: () => void }> = [];
+
+  // A cart run arms real timeouts — the cart probe, the add jitter — and this
+  // one reaches 'done' with several still pending. Left alone they fire after
+  // the test has finished ("Cannot log after tests are done") and hold the
+  // worker open. Nothing here waits on a timer.
+  beforeEach(() => { jest.useFakeTimers(); });
+  afterEach(() => {
+    while (mounted.length) mounted.pop()!.unmount();
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  });
+
   it('previews the skipped names under a cap, with a toggle to the rest, after a real skip', () => {
     const ing = {
       ingredientName: 'Sour Cream', searchTerm: 'sour cream',
@@ -156,6 +196,7 @@ describe('the done screen uses it for skipped items (MEAL-177 wiring)', () => {
         onClose={() => {}}
       />,
     );
+    mounted.push(view);
     const post = (payload: Record<string, unknown>) => act(() => {
       view.getAllByTestId('mock-webview')[0].props.onMessage({
         nativeEvent: { data: JSON.stringify(payload) },

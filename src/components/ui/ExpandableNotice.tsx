@@ -62,60 +62,88 @@ export default function ExpandableNotice({
 }: Props) {
   const [expanded, setExpanded] = useState(false);
 
+  const toggle = (
+    <Pressable
+      onPress={() => setExpanded((v) => !v)}
+      // The whole header is the target, not the chevron: a 13px glyph is below
+      // any reasonable touch minimum, and the row is already the thing that
+      // reads as tappable.
+      style={styles.header}
+      accessibilityRole="button"
+      accessibilityState={{ expanded }}
+      // The label says what the tap DOES. Without it a screen reader announces
+      // only the count, which is exactly the information the collapsed state
+      // already gives — so the control would be invisible to it.
+      accessibilityLabel={`${title}. ${expanded ? 'Hide' : 'Show'} details`}
+      testID={testID ? `${testID}-toggle` : undefined}
+    >
+      <Text style={styles.title}>{title}</Text>
+      <Ionicons
+        name={expanded ? 'chevron-up' : 'chevron-down'}
+        size={16}
+        color={Colors.text3}
+      />
+    </Pressable>
+  );
+
+  // Collapsed, the ellipsized preview is INSIDE the target. It is the thing the
+  // comments below call the signal that there is more, so a tap on it has to do
+  // what it advertises — an affordance that ignores the finger is worse than no
+  // affordance, because the user concludes there is nothing behind it.
+  //
+  // Expanded, the body is deliberately OUTSIDE: it is a ScrollView, and wrapping
+  // a scroll surface in a Pressable makes the two compete for the same gesture.
+  // The header remains the way back.
+  if (!expanded) {
+    return (
+      <View style={containerStyle} testID={testID}>
+        <Pressable
+          onPress={() => setExpanded(true)}
+          accessibilityRole="button"
+          accessibilityState={{ expanded }}
+          accessibilityLabel={`${title}. Show details`}
+          testID={testID ? `${testID}-toggle` : undefined}
+        >
+          <View style={styles.header}>
+            <Text style={styles.title}>{title}</Text>
+            <Ionicons name="chevron-down" size={16} color={Colors.text3} />
+          </View>
+          {/* The preview, and the affordance. `ellipsizeMode="tail"` is explicit
+              rather than left to the default because the trailing "…" is the
+              whole signal that there is more here — it is the only thing
+              distinguishing a list that ends from a list that was cut, and RN
+              draws it only when the text genuinely overflows, so a short list
+              makes no promise it cannot keep. The chevron says the same thing
+              for the case where a screen reader never sees the glyph. */}
+          <Text
+            style={styles.body}
+            numberOfLines={collapsedLines}
+            ellipsizeMode="tail"
+            testID={testID ? `${testID}-preview` : undefined}
+          >
+            {body}
+          </Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
     <View style={containerStyle} testID={testID}>
-      <Pressable
-        onPress={() => setExpanded((v) => !v)}
-        // The whole header is the target, not the chevron: a 13px glyph is below
-        // any reasonable touch minimum, and the row is already the thing that
-        // reads as tappable.
-        style={styles.header}
-        accessibilityRole="button"
-        accessibilityState={{ expanded }}
-        // The label says what the tap DOES. Without it a screen reader announces
-        // only the count, which is exactly the information the collapsed state
-        // already gives — so the control would be invisible to it.
-        accessibilityLabel={`${title}. ${expanded ? 'Hide' : 'Show'} details`}
-        testID={testID ? `${testID}-toggle` : undefined}
+      {toggle}
+      <ScrollView
+        style={{ maxHeight: maxBodyHeight }}
+        // No nestedScrollEnabled: an earlier version set it and justified it as
+        // required on iOS, which is backwards — RN documents it as Android-only
+        // and iOS nests by default. Nothing competes for the gesture anyway,
+        // because the done screen's banner column is NOT inside a ScrollView
+        // (it is a direct child of the SafeAreaView). That last fact is also why
+        // the height cap below matters more than it looks: the column cannot
+        // scroll, so an unbounded body has nowhere to overflow to. See MEAL-193.
+        testID={testID ? `${testID}-body` : undefined}
       >
-        <Text style={styles.title}>{title}</Text>
-        <Ionicons
-          name={expanded ? 'chevron-up' : 'chevron-down'}
-          size={16}
-          color={Colors.text3}
-        />
-      </Pressable>
-      {expanded ? (
-        <ScrollView
-          style={{ maxHeight: maxBodyHeight }}
-          // No nestedScrollEnabled: an earlier version set it and justified it as
-          // required on iOS, which is backwards — RN documents it as Android-only
-          // and iOS nests by default. Nothing competes for the gesture anyway,
-          // because the done screen's banner column is NOT inside a ScrollView
-          // (it is a direct child of the SafeAreaView). That last fact is also why
-          // the height cap below matters more than it looks: the column cannot
-          // scroll, so an unbounded body has nowhere to overflow to. See MEAL-193.
-          testID={testID ? `${testID}-body` : undefined}
-        >
-          <Text style={styles.body}>{body}</Text>
-        </ScrollView>
-      ) : (
-        // The preview, and the affordance. `ellipsizeMode="tail"` is explicit
-        // rather than left to the default because the trailing "…" is the whole
-        // signal that there is more here — it is the only thing distinguishing a
-        // list that ends from a list that was cut, and RN draws it only when the
-        // text genuinely overflows, so a short list makes no promise it cannot
-        // keep. The chevron in the header says the same thing for the case where
-        // a screen reader never sees the glyph.
-        <Text
-          style={styles.body}
-          numberOfLines={collapsedLines}
-          ellipsizeMode="tail"
-          testID={testID ? `${testID}-preview` : undefined}
-        >
-          {body}
-        </Text>
-      )}
+        <Text style={styles.body}>{body}</Text>
+      </ScrollView>
     </View>
   );
 }
