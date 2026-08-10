@@ -601,9 +601,28 @@ ${hebNextDataFn()}
     }
 
     var preferences = null;
+    // The preference probe. Clicking Add here does NOT add anything — it opens
+    // the store's preference dialog purely to read the option rows, then closes
+    // it — and it is the only way this page yields a preference list, so an item
+    // that is not probed reaches Choose Products with preferences:null and shows
+    // the user no selection at all (MEAL-180).
+    //
+    // Four gates, and the diagnostics below have to tell them apart:
+    //   hasPopup            the Add button says it opens a dialog. Read off
+    //                       aria-haspopup, which is set on hydration — a card
+    //                       probed too early reads false and is skipped.
+    //   !outOfStock         nothing to choose a preference for.
+    //   addBtn              no button, nothing to click.
+    //   candidates.length<5 the cap. Each probe clicks, polls up to 4s and closes
+    //                       a modal, so probing all 8 cards is expensive. The cap
+    //                       counts ACCEPTED candidates in DOM order, which is not
+    //                       score order: the best-matching product can sit past
+    //                       the fifth card and never be probed.
     if (hasPopup && !outOfStock && addBtn && candidates.length < 5) {
       try {
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'clicking_add', name: name }));
+        // ci (card index in DOM order) and candidatesLen are what separate
+        // "outside the cap" from "the button had not hydrated" after the fact.
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'clicking_add', name: name, ci: ci, candidatesLen: candidates.length }));
         addBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
         await wait(100);
         addBtn.click();
@@ -629,7 +648,7 @@ ${hebNextDataFn()}
           await wait(100);
         }
 
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'modal_found', found: !!modal, modalTag: modal ? (modal.getAttribute('data-qe-id') || modal.getAttribute('role') || modal.tagName) : null }));
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'modal_found', name: name, found: !!modal, modalTag: modal ? (modal.getAttribute('data-qe-id') || modal.getAttribute('role') || modal.tagName) : null }));
         if (modal) {
           var opts = [];
           for (var ri = 0; ri < rows.length; ri++) {
@@ -638,7 +657,7 @@ ${hebNextDataFn()}
             var labelText = label ? label.textContent.trim() : null;
             if (labelText) opts.push({ text: labelText, value: labelText });
           }
-          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'rows_found', rowCount: rows.length, opts: opts, modalHtml: rows.length === 0 ? modal.innerHTML.substring(0, 2000) : null }));
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'rows_found', name: name, rowCount: rows.length, opts: opts, modalHtml: rows.length === 0 ? modal.innerHTML.substring(0, 2000) : null }));
           if (opts.length > 0) preferences = opts;
 
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
@@ -647,10 +666,15 @@ ${hebNextDataFn()}
           await wait(400);
         }
       } catch(e) {
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'error', err: String(e) }));
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'error', name: name, err: String(e) }));
       }
-    } else if (ci < 3) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'skipped', name: name, hasPopup: hasPopup, outOfStock: outOfStock, candidatesLen: candidates.length }));
+    } else {
+      // Was gated on ci < 3, which made the message useless for the question it
+      // is now being asked: the cap can only bite from the sixth accepted
+      // candidate on, so the cards most likely to have been skipped were the
+      // only ones that never said so. Every unprobed card reports why, and ci
+      // says where it sat. At most 8 lines per search.
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'skipped', name: name, ci: ci, hasPopup: hasPopup, outOfStock: outOfStock, hasAddBtn: !!addBtn, candidatesLen: candidates.length }));
     }
 
     candidates.push({ productName: name, imageUrl: imageUrl, outOfStock: outOfStock, preferences: preferences, price: price, isWeightItem: isWeightItem, weightOptions: weightOptions });
@@ -1011,7 +1035,7 @@ ${buildHebCartQueryFn()}
     var committed = null;
     if (__cartTarget) {
       __cartConf = await __hebCartConfirmAdd(__cartTarget, __cartQueryBefore, {});
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null }));
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null, status: (__cartConf.status == null) ? null : __cartConf.status, code: __cartConf.code || null, loc: __cartConf.loc || null, block: __cartConf.block || null }));
       if (__cartConf.state === 'landed') committed = true;
       else if (__cartConf.state === 'missing') {
         // A 'missing' verdict used to end the matter, which threw away
@@ -1138,7 +1162,7 @@ ${buildHebCartQueryFn()}
   // when the branch above already asked (__cartConf set).
   if (__cartTarget && !__cartConf) {
     __cartConf = await __hebCartConfirmAdd(__cartTarget, await __cartBaseline(), { tries: 3 });
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_crosscheck', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_crosscheck', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null, status: (__cartConf.status == null) ? null : __cartConf.status, code: __cartConf.code || null, loc: __cartConf.loc || null, block: __cartConf.block || null }));
     if (__cartConf.state === 'missing') {
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'cart_absent', confirm: __cartConf }));
       return;
@@ -1570,7 +1594,12 @@ ${hebWaitFreshFn()}
       __cartConf = await __hebCartConfirmAdd(__cartTarget, __cartQueryBefore, {});
       // EXTRACT_DEBUG, not DEBUG: the worker wrapper re-tags this type and the
       // main-WebView handler logs it, so the rail is visible on both rails.
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null }));
+      // MEAL-16: 'block' says which wall a 'blocked' read hit — Imperva by
+      // fingerprint, or a bare 401/403 that is only CONSISTENT with the H-E-B
+      // session having died (see HebCartBlockCause; 'status' and 'detail' are
+      // beside it because the label alone does not settle that one). code/loc
+      // say whether the gateway validated the document we actually sent.
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null, status: (__cartConf.status == null) ? null : __cartConf.status, code: __cartConf.code || null, loc: __cartConf.loc || null, block: __cartConf.block || null }));
       if (__cartConf.state === 'landed') __committed = true;
       else if (__cartConf.state === 'missing') __committed = false;
     }

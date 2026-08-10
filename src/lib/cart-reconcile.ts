@@ -609,10 +609,10 @@ export function reconcileFromWorkerReports(attempts: AttemptedAdd[]): WorkerRepo
  * their cart, and found out at checkout or by re-adding it and paying twice.
  *
  * Deliberately NOT unconditional. A run that attempted no adds at all — the
- * choose-a-product flow, or every item skipped during review — has no signal to
- * find, and a cart read costs a real page load on a store that is watching for
- * automation. `addsAttempted` is the count of items that reached an add click on
- * the SEQUENTIAL paths only.
+ * choose-a-product flow, or every item skipped while picking substitutes — has
+ * no signal to find, and a cart read costs a real page load on a store that is
+ * watching for automation. `addsAttempted` is the count of items that reached an
+ * add click on the SEQUENTIAL paths only.
  *
  * It is no longer the same number as the funnel's `add_click` denominator, which
  * it used to match. MEAL-122 gave the two worker pools per-item `add_click` rows;

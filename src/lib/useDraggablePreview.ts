@@ -84,7 +84,7 @@ export function useDraggablePreview(width: number, height: number, rightInset: n
   }, [place]);
 
   // Extra downward nudge for the default rest position, set per-flow (e.g. the
-  // Review Ingredients flow rests slightly lower than Choose Product). The clamp
+  // Pick a Substitute flow rests slightly lower than Choose Product). The clamp
   // in `place` keeps it on-screen. No-op once the user has dragged the thumbnail.
   const setDefaultOffset = useCallback((px: number) => {
     restOffset.current = px;

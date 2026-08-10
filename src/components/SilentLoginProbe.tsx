@@ -36,6 +36,17 @@ const LOGIN_TIMEOUT_MS = 20000;
 // Cart pre-capture: bounded separately; a miss just means no baseline (we still
 // report logged-in), so we don't want it to hang the queue.
 const CART_TIMEOUT_MS = 15000;
+/**
+ * How many times one cart capture will inject the count script (MEAL-189).
+ *
+ * A cap on LOADS, not on distinct URLs, because the failure being retried is a
+ * same-URL re-render. 5 covers the chains observed — HEB's re-render, /cart ->
+ * homedge -> cart, and Amazon's /gp/aw/c -> expanded-Fresh hop, which needs two
+ * on its own — while still bounding a redirect loop. Injections stop as soon as
+ * any CART_COUNT posts, so in practice this only counts retries that said
+ * nothing.
+ */
+const MAX_CART_INJECTIONS = 5;
 
 export interface PrewarmedCart {
   count: number | null;
@@ -66,7 +77,9 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
   // 'login' until LOGIN_STATUS:true flips us into pre-capturing the cart.
   const phaseRef = useRef<'login' | 'cart'>('login');
   const cartMethodRef = useRef<'url' | 'click' | 'inline' | null>(null);
-  const cartCountInjectedRef = useRef(false);
+  // How many times this capture has injected the count script (MEAL-189).
+  // Counted, not latched, and NOT keyed on the URL — see the note in onLoadEnd.
+  const cartInjectionsRef = useRef(0);
   const [uri, setUri] = useState(scripts ? scripts.storeUrl : 'about:blank');
 
   const beforeContent = Platform.OS === 'android' ? WEBVIEW_FINGERPRINT_SHIM : undefined;
@@ -108,7 +121,7 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
     const click = buildOpenCartScript(storeId);
     const countScript = buildCartPageCountScript(storeId);
     phaseRef.current = 'cart';
-    cartCountInjectedRef.current = false;
+    cartInjectionsRef.current = 0;
     armTimeout(CART_TIMEOUT_MS, () => {
       console.log('[Prewarm] probe', storeId, 'cart pre-capture timed out — reporting logged-in without a baseline');
       finish({ isLoggedIn: true });
@@ -168,14 +181,15 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
       // once it settles on the store page. Idempotent; posts once it has an answer.
       console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — injecting check script');
       webviewRef.current?.injectJavaScript(scripts.checkLoginScript);
-    } else if ((cartMethodRef.current === 'url' || cartMethodRef.current === 'click') && !cartCountInjectedRef.current) {
+    } else if (cartMethodRef.current === 'url' || cartMethodRef.current === 'click') {
       // Same skip as the login branch above, and two tickets converge on it.
       //
-      // This branch LATCHES on its first injection (cartCountInjectedRef below,
-      // set once per capture and never cleared), and the count scripts REFUSE to
-      // answer on a page that is not the cart — silently, when that page is an
-      // auth interstitial, because a verdict there would burn the probe's one
-      // pending slot.
+      // The count scripts REFUSE to answer on a page that is not the cart —
+      // silently, when that page is an auth interstitial, because a verdict there
+      // would burn the probe's one pending slot. This branch used to latch on its
+      // first injection, which made that silence terminal; MEAL-189 made it retry
+      // instead, but the skip below is still worth keeping: an interstitial is
+      // never the cart, so injecting there only spends a retry.
       //
       // Without this check: cart URL -> interstitial -> inject -> latch set ->
       // script returns silently -> the real cart page that loads next never gets
@@ -192,11 +206,47 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
         console.log('[Prewarm] probe', storeId, 'onLoadEnd (cart) — skipping auth redirect page', url);
         return;
       }
+      // RE-INJECT ON EVERY LOAD UNTIL SOMETHING ANSWERS, capped (MEAL-189).
+      //
+      // Strict one-shot assumed one injection yields one answer. It does not:
+      // the page can navigate, or re-render, after a good injection, and the
+      // injected context dies with the old document before it can post. Latch
+      // spent, no retry, and the probe burns its full CART_TIMEOUT_MS reporting
+      // logged-in with no baseline. That is Stephen's 21:31 run — `injecting
+      // count script`, ~13s of nothing, `cart pre-capture timed out`.
+      //
+      // NOT KEYED ON THE URL, and that is the whole point. A first version of
+      // this keyed on it, reasoning that the same page loading twice is not new
+      // information. It is, and this repo already says so: the cart sheet lets
+      // same-URL reloads through while a count is pending, because "HEB
+      // re-renders the cart page (same URL) a beat after load, which kills the
+      // injected count script before it polls/posts" (WebViewCartSheet.tsx, the
+      // cartCountPendingRef clause in onLoadEnd). That is the documented,
+      // field-observed shape of this failure, and a per-URL key excludes exactly
+      // it — the one leg with evidence behind it.
+      //
+      // Re-injecting the same document is safe: `finish` latches on resolvedRef,
+      // so a second CART_COUNT is dropped, and two copies polling the same DOM
+      // cannot produce a worse answer than one. Injection also stops the instant
+      // anything posts, because onLoadEnd bails on resolvedRef above — so this
+      // only ever retries an injection that said nothing at all.
+      //
+      // The cap is what the one-shot was really protecting against: a redirect
+      // loop injecting on every hop for the whole timeout.
+      if (cartInjectionsRef.current >= MAX_CART_INJECTIONS) {
+        console.log('[Prewarm] probe', storeId, 'onLoadEnd (cart) — injection cap reached, not re-injecting', url);
+        return;
+      }
       // Cart page has loaded — count it.
       const countScript = buildCartPageCountScript(storeId);
       if (countScript) {
-        cartCountInjectedRef.current = true;
-        console.log('[Prewarm] probe', storeId, 'onLoadEnd (cart) — injecting count script');
+        cartInjectionsRef.current += 1;
+        // The URL is the diagnostic that was missing. Without it the log cannot
+        // tell "script never ran" from "ran and was destroyed by a navigation"
+        // from "ran and refused silently", which is why MEAL-189's cause had to
+        // be inferred rather than read.
+        console.log('[Prewarm] probe', storeId, 'onLoadEnd (cart) — injecting count script #',
+          cartInjectionsRef.current, 'into', url);
         webviewRef.current?.injectJavaScript(countScript);
       }
     }

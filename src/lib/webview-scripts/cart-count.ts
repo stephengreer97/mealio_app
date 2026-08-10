@@ -269,13 +269,15 @@ export function isCountedCartSnapshot(
 //         (~line 2353). It also refuses to inject anything on an auth
 //         interstitial in the first place (~line 2242), so this branch is in
 //         fact unreachable from there.
-//       – SilentLoginProbe.onLoadEnd injects ONCE per cart capture and latches;
-//         it does not re-inject. Its safety comes from skipping interstitials so
-//         that single injection lands on the real page. That skip is a
-//         dependency of this branch, not a nicety: without it, silence here
-//         means no answer AND no retry, i.e. a 15s stall and no baseline.
-//     So the invariant to preserve is "the count script is never injected on an
-//     interstitial", not "someone will re-inject".
+//       – SilentLoginProbe.onLoadEnd used to inject ONCE per cart capture and
+//         latch, which made silence here terminal: no answer AND no retry, i.e.
+//         a 15s stall and no baseline. MEAL-189 changed it to re-inject on each
+//         load until something posts (bounded), so silence is now recoverable
+//         there too. The interstitial skip is still worth keeping — an
+//         interstitial is never the cart, so injecting there only spends a retry
+//         — but this branch no longer DEPENDS on it.
+//     So the invariant to preserve is "silence must be recoverable by someone",
+//     and both injection sites now satisfy it.
 //   • Anything else is TERMINAL — nothing further is loading. Post
 //     `count: null` with a named reason, so the run degrades to "unknown"
 //     instead of "empty" and the log says WHY. Both CART_COUNT handlers print
