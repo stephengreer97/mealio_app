@@ -459,17 +459,16 @@ export function buildHebCartQueryFn(): string {
   function __hebCartConfirm(target, before, after) {
     var idsku = target ? target.skuId : null;
     var idprod = target ? target.productId : null;
-    // The message must belong to the read the verdict's own reason names, or it
-    // is worse than nothing: a baseline that failed with a graphql_error, paired
-    // with a confirm read that failed as 'blocked' (which carries no message of
-    // its own), would print "unknown/blocked … PersistedQueryNotFound" and send
-    // the investigation after safelisting when the real answer was a wall. So the
-    // before-read's message is used ONLY when the after-read succeeded, which is
-    // precisely the no_baseline case. Both reads ok → null, i.e. every
-    // landed/missing verdict.
-    var detail = (after && after.ok)
-      ? __hebCartDetail(before)
-      : __hebCartDetail(after);
+    // The message must belong to the read whose failure the verdict's own reason
+    // names, or it is worse than nothing: a baseline that failed with a
+    // graphql_error, paired with a confirm read that failed as 'blocked' (which
+    // carries no message of its own), would print
+    // "unknown/blocked … PersistedQueryNotFound" and send the investigation after
+    // safelisting when the real answer was a wall. So each verdict below sets
+    // this to the message of the read it is actually about, and every verdict
+    // that is not about a failed read — no_target, landed, missing, and the
+    // cart_changed pair — leaves it null.
+    var detail = null;
     function out(state, reason, line) {
       return {
         state: state, via: 'cart_query', reason: reason,
@@ -480,16 +479,26 @@ export function buildHebCartQueryFn(): string {
         detail: detail
       };
     }
+    // No target: nothing was compared and neither read is what went wrong, so
+    // this verdict carries no message even if a read did fail.
     if (!target || (!idsku && !idprod)) return out('unknown', 'no_target', null);
     if (!after) return out('unknown', 'no_read', null);
-    if (!after.ok) return out('unknown', after.reason || 'no_read', null);
+    if (!after.ok) {
+      detail = __hebCartDetail(after);
+      return out('unknown', after.reason || 'no_read', null);
+    }
     var a = __hebCartMatch(after.lines, target);
     // No baseline: we can neither tell our units from units that were already
     // there NOR check that this is the same cart the before-read saw, and the
     // second is why this gate is above the absence check rather than below it. An
     // unreadable baseline plus a cart we cannot vouch for is not evidence that
     // the item is missing — it is the DOM rail's turn.
-    if (!before || !before.ok) return out('unknown', 'no_baseline', a);
+    // The one verdict whose reason is about the BEFORE read, so the one place
+    // its message is the right one to carry.
+    if (!before || !before.ok) {
+      detail = __hebCartDetail(before);
+      return out('unknown', 'no_baseline', a);
+    }
     // SAME CART? A valid answer about a different cart reads as "every item
     // failed" — the one outcome this rail must never produce, and not a read
     // failure, so nothing else catches it. MEAL-12's probes prove an anonymous

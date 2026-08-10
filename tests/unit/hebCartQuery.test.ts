@@ -305,6 +305,13 @@ describe('MEAL-16 the gateway’s own error message survives to the confirmation
     expect(conf.detail).toBeNull();
   });
 
+  it('says nothing on `no_target`, a verdict about us rather than about a read', () => {
+    const after = rail.parse(200, { data: null, errors: [{ message: 'PersistedQueryNotFound' }] });
+    const conf = rail.confirm({ skuId: null, productId: null, name: 'Lavash' }, null, after);
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'no_target' });
+    expect(conf.detail).toBeNull();
+  });
+
   it('is null on every verdict where both reads succeeded', () => {
     const full = cartResponseFrom(CART);
     const before = rail.parse(200, withoutProduct(full, LAVASH));
