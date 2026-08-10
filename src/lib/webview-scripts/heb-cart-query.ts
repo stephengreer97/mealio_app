@@ -221,6 +221,15 @@ export interface HebAddConfirmation {
   qtyAfter?: number | null;
   /** Pounds after the add, summed over this product's weight lines. */
   weightAfter?: number | null;
+  /** The failing read's own words, ≤120 chars — H-E-B's `errors[0].message` for
+   *  a `graphql_error`, the exception message for `network`. Null when both
+   *  reads succeeded. `reason` says the request failed; this says what the
+   *  gateway objected to, which is the difference between "safelisting is on,
+   *  we need persisted hashes", "our selection set has drifted from their
+   *  schema" and "the session is not what they expect" — three findings that
+   *  send MEAL-16 in three different directions and are otherwise
+   *  indistinguishable from outside the WebView. */
+  detail?: string | null;
 }
 
 /**
@@ -437,17 +446,33 @@ export function buildHebCartQueryFn(): string {
     return out;
   }
 
+  // The failing read's own words, if it left any. The parse captures
+  // errors[0].message and the catch captures the exception message, both already
+  // sliced to 120 — and until now every one of them died here, so a run could
+  // only ever report a bare 'graphql_error' with no way to tell WHICH contract
+  // with the gateway had broken.
+  function __hebCartDetail(snap) {
+    return (snap && snap.ok === false && snap.detail) ? String(snap.detail) : null;
+  }
+
   // The decision. Pure: two snapshots in, one confirmation out.
   function __hebCartConfirm(target, before, after) {
     var idsku = target ? target.skuId : null;
     var idprod = target ? target.productId : null;
+    // After-read first, then before-read: every failure this can report except
+    // no_baseline comes off the after-read, and no_baseline is exactly the case
+    // where the before-read is the one that failed. So the message named here is
+    // always the one belonging to the verdict's own reason. Both reads ok → null,
+    // which is every landed/missing verdict.
+    var detail = __hebCartDetail(after) || __hebCartDetail(before);
     function out(state, reason, line) {
       return {
         state: state, via: 'cart_query', reason: reason,
         skuId: (line && line.skuId) || idsku || null,
         productId: (line && line.productId) || idprod || null,
         qtyAfter: line ? line.qty : null,
-        weightAfter: line ? line.weight : null
+        weightAfter: line ? line.weight : null,
+        detail: detail
       };
     }
     if (!target || (!idsku && !idprod)) return out('unknown', 'no_target', null);
@@ -555,7 +580,8 @@ export function buildHebCartQueryFn(): string {
       state: 'unknown',
       reason: why || 'contradicted',
       skuId: conf.skuId, productId: conf.productId,
-      qtyAfter: conf.qtyAfter, weightAfter: conf.weightAfter
+      qtyAfter: conf.qtyAfter, weightAfter: conf.weightAfter,
+      detail: (conf.detail == null) ? null : conf.detail
     };
   }
 
@@ -580,7 +606,7 @@ export function buildHebCartQueryFn(): string {
       if (!after.ok && after.reason !== 'network' && after.reason !== 'timeout') return last;
       if (i < tries - 1) await __hebCartWait(gap);
     }
-    return last || { state: 'unknown', via: 'cart_query', reason: 'no_read', skuId: null, productId: null };
+    return last || { state: 'unknown', via: 'cart_query', reason: 'no_read', skuId: null, productId: null, detail: null };
   }
 
   // The identity a result card can give us. H-E-B's cards carry NO sku anywhere

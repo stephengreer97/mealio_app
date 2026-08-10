@@ -262,6 +262,66 @@ describe('MEAL-14 unreadable carts never look like absent items', () => {
   });
 });
 
+// ── MEAL-16: the failing read's own words ─────────────────────────────────────
+//
+// The 2026-08-10 live run returned `unknown/graphql_error` on all 20 adds: the
+// POST cleared Imperva and H-E-B's gateway answered with a structured GraphQL
+// error. `reason` alone cannot say which contract broke — a persisted-query
+// safelist, a drifted selection set and a session problem are all one bare
+// `graphql_error` — and the message that names it was captured by the parse and
+// then dropped by the confirm. These tests hold it on the confirmation.
+
+describe('MEAL-16 the gateway’s own error message survives to the confirmation', () => {
+  const rail = makeRail();
+  const target = { skuId: null, productId: LAVASH, name: 'Lavash' };
+
+  it('carries the GraphQL message off the after-read', () => {
+    const after = rail.parse(200, { data: null, errors: [{ message: 'PersistedQueryNotFound' }] });
+    const conf = rail.confirm(target, null, after);
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'graphql_error', detail: 'PersistedQueryNotFound' });
+  });
+
+  it('carries the network exception message too', () => {
+    const conf = rail.confirm(target, null, { ok: false, reason: 'network', status: null, detail: 'Load failed' });
+    expect(conf.detail).toBe('Load failed');
+  });
+
+  it('carries the BEFORE-read’s message on `no_baseline`, where the after-read is the one that succeeded', () => {
+    const after = rail.parse(200, cartResponseFrom(CART));
+    const before = rail.parse(200, { data: null, errors: [{ message: 'Cannot query field "cartV2" on type "Query"' }] });
+    const conf = rail.confirm(target, before, after);
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'no_baseline' });
+    expect(conf.detail).toBe('Cannot query field "cartV2" on type "Query"');
+  });
+
+  it('is null on every verdict where both reads succeeded', () => {
+    const full = cartResponseFrom(CART);
+    const before = rail.parse(200, withoutProduct(full, LAVASH));
+    const after = rail.parse(200, full);
+    expect(rail.confirm(target, before, after)).toMatchObject({ state: 'landed', detail: null });
+    expect(rail.confirm(target, after, after)).toMatchObject({ state: 'missing', detail: null });
+  });
+
+  it('stays inside the parse’s 120-char cap — a log line, not a page of HTML', async () => {
+    const long = 'x'.repeat(500);
+    const rail2 = makeRail(async () => ({
+      status: 200,
+      text: async () => JSON.stringify({ data: null, errors: [{ message: long }] }),
+    }));
+    const conf = await rail2.confirmAdd(target, null, { firstDelayMs: 0, gapMs: 0 });
+    expect(conf.detail).toHaveLength(120);
+  });
+
+  it('reaches the caller through the polling wrapper, which is how the device sees it', async () => {
+    const rail2 = makeRail(async () => ({
+      status: 200,
+      text: async () => JSON.stringify({ data: null, errors: [{ message: 'query not allowed' }] }),
+    }));
+    const conf = await rail2.confirmAdd(target, null, { firstDelayMs: 0, gapMs: 0 });
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'graphql_error', detail: 'query not allowed' });
+  });
+});
+
 describe('MEAL-14 confirming one add against the cart', () => {
   const rail = makeRail();
   const full = cartResponseFrom(CART);
@@ -597,6 +657,22 @@ describe('MEAL-14 flag gating', () => {
     expect(fused).toContain('__hebCartConfirmAdd');
     // …and the fallback is NOT removed by turning the rail on.
     expect(fused).toContain('__waitForCartIncrease');
+  });
+
+  // MEAL-16. The confirmation is diagnostic only on the device — nothing renders
+  // it — so the debug postMessage is the ONLY way `detail` reaches a human, and
+  // the whole point of carrying it is to read it off Metro after a live run.
+  it('puts the message on the debug line, on every path that asks the cart', async () => {
+    await loadAutomationConfig(async () => ({
+      version: 15,
+      config: { stores: { heb: { cartSkuConfirm: true } } },
+    }));
+    const { add, fused } = hebAddScripts();
+    expect(fused).toContain(`step: 'cart_query_confirm'`);
+    expect(fused).toContain('detail: __cartConf.detail');
+    expect(add).toContain(`step: 'cart_query_confirm'`);
+    expect(add).toContain(`step: 'cart_query_crosscheck'`);
+    expect(add.match(/detail: __cartConf\.detail/g)).toHaveLength(2);
   });
 
   it('parses as valid JS in both states', async () => {

@@ -1288,7 +1288,12 @@ export default function WebViewCartSheet({
       if (msg.type === 'WORKER_DEBUG') {
         // Diagnostic (saa_*) steps carry a full DOM snapshot — don't truncate
         // those; keep the 200-char cap only for the noisy per-tick messages.
-        const isDiag = typeof msg.step === 'string' && msg.step.indexOf('saa_') === 0;
+        // cart_query_* joins them: the worker wrapper re-tags the rail's
+        // EXTRACT_DEBUG as WORKER_DEBUG, and its `detail` — the gateway's own
+        // error message, the whole point of that line — sits at the END of the
+        // JSON, so the cap would cut off precisely the evidence.
+        const isDiag = typeof msg.step === 'string'
+          && (msg.step.indexOf('saa_') === 0 || msg.step.indexOf('cart_query') === 0);
         console.log(`[Cart ${ts()}]`, 'ADD WORKER_DEBUG w', workerId, isDiag ? JSON.stringify(msg) : JSON.stringify(msg).slice(0, 200));
         return;
       }
