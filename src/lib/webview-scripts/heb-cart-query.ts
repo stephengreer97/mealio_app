@@ -221,6 +221,15 @@ export interface HebAddConfirmation {
   qtyAfter?: number | null;
   /** Pounds after the add, summed over this product's weight lines. */
   weightAfter?: number | null;
+  /** The failing read's own words, ≤120 chars — H-E-B's `errors[0].message` for
+   *  a `graphql_error`, the exception message for `network`. Null when both
+   *  reads succeeded. `reason` says the request failed; this says what the
+   *  gateway objected to, which is the difference between "safelisting is on,
+   *  we need persisted hashes", "our selection set has drifted from their
+   *  schema" and "the session is not what they expect" — three findings that
+   *  send MEAL-16 in three different directions and are otherwise
+   *  indistinguishable from outside the WebView. */
+  detail?: string | null;
 }
 
 /**
@@ -437,29 +446,59 @@ export function buildHebCartQueryFn(): string {
     return out;
   }
 
+  // The failing read's own words, if it left any. The parse captures
+  // errors[0].message and the catch captures the exception message, both already
+  // sliced to 120 — and until now every one of them died here, so a run could
+  // only ever report a bare 'graphql_error' with no way to tell WHICH contract
+  // with the gateway had broken.
+  function __hebCartDetail(snap) {
+    return (snap && snap.ok === false && snap.detail) ? String(snap.detail) : null;
+  }
+
   // The decision. Pure: two snapshots in, one confirmation out.
   function __hebCartConfirm(target, before, after) {
     var idsku = target ? target.skuId : null;
     var idprod = target ? target.productId : null;
+    // The message must belong to the read whose failure the verdict's own reason
+    // names, or it is worse than nothing: a baseline that failed with a
+    // graphql_error, paired with a confirm read that failed as 'blocked' (which
+    // carries no message of its own), would print
+    // "unknown/blocked … PersistedQueryNotFound" and send the investigation after
+    // safelisting when the real answer was a wall. So each verdict below sets
+    // this to the message of the read it is actually about, and every verdict
+    // that is not about a failed read — no_target, landed, missing, and the
+    // cart_changed pair — leaves it null.
+    var detail = null;
     function out(state, reason, line) {
       return {
         state: state, via: 'cart_query', reason: reason,
         skuId: (line && line.skuId) || idsku || null,
         productId: (line && line.productId) || idprod || null,
         qtyAfter: line ? line.qty : null,
-        weightAfter: line ? line.weight : null
+        weightAfter: line ? line.weight : null,
+        detail: detail
       };
     }
+    // No target: nothing was compared and neither read is what went wrong, so
+    // this verdict carries no message even if a read did fail.
     if (!target || (!idsku && !idprod)) return out('unknown', 'no_target', null);
     if (!after) return out('unknown', 'no_read', null);
-    if (!after.ok) return out('unknown', after.reason || 'no_read', null);
+    if (!after.ok) {
+      detail = __hebCartDetail(after);
+      return out('unknown', after.reason || 'no_read', null);
+    }
     var a = __hebCartMatch(after.lines, target);
     // No baseline: we can neither tell our units from units that were already
     // there NOR check that this is the same cart the before-read saw, and the
     // second is why this gate is above the absence check rather than below it. An
     // unreadable baseline plus a cart we cannot vouch for is not evidence that
     // the item is missing — it is the DOM rail's turn.
-    if (!before || !before.ok) return out('unknown', 'no_baseline', a);
+    // The one verdict whose reason is about the BEFORE read, so the one place
+    // its message is the right one to carry.
+    if (!before || !before.ok) {
+      detail = __hebCartDetail(before);
+      return out('unknown', 'no_baseline', a);
+    }
     // SAME CART? A valid answer about a different cart reads as "every item
     // failed" — the one outcome this rail must never produce, and not a read
     // failure, so nothing else catches it. MEAL-12's probes prove an anonymous
@@ -553,9 +592,15 @@ export function buildHebCartQueryFn(): string {
     if (!conf) return conf;
     return {
       state: 'unknown',
+      // 'via' was omitted here, and confirmDetail reads an absent confirmVia as
+      // "the DOM decided, no rail ran" — so a cart-vs-label disagreement, the one
+      // signal that should make us turn this flag back off, was telemetered as
+      // though the rail had never spoken. The rail DID speak; it was overruled.
+      via: 'cart_query',
       reason: why || 'contradicted',
       skuId: conf.skuId, productId: conf.productId,
-      qtyAfter: conf.qtyAfter, weightAfter: conf.weightAfter
+      qtyAfter: conf.qtyAfter, weightAfter: conf.weightAfter,
+      detail: (conf.detail == null) ? null : conf.detail
     };
   }
 
@@ -580,7 +625,7 @@ export function buildHebCartQueryFn(): string {
       if (!after.ok && after.reason !== 'network' && after.reason !== 'timeout') return last;
       if (i < tries - 1) await __hebCartWait(gap);
     }
-    return last || { state: 'unknown', via: 'cart_query', reason: 'no_read', skuId: null, productId: null };
+    return last || { state: 'unknown', via: 'cart_query', reason: 'no_read', skuId: null, productId: null, detail: null };
   }
 
   // The identity a result card can give us. H-E-B's cards carry NO sku anywhere

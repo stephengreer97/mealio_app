@@ -1011,7 +1011,7 @@ ${buildHebCartQueryFn()}
     var committed = null;
     if (__cartTarget) {
       __cartConf = await __hebCartConfirmAdd(__cartTarget, __cartQueryBefore, {});
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId }));
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null }));
       if (__cartConf.state === 'landed') committed = true;
       else if (__cartConf.state === 'missing') {
         // A 'missing' verdict used to end the matter, which threw away
@@ -1138,7 +1138,7 @@ ${buildHebCartQueryFn()}
   // when the branch above already asked (__cartConf set).
   if (__cartTarget && !__cartConf) {
     __cartConf = await __hebCartConfirmAdd(__cartTarget, await __cartBaseline(), { tries: 3 });
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_crosscheck', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_crosscheck', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null }));
     if (__cartConf.state === 'missing') {
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'cart_absent', confirm: __cartConf }));
       return;
@@ -1540,7 +1540,7 @@ ${hebWaitFreshFn()}
       __cartConf = await __hebCartConfirmAdd(__cartTarget, __cartQueryBefore, {});
       // EXTRACT_DEBUG, not DEBUG: the worker wrapper re-tags this type and the
       // main-WebView handler logs it, so the rail is visible on both rails.
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId }));
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null }));
       if (__cartConf.state === 'landed') __committed = true;
       else if (__cartConf.state === 'missing') __committed = false;
     }
