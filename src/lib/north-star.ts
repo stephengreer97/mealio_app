@@ -131,6 +131,7 @@
 //                         (see FAILURE_CODE_SEVERITY), so read this when you want
 //                         the distribution rather than the headline.
 //        outcome, cartDeltaWarning, codeSource  (pre-existing)
+//      → This is where the trust qualifiers live. Join to the run for store_id.
 //
 //      `outcome` gained a fourth value in MEAL-190: 'unverified', the run that
 //      finished without reading the cart at all — the probe never answered, or it
@@ -147,7 +148,6 @@
 //      was read and something was off". A run with outcome 'unverified' and
 //      cartDeltaWarning false is the state where nothing checked the run, which
 //      before MEAL-190 was recorded as an ordinary success.
-//      → This is where the trust qualifiers live. Join to the run for store_id.
 //
 //      ABANDONED RUNS (MEAL-5) also ship a `run_summary`, and it is a DIFFERENT
 //      row: outcome 'skipped', and a detail of
