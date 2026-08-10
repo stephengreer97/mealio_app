@@ -467,12 +467,36 @@ describe('MEAL-16 which wall a `blocked` read hit', () => {
   });
 
   it('reaches an id that markup and entities sit between', () => {
-    // `Incident ID:</b>&nbsp;1318…` is as common as the bare form, and a gap that
-    // excluded letters would fall through to 'unauthorized' — which is the
-    // misdiagnosis, not a smaller version of it.
+    // `Incident ID:</b>&nbsp;1318…` is as common as the bare form, and missing
+    // those would fall through to 'unauthorized' — the misdiagnosis, not a
+    // smaller version of it.
     const snap = rail.parse(403, null, '<html><b>Incident ID:</b>&nbsp;1318000700134302733-8022 </html>');
     expect(snap).toMatchObject({ block: 'incident' });
     expect(snap.detail).toBe('incident id 1318000700134302733-8022');
+  });
+
+  it('quotes the incident id, not a number out of the markup in front of it', () => {
+    // Scanning the raw page would capture the first digits after the label
+    // wherever they sit — including inside an attribute — and print a timestamp
+    // as the one string you would quote to Imperva, with the real id gone from
+    // the log entirely. The tags come off before the scan for this reason.
+    const page = '<html><body><p>Incident ID:</p>'
+      + '<span data-ts="1755301234">1318000700134302733-80225616898953604</span></body></html>';
+    const snap = rail.parse(403, null, page);
+    expect(snap).toMatchObject({ block: 'incident' });
+    expect(snap.detail).toBe('incident id 1318000700134302733-80225616898953604');
+  });
+
+  it('is not defeated by a long tag between the label and the id', () => {
+    // A single span carrying a class and a couple of data attributes is over 50
+    // characters of markup on its own. Measured against the raw page, any fixed
+    // gap loses that race and the refusal reads as a dead session.
+    const page = '<html><body>Incident ID:</b>'
+      + '<span class="incident-reference-value" data-qe-id="ref" data-testid="incident">'
+      + '1318000700134302733-80225616898953604</span></body></html>';
+    const snap = rail.parse(403, null, page);
+    expect(snap).toMatchObject({ block: 'incident' });
+    expect(snap.detail).toBe('incident id 1318000700134302733-80225616898953604');
   });
 
   it('still calls a "Pardon Our Interruption" page the interstitial, id or no id', () => {

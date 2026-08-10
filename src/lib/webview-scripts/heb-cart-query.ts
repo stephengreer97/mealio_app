@@ -515,7 +515,10 @@ export function buildHebCartQueryFn(): string {
   // Only when the body actually opens as markup, so a JSON body that happens to
   // contain a '<' is never run through a tag stripper that would eat what follows
   // it. Imperva's pages open with a doctype or an <html>; a JSON body cannot.
-  function __hebCartBlockText(text) {
+  //
+  // Uncapped, because the incident-id scan below reads this too and needs the
+  // whole page: \`__hebCartBlockText\` is where the 120-char budget is spent.
+  function __hebCartPlain(text) {
     if (typeof text !== 'string') return null;
     var t = text;
     if (/^\\s*</.test(t)) {
@@ -524,6 +527,11 @@ export function buildHebCartQueryFn(): string {
         .replace(/&nbsp;/gi, ' ');
     }
     t = t.replace(/\\s+/g, ' ').trim();
+    return t || null;
+  }
+
+  function __hebCartBlockText(text) {
+    var t = __hebCartPlain(text);
     return t ? t.slice(0, 120) : null;
   }
 
@@ -560,12 +568,24 @@ export function buildHebCartQueryFn(): string {
     //
     // The id goes into \`detail\` on its own rather than as the leading slice of
     // the page, whose first 120 characters are a doctype.
-    // The gap between the label and the id is ANY characters, lazily and briefly:
-    // the id is wrapped in markup as often as not (\`Incident ID:</b>&nbsp;1318…\`),
-    // and a gap that excluded letters would miss those and fall through to
-    // 'unauthorized' — which is the misdiagnosis, not a smaller version of it.
-    var __inc = ((status === 401 || status === 403) && typeof text === 'string')
-      ? text.match(/incident\\s*id\\b[\\s\\S]{0,40}?([0-9][0-9a-z-]{5,})/i) : null;
+    //
+    // Scanned over the STRIPPED text, not the markup, because the id is wrapped in
+    // tags as often as not (\`Incident ID:</b>&nbsp;1318…\`) and reading the raw
+    // page gets that wrong in both directions. A number inside an attribute
+    // between the label and the id — \`<span data-ts="1755301234">\` — would be
+    // captured AS the incident id, printing a timestamp as the one string you
+    // would quote to Imperva and dropping the real one. And a gap of any fixed
+    // length is too short for a tag carrying a class and a data attribute, so the
+    // page falls through to 'unauthorized': the "session died" reading this field
+    // exists to prevent. With the tags gone, what separates the label from the id
+    // is punctuation and spaces.
+    //
+    // Which is also why the gap holds NO digits: after stripping, the first number
+    // following the label is the id, and anything that made us skip past a number
+    // to find a later one would be guessing.
+    var __plain = (status === 401 || status === 403) ? __hebCartPlain(text) : null;
+    var __inc = __plain
+      ? __plain.match(/incident\\s*id\\b[^0-9]{0,40}([0-9][0-9a-z-]{5,})/i) : null;
     if (__inc) {
       return {
         ok: false, reason: 'blocked', status: status, block: 'incident',
