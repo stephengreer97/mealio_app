@@ -3546,6 +3546,26 @@ export default function WebViewCartSheet({
       setStep('done');
       return;
     }
+    // The review decision supersedes the pre-run intent (MEAL-178). A reviewed
+    // item's quantity is `PickedItem.qty` — seeded at 0 and set by the user on
+    // the review screen — and its identity is the store title that was picked,
+    // which is also the name the run will report back. Counting these off the
+    // pre-run productQty instead reads a x3 request against a x1 pick and tells
+    // the user "3 items added to your cart!" when one landed; on a header-badge
+    // store it also raises a cart-check warning against a correct run, because
+    // the per-item audit that would have caught the discrepancy needs cart rows.
+    // Matched on searchTerm, which is exactly the `name` toIntendedItem built.
+    const superseded = new Set(itemsToAdd.map((p) => p.searchTerm));
+    runIntendedRef.current = [
+      // Items settled before review (added inline on the combined path) keep the
+      // intent they ran with — no pick ever revised them.
+      ...runIntendedRef.current.filter((i) => !superseded.has(i.name)),
+      ...itemsToAdd.map((p) => ({
+        name: p.productName || p.searchTerm,
+        expectedQty: Math.max(1, p.qty || 1),
+        isWeight: p.purchaseWeight != null,
+      })),
+    ];
     // Don't reset addResultsRef — may already contain results from the combined search+add phase.
     addingItemsRef.current = itemsToAdd;
     addingIdxRef.current = 0;

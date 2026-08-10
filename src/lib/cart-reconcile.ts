@@ -145,19 +145,34 @@ export function unitsOf(item: IntendedItem): number {
  * and dropping it would silently shrink every count that depends on name
  * matching succeeding — the failure mode being that a user is shown a smaller
  * number than the truth and believes less landed than did.
+ *
+ * EXACT NAMES ARE RESERVED FIRST, in the same two passes and for the same reason
+ * as claimQty and claimCountRows: a single loose pass is order-dependent and lets
+ * a sibling swallow a claim that belongs to an exact match. Intending
+ * "H-E-B Bakery Sliced White Bread" x3 and "H-E-B White Bread" x1, a report for
+ * the latter met the former first and billed 3 units — inflating `expected` and
+ * raising a cart-check warning on a run that was correct.
  */
 export function unitsForNames(names: readonly string[], intended: readonly IntendedItem[]): number {
   const pool = intended.map((item) => ({ item, used: false }));
-  let units = 0;
-  for (const name of names) {
-    const hit = pool.find(
-      (c) => !c.used && (cartNameMatches(c.item.name, name) || cartNameMatches(name, c.item.name)),
-    );
-    if (!hit) { units += 1; continue; }
-    hit.used = true;
-    units += unitsOf(hit.item);
-  }
-  return units;
+  const claim = (name: string, exactOnly: boolean) => pool.find((c) => !c.used && (
+    exactOnly
+      ? normalizeName(c.item.name) === normalizeName(name)
+      : cartNameMatches(c.item.name, name) || cartNameMatches(name, c.item.name)
+  ));
+  // Pass 1 reserves every exact match; pass 2 lets what is left match loosely, so
+  // a stray comma or ® on one title cannot cost another its own row.
+  const claimed = new Map<number, ReturnType<typeof claim>>();
+  names.forEach((name, i) => { const hit = claim(name, true); if (hit) { hit.used = true; claimed.set(i, hit); } });
+  names.forEach((name, i) => {
+    if (claimed.has(i)) return;
+    const hit = claim(name, false);
+    if (hit) { hit.used = true; claimed.set(i, hit); }
+  });
+  return names.reduce((units, _name, i) => {
+    const hit = claimed.get(i);
+    return units + (hit ? unitsOf(hit.item) : 1);
+  }, 0);
 }
 
 /** Units in the cart that no intended item accounts for. */

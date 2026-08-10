@@ -964,6 +964,27 @@ describe('unitsForNames', () => {
     expect(unitsForNames(['Topo Chico Mineral Water', 'Topo Chico Mineral Water'], INTENDED)).toBe(4);
   });
 
+  it('reserves the exact name before a sibling can swallow it', () => {
+    // The bug this pins: with a single loose pass, "H-E-B White Bread" met the
+    // longer sibling first and billed its x3, inflating `expected` and raising a
+    // cart-check warning on a run that was correct. Same exact-first rule as
+    // claimQty and claimCountRows, and for the same reason.
+    const BREAD = [
+      intended('H-E-B Bakery Sliced White Bread', 3),
+      intended('H-E-B White Bread', 1),
+    ];
+    expect(unitsForNames(['H-E-B White Bread'], BREAD)).toBe(1);
+    // And both together still add up to the whole order, in either order.
+    expect(unitsForNames(['H-E-B White Bread', 'H-E-B Bakery Sliced White Bread'], BREAD)).toBe(4);
+    expect(unitsForNames(['H-E-B Bakery Sliced White Bread', 'H-E-B White Bread'], BREAD)).toBe(4);
+  });
+
+  it('still falls back to a loose match when no exact title exists', () => {
+    // The exact pass is a reservation, not a restriction: a cart title that
+    // differs by a comma or an ® must still find its item.
+    expect(unitsForNames(['Topo Chico Mineral Water, 12 pk'], INTENDED)).toBe(3);
+  });
+
   it('counts an unresolvable name as one unit rather than dropping it', () => {
     expect(unitsForNames(['Nothing Here Matches That'], INTENDED)).toBe(1);
   });
