@@ -286,17 +286,27 @@ export interface HebAddConfirmation {
    *  indistinguishable from outside the WebView. */
   detail?: string | null;
   /**
-   * MEAL-16. Four more diagnostics off the SAME read `detail` came from — the
-   * one this verdict's own `reason` names. They are set together, from one
-   * snapshot, precisely so no verdict can pair one read's status with another
-   * read's message (see the note in `__hebCartConfirm`).
+   * MEAL-16. HTTP status of the read this verdict is about, and the first of four
+   * diagnostics taken off the SAME read `detail` came from — the one the verdict's
+   * own `reason` names. They are set together, from one snapshot, precisely so no
+   * verdict can pair one read's status with another read's message (see the note
+   * in `__hebCartConfirm`).
+   *
+   * WHICH READ THAT IS depends on the reason, and it is worth saying out loud
+   * because nothing in these four names says it: on `no_baseline` — the one verdict
+   * whose reason is about the BEFORE read — a `status: 401` describes the baseline,
+   * while `qtyAfter`/`weightAfter` in the same object are the after-read's, because
+   * on `no_baseline` the after read is the one that SUCCEEDED. That is the pairing
+   * the verdict is reporting, not a mix-up: the baseline hit a wall, so the cart we
+   * can see cannot be vouched for. Everywhere else the four describe the after read.
+   *
+   * Null when there was no read to have a status — and null is not 0: a
+   * `no_read`/`no_target` verdict never had a response at all.
    *
    * Diagnostic only, all four: `confirmDetail` (pool-add-funnel) picks its
    * telemetry fields by name and forwards none of these, so they reach a human
    * on a debug log line and nowhere else.
    */
-  /** HTTP status of that read. Null when there was no read to have one — and
-   *  null is not 0: a `no_read`/`no_target` verdict never had a response. */
   status?: number | null;
   /** `errors[0].extensions.code`, on a `graphql_error`. */
   code?: string | null;
@@ -796,7 +806,11 @@ export function buildHebCartQueryFn(): string {
     // the item is missing — it is the DOM rail's turn.
     // The one verdict whose reason is about the BEFORE read, so the one place
     // its message — and its status, and its block cause — are the right ones to
-    // carry.
+    // carry. Which means this is also the one verdict where the diagnostics and
+    // the line fields come from DIFFERENT reads: \`status\` is the baseline's,
+    // \`qtyAfter\` is the after-read's, and both are right, because on
+    // 'no_baseline' the after read is the one that succeeded. Called out here and
+    // on HebAddConfirmation.status because nothing in the field names says it.
     if (!before || !before.ok) {
       __hebCartTake(before);
       return out('unknown', 'no_baseline', a);

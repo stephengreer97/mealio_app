@@ -630,6 +630,18 @@ describe('MEAL-16 every verdict reports the status of the read its reason names'
     expect(conf).toMatchObject({ state: 'unknown', reason: 'no_baseline', status: 503 });
   });
 
+  it('is the one verdict whose diagnostics and line fields come from different reads', () => {
+    // Reads like a mix-up and is not one, which is why it is pinned here as well
+    // as commented: on `no_baseline` the BEFORE read is the one that failed, so
+    // the wall label is its, while the quantity can only be the after-read's —
+    // the read that succeeded. Both halves are about the read they say they are.
+    const before = rail.parse(401, {});
+    const conf = rail.confirm(target, before, rail.parse(200, full));
+    expect(conf).toMatchObject({
+      reason: 'no_baseline', status: 401, block: 'unauthorized', productId: LAVASH, qtyAfter: 1,
+    });
+  });
+
   it('never pairs one read’s status with another read’s verdict', () => {
     // The trap #107 closed for `detail`, one field wider: a 200 baseline printed
     // beside a 401 verdict would say the session was fine at the moment we walled.
