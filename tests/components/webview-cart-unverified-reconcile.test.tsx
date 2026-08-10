@@ -121,6 +121,13 @@ jest.mock('../../src/lib/automation-config', () => {
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { usage } from '../../src/lib/api';
+
+/** What the run reported to /api/usage/automation when it finished. */
+const completedRun = () => {
+  const calls = (usage.logAutomationComplete as jest.Mock).mock.calls;
+  return calls.length > 0 ? calls[calls.length - 1][0] : null;
+};
 
 type Ing = { ingredientName: string; searchTerm?: string; productQty: number; qty: number; unit: string; measure: string | null };
 
@@ -153,6 +160,7 @@ beforeEach(() => {
   // ends in finishParallelAdd -> triggerCartProbe('reconcile'). Pre-search commits
   // through the same reconcile, but parking adds a phase this test does not need.
   (globalThis as any).__flags = { presearchAdd: false, parallelAdd: true };
+  (usage.logAutomationComplete as jest.Mock).mockClear();
 });
 
 /**
@@ -163,13 +171,20 @@ beforeEach(() => {
  * reconcile answer is the variable under test: one with `items` gives the diff a
  * cart to compare, one without is the MEAL-152 refusal.
  */
-function runToReconcile(answer: Record<string, unknown>, workerSucceeded = true) {
+async function runToReconcile(answer: Record<string, unknown>, workerSucceeded = true) {
   // ONE item on purpose. With two, the pool hands one to the cold slot (the main
   // WebView enlisted as an extra add surface) and only a single worker WebView
   // ever mounts, so the pool cannot settle without waiting out a 35s worker
   // timeout — which lands the reconcile after the test has finished. One item is
   // one worker, one report, and a pool that settles inside the test.
   const view = render(sheet(chosen('Sour Cream')));
+  // Let logAutomationStart's promise settle. It is a `.then` on a mocked async
+  // function, so no timer advance will ever deliver it — only yielding to the
+  // microtask queue does, and a synchronous act() does not yield. Without this the
+  // run holds a null runId, `if (runId)` skips logAutomationComplete entirely, and
+  // every assertion about what the run REPORTED reads an empty mock. It costs the
+  // banner cases nothing: they were passing on a run that uploaded nothing.
+  await act(async () => {});
   const postTo = (i: number, payload: Record<string, unknown>) => act(() => {
     view.queryAllByTestId('mock-webview')[i]?.props.onMessage({
       nativeEvent: { data: JSON.stringify(payload) },
@@ -197,49 +212,96 @@ function runToReconcile(answer: Record<string, unknown>, workerSucceeded = true)
 }
 
 describe('reconcile that cannot read the cart (MEAL-190)', () => {
-  it('warns when the cart page refuses to identify itself', () => {
+  it('warns when the cart page refuses to identify itself', async () => {
     // `count: null` and NO `items` — verbatim what cartPathGuardJs posts when the
     // cart URL landed somewhere that is not the cart. Before this change the run
     // reconciled from its own worker reports and said nothing.
-    const view = runToReconcile({
+    const view = await runToReconcile({
       type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: 'https://www.heb.com/',
     });
     expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeTruthy();
   });
 
-  it('does not warn when the cart answered with rows', () => {
+  it('does not warn when the cart answered with rows', async () => {
     // The other side of the rule: a reconcile that really did read the cart must
     // not carry an unverified warning, or the message means nothing.
-    const view = runToReconcile({
+    const view = await runToReconcile({
       type: 'CART_COUNT', count: 1,
       items: [{ name: 'Sour Cream', qty: 1 }],
       url: 'https://www.heb.com/cart',
     });
     expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeNull();
   });
-  it('warns on the done screen even when nothing was added', () => {
+  it('warns on the done screen even when nothing was added', async () => {
     // The loudest version of this state, and it renders through a DIFFERENT
     // banner than the two cases above. `!rows` sets totalAdded from the worker
     // reports, so a run whose workers also failed lands on the nothing-added
     // done screen — the run most in need of the warning, since it has neither a
     // cart reading nor a success to point at. Covered separately because
     // deleting the nothing-added banner leaves the other tests green.
-    const view = runToReconcile(
+    const view = await runToReconcile(
       { type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: 'https://www.heb.com/' },
       false,
     );
     expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeTruthy();
   });
 
-  // KNOWN UNCOVERED MUTANT, stated rather than left to be discovered.
-  //
-  // Hoisting the setCartDeltaWarning above `if (!rows)` — so every reconcile
-  // warns — keeps all three tests green. It is not an equivalent mutant: the rows
-  // path clears the warning with setCartDeltaWarning(null) before it finalizes,
-  // EXCEPT on the top-up branch, which returns to navigateToSearchItem earlier
-  // and never reaches that clear. So a hoisted warning is observable, but only on
-  // a run that reads its cart, finds a shortfall, tops up, and then finalizes
-  // through the serial 'after' phase — several phases past where these tests
-  // stop. Pinning it means driving a full top-up to a second done screen, which
-  // belongs with MEAL-158's harness work rather than bolted on here.
+  // THE MUTANT THIS FILE USED TO LEAVE UNCOVERED is now killed, by the state
+  // split rather than by a new test. When the warning lived in cartDeltaWarning,
+  // hoisting it above `if (!rows)` kept every test here green: the rows path
+  // cleared cartDeltaWarning before finalizing, so the hoist was only observable
+  // on a top-up finalizing through the serial 'after' phase, several phases past
+  // where these tests stop. cartUnverified is cleared only when a run OPENS —
+  // nothing clears it mid-run, because every path that sets it finalizes the run
+  // on the spot — so a hoisted setCartUnverified now shows a banner on the rows
+  // case above and fails it directly. No defensive clear was added in the rows
+  // path for that reason: it would restore the hole.
+});
+
+// ── What the run REPORTS, not just what it says ─────────────────────────────
+//
+// Stephen's call on this ticket (option c): `unverified` gets a telemetry value of
+// its own before the banner ships. The banner and the outcome are two different
+// audiences and only one of them is in the kitchen — the fleet view is where
+// "this store's cart has not been readable for a week" is visible at all.
+//
+// Recording these as `partial` was the alternative, and it is a claim about a cart
+// nobody saw: indistinguishable from a run that really did under-add, which is the
+// exact confusion MEAL-185/187/188 already live in. Recording them as `success` is
+// the silence this ticket exists to end. mealio_central accepts the fourth value
+// (app/api/usage/automation/route.ts there); an outcome it does not recognise is
+// stored as NULL, which is why the two halves ship in that order.
+describe('the outcome an unverifiable run reports (MEAL-190)', () => {
+  it('reports unverified when the cart could not be read', async () => {
+    await runToReconcile({
+      type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: 'https://www.heb.com/',
+    });
+    // The add itself succeeded — this run is not a failure, and its one item may
+    // well be sitting in the cart. What is missing is anything that could say so.
+    expect(completedRun()).toMatchObject({ itemsAdded: 1, outcome: 'unverified' });
+  });
+
+  it('still reports success when the cart answered', async () => {
+    // The other side of the rule. If a verified-clean run reported 'unverified'
+    // too, the value would say nothing and the fleet number built on it would be
+    // a count of runs rather than a count of unchecked ones.
+    await runToReconcile({
+      type: 'CART_COUNT', count: 1,
+      items: [{ name: 'Sour Cream', qty: 1 }],
+      url: 'https://www.heb.com/cart',
+    });
+    expect(completedRun()).toMatchObject({ itemsAdded: 1, outcome: 'success' });
+  });
+
+  it('reports failed, not unverified, when nothing was added', async () => {
+    // Ordering inside the outcome expression, pinned: a run that added nothing has
+    // a worse thing to say about itself than "we could not check". Moving
+    // `unverified` ahead of the zero-added test would relabel every failed run at
+    // a store whose cart page redirects.
+    await runToReconcile(
+      { type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: 'https://www.heb.com/' },
+      false,
+    );
+    expect(completedRun()).toMatchObject({ itemsAdded: 0, outcome: 'failed' });
+  });
 });

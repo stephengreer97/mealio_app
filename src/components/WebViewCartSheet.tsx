@@ -205,6 +205,19 @@ function overAddLabel(o: OverAdd): string {
   return o.qty > 1 ? `${o.name} ×${o.qty}` : o.name;
 }
 
+// What to say when the run could not read the cart at all (MEAL-190).
+//
+// One string for every way it happens — the probe never answered, or it answered
+// "I cannot prove this page is the cart" — because the user's situation is
+// identical in all of them: we could not check your cart, go look. WHY we could
+// not read it belongs in the log, which already carries `reason=` and `url=`.
+//
+// Deliberately not the cart-check wording. Those messages report something the
+// cart SAID; this one reports that there is nothing to report.
+function unverifiedCartMessage(storeName: string): string {
+  return `Couldn't verify your ${storeName} cart — please double-check it.`;
+}
+
 // onHttpError fires for subresources too (images, XHR, assets). Only a top-level
 // page load on the store domain should be treated as a block — filter the rest.
 function isLikelyPageUrl(url: string, domain: string): boolean {
@@ -605,6 +618,24 @@ export default function WebViewCartSheet({
   const [cartRowsTimedOut, setCartRowsTimedOut] = useState(false);
   const cartRowsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [cartDeltaWarning, setCartDeltaWarning] = useState<string | null>(null);
+  // The run could not read the cart AT ALL — held apart from cartDeltaWarning
+  // rather than folded into it (MEAL-190).
+  //
+  // They read the same on the done screen, and they are opposite facts. A
+  // cartDeltaWarning is something the cart SAID: it was read, and it disagreed
+  // with the run. This is the absence of any reading, so nothing could have
+  // disagreed — the item counts on such a run are the run's own report of itself,
+  // and the cart diff is the only check that has ever contradicted one (MEAL-185,
+  // MEAL-187, MEAL-188 all reported success on their own internal checks).
+  //
+  // Telling them apart is what the run's `outcome` rides on. Recorded as
+  // `partial`, an unverified run claims a cart was checked and came up short — a
+  // claim about a cart nobody saw, indistinguishable from a real under-add. On a
+  // store whose cart URL redirects (Walmart today, HEB while heb.com/cart 302s)
+  // that is potentially EVERY run, so the two have to be countable apart or one
+  // store's redirect reads as a fleet-wide regression. mealio_central accepts
+  // `unverified` as its own outcome; see app/api/usage/automation/route.ts there.
+  const [cartUnverified, setCartUnverified] = useState<string | null>(null);
   const [addedNames, setAddedNames] = useState<string[]>([]);
   // Names of items that could not be added, shown on the done screen so the
   // failure is specific ("Sour Cream could not be added") instead of a bare count.
@@ -1214,7 +1245,7 @@ export default function WebViewCartSheet({
       cartCountPendingRef.current = null;
       if (phase === 'reconcile') {
         parallelReconcileArmedRef.current = false;
-        setCartDeltaWarning(`Couldn't verify your ${storeName} cart — please double-check it.`);
+        setCartUnverified(unverifiedCartMessage(storeName));
         setStep('done');
       }
     }, CART_PROBE_RESULT_TIMEOUT_MS);
@@ -1483,6 +1514,7 @@ export default function WebViewCartSheet({
       setCartRowsTimedOut(false);
       if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
       setCartDeltaWarning(null);
+      setCartUnverified(null);
 
       // Reset Wegmans parallel worker state. The hook clears its queue,
       // active flag, timers, and worker URIs in one call — workers unmount
@@ -1595,8 +1627,18 @@ export default function WebViewCartSheet({
   useEffect(() => {
     if (step !== 'done' || automationCompletedRef.current) return;
     automationCompletedRef.current = true;
-    const outcome: 'success' | 'partial' | 'failed' =
-      totalAdded === 0 ? 'failed' : cartDeltaWarning ? 'partial' : 'success';
+    // `unverified` sits between partial and success and is neither (MEAL-190). It
+    // is checked AFTER cartDeltaWarning because a cart that was read and disagreed
+    // is the louder, better-evidenced fact — the two are mutually exclusive in
+    // practice, and if they ever co-occur the reading wins.
+    //
+    // Not folded into 'partial': that claims the cart was checked and came up
+    // short, about a cart nobody saw. Not left as 'success' either — that was the
+    // silence this ticket is about. mealio_central has to know the word before a
+    // build sending it ships, or its allowlist stores NULL; see
+    // app/api/usage/automation/route.ts there.
+    const outcome: 'success' | 'partial' | 'unverified' | 'failed' =
+      totalAdded === 0 ? 'failed' : cartDeltaWarning ? 'partial' : cartUnverified ? 'unverified' : 'success';
     const runId = automationRunIdRef.current;
     // ── North-star metric (MEAL-3) ───────────────────────────────────────────
     // itemsAdded is the NUMERATOR and `requested` the DENOMINATOR of the item
@@ -1714,7 +1756,7 @@ export default function WebViewCartSheet({
     // skippedByIdx / unverifiedWeightLines are read above; automationCompletedRef
     // keeps this to one firing per run whatever re-renders the extra dependencies
     // cause.
-  }, [step, totalAdded, cartDeltaWarning, skippedByIdx, unverifiedWeightLines, tel]);
+  }, [step, totalAdded, cartDeltaWarning, cartUnverified, skippedByIdx, unverifiedWeightLines, tel]);
 
   // Clear all safety timers on unmount. Without this, closing the sheet mid
   // login-check / search / add leaves a real setTimeout running that later
@@ -2738,7 +2780,11 @@ export default function WebViewCartSheet({
               // situation is identical — we could not check your cart, go look.
               // Splitting hairs about WHY we could not read it belongs in the log,
               // which already carries `reason=` and `url=`.
-              setCartDeltaWarning(`Couldn't verify your ${storeName} cart — please double-check it.`);
+              //
+              // Held in its own state rather than in cartDeltaWarning, because the
+              // two say opposite things about the cart and the run's `outcome` is
+              // computed from which one is set — see the state declaration.
+              setCartUnverified(unverifiedCartMessage(storeName));
               const { confirmed: wins, failed: lost } = reconcileFromWorkerReports(attempts);
               addResultsRef.current = wins.map((w) => ({ name: w.name, success: true }));
               setTotalAdded(wins.length);
@@ -4412,6 +4458,17 @@ export default function WebViewCartSheet({
           const wasChooseFlow = searchResults.length > 0 && searchResults.every(r => r.isChoose);
           const skippedNames = Object.values(skippedByIdx).filter(Boolean);
           const unverified = unverifiedWeightLines;
+          // ONE banner for both cart-check outcomes, because the user's next move
+          // is the same either way: go look at your cart. They are separate STATE
+          // (see the declarations) because the run's telemetry outcome turns on
+          // which one is set — a cart that was read and disagreed is not the same
+          // fact as a cart that was never read — but that distinction is for the
+          // fleet view, not for someone standing in a kitchen.
+          //
+          // The reading wins when both are somehow set: it says something specific
+          // about the cart, and "we couldn't check" would be a strictly weaker
+          // claim rendered over a stronger one.
+          const cartCheckMessage = cartDeltaWarning ?? cartUnverified;
           return (
             <>
               <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 32, paddingBottom: 16 }}>
@@ -4443,10 +4500,10 @@ export default function WebViewCartSheet({
                           : `${totalFailed} item${totalFailed !== 1 ? 's' : ''} could not be added.`}
                       </Text>
                     )}
-                    {cartDeltaWarning && (
+                    {cartCheckMessage && (
                       <View style={styles.cartCheckBanner} testID="cart-check-warning">
                         <Ionicons name="alert-circle" size={18} color="#b45309" />
-                        <Text style={styles.cartCheckBannerText}>{cartDeltaWarning}</Text>
+                        <Text style={styles.cartCheckBannerText}>{cartCheckMessage}</Text>
                       </View>
                     )}
                   </>
@@ -4475,10 +4532,10 @@ export default function WebViewCartSheet({
                         finding had nowhere to render — the banner only existed
                         on the added>0 branch — and the user would re-add an item
                         already in their cart. */}
-                    {cartDeltaWarning && (
+                    {cartCheckMessage && (
                       <View style={styles.cartCheckBanner} testID="cart-check-warning">
                         <Ionicons name="alert-circle" size={18} color="#b45309" />
-                        <Text style={styles.cartCheckBannerText}>{cartDeltaWarning}</Text>
+                        <Text style={styles.cartCheckBannerText}>{cartCheckMessage}</Text>
                       </View>
                     )}
                   </>
