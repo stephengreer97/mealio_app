@@ -370,14 +370,19 @@ describe('MEAL-16 which wall a `blocked` read hit', () => {
   const rail = makeRail();
 
   it.each([
-    // MEAL-12 measured the ABP wall as a 401 carrying an incidentId. The id is
-    // read BEFORE the status for exactly this row: called 'auth' it would report
-    // "the session died, ABP was not involved" about a measured ABP response.
+    // The two shapes we have actually measured Imperva producing outrank the
+    // status, and these two rows are why: MEAL-12 measured the wall as a 401
+    // CARRYING an incidentId, and the interstitial can be served on a 403.
+    // Labelled 'auth', either would report "the session died, ABP was not
+    // involved" about the wall itself.
     ['an Imperva 401 with an incident body', 'incident', 401, { incidentId: '1318000700134302733-80225616898953604', errorCode: '15' }],
+    ['the interstitial served as a 403', 'interstitial', 403, '<html>Pardon Our Interruption…</html>'],
     ['an incident body served as 200', 'incident', 200, { incidentId: 'abc' }],
+    ['the ABP interstitial served as 200 HTML', 'interstitial', 200, '<html>Pardon Our Interruption…</html>'],
+    // A generic errorCode is weaker evidence than the status, so it sits below it.
     ['a bare 401 — the H-E-B session died mid-run', 'auth', 401, {}],
     ['a bare 403', 'auth', 403, {}],
-    ['the ABP interstitial served as 200 HTML', 'interstitial', 200, '<html>Pardon Our Interruption…</html>'],
+    ['an errorCode body with no incident id, on a 200', 'incident', 200, { errorCode: '15' }],
   ])('reports %s as %s', (_label, block, status, body) => {
     const json = typeof body === 'string' ? null : body;
     const text = typeof body === 'string' ? body : JSON.stringify(body);
@@ -508,7 +513,7 @@ describe('MEAL-16 the request body we actually send', () => {
     expect(JSON.parse(line.body).query).toBe(HEB_CART_QUERY);
   });
 
-  it('logs it ONCE per page, not once per poll — five reads, one line', async () => {
+  it('logs it ONCE per injected script, not once per poll — five reads, one line', async () => {
     const posted: any[] = [];
     const { fn } = stubFetch(200, withoutProduct(cartResponseFrom(CART), LAVASH));
     const rail = makeRail(fn, posted);

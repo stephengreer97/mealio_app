@@ -376,7 +376,7 @@ export function buildHebCartQueryFn(): string {
     return JSON.stringify({ operationName: __HEB_CART_OP, variables: {}, query: __HEB_CART_QUERY });
   }
 
-  // MEAL-16 — log the body we ACTUALLY send, exactly once per page context.
+  // MEAL-16 — log the body we ACTUALLY send, exactly once per injected script.
   //
   // The 2026-08-10 run came back "Field \\"cartV2\\" of type \\"Query\\" must have a
   // selection of subfields" on every read. HEB_CART_QUERY has a selection set, so
@@ -385,23 +385,24 @@ export function buildHebCartQueryFn(): string {
   // something other than what we sent. This line is what kills the first half of
   // that — it prints the string handed to fetch, after both JSON.stringify hops.
   //
-  // ONCE, on \`window\`, not once per read: __hebCartConfirmAdd polls up to five
-  // times per add, and 30 adds would bury the run in a repeated ~350-char line
-  // that says the same thing every time. window is the widest scope that is not
-  // the store's own storage — deliberately NOT sessionStorage, which would leave
-  // a self-identifying Mealio key sitting in H-E-B's origin for their own scripts
-  // to read, the same fingerprint argument that renamed the operation. So the
-  // grain is one line per page load per WebView, and a worker that re-navigates
-  // between items prints it again. That is noise we accept; per-poll is not.
+  // ONCE, not once per read: __hebCartConfirmAdd polls up to five times per add,
+  // and 30 adds would bury the run in a repeated ~350-char line that says the
+  // same thing every time. The latch is a plain var in this script's own IIFE, so
+  // it leaves NOTHING on H-E-B's origin — not a sessionStorage key and not a
+  // window global, either of which would be a self-identifying Mealio artifact
+  // their own scripts could read, the same fingerprint argument that renamed the
+  // operation. Every add is its own injection, so the grain is one line per add
+  // and the poll retries share it. That is the noise we accept; per-poll is not.
   //
   // Guarded on every side because this module is also evaluated in a sandbox with
   // no window and no bridge (tests/unit/hebCartQuery.test.ts), and a diagnostic
   // that can throw inside the read path would take the rail down with it.
+  var __hebCartBodyLogged = false;
   function __hebCartLogBody(body) {
     try {
+      if (__hebCartBodyLogged) return;
       if (typeof window === 'undefined' || !window || !window.ReactNativeWebView) return;
-      if (window.__hebCartBodyLogged) return;
-      window.__hebCartBodyLogged = true;
+      __hebCartBodyLogged = true;
       // EXTRACT_DEBUG: the only debug type the worker wrappers forward (they
       // re-tag it WORKER_DEBUG and swallow ADD_DEBUG), and the main WebView logs
       // it too — so this one type is visible from every surface that adds. The
@@ -463,23 +464,31 @@ export function buildHebCartQueryFn(): string {
   // by itself, and \`status\` cannot stand in for it because the incident body
   // arrives on a 200 as readily as on a 401.
   //
-  // The three tests were reordered to label them, and ONLY to label them: every
-  // input that produced 'blocked' before produces 'blocked' now, in the same
-  // order of precedence over the non-block classifications below. What changed is
-  // that Imperva's own incidentId is consulted BEFORE the status, because MEAL-12
-  // measured the wall as a 401 CARRYING an incidentId — reading that as 'auth'
-  // would report "the session died, ABP was never involved" about the one
-  // response shape we have actually measured ABP producing.
+  // The block tests were reordered to label them, and ONLY to label them: every
+  // input that produced 'blocked' before produces 'blocked' now, with the same
+  // precedence over the non-block classifications below. What changed is that the
+  // two responses we have actually MEASURED Imperva producing — an incidentId
+  // body, and the interstitial page — are consulted BEFORE the status, because
+  // MEAL-12 measured the wall as a 401 CARRYING an incidentId and the
+  // interstitial can be served on a 403. Reading either as 'auth' would report
+  // "the session died, ABP was never involved" about the wall itself.
+  //
+  // Strongest evidence first, which is why a bare errorCode is the exception and
+  // sits BELOW the status: incidentId and the interstitial string are
+  // Imperva-specific, while \`errorCode\` is a generic key that any gateway might
+  // send. On a 401/403 the status is the better evidence of the two.
   function __hebCartParse(status, json, text) {
     if (json && json.incidentId) return { ok: false, reason: 'blocked', status: status, block: 'incident' };
-    // A 401/403 with no incident id: the H-E-B session, not the wall.
-    if (status === 401 || status === 403) return { ok: false, reason: 'blocked', status: status, block: 'auth' };
-    // errorCode without an incidentId — the same body shape minus the id, and
-    // blocked exactly as it has always been.
-    if (json && json.errorCode) return { ok: false, reason: 'blocked', status: status, block: 'incident' };
     if (typeof text === 'string' && text.indexOf('Pardon Our Interruption') !== -1) {
       return { ok: false, reason: 'blocked', status: status, block: 'interstitial' };
     }
+    // A 401/403 with neither Imperva fingerprint on it: the H-E-B session, not
+    // the wall — and that is a finding, not a shrug. It explains a run's failing
+    // adds and a dead reconcile probe with no anti-bot involvement at all.
+    if (status === 401 || status === 403) return { ok: false, reason: 'blocked', status: status, block: 'auth' };
+    // errorCode without an incidentId — the incident body shape minus the id, and
+    // blocked exactly as it has always been.
+    if (json && json.errorCode) return { ok: false, reason: 'blocked', status: status, block: 'incident' };
     if (!json || typeof json !== 'object') {
       return { ok: false, reason: (status >= 400 ? 'http_error' : 'shape'), status: status };
     }

@@ -327,13 +327,6 @@ describe('failure codes', () => {
       // one by one so a genuinely new ADD_RESULT reason still fails this test.
       'http_error', 'shape', 'graphql_error', 'network', 'no_read', 'no_baseline',
       'cart_query', 'cart_query_confirm', 'cart_query_crosscheck', 'missing', 'unknown',
-      // MEAL-16's `block`: WHICH wall a 'blocked' read hit — a bare 401/403 (the
-      // H-E-B session died), an Imperva incident body, or the interstitial. They
-      // share a line with `reason: 'blocked'` because they are the diagnostic
-      // BESIDE that reason, deliberately not three new reasons: splitting the
-      // rail's verdict vocabulary would have been a behaviour change, and
-      // 'blocked' is what the callers read. Never posted as an ADD_RESULT reason.
-      'auth', 'incident', 'interstitial',
       // A CART_COUNT reason, not an ADD_RESULT one. The cart-page scripts post it
       // alongside `count: null` when the page they landed on is not the cart — the
       // Albertsons guard for a redirect off /erums/cart (MEAL-136), and the
@@ -341,6 +334,25 @@ describe('failure codes', () => {
       // a COUNT is unknown; it never describes an add, and addFailureCode never
       // sees it.
       'not_cart_page',
+    ]);
+
+    /**
+     * The same, but scoped to the ONE file that legitimately carries the literal.
+     * `auth` is a plausible ADD_RESULT reason for some future store script, and
+     * putting it in the flat set above would disarm this test for that script
+     * without anyone noticing.
+     *
+     * These three are MEAL-16's `block`: WHICH wall a 'blocked' cart read hit — a
+     * bare 401/403 (the H-E-B session died), an Imperva incident body, or the
+     * interstitial. They share a line with `reason: 'blocked'` because they are
+     * the diagnostic BESIDE that reason, deliberately not three new reasons:
+     * splitting the rail's verdict vocabulary would have been a behaviour change,
+     * and 'blocked' is what the callers read.
+     */
+    const IGNORED_IN = new Map<string, string>([
+      ['auth', 'heb-cart-query.ts'],
+      ['incident', 'heb-cart-query.ts'],
+      ['interstitial', 'heb-cart-query.ts'],
     ]);
 
     const found = new Map<string, string>();
@@ -357,7 +369,8 @@ describe('failure codes', () => {
       for (const line of src.split('\n')) {
         if (!/\breason\b/.test(line)) continue;
         for (const m of line.matchAll(/'([a-z][a-z_]*)'/g)) {
-          if (!IGNORED.has(m[1])) found.set(m[1], file);
+          if (IGNORED.has(m[1]) || IGNORED_IN.get(m[1]) === file) continue;
+          found.set(m[1], file);
         }
       }
     }
