@@ -1019,6 +1019,15 @@ export default function WebViewCartSheet({
         // (a real navigation straight to the results URL, i.e. where the JSON path
         // fires most reliably) as the one flow with no evidence at all.
         if (msg.step === 'next_data') extractWhyRef.current[workerId] = msg.ndReason ?? null;
+        // MEAL-16: the cart rail's verdict arrives by that same re-tagging, and
+        // this handler otherwise logs nothing at all. `detail` — the gateway's
+        // own error message — reaches a human only on a log line, since
+        // confirmDetail picks its telemetry fields by name and does not forward
+        // it. Without this the parked pre-search workers, which are where most
+        // adds actually happen, produce no evidence of the failure.
+        if (typeof msg.step === 'string' && msg.step.indexOf('cart_query') === 0) {
+          console.log(`[Cart ${ts()}]`, 'presearch WORKER_DEBUG w', workerId, JSON.stringify(msg));
+        }
         return;
       }
       if (msg.type === 'WORKER_RESULT') {
