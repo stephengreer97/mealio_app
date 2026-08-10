@@ -1025,7 +1025,12 @@ export default function WebViewCartSheet({
         // confirmDetail picks its telemetry fields by name and does not forward
         // it. Without this the parked pre-search workers, which are where most
         // adds actually happen, produce no evidence of the failure.
-        if (typeof msg.step === 'string' && msg.step.indexOf('cart_query') === 0) {
+        // MEAL-180 adds the preference probe (`pref`) to the same list. The
+        // presearch wrapper forwards it now, but this handler logs by name — so
+        // without naming it here the forwarding is inert: the lines cross the
+        // bridge and are dropped, paying the cost and answering nothing.
+        const isLogged = typeof msg.step === 'string' && msg.step.indexOf('cart_query') === 0;
+        if (isLogged || msg.pref) {
           console.log(`[Cart ${ts()}]`, 'presearch WORKER_DEBUG w', workerId, JSON.stringify(msg));
         }
         return;
