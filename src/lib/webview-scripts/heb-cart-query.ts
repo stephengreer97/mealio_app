@@ -191,10 +191,12 @@ export type HebCartReadFailure =
  *
  * They are genuinely different findings and the log cannot tell them apart:
  *
- *  • `incident` — an Imperva incident id at any status, from the JSON body or
- *    printed into an HTML refusal page, or an `errorCode` body on a status that
- *    is not 401/403. ABP, measured: MEAL-12 got exactly this shape from a plain
- *    React Native HTTP client.
+ *  • `incident` — an `incidentId` in the JSON body at any status, an incident id
+ *    printed into an HTML refusal page on a 401/403, or an `errorCode` body on a
+ *    status that is not 401/403. ABP, measured: MEAL-12 got exactly this shape
+ *    from a plain React Native HTTP client. The HTML form is read only where the
+ *    read was already `blocked`, so that it labels a wall rather than promoting a
+ *    500 error page that happens to print a reference id into one.
  *  • `interstitial` — "Pardon Our Interruption" served as a page, at any status.
  *    Also ABP, but a challenge the user could in principle clear rather than a
  *    refusal.
@@ -498,12 +500,30 @@ export function buildHebCartQueryFn(): string {
   // three now carry a whitespace-collapsed 120-char slice of it in \`detail\`. On
   // an incident that slice holds the incidentId itself — the one string that
   // names a specific Imperva refusal, and the one you would quote to anybody
-  // asking about it. The interstitial is the exception: its body is a page of
-  // HTML whose first 120 characters are a doctype, and its label already says
+  // asking about it. The interstitial is the exception: its label already says
   // everything the slice would.
+  //
+  // The markup comes off first when the body IS a page. 'unauthorized' is the one
+  // label that cannot stand on its own — a dead H-E-B session and a bare ABP
+  // refusal are the same 401 — so its body is the whole evidence, and the first
+  // 120 characters of an HTML refusal are a doctype and a <head> that name
+  // neither. Stripped, the same 120 characters hold what a human would have read
+  // off the screen. Script and style bodies go with the tags: a refusal page
+  // carries far more of those than prose, and one inline script would spend the
+  // budget by itself.
+  //
+  // Only when the body actually opens as markup, so a JSON body that happens to
+  // contain a '<' is never run through a tag stripper that would eat what follows
+  // it. Imperva's pages open with a doctype or an <html>; a JSON body cannot.
   function __hebCartBlockText(text) {
     if (typeof text !== 'string') return null;
-    var t = text.replace(/\\s+/g, ' ').trim();
+    var t = text;
+    if (/^\\s*</.test(t)) {
+      t = t.replace(/<(script|style)\\b[\\s\\S]*?<\\/\\1>/gi, ' ')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;/gi, ' ');
+    }
+    t = t.replace(/\\s+/g, ' ').trim();
     return t ? t.slice(0, 120) : null;
   }
 
@@ -529,13 +549,22 @@ export function buildHebCartQueryFn(): string {
     // check, not before: a "Pardon Our Interruption" page usually carries an
     // incident id too, and 'interstitial' is the more specific answer for it.
     //
+    // ONLY on a 401/403, which is what keeps this a label and not a verdict
+    // change: those two statuses already read as 'blocked' before MEAL-16 and
+    // still do, so all this branch decides is which wall to call them. At any
+    // other status the same page is 'http_error' or 'shape' exactly as it was —
+    // and it has to be, because "incident id" in a body is not proof of Imperva:
+    // a 500 origin error page printing its own reference id under that label
+    // would otherwise be promoted to a measured ABP refusal, which is the
+    // opposite misdiagnosis and a reason no caller asked for.
+    //
     // The id goes into \`detail\` on its own rather than as the leading slice of
     // the page, whose first 120 characters are a doctype.
     // The gap between the label and the id is ANY characters, lazily and briefly:
     // the id is wrapped in markup as often as not (\`Incident ID:</b>&nbsp;1318…\`),
     // and a gap that excluded letters would miss those and fall through to
     // 'unauthorized' — which is the misdiagnosis, not a smaller version of it.
-    var __inc = (typeof text === 'string')
+    var __inc = ((status === 401 || status === 403) && typeof text === 'string')
       ? text.match(/incident\\s*id\\b[\\s\\S]{0,40}?([0-9][0-9a-z-]{5,})/i) : null;
     if (__inc) {
       return {

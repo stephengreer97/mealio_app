@@ -441,6 +441,31 @@ describe('MEAL-16 which wall a `blocked` read hit', () => {
     expect(snap.detail).toBe('incident id 1318000700134302733-80225616898953604');
   });
 
+  it('leaves every status that was not already a wall exactly where it was', () => {
+    // The HTML scan reads only on a 401/403 — the two statuses that read as
+    // 'blocked' before MEAL-16 and still do — so all it ever decides is which
+    // wall. "Incident ID" in a body is not proof of Imperva: an origin error page
+    // printing its own reference id under that label must stay `http_error`, or a
+    // diagnostic has quietly invented a verdict and pointed the next
+    // investigation at ABP.
+    const page = '<!DOCTYPE html><html><body><p>Incident ID: 1318000700134302733-8022</p></body></html>';
+    expect(rail.parse(500, null, page)).toMatchObject({ ok: false, reason: 'http_error' });
+    expect(rail.parse(500, null, page).block == null).toBe(true);
+    expect(rail.parse(200, null, page)).toMatchObject({ ok: false, reason: 'shape' });
+  });
+
+  it('reads the words off an HTML refusal instead of its doctype', () => {
+    // 'unauthorized' is the one label that cannot stand on its own, so its body
+    // is the whole evidence — and a blind prefix of a page spends all 120 chars
+    // on a <head> that names neither a dead session nor a wall.
+    const page = '<!DOCTYPE html><html><head><title>Access Denied</title>'
+      + '<style>body { color: #fff; }</style><script>var x = 1;</script></head>'
+      + '<body><h1>Access Denied</h1><p>You don’t have permission to access "/graphql".</p></body></html>';
+    const snap = rail.parse(403, null, page);
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block: 'unauthorized' });
+    expect(snap.detail).toBe('Access Denied Access Denied You don’t have permission to access "/graphql".');
+  });
+
   it('reaches an id that markup and entities sit between', () => {
     // `Incident ID:</b>&nbsp;1318…` is as common as the bare form, and a gap that
     // excluded letters would fall through to 'unauthorized' — which is the
