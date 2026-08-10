@@ -3564,9 +3564,17 @@ export default function WebViewCartSheet({
     login: `Log in to ${storeName}`,
     searching: currentReview?.isChoose ? 'Choosing Products…' : 'Finding Products…',
     searchResult: 'Items Not Added',
+    // Three things land on this one step and only two of them are substitutions.
+    // A `needs_weight` item is NOT a failed match — Mealio found the product
+    // exactly and is asking for a poundage (the body says "Sold by weight —
+    // choose how much to add"). Heading that "Pick a Substitute" tells the user
+    // the match failed when nothing failed. The old name was vague enough to
+    // cover both; a name that says what to DO cannot be, so it branches.
     review: currentReview?.isChoose
       ? `Choose Product (${reviewIdx + 1} of ${searchResults.length})`
-      : `Pick a Substitute (${reviewIdx + 1} of ${searchResults.length})`,
+      : currentReview?.reason === 'needs_weight'
+        ? `Choose an Amount (${reviewIdx + 1} of ${searchResults.length})`
+        : `Pick a Substitute (${reviewIdx + 1} of ${searchResults.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
     // One generic title for every "Mealio can't drive the store" state — the
@@ -4006,6 +4014,13 @@ export default function WebViewCartSheet({
                   onPress={() => setStep('review')}
                   style={[styles.primaryBtn, { backgroundColor: storeColor }]}
                 >
+                  {/* MEAL-182 left this alone deliberately. It now shares no word
+                      with the step it opens, which is a real gap — but the queue
+                      behind it is mixed (substitutions AND sold-by-weight amount
+                      choices, see the title branch above), so no single verb
+                      covers it, and inventing a third one beside "substitute"
+                      would be worse than the gap. Naming is Stephen's call;
+                      raised on the ticket rather than guessed at here. */}
                   <Text style={styles.primaryBtnText}>
                     Review {searchResults.length} Item{searchResults.length !== 1 ? 's' : ''} →
                   </Text>
