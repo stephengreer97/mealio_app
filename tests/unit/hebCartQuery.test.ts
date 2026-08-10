@@ -487,6 +487,15 @@ describe('MEAL-16 which wall a `blocked` read hit', () => {
     expect(snap.detail).toBe('incident id 1318000700134302733-80225616898953604');
   });
 
+  it('is not defeated by a non-breaking space written as a number', () => {
+    // `&#160;` is as ordinary a way to write `&nbsp;` as the name is, and its
+    // digits sit exactly where the scan is looking for the id's — so leaving it
+    // encoded loses the id and calls an Imperva refusal a dead session.
+    const snap = rail.parse(403, null, '<html><b>Incident ID:</b>&#160;1318000700134302733-8022</html>');
+    expect(snap).toMatchObject({ block: 'incident' });
+    expect(snap.detail).toBe('incident id 1318000700134302733-8022');
+  });
+
   it('is not defeated by a long tag between the label and the id', () => {
     // A single span carrying a class and a couple of data attributes is over 50
     // characters of markup on its own. Measured against the raw page, any fixed

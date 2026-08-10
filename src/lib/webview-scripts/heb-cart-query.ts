@@ -524,7 +524,12 @@ export function buildHebCartQueryFn(): string {
     if (/^\\s*</.test(t)) {
       t = t.replace(/<(script|style)\\b[\\s\\S]*?<\\/\\1>/gi, ' ')
         .replace(/<[^>]*>/g, ' ')
-        .replace(/&nbsp;/gi, ' ');
+        // Numeric entities go with the named one, because a page is as likely to
+        // write its non-breaking space as \`&#160;\` — and the digits inside that
+        // would sit between the incident label and the id, where the scan below
+        // reads the first number it finds as the id. Anything else numeric-encoded
+        // is spacing too, at the only place this text is read.
+        .replace(/&nbsp;|&#x?[0-9a-f]+;/gi, ' ');
     }
     t = t.replace(/\\s+/g, ' ').trim();
     return t || null;
@@ -605,7 +610,10 @@ export function buildHebCartQueryFn(): string {
     if (status === 401 || status === 403) {
       return {
         ok: false, reason: 'blocked', status: status, block: 'unauthorized',
-        detail: __hebCartBlockText(text)
+        // \`__plain\` rather than __hebCartBlockText(text): reaching here means the
+        // status was 401/403, so the page has already been stripped once just
+        // above, and this is that same string with the budget taken off it.
+        detail: __plain ? __plain.slice(0, 120) : null
       };
     }
     // errorCode without an incidentId — the incident body shape minus the id, and
