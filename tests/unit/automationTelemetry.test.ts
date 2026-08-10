@@ -327,6 +327,13 @@ describe('failure codes', () => {
       // one by one so a genuinely new ADD_RESULT reason still fails this test.
       'http_error', 'shape', 'graphql_error', 'network', 'no_read', 'no_baseline',
       'cart_query', 'cart_query_confirm', 'cart_query_crosscheck', 'missing', 'unknown',
+      // MEAL-16's `block`: WHICH wall a 'blocked' read hit — a bare 401/403 (the
+      // H-E-B session died), an Imperva incident body, or the interstitial. They
+      // share a line with `reason: 'blocked'` because they are the diagnostic
+      // BESIDE that reason, deliberately not three new reasons: splitting the
+      // rail's verdict vocabulary would have been a behaviour change, and
+      // 'blocked' is what the callers read. Never posted as an ADD_RESULT reason.
+      'auth', 'incident', 'interstitial',
       // A CART_COUNT reason, not an ADD_RESULT one. The cart-page scripts post it
       // alongside `count: null` when the page they landed on is not the cart — the
       // Albertsons guard for a redirect off /erums/cart (MEAL-136), and the

@@ -40,7 +40,13 @@ interface Rail {
 
 type FetchStub = (url: string, init: any) => Promise<{ status: number; text: () => Promise<string> }>;
 
-function makeRail(fetchStub?: FetchStub): Rail {
+/**
+ * `posted`, when supplied, gives the sandbox a `window.ReactNativeWebView` and
+ * collects everything the rail puts on the bridge. Omitted, there is no `window`
+ * at all — which is also the case this rail's own diagnostics have to survive,
+ * since every other test here evaluates it in exactly that sandbox.
+ */
+function makeRail(fetchStub?: FetchStub, posted?: any[]): Rail {
   const src = `(function() {
 ${buildHebCartQueryFn()}
     return {
@@ -50,7 +56,7 @@ ${buildHebCartQueryFn()}
       targetFromCard: __hebTargetFromCard, body: __hebCartBody
     };
   })()`;
-  return vm.runInNewContext(src, {
+  const sandbox: Record<string, unknown> = {
     fetch: fetchStub,
     setTimeout,
     clearTimeout,
@@ -61,7 +67,13 @@ ${buildHebCartQueryFn()}
     Number,
     String,
     Array,
-  });
+  };
+  if (posted) {
+    sandbox.window = {
+      ReactNativeWebView: { postMessage: (s: string) => posted.push(JSON.parse(s)) },
+    };
+  }
+  return vm.runInNewContext(src, sandbox);
 }
 
 /** A fetch stub that answers every call the same way, counting calls. */
@@ -337,6 +349,180 @@ describe('MEAL-16 the gateway’s own error message survives to the confirmation
     }));
     const conf = await rail2.confirmAdd(target, null, { firstDelayMs: 0, gapMs: 0 });
     expect(conf).toMatchObject({ state: 'unknown', reason: 'graphql_error', detail: 'query not allowed' });
+  });
+});
+
+// ── MEAL-16 second half: the four fields the message alone could not supply ────
+//
+// The message came back `Field "cartV2" of type "Query" must have a selection of
+// subfields` on all 23 reads of the 2026-08-10 21:31 run. HEB_CART_QUERY HAS a
+// selection set, so a validator that received our text cannot have written that
+// sentence — and nothing in the log could say whether the text was mangled in
+// transit, whether the gateway resolved our operationName against a registry
+// instead of executing the document, or whether cartV2 simply moved. The same run
+// then walled 16 s in, and `blocked` collapsed three causes into one word.
+//
+// Five things settle both, every one of them already in hand and thrown away at
+// the verdict boundary: HTTP status, errors[0].extensions.code,
+// errors[0].locations, the body actually sent, and which wall `blocked` was.
+
+describe('MEAL-16 which wall a `blocked` read hit', () => {
+  const rail = makeRail();
+
+  it.each([
+    // MEAL-12 measured the ABP wall as a 401 carrying an incidentId. The id is
+    // read BEFORE the status for exactly this row: called 'auth' it would report
+    // "the session died, ABP was not involved" about a measured ABP response.
+    ['an Imperva 401 with an incident body', 'incident', 401, { incidentId: '1318000700134302733-80225616898953604', errorCode: '15' }],
+    ['an incident body served as 200', 'incident', 200, { incidentId: 'abc' }],
+    ['a bare 401 — the H-E-B session died mid-run', 'auth', 401, {}],
+    ['a bare 403', 'auth', 403, {}],
+    ['the ABP interstitial served as 200 HTML', 'interstitial', 200, '<html>Pardon Our Interruption…</html>'],
+  ])('reports %s as %s', (_label, block, status, body) => {
+    const json = typeof body === 'string' ? null : body;
+    const text = typeof body === 'string' ? body : JSON.stringify(body);
+    const snap = rail.parse(status as number, json, text);
+    // The VERDICT vocabulary is untouched — this ticket is diagnostic only, and
+    // 'blocked' is what the callers and the funnel read.
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block });
+    expect(snap.status).toBe(status);
+  });
+
+  it('carries the cause and the status onto the verdict, where a human can read them', () => {
+    const target = { skuId: null, productId: LAVASH, name: null };
+    const conf = rail.confirm(target, null, rail.parse(401, {}));
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'blocked', block: 'auth', status: 401 });
+  });
+
+  it('leaves `block` null on every failure that is not a wall', () => {
+    for (const snap of [
+      rail.parse(500, { data: null }),
+      rail.parse(200, { data: null, errors: [{ message: 'nope' }] }),
+      rail.parse(200, { data: { somethingElse: true } }),
+    ]) {
+      expect(snap.block == null).toBe(true);
+    }
+  });
+});
+
+describe('MEAL-16 the GraphQL error’s code and location', () => {
+  const rail = makeRail();
+  const target = { skuId: null, productId: LAVASH, name: null };
+
+  // The live shape, verbatim from the 21:31 run. If the gateway had been
+  // resolving our operationName against a safelist, `code` is where it would say
+  // so; `locations` is what says whether it was looking at the document we sent —
+  // our own cartV2 is at line 2, column 3.
+  const LIVE = {
+    data: null,
+    errors: [{
+      message: 'Field "cartV2" of type "Query" must have a selection of subfields. Did you mean "cartV2 { ... }"?',
+      locations: [{ line: 2, column: 3 }],
+      extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
+    }],
+  };
+
+  it('keeps the code and the first location off errors[0]', () => {
+    expect(rail.parse(400, LIVE)).toMatchObject({
+      ok: false, reason: 'graphql_error', status: 400,
+      code: 'GRAPHQL_VALIDATION_FAILED', loc: '2:3',
+    });
+  });
+
+  it('carries both onto the verdict, beside the message', () => {
+    const conf = rail.confirm(target, null, rail.parse(200, LIVE));
+    expect(conf).toMatchObject({
+      state: 'unknown', reason: 'graphql_error',
+      code: 'GRAPHQL_VALIDATION_FAILED', loc: '2:3', status: 200,
+    });
+    expect(conf.detail).toContain('must have a selection of subfields');
+  });
+
+  it('is null, not undefined-shaped, when the gateway sends neither', () => {
+    const snap = rail.parse(200, { data: null, errors: [{ message: 'bare' }] });
+    expect(snap.code).toBeNull();
+    expect(snap.loc).toBeNull();
+  });
+
+  it('survives a location with no column rather than printing "2:undefined"', () => {
+    const snap = rail.parse(200, { data: null, errors: [{ message: 'x', locations: [{ line: 2 }] }] });
+    expect(snap.loc).toBe('2:?');
+  });
+});
+
+describe('MEAL-16 every verdict reports the status of the read its reason names', () => {
+  const rail = makeRail();
+  const target = { skuId: null, productId: LAVASH, name: null };
+  const full = cartResponseFrom(CART);
+
+  it('reports the after-read’s status when both reads succeeded', () => {
+    const before = rail.parse(200, withoutProduct(full, LAVASH));
+    const after = rail.parse(200, full);
+    expect(rail.confirm(target, before, after)).toMatchObject({ state: 'landed', status: 200 });
+  });
+
+  it('reports the BEFORE-read’s status on `no_baseline`, the one verdict about that read', () => {
+    const after = rail.parse(200, full);
+    const before = rail.parse(503, { data: null });
+    const conf = rail.confirm(target, before, after);
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'no_baseline', status: 503 });
+  });
+
+  it('never pairs one read’s status with another read’s verdict', () => {
+    // The trap #107 closed for `detail`, one field wider: a 200 baseline printed
+    // beside a 401 verdict would say the session was fine at the moment we walled.
+    const before = rail.parse(200, full);
+    const after = rail.parse(401, {});
+    const conf = rail.confirm(target, before, after);
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'blocked', status: 401, block: 'auth' });
+    expect(conf.detail).toBeNull();
+  });
+
+  it('is null — never 0 — when there was no response to have a status', () => {
+    expect(rail.confirm(target, null, null).status).toBeNull();
+    expect(rail.confirm({ skuId: null, productId: null, name: null }, null, rail.parse(500, {})).status).toBeNull();
+  });
+
+  it('holds the whole diagnostic through a withdrawn verdict', () => {
+    // A contradiction is the signal that should make us turn the flag off, so it
+    // is the last verdict that can afford to arrive without its evidence.
+    const conf = rail.confirm(target, rail.parse(500, { data: null }), rail.parse(200, full));
+    const out = rail.contradicted(conf, 'contradicted_by_card');
+    expect(out).toMatchObject({ state: 'unknown', reason: 'contradicted_by_card', status: 500 });
+  });
+});
+
+describe('MEAL-16 the request body we actually send', () => {
+  const target = { skuId: null, productId: LAVASH, name: null };
+
+  it('logs the body handed to fetch, byte for byte, with the endpoint it went to', async () => {
+    const posted: any[] = [];
+    const { fn, calls } = stubFetch(200, cartResponseFrom(CART));
+    const rail = makeRail(fn, posted);
+    await rail.read(1000);
+    const line = posted.find((m) => m.step === 'cart_query_body');
+    expect(line).toMatchObject({ type: 'EXTRACT_DEBUG', endpoint: '/graphql', op: HEB_CART_OPERATION });
+    // The point of the line: not a second call to __hebCartBody that could differ,
+    // but the string fetch was given.
+    expect(line.body).toBe(calls[0].init.body);
+    expect(JSON.parse(line.body).query).toBe(HEB_CART_QUERY);
+  });
+
+  it('logs it ONCE per page, not once per poll — five reads, one line', async () => {
+    const posted: any[] = [];
+    const { fn } = stubFetch(200, withoutProduct(cartResponseFrom(CART), LAVASH));
+    const rail = makeRail(fn, posted);
+    const before = { ok: true, cartId: cartId(CART), lines: [], itemCount: 0, status: 200 };
+    await rail.confirmAdd(target, before, { firstDelayMs: 0, gapMs: 0, tries: 5 });
+    expect(posted.filter((m) => m.step === 'cart_query_body')).toHaveLength(1);
+  });
+
+  it('reads the cart normally on a surface with no bridge at all', async () => {
+    // Every other test in this file runs in a sandbox with no `window`. A
+    // diagnostic that threw there would take the whole rail down with it.
+    const { fn } = stubFetch(200, cartResponseFrom(CART));
+    const rail = makeRail(fn);
+    expect(await rail.read(1000)).toMatchObject({ ok: true });
   });
 });
 
@@ -700,6 +886,15 @@ describe('MEAL-14 flag gating', () => {
     expect(add).toContain(`step: 'cart_query_confirm'`);
     expect(add).toContain(`step: 'cart_query_crosscheck'`);
     expect(add.match(/detail: __cartConf\.detail/g)).toHaveLength(2);
+    // MEAL-16's four: a field carried on the confirmation but left off the
+    // postMessage reaches nobody — the confirmation itself is never rendered.
+    for (const field of ['status', 'code', 'loc', 'block']) {
+      expect(fused).toContain(`__cartConf.${field}`);
+      expect(add.match(new RegExp(`__cartConf\\.${field}`, 'g'))!.length).toBeGreaterThanOrEqual(2);
+    }
+    // …and the one line that says what we actually put on the wire.
+    expect(fused).toContain(`step: 'cart_query_body'`);
+    expect(add).toContain(`step: 'cart_query_body'`);
   });
 
   it('parses as valid JS in both states', async () => {
