@@ -191,20 +191,29 @@ export type HebCartReadFailure =
  *
  * They are genuinely different findings and the log cannot tell them apart:
  *
- *  • `incident` — an Imperva incident body (`incidentId`/`errorCode`). ABP,
- *    measured: MEAL-12 got exactly this from a plain React Native HTTP client.
- *  • `interstitial` — "Pardon Our Interruption" served as a page. Also ABP, but a
- *    challenge the user could in principle clear rather than a refusal.
- *  • `unauthorized` — a 401/403 carrying NEITHER of those fingerprints. Consistent
- *    with **the H-E-B session having died mid-run**, which would explain failing
- *    adds and a dead reconcile probe with no anti-bot involvement whatsoever —
- *    but it does NOT prove that, because ABP can also refuse with a bare
- *    401/403. It is named for what was observed rather than for the conclusion
- *    we would like to draw from it; the read carries a slice of the response body
- *    in `detail` so a human can tell which it was.
+ *  • `incident` — an Imperva `incidentId` at any status, or an `errorCode` body on
+ *    a status that is not 401/403. ABP, measured: MEAL-12 got exactly this shape
+ *    from a plain React Native HTTP client.
+ *  • `interstitial` — "Pardon Our Interruption" served as a page, at any status.
+ *    Also ABP, but a challenge the user could in principle clear rather than a
+ *    refusal.
+ *  • `unauthorized` — a 401/403 with no `incidentId` and no interstitial text.
+ *    Consistent with **the H-E-B session having died mid-run**, which would
+ *    explain failing adds and a dead reconcile probe with no anti-bot involvement
+ *    whatsoever — but it does NOT prove that, because ABP can also refuse with a
+ *    bare 401/403. It is named for what was observed rather than for the
+ *    conclusion we would like to draw from it.
  *
- * HTTP `status` alone does not separate them, which is why this field exists at
- * all: the incident body arrives on a 200 as readily as on a 401, and the
+ * The one deliberate asymmetry, spelled out because the boundary is otherwise
+ * invisible: a 401/403 whose body carries an `errorCode` but no `incidentId`
+ * reads as `unauthorized`, not `incident`. `incidentId` is Imperva-specific and
+ * outranks any status; a bare `errorCode` is a generic key that H-E-B's own auth
+ * layer may well send with a 401, so there the status is the better evidence.
+ * Neither call is free, which is why both labels ship beside `status` and a slice
+ * of the body rather than instead of them.
+ *
+ * HTTP `status` alone does not separate the three, which is why this field exists
+ * at all: the incident body arrives on a 200 as readily as on a 401, and the
  * interstitial can be served on a 403.
  */
 export type HebCartBlockCause = 'unauthorized' | 'incident' | 'interstitial';
@@ -483,8 +492,27 @@ export function buildHebCartQueryFn(): string {
   // sits BELOW the status: incidentId and the interstitial string are
   // Imperva-specific, while \`errorCode\` is a generic key that any gateway might
   // send. On a 401/403 the status is the better evidence of the two.
+  //
+  // A blocked read was the only failure that kept NONE of its body, so two of the
+  // three now carry a whitespace-collapsed 120-char slice of it in \`detail\`. On
+  // an incident that slice holds the incidentId itself — the one string that
+  // names a specific Imperva refusal, and the one you would quote to anybody
+  // asking about it. The interstitial is the exception: its body is a page of
+  // HTML whose first 120 characters are a doctype, and its label already says
+  // everything the slice would.
+  function __hebCartBlockText(text) {
+    if (typeof text !== 'string') return null;
+    var t = text.replace(/\\s+/g, ' ').trim();
+    return t ? t.slice(0, 120) : null;
+  }
+
   function __hebCartParse(status, json, text) {
-    if (json && json.incidentId) return { ok: false, reason: 'blocked', status: status, block: 'incident' };
+    if (json && json.incidentId) {
+      return {
+        ok: false, reason: 'blocked', status: status, block: 'incident',
+        detail: __hebCartBlockText(text)
+      };
+    }
     if (typeof text === 'string' && text.indexOf('Pardon Our Interruption') !== -1) {
       return { ok: false, reason: 'blocked', status: status, block: 'interstitial' };
     }
@@ -493,17 +521,25 @@ export function buildHebCartQueryFn(): string {
     // like, but ABP can refuse with a bare 401/403 too, and a label that asserted
     // "the session died, no wall involved" would point the investigation the
     // wrong way exactly as often as it pointed it the right one. So the refusal
-    // brings its own words along — the one thing that can still separate the two,
-    // and the only place any of a blocked read's body survived.
+    // brings its own words along — the one thing that can still separate the two.
+    //
+    // This is also the branch a 401/403 with a bare \`errorCode\` lands on rather
+    // than the one below; see the note on HebCartBlockCause for why the status
+    // outranks that key and the incidentId outranks the status.
     if (status === 401 || status === 403) {
       return {
         ok: false, reason: 'blocked', status: status, block: 'unauthorized',
-        detail: (typeof text === 'string') ? text.replace(/\\s+/g, ' ').trim().slice(0, 120) : null
+        detail: __hebCartBlockText(text)
       };
     }
     // errorCode without an incidentId — the incident body shape minus the id, and
     // blocked exactly as it has always been.
-    if (json && json.errorCode) return { ok: false, reason: 'blocked', status: status, block: 'incident' };
+    if (json && json.errorCode) {
+      return {
+        ok: false, reason: 'blocked', status: status, block: 'incident',
+        detail: __hebCartBlockText(text)
+      };
+    }
     if (!json || typeof json !== 'object') {
       return { ok: false, reason: (status >= 400 ? 'http_error' : 'shape'), status: status };
     }

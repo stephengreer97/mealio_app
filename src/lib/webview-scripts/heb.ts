@@ -1570,8 +1570,10 @@ ${hebWaitFreshFn()}
       __cartConf = await __hebCartConfirmAdd(__cartTarget, __cartQueryBefore, {});
       // EXTRACT_DEBUG, not DEBUG: the worker wrapper re-tags this type and the
       // main-WebView handler logs it, so the rail is visible on both rails.
-      // MEAL-16: 'status' says WHICH wall a 'blocked' hit (a bare 401 is the
-      // H-E-B session dying, not ABP), 'block' names it outright, and code/loc
+      // MEAL-16: 'block' says which wall a 'blocked' read hit — Imperva by
+      // fingerprint, or a bare 401/403 that is only CONSISTENT with the H-E-B
+      // session having died (see HebCartBlockCause; 'status' and 'detail' are
+      // beside it because the label alone does not settle that one). code/loc
       // say whether the gateway validated the document we actually sent.
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null, status: (__cartConf.status == null) ? null : __cartConf.status, code: __cartConf.code || null, loc: __cartConf.loc || null, block: __cartConf.block || null }));
       if (__cartConf.state === 'landed') __committed = true;

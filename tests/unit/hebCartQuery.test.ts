@@ -410,6 +410,31 @@ describe('MEAL-16 which wall a `blocked` read hit', () => {
     expect(snap.detail).toHaveLength(120);
   });
 
+  it('keeps the incidentId itself — the one string that names a specific refusal', () => {
+    const body = { incidentId: '1318000700134302733-80225616898953604', errorCode: '15' };
+    const snap = rail.parse(401, body, JSON.stringify(body));
+    expect(snap).toMatchObject({ block: 'incident' });
+    expect(snap.detail).toContain('1318000700134302733-80225616898953604');
+  });
+
+  it('spends nothing on the interstitial’s HTML, whose label already says it all', () => {
+    const snap = rail.parse(200, null, '<!DOCTYPE html><html><body>Pardon Our Interruption…</body></html>');
+    expect(snap).toMatchObject({ block: 'interstitial' });
+    expect(snap.detail == null).toBe(true);
+  });
+
+  it('lands a 401 whose body has an errorCode but no incidentId on `unauthorized`', () => {
+    // The one deliberate asymmetry — incidentId outranks the status, a bare
+    // errorCode does not, because H-E-B's own auth layer may well send one. The
+    // body rides along either way, so the reader is never left with the label.
+    const snap = rail.parse(401, { errorCode: '15' }, '{"errorCode":"15"}');
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block: 'unauthorized' });
+    expect(snap.detail).toBe('{"errorCode":"15"}');
+    // …and the same body on a 200 is the incident shape, which is where the
+    // errorCode branch still fires.
+    expect(rail.parse(200, { errorCode: '15' }, '{"errorCode":"15"}')).toMatchObject({ block: 'incident' });
+  });
+
   it('carries the cause and the status onto the verdict, where a human can read them', () => {
     const target = { skuId: null, productId: LAVASH, name: null };
     const conf = rail.confirm(target, null, rail.parse(401, {}));
