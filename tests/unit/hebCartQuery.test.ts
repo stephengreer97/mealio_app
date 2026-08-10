@@ -40,7 +40,13 @@ interface Rail {
 
 type FetchStub = (url: string, init: any) => Promise<{ status: number; text: () => Promise<string> }>;
 
-function makeRail(fetchStub?: FetchStub): Rail {
+/**
+ * `posted`, when supplied, gives the sandbox a `window.ReactNativeWebView` and
+ * collects everything the rail puts on the bridge. Omitted, there is no `window`
+ * at all — which is also the case this rail's own diagnostics have to survive,
+ * since every other test here evaluates it in exactly that sandbox.
+ */
+function makeRail(fetchStub?: FetchStub, posted?: any[]): Rail {
   const src = `(function() {
 ${buildHebCartQueryFn()}
     return {
@@ -50,7 +56,7 @@ ${buildHebCartQueryFn()}
       targetFromCard: __hebTargetFromCard, body: __hebCartBody
     };
   })()`;
-  return vm.runInNewContext(src, {
+  const sandbox: Record<string, unknown> = {
     fetch: fetchStub,
     setTimeout,
     clearTimeout,
@@ -61,7 +67,13 @@ ${buildHebCartQueryFn()}
     Number,
     String,
     Array,
-  });
+  };
+  if (posted) {
+    sandbox.window = {
+      ReactNativeWebView: { postMessage: (s: string) => posted.push(JSON.parse(s)) },
+    };
+  }
+  return vm.runInNewContext(src, sandbox);
 }
 
 /** A fetch stub that answers every call the same way, counting calls. */
@@ -337,6 +349,354 @@ describe('MEAL-16 the gateway’s own error message survives to the confirmation
     }));
     const conf = await rail2.confirmAdd(target, null, { firstDelayMs: 0, gapMs: 0 });
     expect(conf).toMatchObject({ state: 'unknown', reason: 'graphql_error', detail: 'query not allowed' });
+  });
+});
+
+// ── MEAL-16 second half: the four fields the message alone could not supply ────
+//
+// The message came back `Field "cartV2" of type "Query" must have a selection of
+// subfields` on all 23 reads of the 2026-08-10 21:31 run. HEB_CART_QUERY HAS a
+// selection set, so a validator that received our text cannot have written that
+// sentence — and nothing in the log could say whether the text was mangled in
+// transit, whether the gateway resolved our operationName against a registry
+// instead of executing the document, or whether cartV2 simply moved. The same run
+// then walled 16 s in, and `blocked` collapsed three causes into one word.
+//
+// Five things settle both, every one of them already in hand and thrown away at
+// the verdict boundary: HTTP status, errors[0].extensions.code,
+// errors[0].locations, the body actually sent, and which wall `blocked` was.
+
+describe('MEAL-16 which wall a `blocked` read hit', () => {
+  const rail = makeRail();
+
+  it.each([
+    // The two shapes we have actually measured Imperva producing outrank the
+    // status, and these two rows are why: MEAL-12 measured the wall as a 401
+    // CARRYING an incidentId, and the interstitial can be served on a 403.
+    // Labelled a session problem, either would point the investigation away
+    // from the wall itself.
+    ['an Imperva 401 with an incident body', 'incident', 401, { incidentId: '1318000700134302733-80225616898953604', errorCode: '15' }],
+    ['the interstitial served as a 403', 'interstitial', 403, '<html>Pardon Our Interruption…</html>'],
+    ['an incident body served as 200', 'incident', 200, { incidentId: 'abc' }],
+    ['the ABP interstitial served as 200 HTML', 'interstitial', 200, '<html>Pardon Our Interruption…</html>'],
+    // A generic errorCode is weaker evidence than the status, so it sits below it.
+    ['a bare 401 — no Imperva fingerprint on it', 'unauthorized', 401, {}],
+    ['a bare 403', 'unauthorized', 403, {}],
+    ['an errorCode body with no incident id, on a 200', 'incident', 200, { errorCode: '15' }],
+  ])('reports %s as %s', (_label, block, status, body) => {
+    const json = typeof body === 'string' ? null : body;
+    const text = typeof body === 'string' ? body : JSON.stringify(body);
+    const snap = rail.parse(status as number, json, text);
+    // The VERDICT vocabulary is untouched — this ticket is diagnostic only, and
+    // 'blocked' is what the callers and the funnel read.
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block });
+    expect(snap.status).toBe(status);
+  });
+
+  it('brings the refusal’s own words along when neither fingerprint is on it', () => {
+    // 'unauthorized' is named for what was observed, not for the conclusion: a
+    // dead H-E-B session looks exactly like this, and so does a bare ABP refusal.
+    // The body is the one thing left that can still tell them apart, and it was
+    // the only part of a blocked read that nothing kept.
+    const snap = rail.parse(401, { message: 'Session expired' }, '{\n  "message":  "Session expired"\n}');
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block: 'unauthorized' });
+    // Whitespace-collapsed so a pretty-printed body does not spend the 120 chars
+    // on newlines.
+    expect(snap.detail).toBe('{ "message": "Session expired" }');
+  });
+
+  it('caps that body at the same 120 chars as every other detail', () => {
+    const snap = rail.parse(403, null, 'x'.repeat(500));
+    expect(snap.detail).toHaveLength(120);
+  });
+
+  it('keeps the incidentId itself — the one string that names a specific refusal', () => {
+    const body = { incidentId: '1318000700134302733-80225616898953604', errorCode: '15' };
+    const snap = rail.parse(401, body, JSON.stringify(body));
+    expect(snap).toMatchObject({ block: 'incident' });
+    expect(snap.detail).toBe('incident id 1318000700134302733-80225616898953604 errorCode 15');
+  });
+
+  it('names the id rather than slicing the body, so a wordy incident cannot bury it', () => {
+    // 120 chars of a blind prefix is not enough to reach an id that Imperva put
+    // after a description — and the id is the whole reason this branch keeps
+    // anything at all.
+    const body = {
+      description: 'x'.repeat(200),
+      hostName: 'www.heb.com',
+      incidentId: '1318000700134302733-80225616898953604',
+    };
+    expect(rail.parse(403, body, JSON.stringify(body)).detail)
+      .toContain('1318000700134302733-80225616898953604');
+  });
+
+  it('finds the incident id printed into an HTML refusal, where JSON.parse gives nothing', () => {
+    // Imperva's "Access Denied" variants carry no interruption text and no JSON,
+    // so without this a 403 ABP refusal would read as a dead session — the exact
+    // misdiagnosis the field exists to prevent — with a doctype for evidence.
+    const page = '<!DOCTYPE html><html><head><title>Access Denied</title></head><body>'
+      + '<p>Incident ID: 1318000700134302733-80225616898953604</p></body></html>';
+    const snap = rail.parse(403, null, page);
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block: 'incident' });
+    expect(snap.detail).toBe('incident id 1318000700134302733-80225616898953604');
+  });
+
+  it('leaves every status that was not already a wall exactly where it was', () => {
+    // The HTML scan reads only on a 401/403 — the two statuses that read as
+    // 'blocked' before MEAL-16 and still do — so all it ever decides is which
+    // wall. "Incident ID" in a body is not proof of Imperva: an origin error page
+    // printing its own reference id under that label must stay `http_error`, or a
+    // diagnostic has quietly invented a verdict and pointed the next
+    // investigation at ABP.
+    const page = '<!DOCTYPE html><html><body><p>Incident ID: 1318000700134302733-8022</p></body></html>';
+    expect(rail.parse(500, null, page)).toMatchObject({ ok: false, reason: 'http_error' });
+    expect(rail.parse(500, null, page).block == null).toBe(true);
+    expect(rail.parse(200, null, page)).toMatchObject({ ok: false, reason: 'shape' });
+  });
+
+  it('reads the words off an HTML refusal instead of its doctype', () => {
+    // 'unauthorized' is the one label that cannot stand on its own, so its body
+    // is the whole evidence — and a blind prefix of a page spends all 120 chars
+    // on a <head> that names neither a dead session nor a wall.
+    const page = '<!DOCTYPE html><html><head><title>Access Denied</title>'
+      + '<style>body { color: #fff; }</style><script>var x = 1;</script></head>'
+      + '<body><h1>Access Denied</h1><p>You don’t have permission to access "/graphql".</p></body></html>';
+    const snap = rail.parse(403, null, page);
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block: 'unauthorized' });
+    expect(snap.detail).toBe('Access Denied Access Denied You don’t have permission to access "/graphql".');
+  });
+
+  it('reaches an id that markup and entities sit between', () => {
+    // `Incident ID:</b>&nbsp;1318…` is as common as the bare form, and missing
+    // those would fall through to 'unauthorized' — the misdiagnosis, not a
+    // smaller version of it.
+    const snap = rail.parse(403, null, '<html><b>Incident ID:</b>&nbsp;1318000700134302733-8022 </html>');
+    expect(snap).toMatchObject({ block: 'incident' });
+    expect(snap.detail).toBe('incident id 1318000700134302733-8022');
+  });
+
+  it('quotes the incident id, not a number out of the markup in front of it', () => {
+    // Scanning the raw page would capture the first digits after the label
+    // wherever they sit — including inside an attribute — and print a timestamp
+    // as the one string you would quote to Imperva, with the real id gone from
+    // the log entirely. The tags come off before the scan for this reason.
+    const page = '<html><body><p>Incident ID:</p>'
+      + '<span data-ts="1755301234">1318000700134302733-80225616898953604</span></body></html>';
+    const snap = rail.parse(403, null, page);
+    expect(snap).toMatchObject({ block: 'incident' });
+    expect(snap.detail).toBe('incident id 1318000700134302733-80225616898953604');
+  });
+
+  it('is not defeated by a non-breaking space written as a number', () => {
+    // `&#160;` is as ordinary a way to write `&nbsp;` as the name is, and its
+    // digits sit exactly where the scan is looking for the id's — so leaving it
+    // encoded loses the id and calls an Imperva refusal a dead session.
+    const snap = rail.parse(403, null, '<html><b>Incident ID:</b>&#160;1318000700134302733-8022</html>');
+    expect(snap).toMatchObject({ block: 'incident' });
+    expect(snap.detail).toBe('incident id 1318000700134302733-8022');
+  });
+
+  it('is not defeated by a long tag between the label and the id', () => {
+    // A single span carrying a class and a couple of data attributes is over 50
+    // characters of markup on its own. Measured against the raw page, any fixed
+    // gap loses that race and the refusal reads as a dead session.
+    const page = '<html><body>Incident ID:</b>'
+      + '<span class="incident-reference-value" data-qe-id="ref" data-testid="incident">'
+      + '1318000700134302733-80225616898953604</span></body></html>';
+    const snap = rail.parse(403, null, page);
+    expect(snap).toMatchObject({ block: 'incident' });
+    expect(snap.detail).toBe('incident id 1318000700134302733-80225616898953604');
+  });
+
+  it('still calls a "Pardon Our Interruption" page the interstitial, id or no id', () => {
+    // The real interruption page carries an incident id too, and 'interstitial'
+    // is the more specific answer for it — a challenge, not a flat refusal.
+    const snap = rail.parse(200, null, '<html>Pardon Our Interruption… Incident ID: 1318000700134302733</html>');
+    expect(snap).toMatchObject({ block: 'interstitial' });
+  });
+
+  it('still calls it the interstitial when tags run through the phrase', () => {
+    // `Pardon <b>Our</b> Interruption` defeats a raw indexOf, and the 403 would
+    // otherwise be labelled 'unauthorized' — "the session died" — while carrying
+    // the interruption text in its own `detail`, a verdict arguing with its own
+    // evidence.
+    const snap = rail.parse(403, null, '<html><h2>Pardon <b>Our</b> Interruption…</h2></html>');
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block: 'interstitial' });
+  });
+
+  it('leaves a split phrase on a status that was never a wall exactly where it was', () => {
+    // The stripped check is gated to 401/403 like the incident scan, and for the
+    // same reason: promoting a split phrase on a 200 from 'shape' to 'blocked'
+    // would be a verdict change, which this ticket does not get to make.
+    expect(rail.parse(200, null, '<html><h2>Pardon <b>Our</b> Interruption…</h2></html>'))
+      .toMatchObject({ ok: false, reason: 'shape' });
+  });
+
+  it('spends nothing on the interstitial’s HTML, whose label already says it all', () => {
+    const snap = rail.parse(200, null, '<!DOCTYPE html><html><body>Pardon Our Interruption…</body></html>');
+    expect(snap).toMatchObject({ block: 'interstitial' });
+    expect(snap.detail == null).toBe(true);
+  });
+
+  it('lands a 401 whose body has an errorCode but no incidentId on `unauthorized`', () => {
+    // The one deliberate asymmetry — incidentId outranks the status, a bare
+    // errorCode does not, because H-E-B's own auth layer may well send one. The
+    // body rides along either way, so the reader is never left with the label.
+    const snap = rail.parse(401, { errorCode: '15' }, '{"errorCode":"15"}');
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block: 'unauthorized' });
+    expect(snap.detail).toBe('{"errorCode":"15"}');
+    // …and the same body on a 200 is the incident shape, which is where the
+    // errorCode branch still fires.
+    expect(rail.parse(200, { errorCode: '15' }, '{"errorCode":"15"}')).toMatchObject({ block: 'incident' });
+  });
+
+  it('carries the cause and the status onto the verdict, where a human can read them', () => {
+    const target = { skuId: null, productId: LAVASH, name: null };
+    const conf = rail.confirm(target, null, rail.parse(401, {}));
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'blocked', block: 'unauthorized', status: 401 });
+  });
+
+  it('leaves `block` null on every failure that is not a wall', () => {
+    for (const snap of [
+      rail.parse(500, { data: null }),
+      rail.parse(200, { data: null, errors: [{ message: 'nope' }] }),
+      rail.parse(200, { data: { somethingElse: true } }),
+    ]) {
+      expect(snap.block == null).toBe(true);
+    }
+  });
+});
+
+describe('MEAL-16 the GraphQL error’s code and location', () => {
+  const rail = makeRail();
+  const target = { skuId: null, productId: LAVASH, name: null };
+
+  // The live shape, verbatim from the 21:31 run. If the gateway had been
+  // resolving our operationName against a safelist, `code` is where it would say
+  // so; `locations` is what says whether it was looking at the document we sent —
+  // our own cartV2 is at line 2, column 3.
+  const LIVE = {
+    data: null,
+    errors: [{
+      message: 'Field "cartV2" of type "Query" must have a selection of subfields. Did you mean "cartV2 { ... }"?',
+      locations: [{ line: 2, column: 3 }],
+      extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
+    }],
+  };
+
+  it('keeps the code and the first location off errors[0]', () => {
+    expect(rail.parse(400, LIVE)).toMatchObject({
+      ok: false, reason: 'graphql_error', status: 400,
+      code: 'GRAPHQL_VALIDATION_FAILED', loc: '2:3',
+    });
+  });
+
+  it('carries both onto the verdict, beside the message', () => {
+    const conf = rail.confirm(target, null, rail.parse(200, LIVE));
+    expect(conf).toMatchObject({
+      state: 'unknown', reason: 'graphql_error',
+      code: 'GRAPHQL_VALIDATION_FAILED', loc: '2:3', status: 200,
+    });
+    expect(conf.detail).toContain('must have a selection of subfields');
+  });
+
+  it('is null, not undefined-shaped, when the gateway sends neither', () => {
+    const snap = rail.parse(200, { data: null, errors: [{ message: 'bare' }] });
+    expect(snap.code).toBeNull();
+    expect(snap.loc).toBeNull();
+  });
+
+  it('survives a location with no column rather than printing "2:undefined"', () => {
+    const snap = rail.parse(200, { data: null, errors: [{ message: 'x', locations: [{ line: 2 }] }] });
+    expect(snap.loc).toBe('2:?');
+  });
+});
+
+describe('MEAL-16 every verdict reports the status of the read its reason names', () => {
+  const rail = makeRail();
+  const target = { skuId: null, productId: LAVASH, name: null };
+  const full = cartResponseFrom(CART);
+
+  it('reports the after-read’s status when both reads succeeded', () => {
+    const before = rail.parse(200, withoutProduct(full, LAVASH));
+    const after = rail.parse(200, full);
+    expect(rail.confirm(target, before, after)).toMatchObject({ state: 'landed', status: 200 });
+  });
+
+  it('reports the BEFORE-read’s status on `no_baseline`, the one verdict about that read', () => {
+    const after = rail.parse(200, full);
+    const before = rail.parse(503, { data: null });
+    const conf = rail.confirm(target, before, after);
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'no_baseline', status: 503 });
+  });
+
+  it('is the one verdict whose diagnostics and line fields come from different reads', () => {
+    // Reads like a mix-up and is not one, which is why it is pinned here as well
+    // as commented: on `no_baseline` the BEFORE read is the one that failed, so
+    // the wall label is its, while the quantity can only be the after-read's —
+    // the read that succeeded. Both halves are about the read they say they are.
+    const before = rail.parse(401, {});
+    const conf = rail.confirm(target, before, rail.parse(200, full));
+    expect(conf).toMatchObject({
+      reason: 'no_baseline', status: 401, block: 'unauthorized', productId: LAVASH, qtyAfter: 1,
+    });
+  });
+
+  it('never pairs one read’s status with another read’s verdict', () => {
+    // The trap #107 closed for `detail`, one field wider: a 200 baseline printed
+    // beside a 401 verdict would say the session was fine at the moment we walled.
+    const before = rail.parse(200, full);
+    const after = rail.parse(401, {});
+    const conf = rail.confirm(target, before, after);
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'blocked', status: 401, block: 'unauthorized' });
+    expect(conf.detail).toBeNull();
+  });
+
+  it('is null — never 0 — when there was no response to have a status', () => {
+    expect(rail.confirm(target, null, null).status).toBeNull();
+    expect(rail.confirm({ skuId: null, productId: null, name: null }, null, rail.parse(500, {})).status).toBeNull();
+  });
+
+  it('holds the whole diagnostic through a withdrawn verdict', () => {
+    // A contradiction is the signal that should make us turn the flag off, so it
+    // is the last verdict that can afford to arrive without its evidence.
+    const conf = rail.confirm(target, rail.parse(500, { data: null }), rail.parse(200, full));
+    const out = rail.contradicted(conf, 'contradicted_by_card');
+    expect(out).toMatchObject({ state: 'unknown', reason: 'contradicted_by_card', status: 500 });
+  });
+});
+
+describe('MEAL-16 the request body we actually send', () => {
+  const target = { skuId: null, productId: LAVASH, name: null };
+
+  it('logs the body handed to fetch, byte for byte, with the endpoint it went to', async () => {
+    const posted: any[] = [];
+    const { fn, calls } = stubFetch(200, cartResponseFrom(CART));
+    const rail = makeRail(fn, posted);
+    await rail.read(1000);
+    const line = posted.find((m) => m.step === 'cart_query_body');
+    expect(line).toMatchObject({ type: 'EXTRACT_DEBUG', endpoint: '/graphql', op: HEB_CART_OPERATION });
+    // The point of the line: not a second call to __hebCartBody that could differ,
+    // but the string fetch was given.
+    expect(line.body).toBe(calls[0].init.body);
+    expect(JSON.parse(line.body).query).toBe(HEB_CART_QUERY);
+  });
+
+  it('logs it ONCE per injected script, not once per poll — five reads, one line', async () => {
+    const posted: any[] = [];
+    const { fn } = stubFetch(200, withoutProduct(cartResponseFrom(CART), LAVASH));
+    const rail = makeRail(fn, posted);
+    const before = { ok: true, cartId: cartId(CART), lines: [], itemCount: 0, status: 200 };
+    await rail.confirmAdd(target, before, { firstDelayMs: 0, gapMs: 0, tries: 5 });
+    expect(posted.filter((m) => m.step === 'cart_query_body')).toHaveLength(1);
+  });
+
+  it('reads the cart normally on a surface with no bridge at all', async () => {
+    // Every other test in this file runs in a sandbox with no `window`. A
+    // diagnostic that threw there would take the whole rail down with it.
+    const { fn } = stubFetch(200, cartResponseFrom(CART));
+    const rail = makeRail(fn);
+    expect(await rail.read(1000)).toMatchObject({ ok: true });
   });
 });
 
@@ -700,6 +1060,15 @@ describe('MEAL-14 flag gating', () => {
     expect(add).toContain(`step: 'cart_query_confirm'`);
     expect(add).toContain(`step: 'cart_query_crosscheck'`);
     expect(add.match(/detail: __cartConf\.detail/g)).toHaveLength(2);
+    // MEAL-16's four: a field carried on the confirmation but left off the
+    // postMessage reaches nobody — the confirmation itself is never rendered.
+    for (const field of ['status', 'code', 'loc', 'block']) {
+      expect(fused).toContain(`__cartConf.${field}`);
+      expect(add.match(new RegExp(`__cartConf\\.${field}`, 'g'))!.length).toBeGreaterThanOrEqual(2);
+    }
+    // …and the one line that says what we actually put on the wire.
+    expect(fused).toContain(`step: 'cart_query_body'`);
+    expect(add).toContain(`step: 'cart_query_body'`);
   });
 
   it('parses as valid JS in both states', async () => {
