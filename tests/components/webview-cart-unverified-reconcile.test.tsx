@@ -44,7 +44,7 @@ jest.mock('react-native-webview', () => {
   // is only visible here.
   const MockWebView = RealReact.forwardRef((props: any, ref: any) => {
     RealReact.useImperativeHandle(ref, () => ({
-      injectJavaScript: () => { ((globalThis as any).__injectedAt ||= []).push(Date.now()); },
+      injectJavaScript: () => {},
       stopLoading: () => {}, goBack: () => {}, reload: () => {},
     }));
     return RealReact.createElement(RealView, { testID: props.testID || 'mock-webview', ...props });
@@ -84,7 +84,7 @@ jest.mock('../../src/lib/api', () => {
     ...actual,
     usage: {
       ...actual.usage,
-      logAutomationStart: jest.fn(async () => 'run-flag-wiring'),
+      logAutomationStart: jest.fn(async () => 'run-unverified-reconcile'),
       logAutomationComplete: jest.fn(async () => {}),
       logAutomationSteps: jest.fn(async () => true),
     },
@@ -139,6 +139,15 @@ const sheet = (...ingredients: Ing[]) => (
   />
 );
 
+// The advanceTimersByTime calls below were copied from the flag-wiring test
+// without its useFakeTimers, so every one of them was a no-op that logged a
+// warning. Installing them for real matters beyond the noise: the run arms a
+// ~14s cartProbeResultMs timeout, and a test that relies on real time not
+// elapsing is one slow CI box away from observing the timeout path instead of
+// the branch it means to test.
+beforeAll(() => { jest.useFakeTimers(); });
+afterAll(() => { jest.useRealTimers(); });
+
 beforeEach(() => {
   // Pre-search off so the run takes the parallel ADD pool, which is the path that
   // ends in finishParallelAdd -> triggerCartProbe('reconcile'). Pre-search commits
@@ -154,7 +163,7 @@ beforeEach(() => {
  * reconcile answer is the variable under test: one with `items` gives the diff a
  * cart to compare, one without is the MEAL-152 refusal.
  */
-function runToReconcile(answer: Record<string, unknown>) {
+function runToReconcile(answer: Record<string, unknown>, workerSucceeded = true) {
   // ONE item on purpose. With two, the pool hands one to the cold slot (the main
   // WebView enlisted as an extra add surface) and only a single worker WebView
   // ever mounts, so the pool cannot settle without waiting out a 35s worker
@@ -177,7 +186,9 @@ function runToReconcile(answer: Record<string, unknown>) {
   act(() => { jest.advanceTimersByTime(2_000); });
 
   // Every add worker reports back, which settles the pool and arms the reconcile.
-  postTo(1, { type: 'WORKER_RESULT', phase: 'add', success: true, productName: 'Sour Cream' });
+  postTo(1, workerSucceeded
+    ? { type: 'WORKER_RESULT', phase: 'add', success: true, productName: 'Sour Cream' }
+    : { type: 'WORKER_RESULT', phase: 'add', success: false, reason: 'add button not found' });
   act(() => { jest.advanceTimersByTime(5_000); });
 
   postTo(0, answer);
@@ -206,4 +217,29 @@ describe('reconcile that cannot read the cart (MEAL-190)', () => {
     });
     expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeNull();
   });
+  it('warns on the done screen even when nothing was added', () => {
+    // The loudest version of this state, and it renders through a DIFFERENT
+    // banner than the two cases above. `!rows` sets totalAdded from the worker
+    // reports, so a run whose workers also failed lands on the nothing-added
+    // done screen — the run most in need of the warning, since it has neither a
+    // cart reading nor a success to point at. Covered separately because
+    // deleting the nothing-added banner leaves the other tests green.
+    const view = runToReconcile(
+      { type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: 'https://www.heb.com/' },
+      false,
+    );
+    expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeTruthy();
+  });
+
+  // KNOWN UNCOVERED MUTANT, stated rather than left to be discovered.
+  //
+  // Hoisting the setCartDeltaWarning above `if (!rows)` — so every reconcile
+  // warns — keeps all three tests green. It is not an equivalent mutant: the rows
+  // path clears the warning with setCartDeltaWarning(null) before it finalizes,
+  // EXCEPT on the top-up branch, which returns to navigateToSearchItem earlier
+  // and never reaches that clear. So a hoisted warning is observable, but only on
+  // a run that reads its cart, finds a shortfall, tops up, and then finalizes
+  // through the serial 'after' phase — several phases past where these tests
+  // stop. Pinning it means driving a full top-up to a second done screen, which
+  // belongs with MEAL-158's harness work rather than bolted on here.
 });
