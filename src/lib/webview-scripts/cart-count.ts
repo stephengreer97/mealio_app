@@ -323,11 +323,16 @@ const GUARDED_CART_STORE_IDS = new Set(['heb', 'walmart', 'wegmans']);
  *   • No parseable authority. `^https://` does NOT imply a host: merge.ts
  *     accepts `https:///cart`, `https://`, `https://?q=1` and `https://#frag`,
  *     all of which have nothing between the slashes for `[^/?#]+` to match.
- *   • The site root. A cart page is never `/`, and this is the dangerous one:
- *     an override naming a bare origin would otherwise emit a guard of `"/"`,
- *     which the STORE HOMEPAGE satisfies. The homepage carries no line items,
- *     so the script would count zero and post it as fact — reintroducing the
- *     exact trusted zero of MEAL-152 through the config lever meant to fix it.
+ *   • The site root. An override naming a bare origin emits a guard of `"/"`,
+ *     which the STORE HOMEPAGE satisfies; the homepage carries no line items, so
+ *     the script counts zero and posts it as fact — the exact trusted zero of
+ *     MEAL-152, through the config lever meant to fix it. This rule covers the
+ *     demonstrated MEAL-152 landing page and the bare-origin typo, and it is a
+ *     SPECIAL CASE, NOT A CLOSURE: any non-cart path a store actually serves
+ *     does the same thing. `/grocery` is not hypothetical — it is Walmart's own
+ *     `storeUrl` in this codebase, and a guard of `/grocery` counts zero on it.
+ *     Refusing that class needs positive evidence of cart-ness before a number
+ *     is posted, not a longer denylist. Tracked as MEAL-184.
  *   • Dot segments. The browser resolves `/cart/../checkout` to `/checkout`
  *     before `location.pathname` is read, so the literal could never match.
  *   • A malformed percent-escape, which decodeURIComponent throws on.
@@ -337,8 +342,24 @@ const GUARDED_CART_STORE_IDS = new Set(['heb', 'walmart', 'wegmans']);
  * `/café` compared raw would never match its own page and the store would go
  * quietly uncountable — a config push that appears to work and does nothing,
  * which is the failure this ticket exists to remove rather than relocate.
- * Round-tripping through decode→encode is idempotent, so an override already
- * written as `/caf%C3%A9` is left alone rather than double-encoded.
+ *
+ * IT ENCODES WHAT IS ILLEGAL AND NEVER DECODES. The obvious spelling —
+ * `encodeURI(decodeURIComponent(path))` — was written here first and is wrong,
+ * because THE CANONICALISER IS ON ONLY ONE SIDE OF AN EQUALITY TEST: the guard
+ * compares this literal against raw `location.pathname`, so any transform we
+ * perform that the browser does not is a permanent mismatch. `encodeURI` does
+ * not escape `; , / ? : @ & = + $ #`, so a round trip unescapes exactly those
+ * and hands back a path no page can report — `/ca%3Frt` became `/ca?rt` while
+ * Chromium still says `/ca%3Frt`. It also normalises escape case, and `%c3%a9`
+ * is what plenty of tools emit. Both directions are safe (a mismatch refuses)
+ * and both are the silent no-op this ticket exists to remove.
+ *
+ * Encoding only the characters that cannot appear leaves every `%XX` byte-exact
+ * in whatever case it arrived, so it is identity on already-encoded input. The
+ * `u` flag is load-bearing: without it the class matches UTF-16 code units and
+ * `encodeURIComponent` throws on the lone surrogate of an astral character.
+ * `%2e` is folded into the dot-segment test rather than decoded, because WHATWG
+ * treats the encoded form as a dot segment too.
  *
  * Trailing slashes are stripped because the guard strips them from
  * `location.pathname` before comparing; an expected `/cart/` would otherwise
@@ -350,9 +371,10 @@ function cartPathnameOf(url: string): string | null {
   let path = m[1] || '/';
   while (path.length > 1 && path.charAt(path.length - 1) === '/') path = path.slice(0, -1);
   if (path === '/') return null;
-  if (/(^|\/)\.\.?(\/|$)/.test(path)) return null;
+  if (/%(?![0-9A-Fa-f]{2})/.test(path)) return null;
+  if (/(^|\/)(\.|%2e){1,2}(\/|$)/i.test(path)) return null;
   try {
-    return encodeURI(decodeURIComponent(path));
+    return path.replace(/[^A-Za-z0-9\-._~!$&'()*+,;=:@%/]/gu, encodeURIComponent);
   } catch {
     return null;
   }

@@ -69,6 +69,12 @@ describe('cart URL from remote config (MEAL-156)', () => {
     // Compared against the TABLE, not against getCartPageUrl — the resolver
     // prefers the config value, so asking it would compare the config with
     // itself and pass no matter how far the table had drifted.
+    //
+    // REACH, measured rather than assumed: this catches heb and walmart, the two
+    // stores with both sources. wegmans and mockstore have a table entry only,
+    // so there is nothing to disagree with — but wegmans is not unprotected, its
+    // entry is live and wegmans.spec.ts fails on a mutation of it. Only
+    // mockstore is genuinely unpinned, and it is __DEV__/E2E-gated.
     const divergent = CART_PAGE_URL_STORE_IDS
       .map((id) => ({ id, table: CART_PAGE_URL[id], config: BUNDLED_AUTOMATION_CONFIG.stores[id]?.cartUrl }))
       .filter((r) => r.config !== undefined && r.config !== r.table);
@@ -167,12 +173,50 @@ describe('cart URL from remote config (MEAL-156)', () => {
       expect(guardPathIn(buildCartPageCountScript('heb'))).toBe(expected);
     });
 
-    it('leaves an already-encoded override alone rather than double-encoding', async () => {
-      // encodeURI(decodeURIComponent(x)) has to be idempotent, or an operator
-      // who writes the encoded form — the form they would copy out of a browser
-      // address bar — gets '/caf%25C3%25A9' and a permanently uncountable store.
-      await pushConfig({ heb: { cartUrl: 'https://www.heb.com/caf%C3%A9' } });
-      expect(guardPathIn(buildCartPageCountScript('heb'))).toBe('/caf%C3%A9');
+    // ── The regression these cases exist for ────────────────────────────────
+    //
+    // The first version of this canonicaliser was `encodeURI(decodeURIComponent
+    // (path))`, and it was wrong in a way idempotence cannot see. The guard
+    // compares its literal against RAW `location.pathname`, so the canonicaliser
+    // sits on only one side of an equality test: any transform we do that the
+    // browser does not is a permanent mismatch. `encodeURI` leaves
+    // `; , / ? : @ & = + $ #` bare, so the round trip unescaped exactly those.
+    //
+    // Every expectation below is `new URL(...).pathname` — the WHATWG algorithm
+    // Chromium implements — computed independently of the implementation, which
+    // is a regex over the illegal-character class and never decodes.
+    it.each([
+      ['an encoded question mark', '/ca%3Frt'],
+      ['an encoded semicolon', '/cart%3Bx'],
+      ['an encoded hash', '/ca%23rt'],
+      ['an encoded ampersand', '/ca%26rt'],
+      ['an encoded slash', '/cart%2F'],
+      ['an encoded slash mid-path', '/cart%2Fcheckout'],
+      ['LOWERCASE escapes, which many tools emit', '/caf%c3%a9'],
+      ['uppercase escapes', '/caf%C3%A9'],
+      ['a percent that is itself encoded', '/cart%2520x'],
+    ])('leaves %s byte-exact', async (_label, path) => {
+      await pushConfig({ heb: { cartUrl: `https://www.heb.com${path}` } });
+      expect(guardPathIn(buildCartPageCountScript('heb')))
+        .toBe(new URL(`https://www.heb.com${path}`).pathname);
+    });
+
+    it('encodes an astral character without throwing on its surrogate half', async () => {
+      // The `u` flag on the character class. Without it the class matches UTF-16
+      // code units, encodeURIComponent throws URIError on the lone surrogate,
+      // and the catch turns a perfectly good path into a refusal.
+      await pushConfig({ heb: { cartUrl: 'https://www.heb.com/🍎' } });
+      expect(guardPathIn(buildCartPageCountScript('heb')))
+        .toBe(new URL('https://www.heb.com/🍎').pathname);
+    });
+
+    it('refuses a dot segment written in encoded form', async () => {
+      // WHATWG treats %2e as a dot segment, so Chromium resolves
+      // /cart/%2e%2e/checkout to /checkout. Before this the encoded form slipped
+      // past the dot-segment test and failed closed only by accident — the guard
+      // mismatched rather than the check firing.
+      await pushConfig({ heb: { cartUrl: 'https://www.heb.com/cart/%2e%2e/checkout' } });
+      expect(buildCartPageCountScript('heb')).toBeNull();
     });
   });
 
