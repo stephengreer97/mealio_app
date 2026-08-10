@@ -417,6 +417,24 @@ describe('MEAL-16 which wall a `blocked` read hit', () => {
     expect(snap.detail).toContain('1318000700134302733-80225616898953604');
   });
 
+  it('finds the incident id printed into an HTML refusal, where JSON.parse gives nothing', () => {
+    // Imperva's "Access Denied" variants carry no interruption text and no JSON,
+    // so without this a 403 ABP refusal would read as a dead session — the exact
+    // misdiagnosis the field exists to prevent — with a doctype for evidence.
+    const page = '<!DOCTYPE html><html><head><title>Access Denied</title></head><body>'
+      + '<p>Incident ID: 1318000700134302733-80225616898953604</p></body></html>';
+    const snap = rail.parse(403, null, page);
+    expect(snap).toMatchObject({ ok: false, reason: 'blocked', block: 'incident' });
+    expect(snap.detail).toBe('incident id 1318000700134302733-80225616898953604');
+  });
+
+  it('still calls a "Pardon Our Interruption" page the interstitial, id or no id', () => {
+    // The real interruption page carries an incident id too, and 'interstitial'
+    // is the more specific answer for it — a challenge, not a flat refusal.
+    const snap = rail.parse(200, null, '<html>Pardon Our Interruption… Incident ID: 1318000700134302733</html>');
+    expect(snap).toMatchObject({ block: 'interstitial' });
+  });
+
   it('spends nothing on the interstitial’s HTML, whose label already says it all', () => {
     const snap = rail.parse(200, null, '<!DOCTYPE html><html><body>Pardon Our Interruption…</body></html>');
     expect(snap).toMatchObject({ block: 'interstitial' });

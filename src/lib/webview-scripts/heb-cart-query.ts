@@ -191,9 +191,10 @@ export type HebCartReadFailure =
  *
  * They are genuinely different findings and the log cannot tell them apart:
  *
- *  • `incident` — an Imperva `incidentId` at any status, or an `errorCode` body on
- *    a status that is not 401/403. ABP, measured: MEAL-12 got exactly this shape
- *    from a plain React Native HTTP client.
+ *  • `incident` — an Imperva incident id at any status, from the JSON body or
+ *    printed into an HTML refusal page, or an `errorCode` body on a status that
+ *    is not 401/403. ABP, measured: MEAL-12 got exactly this shape from a plain
+ *    React Native HTTP client.
  *  • `interstitial` — "Pardon Our Interruption" served as a page, at any status.
  *    Also ABP, but a challenge the user could in principle clear rather than a
  *    refusal.
@@ -515,6 +516,24 @@ export function buildHebCartQueryFn(): string {
     }
     if (typeof text === 'string' && text.indexOf('Pardon Our Interruption') !== -1) {
       return { ok: false, reason: 'blocked', status: status, block: 'interstitial' };
+    }
+    // The same wall wearing an HTML page instead of a JSON body: Imperva's
+    // "Access Denied" variants print the incident id into the markup and carry no
+    // interruption text, so JSON.parse gives null, neither check above fires, and
+    // the 401/403 below would call an ABP refusal a dead session — the exact
+    // misdiagnosis this field exists to prevent. Read after the interstitial
+    // check, not before: a "Pardon Our Interruption" page usually carries an
+    // incident id too, and 'interstitial' is the more specific answer for it.
+    //
+    // The id goes into \`detail\` on its own rather than as the leading slice of
+    // the page, whose first 120 characters are a doctype.
+    var __inc = (typeof text === 'string')
+      ? text.match(/incident\\s*id[^0-9a-z]{0,8}([0-9][0-9a-z-]{5,})/i) : null;
+    if (__inc) {
+      return {
+        ok: false, reason: 'blocked', status: status, block: 'incident',
+        detail: ('incident id ' + __inc[1]).slice(0, 120)
+      };
     }
     // A 401/403 carrying neither Imperva fingerprint. Named for what was
     // OBSERVED, not for the conclusion: this is what a dead H-E-B session looks
