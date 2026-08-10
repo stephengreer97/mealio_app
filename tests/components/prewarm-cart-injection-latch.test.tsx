@@ -1,11 +1,11 @@
 // The prewarm probe's cart injection is one-shot, so it must not be spent on a
 // page that was never the cart (MEAL-152).
 //
-// SilentLoginProbe.onLoadEnd injects the cart-count script exactly once per
-// capture and latches (cartCountInjectedRef). MEAL-152 made the count scripts
-// refuse to answer off the cart page — and on an auth/SSO interstitial they
-// refuse SILENTLY, because a verdict there would burn the probe's one pending
-// slot.
+// SilentLoginProbe.onLoadEnd injects the cart-count script and retries on each
+// load until something posts, bounded by a cap (MEAL-189 — it used to latch on
+// the first injection). MEAL-152 made the count scripts refuse to answer off the
+// cart page — and on an auth/SSO interstitial they refuse SILENTLY, because a
+// verdict there would burn the probe's one pending slot.
 //
 // Those two facts are only safe together if the probe never injects on an
 // interstitial in the first place. Without the skip: cart URL → interstitial →
@@ -67,7 +67,7 @@ function fireMessage(payload: unknown) {
   act(() => { mockWebViewProps.onMessage({ nativeEvent: { data: JSON.stringify(payload) } }); });
 }
 
-describe('SilentLoginProbe cart injection (MEAL-152)', () => {
+describe('SilentLoginProbe cart injection (MEAL-152, MEAL-189)', () => {
   beforeEach(() => {
     mockInjected.length = 0;
     mockWebViewProps = null;
@@ -96,7 +96,13 @@ describe('SilentLoginProbe cart injection (MEAL-152)', () => {
     fireLoadEnd(CART_URL);
     expect(mockInjected.filter(isCartCountScript)).toHaveLength(1);
 
-    // And it stays one-shot: a later load does not inject a second time.
+    // This used to assert one-shot — that a later load never injects again.
+    // MEAL-189 deliberately reversed that, because a page can re-render under a
+    // good injection and silence was terminal. What MEAL-152 actually needs is
+    // preserved and asserted instead: the interstitial consumed NO budget, so the
+    // real cart page still got the first injection above. A later load now
+    // retries, and that is its own test below.
+    fireMessage({ type: 'CART_COUNT', count: 0, items: [], url: CART_URL });
     fireLoadEnd(CART_URL);
     expect(mockInjected.filter(isCartCountScript)).toHaveLength(1);
 
@@ -104,58 +110,86 @@ describe('SilentLoginProbe cart injection (MEAL-152)', () => {
     // test.
     view.unmount();
   });
-  it('re-injects when the page navigates AFTER a good injection (MEAL-189)', () => {
-    // The 21:31 failure. The count script was injected into the page /cart landed
-    // on, that page navigated again, and the injected context died with the old
-    // document before it could post. Strict one-shot meant no retry: the probe
-    // sat out its full 15s and reported logged-in with no baseline.
+  it('retries a same-URL re-render that killed the injected script (MEAL-189)', () => {
+    // THE case, and the one a per-URL key excludes. WebViewCartSheet already
+    // records it for this same script: "HEB re-renders the cart page (same URL) a
+    // beat after load, which kills the injected count script before it
+    // polls/posts". Same symptom as the 21:31 log — inject, then silence.
     //
-    // Note this is NOT the interstitial case above — the landing page here is the
-    // plain homepage, which isAuthRedirectUrl does not match, so the skip does
-    // not apply and the injection really is spent.
+    // Nothing is posted between the loads, which is what makes it a retry rather
+    // than a second opinion: the injection said nothing at all.
     const view = render(
       <SilentLoginProbe storeId={STORE} onLogin={jest.fn()} onResult={jest.fn()} onError={jest.fn()} />,
     );
     fireLoadEnd(HOME_URL);
     fireMessage({ type: 'LOGIN_STATUS', isLoggedIn: true });
 
-    // /cart bounced to the homepage. Injected there — it will refuse, but that is
-    // the guard's job, not this branch's.
-    fireLoadEnd(HOME_URL);
+    fireLoadEnd(CART_URL);
     expect(mockInjected.filter(isCartCountScript)).toHaveLength(1);
-
-    // The redirect chain continues to the real cart page. Before MEAL-189 this
-    // was 1 — the stall.
+    // Same URL, re-rendered. Before MEAL-189 this stayed 1 and the probe stalled.
     fireLoadEnd(CART_URL);
     expect(mockInjected.filter(isCartCountScript)).toHaveLength(2);
     view.unmount();
   });
 
-  it('injects once per distinct page, not once per load', () => {
-    // A page that fires onLoadEnd repeatedly is not new information, and
-    // re-injecting there would double-post from one document.
+  it('stops retrying the moment a count actually posts', () => {
+    // The bound that matters more than the cap. An answer resolves the capture,
+    // so no later load may inject — otherwise a resolved probe keeps poking the
+    // page for the rest of the run.
+    //
+    // This also fixes what the first version of this test got wrong: it asserted
+    // a second injection WITHOUT firing the message the injected script really
+    // sends. cartPathGuardJs posts not_cart_page synchronously, before its first
+    // await, so an injection on a non-cart page answers immediately — and that
+    // answer is terminal. Withholding it modelled a sequence production cannot
+    // produce.
+    const onResult = jest.fn();
     const view = render(
-      <SilentLoginProbe storeId={STORE} onLogin={jest.fn()} onResult={jest.fn()} onError={jest.fn()} />,
+      <SilentLoginProbe storeId={STORE} onLogin={jest.fn()} onResult={onResult} onError={jest.fn()} />,
     );
     fireLoadEnd(HOME_URL);
     fireMessage({ type: 'LOGIN_STATUS', isLoggedIn: true });
+
     fireLoadEnd(CART_URL);
-    fireLoadEnd(CART_URL);
+    expect(mockInjected.filter(isCartCountScript)).toHaveLength(1);
+    // What the guard posts when the page it landed on is not the cart.
+    fireMessage({ type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: HOME_URL });
+    expect(onResult).toHaveBeenCalled();
+
     fireLoadEnd(CART_URL);
     expect(mockInjected.filter(isCartCountScript)).toHaveLength(1);
     view.unmount();
   });
 
   it('stops after the cap so a redirect loop cannot inject forever', () => {
-    // The runaway the original one-shot was guarding against. Distinct URLs, so
-    // the per-URL rule alone would keep going for the whole timeout.
+    // The runaway the original one-shot was really protecting against. Nothing
+    // posts, so every load is a retry.
     const view = render(
       <SilentLoginProbe storeId={STORE} onLogin={jest.fn()} onResult={jest.fn()} onError={jest.fn()} />,
     );
     fireLoadEnd(HOME_URL);
     fireMessage({ type: 'LOGIN_STATUS', isLoggedIn: true });
-    for (let i = 0; i < 8; i++) fireLoadEnd(`https://www.heb.com/cart?hop=${i}`);
-    expect(mockInjected.filter(isCartCountScript)).toHaveLength(3);
+    for (let i = 0; i < 12; i++) fireLoadEnd(`https://www.heb.com/cart?hop=${i}`);
+    expect(mockInjected.filter(isCartCountScript)).toHaveLength(5);
+    view.unmount();
+  });
+
+  it('gives a second capture in the same mount a fresh budget', () => {
+    // startCartCapture is not latched — it runs on every LOGIN_STATUS:true, and
+    // the login check is deliberately re-injected on each load — so one mounted
+    // probe can start two captures. Without the counter reset the second one
+    // inherits a spent budget and cannot inject at all.
+    const view = render(
+      <SilentLoginProbe storeId={STORE} onLogin={jest.fn()} onResult={jest.fn()} onError={jest.fn()} />,
+    );
+    fireLoadEnd(HOME_URL);
+    fireMessage({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    for (let i = 0; i < 6; i++) fireLoadEnd(`https://www.heb.com/cart?hop=${i}`);
+    expect(mockInjected.filter(isCartCountScript)).toHaveLength(5);
+
+    fireMessage({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    fireLoadEnd(CART_URL);
+    expect(mockInjected.filter(isCartCountScript)).toHaveLength(6);
     view.unmount();
   });
 });
