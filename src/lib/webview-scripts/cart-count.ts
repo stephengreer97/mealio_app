@@ -132,6 +132,24 @@ export const CART_PAGE_URL_STORE_IDS: readonly string[] = Object.keys(CART_PAGE_
  * zero MEAL-152 removed, from a config push, on a store nobody was looking at.
  * Adding a store to cart-page counting stays a code change with a guard and a
  * fixture.
+ *
+ * KNOWN LIMIT — this lever moves PATHS, not HOSTS, in the main WebView.
+ * WebViewCartSheet.onLoadEnd gates on `url.includes(s.domain)` before it drains
+ * the injection queue, and `domain` is compiled in (webview-scripts/index.ts)
+ * with no config field behind it. So an override pointing at a NEW HOST
+ * navigates fine and then never gets its count script injected: the probe times
+ * out and the run reports no count. Safe, but not a fix. SilentLoginProbe has no
+ * such gate and does follow the new host, so a host repoint gets an asymmetric
+ * pair — prewarm captures a baseline, the after-probe stalls.
+ *
+ * MEAL-136 was a host change, so this lever would not have covered it, and the
+ * first version of this commit message claimed otherwise. Widening the gate to
+ * trust a config-supplied host is deliberately NOT done here: that gate is what
+ * decides the app will inject scripts into a page at all, and MEAL-136 exists
+ * because its substring test already let a marketing host through once. Making a
+ * config push able to authorise injection on an arbitrary host is a security
+ * change with a blast radius across 20+ banners, not a cart-URL fix. Tracked
+ * separately as MEAL-175.
  */
 export function getCartPageUrl(storeId: string): string | null {
   const bundled = bundledCartPageUrl(storeId);
