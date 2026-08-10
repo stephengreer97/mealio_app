@@ -133,6 +133,22 @@
 //        outcome, cartDeltaWarning, codeSource  (pre-existing)
 //      → This is where the trust qualifiers live. Join to the run for store_id.
 //
+//      `outcome` gained a fourth value in MEAL-190: 'unverified', the run that
+//      finished without reading the cart at all — the probe never answered, or it
+//      answered that it could not prove the page was the cart. Read it as the
+//      COVERAGE flag it is: on such a run `itemsAdded` is the run's own report of
+//      itself with nothing able to contradict it, since the cart diff is the only
+//      check that has ever disagreed with a run. It is not 'partial' (that means
+//      the cart was read and disagreed) and it is not a failure — the adds may
+//      well all have landed. Whole stores can sit in this state when their cart
+//      URL redirects, so a rate drawn without splitting it out attributes one
+//      store's redirect to the automation.
+//
+//      `cartDeltaWarning` no longer covers that case: it now means only "the cart
+//      was read and something was off". A run with outcome 'unverified' and
+//      cartDeltaWarning false is the state where nothing checked the run, which
+//      before MEAL-190 was recorded as an ordinary success.
+//
 //      ABANDONED RUNS (MEAL-5) also ship a `run_summary`, and it is a DIFFERENT
 //      row: outcome 'skipped', and a detail of
 //        terminal      'abandoned'  — present only on these
@@ -341,7 +357,14 @@ export function correctConfirmedFromCart(input: {
  * tells you so.
  */
 export interface RunSummaryFacts {
-  outcome: 'success' | 'partial' | 'failed';
+  /**
+   * 'unverified' (MEAL-190) is the run that finished without reading the cart. It
+   * is a value on this field rather than a fact of its own deliberately: the
+   * detail sits at sanitizeDetail's key cap exactly (see below), so a new KEY here
+   * would silently drop `failureCodes` off every failing row. A new value on a key
+   * that already exists costs nothing.
+   */
+  outcome: 'success' | 'partial' | 'unverified' | 'failed';
   itemsAdded: number;
   cartDeltaWarning: boolean;
   kind: RunKind;
