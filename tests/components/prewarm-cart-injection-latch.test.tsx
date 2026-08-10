@@ -104,4 +104,58 @@ describe('SilentLoginProbe cart injection (MEAL-152)', () => {
     // test.
     view.unmount();
   });
+  it('re-injects when the page navigates AFTER a good injection (MEAL-189)', () => {
+    // The 21:31 failure. The count script was injected into the page /cart landed
+    // on, that page navigated again, and the injected context died with the old
+    // document before it could post. Strict one-shot meant no retry: the probe
+    // sat out its full 15s and reported logged-in with no baseline.
+    //
+    // Note this is NOT the interstitial case above — the landing page here is the
+    // plain homepage, which isAuthRedirectUrl does not match, so the skip does
+    // not apply and the injection really is spent.
+    const view = render(
+      <SilentLoginProbe storeId={STORE} onLogin={jest.fn()} onResult={jest.fn()} onError={jest.fn()} />,
+    );
+    fireLoadEnd(HOME_URL);
+    fireMessage({ type: 'LOGIN_STATUS', isLoggedIn: true });
+
+    // /cart bounced to the homepage. Injected there — it will refuse, but that is
+    // the guard's job, not this branch's.
+    fireLoadEnd(HOME_URL);
+    expect(mockInjected.filter(isCartCountScript)).toHaveLength(1);
+
+    // The redirect chain continues to the real cart page. Before MEAL-189 this
+    // was 1 — the stall.
+    fireLoadEnd(CART_URL);
+    expect(mockInjected.filter(isCartCountScript)).toHaveLength(2);
+    view.unmount();
+  });
+
+  it('injects once per distinct page, not once per load', () => {
+    // A page that fires onLoadEnd repeatedly is not new information, and
+    // re-injecting there would double-post from one document.
+    const view = render(
+      <SilentLoginProbe storeId={STORE} onLogin={jest.fn()} onResult={jest.fn()} onError={jest.fn()} />,
+    );
+    fireLoadEnd(HOME_URL);
+    fireMessage({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    fireLoadEnd(CART_URL);
+    fireLoadEnd(CART_URL);
+    fireLoadEnd(CART_URL);
+    expect(mockInjected.filter(isCartCountScript)).toHaveLength(1);
+    view.unmount();
+  });
+
+  it('stops after the cap so a redirect loop cannot inject forever', () => {
+    // The runaway the original one-shot was guarding against. Distinct URLs, so
+    // the per-URL rule alone would keep going for the whole timeout.
+    const view = render(
+      <SilentLoginProbe storeId={STORE} onLogin={jest.fn()} onResult={jest.fn()} onError={jest.fn()} />,
+    );
+    fireLoadEnd(HOME_URL);
+    fireMessage({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    for (let i = 0; i < 8; i++) fireLoadEnd(`https://www.heb.com/cart?hop=${i}`);
+    expect(mockInjected.filter(isCartCountScript)).toHaveLength(3);
+    view.unmount();
+  });
 });
