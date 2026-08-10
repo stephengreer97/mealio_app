@@ -51,7 +51,7 @@ import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-he
 import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
-import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, AttemptedAdd, OverAdd } from '../lib/cart-reconcile';
+import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
@@ -685,6 +685,13 @@ export default function WebViewCartSheet({
     setFailedNames(failures.map((f) => f.name));
   }, []);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
+  // What every "N items" on screen is counted against (MEAL-178). "items" means
+  // UNITS — the total quantity, weight-priced lines counting 1 by presence — so
+  // the labels measure the same thing the cart counters and the cart check do.
+  // Separate from activeItemsRef because that one is re-pointed at the retry
+  // subset by the reconcile top-up: counting off it would tell the user the run
+  // added 2 items when it added 7, and only on the runs that went wrong.
+  const runIntendedRef = useRef<IntendedItem[]>([]);
   // ── North-star metric (MEAL-3) ─────────────────────────────────────────────
   // The DENOMINATOR, counted once when the add phase commits its item set. It
   // cannot be read off activeItemsRef at run_summary time: the parallel
@@ -1472,6 +1479,7 @@ export default function WebViewCartSheet({
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
       reconcileIntendedRef.current = [];
+      runIntendedRef.current = [];
       // North-star counters. 'add' is the default because it is the reading that
       // cannot silently hide a run: a shopping run mislabelled 'choose' would
       // vanish from the metric, while a choose run mislabelled 'add' shows up as
@@ -1498,6 +1506,7 @@ export default function WebViewCartSheet({
         const unchosen = consolidated.filter((it) => !it.searchTerm);
         const active = unchosen.filter((it) => it.productQty > 0);
         activeItemsRef.current = active.length > 0 ? active : unchosen;
+        runIntendedRef.current = activeItemsRef.current.map(toIntendedItem);
         // No north-star outcome: this branch only ever searches the UNCHOSEN
         // items and the review it ends in offers "choose", not "add", so the run
         // adds nothing to a cart. Excluded whole — scoring it against a cart
@@ -1843,6 +1852,7 @@ export default function WebViewCartSheet({
     // zeroed lines were already filtered out above — they were never requested.
     runKindRef.current = 'add';
     requestedRef.current = countRequested(active);
+    runIntendedRef.current = active.map(toIntendedItem);
     searchIdxRef.current = 0;
     // Arm the parked-worker commit (if any). We still run the normal login +
     // before-snapshot path below; only the add step changes (see beginSearchFlow).
@@ -2866,7 +2876,14 @@ export default function WebViewCartSheet({
               // Top-up owns the last 15%: reset the counter so it fills 85% → 100%
               // across this reconcile subset (see the progress effect).
               setProcessedCount(0);
-              setSearchingLabel(`Topping up ${retryItems.length} item${retryItems.length === 1 ? '' : 's'} we couldn't confirm…`);
+              // Units, not lines (MEAL-178) — and here they genuinely differ:
+              // each retry item's productQty is its SHORTFALL, so one line short
+              // by three is three items being topped up.
+              const topUpUnits = unitsForNames(
+                retryItems.map((i) => i.searchTerm || i.ingredientName),
+                retryItems.map(toIntendedItem),
+              );
+              setSearchingLabel(`Topping up ${topUpUnits} item${topUpUnits === 1 ? '' : 's'} we couldn't confirm…`);
               setStep('searching');
               navigateToSearchItem(0);
               return;
@@ -3968,6 +3985,12 @@ export default function WebViewCartSheet({
         {/* ── Step: searchResult ──────────────────────────────────────────── */}
         {step === 'searchResult' && (() => {
           const autoAdded = autoPickedItemsRef.current;
+          // Units, not rows (MEAL-178). The queue LENGTH still drives the button
+          // below — how many screens the user is about to step through is a count
+          // of ingredients, and inflating it by quantity would promise five
+          // screens and show three.
+          const unaddedUnits = unitsForNames(searchResults.map((r) => r.term), runIntendedRef.current);
+          const autoAddedUnits = unitsForNames(autoAdded.map((p) => p.searchTerm), runIntendedRef.current);
           return (
             <>
               <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.listContent, { alignItems: 'center' }]}>
@@ -3975,14 +3998,14 @@ export default function WebViewCartSheet({
                   <Ionicons name="alert-circle" size={48} color="#f59e0b" />
                 </View>
                 <Text style={[styles.doneTitle, { marginBottom: 8 }]}>
-                  {searchResults.length} item{searchResults.length !== 1 ? 's' : ''} could not be added to cart
+                  {unaddedUnits} item{unaddedUnits !== 1 ? 's' : ''} could not be added to cart
                 </Text>
                 <Text style={[styles.doneSub, { marginBottom: 20 }]}>
                   This may be because the item is out of stock or the store no longer carries it.
                 </Text>
                 {autoAdded.length > 0 && (
                   <Text style={[styles.doneSub, { marginBottom: 20 }]}>
-                    {autoAdded.length} item{autoAdded.length !== 1 ? 's' : ''} matched and will be added automatically.
+                    {autoAddedUnits} item{autoAddedUnits !== 1 ? 's' : ''} matched and will be added automatically.
                   </Text>
                 )}
                 <View style={{ width: '100%', borderRadius: 12, borderWidth: 1, borderColor: Colors.border, overflow: 'hidden' }}>
@@ -4007,7 +4030,7 @@ export default function WebViewCartSheet({
                   style={[styles.primaryBtn, { backgroundColor: storeColor }]}
                 >
                   <Text style={styles.primaryBtnText}>
-                    Review {searchResults.length} Item{searchResults.length !== 1 ? 's' : ''} →
+                    Review {searchResults.length} Ingredient{searchResults.length !== 1 ? 's' : ''} →
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -4387,6 +4410,23 @@ export default function WebViewCartSheet({
           const wasChooseFlow = searchResults.length > 0 && searchResults.every(r => r.isChoose);
           const skippedNames = Object.values(skippedByIdx).filter(Boolean);
           const unverified = unverifiedWeightLines;
+          // Every "N item(s)" below is a UNIT count (MEAL-178). `totalAdded` and
+          // `totalFailed` stay product counts — the north-star metric and the
+          // telemetry rows are defined on them — so the units are derived here,
+          // at the display boundary, from the names each count was built from.
+          // Same fallback as failedUnits below: this branch renders only when
+          // totalAdded > 0, and a headline reading "0 items added" would be a
+          // worse lie than the product count it replaced.
+          const addedUnits = addedNames.length > 0
+            ? unitsForNames(addedNames, runIntendedRef.current)
+            : totalAdded;
+          // Only reachable with no names at all (every finalize path compiles
+          // them), and with no names there is nothing to resolve quantities
+          // against — the product count is then the most that is true.
+          const failedUnits = failedNames.length > 0
+            ? unitsForNames(failedNames, runIntendedRef.current)
+            : totalFailed;
+          const skippedUnits = unitsForNames(skippedNames, runIntendedRef.current);
           return (
             <>
               <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 32, paddingBottom: 16 }}>
@@ -4409,13 +4449,13 @@ export default function WebViewCartSheet({
                       <Ionicons name="cart" size={56} color={storeColor} />
                     </View>
                     <Text style={styles.doneTitle}>
-                      {totalAdded} item{totalAdded !== 1 ? 's' : ''} added to your {storeName} cart!
+                      {addedUnits} item{addedUnits !== 1 ? 's' : ''} added to your {storeName} cart!
                     </Text>
                     {totalFailed > 0 && (
                       <Text style={[styles.doneSub, { color: '#b45309' }]}>
                         {failedNames.length > 0
                           ? `Could not add: ${failedNames.join(', ')}`
-                          : `${totalFailed} item${totalFailed !== 1 ? 's' : ''} could not be added.`}
+                          : `${failedUnits} item${failedUnits !== 1 ? 's' : ''} could not be added.`}
                       </Text>
                     )}
                     {cartDeltaWarning && (
@@ -4466,7 +4506,7 @@ export default function WebViewCartSheet({
               {skippedNames.length > 0 && (
                 <View style={styles.skippedBanner} testID="snapshot-skipped">
                   <Text style={styles.skippedBannerTitle}>
-                    {skippedNames.length} item{skippedNames.length !== 1 ? 's' : ''} skipped during review
+                    {skippedUnits} item{skippedUnits !== 1 ? 's' : ''} skipped during review
                   </Text>
                   <Text style={styles.skippedBannerBody} numberOfLines={3}>
                     {skippedNames.join(', ')}
@@ -4485,6 +4525,9 @@ export default function WebViewCartSheet({
                   silent one. */}
               {unverified.length > 0 && (
                 <View style={styles.skippedBanner} testID="snapshot-unverified-weight">
+                  {/* Already a unit count under MEAL-178's definition and left
+                      alone deliberately: each of these IS one sold-by-weight
+                      line, and a weight line counts 1 by presence. */}
                   <Text style={styles.skippedBannerTitle}>
                     {unverified.length} item{unverified.length !== 1 ? 's' : ''} we could not verify
                   </Text>
