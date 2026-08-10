@@ -195,8 +195,8 @@ function ts(): string {
 // HTTP statuses anti-bot systems (Akamai, DataDome, PerimeterX) use to block.
 const ANTI_BOT_STATUSES = [403, 429, 503];
 
-// Extra downward offset (px) for the floating preview's default rest in the Review
-// Ingredients flow so it doesn't sit too high vs Choose Product. Tune on-device.
+// Extra downward offset (px) for the floating preview's default rest in the Pick
+// a Substitute flow so it doesn't sit too high vs Choose Product. Tune on-device.
 const REVIEW_PREVIEW_Y_OFFSET = 28;
 
 // Cart-check copy for one over-added product: bare name, or "name ×N" when more
@@ -529,8 +529,8 @@ export default function WebViewCartSheet({
   // right). Tapping it opens the full-screen viewer (MEAL-64).
   const [viewerOpen, setViewerOpen] = useState(false);
   const preview = useDraggablePreview(88, 88, 12, () => setViewerOpen(true));
-  // Re-center the thumbnail on each new ingredient being reviewed. The Review
-  // Ingredients flow rests slightly lower than Choose Product — its search box has
+  // Re-center the thumbnail on each new ingredient being reviewed. The Pick a
+  // Substitute flow rests slightly lower than Choose Product — its search box has
   // a reason line above it, so the centered default otherwise reads as too high.
   useEffect(() => {
     const rev = searchResultsRef.current[reviewIdx];
@@ -540,9 +540,9 @@ export default function WebViewCartSheet({
     setViewerOpen(false);
     preview.reset();
   }, [reviewIdx, preview.reset, preview.setDefaultOffset]);
-  // Ingredients the user explicitly skipped during review, keyed by reviewIndex
-  // so re-deciding after Back clears the earlier skip. Reported on the done
-  // snapshot — distinct from items the automation failed to add.
+  // Ingredients the user explicitly skipped while picking substitutes, keyed by
+  // reviewIndex so re-deciding after Back clears the earlier skip. Reported on
+  // the done snapshot — distinct from items the automation failed to add.
   const [skippedByIdx, setSkippedByIdx] = useState<Record<number, string>>({});
   // MEAL-119: count items whose cart line came back sold-by-weight — neither
   // re-added nor confirmed, only reported (see UnverifiedWeightLine). Held apart
@@ -3566,7 +3566,7 @@ export default function WebViewCartSheet({
     searchResult: 'Items Not Added',
     review: currentReview?.isChoose
       ? `Choose Product (${reviewIdx + 1} of ${searchResults.length})`
-      : `Review Ingredients (${reviewIdx + 1} of ${searchResults.length})`,
+      : `Pick a Substitute (${reviewIdx + 1} of ${searchResults.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
     // One generic title for every "Mealio can't drive the store" state — the
@@ -4433,8 +4433,9 @@ export default function WebViewCartSheet({
                     <Text style={styles.doneTitle}>No items were added.</Text>
                     {/* Two different runs land here and they need different
                         words. If nothing was ever attempted (choose-a-product,
-                        or every item skipped in review) the cart was never
-                        touched. If adds WERE attempted and all came back failed,
+                        or every item skipped while picking substitutes) the
+                        cart was never touched. If adds WERE attempted and all
+                        came back failed,
                         "no products were selected" is simply false — and it is
                         exactly the run the cart check below probes, so it can
                         contradict the banner it sits above. */}
@@ -4466,7 +4467,7 @@ export default function WebViewCartSheet({
               {skippedNames.length > 0 && (
                 <View style={styles.skippedBanner} testID="snapshot-skipped">
                   <Text style={styles.skippedBannerTitle}>
-                    {skippedNames.length} item{skippedNames.length !== 1 ? 's' : ''} skipped during review
+                    {skippedNames.length} item{skippedNames.length !== 1 ? 's' : ''} you skipped
                   </Text>
                   <Text style={styles.skippedBannerBody} numberOfLines={3}>
                     {skippedNames.join(', ')}

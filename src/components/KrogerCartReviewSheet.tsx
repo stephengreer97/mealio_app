@@ -472,10 +472,14 @@ export default function KrogerCartReviewSheet({
   // ── Title ────────────────────────────────────────────────────────────────
 
   const titleMap: Record<Step, string> = {
-    qty: 'Review Ingredients',
+    // This is the ingredient LIST — check/uncheck and set quantities before
+    // anything runs. It was called "Review Ingredients", which is the name the
+    // unmatched-item step below used to carry too (MEAL-182); same title, two
+    // screens. Named for what it does, matching WebViewCartSheet's qty step.
+    qty: 'Add to Cart',
     searching: 'Finding Products…',
     searchResult: 'Items Not Added',
-    review: `Review Unmatched Ingredients (${reviewIdx + 1} of ${reviewQueue.length})`,
+    review: `Pick a Substitute (${reviewIdx + 1} of ${reviewQueue.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
   };
