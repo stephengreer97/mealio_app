@@ -117,6 +117,64 @@ export function toIntendedItem(item: ReconcilableItem): IntendedItem {
   };
 }
 
+/**
+ * What one intended item is worth as "items" (MEAL-178).
+ *
+ * "items" means TOTAL QUANTITY, not distinct products: three lines totalling
+ * seven units is seven items. A sold-by-weight line counts 1 — one line at N lb
+ * has no discrete unit count, so it is counted by PRESENCE. That is not a
+ * convenience: it is the same rule every cart counter already applies
+ * (cart-count.ts adds `count += 1` for a weight row), and the whole point of one
+ * definition is that a label and the count it gets compared against measure the
+ * same thing.
+ *
+ * Whether the amount on a weight line actually covers the meal is a different
+ * question, answered by comparing expected against real poundage — MEAL-148.
+ * Counting it as one unit here does not claim it was right, only that it is one.
+ */
+export function unitsOf(item: IntendedItem): number {
+  return item.isWeight ? 1 : Math.max(1, item.expectedQty || 1);
+}
+
+/**
+ * Units for a set of product names, resolved against what the run intended.
+ *
+ * Each name claims at most one intended item, so two near-identical cart titles
+ * cannot both bill the same requested quantity. A name matching nothing intended
+ * counts as ONE unit rather than zero: it is a product the run says it handled,
+ * and dropping it would silently shrink every count that depends on name
+ * matching succeeding — the failure mode being that a user is shown a smaller
+ * number than the truth and believes less landed than did.
+ *
+ * EXACT NAMES ARE RESERVED FIRST, in the same two passes and for the same reason
+ * as claimQty and claimCountRows: a single loose pass is order-dependent and lets
+ * a sibling swallow a claim that belongs to an exact match. Intending
+ * "H-E-B Bakery Sliced White Bread" x3 and "H-E-B White Bread" x1, a report for
+ * the latter met the former first and billed 3 units — inflating `expected` and
+ * raising a cart-check warning on a run that was correct.
+ */
+export function unitsForNames(names: readonly string[], intended: readonly IntendedItem[]): number {
+  const pool = intended.map((item) => ({ item, used: false }));
+  const claim = (name: string, exactOnly: boolean) => pool.find((c) => !c.used && (
+    exactOnly
+      ? normalizeName(c.item.name) === normalizeName(name)
+      : cartNameMatches(c.item.name, name) || cartNameMatches(name, c.item.name)
+  ));
+  // Pass 1 reserves every exact match; pass 2 lets what is left match loosely, so
+  // a stray comma or ® on one title cannot cost another its own row.
+  const claimed = new Map<number, ReturnType<typeof claim>>();
+  names.forEach((name, i) => { const hit = claim(name, true); if (hit) { hit.used = true; claimed.set(i, hit); } });
+  names.forEach((name, i) => {
+    if (claimed.has(i)) return;
+    const hit = claim(name, false);
+    if (hit) { hit.used = true; claimed.set(i, hit); }
+  });
+  return names.reduce((units, _name, i) => {
+    const hit = claimed.get(i);
+    return units + (hit ? unitsOf(hit.item) : 1);
+  }, 0);
+}
+
 /** Units in the cart that no intended item accounts for. */
 export interface OverAdd {
   name: string;
@@ -876,13 +934,15 @@ export function auditCartAfterRun(input: {
   let short: ShortAdd[] = [];
   let over: OverAdd[] = [];
   let recovered: RecoveredAdd[] = [];
+  // The full set the run meant to add. After a parallel top-up `active` is
+  // only the retry subset, so the reconcile's snapshot is preferred; the
+  // serial path never reconciles and falls back to its (unnarrowed) active set.
+  // Hoisted out of the `rows` branch: the count-shortfall check below needs the
+  // requested quantities on the header-badge stores too, and those never have rows.
+  const intendedAll = reconcileIntended.length > 0 ? reconcileIntended : active;
   if (rows) {
     const addedRows = rows.filter((r) => r.added);
     missing = findUnaddedItems(reportedAdded, addedRows.map((r) => r.name));
-    // The full set the run meant to add. After a parallel top-up `active` is
-    // only the retry subset, so the reconcile's snapshot is preferred; the
-    // serial path never reconciles and falls back to its (unnarrowed) active set.
-    const intendedAll = reconcileIntended.length > 0 ? reconcileIntended : active;
     // ONE claim over the added rows, split two ways (see splitCartLeftover).
     // Computing these separately let a single cart unit be reported as both a
     // recovery and an over-add — the same product named twice on the done
@@ -906,7 +966,14 @@ export function auditCartAfterRun(input: {
     );
     short = findShortAddedItems(addedRows, auditItems);
   }
-  const expected = reportedAdded.length;
+  // UNITS expected in the cart, not distinct products (MEAL-178). `countBefore`
+  // and `countAfter` are unit totals — every cart counter sums line quantities —
+  // so measuring `expected` in products made the comparison blind in one
+  // direction. A run that added 2 products, one of them requested ×2, expects 3
+  // units; if only 1 unit of that product landed the delta is 2 and the old
+  // expected was also 2, so `2 < 2` was false and nothing warned. That is the
+  // MEAL-185 multi-qty under-add shape, and this backstop could not see it.
+  const expected = unitsForNames(reportedAdded, intendedAll);
   const clean = missing.length === 0 && short.length === 0 && over.length === 0;
   return {
     missing,

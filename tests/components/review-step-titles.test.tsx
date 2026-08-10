@@ -114,7 +114,11 @@ describe('the review step is titled for what it is asking (MEAL-182)', () => {
       type: 'SEARCH_RESULT',
       candidates: [{ productName: 'Some Other Brand Turkey', imageUrl: null, outOfStock: false, preferences: null, price: '$8' }],
     });
-    act(() => { fireEvent.press(view.getByText(/review 1 item/i)); });
+    // The gate button, used here only to get INTO the step. MEAL-178 renamed it
+    // from "Review 1 Item" to "Review 1 Ingredient": once "item" means a unit,
+    // calling a review row an item contradicts every other count on the screen.
+    // This assertion is about the step TITLE below, not the button's wording.
+    act(() => { fireEvent.press(view.getByText(/review 1 ingredient/i)); });
 
     expect(view.queryByText(/Pick a Substitute \(1 of 1\)/)).toBeTruthy();
   });
@@ -136,7 +140,11 @@ describe('the review step is titled for what it is asking (MEAL-182)', () => {
     // The needs_weight route buffers 400ms before advancing the queue, so the
     // review screen is not reachable until that fires.
     act(() => { jest.advanceTimersByTime(500); });
-    act(() => { fireEvent.press(view.getByText(/review 1 item/i)); });
+    // The gate button, used here only to get INTO the step. MEAL-178 renamed it
+    // from "Review 1 Item" to "Review 1 Ingredient": once "item" means a unit,
+    // calling a review row an item contradicts every other count on the screen.
+    // This assertion is about the step TITLE below, not the button's wording.
+    act(() => { fireEvent.press(view.getByText(/review 1 ingredient/i)); });
 
     expect(view.queryByText(/Choose an Amount \(1 of 1\)/)).toBeTruthy();
     // The claim that matters: it must not tell the user the match failed.

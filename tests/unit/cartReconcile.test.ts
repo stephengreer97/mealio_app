@@ -15,6 +15,8 @@ import {
   splitUnverifiableTopUps,
   summarizeConfirmations,
   toIntendedItem,
+  unitsForNames,
+  unitsOf,
 } from '../../src/lib/cart-reconcile';
 import type { AttemptedAdd, IntendedItem, OverAdd, RecoveredAdd, WorkerReport } from '../../src/lib/cart-reconcile';
 import type { CartRow } from '../../src/lib/webview-scripts/cart-count';
@@ -840,7 +842,157 @@ const AUDIT_CASES: AuditCase[] = [
     countShortfall: null,
     recovered: [],
   },
+  // ── "items" means UNITS (MEAL-178) ─────────────────────────────────────────
+  // countBefore/countAfter are unit totals — every cart counter sums line
+  // quantities — so `expected` has to be units too. Measured in products, the
+  // comparison was blind in one direction and could not see a multi-qty
+  // under-add at all.
+  {
+    name: 'multi-qty under-add on a header-badge store — 3 units were requested, 1 landed',
+    rows: null,
+    reportedAdded: ['Topo Chico Mineral Water'],
+    active: [intended('Topo Chico Mineral Water', 3)],
+    reconcileIntended: [],
+    countBefore: 0,
+    countAfter: 1,
+    missing: [],
+    short: [],
+    over: [],
+    // Counted in products this was `1 < 1` — false, and the run finished silent.
+    countShortfall: { delta: 1, expected: 3 },
+  },
+  {
+    name: 'the MEAL-185 shape — two products, one requested x2, and one of its units never landed',
+    rows: null,
+    reportedAdded: ['Topo Chico Mineral Water', 'H-E-B Sour Cream 16 oz'],
+    active: [intended('Topo Chico Mineral Water', 2), intended('H-E-B Sour Cream 16 oz', 1)],
+    reconcileIntended: [],
+    countBefore: 0,
+    countAfter: 2,
+    missing: [],
+    short: [],
+    over: [],
+    // `2 < 2` was false. The per-item audit is the primary guard for this and
+    // needs rows; on a badge-only store this backstop is all there is.
+    countShortfall: { delta: 2, expected: 3 },
+  },
+  {
+    name: 'a weight line expects ONE unit however many lb were asked for — presence, not count',
+    rows: null,
+    reportedAdded: ['H-E-B Prime 1 Beef Brisket'],
+    active: [intended('H-E-B Prime 1 Beef Brisket', 4, true)],
+    reconcileIntended: [],
+    countBefore: 0,
+    countAfter: 1,
+    missing: [],
+    short: [],
+    over: [],
+    // Counting the 4 lb as 4 units would warn on a cart that is exactly right:
+    // the store's counter contributes 1 for that line and always will.
+    countShortfall: null,
+  },
+  {
+    name: 'the top-up snapshot supplies the quantities once active has narrowed to the retry subset',
+    rows: null,
+    reportedAdded: ['Milk', 'Eggs'],
+    // Only Eggs was retried, so `active` no longer carries Milk's x3.
+    active: [intended('Eggs', 1)],
+    reconcileIntended: [intended('Milk', 3), intended('Eggs', 1)],
+    countBefore: 0,
+    countAfter: 2,
+    missing: [],
+    short: [],
+    over: [],
+    countShortfall: { delta: 2, expected: 4 },
+  },
+  {
+    name: 'a reported name matching nothing intended still expects one unit, not zero',
+    rows: null,
+    // The worker reported a product title the intended set cannot be matched to.
+    // Counting it as zero would shrink `expected` below the truth and mute the
+    // check on exactly the runs where name resolution is already failing.
+    reportedAdded: ['Some Title No Intended Item Resembles'],
+    active: [intended('Milk', 1)],
+    reconcileIntended: [],
+    countBefore: 4,
+    countAfter: 4,
+    missing: [],
+    short: [],
+    over: [],
+    countShortfall: { delta: 0, expected: 1 },
+  },
 ];
+
+// ── One definition of "items" (MEAL-178) ─────────────────────────────────────
+//
+// "items" is total QUANTITY, weight-priced lines counting 1 by presence. The
+// definition is shared by the labels the user reads and the count the cart check
+// compares against, because the whole failure this fixes was the two measuring
+// different things and disagreeing in the user's favour.
+
+describe('unitsOf', () => {
+  it('is the requested quantity for an ordinary item', () => {
+    expect(unitsOf(intended('Topo Chico Mineral Water', 3))).toBe(3);
+  });
+
+  it('is ONE for a weight-priced line, whatever weight was asked for', () => {
+    expect(unitsOf(intended('H-E-B Prime 1 Beef Brisket', 4, true))).toBe(1);
+  });
+
+  it('floors at one — saved meal data can leak a zero qty', () => {
+    expect(unitsOf(intended('Milk', 0))).toBe(1);
+  });
+});
+
+describe('unitsForNames', () => {
+  const INTENDED = [
+    intended('Topo Chico Mineral Water', 3),
+    intended('H-E-B Sour Cream 16 oz', 1),
+    intended('H-E-B Prime 1 Beef Brisket', 4, true),
+  ];
+
+  it('sums the requested quantities of the items the names resolve to', () => {
+    expect(unitsForNames(['Topo Chico Mineral Water', 'H-E-B Sour Cream 16 oz'], INTENDED)).toBe(4);
+  });
+
+  it('counts a weight line once', () => {
+    expect(unitsForNames(['H-E-B Prime 1 Beef Brisket'], INTENDED)).toBe(1);
+  });
+
+  it('lets one intended item be billed once, not once per near-identical name', () => {
+    // Two cart titles both resolving to the x3 line must not report six units.
+    expect(unitsForNames(['Topo Chico Mineral Water', 'Topo Chico Mineral Water'], INTENDED)).toBe(4);
+  });
+
+  it('reserves the exact name before a sibling can swallow it', () => {
+    // The bug this pins: with a single loose pass, "H-E-B White Bread" met the
+    // longer sibling first and billed its x3, inflating `expected` and raising a
+    // cart-check warning on a run that was correct. Same exact-first rule as
+    // claimQty and claimCountRows, and for the same reason.
+    const BREAD = [
+      intended('H-E-B Bakery Sliced White Bread', 3),
+      intended('H-E-B White Bread', 1),
+    ];
+    expect(unitsForNames(['H-E-B White Bread'], BREAD)).toBe(1);
+    // And both together still add up to the whole order, in either order.
+    expect(unitsForNames(['H-E-B White Bread', 'H-E-B Bakery Sliced White Bread'], BREAD)).toBe(4);
+    expect(unitsForNames(['H-E-B Bakery Sliced White Bread', 'H-E-B White Bread'], BREAD)).toBe(4);
+  });
+
+  it('still falls back to a loose match when no exact title exists', () => {
+    // The exact pass is a reservation, not a restriction: a cart title that
+    // differs by a comma or an ® must still find its item.
+    expect(unitsForNames(['Topo Chico Mineral Water, 12 pk'], INTENDED)).toBe(3);
+  });
+
+  it('counts an unresolvable name as one unit rather than dropping it', () => {
+    expect(unitsForNames(['Nothing Here Matches That'], INTENDED)).toBe(1);
+  });
+
+  it('is zero for no names — a run that added nothing added no units', () => {
+    expect(unitsForNames([], INTENDED)).toBe(0);
+  });
+});
 
 describe('auditCartAfterRun', () => {
   it.each(AUDIT_CASES)('$name', (c) => {
