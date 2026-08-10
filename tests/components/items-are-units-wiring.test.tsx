@@ -82,11 +82,14 @@ function runToReview(productQty: number) {
   );
   act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
   post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-  // A candidate that does NOT match the term exactly, so the item cannot
-  // auto-pick and lands on the review screen where the user sets the quantity.
+  // The candidate has to do two things at once. It must not match the term
+  // EXACTLY, or the item auto-picks and never reaches review — and it must still
+  // resolve to the intended item by name, or the count falls through to the
+  // one-unit fallback for unresolvable names and the test proves nothing. A real
+  // store title for the searched product is both.
   post({
     type: 'SEARCH_RESULT',
-    candidates: [{ productName: 'Some Other Brand Cream', imageUrl: null, outOfStock: false, preferences: null, price: '$2' }],
+    candidates: [{ productName: 'Daisy Sour Cream, 16 oz', imageUrl: null, outOfStock: false, preferences: null, price: '$2' }],
   });
   act(() => { fireEvent.press(view.getByText(/review 1 ingredient/i)); });
   return view;
@@ -102,7 +105,7 @@ describe('the done screen counts the units the run intended (MEAL-178)', () => {
     fireEvent.press(view.getByText('+'));
     act(() => { fireEvent.press(view.getByText(/add to cart only/i)); });
 
-    post({ type: 'ADD_RESULT', success: true, productName: 'Some Other Brand Cream' });
+    post({ type: 'ADD_RESULT', success: true, productName: 'Daisy Sour Cream, 16 oz' });
 
     // The whole point: ONE unit landed, so the headline says one. Counting off
     // the pre-run productQty renders "3 items added to your ALDI cart!" here,
@@ -121,7 +124,7 @@ describe('the done screen counts the units the run intended (MEAL-178)', () => {
     fireEvent.press(view.getByText('+'));
     act(() => { fireEvent.press(view.getByText(/add to cart only/i)); });
 
-    post({ type: 'ADD_RESULT', success: true, productName: 'Some Other Brand Cream' });
+    post({ type: 'ADD_RESULT', success: true, productName: 'Daisy Sour Cream, 16 oz' });
 
     await waitFor(() => expect(view.queryByText(/2 items added to your ALDI cart!/i)).toBeTruthy());
   });
@@ -148,7 +151,7 @@ describe('the done screen counts the units the run intended (MEAL-178)', () => {
     post({ type: 'LOGIN_STATUS', isLoggedIn: true });
     post({
       type: 'SEARCH_RESULT',
-      candidates: [{ productName: 'Some Other Brand Cream', imageUrl: null, outOfStock: false, preferences: null, price: '$2' }],
+      candidates: [{ productName: 'Daisy Sour Cream, 16 oz', imageUrl: null, outOfStock: false, preferences: null, price: '$2' }],
     });
 
     // Three units could not be added, across one ingredient. Both numbers are on
