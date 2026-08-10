@@ -268,6 +268,28 @@ export function rawSelectorsFor(
   });
 }
 
+/**
+ * Cart-page URL for a store, honoring a remote `cartUrl` override (MEAL-156).
+ *
+ * `fallback` is the bundled table's answer. Callers decide whether an override
+ * is even eligible: cart-count.ts only consults this for stores that already
+ * ship a cart URL, so config repoints an existing probe rather than promoting a
+ * store onto a navigation path its script was never written for. See the note on
+ * getCartPageUrl.
+ *
+ * The override is already constrained to a safe absolute https URL by merge.ts
+ * (`isValidUrl`, https-only so an override cannot downgrade a store to
+ * cleartext); anything else is dropped with a warning before it reaches `current`.
+ * So this function does not re-validate — it resolves.
+ *
+ * Callers must not cache the result across a run: the point of the lever is that
+ * it changes without a build, and `getCartPagePath` derives the page-identity
+ * guard from this same value so the two can never disagree.
+ */
+export function cartUrlFor(storeId: string, fallback: string | null): string | null {
+  return current.stores[storeId]?.cartUrl ?? fallback;
+}
+
 /** Search-results URL for a term, honoring a remote searchUrlTemplate override. */
 export function searchUrlFor(storeId: string, term: string, fallback: string): string {
   const template = current.stores[storeId]?.searchUrlTemplate;
