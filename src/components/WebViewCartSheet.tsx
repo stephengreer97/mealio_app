@@ -2714,6 +2714,31 @@ export default function WebViewCartSheet({
               // prove it is the cart now posts no `items` at all, deliberately, so
               // a Walmart /cart redirect lands here every time. That is the
               // degradation the guard promises, and this is where it is paid.
+              // SAY SO. The run just fell back to believing its own workers, and
+              // until MEAL-190 it did that in silence (MEAL-190).
+              //
+              // The two ways a reconcile can fail to read the cart were reported
+              // asymmetrically, and the silent one is the LIKELY one. A probe that
+              // never answers hits the timeout in triggerCartProbe, which sets
+              // exactly this warning. A probe that answers "I cannot prove this is
+              // the cart" — `count: null`, no `items`, which is what the MEAL-152
+              // page-identity guard posts — landed here and went to the done screen
+              // with no warning at all. The comment below calls that the EXPECTED
+              // outcome rather than a rarity, so the quieter path was also the
+              // more common one.
+              //
+              // It matters because this is the state in which nothing can
+              // contradict the run: every silent add defect (MEAL-185's multi-qty
+              // under-add, MEAL-187's unhydrated zero, MEAL-188's over-adding
+              // retry) reports success on its own internal checks, and the cart
+              // diff is the only thing that ever disagreed. A run with no diff and
+              // no warning presents a guess as a verified result.
+              //
+              // Same string as the timeout path, deliberately: the user's
+              // situation is identical — we could not check your cart, go look.
+              // Splitting hairs about WHY we could not read it belongs in the log,
+              // which already carries `reason=` and `url=`.
+              setCartDeltaWarning(`Couldn't verify your ${storeName} cart — please double-check it.`);
               const { confirmed: wins, failed: lost } = reconcileFromWorkerReports(attempts);
               addResultsRef.current = wins.map((w) => ({ name: w.name, success: true }));
               setTotalAdded(wins.length);
