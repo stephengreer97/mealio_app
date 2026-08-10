@@ -8,6 +8,7 @@
 import {
   auditCartAfterRun,
   dropExplainedOverAdds,
+  dropRecoveredFailures,
   isWeightPriced,
   reconcileFromWorkerReports,
   reconcileParallelAdd,
@@ -1102,6 +1103,74 @@ describe('dropExplainedOverAdds', () => {
     const input: OverAdd[] = [{ name: CHICKEN, qty: 2 }];
     dropExplainedOverAdds(input, [CHICKEN]);
     expect(input).toEqual([{ name: CHICKEN, qty: 2 }]);
+  });
+});
+
+// ── The failed list, corrected by the cart (MEAL-177) ────────────────────────
+//
+// "Could not add: Sour Cream" is the only place a user is ever told an item
+// failed. When the after-probe finds it in the cart, that line is a false claim
+// with real cost in both directions: leave it and the user buys the item twice,
+// drop one too many and they are never told about a genuine failure and go home
+// without it. So the drop is claim-by-claim, not a name-based sweep.
+describe('dropRecoveredFailures', () => {
+  const recovery = (name: string, over: Partial<RecoveredAdd> = {}): RecoveredAdd =>
+    ({ name, cartName: name, qty: 1, matchQuality: 'exact', ...over });
+
+  it('drops the line the cart disproved, and leaves the rest', () => {
+    expect(dropRecoveredFailures(
+      ['Sour Cream', 'Tortillas'],
+      [recovery('Sour Cream')],
+    )).toEqual(['Tortillas']);
+  });
+
+  it('changes nothing when the cart recovered nothing', () => {
+    const failed = ['Sour Cream', 'Tortillas'];
+    expect(dropRecoveredFailures(failed, [])).toEqual(failed);
+  });
+
+  it('matches across the search-term / store-title gap the recovery was built on', () => {
+    // `recovered.name` is the intended SEARCH TERM ("sour cream"); a failed name
+    // is whatever the run reported, which on the serial path is the store's own
+    // product title. A stricter comparison here would never find the very line
+    // the recovery came from, and the correction would silently do nothing.
+    expect(dropRecoveredFailures(
+      ['Daisy Pure & Natural Sour Cream, 16 oz'],
+      [recovery('sour cream', { cartName: 'Daisy Pure & Natural Sour Cream, 16 oz' })],
+    )).toEqual([]);
+  });
+
+  it('cancels ONE failed line per recovery — a second near-identical failure stays reported', () => {
+    // One recovered unit proves one thing landed. Two failures whose titles both
+    // match it are not both excused by it: the user must still be told about the
+    // one the cart has nothing for, or they leave without it.
+    expect(dropRecoveredFailures(
+      ['H-E-B Sour Cream, 16 oz', 'H-E-B Sour Cream, 8 oz'],
+      [recovery('sour cream')],
+    )).toEqual(['H-E-B Sour Cream, 8 oz']);
+  });
+
+  it('keeps a failure no recovery names, however loudly the cart recovered something else', () => {
+    expect(dropRecoveredFailures(
+      ['Tortillas'],
+      [recovery('sour cream'), recovery('cumin')],
+    )).toEqual(['Tortillas']);
+  });
+
+  it('drops a loose recovery too — the advice it carries is safe either way', () => {
+    // matchQuality only bounds what may be claimed as ADDED (see RecoveredAdd);
+    // it is not a reason to keep telling the user an item failed while a matching
+    // line sits in their cart.
+    expect(dropRecoveredFailures(
+      ['H-E-B Fine Ground Cumin, 1.5 oz'],
+      [recovery('cumin', { matchQuality: 'loose' })],
+    )).toEqual([]);
+  });
+
+  it('does not mutate the caller\'s failed list', () => {
+    const failed = ['Sour Cream', 'Tortillas'];
+    dropRecoveredFailures(failed, [recovery('Sour Cream')]);
+    expect(failed).toEqual(['Sour Cream', 'Tortillas']);
   });
 });
 

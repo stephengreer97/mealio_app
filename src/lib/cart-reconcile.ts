@@ -691,17 +691,21 @@ export interface CartCheckFindings {
   countShortfall: { delta: number; expected: number } | null;
 }
 
-/** Did the run report adding this item? Matched in BOTH directions on purpose:
- *  the intended title is a search term ("sour cream") while a reported title is
- *  the store's product name ("Daisy Pure & Natural Sour Cream, 16 oz"), and
- *  cartNameMatches only asks whether the second argument's tokens are present in
- *  the first. Reading it one way alone would classify half the reported items as
- *  unreported. Erring towards "reported" is the safe direction here: it costs a
- *  recovery we don't announce, never a false "it's already in your cart". */
+/** Do an intended title and a title the RUN reported name the same product?
+ *  Matched in BOTH directions on purpose: the intended title is a search term
+ *  ("sour cream") while a reported title is the store's product name ("Daisy
+ *  Pure & Natural Sour Cream, 16 oz"), and cartNameMatches only asks whether the
+ *  second argument's tokens are present in the first. Reading it one way alone
+ *  would classify half the reported items as unreported. */
+function namesSameProduct(intended: string, reported: string): boolean {
+  return cartNameMatches(intended, reported) || cartNameMatches(reported, intended);
+}
+
+/** Did the run report adding this item? Erring towards "reported" is the safe
+ *  direction here: it costs a recovery we don't announce, never a false "it's
+ *  already in your cart". */
 function wasReported(item: IntendedItem, reportedAdded: string[]): boolean {
-  return reportedAdded.some(
-    (n) => cartNameMatches(item.name, n) || cartNameMatches(n, item.name),
-  );
+  return reportedAdded.some((n) => namesSameProduct(item.name, n));
 }
 
 /**
@@ -894,6 +898,45 @@ export function dropExplainedOverAdds(over: OverAdd[], explainedRows: string[]):
     if (hit) hit.qty -= 1;
   }
   return remaining.filter((o) => o.qty > 0);
+}
+
+/**
+ * Take the items the cart proved landed back out of the run's failed list
+ * (MEAL-177).
+ *
+ * The done screen tells the user "Could not add: X" from the workers' reports,
+ * and the after-probe is the only thing that ever checks them. When it finds X
+ * in the cart, the screen is left asserting two opposite things about one
+ * product — and there is nowhere else the user was told X failed, so that line
+ * IS the claim the cart just disproved. Correcting it is the fix; a banner
+ * printed underneath explaining that the line above is wrong is not.
+ *
+ * Only the failed list is corrected here. A recovery is NOT promoted to
+ * "added": `matchQuality: 'loose'` means a name matched, not that this run put
+ * the product there, and the added headline is the run's claim about what it
+ * did. What both qualities support is the cart statement the caller renders
+ * instead — it is in your cart, don't add it again — which is the advice that
+ * is safe either way (see RecoveredAdd).
+ *
+ * ONE claim per recovery, the same pool discipline as dropExplainedOverAdds and
+ * for a sharper reason: dropping a name here means the user is never told that
+ * item failed, so they do not buy it. One recovered unit cancels one failed
+ * line and no more — two failures with near-identical titles and a single
+ * recovery leave one still reported.
+ *
+ * Matching is namesSameProduct, i.e. the matcher the recovery itself was built
+ * with (`recovered.name` is the intended search term; a failed name is whatever
+ * the run reported, usually the store's product title). A stricter comparison
+ * here would routinely fail to find the very line the recovery came from.
+ */
+export function dropRecoveredFailures(failedNames: string[], recovered: RecoveredAdd[]): string[] {
+  if (recovered.length === 0) return failedNames;
+  const lines = failedNames.map((name) => ({ name, claimed: false }));
+  for (const r of recovered) {
+    const hit = lines.find((l) => !l.claimed && namesSameProduct(r.name, l.name));
+    if (hit) hit.claimed = true;
+  }
+  return lines.filter((l) => !l.claimed).map((l) => l.name);
 }
 
 /**

@@ -18,6 +18,7 @@ import FloatingPreviewImage from './FloatingPreviewImage';
 import ProductImageViewer from './ProductImageViewer';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
+import ExpandableNotice from './ui/ExpandableNotice';
 import { Meal } from '../types';
 // Two entry points on purpose: useStores() where the value is rendered, and
 // getStores() at the two message-handler sites, which read the CURRENT catalog
@@ -51,7 +52,7 @@ import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-he
 import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
-import { auditCartAfterRun, dropExplainedOverAdds, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
+import { auditCartAfterRun, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
@@ -640,6 +641,16 @@ export default function WebViewCartSheet({
   // Names of items that could not be added, shown on the done screen so the
   // failure is specific ("Sour Cream could not be added") instead of a bare count.
   const [failedNames, setFailedNames] = useState<string[]>([]);
+  // Mirror of the above for onMessage, which is created once (deps []) and so
+  // closes over this run's initial []. The after-probe corrects this list from
+  // the cart read (see the RECOVERED branch), and it has to start from what the
+  // screen is currently claiming. Written only through setFailedItems, so the
+  // two cannot drift.
+  const failedNamesRef = useRef<string[]>([]);
+  const setFailedItems = useCallback((names: string[]) => {
+    failedNamesRef.current = names;
+    setFailedNames(names);
+  }, []);
 
   // WebView refs
   const webviewRef = useRef<WebView>(null);
@@ -713,8 +724,8 @@ export default function WebViewCartSheet({
     if (failures.length > 0) {
       console.log(`[Cart ${ts()}]`, 'failed adds:', JSON.stringify(failures.map((f) => ({ name: f.name, reason: f.reason ?? 'unknown' }))));
     }
-    setFailedNames(failures.map((f) => f.name));
-  }, []);
+    setFailedItems(failures.map((f) => f.name));
+  }, [setFailedItems]);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
   // What every "N items" on screen is counted against (MEAL-178). "items" means
   // UNITS — the total quantity, weight-priced lines counting 1 by presence — so
@@ -1467,7 +1478,7 @@ export default function WebViewCartSheet({
       setProcessedCount(0);
       setTotalFailed(0);
       setAddedNames([]);
-      setFailedNames([]);
+      setFailedItems([]);
       setBlockReason(null);
       blockReasonRef.current = null;
       freshStoreUnavailableRef.current = false;
@@ -2805,7 +2816,7 @@ export default function WebViewCartSheet({
               setTotalAdded(wins.length);
               setTotalFailed(lost.length);
               setAddedNames(wins.map((w) => w.name));
-              setFailedNames(lost.map((l) => l.name));
+              setFailedItems(lost.map((l) => l.name));
               reconcileFinalizedRef.current = true;
               setStep('done');
               return;
@@ -3047,6 +3058,29 @@ export default function WebViewCartSheet({
                 detail: { phase: 'after', recovered: recovered.length, reportedAdded: reportedAddedCount },
                 code: 'confirm_failed',
               });
+              // Correct what the screen SAYS, not just what the fleet records
+              // (MEAL-177). "Could not add: Sour Cream" is printed one line above
+              // this banner, and it is the only place the user is ever told an
+              // item failed — there is no live per-item failure rail, and the
+              // mid-run "Items Not Added" gate carries search failures, which are
+              // held out of the intended set and so can never come back as a
+              // recovery. So the banner was a rebuttal of the sentence directly
+              // above it, or (on the nothing-added branch, the likelier one for a
+              // recovery) a correction to a claim that never named anything.
+              //
+              // Dropped from failed, deliberately not moved to added: a `loose`
+              // recovery is a name match and the added headline is the run's own
+              // claim about what it put there. The banner says what holds either
+              // way — it is in your cart, don't add it again.
+              const stillFailed = dropRecoveredFailures(failedNamesRef.current, recovered);
+              if (stillFailed.length !== failedNamesRef.current.length) {
+                setFailedItems(stillFailed);
+                // Kept in step by hand because the two are set together on every
+                // finalize path (see compileFailedNames' callers); totalFailed
+                // alone gates the "Could not add" line, so leaving it behind
+                // would re-print the corrected items as a bare count.
+                setTotalFailed(stillFailed.length);
+              }
             }
             // ── North-star correction (MEAL-3 × MEAL-47) ─────────────────────
             //
@@ -3097,8 +3131,16 @@ export default function WebViewCartSheet({
             if (missing.length > 0 || short.length > 0 || over.length > 0 || recovered.length > 0) {
               const parts: string[] = [];
               if (recovered.length > 0) {
-                const names = recovered.map((r) => r.cartName || r.name).join(', ');
-                parts.push(`${recovered.length} item${recovered.length === 1 ? ' we reported as not added is' : 's we reported as not added are'} in your cart already (${names}) — don't add ${recovered.length === 1 ? 'it' : 'them'} again`);
+                // Says what the CART holds, and nothing about what the run
+                // claimed (MEAL-177). The old wording — "N items we reported as
+                // not added are in your cart already" — cited a report the user
+                // could not be assumed to have read: it was either the line
+                // directly above, now corrected, or nothing at all. What is left
+                // is the fact and the action, which is all this ever had to be.
+                const names = recovered.map((r) => r.cartName || r.name);
+                parts.push(recovered.length === 1
+                  ? `${names[0]} is already in your cart — don't add it again`
+                  : `${recovered.length} items are already in your cart (${names.join(', ')}) — don't add them again`);
               }
               if (missing.length > 0) {
                 parts.push(`${missing.length} item${missing.length === 1 ? '' : 's'} may not have been added (${missing.join(', ')})`);
@@ -4627,14 +4669,22 @@ export default function WebViewCartSheet({
                   the automation-failure count above — these were passed over on
                   purpose, so we surface them plainly rather than as a warning. */}
               {skippedNames.length > 0 && (
-                <View style={styles.skippedBanner} testID="snapshot-skipped">
-                  <Text style={styles.skippedBannerTitle}>
-                    {skippedUnits} item{skippedUnits !== 1 ? 's' : ''} you skipped
-                  </Text>
-                  <Text style={styles.skippedBannerBody} numberOfLines={3}>
-                    {skippedNames.join(', ')}
-                  </Text>
-                </View>
+                // Tap to see ALL of them (MEAL-177). Collapsed it renders what it
+                // always did — the count, and the names under a 3-line cap — so
+                // nothing that used to be readable stopped being. What is new is
+                // that the cap now LIFTS: before, a run that skipped a dozen
+                // items showed three of them with no way to reach the rest, and
+                // looked complete while doing it.
+                //
+                // Count and wording come from main, not from this branch: the
+                // count is UNITS (MEAL-178) and the phrasing is MEAL-182's. Taking
+                // this branch's title wholesale would have silently reverted both.
+                <ExpandableNotice
+                  testID="snapshot-skipped"
+                  containerStyle={styles.skippedBanner}
+                  title={`${skippedUnits} item${skippedUnits !== 1 ? 's' : ''} you skipped`}
+                  body={skippedNames.join(', ')}
+                />
               )}
 
               {/* MEAL-119: count items whose cart line came back priced by weight.
