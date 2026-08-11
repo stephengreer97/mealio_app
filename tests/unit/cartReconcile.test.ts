@@ -10,9 +10,11 @@ import {
   dropExplainedOverAdds,
   dropRecoveredFailures,
   isWeightPriced,
+  landedIncrements,
   reconcileFromWorkerReports,
   reconcileParallelAdd,
   shouldProbeAfterRun,
+  snapToWeightLadder,
   splitUnverifiableTopUps,
   summarizeConfirmations,
   toIntendedItem,
@@ -432,6 +434,188 @@ describe('reconcileParallelAdd', () => {
     expect(out.countItemsOnWeightRows).toEqual([
       { index: 0, cartName: 'H-E-B Deli Roast Beef, lb' },
     ]);
+  });
+});
+
+// ── Increment-style weight items: the after check (MEAL-148) ─────────────────
+//
+// The item this whole section is about: the meal counts it in units ("2 chicken
+// breasts"), the store prices it by weight, and the store's line has no weight
+// dropdown — so the add clicks an increment N times. Until now the cart could
+// not say whether that worked, and the run reported the line as unverified.
+// It can now: N clicks owe the line N × increment pounds.
+
+/** A sold-by-weight cart row as diffCartItems emits it: the line's total, the
+ *  poundage THIS RUN added, and the line's own option ladder. */
+const weightRow = (
+  name: string,
+  addedWeight: number,
+  options: number[] = [0.25, 0.5, 0.75, 1, 1.25, 1.5],
+  weight = addedWeight,
+): CartRow => ({ name, qty: 1, added: true, isWeight: true, weight, addedWeight, weightOptions: options });
+
+/** An increment-style item: counted in units, `weightStepLb` pounds per click. */
+const incrementAttempt = (
+  name: string,
+  expectedQty: number,
+  stepLb: number,
+  report: Partial<WorkerReport> | null,
+): AttemptedAdd => ({ ...attempt(name, expectedQty, report), weightStepLb: stepLb });
+
+describe('snapToWeightLadder', () => {
+  it('leaves the target alone when the line offered no ladder', () => {
+    expect(snapToWeightLadder(0.75, undefined)).toBe(0.75);
+    expect(snapToWeightLadder(0.75, [])).toBe(0.75);
+  });
+
+  it('picks the closest weight the store actually sells', () => {
+    expect(snapToWeightLadder(1.2, [0.5, 1, 1.25, 1.5])).toBe(1.25);
+  });
+
+  it('keeps the LOWER option on a tie — the add path\'s tie-break, so both snap the same way', () => {
+    expect(snapToWeightLadder(1.25, [1, 1.5])).toBe(1);
+  });
+
+  it('ignores a placeholder option', () => {
+    expect(snapToWeightLadder(0.6, [0, 0.5, 1])).toBe(0.5);
+  });
+});
+
+describe('landedIncrements', () => {
+  it('counts the whole request landed when the line gained what N clicks owe it', () => {
+    expect(landedIncrements({ expectedQty: 2, stepLb: 0.25, addedLb: 0.5 })).toBe(2);
+  });
+
+  it('counts the clicks that DID land when one went missing', () => {
+    expect(landedIncrements({ expectedQty: 3, stepLb: 0.25, addedLb: 0.5 })).toBe(2);
+  });
+
+  it('snaps the expectation to the line\'s own ladder before comparing', () => {
+    // 3 × 0.4 lb = 1.2, which this line cannot hold; 1 lb is the closest weight
+    // it can. A run that got 1 lb got everything there was to get.
+    expect(landedIncrements({ expectedQty: 3, stepLb: 0.4, addedLb: 1, options: [0.5, 1, 1.5, 2] })).toBe(3);
+  });
+
+  it('treats a line that came back heavier than asked as covered', () => {
+    expect(landedIncrements({ expectedQty: 2, stepLb: 0.25, addedLb: 0.75 })).toBe(2);
+  });
+
+  it('refuses to decide with no increment or no poundage', () => {
+    expect(landedIncrements({ expectedQty: 2, stepLb: 0, addedLb: 0.5 })).toBeNull();
+    expect(landedIncrements({ expectedQty: 2, stepLb: 0.25, addedLb: 0 })).toBeNull();
+  });
+
+  it('refuses to decide when the shortfall is not a whole number of clicks', () => {
+    // The line moved by 0.3 lb against a 0.25 lb click: something we do not
+    // understand set this line, so we do not get to pronounce on it.
+    expect(landedIncrements({ expectedQty: 3, stepLb: 0.25, addedLb: 0.3 })).toBeNull();
+  });
+
+  it('never reports the whole order missing off a line that grew — that is the double-buy branch', () => {
+    expect(landedIncrements({ expectedQty: 1, stepLb: 0.25, addedLb: 0.25 })).toBe(1);
+    // A line whose smallest option is 1 lb, against an item we believe clicks in
+    // 0.25 lb: the snap puts the expectation a full order above what the line
+    // gained, so the arithmetic would "prove" nothing landed on a line that
+    // demonstrably grew. Two facts that contradict each other — refuse, rather
+    // than re-add the full quantity against a line that plainly took something.
+    expect(landedIncrements({ expectedQty: 2, stepLb: 0.25, addedLb: 0.5, options: [1, 2, 3] })).toBeNull();
+  });
+});
+
+describe('reconcileParallelAdd — increment-style weight items', () => {
+  it('confirms the item when the line gained what the clicks owe it', () => {
+    const out = reconcileParallelAdd(
+      [incrementAttempt('chicken breast', 2, 0.25, { success: true, productName: 'H-E-B Boneless Chicken Breast' })],
+      [weightRow('H-E-B Boneless Chicken Breast', 0.5)],
+    );
+    expect(out.confirmed).toEqual([{ index: 0, name: 'H-E-B Boneless Chicken Breast' }]);
+    expect(out.topUps).toEqual([]);
+    // Neither reported as unverifiable nor as a line nothing intended: it is
+    // this item's line, and the arithmetic says so.
+    expect(out.countItemsOnWeightRows).toEqual([]);
+    expect(out.overAdds).toEqual([]);
+  });
+
+  it('tops up exactly the clicks that are missing, never the whole order', () => {
+    const out = reconcileParallelAdd(
+      [incrementAttempt('chicken breast', 3, 0.25, { success: true, productName: 'H-E-B Boneless Chicken Breast' })],
+      [weightRow('H-E-B Boneless Chicken Breast', 0.5)],
+    );
+    expect(out.confirmed).toEqual([]);
+    expect(out.topUps).toEqual([{ index: 0, shortfall: 1 }]);
+    // Decided, so it is not held back from the retry — and the retry is one
+    // click, which is the whole point: re-adding ×3 here buys the meat twice.
+    expect(out.countItemsOnWeightRows).toEqual([]);
+    expect(splitUnverifiableTopUps(out).retry).toEqual([{ index: 0, shortfall: 1 }]);
+    expect(out.overAdds).toEqual([]);
+  });
+
+  it('credits the run with the poundage IT added, not with the line the user had already started', () => {
+    // Cart line reads 0.75 lb, but 0.25 of it was the user's own. The run asked
+    // for 3 clicks and landed 2.
+    const out = reconcileParallelAdd(
+      [incrementAttempt('roast beef', 3, 0.25, { success: true, productName: 'H-E-B Deli Roast Beef, lb' })],
+      [weightRow('H-E-B Deli Roast Beef, lb', 0.5, undefined, 0.75)],
+    );
+    expect(out.topUps).toEqual([{ index: 0, shortfall: 1 }]);
+  });
+
+  it('reports, and never re-adds, an item whose increment nobody captured', () => {
+    // No weightStepLb — the pre-MEAL-147 shape, or a store whose cart read emits
+    // no weight rows. Unchanged from before the arithmetic existed.
+    const out = reconcileParallelAdd(
+      [attempt('roast beef', 3, { success: true, productName: 'H-E-B Deli Roast Beef, lb' })],
+      [weightRow('H-E-B Deli Roast Beef, lb', 0.5)],
+    );
+    expect(out.topUps).toEqual([{ index: 0, shortfall: 3 }]);
+    expect(out.countItemsOnWeightRows).toEqual([{ index: 0, cartName: 'H-E-B Deli Roast Beef, lb' }]);
+    expect(splitUnverifiableTopUps(out).retry).toEqual([]);
+  });
+
+  it('reports, and never re-adds, an item whose numbers do not reconcile', () => {
+    // The line gained 0.3 lb against a 0.25 lb click. Undecidable is a verdict we
+    // already know how to route: report it, buy nothing.
+    const out = reconcileParallelAdd(
+      [incrementAttempt('roast beef', 3, 0.25, { success: true, productName: 'H-E-B Deli Roast Beef, lb' })],
+      [weightRow('H-E-B Deli Roast Beef, lb', 0.3)],
+    );
+    expect(out.confirmed).toEqual([]);
+    expect(out.countItemsOnWeightRows).toEqual([{ index: 0, cartName: 'H-E-B Deli Roast Beef, lb' }]);
+    expect(splitUnverifiableTopUps(out).unverified).toEqual([
+      { index: 0, cartName: 'H-E-B Deli Roast Beef, lb', shortfall: 3 },
+    ]);
+  });
+
+  it('gives one weight line to one item, whichever way each is decided', () => {
+    // Two deli items, one line. The first claims it and is confirmed; the second
+    // finds nothing left and reports its own full shortfall — it is NOT blamed on
+    // a line already spoken for.
+    const out = reconcileParallelAdd(
+      [
+        incrementAttempt('roast beef', 2, 0.25, { success: true, productName: 'H-E-B Deli Roast Beef, lb' }),
+        incrementAttempt('deli roast beef', 2, 0.25, { success: true, productName: 'H-E-B Deli Roast Beef, lb' }),
+      ],
+      [weightRow('H-E-B Deli Roast Beef, lb', 0.5)],
+    );
+    expect(out.confirmed).toEqual([{ index: 0, name: 'H-E-B Deli Roast Beef, lb' }]);
+    expect(out.topUps).toEqual([{ index: 1, shortfall: 2 }]);
+    expect(out.countItemsOnWeightRows).toEqual([]);
+  });
+
+  it('leaves an item with an ordinary count row alone — the weight pass is for what the count pool could not explain', () => {
+    const out = reconcileParallelAdd(
+      [incrementAttempt('chicken breast', 2, 0.25, { success: true, productName: 'H-E-B Chicken Breast' })],
+      [row('H-E-B Chicken Breast', 2)],
+    );
+    expect(out.confirmed).toEqual([{ index: 0, name: 'H-E-B Chicken Breast' }]);
+    expect(out.overAdds).toEqual([]);
+  });
+
+  it('counts a confirmed increment item as ONE item, because that is what the cart counts', () => {
+    // The cart holds one line whatever the click count, and every counter this is
+    // compared against counts it once. Two clicks reported as "2 items" against a
+    // cart delta of 1 is how a correct run reads as short.
+    expect(unitsOf({ name: 'H-E-B Deli Roast Beef, lb', expectedQty: 3, isWeight: false, weightStepLb: 0.25 })).toBe(1);
   });
 });
 
@@ -1252,6 +1436,49 @@ describe('auditCartAfterRun — the retry exit, beside the unverified banner', (
     expect(explained).toEqual([UNVERIFIED_LINE]);
     expect(dropExplainedOverAdds(reconciled.overAdds, explained)).toEqual([]);
     expect(audit(explained).over).toEqual([{ name: COOKIES, qty: 1 }]);
+  });
+});
+
+// ── The after-probe, for an item that lands as a weight line (MEAL-148) ───────
+//
+// Once the reconcile can CONFIRM an increment-style item off its poundage, that
+// item is no longer named as unverified — so the row is no longer held out of
+// the over-add check by name, and this audit has to know on its own that a deli
+// line is where a ×3 deli order lives. Otherwise the fix for one warning would
+// have manufactured the other.
+describe('auditCartAfterRun — an increment-style item lands as a weight line', () => {
+  const DELI = 'H-E-B Deli Roast Beef, lb';
+  const incrementItem = (name: string, expectedQty: number): IntendedItem =>
+    ({ name, expectedQty, isWeight: false, weightStepLb: 0.25 });
+  const auditDeli = (extraRows: CartRow[] = []) =>
+    auditCartAfterRun({
+      rows: [row(DELI, 1, true), ...extraRows],
+      reportedAdded: [DELI],
+      active: [incrementItem(DELI, 3)],
+      reconcileIntended: [],
+      countBefore: 0,
+      countAfter: 1 + extraRows.length,
+    });
+
+  it("never calls the line an item Mealio didn't intend", () => {
+    expect(auditDeli().over).toEqual([]);
+  });
+
+  it('reports no shortfall of any other kind either', () => {
+    const out = auditDeli();
+    expect(out.missing).toEqual([]);
+    expect(out.short).toEqual([]);
+    expect(out.recovered).toEqual([]);
+  });
+
+  it('counts the order as the ONE cart line it became, not as three units', () => {
+    // The cart badge moved by 1 because one line was added. Expecting 3 against
+    // that delta is how a correct run reads as short — see unitsOf.
+    expect(auditDeli().countShortfall).toBeNull();
+  });
+
+  it('still surfaces a line nothing intended on the same run', () => {
+    expect(auditDeli([row('Impulse Candy Bar', 1)]).over).toEqual([{ name: 'Impulse Candy Bar', qty: 1 }]);
   });
 });
 

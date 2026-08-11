@@ -66,4 +66,49 @@ describe('diffCartItems', () => {
       { name: 'B', qty: 2, added: false },
     ]);
   });
+
+  // ── Sold-by-weight lines (MEAL-148) ────────────────────────────────────────
+  //
+  // A weight line carries no unit count, so the diff classifies it by POUNDAGE.
+  // What the reconcile then checks an expectation against is the poundage THIS
+  // RUN added — the row's own `weight` is the cart's total and belongs to the
+  // user, not to the run.
+  describe('weight lines carry the run\'s own poundage, not just the line total', () => {
+    const deli = (lb: number) => ({
+      name: 'H-E-B Deli Roast Beef, lb',
+      qty: 1,
+      isWeight: true,
+      weight: lb,
+      weightOptions: [0.25, 0.5, 0.75, 1],
+    });
+
+    it('a brand-new weight line credits the run with all of it', () => {
+      const [green] = diffCartItems([], [deli(0.5)]);
+      expect(green).toMatchObject({ added: true, weight: 0.5, addedWeight: 0.5 });
+    });
+
+    it('a line the user had already started credits the run with the INCREASE only', () => {
+      // 0.25 lb was theirs; the run clicked twice more. Reading `weight` here
+      // would call a 0.5 lb order covered by a line that only gained 0.5 — true
+      // by luck — and would call it covered even if the run had added nothing.
+      const [green] = diffCartItems([deli(0.25)], [deli(0.75)]);
+      expect(green).toMatchObject({ added: true, weight: 0.75, addedWeight: 0.5 });
+    });
+
+    it('carries the row\'s option ladder through to the reconcile', () => {
+      const [green] = diffCartItems([], [deli(0.5)]);
+      expect(green.weightOptions).toEqual([0.25, 0.5, 0.75, 1]);
+    });
+
+    it('a weight line that did not grow is grey and claims no added poundage', () => {
+      const [grey] = diffCartItems([deli(0.5)], [deli(0.5)]);
+      expect(grey.added).toBe(false);
+      expect(grey.addedWeight).toBeUndefined();
+    });
+
+    it('float noise in the subtraction does not leak into the delta', () => {
+      const [green] = diffCartItems([deli(0.1)], [deli(0.3)]);
+      expect(green.addedWeight).toBe(0.2);
+    });
+  });
 });

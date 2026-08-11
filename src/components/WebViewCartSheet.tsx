@@ -110,8 +110,10 @@ interface SearchResult {
  * the user one slice and calls the order complete). It is reported instead, on
  * the done screen, with no decision asked of the user.
  *
- * See splitUnverifiableTopUps for why this exists at all, and MEAL-148 for the
- * fix that removes it.
+ * NARROWED by MEAL-148: where the item's per-click increment is known, the
+ * poundage the line gained now answers the question outright, so those items are
+ * confirmed or topped up by the missing clicks and never reach this banner. What
+ * still does is the case the arithmetic cannot decide. See splitUnverifiableTopUps.
  */
 interface UnverifiedWeightLine {
   /** What the meal asked for — the item's search term. */
@@ -765,7 +767,10 @@ export default function WebViewCartSheet({
   // The FULL intended add set (every item we tried to add, with expected qty),
   // captured before the retry top-up narrows activeItemsRef to the retry subset.
   // Used by the final cart check to flag over-adds / unintended additions.
-  const reconcileIntendedRef = useRef<{ name: string; expectedQty: number; isWeight: boolean }[]>([]);
+  // IntendedItem, not a structural copy of it: the increment (`weightStepLb`) has
+  // to survive into the after-check, which is what lets a deli line the run added
+  // by clicking be recognised as that item's rather than as an unintended add.
+  const reconcileIntendedRef = useRef<IntendedItem[]>([]);
   // MEAL-119: the cart titles this run reports on the done screen as sold-by-weight
   // lines it could not verify (the unverified banner names each one). Held in a ref
   // because the only readers are inside onMessage (deps []), and BOTH of the
@@ -2856,9 +2861,14 @@ export default function WebViewCartSheet({
             // unattended re-add of the full quantity (an over-add, and money) or a
             // presence confirm off the weight row (a silent under-add): a stated
             // under-add is the only one of the three that does not break a rule
-            // without telling anyone. MEAL-148 replaces it with the real answer —
-            // expected weight (productQty × increment) against the line's actual
-            // poundage.
+            // without telling anyone.
+            //
+            // MEAL-148 took the deciding away from this branch: an increment item
+            // whose per-click weight we know is settled by arithmetic upstream —
+            // productQty × increment, snapped to the line's own option ladder,
+            // against the poundage the line gained — and comes back as a
+            // confirmation or as a top-up of the clicks that are missing. Only what
+            // the arithmetic refused to decide still arrives here.
             const unverified: UnverifiedWeightLine[] = routing.unverified.map((u) => ({
               term: active[u.index]?.searchTerm || active[u.index]?.ingredientName || u.cartName,
               cartName: u.cartName,
@@ -2910,10 +2920,13 @@ export default function WebViewCartSheet({
               confirmed: confirmed.length,
               retry: retryItems.length,
               review: reviewFailures.length,
-              // How often the intent-vs-cart-row disagreement fires — items the run
-              // could neither re-add nor confirm. Nobody is asked anything, so the
-              // name says what actually happened; MEAL-148 needs the frequency to
-              // size the real fix.
+              // How often the intent-vs-cart-row disagreement is left UNDECIDED —
+              // items the run could neither re-add nor confirm. Nobody is asked
+              // anything, so the name says what actually happened. Since MEAL-148
+              // the deciding cases (increment known, poundage read) never reach it,
+              // so this is now the size of what the arithmetic cannot answer — a
+              // number that should trend to zero as the increment is captured for
+              // more products, and a signal if it doesn't.
               weightRowUnverified: routing.unverified.length,
             };
             if (retryItems.length === 0 && reviewFailures.length === 0 && routing.unverified.length === 0) {
