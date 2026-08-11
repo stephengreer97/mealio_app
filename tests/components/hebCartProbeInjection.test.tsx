@@ -97,6 +97,21 @@ function probeIdOf(n: number): string {
   return m[1];
 }
 
+/** The first thing a ladder posts, before any request goes out. An injection
+ *  that found a ladder already running in that document returns WITHOUT sending
+ *  this — which is how the sheet tells a real attempt from an inert one. */
+function ladderStarted(n = probeInjections().length - 1) {
+  act(() => {
+    mainWebView().onMessage({
+      nativeEvent: {
+        data: JSON.stringify({
+          type: 'EXTRACT_DEBUG', step: 'cart_query_probe_start', probeId: probeIdOf(n), rungs: 5,
+        }),
+      },
+    });
+  });
+}
+
 /** What the ladder itself posts when it reaches its last line. Without this the
  *  sheet has no evidence a ladder survived the page it ran on. */
 function ladderFinished(n = probeInjections().length - 1) {
@@ -139,12 +154,22 @@ function runToFirstLoad(url = 'https://www.heb.com/cart') {
 }
 
 beforeEach(async () => {
+  // The sheet arms real timers the moment a run starts (the login-check safety
+  // net, the cart-probe net), and nothing in these tests waits them out. Left on
+  // real timers they outlive the suite and jest force-exits the worker — which
+  // it does not do for WebViewCartSheet.test.tsx, because that file never gets a
+  // run under way.
+  jest.useFakeTimers();
   __resetAutomationConfigForTests();
   const g = globalThis as any;
   if (g.__mealioWebViews) { g.__mealioWebViews.injected = []; g.__mealioWebViews.instances = []; }
 });
 
-afterEach(() => __resetAutomationConfigForTests());
+afterEach(() => {
+  jest.clearAllTimers();
+  jest.useRealTimers();
+  __resetAutomationConfigForTests();
+});
 
 describe('the MEAL-16 probe ladder reaches the WebView', () => {
   const armRail = () => loadAutomationConfig(async () => ({
@@ -195,7 +220,8 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
 
   it('retries on /cart\'s own re-render, which arrives at the IDENTICAL url', async () => {
     await armRail();
-    runToFirstLoad(); // /cart, ladder injected, nothing back yet
+    runToFirstLoad(); // /cart, ladder injected and running
+    ladderStarted();
     // H-E-B re-renders /cart a beat after load — the dedup above deliberately
     // lets those same-URL loads through while the count probe is pending — and
     // that re-render is what kills injected scripts there. So the same URL has to
@@ -203,11 +229,35 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
     // Two ladders alive at once is prevented in the DOCUMENT, not here; see
     // 'runs ONE ladder per document' in tests/unit/hebCartProbe.test.ts.
     load('https://www.heb.com/cart');
+    ladderStarted();
     expect(probeInjections()).toHaveLength(2);
-    // …and the budget still stops it, however many times the page re-renders.
+    // …and the budget of real attempts still stops it, however many re-renders.
     load('https://www.heb.com/cart');
+    ladderStarted();
     load('https://www.heb.com/cart');
     expect(probeInjections()).toHaveLength(3);
+  });
+
+  it('charges the budget to ladders that STARTED, not to injections', async () => {
+    await armRail();
+    // Nothing here ever reports a start: this is the shape of an injection that
+    // landed in a document where a ladder was already running, which H-E-B's
+    // same-URL /cart re-render produces. Charging those to the budget would
+    // spend it all on /cart and starve the search-page rung.
+    runToFirstLoad();
+    cartCounted();
+    for (const u of ['/a', '/b', '/c']) load('https://www.heb.com' + u);
+    expect(probeInjections()).toHaveLength(4);
+  });
+
+  it('still stops injecting eventually, even if none of them ever starts', async () => {
+    await armRail();
+    runToFirstLoad();
+    cartCounted();
+    for (let i = 0; i < 20; i++) load(`https://www.heb.com/p${i}`);
+    // The flood stop, so a page that reloads in a loop cannot make the sheet
+    // inject forever just because every attempt was inert.
+    expect(probeInjections()).toHaveLength(8);
   });
 
   it('retries a killed SEARCH-page ladder — completion retires the clause, not injection', async () => {
@@ -215,7 +265,8 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
     runToFirstLoad(); // /cart
     ladderFinished();
     cartCounted();
-    load('https://www.heb.com/search?q=a'); // injected, then killed by the next nav
+    load('https://www.heb.com/search?q=a'); // starts, then killed by the next nav
+    ladderStarted();
     load('https://www.heb.com/search?q=b');
     expect(probeInjections()).toHaveLength(3);
     // …and once one of them answers, the clause is spent.
@@ -225,7 +276,8 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
 
   it('does not spend the run\'s only shot on a page that killed the ladder', async () => {
     await armRail();
-    runToFirstLoad(); // injected, but no cart_query_probe_done ever comes back
+    runToFirstLoad(); // injected and running, but no done ever comes back
+    ladderStarted();
     cartCounted();
     load('https://www.heb.com/product-detail/tortillas/1234');
     expect(probeInjections()).toHaveLength(2);
@@ -234,11 +286,15 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
   it('stops retrying after three ladders, however many pages load', async () => {
     await armRail();
     runToFirstLoad();
+    ladderStarted();
     cartCounted();
-    for (const u of ['/a', '/b', '/c', '/d', '/e']) load('https://www.heb.com' + u);
-    // Nothing ever reports done, so every load is a retry candidate — and the
-    // bound is what keeps a page that reloads in a loop from turning a
-    // diagnostic into a request flood.
+    for (const u of ['/a', '/b', '/c', '/d', '/e']) {
+      load('https://www.heb.com' + u);
+      ladderStarted();
+    }
+    // Every ladder starts and none reports done, so every load is a retry
+    // candidate — and the bound is what keeps a run that keeps killing them from
+    // turning a diagnostic into a request flood.
     expect(probeInjections()).toHaveLength(3);
   });
 

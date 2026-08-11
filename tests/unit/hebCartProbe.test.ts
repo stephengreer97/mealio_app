@@ -108,13 +108,19 @@ describe('the ladder', () => {
     expect(String(d.body.query)).toContain('cartV2');
   });
 
-  it('holds the operation name steady across the selection-set rungs', () => {
-    // Rungs 2-4 vary the SELECTION SET with the name fixed; rungs 4-5 and the
-    // run's own reads vary the name with the document fixed. A rung that varied
-    // both would settle neither axis.
-    expect(byName('minimal').body.operationName).toBe(HEB_CART_OPERATION_ALT);
-    expect(byName('discriminator').body.operationName).toBe(HEB_CART_OPERATION_ALT);
-    expect(byName('renamed').body.operationName).toBe(HEB_CART_OPERATION_ALT);
+  it('gives every named rung its OWN operation name', () => {
+    // Two documents under one name are what a name-keyed cache cannot tell
+    // apart — so a shared name could serve the discriminator the minimal rung's
+    // answer, on the exact mechanism the ladder exists to detect. Sequential
+    // sending prevents the concurrent form of that; only distinct names prevent
+    // the cached form.
+    const named = HEB_CART_PROBES.map((p) => p.body.operationName).filter((n) => n != null);
+    expect(new Set(named).size).toBe(named.length);
+    // …and each document announces the name it is actually written under.
+    for (const p of HEB_CART_PROBES) {
+      if (p.body.operationName == null) continue;
+      expect(String(p.body.query)).toContain(`query ${String(p.body.operationName)} `);
+    }
   });
 
   it('sends NOTHING under the live operation name', () => {
@@ -222,6 +228,9 @@ async function runLadder(
   return { posted, calls, sandbox };
 }
 
+/** Just the rung lines — the ladder also posts a start and a done around them. */
+const rungs = (posted: any[]) => posted.filter((m) => m.step === 'cart_query_probe');
+
 const GQL_ERROR = JSON.stringify({
   errors: [{
     message: 'Field "cartV2" of type "Query" must have a selection of subfields. Did you mean "cartV2 { ... }"?',
@@ -267,20 +276,22 @@ describe('running the ladder', () => {
 
   it('posts one line per rung plus a done line', async () => {
     const { posted } = await runLadder(() => ({ status: 400, body: GQL_ERROR }));
-    const rungs = posted.filter((m) => m.step === 'cart_query_probe');
-    expect(rungs.map((m) => m.probe)).toEqual(HEB_CART_PROBES.map((p) => p.name));
+    expect(rungs(posted).map((m) => m.probe)).toEqual(HEB_CART_PROBES.map((p) => p.name));
+    // A start line, before any request goes out — it is what tells the native
+    // side this injection found the document free and really ran.
+    expect(posted[0]).toMatchObject({ step: 'cart_query_probe_start', rungs: HEB_CART_PROBES.length });
     // The done line says one thing: the ladder reached its own last statement.
     // A truncated one is diagnosed by this line's ABSENCE beside however many
     // rung lines carry its id.
     expect(posted[posted.length - 1]).toMatchObject({
       step: 'cart_query_probe_done', rungs: HEB_CART_PROBES.length,
     });
-    for (const m of rungs) expect(m.type).toBe('EXTRACT_DEBUG');
+    for (const m of posted) expect(m.type).toBe('EXTRACT_DEBUG');
   });
 
   it('reports status, code, locations and the message off a GraphQL error', async () => {
     const { posted } = await runLadder(() => ({ status: 400, body: GQL_ERROR }));
-    const first = posted[0];
+    const first = rungs(posted)[0];
     expect(first.status).toBe(400);
     expect(first.code).toBe('GRAPHQL_VALIDATION_FAILED');
     expect(first.loc).toBe('2:3');
@@ -294,14 +305,14 @@ describe('running the ladder', () => {
       body: GQL_ERROR,
       headers: { server: 'nginx', via: '1.1 varnish', 'x-cache': 'HIT', age: '412' },
     }));
-    expect(posted[0].raw).toContain('GRAPHQL_VALIDATION_FAILED');
-    expect(posted[0].hdr).toEqual({ server: 'nginx', via: '1.1 varnish', 'x-cache': 'HIT', age: '412' });
+    expect(rungs(posted)[0].raw).toContain('GRAPHQL_VALIDATION_FAILED');
+    expect(rungs(posted)[0].hdr).toEqual({ server: 'nginx', via: '1.1 varnish', 'x-cache': 'HIT', age: '412' });
   });
 
   it('caps the raw body at 400 characters and collapses its whitespace', async () => {
     const { posted } = await runLadder(() => ({ status: 500, body: `{\n  "x": "${'y'.repeat(900)}"\n}` }));
-    expect(posted[0].raw).toHaveLength(400);
-    expect(posted[0].raw).not.toContain('\n');
+    expect(rungs(posted)[0].raw).toHaveLength(400);
+    expect(rungs(posted)[0].raw).not.toContain('\n');
   });
 
   it('names what came back in data — including the control\'s root type', async () => {
@@ -311,17 +322,17 @@ describe('running the ladder', () => {
     // The one field that speaks to reading B without any interpretation: the
     // gateway's complaint calls cartV2's type `Query`, and this says what the
     // root type of the schema answering us actually is.
-    expect(posted[0].data).toBe('__typename=Query');
-    expect(posted[0].status).toBe(200);
-    expect(posted[0].code).toBeNull();
+    expect(rungs(posted)[0].data).toBe('__typename=Query');
+    expect(rungs(posted)[0].status).toBe(200);
+    expect(rungs(posted)[0].code).toBeNull();
   });
 
   it('distinguishes a null cart from an absent data key', async () => {
     const { posted } = await runLadder(({ index }) => (index === 1
       ? { status: 200, body: JSON.stringify({ data: { cartV2: null } }) }
       : { status: 400, body: GQL_ERROR }));
-    expect(posted[1].data).toBe('cartV2=null');
-    expect(posted[0].data).toBe('no_data');
+    expect(rungs(posted)[1].data).toBe('cartV2=null');
+    expect(rungs(posted)[0].data).toBe('no_data');
   });
 
   it('reads the discriminator\'s answer when the gateway names a real type', async () => {
@@ -337,7 +348,7 @@ describe('running the ladder', () => {
     const { posted } = await runLadder(({ index }) => (index === 2
       ? { status: 400, body: answer }
       : { status: 400, body: GQL_ERROR }));
-    const disc = posted.find((m) => m.probe === 'discriminator');
+    const disc = rungs(posted).find((m) => m.probe === 'discriminator');
     expect(disc.msg).toContain(HEB_CART_PROBE_FIELD);
     expect(disc.msg).toContain('on type "Cart"');
     expect(disc.loc).toBe('1:27');
@@ -345,11 +356,11 @@ describe('running the ladder', () => {
 
   it('reports the document it actually sent, per rung', async () => {
     const { posted } = await runLadder(() => ({ status: 400, body: GQL_ERROR }));
-    const anon = posted.find((m) => m.probe === 'anonymous');
+    const anon = rungs(posted).find((m) => m.probe === 'anonymous');
     // Whitespace-collapsed, so the line stays one line — but still the text.
     expect(anon.q).toBe(HEB_CART_QUERY_ANON.replace(/\s+/g, ' ').slice(0, 300));
     expect(anon.op).toBeNull();
-    expect(posted.find((m) => m.probe === 'renamed').op).toBe(HEB_CART_OPERATION_ALT);
+    expect(rungs(posted).find((m) => m.probe === 'renamed').op).toBe(HEB_CART_OPERATION_ALT);
   });
 
   it('keeps going when a rung throws, and says so on that rung', async () => {
@@ -360,23 +371,23 @@ describe('running the ladder', () => {
       return { status: 400, body: GQL_ERROR };
     });
     expect(calls).toHaveLength(HEB_CART_PROBES.length);
-    expect(posted[1].err).toContain('Network request failed');
-    expect(posted[1].status).toBeNull();
-    expect(posted[2].status).toBe(400);
+    expect(rungs(posted)[1].err).toContain('Network request failed');
+    expect(rungs(posted)[1].status).toBeNull();
+    expect(rungs(posted)[2].status).toBe(400);
     expect(posted[posted.length - 1].step).toBe('cart_query_probe_done');
   });
 
   it('survives a body that is not JSON at all', async () => {
     const { posted } = await runLadder(() => ({ status: 403, body: '<!doctype html><html>Pardon Our Interruption</html>' }));
-    expect(posted[0].status).toBe(403);
-    expect(posted[0].data).toBe('no_json');
-    expect(posted[0].raw).toContain('Pardon Our Interruption');
-    expect(posted[0].err).toBeNull();
+    expect(rungs(posted)[0].status).toBe(403);
+    expect(rungs(posted)[0].data).toBe('no_json');
+    expect(rungs(posted)[0].raw).toContain('Pardon Our Interruption');
+    expect(rungs(posted)[0].err).toBeNull();
   });
 
   it('survives a response with no readable headers', async () => {
     const { posted } = await runLadder(() => ({ status: 400, body: GQL_ERROR }));
-    expect(posted[0].hdr).toEqual({});
+    expect(rungs(posted)[0].hdr).toEqual({});
   });
 
   it('stamps its id on every line it posts', async () => {

@@ -1046,10 +1046,9 @@ export function buildHebCartQueryFn(): string {
 //                    name — a registry or a cache — and not by our text, which is
 //                    reading A with a mechanism attached.
 //
-// Rungs 2-4 hold the name at `CartLinesAlt` and vary the selection set; rungs 4,
-// 5 and the run's own cart reads hold the document and vary the name. Nothing in
-// the ladder is sent under `CartLines` itself — see HEB_CART_PROBES for why that
-// matters and why it costs nothing.
+// Every rung carries its OWN operation name and none of them is `CartLines` —
+// see HEB_CART_PROBES for why sharing one would let a name-keyed cache serve the
+// discriminator somebody else's answer, and why that costs the ladder nothing.
 //
 // Plus, on every rung, the response HEADERS and the first 400 characters of the
 // RAW body. An edge-generated or cached 400 shows itself there and nowhere else:
@@ -1077,13 +1076,14 @@ export function buildHebCartQueryFn(): string {
 //
 // SEQUENTIAL, NOT CONCURRENT, and it costs a truncation risk worth naming: the
 // page can navigate out from under the ladder and take the remaining rungs with
-// it. Firing all five at once would remove that, but rungs 2 and 3 share an
-// operation name, and if the answer really is keyed or cached on that name then
-// two concurrent requests carrying it are the one shape that could make the
-// discriminator report rung 2's answer. A diagnostic that can lie about the
-// thing it exists to measure is worse than one that can come back short, so the
-// rungs go one at a time and each posts as it lands — a partial ladder is
-// readable, and `cart_query_probe_done` says how much of it ran.
+// it. Firing all five at once would remove that — and would also be a five-way
+// burst against the anti-bot layer whose behaviour under programmatic load is
+// the epic's largest open unknown, from a rail that is already suspected of
+// provoking one wall. Five requests spread over a second look like the rail's
+// own traffic; five at once do not, and a ladder that changed the shape it is
+// measuring would be the least useful thing it could do. So the rungs go one at
+// a time and each posts as it lands — a partial ladder is readable, and the
+// absence of `cart_query_probe_done` is what says it was one.
 //
 // DIAGNOSTIC ONLY. Nothing here touches a verdict: no caller reads these
 // messages, `confirmDetail` picks its telemetry fields by name and forwards none
@@ -1112,23 +1112,42 @@ interface HebCartProbe {
   body: Record<string, unknown>;
 }
 
+/** Rung 2's name. Distinct from every other rung's — see HEB_CART_PROBES. */
+export const HEB_CART_OPERATION_MIN = 'CartLinesMin';
+/** Rung 3's name. */
+export const HEB_CART_OPERATION_DISC = 'CartLinesDisc';
+
 /**
- * The ladder, in the order it is sent. Exported for the tests, which assert the
- * two variant rungs differ from the production document ONLY in the operation
- * name — the entire point of rungs 4 and 5.
+ * The ladder, in the order it is sent. Exported for the tests.
  *
- * NO RUNG CARRIES THE PRODUCTION OPERATION NAME, and rungs 2 and 3 gave it up
- * for a reason worth stating. Rung 3 sends a document that is invalid ON PURPOSE.
- * If the name-keyed response this whole ladder exists to test for is real, then
- * sending that under `CartLines` could install a 400 against the very operation
- * the run's own cart reads use — a diagnostic corrupting the run it is measuring.
+ * ONE OPERATION NAME PER RUNG, and none of them is the production one.
  *
- * Nothing is lost by moving them. The answer under the production name is
- * already in the log 18 times a run, on every `cart_query_confirm` line, so the
- * ladder does not need to re-send under it: rungs 2, 3 and 4 vary the SELECTION
- * SET with the name held at `CartLinesAlt`, while rung 4, rung 5 and the run's
- * own reads are the same document under three different names. Both axes are
- * covered and neither rung has to touch `CartLines`.
+ * Not the production name, because rung 3's document is invalid ON PURPOSE: if
+ * the name-keyed response this ladder exists to detect is real, sending that
+ * under `CartLines` could install a 400 against the very operation the run's own
+ * cart reads use — a diagnostic corrupting the run it is measuring. Nothing is
+ * lost, either, since the answer under the live name is already in the log on
+ * every `cart_query_confirm` line of the same run.
+ *
+ * And not SHARED between rungs, which is the subtler half. Two documents under
+ * one name are exactly what a name-keyed cache cannot tell apart, so a shared
+ * name would let rung 3 be served rung 2's answer — the discriminator reporting
+ * the control's reading, on the one mechanism the ladder is trying to detect.
+ * Sequential sending prevents the concurrent form of that; only distinct names
+ * prevent the cached form.
+ *
+ * That costs nothing, because each rung's reading stands on its own: rung 3 says
+ * whether the validator READ our sub-selection (does its answer quote
+ * `zzzNotAField` and name a type?) without needing rung 2 as a control. The name
+ * axis is carried by rungs 4 and 5 and the run's own reads — one document under
+ * three names — which is where holding the document constant actually matters.
+ *
+ * The one collision left is rungs 1 and 5, which are both anonymous because
+ * being anonymous is the point of rung 5 and carrying nothing of ours is the
+ * point of rung 1. If a name-keyed cache serves rung 5 the control's answer, rung
+ * 5 comes back `data: __typename=Query` for a document that selects `cartV2` —
+ * which is not a confound but the finding itself, stated more plainly than any
+ * other rung could state it.
  */
 export const HEB_CART_PROBES: HebCartProbe[] = [
   // No operationName and no variables: the control carries as little of ours as
@@ -1137,17 +1156,17 @@ export const HEB_CART_PROBES: HebCartProbe[] = [
   {
     name: 'minimal',
     body: {
-      operationName: HEB_CART_OPERATION_ALT,
+      operationName: HEB_CART_OPERATION_MIN,
       variables: {},
-      query: `query ${HEB_CART_OPERATION_ALT} { cartV2 { id } }`,
+      query: `query ${HEB_CART_OPERATION_MIN} { cartV2 { id } }`,
     },
   },
   {
     name: 'discriminator',
     body: {
-      operationName: HEB_CART_OPERATION_ALT,
+      operationName: HEB_CART_OPERATION_DISC,
       variables: {},
-      query: `query ${HEB_CART_OPERATION_ALT} { cartV2 { ${HEB_CART_PROBE_FIELD} } }`,
+      query: `query ${HEB_CART_OPERATION_DISC} { cartV2 { ${HEB_CART_PROBE_FIELD} } }`,
     },
   },
   {
@@ -1263,6 +1282,13 @@ export function buildHebCartProbeScript(id: string): string {
       }
       return parts.join(',');
     }
+
+    // First thing on the bridge, before any request goes out. An injection that
+    // found the guard held returns above without sending this, which is how the
+    // native side tells a ladder that actually STARTED from one that was inert —
+    // and it only spends a try on the former. Without it, H-E-B's same-URL
+    // /cart re-render burns the whole budget on injections that did nothing.
+    __post({ type: 'EXTRACT_DEBUG', step: 'cart_query_probe_start', rungs: __PROBES.length });
 
     for (var i = 0; i < __PROBES.length; i++) {
       var p = __PROBES[i];
