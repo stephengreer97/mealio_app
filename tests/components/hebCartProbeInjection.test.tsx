@@ -1,0 +1,169 @@
+// MEAL-16 — does the probe ladder actually get injected?
+//
+// The ladder itself is pinned by tests/unit/hebCartProbe.test.ts, which
+// evaluates the script directly. That proves the script works; it proves nothing
+// about whether anything ever runs it. The whole feature is one `injectJavaScript`
+// call behind four conditions, and a diagnostic that never fires is the failure
+// mode that costs a live run to discover — so this drives the real component to
+// the moment the call is meant to happen and looks for the script on the wire.
+//
+// It also pins the two things that make it a ONCE-PER-RUN latch rather than a
+// per-page one: a second page load in the same run must not re-fire it, and the
+// rail's flag must gate it.
+
+import { act, fireEvent, render } from '@testing-library/react-native';
+
+// Mock factories cannot reference outer-scope variables (jest hoists them), so
+// the recorder hangs off globalThis and is read back through a typed helper.
+jest.mock('react-native-webview', () => {
+  const RealReact = jest.requireActual('react');
+  const RealView = jest.requireActual('react-native').View;
+  const g: any = globalThis as any;
+  g.__mealioWebViews = { injected: [] as string[], instances: [] as any[] };
+  const MockWebView = RealReact.forwardRef((props: any, ref: any) => {
+    RealReact.useImperativeHandle(ref, () => ({
+      injectJavaScript: (s: string) => { g.__mealioWebViews.injected.push(s); },
+      stopLoading: () => {},
+      reload: () => {},
+      goBack: () => {},
+    }));
+    g.__mealioWebViews.instances.push(props);
+    return RealReact.createElement(RealView, { testID: props.testID || 'mock-webview', ...props });
+  });
+  return { __esModule: true, default: MockWebView, WebView: MockWebView };
+});
+
+jest.mock('expo-image', () => {
+  const RealReact = jest.requireActual('react');
+  const RealView = jest.requireActual('react-native').View;
+  return { Image: (props: any) => RealReact.createElement(RealView, { testID: 'mock-image', ...props }) };
+});
+
+jest.mock('@expo/vector-icons', () => {
+  const RealReact = jest.requireActual('react');
+  const RealText = jest.requireActual('react-native').Text;
+  return { Ionicons: (props: any) => RealReact.createElement(RealText, { testID: 'mock-icon' }, props.name) };
+});
+
+jest.mock('react-native-keyboard-aware-scroll-view', () => {
+  const { ScrollView } = jest.requireActual('react-native');
+  return { KeyboardAwareScrollView: ScrollView };
+});
+
+jest.mock('react-native-safe-area-context', () => {
+  const RealReact = jest.requireActual('react');
+  const { View: RealView } = jest.requireActual('react-native');
+  return {
+    SafeAreaView: ({ children, ...rest }: any) => RealReact.createElement(RealView, rest, children),
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+  };
+});
+
+import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import {
+  loadAutomationConfig,
+  __resetAutomationConfigForTests,
+} from '../../src/lib/automation-config';
+
+const bus = () => (globalThis as any).__mealioWebViews as { injected: string[]; instances: any[] };
+
+/** The MAIN WebView, not a pool worker: only it gets onLoadEnd AND
+ *  onNavigationStateChange. Last wins — props are re-recorded every render. */
+function mainWebView(): any {
+  const matches = bus().instances.filter((p) => p.onLoadEnd && p.onNavigationStateChange);
+  return matches[matches.length - 1];
+}
+
+const probeInjections = () => bus().injected.filter((s) => s.includes('cart_query_probe'));
+
+const meal = {
+  id: 'm1',
+  name: 'Tacos',
+  ingredients: [
+    { ingredientName: 'Sour Cream', searchTerm: 'sour cream', productQty: 1, qty: 1, unit: 'qty', measure: null },
+  ],
+};
+
+/** Render the H-E-B sheet and drive it to the first page load after login. */
+function runToFirstLoad(url = 'https://www.heb.com/cart') {
+  const view = render(
+    <WebViewCartSheet visible meals={[meal]} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+  );
+  act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+  const wv = mainWebView();
+  act(() => {
+    wv.onMessage({ nativeEvent: { data: JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }) } });
+  });
+  act(() => { mainWebView().onLoadEnd({ nativeEvent: { url } }); });
+  return view;
+}
+
+beforeEach(async () => {
+  __resetAutomationConfigForTests();
+  const g = globalThis as any;
+  if (g.__mealioWebViews) { g.__mealioWebViews.injected = []; g.__mealioWebViews.instances = []; }
+});
+
+afterEach(() => __resetAutomationConfigForTests());
+
+describe('the MEAL-16 probe ladder reaches the WebView', () => {
+  const armRail = () => loadAutomationConfig(async () => ({
+    version: 31,
+    config: { stores: { heb: { cartSkuConfirm: true } } },
+  }));
+
+  it('injects once the run is past the login gate', async () => {
+    await armRail();
+    runToFirstLoad();
+    expect(probeInjections()).toHaveLength(1);
+    // The real script, not a stub of it: every rung's name has to be in there.
+    const script = probeInjections()[0];
+    for (const rung of ['control', 'minimal', 'discriminator', 'renamed', 'anonymous']) {
+      expect(script).toContain(rung);
+    }
+    expect(script).toContain('zzzNotAField');
+  });
+
+  it('does NOT inject again on a second page load in the same run', async () => {
+    await armRail();
+    runToFirstLoad();
+    act(() => {
+      mainWebView().onLoadEnd({ nativeEvent: { url: 'https://www.heb.com/search?q=sour+cream' } });
+    });
+    // The whole reason the latch is native: #110's in-page one reset on every
+    // navigation and printed its line once per add.
+    expect(probeInjections()).toHaveLength(1);
+  });
+
+  it('does not inject before the login gate', async () => {
+    await armRail();
+    const view = render(
+      <WebViewCartSheet visible meals={[meal]} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+    );
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    // A page load during login_check — the session may not exist yet, so a read
+    // here would measure a logged-out gateway and read as a finding.
+    act(() => { mainWebView().onLoadEnd({ nativeEvent: { url: 'https://www.heb.com/' } }); });
+    expect(probeInjections()).toHaveLength(0);
+  });
+
+  it('does not inject with the rail flag off — the bundled default', async () => {
+    // No config push at all: cartSkuConfirm ships false, and a device with no
+    // rail has nothing to diagnose and should send no GraphQL at all.
+    runToFirstLoad();
+    expect(probeInjections()).toHaveLength(0);
+  });
+
+  it('does not inject for another store', async () => {
+    await armRail();
+    const view = render(
+      <WebViewCartSheet visible meals={[meal]} storeId="aldi" storeName="ALDI" onClose={() => {}} />,
+    );
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    act(() => {
+      mainWebView().onMessage({ nativeEvent: { data: JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }) } });
+    });
+    act(() => { mainWebView().onLoadEnd({ nativeEvent: { url: 'https://www.aldi.us/' } }); });
+    expect(probeInjections()).toHaveLength(0);
+  });
+});
