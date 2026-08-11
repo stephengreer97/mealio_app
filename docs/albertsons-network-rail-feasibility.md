@@ -293,9 +293,12 @@ sort-order: date
 ```
 
 Sent from the origin with `credentials: 'include'`, `mode: 'cors'`. The remaining
-request headers in the capture (`accept`, `accept-language`, `priority`, the
-`sec-ch-ua*` / `sec-fetch-*` set, `referrer`) are browser-supplied and not ours to
-choose from an in-page `fetch`.
+request headers in the capture split two ways: `priority`, the `sec-ch-ua*` /
+`sec-fetch-*` set and `referrer` are **browser-controlled** — a `fetch` cannot set
+them, so a rail gets them for free and identical to the site's own. `accept` and
+`accept-language` are **ours to set** (neither is a forbidden header name) and the
+capture's values are the Angular client's, worth copying if a mismatch ever turns
+out to matter.
 
 Read that against what this document previously asserted:
 
@@ -303,7 +306,7 @@ Read that against what this document previously asserted:
 |---|---|
 | `slotsRequired: true` + `x-swy-client-id: web-portal` were "the load-bearing piece" | **Neither header is sent at all.** `buildHeadersWithToken` is not the builder `/items` uses. |
 | `generateCommonParams` always appends `expressChk=true` | **No `expressChk`.** No `tax`, no `sellerId`. |
-| `cartId` set conditionally — a possible ownership binding | **No `cartId` anywhere**, query or body. The add binds to the account through the bearer. |
+| `cartId` set conditionally — a possible ownership binding | **No `cartId` anywhere**, query or body. Nothing in the request names a cart, so the add must bind to the account through the session context — the bearer, and possibly the cookies that rode along with it. |
 | `serviceType=pickup` (what the anonymous curl probes guessed) | `serviceType=Dug` |
 | Param order unknown | `storeId, serviceType, zipCode, cartCategoryList` |
 | Body unknown — "do not invent it" | Above, verbatim. |
@@ -749,9 +752,11 @@ than vetoes it.
    headers)"), and here every one of those turned out to be unnecessary:
    - `slotsRequired` and `x-swy-client-id` — **not required. Not even sent.**
    - **CSRF** — no header, no body field. None exists on this path.
-   - **`cartId` ownership binding** — no `cartId` is sent at all; the add binds to
-     the account through the bearer. (The `t && !e.seller` conditional in
-     `generateCommonParams` is still unexplained, but it is not on the add path.)
+   - **`cartId` ownership binding** — no `cartId` is sent at all, so nothing in
+     the request names a cart; the binding comes from the session context
+     (bearer, possibly cookies — see the residue below). (The `t && !e.seller`
+     conditional in `generateCommonParams` is still unexplained, but it is not on
+     the add path.)
    - **Write scope** — none. `scp` is the same for reads and writes.
 
    **Residue, none of it blocking:**
@@ -1125,8 +1130,9 @@ that this document never named.
 > which do not appear to exist on a real `userInfo` — it sent an empty `zipCode`
 > and, on the cart leg, no `serviceType` at all. The version below takes store
 > context from the values the accepted add actually used, falls back through
-> several field names, and **refuses to send an empty `zipCode`** rather than
-> quietly producing another uninterpretable 400.
+> several field names, and **refuses to send store context it could not resolve**
+> — aborting with an instruction beats quietly producing another uninterpretable
+> 400.
 >
 > Two results from that run survive the bug, because they are status-*class*
 > signals rather than payloads: a real bearer reaches the app tier (`400`, not the
@@ -1174,16 +1180,23 @@ that this document never named.
   if (!tok) return console.error('No SWY_SHOP_TOKEN. Everything below will 401 — sign in first (or it is still hydrating: wait and re-run).');
 
   // STORE CONTEXT. The 2026-08-11 run read ui.shopStoreId / ui.shopZipcode, which
-  // do not exist — it sent an empty zipCode and both legs 400'd uninterpretably.
-  // Try several names, then STOP rather than send a request we cannot read.
-  const storeId = ui.shopStoreId ?? ui.storeId ?? ui.primaryStoreId ?? ui.preferredStoreId;
-  const zip     = ui.shopZipcode ?? ui.zipCode ?? ui.zipcode ?? ui.postalCode;
-  const svc     = ui.serviceType ?? 'Dug';   // 'Dug' is what the real add sends, NOT 'pickup'
+  // appear to be absent or empty on a real userInfo — it sent zipCode= and both
+  // legs 400'd uninterpretably. Try several names, then STOP rather than send a
+  // request whose answer we could not read.
+  //   `||`, not `??`: an empty string is not a usable value for any of these, and
+  //   the whole point is to fall through to the next candidate rather than to
+  //   carry '' forward the way the run that broke did.
+  //   shopStoreId leads because it is the accessor the bundle's own search code
+  //   uses (getShopStoreId()); primaryStoreId precedes storeId because
+  //   generateCommonParams prefers it that way (quoted verbatim above).
+  const storeId = ui.shopStoreId || ui.primaryStoreId || ui.storeId || ui.preferredStoreId;
+  const zip     = ui.shopZipcode || ui.zipCode || ui.zipcode || ui.postalCode;
+  const svc     = ui.serviceType || 'Dug';   // 'Dug' is what the real add sends, NOT 'pickup'
   console.log('STORE CONTEXT:', { storeId, zip, serviceType: svc });
-  if (!storeId || !zip) return console.error(
-    'storeId/zipCode not found on userInfo — a 400 from here would tell us nothing. ' +
-    'Read them off the KEYS dump above, or off a real cart request in the Network tab, ' +
-    'hard-code them here, and re-run.');
+  if (!storeId || !zip || !svc) return console.error(
+    'storeId/zipCode/serviceType not found on userInfo — a 400 from here would tell ' +
+    'us nothing. Read them off the KEYS dump above, or off a real cart request in the ' +
+    'Network tab, hard-code them here, and re-run.');
 
   const CART    = '/abs/pub/erums/cartservice/api/v2/cart';
   const CART_KEY   = 'c645e9387c654aa8ae253045f648bfac';   // from initErumsConfig
@@ -1195,20 +1208,28 @@ that this document never named.
   const SEARCH_KEY = 'e914eec9448c4d5eb672debf5011cf8f';   // from initSearchConfig
 
   // ── 2. CART READ. POST, but semantically a read — adds nothing. ───────────
-  // Headers deliberately match the ACCEPTED ADD (measured 2026-08-11), not
-  // buildHeadersWithToken: the real add sends neither slotsRequired nor
-  // x-swy-client-id, and sends ocp-apim-trace + sort-order that nobody predicted.
-  // serviceType is included because the 2026-08-11 run omitted it entirely.
+  // ONE evidence source per leg — do NOT mix them. This is the READ path, and
+  // the only description of it is the bundle, so this sends what the bundle says:
+  // buildHeadersWithToken's slotsRequired + x-swy-client-id, and expressChk.
+  // The 2026-08-11 measurement showed all three are absent from the ADD path, but
+  // the add is a different endpoint and nothing measured the read. A hybrid of
+  // the two produces another 400 nobody can attribute, which is exactly the trap
+  // the run below fell into.
+  // If this 400s or 403s: re-send with the measured add-path header set instead
+  // (drop slotsRequired + x-swy-client-id and expressChk, add ocp-apim-trace:
+  // true and sort-order: date). That pair of runs is the experiment — either one
+  // alone is not.
+  // serviceType is new here: the 2026-08-11 run omitted it entirely.
   const cartQs = new URLSearchParams({
     type: 'mini', storeId, serviceType: svc, zipCode: zip,
     cartCategoryList: '1P,3P_MARKETPLACE,1P_Wine', expressChk: 'true' });
   const cr = await fetch(`${CART}/customer/${ui.customerId}?${cartQs}`, {
     method: 'POST', credentials: 'include',
-    headers: { 'ocp-apim-subscription-key': CART_KEY,
+    headers: { 'Ocp-Apim-Subscription-Key': CART_KEY,
                'authorization': 'Bearer ' + tok,
-               'content-type': 'application/json',
-               'ocp-apim-trace': 'true',
-               'sort-order': 'date' },
+               'slotsRequired': 'true',
+               'x-swy-client-id': 'web-portal',
+               'Content-Type': 'application/json' },
     body: '{}' });
   const cartTxt = await cr.text();
   console.log('CART READ:', cr.status, cartTxt.slice(0, 700));
@@ -1248,8 +1269,9 @@ that this document never named.
 
 | Outcome | Meaning |
 |---|---|
-| `hasToken: true` with a long token, and real `customerId`/`shopStoreId` | **The core premise is confirmed.** The session is readable in-page; no Okta flow needed, ever. This closes the ticket's second acceptance criterion for *reads*. |
+| `hasToken: true` with a long token, and a real `customerId` | **The core premise is confirmed** — and was, on 2026-08-11. The session is readable in-page; no Okta flow needed, ever. Note `shopStoreId` is **not** part of this signal: it may well come back `undefined`, which is a finding about the field name and not a failure. The `STORE CONTEXT` line is where to look for that. |
 | `TOKEN READINESS` differs between the immediate read and the 3s read | **Gap 5 confirmed.** The rail needs a hydration wait, not a single read. Record how long it took. |
+| `STORE CONTEXT` shows `undefined` and the probe aborts | **A result, not a failed run** — and the most useful one available, because it means the field names in this document are wrong and the `KEYS` dump has the right ones. Read `storeId`/`zipCode` off the `KEYS` line or off a real cart request in the Network tab, hard-code them, re-run. Report both the KEYS line and what you hard-coded. |
 | `TOKEN READINESS` identical, both `hasToken: true` | Inconclusive, **not** a refutation — you are on a settled tab. Hard-reload and re-run as the first action to actually test this. |
 | `window.AB.userInfo missing` | You are on `/erums/cart` or another sub-app rather than the storefront. Go to the banner homepage and retry. Not a negative result. Note the cart page *does* carry the token globals, but not the config blobs. |
 | **CART READ `200` + JSON containing your hand-added item** | **The read half works** — this is what the 2026-08-11 run failed to get, from its own bug. Note it is *not* what closes gap 1: a read is not a write. Gap 1 was closed by probe 3. |
