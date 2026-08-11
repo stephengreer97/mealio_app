@@ -319,9 +319,10 @@ describe('HEB MEAL-13: __NEXT_DATA__ and DOM extraction agree', () => {
   }
 
   // Preference options are the one field the DOM path pays for with clicks: it
-  // opens each tile's Add popup and reads the modal rows, for at most the first 5
-  // candidates. The payload carries them outright, for every item, with no
-  // interaction — same labels, same {text, value} pairs the add scripts match on.
+  // opens each tile's Add popup and reads the modal rows, for every candidate
+  // carrying a dialog (MEAL-180 raised that cap above the 8-candidate ceiling).
+  // The payload carries them outright, for every item, with no interaction —
+  // same labels, same {text, value} pairs the add scripts match on.
   itWithFixture(
     'search-results-with-preferences.html',
     'reads the avocado ripeness preferences without opening the modal',
@@ -363,6 +364,75 @@ describe('HEB MEAL-13: __NEXT_DATA__ and DOM extraction agree', () => {
       expect(names).toEqual(domTitles);
     },
     { url: 'https://www.heb.com/search?q=avocado' },
+  );
+});
+
+// ── MEAL-180: what the preference probe's budget is allowed to spend ───────────
+//
+// The probe is the only thing that turns an item with a store preference into a
+// preference SELECTOR in Choose Products. A card it skips arrives with
+// preferences:null and the user is never asked — the setting then surfaces only
+// after the add fails, which is the bug Stephen reported.
+//
+// It used to be gated on `candidates.length < 5`: a budget counted in ACCEPTED
+// CANDIDATES rather than in probes performed, so cards with no dialog to open —
+// which cost nothing, no click, no poll, no modal — spent it anyway. His "sliced
+// turkey" search was seven pre-packaged deli cards and, at DOM index 6, the one
+// Custom Sliced item that HAS a preference. The budget was gone before the loop
+// reached it, and the log showed zero probes had actually run.
+//
+// The avocado capture has exactly one popup-bearing card, so moving it to index 6
+// reproduces that shape out of real store DOM. Fails on `< 5`; passes now.
+describe('HEB MEAL-180: preference probe budget', () => {
+  itWithFixture(
+    'search-results-with-preferences.html',
+    'probes the one card with a dialog when it sits past the old 5-card cap',
+    async (runner) => {
+      const popupIndexes = await runner.page.evaluate(() => {
+        const scope =
+          document.querySelector('[data-qe-id="productCardContainer"]') ||
+          document.querySelector('#search_product_grid') ||
+          document;
+        const cards = () =>
+          Array.prototype.slice.call(
+            scope.querySelectorAll('[data-qe-id="productCard"]'),
+          ) as HTMLElement[];
+        // Move the whole grid CELL, not the card node — the card is nested
+        // inside the cell the grid lays out, and reparenting the inner node
+        // would change the DOM in a way the real page never does.
+        const cell = (card: HTMLElement) => {
+          let n = card;
+          while (n.parentElement && n.parentElement !== scope) n = n.parentElement;
+          return n;
+        };
+        const before = cards();
+        cell(before[6]).after(cell(before[0]));
+        return cards()
+          .map((c, i) => {
+            const btn = c.querySelector('button[data-qe-id="addToCart"]');
+            return btn && btn.getAttribute('aria-haspopup') === 'true' ? i : -1;
+          })
+          .filter((i) => i >= 0);
+      });
+      // If a re-capture ever changes which tiles carry a dialog this test stops
+      // reproducing MEAL-180's shape, and says so here rather than passing
+      // vacuously below.
+      expect(popupIndexes).toEqual([6]);
+
+      const result = await runExtractor(runner, scripts.extractProductsScript);
+      expect(result.source).toBe('dom');
+      expect(result.candidates[6].productName).toBe('Fresh Large Hass Avocado, Each');
+      expect(result.candidates[6].preferences).toEqual([
+        { text: 'No preference', value: 'No preference' },
+        { text: 'Ready Now', value: 'Ready Now' },
+        { text: 'Ready Later', value: 'Ready Later' },
+      ]);
+      // And it cost exactly the one probe the page had to offer.
+      expect(
+        runner.messagesOfType('PREF_DEBUG').filter((m) => m.step === 'clicking_add'),
+      ).toHaveLength(1);
+    },
+    { url: 'https://www.heb.com/search?q=avocado', testTimeoutMs: 60_000 },
   );
 });
 
