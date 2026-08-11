@@ -28,7 +28,7 @@ retry or add the same item twice without silently producing a wrong cart.
 > | **The add-path query params** | **Wrong.** `generateCommonParams` always sets `expressChk=true`; the real add sends **no `expressChk`, no `tax`, no `sellerId`, and no `cartId`**. `serviceType` is `Dug`, not the `pickup` the anonymous probes used. |
 > | **The `/items` body** | **Recovered.** It is no longer "do not invent it" — it is measured, below. |
 > | **Gap 1** | **Closed**, with named residue — cookie necessity, `preferenceList`, the response *body* shape, and **`qty` on a repeat add**, which is the one that can produce a wrong cart rather than a visible failure (gap 6). |
-> | **The 403 wall** | **The 2026-08-06 model is *disconfirmed*, not confirmed.** That model said the filter branches on the mere *presence* of a Bearer. A real bearer gets `400` where a bogus one gets `403` — so the filter reads the token and tells valid from invalid. It validates. |
+> | **The 403 wall** | **Neither model is confirmed — and the 2026-08-06 one is no longer safe to quote.** A real signed-in session gets `400` from the same endpoint family that gave every bogus bearer a `403`, so the gate is not branching on the bare *presence* of a `Bearer`. But the session changed the cookies, the origin and the token all at once, so which of them the gate read is unresolved. One `credentials: 'omit'` replay would settle it. |
 > | **Gap 5** | **Sharpened, not closed.** Hydration timing is still unmeasured, but the captured JWT gives a hard number: **45-minute lifetime**, silently refreshed off `offline_access`, **not store- or banner-bound**, no write scope. |
 > | **Gap 3 (the search tarpit)** | **Narrowed.** Product search does **not** hang in-page — it answered `400` promptly from a signed-in tab where plain `curl` never gets a byte. But no client has yet seen a search `200`, so the rail's search half is still unproven. |
 > | **Rail shape** | **New constraint.** The SPA does not observe an API add — the cart badge did not move until reload. Any post-add check that reads the DOM returns a **false negative**. |
@@ -691,24 +691,44 @@ a real session refutes it. Read the last two rows against the first two:
 Only the bottom two rows are new. The top two are the 2026-08-06 transcript,
 repeated here because the comparison is the whole point.
 
-**A presence-only filter cannot produce this table.** If the gate branched merely
-on a `Bearer` being present, a real token would have got the same `403` a bogus
-one gets — it is just as present. It gets `400` instead, which means the gate read
-the token and told valid from invalid. **The origin validates.** The 2026-08-06
-inference is disconfirmed, and this document had it backwards in an earlier
-2026-08-11 draft too, which called the same table a *confirmation* of the presence
-model.
+**The 2026-08-06 model is not confirmed by this, and it is not cleanly refuted
+either. Say what the table can and cannot carry.**
 
-What *does* survive from the 2026-08-06 reasoning is the narrower observation it
-was built on: garbage and a well-formed-but-unsigned JWT are indistinguishable in
-the response. That is unremarkable under a validating gate — both are invalid, and
-one refusal serves both. The missing `WWW-Authenticate` remains non-compliant with
-RFC 6750 and remains unexplained; it is simply not evidence of non-validation.
+*What it refutes:* the strong reading of "presence-only filter" — that the gate
+looks *only* for the string `Bearer ` and branches on that alone. Under that
+reading a real token is exactly as present as a bogus one and would get the same
+`403`. It does not.
 
-The practical consequence is the useful part: **a `403` now means "our token was
-not accepted", not "a bearer was present"** — it is diagnostic where it used to be
-opaque. And the hypothesis in the last paragraph, that this is ordinary OAuth on a
-page-resident token, is confirmed.
+*What it cannot establish:* that the **token** is what the gate read. Rows 1–2 are
+anonymous `curl` from off-origin; rows 3–4 are an in-page `fetch` with
+`credentials: 'include'`. **Four things changed at once** — the token, the cookie
+jar, `Origin`/`Referer`, and same-origin-ness. A gate that short-circuits on a
+valid session cookie and never parses the bearer produces this identical table.
+
+That is precisely the inference this document refuses two sections down for the
+search tarpit ("cookies, an `Origin`/`Referer`, a session, and a same-origin path
+all changed at once between the hanging `curl` and the answering `fetch`"). It is
+the same confound and it gets the same treatment here. An earlier 2026-08-11 draft
+of this section made the inference anyway and asserted "the origin validates";
+that is withdrawn.
+
+**What is established, and it is enough to budget the rail:** a real signed-in
+session, calling from the page, reaches the application tier and gets a `200` for
+a correct request. *Why* the anonymous probes never did — bearer, cookies, origin,
+or some conjunction — is unresolved and does not change the rail's shape, because
+a WebView on the user's own session supplies all of them together.
+
+**The one-word experiment that would resolve it** is now cheap and worth doing on
+the next authenticated run: replay the captured add with `credentials: 'omit'`. It
+also settles the cookie-necessity residue in gap 1, in the same run as the `qty`
+test. If it still `200`s, the bearer is doing the work and "the origin validates"
+can be written down as measured.
+
+The narrow observation the 2026-08-06 reasoning was built on survives untouched:
+garbage and a well-formed-but-unsigned JWT are indistinguishable in the response.
+That fits a validating gate (both invalid, one refusal) and a cookie-short-circuit
+gate (neither had a cookie) equally well. The missing `WWW-Authenticate` remains
+non-compliant with RFC 6750 and remains unexplained.
 
 What is **not** confirmed is that nothing else is required. Four of the specific
 extra gates gap 1 named turned out to be absent (`slotsRequired`,
@@ -867,7 +887,11 @@ than vetoes it.
      the contract. Tracked with gap 6 below.
    - **Cookies.** Both the capture and the replay ran `credentials: 'include'`
      from the origin, so cookie *necessity* is untested. Free in a same-origin
-     WebView; still not established.
+     WebView; still not established — and **cheap to settle**: replay the same
+     capture with `credentials: 'omit'`. It is worth doing not for the rail, which
+     has cookies either way, but because it is the only thing that separates "the
+     origin validates our bearer" from "the origin trusts our session cookie" in
+     the gate chain above.
    - **`preferenceList`** — required, or page state echoed along? Untested.
    - **The response body.** The `200` was reported without consuming the body, so
      what a rail parses back to confirm an add is still unknown. Cheapest thing to
@@ -1177,8 +1201,17 @@ list — all of them one line each on the next authenticated session:
   `DELETE /items` are still bundle-only; only the *add* was confirmed. Probe 2's
   cart leg attempts the read; nothing attempts the remove, on purpose.
 
-And whether `preferenceList` and cookies are required — neither testable without
-deliberately breaking a working request, so both wait for a reason.
+- **Whether cookies are required.** *Corrected: an earlier draft called this
+  "not testable without deliberately breaking a working request". That is wrong,
+  and it was the excuse for leaving it open.* Replay the captured add with
+  `credentials: 'omit'` — one word, fully reversible, and it rides along with the
+  `qty` test on the same session. A `200` means the bearer is doing the work and
+  settles the gate-chain question above too; a `403` means cookies are load-bearing
+  and the rail must stay same-origin, which it already is.
+
+`preferenceList` is the one that genuinely waits for a reason: dropping it is also
+a one-word test, but unlike the others a wrong answer there silently changes what
+lands in the cart rather than failing visibly.
 
 Gap 4, sustained load, is **MEAL-115**, is not closed by any probe below, and
 after 2026-08-11 is the only remaining gap that can sink the rail outright — it
@@ -1275,14 +1308,16 @@ that this document never named.
 
 > **Run 2026-08-11 — and it was defective. Fixed below; re-run before quoting it.**
 >
-> Both request legs returned `400`, and **both 400s were this probe's bug, not
-> origin behaviour**: it built store context from `ui.shopStoreId` / `ui.shopZipcode`,
-> which do not appear to exist on a real `userInfo` — it sent an empty `zipCode`
-> and, on the cart leg, no `serviceType` at all. The version below takes store
-> context from the values the accepted add actually used, falls back through
-> several field names, and **refuses to send store context it could not resolve**
-> — aborting with an instruction beats quietly producing another uninterpretable
-> 400.
+> Both request legs returned `400`. **The cart leg's 400 is this probe's bug
+> rather than origin behaviour**: it built store context from `ui.shopStoreId` /
+> `ui.shopZipcode`, which do not appear to exist on a real `userInfo` — it sent an
+> empty `zipCode` and no `serviceType` at all. **The search leg's 400 is not
+> explained by that**, since search sends neither param; its cause is still open
+> (see the tarpit section — `storeid`, `channel`, or an omitted `uuid`/`banner`).
+> The version below takes store context from the values the accepted add actually
+> used, falls back through several field names, and **refuses to send store
+> context it could not resolve** — skipping a leg with an instruction beats
+> quietly producing another uninterpretable 400.
 >
 > Two results from that run survive the bug, because they are status-*class*
 > signals rather than payloads: a real bearer reaches the app tier (`400`, not the
@@ -1315,7 +1350,19 @@ that this document never named.
 
   // Everything on the object, not just the fields we expected. Cheap, and the
   // fastest way to spot something the rail needs that this doc never named.
-  console.log('userInfo KEYS:', Object.keys(ui).sort().join(', '));
+  // Object.keys alone would miss the case that matters most here: the bundle
+  // describes AB.userInfo entirely through accessors (getShopStoreId(),
+  // getBanner(), getUUID()), so the fields may be prototype getters or
+  // non-enumerable — invisible to Object.keys, and invisible is exactly how the
+  // 2026-08-11 run concluded shopZipcode "does not exist". Walk the chain.
+  const allKeys = (o) => { const out = new Set(); 
+    for (let p = o; p && p !== Object.prototype; p = Object.getPrototypeOf(p))
+      for (const k of Object.getOwnPropertyNames(p)) out.add(k);
+    return [...out].sort(); };
+  console.log('userInfo KEYS (own, enumerable):', Object.keys(ui).sort().join(', '));
+  console.log('userInfo KEYS (incl. prototype + non-enumerable):', allKeys(ui).join(', '));
+  // If those two lines differ, the difference IS the answer to "what are the real
+  // field names" — report both.
 
   const snap = () => { const t = window.AB?.userInfo?.SWY_SHOP_TOKEN;
                        return { hasToken: !!t, len: t ? t.length : 0 }; };
@@ -1364,12 +1411,23 @@ that this document never named.
   //   `||`, not `??`: an empty string is not a usable value for any of these, and
   //   the whole point is to fall through to the next candidate rather than to
   //   carry '' forward the way the run that broke did.
-  //   shopStoreId leads because it is the accessor the bundle's own search code
-  //   uses (getShopStoreId()); primaryStoreId precedes storeId because
-  //   generateCommonParams prefers it that way (quoted verbatim above).
+  //   TWO chains, because the bundle uses two different accessors and this probe's
+  //   own rule is one evidence source per leg:
+  //     cart   — generateCommonParams: `primaryStoreId ? primaryStoreId : storeId`.
+  //              It never mentions shopStoreId.
+  //     search — getShopStoreId(), i.e. shopStoreId.
+  //   They are probably the same value; if they are not, feeding the search
+  //   accessor to the cart call is exactly the mixing that produces a 400 nobody
+  //   can attribute. Log both and let the difference be visible.
   // HARD-CODE HERE if the log below shows undefined — that is the intended fix,
   // and reporting the KEYS line alongside what you hard-coded is the finding.
-  const storeId = ui2.shopStoreId || ui2.primaryStoreId || ui2.storeId || ui2.preferredStoreId;
+  const cartStoreId   = ui2.primaryStoreId || ui2.storeId || ui2.preferredStoreId;
+  const searchStoreId = ui2.shopStoreId || ui2.storeId || ui2.preferredStoreId;
+  const storeId = cartStoreId;   // name kept for the cart leg below
+  if (cartStoreId !== searchStoreId)
+    console.warn('STORE ID: cart and search accessors DISAGREE —',
+                 { cart: cartStoreId, search: searchStoreId },
+                 '— report this; it decides which one a rail reads.');
   const zip     = ui2.shopZipcode || ui2.zipCode || ui2.zipcode || ui2.postalCode;
   const svc     = ui2.serviceType || 'Dug';   // fallback value from the measured add; 'pickup' was the old guess
   console.log('STORE CONTEXT:', { storeId, zip, serviceType: svc,
@@ -1442,7 +1500,7 @@ that this document never named.
   // because search never sends one, so `storeid` and `channel` are the two live
   // suspects. This loop varies `channel`, the cheaper one to rule out.
   const base = location.origin;
-  if (!storeId) {
+  if (!searchStoreId) {
     console.error('SEARCH skipped — storeid unresolved, and a 400 without it is ' +
                   'exactly as uninterpretable as the 2026-08-11 one. Hard-code ' +
                   'storeId above and re-run: this is the leg gap 3 turns on.');
@@ -1462,7 +1520,7 @@ that this document never named.
   // (shopunitedsupermarkets, carrsqc, kingsfoodmarkets…), and a WRONG banner is
   // worse than an absent one: it produces a 400 we would misattribute to storeid
   // or channel. Same rule as uuid — omit, and say so.
-  console.log('SEARCH inputs:', { storeid: storeId, uuid: uuid || '(omitted)',
+  console.log('SEARCH inputs:', { storeid: searchStoreId, uuid: uuid || '(omitted)',
                                   banner: banner || '(omitted)' });
   if (!uuid || !banner) console.warn('SEARCH: omitting', !uuid ? 'uuid' : '', !banner ? 'banner' : '',
     '— absent from userInfo. If this 400s, that omission is a suspect alongside ' +
@@ -1470,7 +1528,7 @@ that this document never named.
   for (const channel of [...new Set(['pickup', 'Dug', svc])]) {
     const sQs = new URLSearchParams({
       pageurl: base, url: base, 'request-id': String(Date.now()), pagename: 'search',
-      rows: '5', start: '0', 'search-type': 'keyword', storeid: storeId,
+      rows: '5', start: '0', 'search-type': 'keyword', storeid: searchStoreId,
       q: 'tortillas', dvid: 'GhXAoLXN-ss-search', channel,
       featured: 'false', includeOffer: 'true',
       ...(uuid   ? { uuid }   : {}),
@@ -1507,7 +1565,7 @@ that this document never named.
 | `window.AB.userInfo never appeared in 10s` | You are on `/erums/cart` or another sub-app rather than the storefront. Go to the banner homepage and retry. Not a negative result. Note the cart page *does* carry the token globals, but not the config blobs — so if you were on the storefront and still saw this, it *is* a result: report it. |
 | **CART READ `200` + JSON containing your hand-added item** | **The read half works** — this is what the 2026-08-11 run failed to get, from its own bug. Note it is *not* what closes gap 1: a read is not a write. Gap 1 was closed by probe 3. |
 | CART READ `401` "Not Authorized" | The token was rejected or absent. Check `tokenExpiration`; reload to refresh and retry. Given the 45-minute lifetime, a token that worked ten minutes ago can be the cause. |
-| CART READ `403` | **Now diagnostic.** A real bearer is measured to get *past* the 403 filter, so a 403 here means the token did not arrive or is not real — not that the operation is forbidden. Check that you read `SWY_SHOP_TOKEN` and not a stale variable. |
+| CART READ `403` | **More diagnostic than it was.** A real in-page session is measured to get *past* the 403 — to a `400` — so a `403` from a signed-in tab means your credential context is not what the site's own calls carry. Most likely the token (check you read `SWY_SHOP_TOKEN` and not a stale variable), but cookies and origin are not ruled out as the thing the gate reads. |
 | CART READ `400` naming a param | We reached the service and only the arguments are wrong. **Do not report this as a result until you have fixed it and re-run** — the 2026-08-11 run stopped here and its 400s carry no information about the endpoint. |
 | SEARCH `200` with a non-zero product count | **The tarpit was client-shaped, not a block.** Search works in-page and the rail's search half is settled. **Nobody has seen this yet** — it is the main thing this probe is still for. |
 | SEARCH `400` on **every** `channel` value | `channel` is *less likely* — not ruled out, since all the values tried are guesses from a domain nothing has enumerated. Move to the other suspects: `storeid` (check the `STORE CONTEXT` line and hard-code a real one), and any param the warning above says was omitted. |
