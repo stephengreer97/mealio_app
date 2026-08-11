@@ -643,6 +643,13 @@ export default function WebViewCartSheet({
   // attempt was inert. Deliberately loose: an inert injection costs one
   // `injectJavaScript` and no network at all.
   const HEB_CART_PROBE_MAX_INJECTIONS = 8;
+  // …and a per-page share of it, which is the bound that actually matters.
+  // /cart is where the churn is: its dedup is bypassed while the cart-count probe
+  // is pending, and heb ships `spaSearch: true` so the re-inject early return
+  // never fires either, meaning every duplicate onLoadEnd reaches the injector.
+  // Without a per-page cap one document can eat the whole budget — and it would
+  // be the one page whose reading we already have.
+  const HEB_CART_PROBE_MAX_PER_URL = 2;
   // The done-screen breakdown spinner falls back to the plain list after this,
   // so a cart page that never loads/counts (e.g. Amazon's multi-hop cart) can't
   // hang on "Updating your … cart" forever.
@@ -2427,7 +2434,14 @@ export default function WebViewCartSheet({
         // traffic on a device where the rail itself is disabled.
         hebCartQueryEnabled() &&
         hebCartProbeLadders.length < HEB_CART_PROBE_MAX_INJECTIONS &&
+        hebCartProbeLadders.filter((l) => l.url === url).length < HEB_CART_PROBE_MAX_PER_URL &&
         hebCartProbeLadders.filter((l) => l.started).length < HEB_CART_PROBE_MAX_TRIES &&
+        // THE LAST TRY IS THE SEARCH PAGE'S. A ladder killed by /cart's re-render
+        // still posted its start, so it still spends a try, and three of those
+        // would exhaust the budget before a search page ever loads — leaving the
+        // run with three readings of the page we already understand and none of
+        // the page whose reads are the ones failing.
+        (isSearch || hebCartProbeLadders.filter((l) => l.started).length < HEB_CART_PROBE_MAX_TRIES - 1) &&
         (
           // The first qualifying page of the run, whatever it is.
           hebCartProbeLadders.length === 0 ||

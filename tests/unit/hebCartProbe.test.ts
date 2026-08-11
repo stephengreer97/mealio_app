@@ -258,10 +258,11 @@ describe('running the ladder', () => {
   });
 
   it('sends them ONE AT A TIME', async () => {
-    // Concurrency would be faster and would survive a navigation better, but
-    // rungs 2 and 3 share an operation name — so if the answer really is keyed
-    // or cached on that name, two concurrent requests carrying it are the one
-    // shape that could make the discriminator report the minimal rung's answer.
+    // Concurrency would be faster and would survive a navigation better, but a
+    // five-way burst is a traffic shape the anti-bot layer scores differently
+    // from the rail's own — and this rail is already suspected of provoking one
+    // wall. A ladder that changed the thing it is measuring would be the least
+    // useful thing it could do.
     let inFlight = 0;
     let maxInFlight = 0;
     await runLadder(async () => {

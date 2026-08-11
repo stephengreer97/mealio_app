@@ -231,10 +231,31 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
     load('https://www.heb.com/cart');
     ladderStarted();
     expect(probeInjections()).toHaveLength(2);
-    // …and the budget of real attempts still stops it, however many re-renders.
+    // …twice and no more, however many times the page re-renders. /cart's dedup
+    // is bypassed while the count probe is pending and heb is an SPA store, so
+    // every duplicate load reaches the injector; without a per-page cap this one
+    // document would eat a budget meant for the page we have not read yet.
     load('https://www.heb.com/cart');
+    load('https://www.heb.com/cart');
+    expect(probeInjections()).toHaveLength(2);
+  });
+
+  it('keeps a try in hand for the search page', async () => {
+    await armRail();
+    runToFirstLoad(); // /cart
     ladderStarted();
-    load('https://www.heb.com/cart');
+    cartCounted();
+    // More non-search pages, each ladder starting and then being killed. Without
+    // the reserve these would exhaust the budget and the run would end with three
+    // readings of pages we already understand and none of a search page.
+    load('https://www.heb.com/product-detail/a/1');
+    ladderStarted();
+    expect(probeInjections()).toHaveLength(2);
+    load('https://www.heb.com/product-detail/b/2');
+    load('https://www.heb.com/product-detail/c/3');
+    expect(probeInjections()).toHaveLength(2);
+    // The held-back try is the search page's, and it is still there.
+    load('https://www.heb.com/search?q=sour+cream');
     expect(probeInjections()).toHaveLength(3);
   });
 
@@ -289,12 +310,13 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
     ladderStarted();
     cartCounted();
     for (const u of ['/a', '/b', '/c', '/d', '/e']) {
-      load('https://www.heb.com' + u);
+      load('https://www.heb.com/search?q=' + u);
       ladderStarted();
     }
     // Every ladder starts and none reports done, so every load is a retry
     // candidate — and the bound is what keeps a run that keeps killing them from
-    // turning a diagnostic into a request flood.
+    // turning a diagnostic into a request flood. Search pages, so the reserve
+    // above is not what is doing the stopping here.
     expect(probeInjections()).toHaveLength(3);
   });
 
