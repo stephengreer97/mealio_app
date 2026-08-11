@@ -51,7 +51,7 @@ import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureC
 import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-health';
 import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
-import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
+import { HebAddConfirmation, buildHebCartProbeScript, hebCartQueryEnabled } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
@@ -598,6 +598,58 @@ export default function WebViewCartSheet({
   const cartProbeResultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cartProbeRetriedRef = useRef(false);
   const CART_PROBE_RESULT_TIMEOUT_MS = cfgTimeouts.cartProbeResultMs;
+  // MEAL-16 probe-ladder state. THE latch is native — there is no in-page one
+  // that survives a navigation without leaving a Mealio artifact on H-E-B's
+  // origin, and #110's in-page `var` printed its line 18 times in an 18-item
+  // cart because every add is its own injection. See the ladder's own header in
+  // webview-scripts/heb-cart-query.
+  //
+  // A LOG OF LADDERS, not a set of booleans, because "it was injected" and "it
+  // ran" are different facts and only the second is worth anything — a ladder
+  // killed by a navigation has to be retried, and a flag set at injection would
+  // have spent the run's only shot on a document that died. Each entry is
+  // identified, because the retry means more than one can be outstanding and a
+  // done line has to retire the ladder that sent it and no other.
+  const hebCartProbeLaddersRef = useRef<
+    { id: string; url: string; search: boolean; started: boolean; done: boolean }[]
+  >([]);
+  /**
+   * Steps at which a page load is NOT part of a running H-E-B cart.
+   *
+   * 'qty' is before the user has committed; 'login'/'login_check' are before
+   * there is a session worth reading a cart with, and a ladder there would
+   * measure a logged-out gateway and read as a finding; 'robot_challenge' is a
+   * wall the user is being asked to clear, which is the last moment to add
+   * automated traffic; 'done' and the two review steps are after the run.
+   * Everything else — 'searching' and 'adding' — is the run.
+   */
+  const HEB_CART_PROBE_IDLE_STEPS = new Set<Step>([
+    'qty', 'login', 'login_check', 'robot_challenge', 'searchResult', 'review', 'done',
+  ]);
+  // Worst case 3 ladders × 5 reads = 15 requests, and only on a run that keeps
+  // killing them; the ordinary shape is two (the cart page, then the first
+  // search page). Against ~18-36 cart reads in the same run this is
+  // proportionate, and it is bounded so a page that reloads in a loop cannot
+  // turn a diagnostic into a request flood.
+  //
+  // Counted in ladders that actually STARTED, not injections. An injection into
+  // a document where one is already running returns without sending anything —
+  // and H-E-B's same-URL /cart re-render produces exactly those, so charging
+  // them to this budget would spend it all on /cart and starve the search-page
+  // rung, which is the reading the ticket most wants.
+  const HEB_CART_PROBE_MAX_TRIES = 3;
+  // The separate flood stop, on injections rather than starts, so a page that
+  // reloads in a loop cannot make the sheet inject forever just because each
+  // attempt was inert. Deliberately loose: an inert injection costs one
+  // `injectJavaScript` and no network at all.
+  const HEB_CART_PROBE_MAX_INJECTIONS = 8;
+  // …and a per-page share of it, which is the bound that actually matters.
+  // /cart is where the churn is: its dedup is bypassed while the cart-count probe
+  // is pending, and heb ships `spaSearch: true` so the re-inject early return
+  // never fires either, meaning every duplicate onLoadEnd reaches the injector.
+  // Without a per-page cap one document can eat the whole budget — and it would
+  // be the one page whose reading we already have.
+  const HEB_CART_PROBE_MAX_PER_URL = 2;
   // The done-screen breakdown spinner falls back to the plain list after this,
   // so a cart page that never loads/counts (e.g. Amazon's multi-hop cart) can't
   // hang on "Updating your … cart" forever.
@@ -1522,6 +1574,7 @@ export default function WebViewCartSheet({
       parallelReconcileArmedRef.current = false;
       reconcileFinalizedRef.current = false;
       cartProbeRetriedRef.current = false;
+      hebCartProbeLaddersRef.current = [];
       parallelOriginalTotalRef.current = 0;
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
@@ -2339,6 +2392,91 @@ export default function WebViewCartSheet({
       console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'skipped: not store domain');
       return;
     }
+    // MEAL-16 probe ladder — five diagnostic GraphQL reads. Declared here and
+    // called from the two places a run's H-E-B page load can END UP: the normal
+    // dispatch below, and the cold-slot branch above it, which returns early and
+    // is the ONE main-WebView search page a pre-search run produces. Missing that
+    // branch left the search-page rung — the reading this ticket most wants —
+    // unreachable on the default config.
+    const maybeInjectHebCartProbe = () => {
+      const hebCartProbeLadders = hebCartProbeLaddersRef.current;
+      const isSearch = s.isSearchUrl(url);
+      // CALLED from below the auth-redirect skip, the NAV_INTENT match and the
+      // same-URL dedup — never above them. Those gates exist to drop loads for a
+      // document that is already being replaced, and a ladder fired on one of
+      // those spends its requests on a page about to die.
+      //
+      // Everything the ladder needs is true at both call sites: the page is loaded
+      // and is the storefront's own origin, ABP was cleared by the very load that
+      // fired this event, and the step says the run is past its login gate, so the
+      // session is the one the run's own cart reads use.
+      //
+      // Runs alongside whatever the caller injects rather than instead of it — the
+      // ladder makes network calls and touches no DOM, so the two cannot interact.
+      if (
+        lockedStoreIdRef.current === 'heb' &&
+        // The run is under way and past the login gate — NOT `step === 'searching'`,
+        // which is a window a few milliseconds wide. `beginSearchFlow` sets
+        // 'searching' and then routes straight into `presearch`/`parallelAdd`, both
+        // of which call setStep('adding') synchronously, so every page load after
+        // the before-cart snapshot — the search pages included, i.e. the reading
+        // this ladder most wants — arrives at 'adding'. Naming the steps that are
+        // NOT a running H-E-B run is the version of this that cannot go stale the
+        // next time a strategy adds a step of its own.
+        !HEB_CART_PROBE_IDLE_STEPS.has(stepRef.current) &&
+        // NOT s.domain: that gate is a substring test (see the note at the top of
+        // this callback), so `accounts.heb.com/authorize` satisfies it — and the
+        // ladder POSTs to a SAME-ORIGIN path, so it would send all five rungs to
+        // the wrong gateway and read the answers as findings about the storefront.
+        /^https?:\/\/(www\.)?heb\.com([/?#]|$)/i.test(url) &&
+        // Gated on the rail's own flag: with `cartSkuConfirm` off there is no rail
+        // to diagnose, and this must not be the one thing that puts H-E-B GraphQL
+        // traffic on a device where the rail itself is disabled.
+        hebCartQueryEnabled() &&
+        hebCartProbeLadders.length < HEB_CART_PROBE_MAX_INJECTIONS &&
+        hebCartProbeLadders.filter((l) => l.url === url).length < HEB_CART_PROBE_MAX_PER_URL &&
+        hebCartProbeLadders.filter((l) => l.started).length < HEB_CART_PROBE_MAX_TRIES &&
+        // THE LAST TRY IS THE SEARCH PAGE'S. A ladder killed by /cart's re-render
+        // still posted its start, so it still spends a try, and three of those
+        // would exhaust the budget before a search page ever loads — leaving the
+        // run with three readings of the page we already understand and none of
+        // the page whose reads are the ones failing.
+        (isSearch || hebCartProbeLadders.filter((l) => l.started).length < HEB_CART_PROBE_MAX_TRIES - 1) &&
+        (
+          // The first qualifying page of the run, whatever it is.
+          hebCartProbeLadders.length === 0 ||
+          // No ladder has yet reported `cart_query_probe_done`, so none has survived
+          // the page it ran on — H-E-B re-renders /cart a beat after load and kills
+          // injected scripts there. Retry rather than spending the run's only shot
+          // on a document that died.
+          //
+          // Two ladders alive in one JS context is what this must NOT cause, and the
+          // native side cannot rule it out: onLoadEnd fires for same-URL re-renders
+          // and for SPA route changes that never replace the document, so neither
+          // "same URL" nor "different URL" says whether the previous ladder is still
+          // running. The document itself carries the interlock — see
+          // HEB_CART_PROBE_GUARD — and an injection that lands while one is running
+          // simply returns, posting nothing. That is why there is no same-URL rule
+          // here: /cart's re-render fires onLoadEnd at the IDENTICAL url, and it is
+          // the one page the retry was built for.
+          !hebCartProbeLadders.some((l) => l.done) ||
+          // And once COMPLETED on a SEARCH page, because that is where the rail's
+          // own reads actually happen. Candidate A includes a page-level fetch
+          // wrapper, which is per-document: a clean ladder from /cart cannot retire
+          // it, and /cart answering differently from /search would be that candidate
+          // with a mechanism attached. Keyed on completion and not on injection —
+          // a search-page ladder that was killed has answered nothing, and retiring
+          // the clause on it would lose the ticket's most valuable reading.
+          (isSearch && !hebCartProbeLadders.some((l) => l.done && l.search))
+        )
+      ) {
+        const id = `p${hebCartProbeLadders.length + 1}`;
+        hebCartProbeLadders.push({ id, url, search: isSearch, started: false, done: false });
+        console.log(`[Cart ${ts()}]`, 'MEAL-16 cart-query probe ladder — injecting', id,
+          'search=', isSearch, 'on', url);
+        webviewRef.current?.injectJavaScript(buildHebCartProbeScript(id));
+      }
+    };
     // Cold-slot branch: the main WebView is acting as a 4th add surface — its
     // results page just loaded, so inject the fused search+add (once) and let
     // onMessage feed the result to the pool. Bypasses the normal cart-flow logic.
@@ -2348,6 +2486,10 @@ export default function WebViewCartSheet({
       const term = item.searchTerm ?? item.ingredientName;
       console.log(`[Cart ${ts()}]`, 'presearch COLD (main) onLoadEnd — injecting fused add for', term);
       webviewRef.current?.injectJavaScript(s.buildSearchAndAddScript(term, item.productQty, item.dropdown ?? null));
+      // Before the return, not after it. This IS a loaded results page in the main
+      // WebView — on a pre-search run it is the only one — so skipping the ladder
+      // here is what made the search-page rung unreachable.
+      maybeInjectHebCartProbe();
       return;
     }
     // Walmart anti-bot redirect: /blocked?url=<encoded original>. We surface
@@ -2489,6 +2631,7 @@ export default function WebViewCartSheet({
     }
     // Track whether we're on a search results page so subsequent items skip homepage reload.
     onSearchPageRef.current = s.isSearchUrl(url);
+    maybeInjectHebCartProbe();
     if (loadQueueRef.current.length > 0) {
       const script = loadQueueRef.current.shift()!;
       const label = script.slice(0, 60).replace(/\n/g, ' ');
@@ -3199,6 +3342,24 @@ export default function WebViewCartSheet({
           console.log(`[Cart ${ts()}]`, 'EXTRACT_DEBUG', JSON.stringify(msg));
           if (msg.step === 'next_data') {
             extractWhyRef.current[MAIN_SURFACE] = msg.ndReason ?? null;
+          }
+          // MEAL-16: a ladder that reached its own last line. This is the only
+          // evidence that one ran end to end rather than being cut off by a
+          // navigation, and it is what stops the retry in onLoadEnd — so it is
+          // recorded against the ladder that SENT it, by the id that rode out on
+          // the injected script. Retiring "some ladder finished" instead would let
+          // a late done from the /cart ladder cash in the search-page clause that
+          // only a search-page ladder can answer.
+          if (msg.step === 'cart_query_probe_start' || msg.step === 'cart_query_probe_done') {
+            const ladder = hebCartProbeLaddersRef.current.find((l) => l.id === msg.probeId);
+            if (ladder) {
+              // A start says this injection found the document free and is really
+              // running — the only injections that cost a try. A done says it
+              // reached its last statement; both are recorded against the ladder
+              // that SENT them, by the id that rode out on the injected script.
+              ladder.started = true;
+              if (msg.step === 'cart_query_probe_done') ladder.done = true;
+            }
           }
           return;
         }
