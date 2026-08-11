@@ -598,12 +598,28 @@ export default function WebViewCartSheet({
   const cartProbeResultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cartProbeRetriedRef = useRef(false);
   const CART_PROBE_RESULT_TIMEOUT_MS = cfgTimeouts.cartProbeResultMs;
-  // MEAL-16: the cart-rail probe ladder has fired for this run. THE latch —
-  // there is no in-page one that survives a navigation without leaving a Mealio
-  // artifact on H-E-B's origin, and #110's in-page `var` printed its line 18
-  // times in an 18-item cart because every add is its own injection. See the
-  // ladder's own header in webview-scripts/heb-cart-query.
-  const hebCartProbeSentRef = useRef(false);
+  // MEAL-16 probe-ladder state. THE latch is native — there is no in-page one
+  // that survives a navigation without leaving a Mealio artifact on H-E-B's
+  // origin, and #110's in-page `var` printed its line 18 times in an 18-item
+  // cart because every add is its own injection. See the ladder's own header in
+  // webview-scripts/heb-cart-query.
+  //
+  // Three refs rather than one boolean, because "it was injected" and "it ran"
+  // are different facts and only the second is worth anything: a ladder killed
+  // by a navigation has to be retried, and a boolean set at injection would have
+  // spent the run's only shot on a document that died.
+  /** Ladders injected this run. Hard bound — see HEB_CART_PROBE_MAX_TRIES. */
+  const hebCartProbeTriesRef = useRef(0);
+  /** A `cart_query_probe_done` has come back, i.e. some ladder ran end to end. */
+  const hebCartProbeDoneRef = useRef(false);
+  /** One of them ran on a search page, where the rail's own reads happen. */
+  const hebCartProbeSearchRef = useRef(false);
+  // Worst case 3 ladders × 5 reads = 15 requests, and only on a run that keeps
+  // killing them; the ordinary shape is two (the cart page, then the first
+  // search page). Against ~18-36 cart reads in the same run this is
+  // proportionate, and it is bounded so a page that reloads in a loop cannot
+  // turn a diagnostic into a request flood.
+  const HEB_CART_PROBE_MAX_TRIES = 3;
   // The done-screen breakdown spinner falls back to the plain list after this,
   // so a cart page that never loads/counts (e.g. Amazon's multi-hop cart) can't
   // hang on "Updating your … cart" forever.
@@ -1528,7 +1544,9 @@ export default function WebViewCartSheet({
       parallelReconcileArmedRef.current = false;
       reconcileFinalizedRef.current = false;
       cartProbeRetriedRef.current = false;
-      hebCartProbeSentRef.current = false;
+      hebCartProbeTriesRef.current = 0;
+      hebCartProbeDoneRef.current = false;
+      hebCartProbeSearchRef.current = false;
       parallelOriginalTotalRef.current = 0;
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
@@ -2346,32 +2364,6 @@ export default function WebViewCartSheet({
       console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'skipped: not store domain');
       return;
     }
-    // MEAL-16 probe ladder — five diagnostic GraphQL reads, ONCE per run, on the
-    // first H-E-B page this run loads after the login gate. Everything it needs
-    // is true here and nowhere earlier: the page is loaded and same-origin, ABP
-    // has been cleared by the very load that fired this event, and 'searching'
-    // means LOGIN_STATUS already came back true, so the session is the one the
-    // run's own cart reads will use.
-    //
-    // Fires alongside whatever the dispatch below injects rather than instead of
-    // it — the ladder only makes network calls and touches no DOM, so the two
-    // cannot interact. It is bounded by how long the page stays put, which is
-    // why each rung posts as it lands and `cart_query_probe_done` reports how
-    // many of the five ran; a ladder cut short by a navigation is still readable.
-    //
-    // Gated on the rail's own flag: with `cartSkuConfirm` off there is no rail to
-    // diagnose, and this must not be the one thing that puts H-E-B GraphQL
-    // traffic on a device where the rail itself is disabled.
-    if (
-      lockedStoreIdRef.current === 'heb' &&
-      stepRef.current === 'searching' &&
-      !hebCartProbeSentRef.current &&
-      hebCartQueryEnabled()
-    ) {
-      hebCartProbeSentRef.current = true;
-      console.log(`[Cart ${ts()}]`, 'MEAL-16 cart-query probe ladder — injecting on', url);
-      webviewRef.current?.injectJavaScript(buildHebCartProbeScript());
-    }
     // Cold-slot branch: the main WebView is acting as a 4th add surface — its
     // results page just loaded, so inject the fused search+add (once) and let
     // onMessage feed the result to the pool. Bypasses the normal cart-flow logic.
@@ -2522,6 +2514,56 @@ export default function WebViewCartSheet({
     }
     // Track whether we're on a search results page so subsequent items skip homepage reload.
     onSearchPageRef.current = s.isSearchUrl(url);
+    // MEAL-16 probe ladder — five diagnostic GraphQL reads, injected here and
+    // nowhere else. Deliberately BELOW every gate above it: the auth-redirect
+    // skip, the NAV_INTENT match and the same-URL dedup all exist to drop loads
+    // for a document that is already being replaced, and a ladder fired on one of
+    // those would spend its requests on a page that is about to die.
+    //
+    // Everything the ladder needs is true at this line and nowhere earlier: the
+    // page is loaded and is the storefront's own origin, ABP was cleared by the
+    // very load that fired this event, and 'searching' means LOGIN_STATUS already
+    // came back true, so the session is the one the run's own cart reads use.
+    //
+    // Fires alongside whatever the dispatch below injects rather than instead of
+    // it — the ladder only makes network calls and touches no DOM, so the two
+    // cannot interact.
+    if (
+      lockedStoreIdRef.current === 'heb' &&
+      stepRef.current === 'searching' &&
+      // NOT s.domain: that gate is a substring test (see the note at the top of
+      // this callback), so `accounts.heb.com/authorize` satisfies it — and the
+      // ladder POSTs to a SAME-ORIGIN path, so it would send all five rungs to
+      // the wrong gateway and read the answers as findings about the storefront.
+      /^https?:\/\/(www\.)?heb\.com([/?#]|$)/i.test(url) &&
+      // Gated on the rail's own flag: with `cartSkuConfirm` off there is no rail
+      // to diagnose, and this must not be the one thing that puts H-E-B GraphQL
+      // traffic on a device where the rail itself is disabled.
+      hebCartQueryEnabled() &&
+      hebCartProbeTriesRef.current < HEB_CART_PROBE_MAX_TRIES &&
+      (
+        // The first qualifying page of the run, whatever it is.
+        hebCartProbeTriesRef.current === 0 ||
+        // A ladder that never reported `cart_query_probe_done` was cut short by a
+        // navigation — H-E-B re-renders the cart page a beat after load and kills
+        // injected scripts there (see the count-script note above), so the normal
+        // path is the likely one to lose it. Retry on the next page rather than
+        // spending the run's only shot on a document that did not survive.
+        !hebCartProbeDoneRef.current ||
+        // And once on a SEARCH page even after a complete run, because that is
+        // where the rail's own reads actually happen. Candidate A includes a
+        // page-level fetch wrapper, which is per-document: a clean ladder from
+        // /cart cannot retire it, and /cart answering differently from /search
+        // would be that candidate with a mechanism attached.
+        (onSearchPageRef.current && !hebCartProbeSearchRef.current)
+      )
+    ) {
+      hebCartProbeTriesRef.current += 1;
+      if (onSearchPageRef.current) hebCartProbeSearchRef.current = true;
+      console.log(`[Cart ${ts()}]`, 'MEAL-16 cart-query probe ladder — injecting, try',
+        hebCartProbeTriesRef.current, 'search=', onSearchPageRef.current, 'on', url);
+      webviewRef.current?.injectJavaScript(buildHebCartProbeScript());
+    }
     if (loadQueueRef.current.length > 0) {
       const script = loadQueueRef.current.shift()!;
       const label = script.slice(0, 60).replace(/\n/g, ' ');
@@ -3233,6 +3275,10 @@ export default function WebViewCartSheet({
           if (msg.step === 'next_data') {
             extractWhyRef.current[MAIN_SURFACE] = msg.ndReason ?? null;
           }
+          // MEAL-16: a ladder that reached its own last line. This is the only
+          // evidence that one ran end to end rather than being cut off by a
+          // navigation, and it is what stops the retry in onLoadEnd.
+          if (msg.step === 'cart_query_probe_done') hebCartProbeDoneRef.current = true;
           return;
         }
 

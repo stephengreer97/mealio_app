@@ -84,6 +84,21 @@ const meal = {
   ],
 };
 
+/** Fire a page load on the main WebView. */
+function load(url: string) {
+  act(() => { mainWebView().onLoadEnd({ nativeEvent: { url } }); });
+}
+
+/** What the ladder itself posts when it reaches its last line. Without this the
+ *  sheet has no evidence a ladder survived the page it ran on. */
+function ladderFinished() {
+  act(() => {
+    mainWebView().onMessage({
+      nativeEvent: { data: JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_probe_done', ran: 5, of: 5 }) },
+    });
+  });
+}
+
 /** Render the H-E-B sheet and drive it to the first page load after login. */
 function runToFirstLoad(url = 'https://www.heb.com/cart') {
   const view = render(
@@ -94,7 +109,7 @@ function runToFirstLoad(url = 'https://www.heb.com/cart') {
   act(() => {
     wv.onMessage({ nativeEvent: { data: JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }) } });
   });
-  act(() => { mainWebView().onLoadEnd({ nativeEvent: { url } }); });
+  load(url);
   return view;
 }
 
@@ -124,15 +139,61 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
     expect(script).toContain('zzzNotAField');
   });
 
-  it('does NOT inject again on a second page load in the same run', async () => {
+  it('does not re-fire on every page once a ladder has run end to end', async () => {
     await armRail();
     runToFirstLoad();
-    act(() => {
-      mainWebView().onLoadEnd({ nativeEvent: { url: 'https://www.heb.com/search?q=sour+cream' } });
-    });
+    ladderFinished();
+    load('https://www.heb.com/product-detail/tortillas/1234');
+    load('https://www.heb.com/');
     // The whole reason the latch is native: #110's in-page one reset on every
     // navigation and printed its line once per add.
     expect(probeInjections()).toHaveLength(1);
+  });
+
+  it('runs once more on the first SEARCH page, and only once', async () => {
+    await armRail();
+    runToFirstLoad(); // /cart
+    ladderFinished();
+    load('https://www.heb.com/search?q=sour+cream');
+    // Where the rail's own reads actually happen. Candidate A includes a
+    // page-level fetch wrapper, which is per-document, so /cart answering
+    // differently from /search is that candidate with a mechanism attached.
+    expect(probeInjections()).toHaveLength(2);
+    ladderFinished();
+    load('https://www.heb.com/search?q=tortillas');
+    expect(probeInjections()).toHaveLength(2);
+  });
+
+  it('does not spend the run\'s only shot on a page that killed the ladder', async () => {
+    await armRail();
+    runToFirstLoad(); // injected, but no cart_query_probe_done ever comes back
+    load('https://www.heb.com/product-detail/tortillas/1234');
+    expect(probeInjections()).toHaveLength(2);
+  });
+
+  it('stops retrying after three ladders, however many pages load', async () => {
+    await armRail();
+    runToFirstLoad();
+    for (const u of ['/a', '/b', '/c', '/d', '/e']) load('https://www.heb.com' + u);
+    // Nothing ever reports done, so every load is a retry candidate — and the
+    // bound is what keeps a page that reloads in a loop from turning a
+    // diagnostic into a request flood.
+    expect(probeInjections()).toHaveLength(3);
+  });
+
+  it('does not probe the login host — a same-origin POST there hits the wrong gateway', async () => {
+    await armRail();
+    const view = render(
+      <WebViewCartSheet visible meals={[meal]} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+    );
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    act(() => {
+      mainWebView().onMessage({ nativeEvent: { data: JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }) } });
+    });
+    // The store gate above this is a substring test, so accounts.heb.com passes
+    // it — and the ladder POSTs to a same-origin path.
+    load('https://accounts.heb.com/authorize?client_id=x');
+    expect(probeInjections()).toHaveLength(0);
   });
 
   it('does not inject before the login gate', async () => {

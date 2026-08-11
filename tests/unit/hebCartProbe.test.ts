@@ -106,14 +106,28 @@ describe('the ladder', () => {
     // reading is "does their answer quote it back at us".
     expect(String(d.body.query)).toContain(HEB_CART_PROBE_FIELD);
     expect(String(d.body.query)).toContain('cartV2');
-    // Same operation name as production: rung 3 varies the SELECTION SET, and
-    // rungs 4-5 vary the name. A rung that varied both would settle neither.
-    expect(d.body.operationName).toBe(HEB_CART_OPERATION);
   });
 
-  it('keeps the production operation name on the two selection-set rungs', () => {
-    expect(byName('minimal').body.operationName).toBe(HEB_CART_OPERATION);
-    expect(byName('discriminator').body.operationName).toBe(HEB_CART_OPERATION);
+  it('holds the operation name steady across the selection-set rungs', () => {
+    // Rungs 2-4 vary the SELECTION SET with the name fixed; rungs 4-5 and the
+    // run's own reads vary the name with the document fixed. A rung that varied
+    // both would settle neither axis.
+    expect(byName('minimal').body.operationName).toBe(HEB_CART_OPERATION_ALT);
+    expect(byName('discriminator').body.operationName).toBe(HEB_CART_OPERATION_ALT);
+    expect(byName('renamed').body.operationName).toBe(HEB_CART_OPERATION_ALT);
+  });
+
+  it('sends NOTHING under the live operation name', () => {
+    // Rung 3's document is invalid on purpose. If the name-keyed response this
+    // ladder exists to test for is real, sending that under `CartLines` could
+    // install a 400 against the operation the run's own cart reads use — a
+    // diagnostic corrupting the run it is measuring. Nothing is lost: the answer
+    // under the live name is already on every cart_query_confirm line.
+    for (const p of HEB_CART_PROBES) {
+      expect(p.body.operationName).not.toBe(HEB_CART_OPERATION);
+      expect(String(p.body.query)).not.toContain(`query ${HEB_CART_OPERATION} `);
+      expect(String(p.body.query)).not.toContain(`query ${HEB_CART_OPERATION}{`);
+    }
   });
 
   it('sends the anonymous rung with no operationName KEY at all', () => {

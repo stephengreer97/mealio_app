@@ -1028,9 +1028,9 @@ export function buildHebCartQueryFn(): string {
 //                    with nothing of ours in it. If this fails too, nothing below
 //                    it means anything. Its `data` also NAMES their root type,
 //                    which is the other half of reading B.
-//   2 minimal        `query CartLines { cartV2 { id } }` — a one-field selection
+//   2 minimal        `query … { cartV2 { id } }` — a one-field selection
 //                    set. Same complaint here means the size of ours is not it.
-//   3 discriminator  `query CartLines { cartV2 { zzzNotAField } }` — THE rung. A
+//   3 discriminator  `query … { cartV2 { zzzNotAField } }` — THE rung. A
 //                    reply naming a type ("Cannot query field \"zzzNotAField\" on
 //                    type \"Cart\"") proves the validator does read our
 //                    sub-selection and tells us their real type for `cartV2`,
@@ -1041,24 +1041,33 @@ export function buildHebCartQueryFn(): string {
 //   5 anonymous      the production document verbatim with no name at all, and
 //                    no `operationName` field on the request.
 //
-//                    If the error follows the NAME across 4 and 5, the response
-//                    is keyed by operation name — a registry or a cache — and not
-//                    by our text, which is reading A with a mechanism attached.
+//                    If the error follows the NAME across 4, 5 and the run's own
+//                    reads under `CartLines`, the response is keyed by operation
+//                    name — a registry or a cache — and not by our text, which is
+//                    reading A with a mechanism attached.
+//
+// Rungs 2-4 hold the name at `CartLinesAlt` and vary the selection set; rungs 4,
+// 5 and the run's own cart reads hold the document and vary the name. Nothing in
+// the ladder is sent under `CartLines` itself — see HEB_CART_PROBES for why that
+// matters and why it costs nothing.
 //
 // Plus, on every rung, the response HEADERS and the first 400 characters of the
 // RAW body. An edge-generated or cached 400 shows itself there and nowhere else:
 // a `via`/`x-cache`/`age` on a 400 that our own gateway would have had no reason
 // to cache is the whole of reading A's third mechanism.
 //
-// ONCE PER RUN, AND THE LATCH IS NATIVE. #110 logged the request body "once per
-// injection", which was literally true and operationally wrong — the script is
-// re-injected for every add navigation, so it printed 18 times in an 18-item
-// cart. There is no in-page latch that survives a navigation without leaving a
-// Mealio artifact on H-E-B's origin (a sessionStorage key or a window global
-// their own scripts could read — the same fingerprint argument that renamed the
-// operation), so this script is not part of the add path at all. It is a
-// standalone one-shot that WebViewCartSheet injects into the main WebView once
-// per run, latched on a ref there.
+// PER RUN, NOT PER ADD, AND THE LATCH IS NATIVE. #110 logged the request body
+// "once per injection", which was literally true and operationally wrong — the
+// script is re-injected for every add navigation, so it printed 18 times in an
+// 18-item cart. There is no in-page latch that survives a navigation without
+// leaving a Mealio artifact on H-E-B's origin (a sessionStorage key or a window
+// global their own scripts could read — the same fingerprint argument that
+// renamed the operation), so this script is not part of the add path at all. It
+// is a standalone script that WebViewCartSheet injects into the main WebView,
+// latched on refs there: the first page of the run, once more on the first
+// SEARCH page (where the rail's own reads happen, and a page-level fetch wrapper
+// would differ), and a retry if a ladder never reached its `..._done` line.
+// Hard-bounded at three.
 //
 // SEQUENTIAL, NOT CONCURRENT, and it costs a truncation risk worth naming: the
 // page can navigate out from under the ladder and take the remaining rungs with
@@ -1097,9 +1106,24 @@ interface HebCartProbe {
   body: Record<string, unknown>;
 }
 
-/** The ladder, in the order it is sent. Exported for the tests, which assert the
- *  two variant rungs differ from the production document ONLY in the operation
- *  name — the entire point of rungs 4 and 5. */
+/**
+ * The ladder, in the order it is sent. Exported for the tests, which assert the
+ * two variant rungs differ from the production document ONLY in the operation
+ * name — the entire point of rungs 4 and 5.
+ *
+ * NO RUNG CARRIES THE PRODUCTION OPERATION NAME, and rungs 2 and 3 gave it up
+ * for a reason worth stating. Rung 3 sends a document that is invalid ON PURPOSE.
+ * If the name-keyed response this whole ladder exists to test for is real, then
+ * sending that under `CartLines` could install a 400 against the very operation
+ * the run's own cart reads use — a diagnostic corrupting the run it is measuring.
+ *
+ * Nothing is lost by moving them. The answer under the production name is
+ * already in the log 18 times a run, on every `cart_query_confirm` line, so the
+ * ladder does not need to re-send under it: rungs 2, 3 and 4 vary the SELECTION
+ * SET with the name held at `CartLinesAlt`, while rung 4, rung 5 and the run's
+ * own reads are the same document under three different names. Both axes are
+ * covered and neither rung has to touch `CartLines`.
+ */
 export const HEB_CART_PROBES: HebCartProbe[] = [
   // No operationName and no variables: the control carries as little of ours as
   // a GraphQL request can and still be one.
@@ -1107,17 +1131,17 @@ export const HEB_CART_PROBES: HebCartProbe[] = [
   {
     name: 'minimal',
     body: {
-      operationName: HEB_CART_OPERATION,
+      operationName: HEB_CART_OPERATION_ALT,
       variables: {},
-      query: `query ${HEB_CART_OPERATION} { cartV2 { id } }`,
+      query: `query ${HEB_CART_OPERATION_ALT} { cartV2 { id } }`,
     },
   },
   {
     name: 'discriminator',
     body: {
-      operationName: HEB_CART_OPERATION,
+      operationName: HEB_CART_OPERATION_ALT,
       variables: {},
-      query: `query ${HEB_CART_OPERATION} { cartV2 { ${HEB_CART_PROBE_FIELD} } }`,
+      query: `query ${HEB_CART_OPERATION_ALT} { cartV2 { ${HEB_CART_PROBE_FIELD} } }`,
     },
   },
   {
