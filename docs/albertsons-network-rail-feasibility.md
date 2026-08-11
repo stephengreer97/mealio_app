@@ -148,11 +148,14 @@ session, and do they generalise across the family?
 ticket describes the auth flow as `albertsons.okta.com/api/v1/authn` →
 sessionToken → bearer. The live config says the IdP is **`ciam.albertsons.com`**
 (`initOktaConfig.issuer`), so the 2026-08-06 text said the ticket's hostname was
-stale. **The real token says otherwise:** the accepted write's bearer carries
-`iss: https://albertsons.okta.com/oauth2/ausp6soxrIyPrm8rS2p6`. Both hostnames
-are live — almost certainly a custom CIAM domain fronting the same Okta org — so
-"`albertsons.okta.com` is stale" is withdrawn. Either way it is out of scope; we
-never mint a token. Noted only so nobody plans against the wrong one.
+stale. **The real token does not support that.** The accepted write's bearer
+carries `iss: https://albertsons.okta.com/oauth2/ausp6soxrIyPrm8rS2p6` — the
+hostname the ticket named and this document called stale. So "`albertsons.okta.com`
+is stale" is **withdrawn**; the likeliest reading is that `ciam.albertsons.com` is
+a custom domain over the same Okta org, but that is a guess and neither hostname
+has been probed. An `iss` claim is an identifier, not a reachable endpoint. Either
+way it is out of scope; we never mint a token. Noted only so nobody plans against
+the wrong one — and nobody should plan against *either* without probing it first.
 
 ---
 
@@ -294,11 +297,14 @@ sort-order: date
 
 Sent from the origin with `credentials: 'include'`, `mode: 'cors'`. The remaining
 request headers in the capture split two ways: `priority`, the `sec-ch-ua*` /
-`sec-fetch-*` set and `referrer` are **browser-controlled** — a `fetch` cannot set
-them, so a rail gets them for free and identical to the site's own. `accept` and
-`accept-language` are **ours to set** (neither is a forbidden header name) and the
-capture's values are the Angular client's, worth copying if a mismatch ever turns
-out to matter.
+`sec-fetch-*` set are **browser-controlled** — a `fetch` cannot set them, so a rail
+gets them for free and identical to the site's own. `accept` and `accept-language`
+are **ours to set** (neither is a forbidden header name) and the capture's values
+are the Angular client's, worth copying if a mismatch ever turns out to matter.
+`referrer` is a third case: `RequestInit.referrer` can set it, but the default is
+the calling page's URL — so an in-page rail gets a sensible one automatically only
+if it runs on a page whose URL resembles the site's own. In our WebView it does;
+worth a glance if a call is ever refused for no other visible reason.
 
 Read that against what this document previously asserted:
 
@@ -327,6 +333,12 @@ Note also what a *rail* still cannot see: the response **body**. The probe repor
 `Response { ok: true, status: 200 }` without consuming it (`bodyUsed: false`), so
 the status is known and the payload shape is not. That decides what a rail parses
 back to confirm an add, and it is cheap to recover on the next authenticated run.
+
+**And one thing the contract does not say at all: what `qty` means on a repeat.**
+The bundle calls this operation "add / **update** item". Sending `qty: 1` twice for
+the same `itemId` may leave one in the cart or two, and nothing here measured it —
+the probe added one item, once. Everything else in the residue produces a failed
+call; this one produces a **wrong cart**. See gap 1's residue.
 
 #### What the bundle says, kept for the record
 
@@ -405,7 +417,7 @@ are evidence about the object it read them from:
 | `customerId` | **Populated** — it appears in the cart-read path, and matches the token's `gid` claim. |
 | `UUID` | **Populated** — it reached the search query, and it matches the token's `uuid` claim exactly. |
 | `banner` | **Populated** — `banner=safeway` in the search query. Note this is the *storefront's* banner; the token's `ban` claim said `albertsons`. They disagree, and the storefront one is the one that was in a working page. |
-| `shopZipcode` | **Absent or empty.** The probe sent `zipCode=` — this is what broke both of its legs. |
+| `shopZipcode` | **Absent or empty.** The probe sent `zipCode=`, which is what broke its **cart** leg. (Not its search leg — search sends no zip under any name, so that 400 has a different cause, most likely `storeid` or the unverified `channel` value.) |
 | `shopStoreId` | **Unknown.** The probe falls back to `ui.storeId`, and the URL was truncated in the paste, so which one supplied the value cannot be told apart. |
 | everything else | **Unknown.** The `userInfo KEYS` dump was not captured. |
 
@@ -710,9 +722,18 @@ Be precise about what that buys, because it is less than it looks:
   session, and a same-origin path all changed at once between the hanging `curl`
   and the answering `fetch`. Which of them the edge cares about is unmeasured.
 
-Gap 3 therefore narrows to: *fix the params and get a `200`.* That is a one-line
-change to probe 2 (below) on the next authenticated run, and until it lands the
-rail's **search** half is still unproven even though its **cart** half is not.
+Gap 3 therefore narrows to: *get a search `200` from anywhere.* That is not a
+one-line fix, because **we do not know which param the search leg got wrong** —
+its 400 cannot be blamed on the empty `zipCode` that broke the cart leg, since
+search sends no zip at all. The two candidates are `storeid` (built from the same
+suspect `userInfo` fields) and `channel`, whose accepted values nothing has
+verified — `pickup` is a guess, and the cart path's analogous param turned out to
+want `Dug`. Probe 2 below now **tries both `channel` values** and warns loudly if
+`storeid` is undefined, so one run distinguishes them; it also no longer aborts
+the search leg when the *cart* leg's store context is missing, which is how the
+2026-08-11 run could have come back with gap 3 unmeasured a second time. Until one
+of these yields a `200`, the rail's **search** half is unproven even though its
+**cart** half is measured.
 
 This is the reason not to over-read finding 3 into "we could skip the WebView
 entirely": search from a plain client **does not currently work**, whatever the cause.
@@ -760,13 +781,24 @@ than vetoes it.
    - **Write scope** — none. `scp` is the same for reads and writes.
 
    **Residue, none of it blocking:**
+   - **`qty` semantics on a repeat add — absolute or additive?** The endpoint is
+     `POST /items` and the bundle calls it "add / **update** item", so `qty: 1`
+     sent twice for the same `itemId` may leave 1 or 2 in the cart. **Nothing
+     measured this**: the probe added one item once. This is the one piece of
+     residue that can produce a *wrong cart* rather than a failed call — a retry
+     after an ambiguous response, or two meals sharing an ingredient, lands
+     exactly here, and both directions violate the cart governing principles (add
+     what the user asked for, no more and no less). Measure it before any rail
+     retries anything: add the same id twice, then read the cart.
    - **Cookies.** Both the capture and the replay ran `credentials: 'include'`
      from the origin, so cookie *necessity* is untested. Free in a same-origin
      WebView; still not established.
    - **`preferenceList`** — required, or page state echoed along? Untested.
    - **The response body.** The `200` was reported without consuming the body, so
      what a rail parses back to confirm an add is still unknown. Cheapest thing to
-     collect on the next authenticated run.
+     collect on the next authenticated run — and note it interacts with the `qty`
+     question above: if the response echoes the resulting quantity, one run
+     answers both.
 
 2. ~~**The `/items` request body.**~~ **CLOSED 2026-08-11.** Recovered by probe 3
    with Copy-as-fetch; it is in "The measured add contract" above. Nobody needs to
@@ -990,8 +1022,10 @@ The honest deductions:
   payoff large — worth one shared canary, not 31. See "What the canary must
   assert" for what that canary has to cover to be worth anything.
 - **Nothing here is an argument for building the rail**, only that if we build it,
-  it covers the family. The unknowns above are unmeasured, and gaps 1 and 4 are the
-  real gating risks (**MEAL-137**, **MEAL-115**).
+  it covers the family. *Updated 2026-08-11:* gap 1 (**MEAL-137**) is closed, so
+  **gap 4 (sustained load, MEAL-115) is now the sole gating risk** — and this
+  section's own claim is untouched by that, because the family sweep is still
+  unrun and the accepted write happened on exactly one banner.
 - **Keep the DOM rail.** Same conclusion as MEAL-12: this is an optimisation with a
   fallback, not a replacement.
 
@@ -1180,23 +1214,24 @@ that this document never named.
   if (!tok) return console.error('No SWY_SHOP_TOKEN. Everything below will 401 — sign in first (or it is still hydrating: wait and re-run).');
 
   // STORE CONTEXT. The 2026-08-11 run read ui.shopStoreId / ui.shopZipcode, which
-  // appear to be absent or empty on a real userInfo — it sent zipCode= and both
-  // legs 400'd uninterpretably. Try several names, then STOP rather than send a
-  // request whose answer we could not read.
+  // appear to be absent or empty on a real userInfo — it sent zipCode= and its
+  // cart leg 400'd uninterpretably. Try several names for each.
   //   `||`, not `??`: an empty string is not a usable value for any of these, and
   //   the whole point is to fall through to the next candidate rather than to
   //   carry '' forward the way the run that broke did.
   //   shopStoreId leads because it is the accessor the bundle's own search code
   //   uses (getShopStoreId()); primaryStoreId precedes storeId because
   //   generateCommonParams prefers it that way (quoted verbatim above).
+  // HARD-CODE HERE if the log below shows undefined — that is the intended fix,
+  // and reporting the KEYS line alongside what you hard-coded is the finding.
   const storeId = ui.shopStoreId || ui.primaryStoreId || ui.storeId || ui.preferredStoreId;
   const zip     = ui.shopZipcode || ui.zipCode || ui.zipcode || ui.postalCode;
-  const svc     = ui.serviceType || 'Dug';   // 'Dug' is what the real add sends, NOT 'pickup'
-  console.log('STORE CONTEXT:', { storeId, zip, serviceType: svc });
-  if (!storeId || !zip || !svc) return console.error(
-    'storeId/zipCode/serviceType not found on userInfo — a 400 from here would tell ' +
-    'us nothing. Read them off the KEYS dump above, or off a real cart request in the ' +
-    'Network tab, hard-code them here, and re-run.');
+  const svc     = ui.serviceType || 'Dug';   // fallback value from the measured add; 'pickup' was the old guess
+  console.log('STORE CONTEXT:', { storeId, zip, serviceType: svc,
+                                  svcFromPage: !!ui.serviceType });
+  // Each leg is gated on what IT needs, not on the union: the cart read needs a
+  // zip and search does not, and aborting the whole probe over a missing zip is
+  // how a run comes back with gap 3 still unmeasured.
 
   const CART    = '/abs/pub/erums/cartservice/api/v2/cart';
   const CART_KEY   = 'c645e9387c654aa8ae253045f648bfac';   // from initErumsConfig
@@ -1219,7 +1254,15 @@ that this document never named.
   // (drop slotsRequired + x-swy-client-id and expressChk, add ocp-apim-trace:
   // true and sort-order: date). That pair of runs is the experiment — either one
   // alone is not.
-  // serviceType is new here: the 2026-08-11 run omitted it entirely.
+  // serviceType is new here and is NOT borrowed from the add: generateCommonParams
+  // sets it for every cart call, and the 2026-08-11 run simply omitted it. Only the
+  // FALLBACK VALUE ('Dug') comes from the add measurement, and only when the page
+  // does not supply one — watch svcFromPage above.
+  if (!storeId || !zip) {
+    console.error('CART READ skipped — storeId/zipCode unresolved. A 400 from here ' +
+                  'would tell us nothing. Hard-code them above and re-run. ' +
+                  '(Search below still runs.)');
+  } else {
   const cartQs = new URLSearchParams({
     type: 'mini', storeId, serviceType: svc, zipCode: zip,
     cartCategoryList: '1P,3P_MARKETPLACE,1P_Wine', expressChk: 'true' });
@@ -1238,29 +1281,39 @@ that this document never named.
   // generateCommonParams.
   try { const j = JSON.parse(cartTxt);
         console.log('cartId candidates:', JSON.stringify(j).match(/"cartId":"[^"]+"/g)?.slice(0,3)); } catch {}
+  }
 
   // ── 3. SEARCH. Does it work in-page, where plain curl tarpitted? ──────────
+  // Runs even if the cart leg was skipped: search needs no zip, and gap 3 is the
+  // open question. It DOES need storeid — the 2026-08-11 search 400 cannot be
+  // blamed on the empty zipCode that broke the cart leg, because search never
+  // sends one, so `storeid` and `channel` are the two live suspects. This loop
+  // varies `channel`, which is the cheaper one to rule out.
   const base = location.origin;
-  const sQs = new URLSearchParams({
-    pageurl: base, url: base, 'request-id': String(Date.now()), pagename: 'search',
-    rows: '5', start: '0', 'search-type': 'keyword', storeid: storeId,
-    // `channel` is the bundle's `fulfillmentType`, a different param from the cart's
-    // `serviceType` — its accepted values are unverified. If this 400s, try `svc`
-    // ('Dug'), which is what the cart path is measured to want.
-    q: 'tortillas', dvid: 'GhXAoLXN-ss-search', channel: 'pickup',
-    uuid: ui.UUID ?? '', featured: 'false', banner: ui.banner ?? '', includeOffer: 'true' });
-  const t0 = performance.now();
-  try {
-    const sr = await fetch(`/abs/pub/xapi/search/products?${sQs}`, {
-      credentials: 'include',
-      headers: { 'ocp-apim-subscription-key': SEARCH_KEY, accept: 'application/json' } });
-    const st = await sr.text();
-    console.log(`SEARCH: ${sr.status} in ${Math.round(performance.now()-t0)}ms`, st.slice(0, 500));
-    try { console.log('product count:',
-      JSON.parse(st)?.primaryProducts?.response?.docs?.length); } catch {}
-  } catch (e) {
-    console.error(`SEARCH threw after ${Math.round(performance.now()-t0)}ms —`,
-                  'if this hung ~30s the tarpit is not client-shaped:', e);
+  if (!storeId) console.warn('SEARCH: storeid is undefined — expect a 400. Hard-code it above.');
+  // `channel` is the bundle's `fulfillmentType`, a different param from the cart's
+  // `serviceType`, and NOTHING has verified its accepted values. 'pickup' is the
+  // original guess; 'Dug' is what the cart path turned out to want. Try both.
+  for (const channel of [...new Set(['pickup', svc])]) {
+    const sQs = new URLSearchParams({
+      pageurl: base, url: base, 'request-id': String(Date.now()), pagename: 'search',
+      rows: '5', start: '0', 'search-type': 'keyword', storeid: storeId ?? '',
+      q: 'tortillas', dvid: 'GhXAoLXN-ss-search', channel,
+      uuid: ui.UUID ?? '', featured: 'false', banner: ui.banner ?? '', includeOffer: 'true' });
+    const t0 = performance.now();
+    try {
+      const sr = await fetch(`/abs/pub/xapi/search/products?${sQs}`, {
+        credentials: 'include',
+        headers: { 'ocp-apim-subscription-key': SEARCH_KEY, accept: 'application/json' } });
+      const st = await sr.text();
+      console.log(`SEARCH [channel=${channel}]: ${sr.status} in ${Math.round(performance.now()-t0)}ms`,
+                  st.slice(0, 500));
+      try { console.log('product count:',
+        JSON.parse(st)?.primaryProducts?.response?.docs?.length); } catch {}
+    } catch (e) {
+      console.error(`SEARCH [channel=${channel}] threw after ${Math.round(performance.now()-t0)}ms —`,
+                    'if this hung ~30s the tarpit is not client-shaped:', e);
+    }
   }
 })();
 ```
@@ -1279,7 +1332,8 @@ that this document never named.
 | CART READ `403` | **Now diagnostic.** A real bearer is measured to get *past* the 403 filter, so a 403 here means the token did not arrive or is not real — not that the operation is forbidden. Check that you read `SWY_SHOP_TOKEN` and not a stale variable. |
 | CART READ `400` naming a param | We reached the service and only the arguments are wrong. **Do not report this as a result until you have fixed it and re-run** — the 2026-08-11 run stopped here and its 400s carry no information about the endpoint. |
 | SEARCH `200` with a non-zero product count | **The tarpit was client-shaped, not a block.** Search works in-page and the rail's search half is settled. **Nobody has seen this yet** — it is the main thing this probe is still for. |
-| SEARCH `400` | What the 2026-08-11 run got, from bad params. Fix them from the message and re-run; it at least shows the operation answers in-page. |
+| SEARCH `400` on **both** `channel` values | What the 2026-08-11 run got. `channel` is then ruled out and `storeid` is the suspect — check the `STORE CONTEXT` line, hard-code a real store id, re-run. |
+| SEARCH `400` on one `channel` and `200` on the other | **Gap 3 closed and the param named.** Record which value won; the cart path's analogue turned out to be `Dug` where everyone assumed `pickup`. |
 | SEARCH hangs in-page too | Did not happen on 2026-08-11, so this is now unlikely — but if it recurs the tarpit is real and server-side. **Fall back to `/abs/pub/xapi/search/autosuggest`**, which is measured working anonymously, or keep DOM scraping for search and use the network rail only for cart. Materially narrows the rail — file it. |
 | SEARCH `401`/`403` | Search needs auth after all, contradicting the bundle. Add `authorization: Bearer` and re-run. |
 | Anything with `x-iinfo` and an Imperva HTML body | Imperva challenged you. Reload the page and retry; if it recurs under repetition that is the load finding, and it is important. |
@@ -1354,7 +1408,10 @@ an expectation, and this document has already been wrong once about what a real
 add sends.
 
 With the contract in hand the rail is implementable — except for gap 4
-(**MEAL-115**), which no console probe can settle.
+(**MEAL-115**), which no console probe can settle, and except for `qty`
+semantics, which one more two-minute run of this same probe would settle: **add
+the same `itemId` twice and read the cart.** Do that before a rail retries
+anything.
 
 ---
 
