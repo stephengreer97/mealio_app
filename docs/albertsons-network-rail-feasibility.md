@@ -518,7 +518,7 @@ number, household id) that it should not be.
 | Claim | Value | Why it matters to a rail |
 |---|---|---|
 | `iat` → `exp` | 15:54:23Z → 16:39:23Z — **45 minutes** | A rail that reads the token once and holds it will break mid-run. Re-read the global on every call. |
-| `auth_time` | **28.9 days** before `iat` | The page refreshes silently off `offline_access`. Expiry is a refresh problem, not a re-login problem — the user is not going to be prompted, and we must not prompt them. |
+| `auth_time` | **28.9 days** before `iat` | The user last typed a password 29 days before this token was minted, and `offline_access` is in `scp` — so the *likeliest* reading is that the page refreshes silently and expiry is a refresh problem rather than a re-login one. **This is an inference from one static token, not a measurement**: nobody watched a refresh happen, and nobody knows the refresh token's own lifetime or what the page does when it finally expires. Do not build an unbounded wait on it. |
 | `scp` | `used_credentials, offline_access, email, openid, profile` | **No write scope.** Reads and writes use the same token, so a working read really would have predicted a working write here — but that was not knowable in advance, which is why gap 1 existed. |
 | `aud` | `Albertsons` | One audience across the family. |
 | `iss` | `https://albertsons.okta.com/oauth2/…` | See the IdP note in "Answers up front" — this is why "`albertsons.okta.com` is stale" is withdrawn. |
@@ -526,7 +526,13 @@ number, household id) that it should not be.
 
 The design consequence, restated because it is the one that will bite: **re-read
 `window.AB.userInfo.SWY_SHOP_TOKEN` before every call, and treat a stale or absent
-read as an expected state to wait on rather than an error to surface.**
+read as an expected state to wait on rather than an error to surface — but wait
+with a bound.** A signed-out session and a still-hydrating one look identical from
+the global, and the 29-day `auth_time` says only that this *particular* session had
+not needed a re-login; it does not promise the next one will not. An unbounded wait
+turns "you need to sign in again" into a hang, which is the failure mode
+`albertsons.ts` already documents for the login check. Bound it, then fall back to
+the signed-out path.
 
 ### The SPA does not observe an API add
 
@@ -666,12 +672,15 @@ The inference above ("a filter branching on the *presence* of a Bearer") was dra
 from byte-identical 403s. It is now measured from inside a real session, and it
 holds:
 
-| Credential | Same endpoint family |
-|---|---|
-| **no** `Authorization` header at all | `401 "Not Authorized"` |
-| bogus, or JWT-shaped-but-unsigned | `403`, byte-identical bodies |
-| **a real `SWY_SHOP_TOKEN`** | **`400 Bad Request`** — past the filter, into the application layer |
-| a real token **plus a correct request** | **`200`** |
+| Credential | Same endpoint family | Measured from |
+|---|---|---|
+| **no** `Authorization` header at all | `401 "Not Authorized"` | anonymous `curl`, 2026-08-06 |
+| bogus, or JWT-shaped-but-unsigned | `403`, byte-identical bodies | anonymous `curl`, 2026-08-06 |
+| **a real `SWY_SHOP_TOKEN`** | **`400 Bad Request`** — past the filter, into the application layer | **in-page, signed in, 2026-08-11** |
+| a real token **plus a correct request** | **`200`** | **in-page, signed in, 2026-08-11** |
+
+Only the bottom two rows are new. The top two are the 2026-08-06 transcript,
+repeated here because the comparison is the whole point.
 
 A valid credential gets past the 403 filter and reaches the app tier, exactly as
 the correction above predicted. And the hypothesis in the last paragraph — that
@@ -681,8 +690,9 @@ What is **not** confirmed is that nothing else is required. Four of the specific
 extra gates gap 1 named turned out to be absent (`slotsRequired`,
 `x-swy-client-id`, CSRF, `cartId`), and the token needs no write scope — but
 `ocp-apim-subscription-key` is measured as **required** — its absence is the APIM
-`401` in the anonymous transcript at the top of this section, a different `401`
-from the missing-bearer one two rows above — `ocp-apim-trace` and `sort-order`
+`401` in the anonymous transcript at the top of this section (`"Access denied due
+to missing subscription key"`), which is a different refusal from the
+missing-bearer `401` in the table just above — `ocp-apim-trace` and `sort-order`
 rode along unclassified,
 and cookies are untested. "The bearer is the only remaining gate" stays withdrawn.
 
@@ -759,10 +769,14 @@ Be precise about what that buys, because it is less than it looks:
 Gap 3 therefore narrows to: *get a search `200` from anywhere.* That is not a
 one-line fix, because **we do not know which param the search leg got wrong** —
 its 400 cannot be blamed on the empty `zipCode` that broke the cart leg, since
-search sends no zip at all. The two candidates are `storeid` (built from the same
-suspect `userInfo` fields) and `channel`, whose accepted values nothing has
+search sends no zip at all. The leading candidates are `storeid` (built from the
+same suspect `userInfo` fields) and `channel`, whose accepted values nothing has
 verified — `pickup` is a guess, and the cart path's analogous param turned out to
-want `Dug`. Probe 2 below now **tries both `channel` values** and warns loudly if
+want `Dug`. **They are not the only ones**, and if a run 400s on every `channel`
+the next suspects are the two places the probe knowingly differs from the bundle:
+`request-id` is `Date.now()` where the bundle calls `_getUTCTimeStampRandom()`, and
+`pageurl`/`url` go through `URLSearchParams` percent-encoding where the bundle
+concatenates them raw. Neither is obviously load-bearing; both are free to align. Probe 2 below now **tries both `channel` values** and warns loudly if
 `storeid` is undefined, so one run distinguishes them; it also no longer aborts
 the search leg when the *cart* leg's store context is missing, which is how the
 2026-08-11 run could have come back with gap 3 unmeasured a second time. Until one
@@ -1254,8 +1268,22 @@ that this document never named.
 // MEAL-15 probe. Read-only. Run on a logged-in www.<banner>.com tab.
 (async () => {
   // ── 1. Is the session really readable from the page, and WHEN? ────────────
-  const ui = window.AB?.userInfo;
-  if (!ui) return console.error('window.AB.userInfo missing — are you on a banner storefront page, signed in?');
+  // POLL, do not read once. On the hard-reload run this probe asks for, AB.userInfo
+  // is often not there yet — and aborting on that would kill the run in exactly the
+  // state gap 5 exists to measure, which is the mistake the token read below was
+  // already fixed for. How long it takes to appear IS the measurement.
+  const tStart = performance.now();
+  let ui = window.AB?.userInfo, waitedMs = 0;
+  while (!ui && waitedMs < 10000) {
+    await new Promise(r => setTimeout(r, 100));
+    waitedMs = Math.round(performance.now() - tStart);
+    ui = window.AB?.userInfo;
+  }
+  if (!ui) return console.error('window.AB.userInfo never appeared in 10s — are you on a banner ' +
+                                'storefront page (not /erums/cart), signed in? If you ARE, that is ' +
+                                'itself the finding: report it.');
+  console.log(`AB.userInfo READY after ${waitedMs}ms` +
+              (waitedMs ? ' — it was NOT there on first read. Report this number: it is gap 5.' : ' (present immediately)'));
 
   // Everything on the object, not just the fields we expected. Cheap, and the
   // fastest way to spot something the rail needs that this doc never named.
@@ -1394,10 +1422,16 @@ that this document never named.
   // `zipCode=` that made the 2026-08-11 cart 400 unreadable — an empty value is a
   // value, and its refusal gets misattributed to whichever param we happened to
   // be varying. Both were populated on 2026-08-11, so a miss is itself news.
-  const uuid   = ui2.UUID || '';
-  const banner = ui2.banner || location.hostname.split('.')[1] || '';
-  if (!uuid || !banner) console.warn('SEARCH: omitting empty', !uuid ? 'uuid' : '', !banner ? 'banner' : '',
-    '— if this 400s, that omission is a suspect alongside storeid and channel.');
+  const uuid       = ui2.UUID || '';
+  const bannerFromPage = ui2.banner || '';
+  // Falling back to the hostname would make `banner` never falsy and silently hide
+  // a missing field — so derive it, but SAY which source won.
+  const banner = bannerFromPage || location.hostname.split('.')[1] || '';
+  console.log('SEARCH inputs:', { storeid: storeId, uuid: uuid || '(omitted)',
+    banner, bannerSource: bannerFromPage ? 'userInfo' : 'hostname fallback' });
+  if (!uuid || !bannerFromPage) console.warn('SEARCH:', !uuid ? 'uuid omitted (absent);' : '',
+    !bannerFromPage ? 'banner came from the hostname, not userInfo;' : '',
+    'if this 400s, that is a suspect alongside storeid and channel.');
   for (const channel of [...new Set(['pickup', 'Dug', svc])]) {
     const sQs = new URLSearchParams({
       pageurl: base, url: base, 'request-id': String(Date.now()), pagename: 'search',
@@ -1472,7 +1506,13 @@ accepted at all**. This probe was changed to settle both in one pass, and did.
 1. On a logged-in banner tab, open DevTools → **Network**, filter `cartservice`.
 2. Click **Add** on any product in the normal UI.
 3. Right-click the `POST …/api/v2/cart/items` request → **Copy** → **Copy as
-   fetch** (or **Copy as cURL**).
+   fetch**. **Not "Copy as cURL", and not "Copy as fetch (with cookies)"** — those
+   embed the session cookie jar, and a session cookie in a tracker comment is a
+   worse leak than the bearer below, because it does not expire in 45 minutes.
+   (The 2026-08-11 capture used plain "Copy as fetch" and contained **no `cookie`
+   header at all** — verified against the paste. Chrome relies on
+   `credentials: 'include'` instead, which is also why cookie *necessity* is still
+   untested: we have never seen the cookie set, only its effects.)
 4. **Replace the `authorization` value with `Bearer <redacted>` before pasting it
    anywhere.** Learned the hard way on 2026-08-11: the capture carries a live
    bearer *and*, in its claims, the account's email, phone, loyalty card number
@@ -1483,12 +1523,17 @@ accepted at all**. This probe was changed to settle both in one pass, and did.
 
 Why "Copy as fetch": the merged version asked for "the JSON body and the full
 header list", which is a transcription task, and transcription silently drops
-exactly the things gap 1 turned on — **query-parameter order**, the **full cookie
-set**, and any header a reader assumes is boilerplate. That is not hypothetical:
-the two headers this document had never heard of (`ocp-apim-trace`, `sort-order`)
-and the two it had wrongly called load-bearing (`slotsRequired`,
-`x-swy-client-id`) are precisely what a hand transcription would have got wrong in
-both directions. It costs the same one right-click.
+exactly the things gap 1 turned on — **query-parameter order** and any header a
+reader assumes is boilerplate. That is not hypothetical: the two headers this
+document had never heard of (`ocp-apim-trace`, `sort-order`) and the two it had
+wrongly called load-bearing (`slotsRequired`, `x-swy-client-id`) are precisely
+what a hand transcription would have got wrong in both directions. It costs the
+same one right-click.
+
+*Corrected 2026-08-11: an earlier draft of this step claimed Copy-as-fetch also
+captures "the full cookie set". It does not — see the parenthesis above. That was
+the argument for preferring it over transcription, and it was the one part of the
+argument that was false.*
 
 **Step B — the smallest reversible write.** This is the step that closed gap 1;
 without it the document had only observed refusals:
