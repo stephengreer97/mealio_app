@@ -613,12 +613,16 @@ ${hebNextDataFn()}
     //                       probed too early reads false and is skipped.
     //   !outOfStock         nothing to choose a preference for.
     //   addBtn              no button, nothing to click.
-    //   candidates.length<5 the cap. Each probe clicks, polls up to 4s and closes
-    //                       a modal, so probing all 8 cards is expensive. The cap
-    //                       counts ACCEPTED candidates in DOM order, which is not
-    //                       score order: the best-matching product can sit past
-    //                       the fifth card and never be probed.
-    if (hasPopup && !outOfStock && addBtn && candidates.length < 5) {
+    //   candidates.length<11 the cap, and it counts ACCEPTED candidates rather
+    //                       than probes performed. At <5 that was the bug: the
+    //                       seven pre-packaged deli cards ahead of the Custom
+    //                       Sliced turkey had no dialog to open and cost nothing,
+    //                       but they still spent the whole budget, so the one
+    //                       probeable card on the page was skipped and reached
+    //                       Choose Products with preferences:null. The extract
+    //                       loop stops at 8 candidates, so 11 is above the
+    //                       ceiling — every card with a dialog now gets probed.
+    if (hasPopup && !outOfStock && addBtn && candidates.length < 11) {
       try {
         // ci (card index in DOM order) and candidatesLen are what separate
         // "outside the cap" from "the button had not hydrated" after the fact.
@@ -669,11 +673,10 @@ ${hebNextDataFn()}
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'error', name: name, err: String(e) }));
       }
     } else {
-      // Was gated on ci < 3, which made the message useless for the question it
-      // is now being asked: the cap can only bite from the sixth accepted
-      // candidate on, so the cards most likely to have been skipped were the
-      // only ones that never said so. Every unprobed card reports why, and ci
-      // says where it sat. At most 8 lines per search.
+      // Every unprobed card reports why, and ci says where it sat — that pair is
+      // what identified the cap as the cause of MEAL-180 rather than a hydration
+      // race. Now that the cap sits above the 8-candidate ceiling, hasPopup:false
+      // should be the only reason a card appears here. At most 8 lines per search.
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'PREF_DEBUG', step: 'skipped', name: name, ci: ci, hasPopup: hasPopup, outOfStock: outOfStock, hasAddBtn: !!addBtn, candidatesLen: candidates.length }));
     }
 

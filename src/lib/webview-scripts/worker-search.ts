@@ -162,7 +162,7 @@ export function buildExtractWorker(workerId: number, extractScript: string): str
       // a card whose Add button had not hydrated yet, and a probe that threw.
       // The sequential pass, which does reach the log, is exactly the pass the
       // bug does NOT reproduce on. Bounded per search: at most one line per
-      // card, plus three per probed card, and the probe itself is capped at 5.
+      // card, plus three per probed card, and a search yields at most 8 cards.
       if (m && (m.type === 'EXTRACT_DEBUG' || m.type === 'WORKER_DEBUG' || m.type === 'PREF_DEBUG')) {
         if (m.type === 'PREF_DEBUG') m.pref = true;
         m.type = 'WORKER_DEBUG';
