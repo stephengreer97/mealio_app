@@ -128,8 +128,16 @@ session, and do they generalise across the family?
    wants is sitting on a page global, `window.AB.userInfo.SWY_SHOP_TOKEN`. So we
    ride the session by reading it, not by minting it. **No Okta flow of our own,
    no credential handling.** The ticket's second acceptance criterion is now
-   satisfied **in practice** — an in-page `fetch` carrying that bearer performed a
-   real add and got `200` (**MEAL-137**, 2026-08-11).
+   satisfied **in practice for the write**, and **one inference short of it for
+   the token source** (**MEAL-137**, 2026-08-11): an in-page `fetch` performed a
+   real add and got `200`, but it replayed a bearer *captured from the site's own
+   request*, not one read from the global at call time. The call that did read the
+   global reached the same service's application layer (`400`, where every bogus
+   bearer got `403`), so the global holds a credential the origin treats as real —
+   which is strong, and is not the byte comparison that would finish the argument.
+   **One logged line on the next run closes it**; see "On that bearer" below.
+   Nothing else in the rail's shape depends on the answer, but "no Okta flow,
+   ever" does.
 
    *The 2026-08-06 version said "in principle only. No probe has confirmed it in
    practice", correcting a merged claim that described a probe nobody had run.
@@ -672,8 +680,10 @@ this is ordinary OAuth on a page-resident token — is confirmed.
 What is **not** confirmed is that nothing else is required. Four of the specific
 extra gates gap 1 named turned out to be absent (`slotsRequired`,
 `x-swy-client-id`, CSRF, `cartId`), and the token needs no write scope — but
-`ocp-apim-subscription-key` is measured as **required** (its absence is the `401`
-in the first table), `ocp-apim-trace` and `sort-order` rode along unclassified,
+`ocp-apim-subscription-key` is measured as **required** — its absence is the APIM
+`401` in the anonymous transcript at the top of this section, a different `401`
+from the missing-bearer one two rows above — `ocp-apim-trace` and `sort-order`
+rode along unclassified,
 and cookies are untested. "The bearer is the only remaining gate" stays withdrawn.
 
 *The `400` came from probe 2, which was **defective**: it derived `storeId` /
@@ -887,6 +897,11 @@ than vetoes it.
    minutes on the next authenticated session settles it: add the same id twice,
    read the cart. Cheaper than any of the alternatives, including finding out from
    a user.
+
+   ⚠️ **Unticketed as of 2026-08-11 — it needs one.** Gaps 1 and 4 have tickets
+   (**MEAL-137**, **MEAL-115**) and this does not, which is exactly how a
+   correctness prerequisite ends its life as a paragraph nobody re-reads. Whoever
+   picks up the Albertsons rail: file it before you write the add path, not after.
 
 ---
 
@@ -1107,12 +1122,25 @@ Albertsons-family session.
 
 Still open, mapped to "What remains unknown": (3) whether product search returns
 anything — probe 2's search leg needs its params fixed and re-run; (5) when the
-token is actually readable after a load. Plus gap 1's residue: the add's **response
-body**, and whether `preferenceList` and cookies are required. Gap 4, sustained
-load, is **MEAL-115**, is not closed by any probe below, and after 2026-08-11 is
-the only remaining gap that can sink the rail outright — it needs its own volume
-test. Gap 6 (`qty` semantics) does not sink it but must be answered before a rail
-retries anything.
+token is actually readable after a load; (6) what `qty` means on a repeat add,
+which does not sink the rail but must be answered before it retries anything.
+
+Plus three things that are not numbered gaps and would otherwise fall off the
+list — all of them one line each on the next authenticated session:
+
+- **The add's response body.** The `200` was logged without consuming it.
+- **`capturedBearer === window.AB.userInfo.SWY_SHOP_TOKEN`.** The one comparison
+  that turns "no Okta flow, ever" from inference into measurement.
+- **The read and remove operations.** `POST /cart/customer/{id}` and
+  `DELETE /items` are still bundle-only; only the *add* was confirmed. Probe 2's
+  cart leg attempts the read; nothing attempts the remove, on purpose.
+
+And whether `preferenceList` and cookies are required — neither testable without
+deliberately breaking a working request, so both wait for a reason.
+
+Gap 4, sustained load, is **MEAL-115**, is not closed by any probe below, and
+after 2026-08-11 is the only remaining gap that can sink the rail outright — it
+needs its own volume test.
 
 **Probe status:** probe 1 — not run. Probe 2 — run 2026-08-11, **defective**, see
 its own note. Probe 3 — **run 2026-08-11, succeeded.**
@@ -1362,18 +1390,22 @@ that this document never named.
   // `serviceType`, and NOTHING has verified its accepted values. 'pickup' is the
   // original guess; 'Dug' is what the cart path turned out to want; ui2.serviceType
   // is whatever the page itself thinks. Try all three, deduped.
+  // uuid and banner: OMIT rather than send empty. `uuid=` is the same trap as the
+  // `zipCode=` that made the 2026-08-11 cart 400 unreadable — an empty value is a
+  // value, and its refusal gets misattributed to whichever param we happened to
+  // be varying. Both were populated on 2026-08-11, so a miss is itself news.
+  const uuid   = ui2.UUID || '';
+  const banner = ui2.banner || location.hostname.split('.')[1] || '';
+  if (!uuid || !banner) console.warn('SEARCH: omitting empty', !uuid ? 'uuid' : '', !banner ? 'banner' : '',
+    '— if this 400s, that omission is a suspect alongside storeid and channel.');
   for (const channel of [...new Set(['pickup', 'Dug', svc])]) {
     const sQs = new URLSearchParams({
       pageurl: base, url: base, 'request-id': String(Date.now()), pagename: 'search',
       rows: '5', start: '0', 'search-type': 'keyword', storeid: storeId,
       q: 'tortillas', dvid: 'GhXAoLXN-ss-search', channel,
-      // `||`, not `??`, for the same reason as the store context above: an empty
-      // string here would be sent as a real value and its 400 misattributed to
-      // storeid. Both were populated on 2026-08-11, so a miss is itself news.
-      uuid: ui2.UUID || '', featured: 'false', banner: ui2.banner || location.hostname.split('.')[1] || '',
-      includeOffer: 'true' });
-    if (!ui2.UUID || !ui2.banner) console.warn('SEARCH: uuid/banner missing from userInfo —', 
-      { uuid: ui2.UUID, banner: ui2.banner }, '— a 400 may be this, not storeid or channel.');
+      featured: 'false', includeOffer: 'true',
+      ...(uuid   ? { uuid }   : {}),
+      ...(banner ? { banner } : {}) });
     const t0 = performance.now();
     try {
       const sr = await fetch(`/abs/pub/xapi/search/products?${sQs}`, {
@@ -1408,7 +1440,7 @@ that this document never named.
 | CART READ `403` | **Now diagnostic.** A real bearer is measured to get *past* the 403 filter, so a 403 here means the token did not arrive or is not real — not that the operation is forbidden. Check that you read `SWY_SHOP_TOKEN` and not a stale variable. |
 | CART READ `400` naming a param | We reached the service and only the arguments are wrong. **Do not report this as a result until you have fixed it and re-run** — the 2026-08-11 run stopped here and its 400s carry no information about the endpoint. |
 | SEARCH `200` with a non-zero product count | **The tarpit was client-shaped, not a block.** Search works in-page and the rail's search half is settled. **Nobody has seen this yet** — it is the main thing this probe is still for. |
-| SEARCH `400` on **every** `channel` value | `channel` is ruled out — which nothing has ruled out yet, since the 2026-08-11 run tried only `pickup`. `storeid` is then the suspect: check the `STORE CONTEXT` line, hard-code a real store id, re-run. |
+| SEARCH `400` on **every** `channel` value | `channel` is *less likely* — not ruled out, since all the values tried are guesses from a domain nothing has enumerated. Move to the other suspects: `storeid` (check the `STORE CONTEXT` line and hard-code a real one), and any param the warning above says was omitted. |
 | SEARCH `400` on some `channel` values and `200` on another | **Gap 3 closed and the param named.** Record which value won; the cart path's analogue turned out to be `Dug` where everyone assumed `pickup`, which is exactly why the probe now sweeps them. |
 | `SEARCH skipped` | `storeid` could not be resolved. Not a result about the endpoint — hard-code a store id above and re-run, because this is the leg gap 3 turns on. |
 | SEARCH hangs in-page too | Did not happen on 2026-08-11, so this is now unlikely — but if it recurs the tarpit is real and server-side. **Fall back to `/abs/pub/xapi/search/autosuggest`**, which is measured working anonymously, or keep DOM scraping for search and use the network rail only for cart. Materially narrows the rail — file it. |
