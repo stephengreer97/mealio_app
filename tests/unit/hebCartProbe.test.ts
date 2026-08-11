@@ -149,7 +149,7 @@ describe('the ladder', () => {
 // ── The script ───────────────────────────────────────────────────────────────
 
 it('parses as valid JS', () => {
-  expect(() => new vm.Script(buildHebCartProbeScript())).not.toThrow();
+  expect(() => new vm.Script(buildHebCartProbeScript('p1'))).not.toThrow();
 });
 
 interface StubResponse {
@@ -161,7 +161,7 @@ interface StubResponse {
 /** Run the ladder in a sandbox. `answer` is called per rung, in send order. */
 async function runLadder(
   answer: (call: { url: string; init: any; index: number }) => StubResponse | Promise<StubResponse> | never,
-  opts: { noBridge?: boolean } = {}
+  opts: { noBridge?: boolean; runTwice?: boolean; id?: string } = {}
 ): Promise<{ posted: any[]; calls: { url: string; init: any }[] }> {
   const posted: any[] = [];
   const calls: { url: string; init: any }[] = [];
@@ -204,7 +204,8 @@ async function runLadder(
     setTimeout(done, 0);
   }
 
-  vm.runInNewContext(buildHebCartProbeScript(), sandbox);
+  vm.runInNewContext(buildHebCartProbeScript(opts.id ?? 'p1'), sandbox);
+  if (opts.runTwice) vm.runInNewContext(buildHebCartProbeScript('p2'), sandbox);
   // The bail-out timer is CLEARED either way — a pending 5 s handle would keep
   // the whole jest worker alive after the suite passed.
   let bail: ReturnType<typeof setTimeout> | null = null;
@@ -373,6 +374,26 @@ describe('running the ladder', () => {
   it('survives a response with no readable headers', async () => {
     const { posted } = await runLadder(() => ({ status: 400, body: GQL_ERROR }));
     expect(posted[0].hdr).toEqual({});
+  });
+
+  it('stamps its id on every line it posts', async () => {
+    // The native side runs more than one ladder per run (it retries one that
+    // never finished), so a done line without an id would retire whichever record
+    // happened to be outstanding — including a later ladder still running.
+    const { posted } = await runLadder(() => ({ status: 400, body: GQL_ERROR }), { id: 'p2' });
+    expect(posted.length).toBeGreaterThan(HEB_CART_PROBES.length);
+    for (const m of posted) expect(m.probeId).toBe('p2');
+  });
+
+  it('runs ONE ladder per document, whatever the native side injects', async () => {
+    // onLoadEnd fires for H-E-B's same-URL cart re-render and for SPA route
+    // changes that never replace the document, so no native rule can tell whether
+    // the previous ladder is still alive. The document itself carries the
+    // interlock — two ladders in one context would put concurrent CartLinesAlt
+    // requests on the wire, the shape the rungs are sequential to avoid.
+    const { posted, calls } = await runLadder(() => ({ status: 400, body: GQL_ERROR }), { runTwice: true });
+    expect(calls).toHaveLength(HEB_CART_PROBES.length);
+    expect(posted.filter((m) => m.probeId === 'p2')).toEqual([]);
   });
 
   it('does nothing at all without the bridge', async () => {

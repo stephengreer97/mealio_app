@@ -604,21 +604,13 @@ export default function WebViewCartSheet({
   // cart because every add is its own injection. See the ladder's own header in
   // webview-scripts/heb-cart-query.
   //
-  // Three refs rather than one boolean, because "it was injected" and "it ran"
-  // are different facts and only the second is worth anything: a ladder killed
-  // by a navigation has to be retried, and a boolean set at injection would have
-  // spent the run's only shot on a document that died.
-  /** Ladders injected this run. Hard bound — see HEB_CART_PROBE_MAX_TRIES. */
-  const hebCartProbeTriesRef = useRef(0);
-  /** The ladder we injected and have not heard back from, and the page it went
-   *  onto. Cleared by its own `cart_query_probe_done`, or when a different page
-   *  loads — which is what says the document it was running on is gone. */
-  const hebCartProbeInflightRef = useRef<{ url: string; search: boolean } | null>(null);
-  /** A `cart_query_probe_done` has come back, i.e. some ladder ran end to end. */
-  const hebCartProbeRanRef = useRef(false);
-  /** One of the COMPLETED ones ran on a search page, where the rail's own reads
-   *  happen. Completed, not merely injected: a killed ladder answered nothing. */
-  const hebCartProbeSearchRanRef = useRef(false);
+  // A LOG OF LADDERS, not a set of booleans, because "it was injected" and "it
+  // ran" are different facts and only the second is worth anything — a ladder
+  // killed by a navigation has to be retried, and a flag set at injection would
+  // have spent the run's only shot on a document that died. Each entry is
+  // identified, because the retry means more than one can be outstanding and a
+  // done line has to retire the ladder that sent it and no other.
+  const hebCartProbeLaddersRef = useRef<{ id: string; url: string; search: boolean; done: boolean }[]>([]);
   // Worst case 3 ladders × 5 reads = 15 requests, and only on a run that keeps
   // killing them; the ordinary shape is two (the cart page, then the first
   // search page). Against ~18-36 cart reads in the same run this is
@@ -1549,10 +1541,7 @@ export default function WebViewCartSheet({
       parallelReconcileArmedRef.current = false;
       reconcileFinalizedRef.current = false;
       cartProbeRetriedRef.current = false;
-      hebCartProbeTriesRef.current = 0;
-      hebCartProbeInflightRef.current = null;
-      hebCartProbeRanRef.current = false;
-      hebCartProbeSearchRanRef.current = false;
+      hebCartProbeLaddersRef.current = [];
       parallelOriginalTotalRef.current = 0;
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
@@ -2534,6 +2523,7 @@ export default function WebViewCartSheet({
     // Fires alongside whatever the dispatch below injects rather than instead of
     // it — the ladder only makes network calls and touches no DOM, so the two
     // cannot interact.
+    const hebCartProbeLadders = hebCartProbeLaddersRef.current;
     if (
       lockedStoreIdRef.current === 'heb' &&
       stepRef.current === 'searching' &&
@@ -2546,24 +2536,29 @@ export default function WebViewCartSheet({
       // to diagnose, and this must not be the one thing that puts H-E-B GraphQL
       // traffic on a device where the rail itself is disabled.
       hebCartQueryEnabled() &&
-      hebCartProbeTriesRef.current < HEB_CART_PROBE_MAX_TRIES &&
-      // NOT WHILE ONE IS IN FLIGHT ON THIS SAME PAGE. The dedup above deliberately
-      // lets same-URL loads through while a cart-count probe is pending, because
-      // H-E-B re-renders /cart a beat after load — and it does that "while the
-      // injected script is still running". So a second ladder here could be two
-      // ladders in ONE JS context, putting concurrent CartLinesAlt requests on the
-      // wire: precisely the shape the ladder is sequential to avoid, and the one
-      // that could make the discriminator report the minimal rung's answer.
-      // A DIFFERENT url means that document is gone and its ladder with it, so the
-      // marker is cleared below and the retry is allowed.
-      hebCartProbeInflightRef.current?.url !== url &&
+      hebCartProbeLadders.length < HEB_CART_PROBE_MAX_TRIES &&
+      // Not onto a page that already has a ladder we have not heard back from.
+      // H-E-B re-renders /cart a beat after load and the dedup above deliberately
+      // lets those same-URL loads through while a cart-count probe is pending, so
+      // without this the run spends its whole budget on /cart and the search-page
+      // rung never runs. The in-page guard would keep the extra injections inert,
+      // but inert is not free — each one still costs a try.
+      !hebCartProbeLadders.some((l) => !l.done && l.url === url) &&
       (
         // The first qualifying page of the run, whatever it is.
-        hebCartProbeTriesRef.current === 0 ||
+        hebCartProbeLadders.length === 0 ||
         // No ladder has yet reported `cart_query_probe_done`, so none has survived
-        // the page it ran on. Retry rather than spending the run's only shot on a
-        // document that died.
-        !hebCartProbeRanRef.current ||
+        // the page it ran on — H-E-B re-renders /cart a beat after load and kills
+        // injected scripts there. Retry rather than spending the run's only shot
+        // on a document that died.
+        //
+        // Two ladders alive in one JS context is what this must NOT cause, and the
+        // native side cannot rule it out: onLoadEnd fires for same-URL re-renders
+        // and for SPA route changes that never replace the document, so neither
+        // "same URL" nor "different URL" says whether the previous ladder is still
+        // running. The document itself carries the interlock — see
+        // HEB_CART_PROBE_GUARD — and a suppressed injection simply posts nothing.
+        !hebCartProbeLadders.some((l) => l.done) ||
         // And once COMPLETED on a SEARCH page, because that is where the rail's
         // own reads actually happen. Candidate A includes a page-level fetch
         // wrapper, which is per-document: a clean ladder from /cart cannot retire
@@ -2571,19 +2566,14 @@ export default function WebViewCartSheet({
         // with a mechanism attached. Keyed on completion and not on injection —
         // a search-page ladder that was killed has answered nothing, and retiring
         // the clause on it would lose the ticket's most valuable reading.
-        (onSearchPageRef.current && !hebCartProbeSearchRanRef.current)
+        (onSearchPageRef.current && !hebCartProbeLadders.some((l) => l.done && l.search))
       )
     ) {
-      hebCartProbeTriesRef.current += 1;
-      hebCartProbeInflightRef.current = { url, search: onSearchPageRef.current };
-      console.log(`[Cart ${ts()}]`, 'MEAL-16 cart-query probe ladder — injecting, try',
-        hebCartProbeTriesRef.current, 'search=', onSearchPageRef.current, 'on', url);
-      webviewRef.current?.injectJavaScript(buildHebCartProbeScript());
-    } else if (hebCartProbeInflightRef.current && hebCartProbeInflightRef.current.url !== url) {
-      // The page the in-flight ladder was running on is gone, and it never
-      // reported. Drop the marker so the NEXT page is a retry rather than being
-      // suppressed by a ladder that no longer exists.
-      hebCartProbeInflightRef.current = null;
+      const id = `p${hebCartProbeLadders.length + 1}`;
+      hebCartProbeLadders.push({ id, url, search: onSearchPageRef.current, done: false });
+      console.log(`[Cart ${ts()}]`, 'MEAL-16 cart-query probe ladder — injecting', id,
+        'search=', onSearchPageRef.current, 'on', url);
+      webviewRef.current?.injectJavaScript(buildHebCartProbeScript(id));
     }
     if (loadQueueRef.current.length > 0) {
       const script = loadQueueRef.current.shift()!;
@@ -3298,13 +3288,14 @@ export default function WebViewCartSheet({
           }
           // MEAL-16: a ladder that reached its own last line. This is the only
           // evidence that one ran end to end rather than being cut off by a
-          // navigation, and it is what stops the retry in onLoadEnd. The
-          // search-page clause is retired HERE, off the in-flight record, so it
-          // is retired by a ladder that answered and never by one that was killed.
+          // navigation, and it is what stops the retry in onLoadEnd — so it is
+          // recorded against the ladder that SENT it, by the id that rode out on
+          // the injected script. Retiring "some ladder finished" instead would let
+          // a late done from the /cart ladder cash in the search-page clause that
+          // only a search-page ladder can answer.
           if (msg.step === 'cart_query_probe_done') {
-            hebCartProbeRanRef.current = true;
-            if (hebCartProbeInflightRef.current?.search) hebCartProbeSearchRanRef.current = true;
-            hebCartProbeInflightRef.current = null;
+            const ladder = hebCartProbeLaddersRef.current.find((l) => l.id === msg.probeId);
+            if (ladder) ladder.done = true;
           }
           return;
         }

@@ -1064,10 +1064,16 @@ export function buildHebCartQueryFn(): string {
 // global their own scripts could read — the same fingerprint argument that
 // renamed the operation), so this script is not part of the add path at all. It
 // is a standalone script that WebViewCartSheet injects into the main WebView,
-// latched on refs there: the first page of the run, once more on the first
-// SEARCH page (where the rail's own reads happen, and a page-level fetch wrapper
-// would differ), and a retry if a ladder never reached its `..._done` line.
-// Hard-bounded at three.
+// latched on a log of ladders there: the first page of the run, once more on the
+// first SEARCH page (where the rail's own reads happen, and a page-level fetch
+// wrapper would differ), and a retry if a ladder never reached its `..._done`
+// line. Hard-bounded at three, and every line a ladder posts carries the id it
+// was injected with, so a done retires the ladder that sent it and no other.
+//
+// The one in-page thing it does keep is a per-DOCUMENT interlock, because the
+// native side genuinely cannot know whether the last ladder is still alive — see
+// HEB_CART_PROBE_GUARD for why, and for why one neutral boolean is not the
+// fingerprint the paragraph above is about.
 //
 // SEQUENTIAL, NOT CONCURRENT, and it costs a truncation risk worth naming: the
 // page can navigate out from under the ladder and take the remaining rungs with
@@ -1166,19 +1172,50 @@ export const HEB_CART_PROBES: HebCartProbe[] = [
 const HEB_CART_PROBE_HEADERS = ['server', 'via', 'x-cache', 'age', 'content-type', 'x-served-by'];
 
 /**
- * The one-shot ladder, as a complete injectable script.
+ * The in-page one-per-document guard.
+ *
+ * The native latch cannot do this job on its own: `onLoadEnd` fires for H-E-B's
+ * same-URL cart re-render AND for SPA route changes that never replace the
+ * document (`stores.heb.spaSearch` is true, and the search path injects in-page
+ * without navigating), so "a different URL" does not mean "a different JS
+ * context". Two ladders alive in one context would put concurrent
+ * `CartLinesAlt` requests on the wire — the shape the rungs are sequential to
+ * avoid, and the one that could make the discriminator report rung 2's answer.
+ *
+ * So the document itself holds the flag. That is a global on H-E-B's origin, and
+ * the module header argues against leaving one — but that argument is about the
+ * RAIL, which runs on every add and carries our operation name. This is one
+ * neutral boolean set once per page by a diagnostic, named exactly like
+ * `window.__hebLoginCheckActive`, which `CHECK_LOGIN_SCRIPT` has been setting on
+ * heb.com since long before this ticket. Nothing about it says Mealio.
+ */
+const HEB_CART_PROBE_GUARD = '__hebCartProbeActive';
+
+/**
+ * The ladder, as a complete injectable script.
  *
  * Self-contained — it shares no helper with `buildHebCartQueryFn`, because it is
  * injected on its own into a page that does not have that script on it. Posts
  * one `EXTRACT_DEBUG` per rung (`step: 'cart_query_probe'`) and one
  * `cart_query_probe_done` at the end; `cart_query_*` is the step prefix the
  * debug handlers already log in full.
+ *
+ * `id` rides on every line this ladder posts, INCLUDING the done line. Without
+ * it the native side cannot tell which ladder just reported — and it has more
+ * than one to account for, since it retries a ladder that never finished. A done
+ * line from an earlier ladder would otherwise retire the record of a later one
+ * that is still running.
  */
-export function buildHebCartProbeScript(): string {
+export function buildHebCartProbeScript(id: string): string {
   return `(async function() {
   try {
     if (typeof window === 'undefined' || !window || !window.ReactNativeWebView) return;
+    // One ladder per document — see HEB_CART_PROBE_GUARD.
+    if (window.${HEB_CART_PROBE_GUARD}) return;
+    window.${HEB_CART_PROBE_GUARD} = true;
+    var __ID = ${JSON.stringify(id)};
     var __post = function(o) {
+      o.probeId = __ID;
       try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
     };
     var __EP = ${JSON.stringify(hebCartEndpoint())};
@@ -1282,7 +1319,7 @@ export function buildHebCartProbeScript(): string {
   } catch (e) {
     try {
       window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'EXTRACT_DEBUG', step: 'cart_query_probe_error',
+        type: 'EXTRACT_DEBUG', step: 'cart_query_probe_error', probeId: ${JSON.stringify(id)},
         detail: String((e && e.message) || e || '').slice(0, 200)
       }));
     } catch (e2) {}

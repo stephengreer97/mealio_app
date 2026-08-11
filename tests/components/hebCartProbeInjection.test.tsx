@@ -89,12 +89,24 @@ function load(url: string) {
   act(() => { mainWebView().onLoadEnd({ nativeEvent: { url } }); });
 }
 
+/** The id the Nth injected ladder was built with — every line it posts carries
+ *  it, which is how the sheet tells one ladder's report from another's. */
+function probeIdOf(n: number): string {
+  const m = probeInjections()[n].match(/var __ID = "([^"]+)"/);
+  if (!m) throw new Error('injected ladder carries no id');
+  return m[1];
+}
+
 /** What the ladder itself posts when it reaches its last line. Without this the
  *  sheet has no evidence a ladder survived the page it ran on. */
-function ladderFinished() {
+function ladderFinished(n = probeInjections().length - 1) {
   act(() => {
     mainWebView().onMessage({
-      nativeEvent: { data: JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_probe_done', ran: 5, of: 5 }) },
+      nativeEvent: {
+        data: JSON.stringify({
+          type: 'EXTRACT_DEBUG', step: 'cart_query_probe_done', probeId: probeIdOf(n), ran: 5, of: 5,
+        }),
+      },
     });
   });
 }
