@@ -51,7 +51,7 @@ import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureC
 import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-health';
 import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
-import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
+import { HebAddConfirmation, buildHebCartProbeScript, hebCartQueryEnabled } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
@@ -598,6 +598,12 @@ export default function WebViewCartSheet({
   const cartProbeResultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cartProbeRetriedRef = useRef(false);
   const CART_PROBE_RESULT_TIMEOUT_MS = cfgTimeouts.cartProbeResultMs;
+  // MEAL-16: the cart-rail probe ladder has fired for this run. THE latch —
+  // there is no in-page one that survives a navigation without leaving a Mealio
+  // artifact on H-E-B's origin, and #110's in-page `var` printed its line 18
+  // times in an 18-item cart because every add is its own injection. See the
+  // ladder's own header in webview-scripts/heb-cart-query.
+  const hebCartProbeSentRef = useRef(false);
   // The done-screen breakdown spinner falls back to the plain list after this,
   // so a cart page that never loads/counts (e.g. Amazon's multi-hop cart) can't
   // hang on "Updating your … cart" forever.
@@ -1522,6 +1528,7 @@ export default function WebViewCartSheet({
       parallelReconcileArmedRef.current = false;
       reconcileFinalizedRef.current = false;
       cartProbeRetriedRef.current = false;
+      hebCartProbeSentRef.current = false;
       parallelOriginalTotalRef.current = 0;
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
@@ -2338,6 +2345,32 @@ export default function WebViewCartSheet({
     if (!s || !url.includes(s.domain)) {
       console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'skipped: not store domain');
       return;
+    }
+    // MEAL-16 probe ladder — five diagnostic GraphQL reads, ONCE per run, on the
+    // first H-E-B page this run loads after the login gate. Everything it needs
+    // is true here and nowhere earlier: the page is loaded and same-origin, ABP
+    // has been cleared by the very load that fired this event, and 'searching'
+    // means LOGIN_STATUS already came back true, so the session is the one the
+    // run's own cart reads will use.
+    //
+    // Fires alongside whatever the dispatch below injects rather than instead of
+    // it — the ladder only makes network calls and touches no DOM, so the two
+    // cannot interact. It is bounded by how long the page stays put, which is
+    // why each rung posts as it lands and `cart_query_probe_done` reports how
+    // many of the five ran; a ladder cut short by a navigation is still readable.
+    //
+    // Gated on the rail's own flag: with `cartSkuConfirm` off there is no rail to
+    // diagnose, and this must not be the one thing that puts H-E-B GraphQL
+    // traffic on a device where the rail itself is disabled.
+    if (
+      lockedStoreIdRef.current === 'heb' &&
+      stepRef.current === 'searching' &&
+      !hebCartProbeSentRef.current &&
+      hebCartQueryEnabled()
+    ) {
+      hebCartProbeSentRef.current = true;
+      console.log(`[Cart ${ts()}]`, 'MEAL-16 cart-query probe ladder — injecting on', url);
+      webviewRef.current?.injectJavaScript(buildHebCartProbeScript());
     }
     // Cold-slot branch: the main WebView is acting as a 4th add surface — its
     // results page just loaded, so inject the fused search+add (once) and let

@@ -347,9 +347,21 @@ export interface HebAddConfirmation {
  */
 export const HEB_CART_OPERATION = 'CartLines';
 
-/** Interpolated from HEB_CART_OPERATION so the document text and the
- *  `operationName` field cannot drift apart — a mismatch is a 400. */
-export const HEB_CART_QUERY = `query ${HEB_CART_OPERATION} {
+/**
+ * The selection set on its own, WITHOUT the `query <name>` that precedes it.
+ *
+ * Split out for MEAL-16's probe ladder, whose last two rungs re-send this exact
+ * document under a different operation name and under none — a test that only
+ * means anything if the two documents are byte-identical to the production one
+ * apart from that name. Deriving them from one constant makes that structural;
+ * two hand-written copies would let a future edit to the selection set change
+ * the production document and leave the probes testing something else.
+ *
+ * `HEB_CART_QUERY` below is unchanged by the split, character for character —
+ * pinned in hebCartQuery.test.ts, because `loc: 2:3` (the gateway's own
+ * complaint) is a statement about where `cartV2` sits in THIS text.
+ */
+const HEB_CART_SELECTION = `{
   cartV2 {
     id
     itemCount { total }
@@ -362,6 +374,10 @@ export const HEB_CART_QUERY = `query ${HEB_CART_OPERATION} {
     }
   }
 }`;
+
+/** Interpolated from HEB_CART_OPERATION so the document text and the
+ *  `operationName` field cannot drift apart — a mismatch is a 400. */
+export const HEB_CART_QUERY = `query ${HEB_CART_OPERATION} ${HEB_CART_SELECTION}`;
 
 /**
  * The client name header the storefront itself sends, which MEAL-12's verified
@@ -981,4 +997,271 @@ export function buildHebCartQueryFn(): string {
     return { skuId: null, productId: pid, name: name || null };
   }
 `;
+}
+
+// ── MEAL-16 probe ladder ─────────────────────────────────────────────────────
+//
+// WHAT IT IS FOR. Every cart read of the 2026-08-10 run came back
+//
+//   400 GRAPHQL_VALIDATION_FAILED, loc 2:3,
+//   "Field \"cartV2\" of type \"Query\" must have a selection of subfields."
+//
+// while the body line printed our document with its selection set intact. Two of
+// the three candidates died on that reading: the text is NOT mangled in transit
+// (the body handed to `fetch` is byte-correct), and this is NOT safelisting
+// wearing a different error (a plain validation failure is neither
+// `PersistedQueryNotFound` nor a safelist rejection). What is left is a
+// contradiction with exactly two live readings, and they are distinguishable by
+// experiment rather than by argument:
+//
+//   A — the sub-selection never reaches the validator. Something between `fetch`
+//       and validation re-parses, strips or substitutes the document: a
+//       page-level fetch wrapper (the storefront's own, or the ABP script's), an
+//       edge normaliser, or a canned/cached 400 keyed on the operation name.
+//   B — it is validated against a schema that is not the storefront's. The
+//       message calls `cartV2`'s type `Query`; the page's own __APOLLO_STATE__
+//       (tests/fixtures/heb/cart-with-items.html) has ROOT_QUERY.cartV2 → Cart.
+//
+// THE RUNGS, and what each one is worth:
+//
+//   1 control        `query { __typename }` — endpoint, session and transport,
+//                    with nothing of ours in it. If this fails too, nothing below
+//                    it means anything. Its `data` also NAMES their root type,
+//                    which is the other half of reading B.
+//   2 minimal        `query CartLines { cartV2 { id } }` — a one-field selection
+//                    set. Same complaint here means the size of ours is not it.
+//   3 discriminator  `query CartLines { cartV2 { zzzNotAField } }` — THE rung. A
+//                    reply naming a type ("Cannot query field \"zzzNotAField\" on
+//                    type \"Cart\"") proves the validator does read our
+//                    sub-selection and tells us their real type for `cartV2`,
+//                    killing A and settling B. The same missing-sub-selection
+//                    error instead means our sub-selection never reaches it.
+//   4 renamed        the production document verbatim under a different
+//                    operation name.
+//   5 anonymous      the production document verbatim with no name at all, and
+//                    no `operationName` field on the request.
+//
+//                    If the error follows the NAME across 4 and 5, the response
+//                    is keyed by operation name — a registry or a cache — and not
+//                    by our text, which is reading A with a mechanism attached.
+//
+// Plus, on every rung, the response HEADERS and the first 400 characters of the
+// RAW body. An edge-generated or cached 400 shows itself there and nowhere else:
+// a `via`/`x-cache`/`age` on a 400 that our own gateway would have had no reason
+// to cache is the whole of reading A's third mechanism.
+//
+// ONCE PER RUN, AND THE LATCH IS NATIVE. #110 logged the request body "once per
+// injection", which was literally true and operationally wrong — the script is
+// re-injected for every add navigation, so it printed 18 times in an 18-item
+// cart. There is no in-page latch that survives a navigation without leaving a
+// Mealio artifact on H-E-B's origin (a sessionStorage key or a window global
+// their own scripts could read — the same fingerprint argument that renamed the
+// operation), so this script is not part of the add path at all. It is a
+// standalone one-shot that WebViewCartSheet injects into the main WebView once
+// per run, latched on a ref there.
+//
+// SEQUENTIAL, NOT CONCURRENT, and it costs a truncation risk worth naming: the
+// page can navigate out from under the ladder and take the remaining rungs with
+// it. Firing all five at once would remove that, but rungs 2 and 3 share an
+// operation name, and if the answer really is keyed or cached on that name then
+// two concurrent requests carrying it are the one shape that could make the
+// discriminator report rung 2's answer. A diagnostic that can lie about the
+// thing it exists to measure is worse than one that can come back short, so the
+// rungs go one at a time and each posts as it lands — a partial ladder is
+// readable, and `cart_query_probe_done` says how much of it ran.
+//
+// DIAGNOSTIC ONLY. Nothing here touches a verdict: no caller reads these
+// messages, `confirmDetail` picks its telemetry fields by name and forwards none
+// of them, and the whole script is gated behind `hebCartQueryEnabled()` at the
+// injection site, so it cannot run in a build where the rail itself is off.
+
+/** The alternate operation name for rung 4. Neutral and non-identifying, for the
+ *  same reason `CartLines` is — see HEB_CART_OPERATION. */
+export const HEB_CART_OPERATION_ALT = 'CartLinesAlt';
+
+/** Rung 4: the production document, name changed and nothing else. */
+export const HEB_CART_QUERY_ALT = `query ${HEB_CART_OPERATION_ALT} ${HEB_CART_SELECTION}`;
+
+/** Rung 5: the production document as an anonymous operation. */
+export const HEB_CART_QUERY_ANON = `query ${HEB_CART_SELECTION}`;
+
+/**
+ * Rung 3's deliberately absent field. Named so that H-E-B's own answer quotes it
+ * back — a reply that does NOT mention this string is not about our document.
+ */
+export const HEB_CART_PROBE_FIELD = 'zzzNotAField';
+
+/** One rung: the name it reports under, and the request body it sends. */
+interface HebCartProbe {
+  name: string;
+  body: Record<string, unknown>;
+}
+
+/** The ladder, in the order it is sent. Exported for the tests, which assert the
+ *  two variant rungs differ from the production document ONLY in the operation
+ *  name — the entire point of rungs 4 and 5. */
+export const HEB_CART_PROBES: HebCartProbe[] = [
+  // No operationName and no variables: the control carries as little of ours as
+  // a GraphQL request can and still be one.
+  { name: 'control', body: { query: 'query { __typename }' } },
+  {
+    name: 'minimal',
+    body: {
+      operationName: HEB_CART_OPERATION,
+      variables: {},
+      query: `query ${HEB_CART_OPERATION} { cartV2 { id } }`,
+    },
+  },
+  {
+    name: 'discriminator',
+    body: {
+      operationName: HEB_CART_OPERATION,
+      variables: {},
+      query: `query ${HEB_CART_OPERATION} { cartV2 { ${HEB_CART_PROBE_FIELD} } }`,
+    },
+  },
+  {
+    name: 'renamed',
+    body: {
+      operationName: HEB_CART_OPERATION_ALT,
+      variables: {},
+      query: HEB_CART_QUERY_ALT,
+    },
+  },
+  // No `operationName` KEY at all, not an empty one — an anonymous operation
+  // named in the envelope is a different request from an unnamed one, and rung 5
+  // is only worth sending as the latter.
+  { name: 'anonymous', body: { variables: {}, query: HEB_CART_QUERY_ANON } },
+];
+
+/**
+ * Response headers worth carrying. Short list on purpose: these are the ones
+ * that distinguish an answer our gateway composed from one an edge composed or
+ * replayed, and a header dump would bury them.
+ */
+const HEB_CART_PROBE_HEADERS = ['server', 'via', 'x-cache', 'age', 'content-type', 'x-served-by'];
+
+/**
+ * The one-shot ladder, as a complete injectable script.
+ *
+ * Self-contained — it shares no helper with `buildHebCartQueryFn`, because it is
+ * injected on its own into a page that does not have that script on it. Posts
+ * one `EXTRACT_DEBUG` per rung (`step: 'cart_query_probe'`) and one
+ * `cart_query_probe_done` at the end; `cart_query_*` is the step prefix the
+ * debug handlers already log in full.
+ */
+export function buildHebCartProbeScript(): string {
+  return `(async function() {
+  try {
+    if (typeof window === 'undefined' || !window || !window.ReactNativeWebView) return;
+    var __post = function(o) {
+      try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
+    };
+    var __EP = ${JSON.stringify(hebCartEndpoint())};
+    var __CLIENT = ${JSON.stringify(HEB_APOLLO_CLIENT)};
+    var __PROBES = ${JSON.stringify(HEB_CART_PROBES)};
+    var __HDRS = ${JSON.stringify(HEB_CART_PROBE_HEADERS)};
+
+    // Named headers only, and every one of them optional — a fetch polyfill that
+    // has no Headers.get must not take the ladder down with it.
+    function __probeHeaders(res) {
+      var out = {};
+      for (var h = 0; h < __HDRS.length; h++) {
+        var v = null;
+        try { v = (res && res.headers && res.headers.get) ? res.headers.get(__HDRS[h]) : null; } catch (e) { v = null; }
+        if (v) out[__HDRS[h]] = String(v).slice(0, 80);
+      }
+      return out;
+    }
+
+    // What came back in \`data\`, one line. The control's answer is the useful
+    // case: \`__typename=Query\` names their root type, which is the field the
+    // gateway's complaint claims \`cartV2\` has as its OWN type.
+    function __probeData(json) {
+      if (!json || typeof json !== 'object') return 'no_json';
+      if (!('data' in json)) return 'no_data';
+      if (json.data == null) return 'data_null';
+      var ks = [];
+      try { ks = Object.keys(json.data); } catch (e) { ks = []; }
+      if (ks.length === 0) return 'data_empty';
+      var parts = [];
+      for (var i = 0; i < ks.length && i < 4; i++) {
+        var v = json.data[ks[i]];
+        parts.push(ks[i] + '=' + (v == null ? 'null' : (typeof v === 'object' ? 'obj' : String(v).slice(0, 40))));
+      }
+      return parts.join(',');
+    }
+
+    var ran = 0;
+    for (var i = 0; i < __PROBES.length; i++) {
+      var p = __PROBES[i];
+      var line = {
+        type: 'EXTRACT_DEBUG', step: 'cart_query_probe', probe: p.name,
+        // The document as sent, not as declared — #110's lesson was that the two
+        // are worth checking against each other.
+        q: String(p.body.query).replace(/\\s+/g, ' ').slice(0, 300),
+        op: (p.body.operationName == null) ? null : String(p.body.operationName),
+        status: null, code: null, loc: null, errN: null, msg: null,
+        data: null, hdr: null, raw: null, err: null
+      };
+      var ctl = null;
+      try { ctl = new AbortController(); } catch (e) { ctl = null; }
+      var timer = null;
+      try {
+        var init = {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'content-type': 'application/json',
+            'accept': '*/*',
+            'apollographql-client-name': __CLIENT
+          },
+          body: JSON.stringify(p.body)
+        };
+        if (ctl) init.signal = ctl.signal;
+        var pr = fetch(__EP, init);
+        if (ctl) timer = setTimeout(function() { try { ctl.abort(); } catch (e) {} }, 6000);
+        var res = await pr;
+        line.status = res.status;
+        line.hdr = __probeHeaders(res);
+        var text = '';
+        try { text = await res.text(); } catch (e) { text = ''; }
+        // Whitespace-collapsed so 400 characters are 400 characters of evidence
+        // rather than a pretty-printed error object's indentation.
+        line.raw = text ? String(text).replace(/\\s+/g, ' ').slice(0, 400) : null;
+        var json = null;
+        try { json = JSON.parse(text); } catch (e) { json = null; }
+        if (json && json.errors && json.errors.length > 0) {
+          var e0 = json.errors[0] || {};
+          line.errN = json.errors.length;
+          line.msg = e0.message ? String(e0.message).slice(0, 200) : null;
+          var ext = e0.extensions || null;
+          line.code = (ext && ext.code != null && ext.code !== '') ? String(ext.code).slice(0, 60) : null;
+          var l0 = (e0.locations && e0.locations.length > 0) ? e0.locations[0] : null;
+          line.loc = (l0 && l0.line != null)
+            ? (String(l0.line) + ':' + (l0.column == null ? '?' : String(l0.column)))
+            : null;
+        }
+        line.data = __probeData(json);
+      } catch (e) {
+        // A rung that threw still posts. An AbortError here is the 6 s timeout
+        // and is itself a reading — the production reads come back in well under
+        // a second, so a rung that hangs is not the same gateway answering.
+        line.err = (String((e && e.name) || 'Error') + ' ' + String((e && e.message) || '')).slice(0, 160);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      ran++;
+      __post(line);
+    }
+    __post({ type: 'EXTRACT_DEBUG', step: 'cart_query_probe_done', ran: ran, of: __PROBES.length });
+  } catch (e) {
+    try {
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'EXTRACT_DEBUG', step: 'cart_query_probe_error',
+        detail: String((e && e.message) || e || '').slice(0, 200)
+      }));
+    } catch (e2) {}
+  }
+})(); true;`;
 }
