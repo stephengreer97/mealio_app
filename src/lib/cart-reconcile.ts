@@ -58,6 +58,109 @@ export function isWeightPriced<T extends WeightPricedFields>(
   return item.purchaseWeight != null;
 }
 
+// ── Increment-style weight lines: the after check (MEAL-148) ──────────────────
+
+/**
+ * How close two poundages have to be to count as the same weight (lb), and how
+ * close a click count has to be to a whole number to count as one.
+ *
+ * Both are float-noise tolerances, NOT judgement thresholds — there is nothing
+ * to absorb but the arithmetic itself. The store does not round these lines: the
+ * weight a cart row reports is one of the discrete options the row offers (see
+ * CartRow.weightOptions), chosen when the line was set, so N clicks × increment
+ * lands exactly on an option. A tolerance wide enough to hide a missed click
+ * would be the wrong shape of answer here — a missed click is exactly what this
+ * check exists to catch.
+ */
+const WEIGHT_EPSILON_LB = 1e-4;
+const CLICK_EPSILON = 1e-3;
+
+/**
+ * The weight the store could actually have given us for `targetLb`: the closest
+ * option on this line's ladder, or `targetLb` itself when the ladder is unknown.
+ *
+ * The in-page twin of `__closestOpt` in heb.ts (handleWeightDropdown), and
+ * deliberately the same rule down to the tie-break — the option list this snaps
+ * against is the one the add path snapped against, handed back to us by the cart
+ * row. Re-deriving a ladder from an assumed increment would make this a second
+ * guess at a number we already have.
+ */
+export function snapToWeightLadder(targetLb: number, options?: readonly number[] | null): number {
+  if (!options || options.length === 0) return targetLb;
+  let best = targetLb;
+  let bestD = Infinity;
+  for (const opt of options) {
+    if (!(opt > 0)) continue;
+    const d = Math.abs(opt - targetLb);
+    // Strict <, so ties keep the FIRST (lowest) option — __closestOpt's tie-break,
+    // over an ascending ladder.
+    if (d < bestD) { bestD = d; best = opt; }
+  }
+  return bestD === Infinity ? targetLb : best;
+}
+
+/** One increment-style weight line, checked against what the run asked for. */
+export interface IncrementWeightCheck {
+  /** Clicks requested. For these items productQty IS the click count. */
+  expectedQty: number;
+  /** Pounds one click adds — the item's `weightStep`. */
+  stepLb: number;
+  /** Pounds THIS RUN put on the line (CartRow.addedWeight), never the line's
+   *  total: a line the user had already started reads heavier than we added. */
+  addedLb: number;
+  /** The line's own option ladder, when the cart read emitted one. */
+  options?: readonly number[] | null;
+}
+
+/**
+ * How many of the requested clicks landed on a weight line — MEAL-148's answer
+ * to "when a run finishes, how should a weight line that was added by clicking N
+ * times be checked?".
+ *
+ * It is checked by ARITHMETIC. An item the meal counts in units ("2 chicken
+ * breasts") whose store line is priced by weight is added by clicking an
+ * increment N times, so what the cart owes it is N × increment pounds — snapped
+ * onto the row's own ladder, because that is the set of weights the line could
+ * hold. Compare that against the pounds the run actually put on the line and the
+ * question answers itself; no threshold, and nothing is asked of the user.
+ *
+ * Returns the clicks landed (== `expectedQty` when the line covers the request),
+ * or NULL when the arithmetic cannot decide — no increment known, no poundage
+ * read, or numbers that don't reconcile to a whole number of clicks. Null is not
+ * a failure verdict: it routes the item to the report-only path it took before
+ * this existed (see splitUnverifiableTopUps), which neither confirms nor re-adds.
+ *
+ * Two things it deliberately does not do:
+ *
+ *   • it never returns 0. `addedLb` comes from a green row, and a weight row is
+ *     only green when the line GREW, so at least one click landed. That is what
+ *     makes the resulting top-up safe to run unattended: the shortfall is always
+ *     strictly less than the request, so the one branch the ticket rules out —
+ *     re-adding the full quantity against a line that did land, and buying the
+ *     meat twice — cannot be reached from here.
+ *   • it does not report a line that came back HEAVIER than asked. That is the
+ *     over-add channel's business, and it counts units, not pounds; here a line
+ *     that covers the request is simply covered.
+ */
+export function landedIncrements(check: IncrementWeightCheck): number | null {
+  const expectedQty = Math.max(1, check.expectedQty || 1);
+  if (!(check.stepLb > 0) || !(check.addedLb > 0)) return null;
+  const expectedLb = snapToWeightLadder(expectedQty * check.stepLb, check.options);
+  if (check.addedLb + WEIGHT_EPSILON_LB >= expectedLb) return expectedQty;
+  const missingClicks = (expectedLb - check.addedLb) / check.stepLb;
+  const whole = Math.round(missingClicks);
+  // Not a whole number of clicks short: the line moved by something this item's
+  // increment cannot explain (a non-uniform ladder, a weight the user edited by
+  // hand, a step we read wrong). Undecidable — and undecidable is a verdict we
+  // already know how to route.
+  if (Math.abs(missingClicks - whole) > CLICK_EPSILON) return null;
+  // Short by the whole request, with the line demonstrably heavier than before:
+  // the two facts contradict each other, so refuse rather than credit nothing and
+  // re-add everything.
+  if (whole < 1 || whole >= expectedQty) return null;
+  return expectedQty - whole;
+}
+
 // ── Qty-step exclusion ────────────────────────────────────────────────────────
 
 /** The fields the qty-step exclusion rule reads. Structurally satisfied by both
@@ -96,6 +199,16 @@ export interface IntendedItem {
   expectedQty: number;
   /** Sold by weight — see isWeightPriced. */
   isWeight: boolean;
+  /**
+   * Pounds one add-click puts on the line, for an INCREMENT-style item: counted
+   * in units, priced by weight, no weight dropdown (`weightStep` set and no
+   * `purchaseWeight` — see weightDisplay). Absent on everything else.
+   *
+   * Present, it is what lets the after check compare a unit count against a
+   * poundage — expectedQty × this, against the pounds the line gained. See
+   * landedIncrements. Absent, such an item can only be reported, not decided.
+   */
+  weightStepLb?: number;
 }
 
 /** The fields reconcile reads off a cart-run ingredient. Structurally satisfied
@@ -104,16 +217,23 @@ export interface ReconcilableItem extends WeightPricedFields {
   ingredientName: string;
   searchTerm?: string | null;
   productQty?: number;
+  weightStep?: number | null;
 }
 
 /** Reduce a cart-run ingredient to what reconcile compares: the title it is
  *  matched by, the units requested (never below 1 — saved meal data can leak a
- *  zero qty), and whether it is weight-priced. */
+ *  zero qty), whether it is weight-priced, and — for an increment-style item —
+ *  the pounds one click adds. */
 export function toIntendedItem(item: ReconcilableItem): IntendedItem {
+  // Only for the increment shape. A weight-PRICED item carries weightStep too
+  // (the stepper nudges its purchaseWeight by it), but its productQty means
+  // nothing, so multiplying the two would invent an expectation.
+  const stepper = !isWeightPriced(item) && item.weightStep != null && item.weightStep > 0;
   return {
     name: item.searchTerm || item.ingredientName,
     expectedQty: Math.max(1, item.productQty || 1),
     isWeight: isWeightPriced(item),
+    ...(stepper ? { weightStepLb: item.weightStep as number } : {}),
   };
 }
 
@@ -128,12 +248,19 @@ export function toIntendedItem(item: ReconcilableItem): IntendedItem {
  * definition is that a label and the count it gets compared against measure the
  * same thing.
  *
- * Whether the amount on a weight line actually covers the meal is a different
- * question, answered by comparing expected against real poundage — MEAL-148.
- * Counting it as one unit here does not claim it was right, only that it is one.
+ * An INCREMENT-style item counts 1 for exactly that reason (MEAL-148). Two
+ * chicken breasts are two of something to a shopper, but they reach the cart as
+ * ONE weight line, and every counter this number is compared against — the cart
+ * badge, the count delta, the row totals — counts that line once. Counting the
+ * clicks here instead would make a correct run read as an item short.
+ *
+ * Whether the amount on such a line actually covers the meal is a different
+ * question, and landedIncrements answers it from the poundage. Counting it as one
+ * unit here does not claim it was right, only that it is one line.
  */
 export function unitsOf(item: IntendedItem): number {
-  return item.isWeight ? 1 : Math.max(1, item.expectedQty || 1);
+  if (item.isWeight || item.weightStepLb != null) return 1;
+  return Math.max(1, item.expectedQty || 1);
 }
 
 /**
@@ -242,10 +369,11 @@ export interface ReconcileOutcome {
   /** Total units across overAdds. */
   overAddUnits: number;
   /**
-   * The intent-vs-row disagreements among `topUps`: items ordered by unit COUNT
-   * that came up short while an unclaimed sold-by-weight line bearing their name
-   * sits in the cart (the stepper-weight H-E-B deli shape — weightStep but no
-   * purchaseWeight, so isWeightPriced is false and the ×N is a unit count).
+   * The intent-vs-row disagreements among `topUps` that the WEIGHT ARITHMETIC
+   * COULD NOT DECIDE: items ordered by unit COUNT that came up short while an
+   * unclaimed sold-by-weight line bearing their name sits in the cart (the
+   * increment-style H-E-B deli shape — weightStep but no purchaseWeight, so
+   * isWeightPriced is false and the ×N is a unit count).
    *
    * Reported separately because the top-up these items get is the one case where
    * a re-add can cost real money: the line plausibly DID land, so re-adding the
@@ -257,13 +385,16 @@ export interface ReconcileOutcome {
    * Each unclaimed weight row explains at most one item, so this can never name
    * more items than the cart has unexplained weight lines.
    *
-   * STOPGAP. Detecting the condition is all this can do: a count and a poundage
-   * are not comparable, so nothing here can decide whether the line covers the
-   * request. MEAL-148 replaces the guessing by computing the expected weight
-   * (productQty × increment) and comparing it against the cart line's actual
-   * poundage, which answers the question instead of reporting that it is open.
-   * Until then this number is also the measurement of how often the case fires —
-   * the sheet puts it on the funnel.
+   * NO LONGER THE ANSWER, only the residue (MEAL-148). Where the item's increment
+   * and the row's poundage are both known, landedIncrements decides the case:
+   * the item is confirmed if the line covers N clicks, or topped up by exactly
+   * the clicks that are missing — neither of which lands here. What still lands
+   * here is what the arithmetic refused: no increment (a store whose cart read
+   * emits no weight rows at all, or an item that never went through choose), no
+   * poundage, or numbers that don't reconcile. For those, "we could not verify
+   * this" is still the most that is true, and the sheet still puts the count on
+   * the funnel — now as a measure of how much is left undecided rather than of
+   * how often the whole case fires.
    */
   countItemsOnWeightRows: { index: number; cartName: string }[];
 }
@@ -293,8 +424,12 @@ export function reconcileParallelAdd(
     name: string;
     expectedQty: number;
     isWeight: boolean;
+    weightStepLb?: number;
     claimed: number;
     confirmedWeight: boolean;
+    /** The weight line this count item was blamed on when the arithmetic could
+     *  not decide — see countItemsOnWeightRows. */
+    undecidedOn: string | null;
   }[] = [];
   attempts.forEach((attempt, index) => {
     const r = attempt.report;
@@ -307,14 +442,17 @@ export function reconcileParallelAdd(
       name: decodeHtmlEntities((r && r.productName) || attempt.name),
       expectedQty: Math.max(1, attempt.expectedQty || 1),
       isWeight: attempt.isWeight,
+      weightStepLb: attempt.weightStepLb,
       claimed: 0,
       confirmedWeight: false,
+      undecidedOn: null,
     });
   });
   const intended: IntendedItem[] = toMatch.map((m) => ({
     name: m.name,
     expectedQty: m.expectedQty,
     isWeight: m.isWeight,
+    ...(m.weightStepLb != null ? { weightStepLb: m.weightStepLb } : {}),
   }));
 
   // Attribute each added cart unit to a SINGLE item. Summing every name-matching
@@ -368,21 +506,26 @@ export function reconcileParallelAdd(
   // Silent non-delivery is the worst failure available here, so failing visibly
   // beats it.
   //
-  // But the shortfall must not be re-added on its own either. The top-up is
-  // unattended and, here, the shortfall IS the full quantity — so where the weight
-  // line genuinely did land it buys a second one, and for a deli line that is meat
-  // the user pays for twice. Both machine answers are therefore refused: these
-  // items are named in `countItemsOnWeightRows` and splitUnverifiableTopUps lifts
-  // them out of the top-up, so nothing is bought and nothing claims success. The
-  // sheet reports them as unverified on the done screen.
+  // But the shortfall must not be re-added on its own either, WHERE THE SIZE OF IT
+  // is still a guess. The top-up is unattended and, with nothing claimed off the
+  // weight line, the shortfall is the full quantity — so where the line genuinely
+  // did land it buys a second one, and for a deli line that is meat the user pays
+  // for twice. Where the item's increment is known, MEAL-148's arithmetic removes
+  // the guess (see the count pass below and landedIncrements): the clicks that
+  // landed are read off the poundage, so the item is either confirmed or topped up
+  // by the few clicks actually missing. Where it is not known, both machine
+  // answers are still refused: the item is named in `countItemsOnWeightRows`,
+  // splitUnverifiableTopUps lifts it out of the top-up, nothing is bought and
+  // nothing claims success, and the sheet reports it as unverified.
   //
   // The disagreement is not swallowed either — no weight-priced item claimed the
   // row, so findOverAddedItems returns it in `overAdds` and both sides are
-  // announced.
-  const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false }));
+  // announced. (An increment item that the arithmetic DID account for is not a
+  // disagreement any more, and findOverAddedItems lets it keep its row.)
+  const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ row: r, used: false }));
   toMatch.forEach((m) => {
     if (!m.isWeight) return;
-    const w = weightPool.find((p) => !p.used && cartNameMatches(p.name, m.name));
+    const w = weightPool.find((p) => !p.used && cartNameMatches(p.row.name, m.name));
     if (w) { w.used = true; m.confirmedWeight = true; }
   });
   // Count items only, out of the count pool. Pass 1: every item reserves its
@@ -390,6 +533,35 @@ export function reconcileParallelAdd(
   // remains unclaimed.
   toMatch.forEach((m) => { if (!m.isWeight) m.claimed = claimQty(m.name, m.expectedQty, true); });
   toMatch.forEach((m) => { if (!m.isWeight && m.claimed < m.expectedQty) m.claimed += claimQty(m.name, m.expectedQty - m.claimed, false); });
+  // Third pass, count items only, and the one that answers MEAL-148: a count item
+  // still short, with an unclaimed sold-by-weight line bearing its name, is the
+  // increment-style item this whole branch is about — the store prices it by
+  // weight, the meal counts it in units, and the add clicked an increment N times.
+  // Its units are therefore IN that line's poundage, not in the count pool, and
+  // landedIncrements reads them back out.
+  //
+  // Consume the row whichever way it goes. Two count items must not both be
+  // credited (or both blamed) for one physical line, and the row is spent either
+  // way: it has explained this item, or it has failed to.
+  toMatch.forEach((m) => {
+    if (m.isWeight || m.claimed >= m.expectedQty) return;
+    const w = weightPool.find((p) => !p.used && cartNameMatches(p.row.name, m.name));
+    if (!w) return;
+    w.used = true;
+    const landed = m.weightStepLb == null ? null : landedIncrements({
+      expectedQty: m.expectedQty,
+      stepLb: m.weightStepLb,
+      // The run's own contribution, never the line total — a line the user had
+      // already started would otherwise confirm an add that never happened.
+      addedLb: w.row.addedWeight ?? 0,
+      options: w.row.weightOptions,
+    });
+    // Undecidable: no increment (no choose data, or a store whose cart read emits
+    // no weight rows), no poundage, or numbers that don't reconcile. Report it,
+    // exactly as before the arithmetic existed.
+    if (landed == null) { m.undecidedOn = w.row.name; return; }
+    m.claimed = Math.min(m.expectedQty, m.claimed + landed);
+  });
 
   const confirmed: { index: number; name: string }[] = [];
   const topUps: { index: number; shortfall: number }[] = [];
@@ -406,13 +578,10 @@ export function reconcileParallelAdd(
     const shortfall = m.expectedQty - m.claimed;
     if (shortfall <= 0) { confirmed.push({ index: m.index, name: m.name }); return; }
     topUps.push({ index: m.index, shortfall });
-    // Short AND a weight line nobody claimed bears its name: this is the intent
-    // disagreement, not an ordinary missing item, and its top-up may buy a second
-    // one (see the presence pass above). Consume the row so two count items can't
-    // both be blamed on it — the weight pool is finished with by now, so nothing
-    // else reads this.
-    const w = weightPool.find((p) => !p.used && cartNameMatches(p.name, m.name));
-    if (w) { w.used = true; countItemsOnWeightRows.push({ index: m.index, cartName: w.name }); }
+    // Short, and the weight line that bears its name explained nothing: the
+    // intent disagreement, unresolved. Its top-up may buy a second one, so it is
+    // named here and splitUnverifiableTopUps lifts it out.
+    if (m.undecidedOn) countItemsOnWeightRows.push({ index: m.index, cartName: m.undecidedOn });
   });
 
   const overAdds = findOverAddedItems(addedRows, intended);
@@ -468,11 +637,13 @@ export interface TopUpRouting {
  * which the caller REPORTS. That is still an under-add — but a stated one, and
  * stating it is the only branch that does not silently break a rule.
  *
- * STOPGAP, deliberately. Nothing here can compare a unit count against a
- * poundage, so "we could not verify this" is the most that is true. MEAL-148
- * computes the expected weight (productQty × increment) and compares it against
- * the cart line's actual poundage, which decides the case instead of reporting it
- * open, and this split goes away with it.
+ * NARROWED, not removed (MEAL-148). Where the item's increment is known, the
+ * reconcile now compares productQty × increment against the poundage the line
+ * gained and decides the case: such an item is confirmed, or topped up by the
+ * clicks actually missing, and either way it never reaches
+ * `countItemsOnWeightRows`. What still arrives here is what the arithmetic
+ * refused to decide — no increment, no poundage, or numbers that don't reconcile
+ * — and for those, "we could not verify this" remains the most that is true.
  *
  * A total partition of `topUps` by index — every short item ends up in exactly
  * one side, so no item can be both re-added and reported, and none can be
@@ -766,6 +937,18 @@ function claimWeightRows(pool: Leftover, claims: Claim[]): void {
   }
 }
 
+/** Consume one weight row for each INCREMENT-style item (`weightStepLb`) the count
+ *  pool left empty-handed — its clicks are poundage on that line, so the line is
+ *  its, not an unintended add. Runs after the count passes for the same reason as
+ *  in findOverAddedItems, and claims at most one row per item. Mutates `pool`. */
+function claimIncrementRows(pool: Leftover, claims: Claim[]): void {
+  for (const c of claims) {
+    if (c.item.isWeight || c.item.weightStepLb == null || c.qty > 0) continue;
+    const w = pool.weight.find((p) => !p.used && cartNameMatches(p.name, c.item.name));
+    if (w) { w.used = true; c.qty = 1; c.cartName = w.name; c.loose = true; }
+  }
+}
+
 /** Consume count rows for the count items among `claims`, capped at each item's
  *  expected qty so a legitimately-requested unit never reads as overage.
  *  Mutates `pool`. */
@@ -831,6 +1014,8 @@ export function splitCartLeftover(
   claimCountRows(pool, unreported, true);
   claimCountRows(pool, reported, false);
   claimCountRows(pool, unreported, false);
+  claimIncrementRows(pool, reported);
+  claimIncrementRows(pool, unreported);
 
   const over: OverAdd[] = [];
   for (const row of pool.count) if (row.qty > 0) over.push({ name: row.name, qty: row.qty });

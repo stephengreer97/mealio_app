@@ -755,6 +755,49 @@ describe('HEB cart-page count (snapshot before/after)', () => {
     { url: 'https://www.heb.com/cart' },
   );
 
+  // MEAL-148. The reconcile decides an increment-style item by arithmetic —
+  // clicks × increment against the poundage the line gained — and it snaps that
+  // expectation onto the LINE'S OWN option ladder rather than an assumed step.
+  // So the ladder has to survive the trip out of the page, off a real captured
+  // cart and not just a hand-built row. This is the reachability half: the unit
+  // tests prove snapToWeightLadder snaps, this proves it is given something to
+  // snap to.
+  itWithFixture(
+    'cart-with-weight-item.html',
+    'carries each weight line\'s own option ladder out with it (MEAL-148)',
+    async (runner) => {
+      await runner.inject(buildCartPageCountScript('heb')!);
+      const result = await runner.waitForMessage('CART_COUNT', 8_000);
+      const weighty = (result.items as any[]).filter((it) => it.isWeight);
+      expect(weighty.length).toBeGreaterThan(0);
+      for (const it of weighty) {
+        // A ladder, ascending, with no "Select a Weight" placeholder in it.
+        expect(Array.isArray(it.weightOptions)).toBe(true);
+        expect(it.weightOptions.length).toBeGreaterThan(1);
+        expect(it.weightOptions.every((o: number) => o > 0)).toBe(true);
+        expect([...it.weightOptions].sort((a: number, b: number) => a - b)).toEqual(it.weightOptions);
+        // The weight the row is SET to is one of the weights it offers. This is
+        // the property the arithmetic rests on: the selected value is a choice
+        // off this list, not a scale reading, so an expectation snapped to the
+        // list is comparable to it.
+        expect(it.weightOptions).toContain(it.weight);
+      }
+      // Uniform ladders starting at the increment are what make N clicks land
+      // exactly on an option — pinned here so a captured cart that stops being
+      // uniform fails loudly instead of quietly making the arithmetic undecidable.
+      for (const it of weighty) {
+        const step = it.weightOptions[0];
+        it.weightOptions.forEach((o: number, i: number) => {
+          expect(o).toBeCloseTo(step * (i + 1), 6);
+        });
+      }
+      // The bulk coffee's ladder is 1 → 5 lb in 1 lb steps.
+      const coffee = weighty.find((it) => /bulk coffee/i.test(it.name));
+      expect(coffee.weightOptions).toEqual([1, 2, 3, 4, 5]);
+    },
+    { url: 'https://www.heb.com/cart' },
+  );
+
   // MEAL-152. No redirect has been observed on www.heb.com/cart (200, 0
   // redirects, measured 2026-08-07 anonymously under the app's mobile UA), so
   // this guard is a no-op on today's HEB and this test is a standing guarantee

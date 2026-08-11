@@ -428,6 +428,10 @@ export interface CartItem {
    *  weight carries the lb amount. Reconciled by presence, not discrete count. */
   isWeight?: boolean;
   weight?: number;
+  /** The weights this line could have been set to, in lb — the row's own option
+   *  ladder (MEAL-148). Absent on stores whose cart read doesn't emit it, and on
+   *  a row read from the a11y text rather than a <select>. */
+  weightOptions?: number[];
 }
 
 export interface CartRow {
@@ -436,7 +440,21 @@ export interface CartRow {
   /** true = added by this run (green +), false = already in the cart (grey). */
   added: boolean;
   isWeight?: boolean;
+  /** Pounds ON THE LINE — the cart's total, not this run's contribution. What the
+   *  done screen shows, because that is what the user's cart says. */
   weight?: number;
+  weightOptions?: number[];
+  /**
+   * Pounds THIS RUN added to the line: the after weight less the before weight
+   * (MEAL-148). Set on added weight rows only.
+   *
+   * Reconcile must compare against this and not `weight`: a user who already had
+   * 0.25 lb of deli beef in their cart and asked Mealio for 0.5 lb ends on a line
+   * reading 0.75 lb, and checking the requested weight against the LINE would
+   * call a run that added nothing at all a success. Always > 0 where it is set,
+   * because a weight row is only green when the line grew.
+   */
+  addedWeight?: number;
 }
 
 /**
@@ -580,10 +598,19 @@ export function findShortAddedItems(
  * capped at its expected qty); whatever added units remain unclaimed are the
  * overage. Weight lines are presence-based (one row regardless of poundage), so
  * an intended weight item consumes at most one matching weight row.
+ *
+ * An INCREMENT-STYLE item (`weightStepLb` — counted in units, priced by weight,
+ * added by clicking an increment N times) may consume one too, once the count
+ * pool has come up short for it. Its units are physically ON that line, so a line
+ * it explains is not a line "nothing intended": before MEAL-148 that row was
+ * reported as an over-add and the caller had to un-report it by name, which is
+ * one warning talking the user into deleting a thing they asked for. Only after
+ * the count passes, and only one row, so it can neither pre-empt an exact count
+ * match nor absorb two lines.
  */
 export function findOverAddedItems(
   addedRows: CartRow[],
-  intended: { name: string; expectedQty: number; isWeight?: boolean }[],
+  intended: { name: string; expectedQty: number; isWeight?: boolean; weightStepLb?: number }[],
 ): { name: string; qty: number }[] {
   const countPool = addedRows.filter((r) => !r.isWeight).map((r) => ({ name: r.name, qty: r.qty }));
   const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false }));
@@ -604,9 +631,18 @@ export function findOverAddedItems(
   }
   // Count items: exact pass then loose pass, capped at each item's expected qty,
   // so a legitimately-requested unit never counts as overage.
-  const need = intended.filter((i) => !i.isWeight).map((i) => ({ name: i.name, left: Math.max(1, i.expectedQty || 1) }));
+  const need = intended
+    .filter((i) => !i.isWeight)
+    .map((i) => ({ name: i.name, left: Math.max(1, i.expectedQty || 1), increment: i.weightStepLb != null }));
   need.forEach((n) => { n.left -= claim(n.name, n.left, true); });
   need.forEach((n) => { if (n.left > 0) n.left -= claim(n.name, n.left, false); });
+  // Increment items last: their units live on a weight line, not in the count
+  // pool (see above).
+  need.forEach((n) => {
+    if (!n.increment || n.left <= 0) return;
+    const w = weightPool.find((p) => !p.used && cartNameMatches(p.name, n.name));
+    if (w) { w.used = true; n.left = 0; }
+  });
   const over: { name: string; qty: number }[] = [];
   for (const row of countPool) if (row.qty > 0) over.push({ name: row.name, qty: row.qty });
   for (const w of weightPool) if (!w.used) over.push({ name: w.name, qty: 1 });
@@ -637,7 +673,15 @@ export function diffCartItems(beforeRaw: CartItem[], afterRaw: CartItem[]): Cart
       const bw = beforeWeight.get(it.name) || 0;
       const aw = typeof it.weight === 'number' ? it.weight : 0;
       const added = !beforeWeight.has(it.name) || aw > bw;
-      (added ? green : grey).push({ name: it.name, qty: it.qty, added, isWeight: true, weight: it.weight });
+      // `addedWeight` is the run's own contribution, which is the only poundage
+      // reconcile may check an expectation against — see CartRow.addedWeight.
+      // Only on the green row: a grey row is by definition weight this run did
+      // not add.
+      (added ? green : grey).push({
+        name: it.name, qty: it.qty, added, isWeight: true, weight: it.weight,
+        weightOptions: it.weightOptions,
+        ...(added ? { addedWeight: +(aw - bw).toFixed(4) } : {}),
+      });
       continue;
     }
     const bq = beforeQty.get(it.name) || 0;
@@ -1064,21 +1108,40 @@ ${cartPathGuardJs(cartPath)}
   // Sold-by-weight lines have NO cartQuantityCounterValue — instead a
   // itemRowWeighedQuantityDropdown and an a11y "Quantity: N lb" label. Read the
   // weight (lb) so these aren't seen as qty 0 (which made reconcile think the
-  // item was missing and re-add it). Returns the weight in lb, or 0 if not a
-  // weight line.
-  function rowWeightLb(row) {
-    if (!row.querySelector('[data-qe-id="itemRowWeighedQuantityDropdown"]')) return 0;
+  // item was missing and re-add it). Returns { lb, options }: the weight in lb
+  // (0 if not a weight line), and the weights this row could have been set to.
+  //
+  // MEAL-148: the OPTIONS are why this returns an object. The selected value is
+  // not a scale reading — nothing has been weighed at cart-read time — it is one
+  // of the discrete weights the store sells, and it is the ladder below that says
+  // which ones those are. Reconcile snaps its expectation (clicks × increment)
+  // onto this same ladder before comparing, so it compares against what the store
+  // could actually have given us rather than against an assumed increment. Read
+  // off the row, never off the SKU: the ladder belongs to the line, and a snap
+  // against a re-derived one would be a second guess at the number we already
+  // have. Empty when the row has no <select> (the a11y-text fallback below), and
+  // an empty ladder means "nothing to snap to", not "no options exist".
+  function rowWeight(row) {
+    var sel = row.querySelector('[data-qe-id="itemRowWeighedQuantityDropdown"]');
+    if (!sel) return { lb: 0, options: [] };
     // Prefer the live select value; fall back to the a11y "Quantity: N lb" text
     // (server-rendered, present even when the select value isn't reflected as an
     // attribute).
-    var sel = row.querySelector('[data-qe-id="itemRowWeighedQuantityDropdown"]');
-    var w = sel ? parseFloat(sel.value) : NaN;
+    var w = parseFloat(sel.value);
     if (!w || isNaN(w)) {
       var txt = row.textContent || '';
       var m = txt.match(/Quantity:\\s*([0-9]+(?:\\.[0-9]+)?)\\s*lbs?/i);
       if (m) w = parseFloat(m[1]);
     }
-    return (!w || isNaN(w)) ? 0 : w;
+    var opts = [];
+    var raw = sel.options ? Array.prototype.slice.call(sel.options) : [];
+    for (var oi = 0; oi < raw.length; oi++) {
+      var ov = parseFloat(raw[oi].value);
+      // > 0 drops the "Select a Weight" placeholder, exactly as the add path's
+      // option filter does (heb.ts handleWeightDropdown).
+      if (ov > 0) opts.push(ov);
+    }
+    return { lb: (!w || isNaN(w)) ? 0 : w, options: opts };
   }
   function snapshot() {
     var rows = Array.prototype.slice.call(document.querySelectorAll('[data-qe-id="itemRow"]'));
@@ -1086,12 +1149,13 @@ ${cartPathGuardJs(cartPath)}
     for (var j = 0; j < rows.length; j++) {
       var nameEl = rows[j].querySelector('[data-qe-id="itemRowDetailsName"]');
       var nm = nameEl ? norm(nameEl.textContent) : '';
-      var wlb = rowWeightLb(rows[j]);
-      if (wlb > 0) {
-        // Weight line: present in the cart at <wlb> lb. Count it as one unit so
-        // the total stays meaningful; carry the weight + flag for reconcile.
+      var wt = rowWeight(rows[j]);
+      if (wt.lb > 0) {
+        // Weight line: present in the cart at <wt.lb> lb. Count it as one unit so
+        // the total stays meaningful; carry the weight, the ladder it was chosen
+        // from and the flag for reconcile.
         count += 1;
-        if (nm) items.push({ name: nm, qty: 1, weight: wlb, isWeight: true });
+        if (nm) items.push({ name: nm, qty: 1, weight: wt.lb, weightOptions: wt.options, isWeight: true });
       } else {
         var q = rowQty(rows[j]);
         count += q;
