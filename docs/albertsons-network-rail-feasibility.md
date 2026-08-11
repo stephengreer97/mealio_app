@@ -387,9 +387,13 @@ measured contract above; nobody needs to invent it now.
 *And the wider point that note carried still holds where it has not been measured.
 The merged version called the body "the one part of the contract that is not
 established"; it was not the only one, only the one we knew we were missing.
-Of the rest — required headers, a CSRF token, an owned `cartId`, a write-scoped
-token — the capture settles all four (none are needed). **Cookies it does not
-settle.** See "What remains unknown", gap 1.*
+Of the rest — the two headers the bundle named (`slotsRequired`,
+`x-swy-client-id`), a CSRF token, an owned `cartId`, a write-scoped token — the
+capture settles all four: **none of those four is needed.** That is not "no header
+is needed": `ocp-apim-subscription-key` is measured as required (its absence gets
+a `401` from APIM), and `ocp-apim-trace` / `sort-order` were in the accepted
+request and are unclassified. **Cookies it does not settle at all.** See "What
+remains unknown", gap 1.*
 
 ---
 
@@ -418,7 +422,7 @@ are evidence about the object it read them from:
 | `UUID` | **Populated** — it reached the search query, and it matches the token's `uuid` claim exactly. |
 | `banner` | **Populated** — `banner=safeway` in the search query. Note this is the *storefront's* banner; the token's `ban` claim said `albertsons`. They disagree, and the storefront one is the one that was in a working page. |
 | `shopZipcode` | **Absent or empty.** The probe sent `zipCode=`, which is what broke its **cart** leg. (Not its search leg — search sends no zip under any name, so that 400 has a different cause, most likely `storeid` or the unverified `channel` value.) |
-| `shopStoreId` | **Unknown.** The probe falls back to `ui.storeId`, and the URL was truncated in the paste, so which one supplied the value cannot be told apart. |
+| `shopStoreId` | **Unknown.** The probe falls back to `ui.storeId`, and `storeid` sits in the part of the query string Chrome elided from the middle of the pasted URL — unlike `uuid` and `banner`, which survived at the end. So a value reached the query and which field supplied it cannot be told apart. |
 | everything else | **Unknown.** The `userInfo KEYS` dump was not captured. |
 
 So the shape of the object is confirmed and its exact field names are not. **A rail
@@ -1258,15 +1262,22 @@ that this document never named.
   // sets it for every cart call, and the 2026-08-11 run simply omitted it. Only the
   // FALLBACK VALUE ('Dug') comes from the add measurement, and only when the page
   // does not supply one — watch svcFromPage above.
-  if (!storeId || !zip) {
-    console.error('CART READ skipped — storeId/zipCode unresolved. A 400 from here ' +
-                  'would tell us nothing. Hard-code them above and re-run. ' +
-                  '(Search below still runs.)');
+  // customerId is in the PATH, so a missing one silently requests
+  // /cart/customer/undefined — the same uninterpretable-refusal trap as an empty
+  // query param, and harder to spot. Guarded with the rest. (It was populated on
+  // 2026-08-11; the field name is still only observed once.)
+  const custId = ui.customerId || ui.customerID || ui.guid;
+  if (!storeId || !zip || !custId) {
+    console.error('CART READ skipped — unresolved:',
+                  [!storeId && 'storeId', !zip && 'zipCode', !custId && 'customerId']
+                    .filter(Boolean).join(', '),
+                  '— a 400 from here would tell us nothing. Hard-code above and ' +
+                  're-run. (Search below still runs.)');
   } else {
   const cartQs = new URLSearchParams({
     type: 'mini', storeId, serviceType: svc, zipCode: zip,
     cartCategoryList: '1P,3P_MARKETPLACE,1P_Wine', expressChk: 'true' });
-  const cr = await fetch(`${CART}/customer/${ui.customerId}?${cartQs}`, {
+  const cr = await fetch(`${CART}/customer/${custId}?${cartQs}`, {
     method: 'POST', credentials: 'include',
     headers: { 'Ocp-Apim-Subscription-Key': CART_KEY,
                'authorization': 'Bearer ' + tok,
@@ -1284,20 +1295,25 @@ that this document never named.
   }
 
   // ── 3. SEARCH. Does it work in-page, where plain curl tarpitted? ──────────
-  // Runs even if the cart leg was skipped: search needs no zip, and gap 3 is the
-  // open question. It DOES need storeid — the 2026-08-11 search 400 cannot be
-  // blamed on the empty zipCode that broke the cart leg, because search never
-  // sends one, so `storeid` and `channel` are the two live suspects. This loop
-  // varies `channel`, which is the cheaper one to rule out.
+  // Runs even if the CART leg was skipped: search sends no zip, so a missing zip
+  // must not cost us gap 3 a second time. It does need storeid — the 2026-08-11
+  // search 400 cannot be blamed on the empty zipCode that broke the cart leg,
+  // because search never sends one, so `storeid` and `channel` are the two live
+  // suspects. This loop varies `channel`, the cheaper one to rule out.
   const base = location.origin;
-  if (!storeId) console.warn('SEARCH: storeid is undefined — expect a 400. Hard-code it above.');
+  if (!storeId) {
+    console.error('SEARCH skipped — storeid unresolved, and a 400 without it is ' +
+                  'exactly as uninterpretable as the 2026-08-11 one. Hard-code ' +
+                  'storeId above and re-run: this is the leg gap 3 turns on.');
+  } else {
   // `channel` is the bundle's `fulfillmentType`, a different param from the cart's
   // `serviceType`, and NOTHING has verified its accepted values. 'pickup' is the
-  // original guess; 'Dug' is what the cart path turned out to want. Try both.
-  for (const channel of [...new Set(['pickup', svc])]) {
+  // original guess; 'Dug' is what the cart path turned out to want; ui.serviceType
+  // is whatever the page itself thinks. Try all three, deduped.
+  for (const channel of [...new Set(['pickup', 'Dug', svc])]) {
     const sQs = new URLSearchParams({
       pageurl: base, url: base, 'request-id': String(Date.now()), pagename: 'search',
-      rows: '5', start: '0', 'search-type': 'keyword', storeid: storeId ?? '',
+      rows: '5', start: '0', 'search-type': 'keyword', storeid: storeId,
       q: 'tortillas', dvid: 'GhXAoLXN-ss-search', channel,
       uuid: ui.UUID ?? '', featured: 'false', banner: ui.banner ?? '', includeOffer: 'true' });
     const t0 = performance.now();
@@ -1314,6 +1330,7 @@ that this document never named.
       console.error(`SEARCH [channel=${channel}] threw after ${Math.round(performance.now()-t0)}ms —`,
                     'if this hung ~30s the tarpit is not client-shaped:', e);
     }
+  }
   }
 })();
 ```
@@ -1332,8 +1349,9 @@ that this document never named.
 | CART READ `403` | **Now diagnostic.** A real bearer is measured to get *past* the 403 filter, so a 403 here means the token did not arrive or is not real — not that the operation is forbidden. Check that you read `SWY_SHOP_TOKEN` and not a stale variable. |
 | CART READ `400` naming a param | We reached the service and only the arguments are wrong. **Do not report this as a result until you have fixed it and re-run** — the 2026-08-11 run stopped here and its 400s carry no information about the endpoint. |
 | SEARCH `200` with a non-zero product count | **The tarpit was client-shaped, not a block.** Search works in-page and the rail's search half is settled. **Nobody has seen this yet** — it is the main thing this probe is still for. |
-| SEARCH `400` on **both** `channel` values | What the 2026-08-11 run got. `channel` is then ruled out and `storeid` is the suspect — check the `STORE CONTEXT` line, hard-code a real store id, re-run. |
-| SEARCH `400` on one `channel` and `200` on the other | **Gap 3 closed and the param named.** Record which value won; the cart path's analogue turned out to be `Dug` where everyone assumed `pickup`. |
+| SEARCH `400` on **every** `channel` value | `channel` is ruled out — which nothing has ruled out yet, since the 2026-08-11 run tried only `pickup`. `storeid` is then the suspect: check the `STORE CONTEXT` line, hard-code a real store id, re-run. |
+| SEARCH `400` on some `channel` values and `200` on another | **Gap 3 closed and the param named.** Record which value won; the cart path's analogue turned out to be `Dug` where everyone assumed `pickup`, which is exactly why the probe now sweeps them. |
+| `SEARCH skipped` | `storeid` could not be resolved. Not a result about the endpoint — hard-code a store id above and re-run, because this is the leg gap 3 turns on. |
 | SEARCH hangs in-page too | Did not happen on 2026-08-11, so this is now unlikely — but if it recurs the tarpit is real and server-side. **Fall back to `/abs/pub/xapi/search/autosuggest`**, which is measured working anonymously, or keep DOM scraping for search and use the network rail only for cart. Materially narrows the rail — file it. |
 | SEARCH `401`/`403` | Search needs auth after all, contradicting the bundle. Add `authorization: Bearer` and re-run. |
 | Anything with `x-iinfo` and an Imperva HTML body | Imperva challenged you. Reload the page and retry; if it recurs under repetition that is the load finding, and it is important. |
