@@ -31,13 +31,19 @@
 //    where Apollo encodes the field arguments into the key) is good evidence the
 //    cart field takes NO arguments. That is an inference from how Apollo keys
 //    fields, not a measurement.
-//  • The OPERATION NAME and the document text are NOT verified. MEAL-14's ticket
-//    names an operation `cartEstimated`; that string appears nowhere in this
-//    repo, in any fixture, or in either findings doc, so it is not used here — a
-//    guessed persisted-query hash or operation is exactly what MEAL-12 said not
-//    to ship. We send our own document as text, which is the path MEAL-12
-//    measured as accepted. Swapping to a hash is a one-line change in
-//    `__hebCartBody` if H-E-B ever enables safelisting.
+//  • The OPERATION NAME is NOT verified. MEAL-14's ticket names an operation
+//    `cartEstimated`; that string appears nowhere in this repo, in any fixture,
+//    or in either findings doc, so it is not used here — a guessed
+//    persisted-query hash or operation is exactly what MEAL-12 said not to ship.
+//    We send our own document as text, which is the path MEAL-12 measured as
+//    accepted. Swapping to a hash is a one-line change in `__hebCartBody` if
+//    H-E-B ever enables safelisting.
+//  • The DOCUMENT'S SHAPE is verified as of 2026-08-11, and it was wrong for the
+//    rail's whole life until then: `cartV2` returns the union
+//    `CartResponse = Cart | CartError`, so the selection has to sit inside
+//    `... on Cart { … }`. Six runs answered `unknown` on every add because it
+//    did not. H-E-B named that type in a live 400 (MEAL-16's probe ladder, rung
+//    3). See HEB_CART_SELECTION for the evidence and for what did not change.
 //  • AUTHENTICATED operations were never measured (MEAL-12's open gap 1, and the
 //    cart query is authenticated). Nor was ABP's behaviour under this rail's
 //    request rate: it is a baseline read plus 1–5 polled after-reads PER ADD, so
@@ -178,6 +184,19 @@ export type HebCartReadFailure =
   | 'blocked'
   | 'http_error'
   | 'graphql_error'
+  /**
+   * `cartV2` answered as the union's OTHER arm: `__typename: 'CartError'`.
+   *
+   * A valid response to a valid document, and still not a cart — H-E-B declining
+   * to hand one over, in words, which `detail` carries. Distinct from `shape`
+   * because a `shape` read means we could not make sense of the answer, while
+   * this one means we understood it perfectly and it was a refusal; the two send
+   * an investigation in opposite directions.
+   *
+   * Never `missing`, like every other member of this union: an add whose cart
+   * read came back a CartError is one we cannot vouch for either way.
+   */
+  | 'cart_error'
   /** 200 with JSON that is not a cart — including `data.cartV2: null`. */
   | 'shape'
   | 'network'
@@ -240,15 +259,34 @@ export type HebCartSnapshot =
     detail?: string | null;
     /** Only on `blocked`. Which wall — see HebCartBlockCause. */
     block?: HebCartBlockCause | null;
-    /** Only on `graphql_error`: `errors[0].extensions.code`. A gateway that
-     *  resolves our `operationName` against a safelist instead of executing the
-     *  document we sent says so here and nowhere else. */
+    /** On `graphql_error`, `errors[0].extensions.code` — a gateway that resolves
+     *  our `operationName` against a safelist instead of executing the document
+     *  we sent says so here and nowhere else. On `cart_error`, `CartError.code`,
+     *  which is H-E-B's own name for the refusal. */
     code?: string | null;
     /** Only on `graphql_error`: `errors[0].locations[0]` as `line:col`. Says
      *  WHERE in the document the gateway's complaint lands, which is what
      *  separates "they validated the text we sent" from "they validated
      *  something else". */
     loc?: string | null;
+    /**
+     * Only on `graphql_error`: how many errors the response carried, when
+     * `detail`/`code`/`loc` describe only the FIRST of them.
+     *
+     * This field exists because its absence cost this ticket five runs. Every
+     * production read of the broken document came back with FOUR errors whose
+     * first was `Field "cartV2" of type "Query" must have a selection of
+     * subfields` — a complaint that names the PARENT type and reads like a
+     * mangled-in-transit story — while `errors[1…]` said `Cannot query field
+     * "id" on type "CartResponse"` and answered the question outright. Only
+     * `errors[0]` was ever logged, so five runs of reads could not see it.
+     *
+     * A count is not the messages, so the messages go out too, on their own
+     * bridge line — see `__hebCartLogErrors`. What the count buys is that the
+     * verdict line itself says "there were three more", which is what makes
+     * anybody go looking for that line.
+     */
+    errN?: number | null;
   };
 
 /** The product an add targeted, as far as the cart can identify it. */
@@ -286,7 +324,7 @@ export interface HebAddConfirmation {
    *  indistinguishable from outside the WebView. */
   detail?: string | null;
   /**
-   * MEAL-16. HTTP status of the read this verdict is about, and the first of four
+   * MEAL-16. HTTP status of the read this verdict is about, and the first of five
    * diagnostics taken off the SAME read `detail` came from — the one the verdict's
    * own `reason` names. They are set together, from one snapshot, precisely so no
    * verdict can pair one read's status with another read's message (see the note
@@ -303,15 +341,20 @@ export interface HebAddConfirmation {
    * Null when there was no read to have a status — and null is not 0: a
    * `no_read`/`no_target` verdict never had a response at all.
    *
-   * Diagnostic only, all four: `confirmDetail` (pool-add-funnel) picks its
+   * Diagnostic only, all five: `confirmDetail` (pool-add-funnel) picks its
    * telemetry fields by name and forwards none of these, so they reach a human
    * on a debug log line and nowhere else.
    */
   status?: number | null;
-  /** `errors[0].extensions.code`, on a `graphql_error`. */
+  /** `errors[0].extensions.code` on a `graphql_error`, `CartError.code` on a
+   *  `cart_error`. */
   code?: string | null;
   /** `errors[0].locations[0]` as `line:col`, on a `graphql_error`. */
   loc?: string | null;
+  /** How many errors the `graphql_error` response carried — i.e. how many
+   *  `detail` is one of. See the field of the same name on HebCartSnapshot for
+   *  why a count earns its place on a verdict line. */
+  errN?: number | null;
   /** Which wall a `blocked` read hit — see HebCartBlockCause. */
   block?: HebCartBlockCause | null;
 }
@@ -321,10 +364,14 @@ export interface HebAddConfirmation {
  *
  * Field-for-field what the committed `__APOLLO_STATE__` captures prove the
  * server returns (see the module header). Intentionally minimal: no price, no
- * fulfillment, no `__typename` — a smaller selection set is less to break when
- * H-E-B changes its schema, and everything here is load-bearing for the diff.
+ * fulfillment — a smaller selection set is less to break when H-E-B changes its
+ * schema, and everything here is load-bearing for the diff.
  * `product.fullDisplayName` earns its place by naming the item in the report the
  * user eventually sees.
+ *
+ * The one field that is NOT load-bearing for the diff is `__typename` on
+ * `cartV2` itself, and it is there because `cartV2` returns a UNION — see
+ * HEB_CART_SELECTION.
  */
 /**
  * Our operation name — neutral and descriptive, and deliberately NOT H-E-B's own.
@@ -340,38 +387,83 @@ export interface HebAddConfirmation {
  * document does and advertises nothing.
  *
  * This is a reduction, not concealment, and the difference matters: the document
- * still carries no `__typename` fields, which is exactly the fingerprint MEAL-12
+ * carries ONE `__typename`, on `cartV2` and nowhere else, where Apollo's own
+ * client injects one at every level. That asymmetry is the fingerprint MEAL-12
  * used to prove the gateway executed OUR text rather than a cached persisted
- * operation. We cannot remove that without schema knowledge we do not have, so
- * the request remains distinguishable from the site's own by anyone looking.
+ * operation, and the union wrapper does not spend it — a response whose
+ * `items[]` carry no `__typename` is still not one Apollo composed. We cannot
+ * remove the difference without schema knowledge we do not have, so the request
+ * remains distinguishable from the site's own by anyone looking.
  */
 export const HEB_CART_OPERATION = 'CartLines';
 
 /**
  * The selection set on its own, WITHOUT the `query <name>` that precedes it.
  *
- * Split out for MEAL-16's probe ladder, whose last two rungs re-send this exact
- * document under a different operation name and under none — a test that only
- * means anything if the two documents are byte-identical to the production one
- * apart from that name. Deriving them from one constant makes that structural;
- * two hand-written copies would let a future edit to the selection set change
- * the production document and leave the probes testing something else.
+ * `cartV2` RETURNS A UNION, `CartResponse = Cart | CartError`, and until this
+ * commit we selected its fields directly on the union. That is not a valid
+ * GraphQL document against any schema: a union has no fields of its own, so the
+ * selection has to sit inside `... on Cart { … }`. Six live runs of this rail
+ * therefore answered `unknown` to every single add — MEAL-16's Question 1, and
+ * the reason no `cart verdicts:` line has ever appeared in a run log.
  *
- * `HEB_CART_QUERY` below is unchanged by the split, character for character —
- * pinned in hebCartQuery.test.ts, because `loc: 2:3` (the gateway's own
- * complaint) is a statement about where `cartV2` sits in THIS text.
+ * THE EVIDENCE, in the order it is worth anything:
+ *
+ *  • Rung 3 of the probe ladder, live on 2026-08-11: we asked for
+ *    `cartV2 { zzzNotAField }` and H-E-B answered `Cannot query field
+ *    "zzzNotAField" on type "CartResponse"`. That names the type of `cartV2`
+ *    from the gateway's own mouth, and it names it as the union.
+ *  • The storefront's own bundle, cached by the fixture rig on 2026-05-20
+ *    (`tests/.chrome-profile/heb/cache/…`), carries Apollo's `possibleTypes`
+ *    with `"CartResponse":["Cart","CartError"]`, and every cart query in it
+ *    takes the union apart with `... on Cart` / `... on CartError`.
+ *    Corroboration, not the finding — it is a cached copy, months old.
+ *
+ * WHAT DID NOT CHANGE: every field name. `id`, `itemCount { total }`, `items`,
+ * `quantity`, `estimatedWeight`, `product { id fullDisplayName }`,
+ * `sku { id twelveDigitUPC weightSelectionIncrements }` all appear in that same
+ * bundle's fragments spelled exactly as we spell them, and all of them are in
+ * the committed `__APOLLO_STATE__` captures. This is a wrapper, not a rewrite,
+ * and no parse below reads a field it did not read before.
+ *
+ * `__typename` on `cartV2` is the union's discriminator and the only field
+ * added. `__hebCartParse` reads it to tell a cart from an error rather than
+ * inferring which arm answered from which keys are present — the shape of
+ * inference that made this bug take six runs.
+ *
+ * `... on CartError { code title message }` is selected even though nothing
+ * diffs it: an error arm we did not select would arrive as an object with no
+ * `items` and read as `shape` — "the gateway sent us something odd" — while
+ * H-E-B was in fact telling us why in words. Those words are what `detail`
+ * carries on a `cart_error`.
+ *
+ * Split out from `query <name>` for MEAL-16's probe ladder, whose last two rungs
+ * re-send this exact document under a different operation name and under none —
+ * a test that only means anything if the two documents are byte-identical to the
+ * production one apart from that name. Deriving them from one constant makes
+ * that structural; two hand-written copies would let a future edit to the
+ * selection set change the production document and leave the probes testing
+ * something else.
+ *
+ * `cartV2` stays at line 2, column 3 — pinned in hebCartProbe.test.ts, because
+ * `loc: 2:3` is what six runs of gateway complaints are a statement about, and a
+ * document that moved it would make the old logs unreadable against the new one.
  */
 const HEB_CART_SELECTION = `{
   cartV2 {
-    id
-    itemCount { total }
-    items {
+    __typename
+    ... on Cart {
       id
-      quantity
-      estimatedWeight
-      product { id fullDisplayName }
-      sku { id twelveDigitUPC weightSelectionIncrements }
+      itemCount { total }
+      items {
+        id
+        quantity
+        estimatedWeight
+        product { id fullDisplayName }
+        sku { id twelveDigitUPC weightSelectionIncrements }
+      }
     }
+    ... on CartError { code title message }
   }
 }`;
 
@@ -455,6 +547,59 @@ export function buildHebCartQueryFn(): string {
       window.ReactNativeWebView.postMessage(JSON.stringify({
         type: 'EXTRACT_DEBUG', step: 'cart_query_body',
         endpoint: __HEB_CART_ENDPOINT, op: __HEB_CART_OP, body: body
+      }));
+    } catch (e) {}
+  }
+
+  // MEAL-16 — EVERY error the gateway sent, not just the one the verdict carries.
+  //
+  // This is the diagnostic that would have ended this ticket on run 2. The
+  // broken document drew FOUR errors per read; \`detail\` keeps errors[0], and
+  // errors[0] was the one that named the parent type and pointed five runs of
+  // investigation at a mangled-in-transit story. The answer —
+  // \`Cannot query field "id" on type "CartResponse"\` — was sitting in
+  // errors[1…] of a response we had already parsed, on every read of every run.
+  //
+  // It took a five-rung probe ladder to recover a string we were throwing away.
+  // The document is fixed now, so on a healthy run this line never prints; it
+  // exists for the NEXT time the contract drifts, which is the one moment the
+  // cost of a second bridge line is worth nothing at all.
+  //
+  // Same latch discipline and the same reasons as __hebCartLogBody: once per
+  // injected script (a poll of five reads that all fail says the same thing five
+  // times), a plain var rather than anything left on H-E-B's origin, and every
+  // access guarded so a surface with no bridge — including the test sandbox —
+  // reads the cart normally.
+  //
+  // Sliced at 200 per message rather than \`detail\`'s 120: the live errors[0] is
+  // 97 characters, which clears that cap by 23 — a gateway one clause wordier
+  // truncates, and the clause a validation error puts LAST is the field and type
+  // it is complaining about. This line prints once per injection, for a human
+  // who came looking for exactly it, so it need not be as thrifty as a verdict.
+  // Capped at 8 messages, twice what the worst real response carried.
+  var __hebCartErrsLogged = false;
+  function __hebCartLogErrors(errors) {
+    try {
+      if (__hebCartErrsLogged) return;
+      if (!errors || !errors.length) return;
+      if (typeof window === 'undefined' || !window || !window.ReactNativeWebView) return;
+      __hebCartErrsLogged = true;
+      var out = [];
+      for (var i = 0; i < errors.length && i < 8; i++) {
+        var er = errors[i] || {};
+        var ex = er.extensions || null;
+        var lc = (er.locations && er.locations.length > 0) ? er.locations[0] : null;
+        out.push({
+          msg: er.message ? String(er.message).slice(0, 200) : null,
+          code: (ex && ex.code != null && ex.code !== '') ? String(ex.code).slice(0, 60) : null,
+          loc: (lc && lc.line != null)
+            ? (String(lc.line) + ':' + (lc.column == null ? '?' : String(lc.column)))
+            : null
+        });
+      }
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'EXTRACT_DEBUG', step: 'cart_query_errors',
+        op: __HEB_CART_OP, n: errors.length, errs: out
       }));
     } catch (e) {}
   }
@@ -679,6 +824,13 @@ export function buildHebCartQueryFn(): string {
       // error message — and could not say where in the document it was looking.
       // extensions.code answers the first; locations answers the second (our own
       // cartV2 sits at line 2, column 3).
+      //
+      // AND \`errN\`, because errors[0] turned out to be the wrong error. Four
+      // came back on every production read of the broken document and the first
+      // was the least informative of the four; see HebCartSnapshot.errN. The
+      // count is not a substitute for the other three messages — those go out on
+      // their own line, from __hebCartRead — it is what tells a reader of the
+      // verdict that such a line exists.
       var e0 = json.errors[0] || null;
       var m = (e0 && e0.message) ? String(e0.message) : '';
       var ext = (e0 && e0.extensions) || null;
@@ -688,16 +840,45 @@ export function buildHebCartQueryFn(): string {
         code: (ext && ext.code != null && ext.code !== '') ? String(ext.code).slice(0, 60) : null,
         loc: (loc0 && loc0.line != null)
           ? (String(loc0.line) + ':' + (loc0.column == null ? '?' : String(loc0.column)))
-          : null
+          : null,
+        errN: json.errors.length
       };
     }
     if (status >= 400) return { ok: false, reason: 'http_error', status: status };
     var cart = json.data && json.data.cartV2;
+    // The union's other arm, ASKED FOR BY NAME rather than deduced from which
+    // keys are present. \`cartV2\` is CartResponse = Cart | CartError, and a
+    // CartError is a valid answer to a valid document — H-E-B saying no, with a
+    // code and a sentence. Read before the items check, or its own absence of
+    // items would report it as 'shape' and throw those words away.
+    //
+    // Keyed on __typename ONLY: this is the field the union exists to be told
+    // apart by, and a structural guess ("no items, but it has a message") would
+    // be the same species of inference that let the broken document survive six
+    // runs. A CartError arm we did not recognise reads as 'shape', which is the
+    // honest answer for a response we cannot classify.
+    if (cart && cart.__typename === 'CartError') {
+      var ce = [];
+      if (cart.code != null && cart.code !== '') ce.push(String(cart.code));
+      if (cart.title != null && cart.title !== '') ce.push(String(cart.title));
+      if (cart.message != null && cart.message !== '') ce.push(String(cart.message));
+      return {
+        ok: false, reason: 'cart_error', status: status,
+        detail: ce.length ? ce.join(': ').slice(0, 120) : null,
+        code: (cart.code != null && cart.code !== '') ? String(cart.code).slice(0, 60) : null
+      };
+    }
     // An EMPTY cart is { items: [] } and reads fine. A null cart is treated as
     // unreadable, not as empty: we have never captured what a logged-out or
     // cartless session answers, and guessing "empty" there would turn a session
     // problem into "every item failed" — the one outcome this rail must never
     // produce. Being wrong the other way only costs a fallback to the badge.
+    //
+    // The items array is still the gate, not \`__typename === 'Cart'\`: every
+    // committed capture and every test payload predates the union wrapper and
+    // carries no __typename at all, and a cart with lines in it is a cart
+    // whatever it calls itself. The discriminator is consulted where it decides
+    // something — the error arm above — and not made a new way to fail.
     if (!cart || !Array.isArray(cart.items)) return { ok: false, reason: 'shape', status: status };
     var lines = [];
     for (var i = 0; i < cart.items.length; i++) lines.push(__hebCartLine(cart.items[i]));
@@ -783,7 +964,7 @@ export function buildHebCartQueryFn(): string {
     // message, both already sliced to 120; before MEAL-16's first half every one
     // of them died here, so a run could only ever report a bare 'graphql_error'
     // with no way to tell WHICH contract with the gateway had broken.
-    var diag = { detail: null, status: null, code: null, loc: null, block: null };
+    var diag = { detail: null, status: null, code: null, loc: null, errN: null, block: null };
     function __hebCartTake(snap) {
       if (!snap) return;
       diag.status = (snap.status == null) ? null : snap.status;
@@ -791,6 +972,10 @@ export function buildHebCartQueryFn(): string {
         diag.detail = snap.detail ? String(snap.detail) : null;
         diag.code = snap.code ? String(snap.code) : null;
         diag.loc = snap.loc ? String(snap.loc) : null;
+        // A number, so the falsy test the four above use would drop errN: 0 —
+        // which cannot happen (the parse sets it only where errors.length > 0)
+        // but is the kind of thing that starts happening later.
+        diag.errN = (snap.errN == null) ? null : snap.errN;
         diag.block = snap.block ? String(snap.block) : null;
       }
     }
@@ -802,7 +987,7 @@ export function buildHebCartQueryFn(): string {
         qtyAfter: line ? line.qty : null,
         weightAfter: line ? line.weight : null,
         detail: diag.detail, status: diag.status,
-        code: diag.code, loc: diag.loc, block: diag.block
+        code: diag.code, loc: diag.loc, errN: diag.errN, block: diag.block
       };
     }
     // No target: nothing was compared and neither read is what went wrong, so
@@ -902,6 +1087,10 @@ export function buildHebCartQueryFn(): string {
       try { text = await res.text(); } catch (e) { text = ''; }
       var json = null;
       try { json = JSON.parse(text); } catch (e) { json = null; }
+      // Logged from HERE and not from the parse, which is pure and is called
+      // directly by the tests with no bridge in sight. The parse decides; this
+      // reports.
+      if (json && json.errors && json.errors.length > 0) __hebCartLogErrors(json.errors);
       return __hebCartParse(res.status, json, text);
     } catch (e) {
       var nm = String((e && e.name) || '');
@@ -948,6 +1137,7 @@ export function buildHebCartQueryFn(): string {
       status: (conf.status == null) ? null : conf.status,
       code: (conf.code == null) ? null : conf.code,
       loc: (conf.loc == null) ? null : conf.loc,
+      errN: (conf.errN == null) ? null : conf.errN,
       block: (conf.block == null) ? null : conf.block
     };
   }
@@ -975,7 +1165,7 @@ export function buildHebCartQueryFn(): string {
     }
     return last || {
       state: 'unknown', via: 'cart_query', reason: 'no_read', skuId: null, productId: null,
-      detail: null, status: null, code: null, loc: null, block: null
+      detail: null, status: null, code: null, loc: null, errN: null, block: null
     };
   }
 

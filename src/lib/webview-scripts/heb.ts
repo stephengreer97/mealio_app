@@ -1038,7 +1038,7 @@ ${buildHebCartQueryFn()}
     var committed = null;
     if (__cartTarget) {
       __cartConf = await __hebCartConfirmAdd(__cartTarget, __cartQueryBefore, {});
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null, status: (__cartConf.status == null) ? null : __cartConf.status, code: __cartConf.code || null, loc: __cartConf.loc || null, block: __cartConf.block || null }));
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null, status: (__cartConf.status == null) ? null : __cartConf.status, code: __cartConf.code || null, loc: __cartConf.loc || null, errN: (__cartConf.errN == null) ? null : __cartConf.errN, block: __cartConf.block || null }));
       if (__cartConf.state === 'landed') committed = true;
       else if (__cartConf.state === 'missing') {
         // A 'missing' verdict used to end the matter, which threw away
@@ -1165,7 +1165,7 @@ ${buildHebCartQueryFn()}
   // when the branch above already asked (__cartConf set).
   if (__cartTarget && !__cartConf) {
     __cartConf = await __hebCartConfirmAdd(__cartTarget, await __cartBaseline(), { tries: 3 });
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_crosscheck', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null, status: (__cartConf.status == null) ? null : __cartConf.status, code: __cartConf.code || null, loc: __cartConf.loc || null, block: __cartConf.block || null }));
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: 'cart_query_crosscheck', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null, status: (__cartConf.status == null) ? null : __cartConf.status, code: __cartConf.code || null, loc: __cartConf.loc || null, errN: (__cartConf.errN == null) ? null : __cartConf.errN, block: __cartConf.block || null }));
     if (__cartConf.state === 'missing') {
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_RESULT', success: false, reason: 'cart_absent', confirm: __cartConf }));
       return;
@@ -1601,8 +1601,10 @@ ${hebWaitFreshFn()}
       // fingerprint, or a bare 401/403 that is only CONSISTENT with the H-E-B
       // session having died (see HebCartBlockCause; 'status' and 'detail' are
       // beside it because the label alone does not settle that one). code/loc
-      // say whether the gateway validated the document we actually sent.
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null, status: (__cartConf.status == null) ? null : __cartConf.status, code: __cartConf.code || null, loc: __cartConf.loc || null, block: __cartConf.block || null }));
+      // say whether the gateway validated the document we actually sent, and
+      // errN says how many errors 'detail' is ONE of — the field whose absence
+      // hid the union bug in errors[1…] for six runs.
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_confirm', state: __cartConf.state, why: __cartConf.reason, sku: __cartConf.skuId, product: __cartConf.productId, detail: __cartConf.detail || null, status: (__cartConf.status == null) ? null : __cartConf.status, code: __cartConf.code || null, loc: __cartConf.loc || null, errN: (__cartConf.errN == null) ? null : __cartConf.errN, block: __cartConf.block || null }));
       if (__cartConf.state === 'landed') __committed = true;
       else if (__cartConf.state === 'missing') __committed = false;
     }

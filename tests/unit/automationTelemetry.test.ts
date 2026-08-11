@@ -353,6 +353,14 @@ describe('failure codes', () => {
       ['unauthorized', 'heb-cart-query.ts'],
       ['incident', 'heb-cart-query.ts'],
       ['interstitial', 'heb-cart-query.ts'],
+      // MEAL-16: `cartV2` returns the union `CartResponse = Cart | CartError`,
+      // and this is the read failure for its error arm — a cart read the rail
+      // understood and that was not a cart. It belongs with `graphql_error` and
+      // `shape` in the flat set above by kind, and is scoped to this ONE file
+      // instead for the reason `unauthorized` is: "the cart errored" is a
+      // plausible ADD_RESULT reason for some future store script, and a flat
+      // entry would disarm this test for that script without anyone noticing.
+      ['cart_error', 'heb-cart-query.ts'],
     ]);
 
     const found = new Map<string, string>();

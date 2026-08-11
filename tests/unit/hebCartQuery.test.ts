@@ -125,13 +125,18 @@ function apolloState(html: string): Record<string, any> {
 }
 
 /** Project the captured cache through HEB_CART_QUERY's selection set — i.e.
- *  rebuild the response the gateway would have sent for our document. */
+ *  rebuild the response the gateway would have sent for our document.
+ *
+ *  `__typename: 'Cart'` is the union arm the captures themselves name: the
+ *  cache's `ROOT_QUERY.cartV2` points at a `Cart:…` key, which is Apollo saying
+ *  which of `CartResponse`'s two arms answered. */
 function cartResponseFrom(fixtureName: string): any {
   const state = apolloState(fixture(fixtureName));
   const cart = state[state.ROOT_QUERY.cartV2.__ref];
   return {
     data: {
       cartV2: {
+        __typename: 'Cart',
         id: cart.id,
         itemCount: { total: cart.itemCount.total },
         items: cart.items.map((ref: any) => {
@@ -247,6 +252,7 @@ describe('MEAL-14 unreadable carts never look like absent items', () => {
     ['the ABP interstitial served as 200 HTML', 'blocked', 200, '<html>Pardon Our Interruption…</html>'],
     ['a 500', 'http_error', 500, { data: null }],
     ['a GraphQL error', 'graphql_error', 200, { data: null, errors: [{ message: 'Cannot query field "cartV3"' }] }],
+    ['the union’s CartError arm', 'cart_error', 200, { data: { cartV2: { __typename: 'CartError', code: 'X', message: 'no' } } }],
     ['JSON that is not a cart', 'shape', 200, { data: { somethingElse: true } }],
     ['a null cart', 'shape', 200, { data: { cartV2: null } }],
     ['a body that is not JSON at all', 'shape', 200, 'not json'],
@@ -260,7 +266,7 @@ describe('MEAL-14 unreadable carts never look like absent items', () => {
 
   it('turns every read failure into `unknown`, never `missing`', () => {
     const target = { skuId: null, productId: LAVASH, name: 'Lavash' };
-    for (const reason of ['blocked', 'http_error', 'graphql_error', 'shape', 'network', 'timeout']) {
+    for (const reason of ['blocked', 'http_error', 'graphql_error', 'cart_error', 'shape', 'network', 'timeout']) {
       const conf = rail.confirm(target, null, { ok: false, reason, status: null });
       expect(conf.state).toBe('unknown');
       expect(conf.reason).toBe(reason);
@@ -609,6 +615,183 @@ describe('MEAL-16 the GraphQL error’s code and location', () => {
   it('survives a location with no column rather than printing "2:undefined"', () => {
     const snap = rail.parse(200, { data: null, errors: [{ message: 'x', locations: [{ line: 2 }] }] });
     expect(snap.loc).toBe('2:?');
+  });
+});
+
+// ── MEAL-16 Q1, answered: cartV2 is a UNION ───────────────────────────────────
+//
+// `CartResponse = Cart | CartError`. Our document selected fields straight off
+// the union, which is invalid against any schema, so the rail answered `unknown`
+// on every add of all six live runs. H-E-B named the type itself: rung 3 asked
+// for `cartV2 { zzzNotAField }` and got back `Cannot query field "zzzNotAField"
+// on type "CartResponse"`.
+//
+// The document is pinned in hebCartProbe.test.ts. These are the parse's half:
+// the error arm has to be READ, not merely selected, or the words H-E-B sends
+// with a refusal are thrown away as an odd shape.
+
+describe('MEAL-16 the union’s other arm', () => {
+  const rail = makeRail();
+  const target = { skuId: null, productId: LAVASH, name: 'Lavash' };
+
+  const CART_ERROR = {
+    data: {
+      cartV2: {
+        __typename: 'CartError',
+        code: 'CART_NOT_FOUND',
+        title: 'We could not find your cart',
+        message: 'Sign in and try again.',
+      },
+    },
+  };
+
+  it('is its own reason, not `shape`', () => {
+    // 'shape' means we could not make sense of the answer; this means we
+    // understood it perfectly and it was a refusal. The two send an
+    // investigation in opposite directions.
+    expect(rail.parse(200, CART_ERROR)).toMatchObject({
+      ok: false, reason: 'cart_error', status: 200, code: 'CART_NOT_FOUND',
+    });
+  });
+
+  it('keeps the words H-E-B sent with the refusal', () => {
+    expect(rail.parse(200, CART_ERROR).detail)
+      .toBe('CART_NOT_FOUND: We could not find your cart: Sign in and try again.');
+  });
+
+  it('caps them at the same 120 chars as every other detail', () => {
+    const long = { data: { cartV2: { __typename: 'CartError', code: 'X', message: 'y'.repeat(400) } } };
+    expect(rail.parse(200, long).detail).toHaveLength(120);
+  });
+
+  it('says nothing rather than "null: null" when the arm carries no words', () => {
+    expect(rail.parse(200, { data: { cartV2: { __typename: 'CartError' } } }).detail).toBeNull();
+  });
+
+  it('is `unknown` and never `missing` — a refusal is not an absent item', () => {
+    const conf = rail.confirm(target, rail.parse(200, cartResponseFrom(CART)), rail.parse(200, CART_ERROR));
+    expect(conf).toMatchObject({ state: 'unknown', reason: 'cart_error', code: 'CART_NOT_FOUND' });
+  });
+
+  it('reads a Cart arm exactly as it read a cart before the wrapper', () => {
+    const snap = rail.parse(200, cartResponseFrom(CART));
+    expect(snap).toMatchObject({ ok: true, itemCount: 2 });
+    expect(snap.lines).toHaveLength(2);
+  });
+
+  it('still reads a cart that names no arm at all', () => {
+    // Every committed capture and every payload in this file predates the
+    // wrapper. The discriminator decides the ERROR arm; it is not a new way for
+    // a cart with lines in it to fail.
+    const snap = rail.parse(200, { data: { cartV2: { id: 'c', itemCount: { total: 1 }, items: [] } } });
+    expect(snap).toMatchObject({ ok: true, cartId: 'c' });
+  });
+
+  it('reports an unrecognised arm as `shape`, which is the honest answer', () => {
+    expect(rail.parse(200, { data: { cartV2: { __typename: 'CartSomethingNew' } } }))
+      .toMatchObject({ ok: false, reason: 'shape' });
+  });
+});
+
+// ── MEAL-16: errors[0] was the wrong error ────────────────────────────────────
+//
+// The broken document drew FOUR errors on every production read. errors[0] —
+// `Field "cartV2" of type "Query" must have a selection of subfields` — names
+// the PARENT type and reads like a mangled-in-transit story; it is what five
+// runs of investigation chased. errors[1…] said `Cannot query field "id" on
+// type "CartResponse"` and answered the question outright, and nothing logged
+// it. It took a five-rung probe ladder to recover a string we already had.
+
+describe('MEAL-16 every error the gateway sent', () => {
+  const rail = makeRail();
+  const target = { skuId: null, productId: LAVASH, name: null };
+
+  /** The live 400, verbatim in shape: the red herring first, the answer second. */
+  const FOUR = {
+    data: null,
+    errors: [
+      {
+        message: 'Field "cartV2" of type "Query" must have a selection of subfields. Did you mean "cartV2 { ... }"?',
+        locations: [{ line: 2, column: 3 }],
+        extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
+      },
+      {
+        message: 'Cannot query field "id" on type "CartResponse".',
+        locations: [{ line: 3, column: 5 }],
+        extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
+      },
+      { message: 'Cannot query field "itemCount" on type "CartResponse".' },
+      { message: 'Cannot query field "items" on type "CartResponse".' },
+    ],
+  };
+
+  it('counts them on the snapshot, so the verdict says detail is one of four', () => {
+    expect(rail.parse(400, FOUR)).toMatchObject({ reason: 'graphql_error', errN: 4 });
+  });
+
+  it('carries the count onto the verdict beside the message it is a count of', () => {
+    expect(rail.confirm(target, null, rail.parse(400, FOUR)))
+      .toMatchObject({ state: 'unknown', reason: 'graphql_error', errN: 4 });
+  });
+
+  it('is null where there is no error to count', () => {
+    const full = cartResponseFrom(CART);
+    expect(rail.confirm(target, rail.parse(200, withoutProduct(full, LAVASH)), rail.parse(200, full)).errN).toBeNull();
+    expect(rail.confirm(target, null, rail.parse(403, {})).errN).toBeNull();
+  });
+
+  it('survives a withdrawn verdict, like every other diagnostic', () => {
+    const conf = rail.confirm(target, rail.parse(400, FOUR), rail.parse(200, cartResponseFrom(CART)));
+    expect(rail.contradicted(conf, 'contradicted_by_card')).toMatchObject({ reason: 'contradicted_by_card', errN: 4 });
+  });
+
+  it('puts ALL of them on the bridge — the line that would have ended this ticket on run 2', async () => {
+    const posted: any[] = [];
+    const { fn } = stubFetch(400, FOUR);
+    const rail2 = makeRail(fn, posted);
+    await rail2.read(1000);
+    const line = posted.find((m) => m.step === 'cart_query_errors');
+    expect(line).toMatchObject({ type: 'EXTRACT_DEBUG', n: 4, op: HEB_CART_OPERATION });
+    expect(line.errs.map((e: any) => e.msg)).toEqual(FOUR.errors.map((e) => e.message));
+    expect(line.errs[1]).toMatchObject({ loc: '3:5', code: 'GRAPHQL_VALIDATION_FAILED' });
+  });
+
+  it('gives each message 200 chars there, not the verdict’s 120', async () => {
+    // The live errors[0] is 97 characters — it clears the verdict's 120-char cap
+    // by 23, and the clause a validation error puts LAST is the field and type
+    // it is complaining about. The verdict line keeps its cap; the diagnostic
+    // line, which prints once per injection and is read by a human looking for
+    // exactly this, does not have to.
+    const long = 'z'.repeat(400);
+    const posted: any[] = [];
+    const { fn } = stubFetch(400, { data: null, errors: [{ message: long }] });
+    const rail2 = makeRail(fn, posted);
+    const snap = await rail2.read(1000);
+    expect(snap.detail).toHaveLength(120);
+    expect(posted.find((m) => m.step === 'cart_query_errors').errs[0].msg).toHaveLength(200);
+  });
+
+  it('logs them ONCE per injected script, not once per poll', async () => {
+    const posted: any[] = [];
+    const { fn } = stubFetch(200, { data: null, errors: [{ message: 'transient' }] });
+    const rail2 = makeRail(fn, posted);
+    await rail2.read(1000);
+    await rail2.read(1000);
+    expect(posted.filter((m) => m.step === 'cart_query_errors')).toHaveLength(1);
+  });
+
+  it('posts nothing at all when the read succeeded', async () => {
+    const posted: any[] = [];
+    const { fn } = stubFetch(200, cartResponseFrom(CART));
+    const rail2 = makeRail(fn, posted);
+    await rail2.read(1000);
+    expect(posted.find((m) => m.step === 'cart_query_errors')).toBeUndefined();
+  });
+
+  it('reads the cart normally on a surface with no bridge at all', async () => {
+    const { fn } = stubFetch(400, FOUR);
+    const rail2 = makeRail(fn);
+    expect(await rail2.read(1000)).toMatchObject({ reason: 'graphql_error', errN: 4 });
   });
 });
 
