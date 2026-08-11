@@ -284,7 +284,7 @@ in the cart after a reload.
 POST /abs/pub/erums/cartservice/api/v2/cart/items
      ?storeId=654&serviceType=Dug&zipCode=94611&cartCategoryList=1P,3P_MARKETPLACE,1P_Wine
 
-authorization: Bearer <window.AB.userInfo.SWY_SHOP_TOKEN>
+authorization: Bearer <the session's shop token — see the note below>
 ocp-apim-subscription-key: c645e9387c654aa8ae253045f648bfac
 content-type: application/json
 ocp-apim-trace: true
@@ -316,6 +316,20 @@ Read that against what this document previously asserted:
 | `serviceType=pickup` (what the anonymous curl probes guessed) | `serviceType=Dug` |
 | Param order unknown | `storeId, serviceType, zipCode, cartCategoryList` |
 | Body unknown — "do not invent it" | Above, verbatim. |
+
+**On that bearer — say exactly what was and was not measured.** The token in the
+accepted request came from the site's own add, captured with Copy-as-fetch; step B
+changed only the product id, so it re-sent the *captured* value. **Nobody compared
+it byte-for-byte with `window.AB.userInfo.SWY_SHOP_TOKEN`.** That the two are the
+same value is the bundle's claim (`getSWY_SHOP_TOKEN()` returns exactly that
+global, and the site's own chat widget labels it `okta_token`), and it now has
+independent support — probe 2 read the global and used it to reach the
+*application layer* (`400`, the status a real credential gets) where every bogus
+bearer got `403`. So the global demonstrably holds a token the origin treats as
+real. It is still an inference rather than an equality, and the whole "no Okta
+flow, ever" conclusion rests on it, so it is worth the one line it costs to
+settle: on the next run, log
+`capturedBearer === window.AB.userInfo.SWY_SHOP_TOKEN`.
 
 Two headers nobody predicted rode along: **`ocp-apim-trace: true`** and
 **`sort-order: date`**. Both look like a generic interceptor rather than anything
@@ -646,15 +660,21 @@ holds:
 
 | Credential | Same endpoint family |
 |---|---|
-| none / bogus / JWT-shaped-but-unsigned | `403`, byte-identical bodies |
+| **no** `Authorization` header at all | `401 "Not Authorized"` |
+| bogus, or JWT-shaped-but-unsigned | `403`, byte-identical bodies |
 | **a real `SWY_SHOP_TOKEN`** | **`400 Bad Request`** — past the filter, into the application layer |
 | a real token **plus a correct request** | **`200`** |
 
 A valid credential gets past the 403 filter and reaches the app tier, exactly as
 the correction above predicted. And the hypothesis in the last paragraph — that
-this is ordinary OAuth on a page-resident token — is confirmed: it is, and the
-list of extra gates it might have needed turned out to be empty apart from
-cookies, which remain untested.
+this is ordinary OAuth on a page-resident token — is confirmed.
+
+What is **not** confirmed is that nothing else is required. Four of the specific
+extra gates gap 1 named turned out to be absent (`slotsRequired`,
+`x-swy-client-id`, CSRF, `cartId`), and the token needs no write scope — but
+`ocp-apim-subscription-key` is measured as **required** (its absence is the `401`
+in the first table), `ocp-apim-trace` and `sort-order` rode along unclassified,
+and cookies are untested. "The bearer is the only remaining gate" stays withdrawn.
 
 *The `400` came from probe 2, which was **defective**: it derived `storeId` /
 `zipCode` from `ui.shopStoreId` / `ui.shopZipcode`, sent an empty `zipCode`, and
@@ -784,16 +804,19 @@ than vetoes it.
      the add path.)
    - **Write scope** — none. `scp` is the same for reads and writes.
 
-   **Residue, none of it blocking:**
-   - **`qty` semantics on a repeat add — absolute or additive?** The endpoint is
-     `POST /items` and the bundle calls it "add / **update** item", so `qty: 1`
-     sent twice for the same `itemId` may leave 1 or 2 in the cart. **Nothing
-     measured this**: the probe added one item once. This is the one piece of
-     residue that can produce a *wrong cart* rather than a failed call — a retry
-     after an ambiguous response, or two meals sharing an ingredient, lands
-     exactly here, and both directions violate the cart governing principles (add
-     what the user asked for, no more and no less). Measure it before any rail
-     retries anything: add the same id twice, then read the cart.
+   **Residue. One piece of it blocks, the rest do not:**
+   - **`qty` semantics on a repeat add — absolute or additive? BLOCKING for any
+     rail that can send the same `itemId` twice.** The endpoint is `POST /items`
+     and the bundle calls it "add / **update** item", so `qty: 1` sent twice may
+     leave 1 or 2 in the cart. **Nothing measured this**: the probe added one item
+     once. Every other unknown on this page produces a failed call you can see;
+     this one produces a *wrong cart* you cannot — and a retry after an ambiguous
+     response, or two meals sharing an ingredient, lands on it immediately. Both
+     possible answers break a cart governing principle (never over-add, never
+     under-add) if the rail assumes the other. It is cheap to settle — add the
+     same id twice, read the cart — and it must be settled before a rail retries
+     anything, which is why it is called out here rather than left as a detail of
+     the contract. Tracked with gap 6 below.
    - **Cookies.** Both the capture and the replay ran `credentials: 'include'`
      from the origin, so cookie *necessity* is untested. Free in a same-origin
      WebView; still not established.
@@ -826,7 +849,9 @@ than vetoes it.
    probe in gap 1. Tracked as **MEAL-115**.
 
    **Untouched by the 2026-08-11 measurement, and now the only gap that can sink
-   the rail.** One accepted add is not sustained load; if anything, closing gap 1
+   the rail outright** (gap 6 does not sink it — it constrains what the rail is
+   allowed to do until answered). One accepted add is not sustained load; if
+   anything, closing gap 1
    raises this one's urgency, because it removes the reason not to build and
    therefore brings forward the day we find out. Nothing below the "Closing the
    gap" heading measures it — it needs its own volume test.
@@ -848,6 +873,20 @@ than vetoes it.
    be prompted about. Re-reading the global before every call handles both this and
    the hydration case. See "What the real token turned out to say". Operational
    rather than existential — it shapes the rail, it does not veto it.
+
+6. **What `qty` means on a repeat add. Added 2026-08-11, and it is a correctness
+   prerequisite rather than a feasibility one.** `POST /items` is "add / **update**
+   item"; sending `qty: 1` twice for one `itemId` may leave 1 or 2 in the cart, and
+   nothing has measured which. Unlike everything else here, both answers *work* —
+   they just produce different carts, and a rail that assumes the wrong one
+   silently over- or under-adds. That is the failure the cart governing principles
+   exist to prevent, and it is invisible in a `200`.
+
+   **This does not gate whether the rail is buildable; it gates whether the rail
+   may retry, or add the same item from two meals, before it is answered.** Two
+   minutes on the next authenticated session settles it: add the same id twice,
+   read the cart. Cheaper than any of the alternatives, including finding out from
+   a user.
 
 ---
 
@@ -1027,7 +1066,8 @@ The honest deductions:
   assert" for what that canary has to cover to be worth anything.
 - **Nothing here is an argument for building the rail**, only that if we build it,
   it covers the family. *Updated 2026-08-11:* gap 1 (**MEAL-137**) is closed, so
-  **gap 4 (sustained load, MEAL-115) is now the sole gating risk** — and this
+  **gap 4 (sustained load, MEAL-115) is now the sole *feasibility* risk** — gap 6
+  (`qty` on a repeat) is a correctness prerequisite, not a feasibility one — and this
   section's own claim is untouched by that, because the family sweep is still
   unrun and the accepted write happened on exactly one banner.
 - **Keep the DOM rail.** Same conclusion as MEAL-12: this is an optimisation with a
@@ -1070,7 +1110,9 @@ anything — probe 2's search leg needs its params fixed and re-run; (5) when th
 token is actually readable after a load. Plus gap 1's residue: the add's **response
 body**, and whether `preferenceList` and cookies are required. Gap 4, sustained
 load, is **MEAL-115**, is not closed by any probe below, and after 2026-08-11 is
-the only remaining gap that can sink the rail — it needs its own volume test.
+the only remaining gap that can sink the rail outright — it needs its own volume
+test. Gap 6 (`qty` semantics) does not sink it but must be answered before a rail
+retries anything.
 
 **Probe status:** probe 1 — not run. Probe 2 — run 2026-08-11, **defective**, see
 its own note. Probe 3 — **run 2026-08-11, succeeded.**
@@ -1195,8 +1237,8 @@ that this document never named.
                        return { hasToken: !!t, len: t ? t.length : 0 }; };
   const t_immediate = snap();
 
-  const tok = ui.SWY_SHOP_TOKEN;
-  const sess = { hasToken: !!tok, tokenLen: tok ? tok.length : 0,
+  const tok_immediate = ui.SWY_SHOP_TOKEN;
+  const sess = { hasToken: !!tok_immediate, tokenLen: tok_immediate ? tok_immediate.length : 0,
                  customerId: ui.customerId, storeId: ui.storeId,
                  shopStoreId: ui.shopStoreId, shopZipcode: ui.shopZipcode,
                  banner: ui.banner, uuid: ui.UUID, tokenExpiration: ui.tokenExpiration };
@@ -1215,7 +1257,17 @@ that this document never named.
   // thing you do. If hasToken is false immediately after load and true 3s later,
   // gap 5 is confirmed and the rail needs a readiness wait.
 
-  if (!tok) return console.error('No SWY_SHOP_TOKEN. Everything below will 401 — sign in first (or it is still hydrating: wait and re-run).');
+  // RE-READ after the wait, and use THAT below. Reading once up top and gating on
+  // it down here would abort the whole probe in exactly the run this document
+  // asks for — the hard-reload one, where an absent-then-present token is the
+  // finding rather than a failure. Which is also the rail's rule: re-read, never
+  // cache. Note `ui` is captured, so re-read through window in case the object
+  // itself was replaced rather than filled in.
+  const ui2 = window.AB?.userInfo ?? ui;
+  const tok = ui2.SWY_SHOP_TOKEN;
+  if (!tok) return console.error('No SWY_SHOP_TOKEN, even 3s after load. Everything below would 401 — sign in first, or wait longer and re-run.');
+  if (!tok_immediate) console.warn('GAP 5 CONFIRMED: the token was ABSENT on the first read and present 3s later. ' +
+                                   'A rail must wait for hydration. Report this line.');
 
   // STORE CONTEXT. The 2026-08-11 run read ui.shopStoreId / ui.shopZipcode, which
   // appear to be absent or empty on a real userInfo — it sent zipCode= and its
@@ -1228,11 +1280,11 @@ that this document never named.
   //   generateCommonParams prefers it that way (quoted verbatim above).
   // HARD-CODE HERE if the log below shows undefined — that is the intended fix,
   // and reporting the KEYS line alongside what you hard-coded is the finding.
-  const storeId = ui.shopStoreId || ui.primaryStoreId || ui.storeId || ui.preferredStoreId;
-  const zip     = ui.shopZipcode || ui.zipCode || ui.zipcode || ui.postalCode;
-  const svc     = ui.serviceType || 'Dug';   // fallback value from the measured add; 'pickup' was the old guess
+  const storeId = ui2.shopStoreId || ui2.primaryStoreId || ui2.storeId || ui2.preferredStoreId;
+  const zip     = ui2.shopZipcode || ui2.zipCode || ui2.zipcode || ui2.postalCode;
+  const svc     = ui2.serviceType || 'Dug';   // fallback value from the measured add; 'pickup' was the old guess
   console.log('STORE CONTEXT:', { storeId, zip, serviceType: svc,
-                                  svcFromPage: !!ui.serviceType });
+                                  svcFromPage: !!ui2.serviceType });
   // Each leg is gated on what IT needs, not on the union: the cart read needs a
   // zip and search does not, and aborting the whole probe over a missing zip is
   // how a run comes back with gap 3 still unmeasured.
@@ -1266,7 +1318,7 @@ that this document never named.
   // /cart/customer/undefined — the same uninterpretable-refusal trap as an empty
   // query param, and harder to spot. Guarded with the rest. (It was populated on
   // 2026-08-11; the field name is still only observed once.)
-  const custId = ui.customerId || ui.customerID || ui.guid;
+  const custId = ui2.customerId || ui2.customerID || ui2.guid;
   if (!storeId || !zip || !custId) {
     console.error('CART READ skipped — unresolved:',
                   [!storeId && 'storeId', !zip && 'zipCode', !custId && 'customerId']
@@ -1308,14 +1360,20 @@ that this document never named.
   } else {
   // `channel` is the bundle's `fulfillmentType`, a different param from the cart's
   // `serviceType`, and NOTHING has verified its accepted values. 'pickup' is the
-  // original guess; 'Dug' is what the cart path turned out to want; ui.serviceType
+  // original guess; 'Dug' is what the cart path turned out to want; ui2.serviceType
   // is whatever the page itself thinks. Try all three, deduped.
   for (const channel of [...new Set(['pickup', 'Dug', svc])]) {
     const sQs = new URLSearchParams({
       pageurl: base, url: base, 'request-id': String(Date.now()), pagename: 'search',
       rows: '5', start: '0', 'search-type': 'keyword', storeid: storeId,
       q: 'tortillas', dvid: 'GhXAoLXN-ss-search', channel,
-      uuid: ui.UUID ?? '', featured: 'false', banner: ui.banner ?? '', includeOffer: 'true' });
+      // `||`, not `??`, for the same reason as the store context above: an empty
+      // string here would be sent as a real value and its 400 misattributed to
+      // storeid. Both were populated on 2026-08-11, so a miss is itself news.
+      uuid: ui2.UUID || '', featured: 'false', banner: ui2.banner || location.hostname.split('.')[1] || '',
+      includeOffer: 'true' });
+    if (!ui2.UUID || !ui2.banner) console.warn('SEARCH: uuid/banner missing from userInfo —', 
+      { uuid: ui2.UUID, banner: ui2.banner }, '— a 400 may be this, not storeid or channel.');
     const t0 = performance.now();
     try {
       const sr = await fetch(`/abs/pub/xapi/search/products?${sQs}`, {
@@ -1341,7 +1399,8 @@ that this document never named.
 |---|---|
 | `hasToken: true` with a long token, and a real `customerId` | **The core premise is confirmed** — and was, on 2026-08-11. The session is readable in-page; no Okta flow needed, ever. Note `shopStoreId` is **not** part of this signal: it may well come back `undefined`, which is a finding about the field name and not a failure. The `STORE CONTEXT` line is where to look for that. |
 | `TOKEN READINESS` differs between the immediate read and the 3s read | **Gap 5 confirmed.** The rail needs a hydration wait, not a single read. Record how long it took. |
-| `STORE CONTEXT` shows `undefined` and the probe aborts | **A result, not a failed run** — and the most useful one available, because it means the field names in this document are wrong and the `KEYS` dump has the right ones. Read `storeId`/`zipCode` off the `KEYS` line or off a real cart request in the Network tab, hard-code them, re-run. Report both the KEYS line and what you hard-coded. |
+| `STORE CONTEXT` shows `undefined` and a leg logs "skipped" | **A result, not a failed run** — and the most useful one available, because it means the field names in this document are wrong and the `KEYS` dump has the right ones. Each leg skips independently: a missing zip costs you the cart read only, a missing `storeId` costs you both. Read the values off the `KEYS` line or off a real cart request in the Network tab, hard-code them, re-run. Report the KEYS line **and** what you hard-coded. |
+| `GAP 5 CONFIRMED` in the log | The token was absent on the first read and present 3s later — **the finding this probe exists for**, and only visible on a hard-reload run. The probe continues rather than aborting, so the rest of the run is still valid. Report the line verbatim. |
 | `TOKEN READINESS` identical, both `hasToken: true` | Inconclusive, **not** a refutation — you are on a settled tab. Hard-reload and re-run as the first action to actually test this. |
 | `window.AB.userInfo missing` | You are on `/erums/cart` or another sub-app rather than the storefront. Go to the banner homepage and retry. Not a negative result. Note the cart page *does* carry the token globals, but not the config blobs. |
 | **CART READ `200` + JSON containing your hand-added item** | **The read half works** — this is what the 2026-08-11 run failed to get, from its own bug. Note it is *not* what closes gap 1: a read is not a write. Gap 1 was closed by probe 3. |

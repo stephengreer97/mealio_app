@@ -207,8 +207,12 @@ export function albertsonsSearchQuery(name: string): string {
 //      every time we inject early). It moves the race, it does not remove it.
 //   2. We had never observed it populated, and now we have — but not the part
 //      that matters here. UPDATED 2026-08-11 (MEAL-137): the logged-in probe was
-//      run, and on a settled signed-in safeway.com tab the property IS non-empty
-//      — an in-page fetch carrying it performed a real add and got 200. What is
+//      run, and on a settled signed-in safeway.com tab the property IS non-empty.
+//      An in-page fetch reading it reached the cart service's application layer
+//      (a 400, where every bogus bearer got a 403), so the value is a credential
+//      the origin treats as real. Note the separate add-to-cart that returned 200
+//      in that session replayed a bearer CAPTURED from the site's own request —
+//      nobody has yet compared the two values byte for byte. What is
 //      still unobserved is everything this check actually turns on: the value
 //      DURING the hydration window (nobody has captured the immediate-vs-delayed
 //      read), what it holds for a guest (initSearchConfig ships
