@@ -162,7 +162,7 @@ interface StubResponse {
 async function runLadder(
   answer: (call: { url: string; init: any; index: number }) => StubResponse | Promise<StubResponse> | never,
   opts: { noBridge?: boolean; runTwice?: boolean; id?: string } = {}
-): Promise<{ posted: any[]; calls: { url: string; init: any }[] }> {
+): Promise<{ posted: any[]; calls: { url: string; init: any }[]; sandbox: Record<string, unknown> }> {
   const posted: any[] = [];
   const calls: { url: string; init: any }[] = [];
   let done: () => void = () => {};
@@ -219,7 +219,7 @@ async function runLadder(
   } finally {
     if (bail) clearTimeout(bail);
   }
-  return { posted, calls };
+  return { posted, calls, sandbox };
 }
 
 const GQL_ERROR = JSON.stringify({
@@ -269,8 +269,11 @@ describe('running the ladder', () => {
     const { posted } = await runLadder(() => ({ status: 400, body: GQL_ERROR }));
     const rungs = posted.filter((m) => m.step === 'cart_query_probe');
     expect(rungs.map((m) => m.probe)).toEqual(HEB_CART_PROBES.map((p) => p.name));
+    // The done line says one thing: the ladder reached its own last statement.
+    // A truncated one is diagnosed by this line's ABSENCE beside however many
+    // rung lines carry its id.
     expect(posted[posted.length - 1]).toMatchObject({
-      step: 'cart_query_probe_done', ran: HEB_CART_PROBES.length, of: HEB_CART_PROBES.length,
+      step: 'cart_query_probe_done', rungs: HEB_CART_PROBES.length,
     });
     for (const m of rungs) expect(m.type).toBe('EXTRACT_DEBUG');
   });
@@ -360,7 +363,7 @@ describe('running the ladder', () => {
     expect(posted[1].err).toContain('Network request failed');
     expect(posted[1].status).toBeNull();
     expect(posted[2].status).toBe(400);
-    expect(posted[posted.length - 1].ran).toBe(HEB_CART_PROBES.length);
+    expect(posted[posted.length - 1].step).toBe('cart_query_probe_done');
   });
 
   it('survives a body that is not JSON at all', async () => {
@@ -394,6 +397,25 @@ describe('running the ladder', () => {
     const { posted, calls } = await runLadder(() => ({ status: 400, body: GQL_ERROR }), { runTwice: true });
     expect(calls).toHaveLength(HEB_CART_PROBES.length);
     expect(posted.filter((m) => m.probeId === 'p2')).toEqual([]);
+  });
+
+  it('lets the NEXT ladder run in the same document once it has finished', async () => {
+    // The guard means "a ladder is running here", not "a ladder has run here".
+    // With spaSearch the homepage → /search → /search transitions all stay in one
+    // document, so a flag that stuck would make every ladder after the first
+    // inert — sending nothing, posting nothing, and burning the retry budget.
+    const { posted, calls, sandbox } = await runLadder(() => ({ status: 400, body: GQL_ERROR }));
+    expect(calls).toHaveLength(HEB_CART_PROBES.length);
+    await new Promise<void>((r) => {
+      (sandbox.window as any).ReactNativeWebView.postMessage = (str: string) => {
+        const m = JSON.parse(str);
+        posted.push(m);
+        if (m.step === 'cart_query_probe_done') r();
+      };
+      vm.runInNewContext(buildHebCartProbeScript('p2'), sandbox);
+    });
+    expect(calls).toHaveLength(HEB_CART_PROBES.length * 2);
+    expect(posted.filter((m) => m.probeId === 'p2' && m.step === 'cart_query_probe')).toHaveLength(HEB_CART_PROBES.length);
   });
 
   it('does nothing at all without the bridge', async () => {

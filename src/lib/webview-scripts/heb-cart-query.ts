@@ -1185,9 +1185,17 @@ const HEB_CART_PROBE_HEADERS = ['server', 'via', 'x-cache', 'age', 'content-type
  * So the document itself holds the flag. That is a global on H-E-B's origin, and
  * the module header argues against leaving one — but that argument is about the
  * RAIL, which runs on every add and carries our operation name. This is one
- * neutral boolean set once per page by a diagnostic, named exactly like
- * `window.__hebLoginCheckActive`, which `CHECK_LOGIN_SCRIPT` has been setting on
- * heb.com since long before this ticket. Nothing about it says Mealio.
+ * neutral boolean, named exactly like `window.__hebLoginCheckActive`, which
+ * `CHECK_LOGIN_SCRIPT` has been setting on heb.com since long before this ticket.
+ * Nothing about it says Mealio.
+ *
+ * RELEASED when the ladder finishes, like that precedent and unlike a latch. It
+ * means "a ladder is running here", not "a ladder has run here": with
+ * `spaSearch: true` the homepage → /search → /search transitions all stay in one
+ * document, so a flag that stuck would make every ladder after the first inert
+ * for the rest of the run — burning the retry budget on injections that send
+ * nothing and post nothing. The native side owns how MANY ladders run; this owns
+ * only that no two overlap.
  */
 const HEB_CART_PROBE_GUARD = '__hebCartProbeActive';
 
@@ -1208,11 +1216,14 @@ const HEB_CART_PROBE_GUARD = '__hebCartProbeActive';
  */
 export function buildHebCartProbeScript(id: string): string {
   return `(async function() {
+  // Set OUTSIDE the try whose finally releases it, so an injection that lands
+  // while a ladder is running returns without ever reaching that finally — a
+  // release from the second script would unlock the document under the first.
+  if (typeof window === 'undefined' || !window || !window.ReactNativeWebView) return;
+  // One ladder per document — see HEB_CART_PROBE_GUARD.
+  if (window.${HEB_CART_PROBE_GUARD}) return;
+  window.${HEB_CART_PROBE_GUARD} = true;
   try {
-    if (typeof window === 'undefined' || !window || !window.ReactNativeWebView) return;
-    // One ladder per document — see HEB_CART_PROBE_GUARD.
-    if (window.${HEB_CART_PROBE_GUARD}) return;
-    window.${HEB_CART_PROBE_GUARD} = true;
     var __ID = ${JSON.stringify(id)};
     var __post = function(o) {
       o.probeId = __ID;
@@ -1253,7 +1264,6 @@ export function buildHebCartProbeScript(id: string): string {
       return parts.join(',');
     }
 
-    var ran = 0;
     for (var i = 0; i < __PROBES.length; i++) {
       var p = __PROBES[i];
       var line = {
@@ -1312,10 +1322,14 @@ export function buildHebCartProbeScript(id: string): string {
       } finally {
         if (timer) clearTimeout(timer);
       }
-      ran++;
       __post(line);
     }
-    __post({ type: 'EXTRACT_DEBUG', step: 'cart_query_probe_done', ran: ran, of: __PROBES.length });
+    // The done line says ONE thing: this ladder reached its own last statement.
+    // It cannot report a partial run — every rung posts from inside the loop, so
+    // reaching here means all of them did. A truncated ladder is diagnosed by
+    // this line's ABSENCE next to however many rung lines carry its probeId,
+    // which is exactly how the native side reads it.
+    __post({ type: 'EXTRACT_DEBUG', step: 'cart_query_probe_done', rungs: __PROBES.length });
   } catch (e) {
     try {
       window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -1323,6 +1337,10 @@ export function buildHebCartProbeScript(id: string): string {
         detail: String((e && e.message) || e || '').slice(0, 200)
       }));
     } catch (e2) {}
+  } finally {
+    // Released so a later injection into this SAME document can run a fresh
+    // ladder — with spaSearch the whole run can happen in one document.
+    try { window.${HEB_CART_PROBE_GUARD} = false; } catch (e3) {}
   }
 })(); true;`;
 }

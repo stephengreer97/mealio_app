@@ -111,6 +111,19 @@ function ladderFinished(n = probeInjections().length - 1) {
   });
 }
 
+/** The before-cart snapshot answering. This is NOT optional scaffolding: it is
+ *  what moves the run out of 'searching' and into the add strategies, and a test
+ *  that never sends it pins the step at a value the real run leaves in
+ *  milliseconds — which is how an earlier revision of this file passed while the
+ *  ladder was unreachable on every page after the first. */
+function cartCounted(count = 0) {
+  act(() => {
+    mainWebView().onMessage({
+      nativeEvent: { data: JSON.stringify({ type: 'CART_COUNT', count, items: [], url: 'https://www.heb.com/cart' }) },
+    });
+  });
+}
+
 /** Render the H-E-B sheet and drive it to the first page load after login. */
 function runToFirstLoad(url = 'https://www.heb.com/cart') {
   const view = render(
@@ -155,6 +168,7 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
     await armRail();
     runToFirstLoad();
     ladderFinished();
+    cartCounted();
     load('https://www.heb.com/product-detail/tortillas/1234');
     load('https://www.heb.com/');
     // The whole reason the latch is native: #110's in-page one reset on every
@@ -166,6 +180,9 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
     await armRail();
     runToFirstLoad(); // /cart
     ladderFinished();
+    // The before-count lands and the run moves on to its add strategy, which is
+    // where every remaining page load of a real run happens.
+    cartCounted();
     load('https://www.heb.com/search?q=sour+cream');
     // Where the rail's own reads actually happen. Candidate A includes a
     // page-level fetch wrapper, which is per-document, so /cart answering
@@ -176,22 +193,28 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
     expect(probeInjections()).toHaveLength(2);
   });
 
-  it('does not stack a second ladder on the same page as one still in flight', async () => {
+  it('retries on /cart\'s own re-render, which arrives at the IDENTICAL url', async () => {
     await armRail();
     runToFirstLoad(); // /cart, ladder injected, nothing back yet
-    // H-E-B re-renders /cart a beat after load and the dedup above deliberately
-    // lets those same-URL loads through while the count probe is pending. Two
-    // ladders in one JS context would put concurrent CartLinesAlt requests on the
-    // wire — the shape the ladder is sequential to avoid.
+    // H-E-B re-renders /cart a beat after load — the dedup above deliberately
+    // lets those same-URL loads through while the count probe is pending — and
+    // that re-render is what kills injected scripts there. So the same URL has to
+    // be a retry, not a suppression: it is the one page the retry exists for.
+    // Two ladders alive at once is prevented in the DOCUMENT, not here; see
+    // 'runs ONE ladder per document' in tests/unit/hebCartProbe.test.ts.
+    load('https://www.heb.com/cart');
+    expect(probeInjections()).toHaveLength(2);
+    // …and the budget still stops it, however many times the page re-renders.
     load('https://www.heb.com/cart');
     load('https://www.heb.com/cart');
-    expect(probeInjections()).toHaveLength(1);
+    expect(probeInjections()).toHaveLength(3);
   });
 
   it('retries a killed SEARCH-page ladder — completion retires the clause, not injection', async () => {
     await armRail();
     runToFirstLoad(); // /cart
     ladderFinished();
+    cartCounted();
     load('https://www.heb.com/search?q=a'); // injected, then killed by the next nav
     load('https://www.heb.com/search?q=b');
     expect(probeInjections()).toHaveLength(3);
@@ -203,6 +226,7 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
   it('does not spend the run\'s only shot on a page that killed the ladder', async () => {
     await armRail();
     runToFirstLoad(); // injected, but no cart_query_probe_done ever comes back
+    cartCounted();
     load('https://www.heb.com/product-detail/tortillas/1234');
     expect(probeInjections()).toHaveLength(2);
   });
@@ -210,6 +234,7 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
   it('stops retrying after three ladders, however many pages load', async () => {
     await armRail();
     runToFirstLoad();
+    cartCounted();
     for (const u of ['/a', '/b', '/c', '/d', '/e']) load('https://www.heb.com' + u);
     // Nothing ever reports done, so every load is a retry candidate — and the
     // bound is what keeps a page that reloads in a loop from turning a

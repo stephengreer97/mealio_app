@@ -611,6 +611,19 @@ export default function WebViewCartSheet({
   // identified, because the retry means more than one can be outstanding and a
   // done line has to retire the ladder that sent it and no other.
   const hebCartProbeLaddersRef = useRef<{ id: string; url: string; search: boolean; done: boolean }[]>([]);
+  /**
+   * Steps at which a page load is NOT part of a running H-E-B cart.
+   *
+   * 'qty' is before the user has committed; 'login'/'login_check' are before
+   * there is a session worth reading a cart with, and a ladder there would
+   * measure a logged-out gateway and read as a finding; 'robot_challenge' is a
+   * wall the user is being asked to clear, which is the last moment to add
+   * automated traffic; 'done' and the two review steps are after the run.
+   * Everything else — 'searching' and 'adding' — is the run.
+   */
+  const HEB_CART_PROBE_IDLE_STEPS = new Set<Step>([
+    'qty', 'login', 'login_check', 'robot_challenge', 'searchResult', 'review', 'done',
+  ]);
   // Worst case 3 ladders × 5 reads = 15 requests, and only on a run that keeps
   // killing them; the ordinary shape is two (the cart page, then the first
   // search page). Against ~18-36 cart reads in the same run this is
@@ -2526,7 +2539,15 @@ export default function WebViewCartSheet({
     const hebCartProbeLadders = hebCartProbeLaddersRef.current;
     if (
       lockedStoreIdRef.current === 'heb' &&
-      stepRef.current === 'searching' &&
+      // The run is under way and past the login gate — NOT `step === 'searching'`,
+      // which is a window a few milliseconds wide. `beginSearchFlow` sets
+      // 'searching' and then routes straight into `presearch`/`parallelAdd`, both
+      // of which call setStep('adding') synchronously, so every page load after
+      // the before-cart snapshot — the search pages included, i.e. the reading
+      // this ladder most wants — arrives at 'adding'. Naming the steps that are
+      // NOT a running H-E-B run is the version of this that cannot go stale the
+      // next time a strategy adds a step of its own.
+      !HEB_CART_PROBE_IDLE_STEPS.has(stepRef.current) &&
       // NOT s.domain: that gate is a substring test (see the note at the top of
       // this callback), so `accounts.heb.com/authorize` satisfies it — and the
       // ladder POSTs to a SAME-ORIGIN path, so it would send all five rungs to
@@ -2537,13 +2558,6 @@ export default function WebViewCartSheet({
       // traffic on a device where the rail itself is disabled.
       hebCartQueryEnabled() &&
       hebCartProbeLadders.length < HEB_CART_PROBE_MAX_TRIES &&
-      // Not onto a page that already has a ladder we have not heard back from.
-      // H-E-B re-renders /cart a beat after load and the dedup above deliberately
-      // lets those same-URL loads through while a cart-count probe is pending, so
-      // without this the run spends its whole budget on /cart and the search-page
-      // rung never runs. The in-page guard would keep the extra injections inert,
-      // but inert is not free — each one still costs a try.
-      !hebCartProbeLadders.some((l) => !l.done && l.url === url) &&
       (
         // The first qualifying page of the run, whatever it is.
         hebCartProbeLadders.length === 0 ||
@@ -2557,7 +2571,10 @@ export default function WebViewCartSheet({
         // and for SPA route changes that never replace the document, so neither
         // "same URL" nor "different URL" says whether the previous ladder is still
         // running. The document itself carries the interlock — see
-        // HEB_CART_PROBE_GUARD — and a suppressed injection simply posts nothing.
+        // HEB_CART_PROBE_GUARD — and an injection that lands while one is running
+        // simply returns, posting nothing. That is why there is no same-URL rule
+        // here: /cart's re-render fires onLoadEnd at the IDENTICAL url, and it is
+        // the one page the retry was built for.
         !hebCartProbeLadders.some((l) => l.done) ||
         // And once COMPLETED on a SEARCH page, because that is where the rail's
         // own reads actually happen. Candidate A includes a page-level fetch
