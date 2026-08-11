@@ -610,10 +610,15 @@ export default function WebViewCartSheet({
   // spent the run's only shot on a document that died.
   /** Ladders injected this run. Hard bound — see HEB_CART_PROBE_MAX_TRIES. */
   const hebCartProbeTriesRef = useRef(0);
+  /** The ladder we injected and have not heard back from, and the page it went
+   *  onto. Cleared by its own `cart_query_probe_done`, or when a different page
+   *  loads — which is what says the document it was running on is gone. */
+  const hebCartProbeInflightRef = useRef<{ url: string; search: boolean } | null>(null);
   /** A `cart_query_probe_done` has come back, i.e. some ladder ran end to end. */
-  const hebCartProbeDoneRef = useRef(false);
-  /** One of them ran on a search page, where the rail's own reads happen. */
-  const hebCartProbeSearchRef = useRef(false);
+  const hebCartProbeRanRef = useRef(false);
+  /** One of the COMPLETED ones ran on a search page, where the rail's own reads
+   *  happen. Completed, not merely injected: a killed ladder answered nothing. */
+  const hebCartProbeSearchRanRef = useRef(false);
   // Worst case 3 ladders × 5 reads = 15 requests, and only on a run that keeps
   // killing them; the ordinary shape is two (the cart page, then the first
   // search page). Against ~18-36 cart reads in the same run this is
@@ -1545,8 +1550,9 @@ export default function WebViewCartSheet({
       reconcileFinalizedRef.current = false;
       cartProbeRetriedRef.current = false;
       hebCartProbeTriesRef.current = 0;
-      hebCartProbeDoneRef.current = false;
-      hebCartProbeSearchRef.current = false;
+      hebCartProbeInflightRef.current = null;
+      hebCartProbeRanRef.current = false;
+      hebCartProbeSearchRanRef.current = false;
       parallelOriginalTotalRef.current = 0;
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
@@ -2541,28 +2547,43 @@ export default function WebViewCartSheet({
       // traffic on a device where the rail itself is disabled.
       hebCartQueryEnabled() &&
       hebCartProbeTriesRef.current < HEB_CART_PROBE_MAX_TRIES &&
+      // NOT WHILE ONE IS IN FLIGHT ON THIS SAME PAGE. The dedup above deliberately
+      // lets same-URL loads through while a cart-count probe is pending, because
+      // H-E-B re-renders /cart a beat after load — and it does that "while the
+      // injected script is still running". So a second ladder here could be two
+      // ladders in ONE JS context, putting concurrent CartLinesAlt requests on the
+      // wire: precisely the shape the ladder is sequential to avoid, and the one
+      // that could make the discriminator report the minimal rung's answer.
+      // A DIFFERENT url means that document is gone and its ladder with it, so the
+      // marker is cleared below and the retry is allowed.
+      hebCartProbeInflightRef.current?.url !== url &&
       (
         // The first qualifying page of the run, whatever it is.
         hebCartProbeTriesRef.current === 0 ||
-        // A ladder that never reported `cart_query_probe_done` was cut short by a
-        // navigation — H-E-B re-renders the cart page a beat after load and kills
-        // injected scripts there (see the count-script note above), so the normal
-        // path is the likely one to lose it. Retry on the next page rather than
-        // spending the run's only shot on a document that did not survive.
-        !hebCartProbeDoneRef.current ||
-        // And once on a SEARCH page even after a complete run, because that is
-        // where the rail's own reads actually happen. Candidate A includes a
-        // page-level fetch wrapper, which is per-document: a clean ladder from
-        // /cart cannot retire it, and /cart answering differently from /search
-        // would be that candidate with a mechanism attached.
-        (onSearchPageRef.current && !hebCartProbeSearchRef.current)
+        // No ladder has yet reported `cart_query_probe_done`, so none has survived
+        // the page it ran on. Retry rather than spending the run's only shot on a
+        // document that died.
+        !hebCartProbeRanRef.current ||
+        // And once COMPLETED on a SEARCH page, because that is where the rail's
+        // own reads actually happen. Candidate A includes a page-level fetch
+        // wrapper, which is per-document: a clean ladder from /cart cannot retire
+        // it, and /cart answering differently from /search would be that candidate
+        // with a mechanism attached. Keyed on completion and not on injection —
+        // a search-page ladder that was killed has answered nothing, and retiring
+        // the clause on it would lose the ticket's most valuable reading.
+        (onSearchPageRef.current && !hebCartProbeSearchRanRef.current)
       )
     ) {
       hebCartProbeTriesRef.current += 1;
-      if (onSearchPageRef.current) hebCartProbeSearchRef.current = true;
+      hebCartProbeInflightRef.current = { url, search: onSearchPageRef.current };
       console.log(`[Cart ${ts()}]`, 'MEAL-16 cart-query probe ladder — injecting, try',
         hebCartProbeTriesRef.current, 'search=', onSearchPageRef.current, 'on', url);
       webviewRef.current?.injectJavaScript(buildHebCartProbeScript());
+    } else if (hebCartProbeInflightRef.current && hebCartProbeInflightRef.current.url !== url) {
+      // The page the in-flight ladder was running on is gone, and it never
+      // reported. Drop the marker so the NEXT page is a retry rather than being
+      // suppressed by a ladder that no longer exists.
+      hebCartProbeInflightRef.current = null;
     }
     if (loadQueueRef.current.length > 0) {
       const script = loadQueueRef.current.shift()!;
@@ -3277,8 +3298,14 @@ export default function WebViewCartSheet({
           }
           // MEAL-16: a ladder that reached its own last line. This is the only
           // evidence that one ran end to end rather than being cut off by a
-          // navigation, and it is what stops the retry in onLoadEnd.
-          if (msg.step === 'cart_query_probe_done') hebCartProbeDoneRef.current = true;
+          // navigation, and it is what stops the retry in onLoadEnd. The
+          // search-page clause is retired HERE, off the in-flight record, so it
+          // is retired by a ladder that answered and never by one that was killed.
+          if (msg.step === 'cart_query_probe_done') {
+            hebCartProbeRanRef.current = true;
+            if (hebCartProbeInflightRef.current?.search) hebCartProbeSearchRanRef.current = true;
+            hebCartProbeInflightRef.current = null;
+          }
           return;
         }
 

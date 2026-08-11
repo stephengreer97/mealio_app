@@ -164,6 +164,30 @@ describe('the MEAL-16 probe ladder reaches the WebView', () => {
     expect(probeInjections()).toHaveLength(2);
   });
 
+  it('does not stack a second ladder on the same page as one still in flight', async () => {
+    await armRail();
+    runToFirstLoad(); // /cart, ladder injected, nothing back yet
+    // H-E-B re-renders /cart a beat after load and the dedup above deliberately
+    // lets those same-URL loads through while the count probe is pending. Two
+    // ladders in one JS context would put concurrent CartLinesAlt requests on the
+    // wire — the shape the ladder is sequential to avoid.
+    load('https://www.heb.com/cart');
+    load('https://www.heb.com/cart');
+    expect(probeInjections()).toHaveLength(1);
+  });
+
+  it('retries a killed SEARCH-page ladder — completion retires the clause, not injection', async () => {
+    await armRail();
+    runToFirstLoad(); // /cart
+    ladderFinished();
+    load('https://www.heb.com/search?q=a'); // injected, then killed by the next nav
+    load('https://www.heb.com/search?q=b');
+    expect(probeInjections()).toHaveLength(3);
+    // …and once one of them answers, the clause is spent.
+    ladderFinished();
+    expect(probeInjections()).toHaveLength(3);
+  });
+
   it('does not spend the run\'s only shot on a page that killed the ladder', async () => {
     await armRail();
     runToFirstLoad(); // injected, but no cart_query_probe_done ever comes back
