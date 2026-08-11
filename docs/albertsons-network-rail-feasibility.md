@@ -6,8 +6,11 @@
 Everything in the 2026-08-06 version of this document was anonymous and every
 measurement in it was a *refusal*; probe 3 has now been run on a signed-in
 `www.safeway.com` session and the platform accepted an add-to-cart. The rail is
-**estimable**. It is not unblocked: gap 4 (sustained load, **MEAL-115**) is
-untouched by that measurement and still gates it on its own.
+**estimable**. It is not unblocked, on two counts: gap 4 (sustained load,
+**MEAL-115**) is untouched by that measurement and still gates it on its own, and
+**gap 6 — what `qty` means on a repeat add — is unmeasured and unticketed.** Gap 6
+does not decide whether the rail can be built; it decides whether the rail may
+retry or add the same item twice without silently producing a wrong cart.
 **Timebox:** 1 day (spike — findings, not shipped code).
 
 > ### Corrected 2026-08-11 — probe 3 was run, and it overturns the contract
@@ -24,7 +27,8 @@ untouched by that measurement and still gates it on its own.
 > | **The add-path headers** | **Wrong.** `buildHeadersWithToken` — "the load-bearing piece" — is **not** the builder `/items` uses. `slotsRequired` and `x-swy-client-id` are **not sent at all** on a real add. |
 > | **The add-path query params** | **Wrong.** `generateCommonParams` always sets `expressChk=true`; the real add sends **no `expressChk`, no `tax`, no `sellerId`, and no `cartId`**. `serviceType` is `Dug`, not the `pickup` the anonymous probes used. |
 > | **The `/items` body** | **Recovered.** It is no longer "do not invent it" — it is measured, below. |
-> | **Gap 1** | **Closed**, with named residue (cookie necessity, `preferenceList`, the response *body* shape). The 403 wall is confirmed as an auth-*presence* filter: with a real bearer the same endpoint family returns `400`, not `403`. |
+> | **Gap 1** | **Closed**, with named residue — cookie necessity, `preferenceList`, the response *body* shape, and **`qty` on a repeat add**, which is the one that can produce a wrong cart rather than a visible failure (gap 6). |
+> | **The 403 wall** | **The 2026-08-06 model is *disconfirmed*, not confirmed.** That model said the filter branches on the mere *presence* of a Bearer. A real bearer gets `400` where a bogus one gets `403` — so the filter reads the token and tells valid from invalid. It validates. |
 > | **Gap 5** | **Sharpened, not closed.** Hydration timing is still unmeasured, but the captured JWT gives a hard number: **45-minute lifetime**, silently refreshed off `offline_access`, **not store- or banner-bound**, no write scope. |
 > | **Gap 3 (the search tarpit)** | **Narrowed.** Product search does **not** hang in-page — it answered `400` promptly from a signed-in tab where plain `curl` never gets a byte. But no client has yet seen a search `200`, so the rail's search half is still unproven. |
 > | **Rail shape** | **New constraint.** The SPA does not observe an API add — the cart badge did not move until reload. Any post-add check that reads the DOM returns a **false negative**. |
@@ -655,6 +659,11 @@ credential**, not one verifying signature, expiry or audience. So the split tell
 us the string is being *looked at*, and nothing about what happens when it is
 *correct*.
 
+> **⚠️ Disconfirmed 2026-08-11 — read the subsection immediately below before
+> using this paragraph.** A real token gets a `400` where a bogus one gets `403`,
+> which a presence-only filter cannot do. The origin validates. The reasoning here
+> was sound on the evidence it had; the evidence was one-sided.
+
 **Withdrawn: "the bearer is the only remaining gate."** It is *a* gate. Whether it
 is the last one is unmeasured — see gap 1. The rail may still need `slotsRequired`,
 `x-swy-client-id`, cookies, a CSRF token, an owned `cartId`, or a token with the
@@ -666,11 +675,11 @@ see our requests. It is *plausibly* gated by ordinary OAuth on a token that live
 in the page — but that is a hypothesis about acceptance drawn entirely from
 refusals, and refusals do not license it.
 
-#### Confirmed 2026-08-11 — from the other side of the wall
+#### Measured 2026-08-11 — and the model above is *wrong*
 
-The inference above ("a filter branching on the *presence* of a Bearer") was drawn
-from byte-identical 403s. It is now measured from inside a real session, and it
-holds:
+The inference above — "a filter branching on the **presence** of a Bearer, not one
+verifying signature, expiry or audience" — was drawn from byte-identical 403s, and
+a real session refutes it. Read the last two rows against the first two:
 
 | Credential | Same endpoint family | Measured from |
 |---|---|---|
@@ -682,9 +691,24 @@ holds:
 Only the bottom two rows are new. The top two are the 2026-08-06 transcript,
 repeated here because the comparison is the whole point.
 
-A valid credential gets past the 403 filter and reaches the app tier, exactly as
-the correction above predicted. And the hypothesis in the last paragraph — that
-this is ordinary OAuth on a page-resident token — is confirmed.
+**A presence-only filter cannot produce this table.** If the gate branched merely
+on a `Bearer` being present, a real token would have got the same `403` a bogus
+one gets — it is just as present. It gets `400` instead, which means the gate read
+the token and told valid from invalid. **The origin validates.** The 2026-08-06
+inference is disconfirmed, and this document had it backwards in an earlier
+2026-08-11 draft too, which called the same table a *confirmation* of the presence
+model.
+
+What *does* survive from the 2026-08-06 reasoning is the narrower observation it
+was built on: garbage and a well-formed-but-unsigned JWT are indistinguishable in
+the response. That is unremarkable under a validating gate — both are invalid, and
+one refusal serves both. The missing `WWW-Authenticate` remains non-compliant with
+RFC 6750 and remains unexplained; it is simply not evidence of non-validation.
+
+The practical consequence is the useful part: **a `403` now means "our token was
+not accepted", not "a bearer was present"** — it is diagnostic where it used to be
+opaque. And the hypothesis in the last paragraph, that this is ordinary OAuth on a
+page-resident token, is confirmed.
 
 What is **not** confirmed is that nothing else is required. Four of the specific
 extra gates gap 1 named turned out to be absent (`slotsRequired`,
@@ -891,11 +915,15 @@ than vetoes it.
    a rail wants to read it. **Hydration timing is still unmeasured** — probe 2's
    `TOKEN READINESS` line was not captured.
 
-   *Sharpened 2026-08-11:* the captured JWT lives **45 minutes** and is refreshed
-   silently off `offline_access` (`auth_time` was 29 days before `iat`), so expiry
-   mid-run is not hypothetical for a long cart and is not something the user will
-   be prompted about. Re-reading the global before every call handles both this and
-   the hydration case. See "What the real token turned out to say". Operational
+   *Sharpened 2026-08-11:* the captured JWT lives **45 minutes** — measured, from
+   `iat` and `exp` — so expiry mid-run is not hypothetical for a long cart.
+   Whether the page then refreshes silently is **inferred, not measured**:
+   `offline_access` is in `scp` and `auth_time` was 29 days before `iat`, which
+   together make a silent refresh the likeliest reading, but nobody watched one
+   happen. Re-reading the global before every call handles the expiry and the
+   hydration case alike — **with a bound**, because a session that genuinely needs
+   a re-login is indistinguishable from a slow one, and an unbounded wait turns
+   that into a hang. See "What the real token turned out to say". Operational
    rather than existential — it shapes the rail, it does not veto it.
 
 6. **What `qty` means on a repeat add. Added 2026-08-11, and it is a correctness
@@ -1321,9 +1349,14 @@ that this document never named.
   // itself was replaced rather than filled in.
   const ui2 = window.AB?.userInfo ?? ui;
   const tok = ui2.SWY_SHOP_TOKEN;
-  if (!tok) return console.error('No SWY_SHOP_TOKEN, even 3s after load. Everything below would 401 — sign in first, or wait longer and re-run.');
-  if (!tok_immediate) console.warn('GAP 5 CONFIRMED: the token was ABSENT on the first read and present 3s later. ' +
-                                   'A rail must wait for hydration. Report this line.');
+  // Do NOT return here. The CART leg needs the token; SEARCH sends no bearer at
+  // all and is the leg gap 3 turns on. Aborting everything on a missing token is
+  // the third version of the same mistake this probe has now made twice.
+  if (!tok) console.error('No SWY_SHOP_TOKEN, even 3s after load — the CART leg below will be ' +
+                          'skipped. Sign in, or wait longer and re-run. (Search still runs: it ' +
+                          'sends no bearer.)');
+  if (tok && !tok_immediate) console.warn('GAP 5 CONFIRMED: the token was ABSENT on the first read and ' +
+                                          'present 3s later. A rail must wait for hydration. Report this line.');
 
   // STORE CONTEXT. The 2026-08-11 run read ui.shopStoreId / ui.shopZipcode, which
   // appear to be absent or empty on a real userInfo — it sent zipCode= and its
@@ -1375,10 +1408,10 @@ that this document never named.
   // query param, and harder to spot. Guarded with the rest. (It was populated on
   // 2026-08-11; the field name is still only observed once.)
   const custId = ui2.customerId || ui2.customerID || ui2.guid;
-  if (!storeId || !zip || !custId) {
+  if (!tok || !storeId || !zip || !custId) {
     console.error('CART READ skipped — unresolved:',
-                  [!storeId && 'storeId', !zip && 'zipCode', !custId && 'customerId']
-                    .filter(Boolean).join(', '),
+                  [!tok && 'SWY_SHOP_TOKEN', !storeId && 'storeId', !zip && 'zipCode',
+                   !custId && 'customerId'].filter(Boolean).join(', '),
                   '— a 400 from here would tell us nothing. Hard-code above and ' +
                   're-run. (Search below still runs.)');
   } else {
@@ -1423,15 +1456,17 @@ that this document never named.
   // value, and its refusal gets misattributed to whichever param we happened to
   // be varying. Both were populated on 2026-08-11, so a miss is itself news.
   const uuid       = ui2.UUID || '';
-  const bannerFromPage = ui2.banner || '';
-  // Falling back to the hostname would make `banner` never falsy and silently hide
-  // a missing field — so derive it, but SAY which source won.
-  const banner = bannerFromPage || location.hostname.split('.')[1] || '';
+  const banner = ui2.banner || '';
+  // NO hostname fallback. `location.hostname.split('.')[1]` looks right for
+  // www.safeway.com and is wrong wherever the host and the banner token differ
+  // (shopunitedsupermarkets, carrsqc, kingsfoodmarkets…), and a WRONG banner is
+  // worse than an absent one: it produces a 400 we would misattribute to storeid
+  // or channel. Same rule as uuid — omit, and say so.
   console.log('SEARCH inputs:', { storeid: storeId, uuid: uuid || '(omitted)',
-    banner, bannerSource: bannerFromPage ? 'userInfo' : 'hostname fallback' });
-  if (!uuid || !bannerFromPage) console.warn('SEARCH:', !uuid ? 'uuid omitted (absent);' : '',
-    !bannerFromPage ? 'banner came from the hostname, not userInfo;' : '',
-    'if this 400s, that is a suspect alongside storeid and channel.');
+                                  banner: banner || '(omitted)' });
+  if (!uuid || !banner) console.warn('SEARCH: omitting', !uuid ? 'uuid' : '', !banner ? 'banner' : '',
+    '— absent from userInfo. If this 400s, that omission is a suspect alongside ' +
+    'storeid and channel. Read the real value off a search request in the Network tab.');
   for (const channel of [...new Set(['pickup', 'Dug', svc])]) {
     const sQs = new URLSearchParams({
       pageurl: base, url: base, 'request-id': String(Date.now()), pagename: 'search',
@@ -1467,8 +1502,9 @@ that this document never named.
 | `TOKEN READINESS` differs between the immediate read and the 3s read | **Gap 5 confirmed.** The rail needs a hydration wait, not a single read. Record how long it took. |
 | `STORE CONTEXT` shows `undefined` and a leg logs "skipped" | **A result, not a failed run** — and the most useful one available, because it means the field names in this document are wrong and the `KEYS` dump has the right ones. Each leg skips independently: a missing zip costs you the cart read only, a missing `storeId` costs you both. Read the values off the `KEYS` line or off a real cart request in the Network tab, hard-code them, re-run. Report the KEYS line **and** what you hard-coded. |
 | `GAP 5 CONFIRMED` in the log | The token was absent on the first read and present 3s later — **the finding this probe exists for**, and only visible on a hard-reload run. The probe continues rather than aborting, so the rest of the run is still valid. Report the line verbatim. |
-| `TOKEN READINESS` identical, both `hasToken: true` | Inconclusive, **not** a refutation — you are on a settled tab. Hard-reload and re-run as the first action to actually test this. |
-| `window.AB.userInfo missing` | You are on `/erums/cart` or another sub-app rather than the storefront. Go to the banner homepage and retry. Not a negative result. Note the cart page *does* carry the token globals, but not the config blobs. |
+| `TOKEN READINESS` identical, both `hasToken: true`, **and** `AB.userInfo READY (present immediately)` | Inconclusive, **not** a refutation — you were on a settled tab. Hard-reload and re-run as the first action to actually test this. |
+| `TOKEN READINESS` identical but `AB.userInfo READY after <n>ms` | **Not inconclusive — that `n` is the hydration window**, and the probe spent it waiting for the object before it ever read the token. Report `n`; a rail needs to survive it. |
+| `window.AB.userInfo never appeared in 10s` | You are on `/erums/cart` or another sub-app rather than the storefront. Go to the banner homepage and retry. Not a negative result. Note the cart page *does* carry the token globals, but not the config blobs — so if you were on the storefront and still saw this, it *is* a result: report it. |
 | **CART READ `200` + JSON containing your hand-added item** | **The read half works** — this is what the 2026-08-11 run failed to get, from its own bug. Note it is *not* what closes gap 1: a read is not a write. Gap 1 was closed by probe 3. |
 | CART READ `401` "Not Authorized" | The token was rejected or absent. Check `tokenExpiration`; reload to refresh and retry. Given the 45-minute lifetime, a token that worked ten minutes ago can be the cause. |
 | CART READ `403` | **Now diagnostic.** A real bearer is measured to get *past* the 403 filter, so a 403 here means the token did not arrive or is not real — not that the operation is forbidden. Check that you read `SWY_SHOP_TOKEN` and not a stale variable. |
@@ -1541,11 +1577,15 @@ without it the document had only observed refusals:
 1. Empty the cart, or note exactly what is in it.
 2. Take the captured `fetch(...)` from step A, change **one** thing — the product
    id — and run it in the console on the same tab.
-3. Record the response status **and `await r.text()` the body** — a bare
-   `Response` object in the console shows the status but leaves `bodyUsed: false`,
-   which is how the 2026-08-11 run answered the ticket's question while leaving a
-   rail without the payload it has to parse. Then check the cart UI **on reload**;
-   do not trust the badge, which is measured not to update.
+3. Record the response status **and the body**. The capture pastes as a bare
+   `fetch(...)` that binds nothing, which is how the 2026-08-11 run ended up with
+   a status and no payload. Put a variable in front of it and read it:
+   `const r = await fetch(...same capture...); console.log(r.status, await r.text());`
+   A bare `Response` object in the console shows the status but leaves
+   `bodyUsed: false`, which is how the 2026-08-11 run answered the ticket's
+   question while leaving a rail without the payload it has to parse. Then check
+   the cart UI **on reload**; do not trust the badge, which is measured not to
+   update.
 4. **Remove it through the site's own UI**, not through the API. One add, then a
    normal manual removal: fully reversible, no `DELETE` call, nothing left behind.
 
