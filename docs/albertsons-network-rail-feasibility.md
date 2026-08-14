@@ -1,12 +1,43 @@
 # MEAL-15 — Can we drive the Albertsons family from an in-page network rail?
 
-**Date:** 2026-08-06 (corrected 2026-08-06 after cold review)
-**Status:** **Not disproven.** Every measurement here is anonymous, and every one
-of them is a *refusal*. Nothing in this document shows an authenticated call
-succeeding. Two probes remain and both need a logged-in human.
+**Date:** 2026-08-06 (corrected 2026-08-06 after cold review; **corrected again
+2026-08-11 after probe 3 was actually run**)
+**Status:** **Gap 1 is closed. An authenticated write was accepted — `200`.**
+Everything in the 2026-08-06 version of this document was anonymous and every
+measurement in it was a *refusal*; probe 3 has now been run on a signed-in
+`www.safeway.com` session and the platform accepted an add-to-cart. The rail is
+**estimable**. It is not unblocked, on two counts: gap 4 (sustained load,
+**MEAL-115**) is untouched by that measurement and still gates it on its own, and
+**gap 6 — what `qty` means on a repeat add — is unmeasured (MEAL-194).** Gap 6
+does not decide whether the rail can be built; it decides whether the rail may
+retry or add the same item twice without silently producing a wrong cart.
 **Timebox:** 1 day (spike — findings, not shipped code).
 
-> ### Corrected after cold review
+> ### Corrected 2026-08-11 — probe 3 was run, and it overturns the contract
+>
+> Read this before anything below it. Stephen captured a real add with
+> Copy-as-fetch on a signed-in `www.safeway.com` session, changed **only the
+> product id**, re-ran it from the console, and got **`200 OK`** with the item in
+> the cart after a reload (**MEAL-137**). That is the first time in this
+> investigation that the platform has accepted anything from us, and it replaces
+> guesses with a measurement in seven places:
+>
+> | | What changed |
+> |---|---|
+> | **The add-path headers** | **Wrong.** `buildHeadersWithToken` — "the load-bearing piece" — is **not** the builder `/items` uses. `slotsRequired` and `x-swy-client-id` are **not sent at all** on a real add. |
+> | **The add-path query params** | **Wrong.** `generateCommonParams` always sets `expressChk=true`; the real add sends **no `expressChk`, no `tax`, no `sellerId`, and no `cartId`**. `serviceType` is `Dug`, not the `pickup` the anonymous probes used. |
+> | **The `/items` body** | **Recovered.** It is no longer "do not invent it" — it is measured, below. |
+> | **Gap 1** | **Closed**, with named residue — cookie necessity, `preferenceList`, the response *body* shape, and **`qty` on a repeat add**, which is the one that can produce a wrong cart rather than a visible failure (gap 6). |
+> | **The 403 wall** | **Neither model is confirmed — and the 2026-08-06 one is no longer safe to quote.** A real signed-in session gets `400` from the same endpoint family that gave every bogus bearer a `403`, so the gate is not branching on the bare *presence* of a `Bearer`. But the session changed the cookies, the origin and the token all at once, so which of them the gate read is unresolved. One `credentials: 'omit'` replay would settle it. |
+> | **Gap 5** | **Sharpened, not closed.** Hydration timing is still unmeasured, but the captured JWT gives a hard number: **45-minute lifetime**, silently refreshed off `offline_access`, **not store- or banner-bound**, no write scope. |
+> | **Gap 3 (the search tarpit)** | **Narrowed.** Product search does **not** hang in-page — it answered `400` promptly from a signed-in tab where plain `curl` never gets a byte. But no client has yet seen a search `200`, so the rail's search half is still unproven. |
+> | **Rail shape** | **New constraint.** The SPA does not observe an API add — the cart badge did not move until reload. Any post-add check that reads the DOM returns a **false negative**. |
+>
+> Two things this did **not** do: it did not touch gap 4, and it did not license
+> "the bearer alone is sufficient" — both the capture and the replay ran
+> `credentials: 'include'` from the origin, so cookies rode along either way.
+>
+> ### Corrected after cold review (2026-08-06)
 >
 > A cold review re-ran the probes independently and returned "ship with stated
 > corrections". The four headline conclusions survive; two got **stronger** under
@@ -44,25 +75,27 @@ session, and do they generalise across the family?
 
 ## Answers up front
 
-1. **The endpoints are identified.**
+1. **The endpoints are identified, and the add path is now confirmed by a server
+   response.**
    Search: `GET /abs/pub/xapi/search/products`. Cart: `/abs/pub/erums/cartservice/api/v2/cart`.
    Both are relative paths on whichever banner domain the page is already on.
-   **Confidence: high that the bundle says this; moderate that the server agrees.**
-   The base *prefix* is corroborated three ways: the page's own config blob, the
-   Angular bundle's call-construction code, and a live APIM 404 for a sibling
+   **Confidence: high for `POST /items` — a real session got `200` from it.**
+   The base *prefix* is corroborated three ways over: the page's own config blob,
+   the Angular bundle's call-construction code, and a live APIM 404 for a sibling
    prefix (`/basket/items`) that a wrong prefix would not produce.
-   But `/items` and the three cart operations come from **the bundle alone** — the
-   config blob does not name them, and live probing cannot corroborate them (see
-   the guessed-path correction below: `/items-typo` is indistinguishable from
-   `/items` at every gate we can reach anonymously).
-   The bundle evidence is strong — their own code, in the clear, not inferred —
-   but it is minified JavaScript read by a human, and no server response has yet
-   agreed with it about `/items`. Splitting the confidence is the honest form:
-   high that this is what their client sends, moderate that the server accepts it.
 
-   *Corrected: the original text claimed this was "validated against production".
-   It was not. See "The gate chain" — the 400 that was read as route confirmation
-   is a generic binder error that any unmatched path produces.*
+   *Upgraded 2026-08-11.* The 2026-08-06 text split this — "high that the bundle
+   says this; moderate that the server agrees" — because `/items` rested on the
+   bundle alone and no server response had ever agreed with it. One now has: the
+   accepted add went to `POST …/api/v2/cart/items` and returned `200`. **That
+   covers the add operation only.** Read-cart (`POST /cart/customer/{id}`) and
+   remove (`DELETE /items`) are still bundle-only and still unconfirmed — the one
+   read we attempted returned `400`, from a probe with a known bug.
+
+   *Corrected 2026-08-06: the original text claimed this was "validated against
+   production". It was not, then. See "The gate chain" — the 400 that was read as
+   route confirmation is a generic binder error that any unmatched path produces,
+   and it is not what upgraded this answer; the `200` is.*
 
 2. **The family genuinely shares endpoints. This is not an inheritance from
    sharing selectors — it is measured, and the cold review strengthened it.**
@@ -98,12 +131,24 @@ session, and do they generalise across the family?
    the bot wall. Here it is needed to **read the session**: the bearer the cart API
    wants is sitting on a page global, `window.AB.userInfo.SWY_SHOP_TOKEN`. So we
    ride the session by reading it, not by minting it. **No Okta flow of our own,
-   no credential handling.** The ticket's second acceptance criterion is satisfied
-   **in principle only. No probe has confirmed it in practice** — the original
-   text said "one probe confirms it in practice", which describes a probe nobody
-   has run. Two things stand between principle and practice: nothing here has
-   observed an authenticated call *succeed* (gap 1, **MEAL-137**), and the token is
-   hydrated asynchronously rather than being simply present (gap 5).
+   no credential handling.** The ticket's second acceptance criterion is now
+   satisfied **in practice for the write**, and **one inference short of it for
+   the token source** (**MEAL-137**, 2026-08-11): an in-page `fetch` performed a
+   real add and got `200`, but it replayed a bearer *captured from the site's own
+   request*, not one read from the global at call time. The call that did read the
+   global reached the same service's application layer (`400`, where every bogus
+   bearer got `403`), so the global holds a credential the origin treats as real —
+   which is strong, and is not the byte comparison that would finish the argument.
+   **One logged line on the next run closes it**; see "On that bearer" below.
+   Nothing else in the rail's shape depends on the answer, but "no Okta flow,
+   ever" does.
+
+   *The 2026-08-06 version said "in principle only. No probe has confirmed it in
+   practice", correcting a merged claim that described a probe nobody had run.
+   The probe has now been run.* What is left is operational, not existential: the
+   token is hydrated asynchronously and lives **45 minutes** (gap 5), and the
+   page's own cart state does not observe our write, so the rail must confirm from
+   the response rather than the DOM.
 
 5. **The ~15-banner payoff argument survives.** The shared config lists **31
    banner hosts** — but 31 hosts is not 31 banners of payoff, and the original
@@ -111,11 +156,18 @@ session, and do they generalise across the family?
    our `DOMAIN_MAP` is **4**, and realising them is a product decision, not a rail
    dividend. See "Does the payoff argument hold?".
 
-**One thing the ticket gets wrong:** it describes the auth flow as
-`albertsons.okta.com/api/v1/authn` → sessionToken → bearer. The live config says
-the IdP is **`ciam.albertsons.com`** (`initOktaConfig.issuer`), not
-`albertsons.okta.com`. Either way it is out of scope — noted so nobody plans
-against a stale hostname.
+**One thing the ticket gets wrong — and this document then over-corrected.** The
+ticket describes the auth flow as `albertsons.okta.com/api/v1/authn` →
+sessionToken → bearer. The live config says the IdP is **`ciam.albertsons.com`**
+(`initOktaConfig.issuer`), so the 2026-08-06 text said the ticket's hostname was
+stale. **The real token does not support that.** The accepted write's bearer
+carries `iss: https://albertsons.okta.com/oauth2/ausp6soxrIyPrm8rS2p6` — the
+hostname the ticket named and this document called stale. So "`albertsons.okta.com`
+is stale" is **withdrawn**; the likeliest reading is that `ciam.albertsons.com` is
+a custom domain over the same Okta org, but that is a guess and neither hostname
+has been probed. An `iss` claim is an identifier, not a reachable endpoint. Either
+way it is out of scope; we never mint a token. Noted only so nobody plans against
+the wrong one — and nobody should plan against *either* without probing it first.
 
 ---
 
@@ -222,17 +274,105 @@ returns a **404** APIM `"Resource not found"`, while the same request under
 That is the only genuine live confirmation in this document, and it confirms
 something the config blob already told us.
 
-Everything below — `/items`, and the three operations — comes from **the bundle
-alone.** Live probing cannot distinguish a real sub-path from a made-up one here
-(see "The gate chain"), so do not treat the probe transcript as corroborating them.
+The three operations the ticket asks for. **The add is measured; the other two are
+still bundle-only** — live probing cannot distinguish a real sub-path from a
+made-up one (see "The gate chain"), so do not treat the anonymous probe transcript
+as corroborating them.
 
-The three operations the ticket asks for, from the bundle:
+| Operation | Call | Basis |
+|---|---|---|
+| **Add / update item** | `POST {cartAPI}/items` — see the measured contract below | **Measured. `200` from a real session, 2026-08-11.** |
+| **Read cart** | `POST {cartAPI}/customer/{customerId}?type=mini&storeId=…&zipCode=…&cartCategoryList=…&expressChk=true` with body `{}` (a POST that semantically reads) | Bundle only. One attempt returned `400`, from a probe with a known bug. |
+| **Remove item** | `DELETE {cartAPI}/items` with a body | Bundle only. Never attempted — deliberately: the probe undid its add through the site UI. |
 
-| Operation | Call (all three: **bundle-only, unconfirmed by any server response**) |
+#### The measured add contract
+
+Captured with Copy-as-fetch from a real add on a signed-in `www.safeway.com`
+session, then replayed with **only the product id changed**. The replay returned
+**`200 OK`** (`Response { ok: true, status: 200, type: "basic" }`) and the item was
+in the cart after a reload.
+
+```http
+POST /abs/pub/erums/cartservice/api/v2/cart/items
+     ?storeId=654&serviceType=Dug&zipCode=94611&cartCategoryList=1P,3P_MARKETPLACE,1P_Wine
+
+authorization: Bearer <the session's shop token — see the note below>
+ocp-apim-subscription-key: c645e9387c654aa8ae253045f648bfac
+content-type: application/json
+ocp-apim-trace: true
+sort-order: date
+
+{"preferenceList":[{"cartCategory":"1P_WINE"}],
+ "cartItemsList":[{"itemId":"<product id>","qty":1}],
+ "cartCategory":"abs"}
+```
+
+Sent from the origin with `credentials: 'include'`, `mode: 'cors'`. The remaining
+request headers in the capture split two ways: `priority`, the `sec-ch-ua*` /
+`sec-fetch-*` set are **browser-controlled** — a `fetch` cannot set them, so a rail
+gets them for free and identical to the site's own. `accept` and `accept-language`
+are **ours to set** (neither is a forbidden header name) and the capture's values
+are the Angular client's, worth copying if a mismatch ever turns out to matter.
+`referrer` is a third case: `RequestInit.referrer` can set it, but the default is
+the calling page's URL — so an in-page rail gets a sensible one automatically only
+if it runs on a page whose URL resembles the site's own. In our WebView it does;
+worth a glance if a call is ever refused for no other visible reason.
+
+Read that against what this document previously asserted:
+
+| The bundle said | The real add |
 |---|---|
-| **Add / update item** | `POST {cartAPI}/items` — body is the item payload, params from `generateCommonParams` |
-| **Read cart** | `POST {cartAPI}/customer/{customerId}?type=mini&storeId=…&zipCode=…&cartCategoryList=…&expressChk=true` with body `{}` (a POST that semantically reads) |
-| **Remove item** | `DELETE {cartAPI}/items` with a body |
+| `slotsRequired: true` + `x-swy-client-id: web-portal` were "the load-bearing piece" | **Neither header is sent at all.** `buildHeadersWithToken` is not the builder `/items` uses. |
+| `generateCommonParams` always appends `expressChk=true` | **No `expressChk`.** No `tax`, no `sellerId`. |
+| `cartId` set conditionally — a possible ownership binding | **No `cartId` anywhere**, query or body. Nothing in the request names a cart, so the add must bind to the account through the session context — the bearer, and possibly the cookies that rode along with it. |
+| `serviceType=pickup` (what the anonymous curl probes guessed) | `serviceType=Dug` |
+| Param order unknown | `storeId, serviceType, zipCode, cartCategoryList` |
+| Body unknown — "do not invent it" | Above, verbatim. |
+
+**On that bearer — say exactly what was and was not measured.** The token in the
+accepted request came from the site's own add, captured with Copy-as-fetch; step B
+changed only the product id, so it re-sent the *captured* value. **Nobody compared
+it byte-for-byte with `window.AB.userInfo.SWY_SHOP_TOKEN`.** That the two are the
+same value is the bundle's claim (`getSWY_SHOP_TOKEN()` returns exactly that
+global, and the site's own chat widget labels it `okta_token`), and it now has
+independent support — probe 2 read the global and used it to reach the
+*application layer* (`400`, the status a real credential gets) where every bogus
+bearer got `403`. So the global demonstrably holds a token the origin treats as
+real. It is still an inference rather than an equality, and the whole "no Okta
+flow, ever" conclusion rests on it, so it is worth the one line it costs to
+settle: on the next run, log
+`capturedBearer === window.AB.userInfo.SWY_SHOP_TOKEN`.
+
+Two headers nobody predicted rode along: **`ocp-apim-trace: true`** and
+**`sort-order: date`**. Both look like a generic interceptor rather than anything
+add-specific, but they were in the accepted request, so a rail that reproduces the
+capture should keep them until something shows they are inert.
+
+**What this does not establish: that the bearer alone is sufficient.** Both the
+capture and the replay ran `credentials: 'include'` from the origin, so cookies
+went along either way, and neither was run without them. In a same-origin WebView
+that costs us nothing — so it does not block the rail — but it is not measured and
+is not written here as if it were. Likewise `preferenceList`: it may be required,
+or it may be page state echoed along. Untested.
+
+Note also what a *rail* still cannot see: the response **body**. The probe reported
+`Response { ok: true, status: 200 }` without consuming it (`bodyUsed: false`), so
+the status is known and the payload shape is not. That decides what a rail parses
+back to confirm an add, and it is cheap to recover on the next authenticated run.
+
+**And one thing the contract does not say at all: what `qty` means on a repeat.**
+The bundle calls this operation "add / **update** item". Sending `qty: 1` twice for
+the same `itemId` may leave one in the cart or two, and nothing here measured it —
+the probe added one item, once. Everything else in the residue produces a failed
+call; this one produces a **wrong cart**. Tracked as **MEAL-194**; see gap 1's
+residue.
+
+#### What the bundle says, kept for the record
+
+The two builders below are what the 2026-08-06 version of this document treated as
+the contract. **The add path does not use either of them.** They are retained
+because they presumably still describe *some* cart call — the read and the delete
+are unmeasured, and these are the only description of them we have.
 
 `generateCommonParams` verbatim:
 
@@ -251,7 +391,8 @@ generateCommonParams(e,t){
 
 Prod `cartCategoryList` is `1P,3P_MARKETPLACE,1P_Wine`.
 
-And the headers, verbatim — this is the load-bearing piece:
+And the headers, verbatim. The 2026-08-06 text called this "the load-bearing
+piece"; the capture shows it is **not on the add path at all**:
 
 ```js
 buildHeadersWithToken(e,t,i){
@@ -264,15 +405,22 @@ buildHeadersWithToken(e,t,i){
 }
 ```
 
-**I have not seen the `/items` request body.** It is assembled from a product object
-at click time rather than written literally in the bundle, so it is not recoverable
-by reading. Probe 3 recovers it from a real add. **Do not invent it.**
+**The `/items` request body is no longer unknown.** It is assembled from a product
+object at click time rather than written literally in the bundle, so it was not
+recoverable by reading — the 2026-08-06 text said "Probe 3 recovers it from a real
+add. **Do not invent it.**" Probe 3 was run, and it did. The body is in the
+measured contract above; nobody needs to invent it now.
 
-*Corrected: the merged version called this "the one part of the contract that is not
-established". It is not the only one — it is the only one we knew we were missing.
-Whether the call needs anything **beyond** the bearer (required headers, cookies, a
-CSRF token, an owned `cartId`, a write-scoped token) is equally unestablished, and
-the anonymous probes cannot see it. See "What remains unknown", gap 1.*
+*And the wider point that note carried still holds where it has not been measured.
+The merged version called the body "the one part of the contract that is not
+established"; it was not the only one, only the one we knew we were missing.
+Of the rest — the two headers the bundle named (`slotsRequired`,
+`x-swy-client-id`), a CSRF token, an owned `cartId`, a write-scoped token — the
+capture settles all four: **none of those four is needed.** That is not "no header
+is needed": `ocp-apim-subscription-key` is measured as required (its absence gets
+a `401` from APIM), and `ocp-apim-trace` / `sort-order` were in the accepted
+request and are unclassified. **Cookies it does not settle at all.** See "What
+remains unknown", gap 1.*
 
 ---
 
@@ -288,6 +436,28 @@ getSWY_SHOP_TOKEN(){ return window.AB.userInfo.SWY_SHOP_TOKEN }
 Alongside it, on the same object: `storeId`, `shopStoreId`, `shopZipcode`, `banner`,
 `customerId`, `UUID`, `clubCardNumber`, `userType`, `tokenExpiration` — i.e. every
 parameter the cart and search calls need.
+
+**Confirmed populated, 2026-08-11 — and one entry of that list is wrong.** The
+list was read off the bundle's accessors, not off a live object. Probe 2 ran on a
+signed-in settled tab and, though it was defective in other ways, its request URLs
+are evidence about the object it read them from:
+
+| Field | Status |
+|---|---|
+| `SWY_SHOP_TOKEN` | **Populated.** The probe returns early on a falsy token and it did not — it reached the cart call. This is the first direct observation of the global being non-empty. |
+| `customerId` | **Populated** — it appears in the cart-read path, and matches the token's `gid` claim. |
+| `UUID` | **Populated** — it reached the search query, and it matches the token's `uuid` claim exactly. |
+| `banner` | **Populated** — `banner=safeway` in the search query. Note this is the *storefront's* banner; the token's `ban` claim said `albertsons`. They disagree, and the storefront one is the one that was in a working page. |
+| `shopZipcode` | **Absent or empty.** The probe sent `zipCode=`, which is what broke its **cart** leg. (Not its search leg — search sends no zip under any name, so that 400 has a different cause, most likely `storeid` or the unverified `channel` value.) |
+| `shopStoreId` | **Unknown.** The probe falls back to `ui.storeId`, and `storeid` sits in the part of the query string Chrome elided from the middle of the pasted URL — unlike `uuid` and `banner`, which survived at the end. So a value reached the query and which field supplied it cannot be told apart. |
+| everything else | **Unknown.** The `userInfo KEYS` dump was not captured. |
+
+So the shape of the object is confirmed and its exact field names are not. **A rail
+should read `SWY_SHOP_TOKEN`, `customerId`, `UUID` and `banner` from
+`AB.userInfo`, and get store context from somewhere else** — pending the KEYS dump.
+Fallback if the globals disappoint: the token's own claims carry `gid`, `ban`,
+`str` and `zip` — but see the store-binding note below before trusting `str`/`zip`
+for store context, because on the accepted write all three were wrong.
 
 **Corroborated independently inside the committed fixture.** `logged-in-home.html`
 contains the site's own chat-widget setup, which labels this exact value:
@@ -340,6 +510,48 @@ What a rail therefore has to do, none of which is in scope today:
 
 This is gap 5 in "What remains unknown", and probe 2 has been amended to measure
 it (re-reading the token after a delay) rather than assume it away.
+
+### What the real token turned out to say
+
+**Added 2026-08-11.** The `SESSION` and `TOKEN READINESS` lines did not survive
+probe 2, so hydration *timing* is still unmeasured. But the bearer from the
+accepted write decodes, and its claims answer operational questions the bundle
+could not. Decoded locally from the capture; the token itself is not recorded
+here or anywhere in this repo, and it carries enough PII (email, phone, loyalty
+number, household id) that it should not be.
+
+| Claim | Value | Why it matters to a rail |
+|---|---|---|
+| `iat` → `exp` | 15:54:23Z → 16:39:23Z — **45 minutes** | A rail that reads the token once and holds it will break mid-run. Re-read the global on every call. |
+| `auth_time` | **28.9 days** before `iat` | The user last typed a password 29 days before this token was minted, and `offline_access` is in `scp` — so the *likeliest* reading is that the page refreshes silently and expiry is a refresh problem rather than a re-login one. **This is an inference from one static token, not a measurement**: nobody watched a refresh happen, and nobody knows the refresh token's own lifetime or what the page does when it finally expires. Do not build an unbounded wait on it. |
+| `scp` | `used_credentials, offline_access, email, openid, profile` | **No write scope.** Reads and writes use the same token, so a working read really would have predicted a working write here — but that was not knowable in advance, which is why gap 1 existed. |
+| `aud` | `Albertsons` | One audience across the family. |
+| `iss` | `https://albertsons.okta.com/oauth2/…` | See the IdP note in "Answers up front" — this is why "`albertsons.okta.com` is stale" is withdrawn. |
+| `ban` / `str` / `zip` | `albertsons` / `177` / `83713` | **The token is not store- or banner-bound.** The accepted write ran against `storeId=654`, `zipCode=94611`, on `safeway.com`, with none of those three claims matching. Store context is per-request. That is good news for the family sweep — one session, any banner's store — and it means `str`/`zip` are **not** a usable source of store context. |
+
+The design consequence, restated because it is the one that will bite: **re-read
+`window.AB.userInfo.SWY_SHOP_TOKEN` before every call, and treat a stale or absent
+read as an expected state to wait on rather than an error to surface — but wait
+with a bound.** A signed-out session and a still-hydrating one look identical from
+the global, and the 29-day `auth_time` says only that this *particular* session had
+not needed a re-login; it does not promise the next one will not. An unbounded wait
+turns "you need to sign in again" into a hang, which is the failure mode
+`albertsons.ts` already documents for the login check. Bound it, then fall back to
+the signed-out path.
+
+### The SPA does not observe an API add
+
+**Added 2026-08-11, and it is a trap worth naming loudly.** After the accepted
+write, *the cart badge did not move until the page was reloaded.* The write landed
+server-side — the item was there after the reload — but the SPA's local cart state
+never saw it.
+
+So **any post-add verification that reads the DOM will produce a false negative.**
+A rail must confirm from the response, or force a reload before reading the page.
+This is the same shape of mistake as MEAL-28, which shipped to two of six stores
+with every number in its report correct; here it would have been very easy to
+build a rail that "verified" every successful add as a failure and retried it —
+which on a cart is not a harmless retry.
 
 ---
 
@@ -448,6 +660,11 @@ credential**, not one verifying signature, expiry or audience. So the split tell
 us the string is being *looked at*, and nothing about what happens when it is
 *correct*.
 
+> **⚠️ Disconfirmed 2026-08-11 — read the subsection immediately below before
+> using this paragraph.** A real token gets a `400` where a bogus one gets `403`,
+> which a presence-only filter cannot do. The origin validates. The reasoning here
+> was sound on the evidence it had; the evidence was one-sided.
+
 **Withdrawn: "the bearer is the only remaining gate."** It is *a* gate. Whether it
 is the last one is unmeasured — see gap 1. The rail may still need `slotsRequired`,
 `x-swy-client-id`, cookies, a CSRF token, an owned `cartId`, or a token with the
@@ -458,6 +675,77 @@ So: the rail is not blocked by bot defence at these volumes, and the app tier do
 see our requests. It is *plausibly* gated by ordinary OAuth on a token that lives
 in the page — but that is a hypothesis about acceptance drawn entirely from
 refusals, and refusals do not license it.
+
+#### Measured 2026-08-11 — and the model above is *wrong*
+
+The inference above — "a filter branching on the **presence** of a Bearer, not one
+verifying signature, expiry or audience" — was drawn from byte-identical 403s, and
+a real session refutes it. Read the last two rows against the first two:
+
+| Credential | Same endpoint family | Measured from |
+|---|---|---|
+| **no** `Authorization` header at all | `401 "Not Authorized"` | anonymous `curl`, 2026-08-06 |
+| bogus, or JWT-shaped-but-unsigned | `403`, byte-identical bodies | anonymous `curl`, 2026-08-06 |
+| **a real `SWY_SHOP_TOKEN`** | **`400 Bad Request`** — past the filter, into the application layer | **in-page, signed in, 2026-08-11** |
+| a real token **plus a correct request** | **`200`** | **in-page, signed in, 2026-08-11** |
+
+Only the bottom two rows are new. The top two are the 2026-08-06 transcript,
+repeated here because the comparison is the whole point.
+
+**The 2026-08-06 model is not confirmed by this, and it is not cleanly refuted
+either. Say what the table can and cannot carry.**
+
+*What it refutes:* the strong reading of "presence-only filter" — that the gate
+looks *only* for the string `Bearer ` and branches on that alone. Under that
+reading a real token is exactly as present as a bogus one and would get the same
+`403`. It does not.
+
+*What it cannot establish:* that the **token** is what the gate read. Rows 1–2 are
+anonymous `curl` from off-origin; rows 3–4 are an in-page `fetch` with
+`credentials: 'include'`. **Four things changed at once** — the token, the cookie
+jar, `Origin`/`Referer`, and same-origin-ness. A gate that short-circuits on a
+valid session cookie and never parses the bearer produces this identical table.
+
+That is precisely the inference this document refuses two sections down for the
+search tarpit ("cookies, an `Origin`/`Referer`, a session, and a same-origin path
+all changed at once between the hanging `curl` and the answering `fetch`"). It is
+the same confound and it gets the same treatment here. An earlier 2026-08-11 draft
+of this section made the inference anyway and asserted "the origin validates";
+that is withdrawn.
+
+**What is established, and it is enough to budget the rail:** a real signed-in
+session, calling from the page, reaches the application tier and gets a `200` for
+a correct request. *Why* the anonymous probes never did — bearer, cookies, origin,
+or some conjunction — is unresolved and does not change the rail's shape, because
+a WebView on the user's own session supplies all of them together.
+
+**The one-word experiment that would resolve it** is now cheap and worth doing on
+the next authenticated run: replay the captured add with `credentials: 'omit'`. It
+also settles the cookie-necessity residue in gap 1, in the same run as the `qty`
+test. If it still `200`s, the bearer is doing the work and "the origin validates"
+can be written down as measured.
+
+The narrow observation the 2026-08-06 reasoning was built on survives untouched:
+garbage and a well-formed-but-unsigned JWT are indistinguishable in the response.
+That fits a validating gate (both invalid, one refusal) and a cookie-short-circuit
+gate (neither had a cookie) equally well. The missing `WWW-Authenticate` remains
+non-compliant with RFC 6750 and remains unexplained.
+
+What is **not** confirmed is that nothing else is required. Four of the specific
+extra gates gap 1 named turned out to be absent (`slotsRequired`,
+`x-swy-client-id`, CSRF, `cartId`), and the token needs no write scope — but
+`ocp-apim-subscription-key` is measured as **required** — its absence is the APIM
+`401` in the anonymous transcript at the top of this section (`"Access denied due
+to missing subscription key"`), which is a different refusal from the
+missing-bearer `401` in the table just above — `ocp-apim-trace` and `sort-order`
+rode along unclassified,
+and cookies are untested. "The bearer is the only remaining gate" stays withdrawn.
+
+*The `400` came from probe 2, which was **defective**: it derived `storeId` /
+`zipCode` from `ui.shopStoreId` / `ui.shopZipcode`, sent an empty `zipCode`, and
+sent no `serviceType` at all. Those 400s are the probe's bug, not origin
+behaviour, and they say nothing about whether `POST /cart/customer/{id}` is a real
+route. Their only value is the status-*class* signal in the table above.*
 
 ### The one anomaly: product search tarpits from a plain client
 
@@ -506,9 +794,39 @@ Two consequences for how this document originally read it:
   Answer 3 and raises **MEAL-115**'s priority, because it would mean the platform
   does shape traffic on this surface — just not with an interstitial.
 
-**The in-page probe still settles it**, and settles it in the environment we would
-actually ship in — with real cookies, a real `uuid`, and a real store id. Until
-then, treat the cause as open and both branches as live.
+**Partly answered 2026-08-11 — it does not tarpit in-page.** Probe 2's search leg
+ran from a signed-in `www.safeway.com` tab and returned **`400 Bad Request`**,
+promptly. Not a hang. Same operation (`/abs/pub/xapi/search/products`) that never
+returns a byte to plain `curl`.
+
+Be precise about what that buys, because it is less than it looks:
+
+- **It rules out "the operation is dead upstream."** Something answered, from the
+  environment we would ship in.
+- **It does not show search works in-page.** A `400` is a refusal, and probe 2's
+  search params were built from the same non-existent `userInfo` fields that broke
+  its cart leg, so a `400` is roughly what a defective request should get. We have
+  never seen a product-search `200` with a non-zero doc count from any client.
+- **It does not distinguish the two branches** — cookies, an `Origin`/`Referer`, a
+  session, and a same-origin path all changed at once between the hanging `curl`
+  and the answering `fetch`. Which of them the edge cares about is unmeasured.
+
+Gap 3 therefore narrows to: *get a search `200` from anywhere.* That is not a
+one-line fix, because **we do not know which param the search leg got wrong** —
+its 400 cannot be blamed on the empty `zipCode` that broke the cart leg, since
+search sends no zip at all. The leading candidates are `storeid` (built from the
+same suspect `userInfo` fields) and `channel`, whose accepted values nothing has
+verified — `pickup` is a guess, and the cart path's analogous param turned out to
+want `Dug`. **They are not the only ones**, and if a run 400s on every `channel`
+the next suspects are the two places the probe knowingly differs from the bundle:
+`request-id` is `Date.now()` where the bundle calls `_getUTCTimeStampRandom()`, and
+`pageurl`/`url` go through `URLSearchParams` percent-encoding where the bundle
+concatenates them raw. Neither is obviously load-bearing; both are free to align. Probe 2 below now **tries both `channel` values** and warns loudly if
+`storeid` is undefined, so one run distinguishes them; it also no longer aborts
+the search leg when the *cart* leg's store context is missing, which is how the
+2026-08-11 run could have come back with gap 3 unmeasured a second time. Until one
+of these yields a `200`, the rail's **search** half is unproven even though its
+**cart** half is measured.
 
 This is the reason not to over-read finding 3 into "we could skip the WebView
 entirely": search from a plain client **does not currently work**, whatever the cause.
@@ -530,36 +848,69 @@ entirely": search from a plain client **does not currently work**, whatever the 
 Added after cold review, and numbered deliberately: MEAL-12 gives these the same
 treatment (`docs/heb-graphql-persisted-queries.md:258-276`) and the merged version
 of this document did not, which let three *Confidence: high* lines at the top read
-as more settled than the evidence supports. **Gaps 1 and 4 could each sink the rail
-on their own** — and within gap 1, so could any one of the four sub-items. Gaps 2, 3
-and 5 shape the rail rather than veto it.
+as more settled than the evidence supports.
 
-1. **No authenticated call has been observed succeeding.** This is the gap the
-   merged version omitted entirely. Every measurement in this document is a
-   *refusal* — 401, 403, 400, 404, a hang — and per the gate-chain correction above,
-   a refusal tells us nothing about acceptance. MEAL-12 declared exactly this for
-   H-E-B (`docs/heb-graphql-persisted-queries.md:267-268`: "Mutations specifically
-   may carry extra requirements (a CSRF token, an order/cart id, store-context
-   headers)"); MEAL-15 declared only the missing request *body*, which is the
-   smaller half of the same gap. Specifically unmeasured:
-   - Whether `slotsRequired` and `x-swy-client-id` are **required** or merely sent
-     by the site's own client.
-   - Whether there is a **CSRF token, or cookies** the call needs beyond the bearer.
-   - Whether the cart id is **ownership-bound** to the caller. Note
-     `generateCommonParams` sets `cartId` *conditionally* (`t && !e.seller`), so the
-     site does not always send one — that conditional is unexplained.
-   - Whether the token's **audience/scope differs for writes vs reads**. A read
-     working would not settle an add.
+**Updated 2026-08-11: gaps 1 and 2 are closed, 3 and 5 are narrower, and gap 4 is
+exactly where it was.** Gap 4 could still sink the rail on its own, and it is now
+the *only* one that could. What is left of gaps 1, 3 and 5 shapes the rail rather
+than vetoes it.
 
-   Tracked as **MEAL-137**. This is the gate on budgeting the rail.
+1. ~~**No authenticated call has been observed succeeding.**~~ **CLOSED
+   2026-08-11 — MEAL-137.** A real session performed a real add and got `200`,
+   with the item present after a reload. Every measurement in the 2026-08-06
+   document was a *refusal* — 401, 403, 400, 404, a hang — and per the gate-chain
+   correction, a refusal tells us nothing about acceptance; this is the first
+   acceptance. MEAL-12 declared the same gap for H-E-B
+   (`docs/heb-graphql-persisted-queries.md:267-268`: "Mutations specifically may
+   carry extra requirements (a CSRF token, an order/cart id, store-context
+   headers)"), and here every one of those turned out to be unnecessary:
+   - `slotsRequired` and `x-swy-client-id` — **not required. Not even sent.**
+   - **CSRF** — no header, no body field. None exists on this path.
+   - **`cartId` ownership binding** — no `cartId` is sent at all, so nothing in
+     the request names a cart; the binding comes from the session context
+     (bearer, possibly cookies — see the residue below). (The `t && !e.seller`
+     conditional in `generateCommonParams` is still unexplained, but it is not on
+     the add path.)
+   - **Write scope** — none. `scp` is the same for reads and writes.
 
-2. **The `/items` request body.** Unchanged from the merged version: it is
-   assembled from a product object at click time rather than written literally in
-   the bundle. Probe 3 recovers it. **Do not invent it.**
+   **Residue. One piece of it blocks, the rest do not:**
+   - **`qty` semantics on a repeat add — absolute or additive? BLOCKING for any
+     rail that can send the same `itemId` twice.** The endpoint is `POST /items`
+     and the bundle calls it "add / **update** item", so `qty: 1` sent twice may
+     leave 1 or 2 in the cart. **Nothing measured this**: the probe added one item
+     once. Every other unknown on this page produces a failed call you can see;
+     this one produces a *wrong cart* you cannot — and a retry after an ambiguous
+     response, or two meals sharing an ingredient, lands on it immediately. Both
+     possible answers break a cart governing principle (never over-add, never
+     under-add) if the rail assumes the other. It is cheap to settle — add the
+     same id twice, read the cart — and it must be settled before a rail retries
+     anything, which is why it is called out here rather than left as a detail of
+     the contract. Tracked with gap 6 below.
+   - **Cookies.** Both the capture and the replay ran `credentials: 'include'`
+     from the origin, so cookie *necessity* is untested. Free in a same-origin
+     WebView; still not established — and **cheap to settle**: replay the same
+     capture with `credentials: 'omit'`. It is worth doing not for the rail, which
+     has cookies either way, but because it is the only thing that separates "the
+     origin validates our bearer" from "the origin trusts our session cookie" in
+     the gate chain above.
+   - **`preferenceList`** — required, or page state echoed along? Untested.
+   - **The response body.** The `200` was reported without consuming the body, so
+     what a rail parses back to confirm an add is still unknown. Cheapest thing to
+     collect on the next authenticated run — and note it interacts with the `qty`
+     question above: if the response echoes the resulting quantity, one run
+     answers both.
 
-3. **Why product search tarpits from a plain client**, and in particular whether
-   the cause is an upstream dependency or edge posture. See the tarpit section —
-   the second branch would partially contradict Answer 3.
+2. ~~**The `/items` request body.**~~ **CLOSED 2026-08-11.** Recovered by probe 3
+   with Copy-as-fetch; it is in "The measured add contract" above. Nobody needs to
+   invent it.
+
+3. **Whether product search actually works, and why it tarpits from a plain
+   client.** Narrowed 2026-08-11: it does **not** tarpit in-page — it returned
+   `400` promptly from a signed-in tab — but that was a defective request and no
+   client has yet seen a product-search `200`. So the cause of the plain-client
+   hang is still open (upstream dependency vs edge posture, the second branch
+   partially contradicting Answer 3), and the rail's **search half is unproven**
+   while its cart half is measured. Fix probe 2's params and re-run.
 
 4. **Rate limiting / Imperva behaviour under sustained programmatic load is
    untested, and this is the largest unknown on the list rather than the
@@ -570,16 +921,56 @@ and 5 shape the rail rather than veto it.
    production, on real users' carts. Measure it no later than the authenticated
    probe in gap 1. Tracked as **MEAL-115**.
 
+   **Untouched by the 2026-08-11 measurement, and now the only gap that can sink
+   the rail outright** (gap 6 does not sink it — it constrains what the rail is
+   allowed to do until answered). One accepted add is not sustained load; if
+   anything, closing gap 1
+   raises this one's urgency, because it removes the reason not to build and
+   therefore brings forward the day we find out. Nothing below the "Closing the
+   gap" heading measures it — it needs its own volume test.
+
    *This is deliberately worded to match MEAL-12's gap 4
    (`docs/heb-graphql-persisted-queries.md:271-276`). Same risk, same platform
    posture, same priority — and the merged version of this document gave it a
    bullet where MEAL-12 gave it a number.*
 
-5. **Token readiness.** `window.AB.userInfo.SWY_SHOP_TOKEN` is populated
-   asynchronously, so "the token is in the page" is true of a settled tab and not
-   necessarily true at the moment a rail wants to read it. Expiry and refresh
-   mid-run are likewise unhandled. See "But the token is not simply *there*".
-   Operational rather than existential — it shapes the rail, it does not veto it.
+5. **Token readiness — and now, token lifetime.**
+   `window.AB.userInfo.SWY_SHOP_TOKEN` is populated asynchronously, so "the token
+   is in the page" is true of a settled tab and not necessarily true at the moment
+   a rail wants to read it. **Hydration timing is still unmeasured** — probe 2's
+   `TOKEN READINESS` line was not captured.
+
+   *Sharpened 2026-08-11:* the captured JWT lives **45 minutes** — measured, from
+   `iat` and `exp` — so expiry mid-run is not hypothetical for a long cart.
+   Whether the page then refreshes silently is **inferred, not measured**:
+   `offline_access` is in `scp` and `auth_time` was 29 days before `iat`, which
+   together make a silent refresh the likeliest reading, but nobody watched one
+   happen. Re-reading the global before every call handles the expiry and the
+   hydration case alike — **with a bound**, because a session that genuinely needs
+   a re-login is indistinguishable from a slow one, and an unbounded wait turns
+   that into a hang. See "What the real token turned out to say". Operational
+   rather than existential — it shapes the rail, it does not veto it.
+
+6. **What `qty` means on a repeat add. Added 2026-08-11, and it is a correctness
+   prerequisite rather than a feasibility one.** `POST /items` is "add / **update**
+   item"; sending `qty: 1` twice for one `itemId` may leave 1 or 2 in the cart, and
+   nothing has measured which. Unlike everything else here, both answers *work* —
+   they just produce different carts, and a rail that assumes the wrong one
+   silently over- or under-adds. That is the failure the cart governing principles
+   exist to prevent, and it is invisible in a `200`.
+
+   **This does not gate whether the rail is buildable; it gates whether the rail
+   may retry, or add the same item from two meals, before it is answered.** Two
+   minutes on the next authenticated session settles it: add the same id twice,
+   read the cart. Cheaper than any of the alternatives, including finding out from
+   a user.
+
+   ✅ **Ticketed 2026-08-14 as MEAL-194** (p1 spike, 1 day), alongside gaps 1 and
+   4 (**MEAL-137**, **MEAL-115**). It was unticketed for three days, which is
+   exactly how a correctness prerequisite ends its life as a paragraph nobody
+   re-reads. Whoever picks up the Albertsons rail: settle MEAL-194 before you
+   write the add path, not after. The same class of bug is already live on HEB
+   (**MEAL-185**), so the wrong guess here is not hypothetical.
 
 ---
 
@@ -758,8 +1149,11 @@ The honest deductions:
   payoff large — worth one shared canary, not 31. See "What the canary must
   assert" for what that canary has to cover to be worth anything.
 - **Nothing here is an argument for building the rail**, only that if we build it,
-  it covers the family. The unknowns above are unmeasured, and gaps 1 and 4 are the
-  real gating risks (**MEAL-137**, **MEAL-115**).
+  it covers the family. *Updated 2026-08-11:* gap 1 (**MEAL-137**) is closed, so
+  **gap 4 (sustained load, MEAL-115) is now the sole *feasibility* risk** — gap 6
+  (`qty` on a repeat) is a correctness prerequisite, not a feasibility one — and this
+  section's own claim is untouched by that, because the family sweep is still
+  unrun and the accepted write happened on exactly one banner.
 - **Keep the DOM rail.** Same conclusion as MEAL-12: this is an optimisation with a
   fallback, not a replacement.
 
@@ -790,16 +1184,44 @@ what a *working* endpoint returns to it. Relevant existing ticket: **MEAL-7**
 
 ## Closing the gap — runnable, needs a human
 
-Everything above was established without an account, and **everything above is a
-refusal.** What remains needs a logged-in Albertsons-family session, which is why
-it stops here.
+Everything in the 2026-08-06 document was established without an account, and all
+of it was a refusal. **Probe 3 has since been run and it closed gaps 1 and 2** —
+see "The measured add contract". What is left still needs a logged-in
+Albertsons-family session.
 
-Open, mapped to "What remains unknown": (1) does an authenticated call **succeed** —
-including a *write* — and what else does it need besides the bearer (gap 1,
-**MEAL-137**); (2) the `/items` request body (gap 2); (3) why product search tarpits
-for a plain client (gap 3); (5) when the token is actually readable, and what
-happens when it expires (gap 5). Gap 4, sustained load, is **MEAL-115** and is not
-closed by any probe below — it needs its own volume test.
+Still open, mapped to "What remains unknown": (3) whether product search returns
+anything — probe 2's search leg needs its params fixed and re-run; (5) when the
+token is actually readable after a load; (6) what `qty` means on a repeat add,
+which does not sink the rail but must be answered before it retries anything.
+
+Plus three things that are not numbered gaps and would otherwise fall off the
+list — all of them one line each on the next authenticated session:
+
+- **The add's response body.** The `200` was logged without consuming it.
+- **`capturedBearer === window.AB.userInfo.SWY_SHOP_TOKEN`.** The one comparison
+  that turns "no Okta flow, ever" from inference into measurement.
+- **The read and remove operations.** `POST /cart/customer/{id}` and
+  `DELETE /items` are still bundle-only; only the *add* was confirmed. Probe 2's
+  cart leg attempts the read; nothing attempts the remove, on purpose.
+
+- **Whether cookies are required.** *Corrected: an earlier draft called this
+  "not testable without deliberately breaking a working request". That is wrong,
+  and it was the excuse for leaving it open.* Replay the captured add with
+  `credentials: 'omit'` — one word, fully reversible, and it rides along with the
+  `qty` test on the same session. A `200` means the bearer is doing the work and
+  settles the gate-chain question above too; a `403` means cookies are load-bearing
+  and the rail must stay same-origin, which it already is.
+
+`preferenceList` is the one that genuinely waits for a reason: dropping it is also
+a one-word test, but unlike the others a wrong answer there silently changes what
+lands in the cart rather than failing visibly.
+
+Gap 4, sustained load, is **MEAL-115**, is not closed by any probe below, and
+after 2026-08-11 is the only remaining gap that can sink the rail outright — it
+needs its own volume test.
+
+**Probe status:** probe 1 — not run. Probe 2 — run 2026-08-11, **defective**, see
+its own note. Probe 3 — **run 2026-08-11, succeeded.**
 
 ### Probe 1 — the family sweep. No account needed.
 
@@ -887,23 +1309,70 @@ settled tab will always see the latter. The key dump matters too: it shows what
 else is on that object, which is the cheapest way to notice a field the rail needs
 that this document never named.
 
+> **Run 2026-08-11 — and it was defective. Fixed below; re-run before quoting it.**
+>
+> Both request legs returned `400`. **The cart leg's 400 is this probe's bug
+> rather than origin behaviour**: it built store context from `ui.shopStoreId` /
+> `ui.shopZipcode`, which do not appear to exist on a real `userInfo` — it sent an
+> empty `zipCode` and no `serviceType` at all. **The search leg's 400 is not
+> explained by that**, since search sends neither param; its cause is still open
+> (see the tarpit section — `storeid`, `channel`, or an omitted `uuid`/`banner`).
+> The version below takes store context from the values the accepted add actually
+> used, falls back through several field names, and **refuses to send store
+> context it could not resolve** — skipping a leg with an instruction beats
+> quietly producing another uninterpretable 400.
+>
+> Two results from that run survive the bug, because they are status-*class*
+> signals rather than payloads: a real bearer reaches the app tier (`400`, not the
+> `403` every bogus bearer got — see the gate chain), and product search **answers
+> in-page instead of tarpitting** (see the tarpit section). The `SESSION` and
+> `TOKEN READINESS` lines were not captured, so gap 5 is still open, and the
+> `userInfo KEYS` dump was not captured either — which is the single most useful
+> line to bring back next time, since it is what would have caught this bug.
+
 ```js
 // MEAL-15 probe. Read-only. Run on a logged-in www.<banner>.com tab.
 (async () => {
   // ── 1. Is the session really readable from the page, and WHEN? ────────────
-  const ui = window.AB?.userInfo;
-  if (!ui) return console.error('window.AB.userInfo missing — are you on a banner storefront page, signed in?');
+  // POLL, do not read once. On the hard-reload run this probe asks for, AB.userInfo
+  // is often not there yet — and aborting on that would kill the run in exactly the
+  // state gap 5 exists to measure, which is the mistake the token read below was
+  // already fixed for. How long it takes to appear IS the measurement.
+  const tStart = performance.now();
+  let ui = window.AB?.userInfo, waitedMs = 0;
+  while (!ui && waitedMs < 10000) {
+    await new Promise(r => setTimeout(r, 100));
+    waitedMs = Math.round(performance.now() - tStart);
+    ui = window.AB?.userInfo;
+  }
+  if (!ui) return console.error('window.AB.userInfo never appeared in 10s — are you on a banner ' +
+                                'storefront page (not /erums/cart), signed in? If you ARE, that is ' +
+                                'itself the finding: report it.');
+  console.log(`AB.userInfo READY after ${waitedMs}ms` +
+              (waitedMs ? ' — it was NOT there on first read. Report this number: it is gap 5.' : ' (present immediately)'));
 
   // Everything on the object, not just the fields we expected. Cheap, and the
   // fastest way to spot something the rail needs that this doc never named.
-  console.log('userInfo KEYS:', Object.keys(ui).sort().join(', '));
+  // Object.keys alone would miss the case that matters most here: the bundle
+  // describes AB.userInfo entirely through accessors (getShopStoreId(),
+  // getBanner(), getUUID()), so the fields may be prototype getters or
+  // non-enumerable — invisible to Object.keys, and invisible is exactly how the
+  // 2026-08-11 run concluded shopZipcode "does not exist". Walk the chain.
+  const allKeys = (o) => { const out = new Set(); 
+    for (let p = o; p && p !== Object.prototype; p = Object.getPrototypeOf(p))
+      for (const k of Object.getOwnPropertyNames(p)) out.add(k);
+    return [...out].sort(); };
+  console.log('userInfo KEYS (own, enumerable):', Object.keys(ui).sort().join(', '));
+  console.log('userInfo KEYS (incl. prototype + non-enumerable):', allKeys(ui).join(', '));
+  // If those two lines differ, the difference IS the answer to "what are the real
+  // field names" — report both.
 
   const snap = () => { const t = window.AB?.userInfo?.SWY_SHOP_TOKEN;
                        return { hasToken: !!t, len: t ? t.length : 0 }; };
   const t_immediate = snap();
 
-  const tok = ui.SWY_SHOP_TOKEN;
-  const sess = { hasToken: !!tok, tokenLen: tok ? tok.length : 0,
+  const tok_immediate = ui.SWY_SHOP_TOKEN;
+  const sess = { hasToken: !!tok_immediate, tokenLen: tok_immediate ? tok_immediate.length : 0,
                  customerId: ui.customerId, storeId: ui.storeId,
                  shopStoreId: ui.shopStoreId, shopZipcode: ui.shopZipcode,
                  banner: ui.banner, uuid: ui.UUID, tokenExpiration: ui.tokenExpiration };
@@ -922,10 +1391,54 @@ that this document never named.
   // thing you do. If hasToken is false immediately after load and true 3s later,
   // gap 5 is confirmed and the rail needs a readiness wait.
 
-  if (!tok) return console.error('No SWY_SHOP_TOKEN. Everything below will 401 — sign in first (or it is still hydrating: wait and re-run).');
+  // RE-READ after the wait, and use THAT below. Reading once up top and gating on
+  // it down here would abort the whole probe in exactly the run this document
+  // asks for — the hard-reload one, where an absent-then-present token is the
+  // finding rather than a failure. Which is also the rail's rule: re-read, never
+  // cache. Note `ui` is captured, so re-read through window in case the object
+  // itself was replaced rather than filled in.
+  const ui2 = window.AB?.userInfo ?? ui;
+  const tok = ui2.SWY_SHOP_TOKEN;
+  // Do NOT return here. The CART leg needs the token; SEARCH sends no bearer at
+  // all and is the leg gap 3 turns on. Aborting everything on a missing token is
+  // the third version of the same mistake this probe has now made twice.
+  if (!tok) console.error('No SWY_SHOP_TOKEN, even 3s after load — the CART leg below will be ' +
+                          'skipped. Sign in, or wait longer and re-run. (Search still runs: it ' +
+                          'sends no bearer.)');
+  if (tok && !tok_immediate) console.warn('GAP 5 CONFIRMED: the token was ABSENT on the first read and ' +
+                                          'present 3s later. A rail must wait for hydration. Report this line.');
 
-  const storeId = ui.shopStoreId || ui.storeId;
-  const zip     = ui.shopZipcode || '';
+  // STORE CONTEXT. The 2026-08-11 run read ui.shopStoreId / ui.shopZipcode, which
+  // appear to be absent or empty on a real userInfo — it sent zipCode= and its
+  // cart leg 400'd uninterpretably. Try several names for each.
+  //   `||`, not `??`: an empty string is not a usable value for any of these, and
+  //   the whole point is to fall through to the next candidate rather than to
+  //   carry '' forward the way the run that broke did.
+  //   TWO chains, because the bundle uses two different accessors and this probe's
+  //   own rule is one evidence source per leg:
+  //     cart   — generateCommonParams: `primaryStoreId ? primaryStoreId : storeId`.
+  //              It never mentions shopStoreId.
+  //     search — getShopStoreId(), i.e. shopStoreId.
+  //   They are probably the same value; if they are not, feeding the search
+  //   accessor to the cart call is exactly the mixing that produces a 400 nobody
+  //   can attribute. Log both and let the difference be visible.
+  // HARD-CODE HERE if the log below shows undefined — that is the intended fix,
+  // and reporting the KEYS line alongside what you hard-coded is the finding.
+  const cartStoreId   = ui2.primaryStoreId || ui2.storeId || ui2.preferredStoreId;
+  const searchStoreId = ui2.shopStoreId || ui2.storeId || ui2.preferredStoreId;
+  const storeId = cartStoreId;   // name kept for the cart leg below
+  if (cartStoreId !== searchStoreId)
+    console.warn('STORE ID: cart and search accessors DISAGREE —',
+                 { cart: cartStoreId, search: searchStoreId },
+                 '— report this; it decides which one a rail reads.');
+  const zip     = ui2.shopZipcode || ui2.zipCode || ui2.zipcode || ui2.postalCode;
+  const svc     = ui2.serviceType || 'Dug';   // fallback value from the measured add; 'pickup' was the old guess
+  console.log('STORE CONTEXT:', { storeId, zip, serviceType: svc,
+                                  svcFromPage: !!ui2.serviceType });
+  // Each leg is gated on what IT needs, not on the union: the cart read needs a
+  // zip and search does not, and aborting the whole probe over a missing zip is
+  // how a run comes back with gap 3 still unmeasured.
+
   const CART    = '/abs/pub/erums/cartservice/api/v2/cart';
   const CART_KEY   = 'c645e9387c654aa8ae253045f648bfac';   // from initErumsConfig
   // NOTE: the prefix above is corroborated (config blob, bundle, and a live APIM
@@ -936,10 +1449,37 @@ that this document never named.
   const SEARCH_KEY = 'e914eec9448c4d5eb672debf5011cf8f';   // from initSearchConfig
 
   // ── 2. CART READ. POST, but semantically a read — adds nothing. ───────────
+  // ONE evidence source per leg — do NOT mix them. This is the READ path, and
+  // the only description of it is the bundle, so this sends what the bundle says:
+  // buildHeadersWithToken's slotsRequired + x-swy-client-id, and expressChk.
+  // The 2026-08-11 measurement showed all three are absent from the ADD path, but
+  // the add is a different endpoint and nothing measured the read. A hybrid of
+  // the two produces another 400 nobody can attribute, which is exactly the trap
+  // the run below fell into.
+  // If this 400s or 403s: re-send with the measured add-path header set instead
+  // (drop slotsRequired + x-swy-client-id and expressChk, add ocp-apim-trace:
+  // true and sort-order: date). That pair of runs is the experiment — either one
+  // alone is not.
+  // serviceType is new here and is NOT borrowed from the add: generateCommonParams
+  // sets it for every cart call, and the 2026-08-11 run simply omitted it. Only the
+  // FALLBACK VALUE ('Dug') comes from the add measurement, and only when the page
+  // does not supply one — watch svcFromPage above.
+  // customerId is in the PATH, so a missing one silently requests
+  // /cart/customer/undefined — the same uninterpretable-refusal trap as an empty
+  // query param, and harder to spot. Guarded with the rest. (It was populated on
+  // 2026-08-11; the field name is still only observed once.)
+  const custId = ui2.customerId || ui2.customerID || ui2.guid;
+  if (!tok || !storeId || !zip || !custId) {
+    console.error('CART READ skipped — unresolved:',
+                  [!tok && 'SWY_SHOP_TOKEN', !storeId && 'storeId', !zip && 'zipCode',
+                   !custId && 'customerId'].filter(Boolean).join(', '),
+                  '— a 400 from here would tell us nothing. Hard-code above and ' +
+                  're-run. (Search below still runs.)');
+  } else {
   const cartQs = new URLSearchParams({
-    type: 'mini', storeId, zipCode: zip,
+    type: 'mini', storeId, serviceType: svc, zipCode: zip,
     cartCategoryList: '1P,3P_MARKETPLACE,1P_Wine', expressChk: 'true' });
-  const cr = await fetch(`${CART}/customer/${ui.customerId}?${cartQs}`, {
+  const cr = await fetch(`${CART}/customer/${custId}?${cartQs}`, {
     method: 'POST', credentials: 'include',
     headers: { 'Ocp-Apim-Subscription-Key': CART_KEY,
                'authorization': 'Bearer ' + tok,
@@ -949,29 +1489,68 @@ that this document never named.
     body: '{}' });
   const cartTxt = await cr.text();
   console.log('CART READ:', cr.status, cartTxt.slice(0, 700));
-  // Keep the cartId — an add needs it.
+  // Keep the cartId — not because an add needs it (the measured add sends none),
+  // but because its presence or absence is the last unexplained bit of
+  // generateCommonParams.
   try { const j = JSON.parse(cartTxt);
         console.log('cartId candidates:', JSON.stringify(j).match(/"cartId":"[^"]+"/g)?.slice(0,3)); } catch {}
+  }
 
   // ── 3. SEARCH. Does it work in-page, where plain curl tarpitted? ──────────
+  // Runs even if the CART leg was skipped: search sends no zip, so a missing zip
+  // must not cost us gap 3 a second time. It does need storeid — the 2026-08-11
+  // search 400 cannot be blamed on the empty zipCode that broke the cart leg,
+  // because search never sends one, so `storeid` and `channel` are the two live
+  // suspects. This loop varies `channel`, the cheaper one to rule out.
   const base = location.origin;
-  const sQs = new URLSearchParams({
-    pageurl: base, url: base, 'request-id': String(Date.now()), pagename: 'search',
-    rows: '5', start: '0', 'search-type': 'keyword', storeid: storeId,
-    q: 'tortillas', dvid: 'GhXAoLXN-ss-search', channel: 'pickup',
-    uuid: ui.UUID ?? '', featured: 'false', banner: ui.banner ?? '', includeOffer: 'true' });
-  const t0 = performance.now();
-  try {
-    const sr = await fetch(`/abs/pub/xapi/search/products?${sQs}`, {
-      credentials: 'include',
-      headers: { 'ocp-apim-subscription-key': SEARCH_KEY, accept: 'application/json' } });
-    const st = await sr.text();
-    console.log(`SEARCH: ${sr.status} in ${Math.round(performance.now()-t0)}ms`, st.slice(0, 500));
-    try { console.log('product count:',
-      JSON.parse(st)?.primaryProducts?.response?.docs?.length); } catch {}
-  } catch (e) {
-    console.error(`SEARCH threw after ${Math.round(performance.now()-t0)}ms —`,
-                  'if this hung ~30s the tarpit is not client-shaped:', e);
+  if (!searchStoreId) {
+    console.error('SEARCH skipped — storeid unresolved, and a 400 without it is ' +
+                  'exactly as uninterpretable as the 2026-08-11 one. Hard-code ' +
+                  'storeId above and re-run: this is the leg gap 3 turns on.');
+  } else {
+  // `channel` is the bundle's `fulfillmentType`, a different param from the cart's
+  // `serviceType`, and NOTHING has verified its accepted values. 'pickup' is the
+  // original guess; 'Dug' is what the cart path turned out to want; ui2.serviceType
+  // is whatever the page itself thinks. Try all three, deduped.
+  // uuid and banner: OMIT rather than send empty. `uuid=` is the same trap as the
+  // `zipCode=` that made the 2026-08-11 cart 400 unreadable — an empty value is a
+  // value, and its refusal gets misattributed to whichever param we happened to
+  // be varying. Both were populated on 2026-08-11, so a miss is itself news.
+  const uuid       = ui2.UUID || '';
+  const banner = ui2.banner || '';
+  // NO hostname fallback. `location.hostname.split('.')[1]` looks right for
+  // www.safeway.com and is wrong wherever the host and the banner token differ
+  // (shopunitedsupermarkets, carrsqc, kingsfoodmarkets…), and a WRONG banner is
+  // worse than an absent one: it produces a 400 we would misattribute to storeid
+  // or channel. Same rule as uuid — omit, and say so.
+  console.log('SEARCH inputs:', { storeid: searchStoreId, uuid: uuid || '(omitted)',
+                                  banner: banner || '(omitted)' });
+  if (!uuid || !banner) console.warn('SEARCH: omitting', !uuid ? 'uuid' : '', !banner ? 'banner' : '',
+    '— absent from userInfo. If this 400s, that omission is a suspect alongside ' +
+    'storeid and channel. Read the real value off a search request in the Network tab.');
+  for (const channel of [...new Set(['pickup', 'Dug', svc])]) {
+    const sQs = new URLSearchParams({
+      pageurl: base, url: base, 'request-id': String(Date.now()), pagename: 'search',
+      rows: '5', start: '0', 'search-type': 'keyword', storeid: searchStoreId,
+      q: 'tortillas', dvid: 'GhXAoLXN-ss-search', channel,
+      featured: 'false', includeOffer: 'true',
+      ...(uuid   ? { uuid }   : {}),
+      ...(banner ? { banner } : {}) });
+    const t0 = performance.now();
+    try {
+      const sr = await fetch(`/abs/pub/xapi/search/products?${sQs}`, {
+        credentials: 'include',
+        headers: { 'ocp-apim-subscription-key': SEARCH_KEY, accept: 'application/json' } });
+      const st = await sr.text();
+      console.log(`SEARCH [channel=${channel}]: ${sr.status} in ${Math.round(performance.now()-t0)}ms`,
+                  st.slice(0, 500));
+      try { console.log('product count:',
+        JSON.parse(st)?.primaryProducts?.response?.docs?.length); } catch {}
+    } catch (e) {
+      console.error(`SEARCH [channel=${channel}] threw after ${Math.round(performance.now()-t0)}ms —`,
+                    'if this hung ~30s the tarpit is not client-shaped:', e);
+    }
+  }
   }
 })();
 ```
@@ -980,68 +1559,125 @@ that this document never named.
 
 | Outcome | Meaning |
 |---|---|
-| `hasToken: true` with a long token, and real `customerId`/`shopStoreId` | **The core premise is confirmed.** The session is readable in-page; no Okta flow needed, ever. This closes the ticket's second acceptance criterion for *reads*. |
+| `hasToken: true` with a long token, and a real `customerId` | **The core premise is confirmed** — and was, on 2026-08-11. The session is readable in-page; no Okta flow needed, ever. Note `shopStoreId` is **not** part of this signal: it may well come back `undefined`, which is a finding about the field name and not a failure. The `STORE CONTEXT` line is where to look for that. |
 | `TOKEN READINESS` differs between the immediate read and the 3s read | **Gap 5 confirmed.** The rail needs a hydration wait, not a single read. Record how long it took. |
-| `TOKEN READINESS` identical, both `hasToken: true` | Inconclusive, **not** a refutation — you are on a settled tab. Hard-reload and re-run as the first action to actually test this. |
-| `window.AB.userInfo missing` | You are on `/erums/cart` or another sub-app rather than the storefront. Go to the banner homepage and retry. Not a negative result. Note the cart page *does* carry the token globals, but not the config blobs. |
-| **CART READ `200` + JSON containing your hand-added item** | **The read half works** — auth and session confirmed against a real account. **This is not "the rail works"**, which is what the merged version claimed here: a read is not a write, and gap 1 is not closed until probe 3's write succeeds. |
-| CART READ `401` "Not Authorized" | The token was rejected or absent. Check `tokenExpiration`; reload to refresh and retry. |
-| CART READ `403` | Token present but not accepted for this operation — the same status a *bogus* bearer produced from curl. Suspect an extra required header or a token audience mismatch. Capture the real request from the Network tab and diff the headers. |
-| CART READ `400` naming a param | **Success for our purposes** — we reached the service and only the arguments are wrong. Fix from the message and re-run. |
-| SEARCH `200` with a non-zero product count | **The tarpit was client-shaped, not a block.** Search works in-page. This is the expected result and the rail's search half is settled. |
-| SEARCH hangs in-page too | The tarpit is real and server-side. **Fall back to `/abs/pub/xapi/search/autosuggest`**, which is measured working anonymously, or keep DOM scraping for search and use the network rail only for cart. Materially narrows the rail — file it. |
+| `STORE CONTEXT` shows `undefined` and a leg logs "skipped" | **A result, not a failed run** — and the most useful one available, because it means the field names in this document are wrong and the `KEYS` dump has the right ones. Each leg skips independently: a missing zip costs you the cart read only, a missing `storeId` costs you both. Read the values off the `KEYS` line or off a real cart request in the Network tab, hard-code them, re-run. Report the KEYS line **and** what you hard-coded. |
+| `GAP 5 CONFIRMED` in the log | The token was absent on the first read and present 3s later — **the finding this probe exists for**, and only visible on a hard-reload run. The probe continues rather than aborting, so the rest of the run is still valid. Report the line verbatim. |
+| `TOKEN READINESS` identical, both `hasToken: true`, **and** `AB.userInfo READY (present immediately)` | Inconclusive, **not** a refutation — you were on a settled tab. Hard-reload and re-run as the first action to actually test this. |
+| `TOKEN READINESS` identical but `AB.userInfo READY after <n>ms` | **Not inconclusive — that `n` is the hydration window**, and the probe spent it waiting for the object before it ever read the token. Report `n`; a rail needs to survive it. |
+| `window.AB.userInfo never appeared in 10s` | You are on `/erums/cart` or another sub-app rather than the storefront. Go to the banner homepage and retry. Not a negative result. Note the cart page *does* carry the token globals, but not the config blobs — so if you were on the storefront and still saw this, it *is* a result: report it. |
+| **CART READ `200` + JSON containing your hand-added item** | **The read half works** — this is what the 2026-08-11 run failed to get, from its own bug. Note it is *not* what closes gap 1: a read is not a write. Gap 1 was closed by probe 3. |
+| CART READ `401` "Not Authorized" | The token was rejected or absent. Check `tokenExpiration`; reload to refresh and retry. Given the 45-minute lifetime, a token that worked ten minutes ago can be the cause. |
+| CART READ `403` | **More diagnostic than it was.** A real in-page session is measured to get *past* the 403 — to a `400` — so a `403` from a signed-in tab means your credential context is not what the site's own calls carry. Most likely the token (check you read `SWY_SHOP_TOKEN` and not a stale variable), but cookies and origin are not ruled out as the thing the gate reads. |
+| CART READ `400` naming a param | We reached the service and only the arguments are wrong. **Do not report this as a result until you have fixed it and re-run** — the 2026-08-11 run stopped here and its 400s carry no information about the endpoint. |
+| SEARCH `200` with a non-zero product count | **The tarpit was client-shaped, not a block.** Search works in-page and the rail's search half is settled. **Nobody has seen this yet** — it is the main thing this probe is still for. |
+| SEARCH `400` on **every** `channel` value | `channel` is *less likely* — not ruled out, since all the values tried are guesses from a domain nothing has enumerated. Move to the other suspects: `storeid` (check the `STORE CONTEXT` line and hard-code a real one), and any param the warning above says was omitted. |
+| SEARCH `400` on some `channel` values and `200` on another | **Gap 3 closed and the param named.** Record which value won; the cart path's analogue turned out to be `Dug` where everyone assumed `pickup`, which is exactly why the probe now sweeps them. |
+| `SEARCH skipped` | `storeid` could not be resolved. Not a result about the endpoint — hard-code a store id above and re-run, because this is the leg gap 3 turns on. |
+| SEARCH hangs in-page too | Did not happen on 2026-08-11, so this is now unlikely — but if it recurs the tarpit is real and server-side. **Fall back to `/abs/pub/xapi/search/autosuggest`**, which is measured working anonymously, or keep DOM scraping for search and use the network rail only for cart. Materially narrows the rail — file it. |
 | SEARCH `401`/`403` | Search needs auth after all, contradicting the bundle. Add `authorization: Bearer` and re-run. |
 | Anything with `x-iinfo` and an Imperva HTML body | Imperva challenged you. Reload the page and retry; if it recurs under repetition that is the load finding, and it is important. |
 
-### Probe 3 — capture a real add, then perform one. Needs a human, two clicks.
+### Probe 3 — capture a real add, then perform one. ✅ RUN 2026-08-11.
+
+**This one was run and it worked.** Kept in full because it is the procedure that
+produced the measured contract, because it is the template for doing the same on
+the next banner, and because one of its steps is not optional (step B's undo).
+
+> **Result, 2026-08-11, `www.safeway.com`.** Step A captured the add. Step B
+> replayed it with only the product id changed and got **`200 OK`**; the item was
+> in the cart after a reload, and *only* after a reload — the badge did not move
+> on its own. Step B is what closed gap 1. The contract it produced is in "The
+> measured add contract"; the JWT it produced is in "What the real token turned
+> out to say". **What it did not collect: the response body** (the `Response` was
+> logged without being consumed) and the `SESSION` / `TOKEN READINESS` / `KEYS`
+> lines from probe 2. Those are the shopping list for the next run.
 
 The merged version framed this as "the `/items` POST body is the **only** part of
-the contract still unknown". It is not — see gap 1. The body is the smaller half;
-the larger half is that **nothing has observed an authenticated write being
-accepted at all**. This probe has been changed to settle both in one pass.
+the contract still unknown". It was not — see gap 1. The body was the smaller
+half; the larger half was that **nothing had observed an authenticated write being
+accepted at all**. This probe was changed to settle both in one pass, and did.
 
 **Step A — capture. Use "Copy as fetch", not a hand-transcribed body.**
 
 1. On a logged-in banner tab, open DevTools → **Network**, filter `cartservice`.
 2. Click **Add** on any product in the normal UI.
 3. Right-click the `POST …/api/v2/cart/items` request → **Copy** → **Copy as
-   fetch** (or **Copy as cURL**).
-4. Paste that verbatim into **MEAL-137**.
+   fetch**. **Not "Copy as cURL", and not "Copy as fetch (with cookies)"** — those
+   embed the session cookie jar, and a session cookie in a tracker comment is a
+   worse leak than the bearer below, because it does not expire in 45 minutes.
+   (The 2026-08-11 capture used plain "Copy as fetch" and contained **no `cookie`
+   header at all** — verified against the paste. Chrome relies on
+   `credentials: 'include'` instead, which is also why cookie *necessity* is still
+   untested: we have never seen the cookie set, only its effects.)
+4. **Replace the `authorization` value with `Bearer <redacted>` before pasting it
+   anywhere.** Learned the hard way on 2026-08-11: the capture carries a live
+   bearer *and*, in its claims, the account's email, phone, loyalty card number
+   and household id. The token expires in 45 minutes; the PII does not, and the
+   tracker has no comment-edit API. Nothing downstream needs the token value —
+   this document was written from the *claims*, decoded locally.
+5. Paste the redacted capture into **MEAL-137**.
 
-Why the change: the merged version asked for "the JSON body and the full header
-list", which is a transcription task, and transcription silently drops exactly the
-things gap 1 turns on — **query-parameter order**, the **full cookie set**, and any
-header a reader assumes is boilerplate (`x-swy-client-id`, `slotsRequired`, a CSRF
-header, a `sec-*` header). "Copy as fetch" captures all of it mechanically and
-settles gap 1's header/cookie questions in the same pass as the body. It costs the
+Why "Copy as fetch": the merged version asked for "the JSON body and the full
+header list", which is a transcription task, and transcription silently drops
+exactly the things gap 1 turned on — **query-parameter order** and any header a
+reader assumes is boilerplate. That is not hypothetical: the two headers this
+document had never heard of (`ocp-apim-trace`, `sort-order`) and the two it had
+wrongly called load-bearing (`slotsRequired`, `x-swy-client-id`) are precisely
+what a hand transcription would have got wrong in both directions. It costs the
 same one right-click.
 
-**Step B — the smallest reversible write.** Do this, because without it the
-document still has not observed an authenticated write succeeding:
+*Corrected 2026-08-11: an earlier draft of this step claimed Copy-as-fetch also
+captures "the full cookie set". It does not — see the parenthesis above. That was
+the argument for preferring it over transcription, and it was the one part of the
+argument that was false.*
+
+**Step B — the smallest reversible write.** This is the step that closed gap 1;
+without it the document had only observed refusals:
 
 1. Empty the cart, or note exactly what is in it.
 2. Take the captured `fetch(...)` from step A, change **one** thing — the product
    id — and run it in the console on the same tab.
-3. Check the result: the response status, *and* whether the item appears in the
-   cart UI on reload.
+3. Record the response status **and the body**. The capture pastes as a bare
+   `fetch(...)` that binds nothing, which is how the 2026-08-11 run ended up with
+   a status and no payload. Put a variable in front of it and read it:
+   `const r = await fetch(...same capture...); console.log(r.status, await r.text());`
+   A bare `Response` object in the console shows the status but leaves
+   `bodyUsed: false`, which is how the 2026-08-11 run answered the ticket's
+   question while leaving a rail without the payload it has to parse. Then check
+   the cart UI **on reload**; do not trust the badge, which is measured not to
+   update.
 4. **Remove it through the site's own UI**, not through the API. One add, then a
    normal manual removal: fully reversible, no `DELETE` call, nothing left behind.
 
-Report the status *and* the response body. A `200`/`201` with the item visible in
-the UI closes gap 1 and is the first evidence in this whole investigation of the
-platform *accepting* anything from us. A `403` is the interesting failure: it is the
-same status a bogus bearer produces, and per the gate-chain correction it will not
-tell you why on its own — diff your call against the step-A capture, header by
-header and param by param, and the difference is the answer.
+How to read it: a `200`/`201` with the item visible after reload closes gap 1 for
+that banner — that is what happened. A `403` would have been the interesting
+failure: it is the same status a bogus bearer produces, and per the gate-chain
+correction it does not say why on its own — diff the call against the step-A
+capture, header by header and param by param, and the difference is the answer.
 
-With that in hand the contract is complete and the rail is implementable — except
-for gap 4 (**MEAL-115**), which no console probe can settle.
+**Repeat it per banner before assuming the family generalises.** It has been run on
+`safeway.com` only. The config blobs are byte-identical across the family and the
+token is not banner-bound, so the expectation is that it just works — but that is
+an expectation, and this document has already been wrong once about what a real
+add sends.
+
+With the contract in hand the rail is implementable — except for gap 4
+(**MEAL-115**), which no console probe can settle, and except for `qty`
+semantics, which one more two-minute run of this same probe would settle: **add
+the same `itemId` twice and read the cart.** Do that before a rail retries
+anything.
 
 ---
 
 ## Reproducing what is in this document
 
-Everything above is reproducible in about ten minutes with no account:
+The anonymous half is reproducible in about ten minutes with no account. **The
+part that matters most — the accepted add — is not in here**, because it needs a
+signed-in session; see probe 3. Note that every `serviceType=pickup` below is what
+the anonymous probes *guessed*; the real add sends `serviceType=Dug`. It makes no
+difference to these commands, which never get far enough to care, and it is left
+as-run so the transcript matches what was measured.
 
 ```bash
 # 1. Endpoint map, straight out of any banner's HTML — no bundle needed.
@@ -1093,9 +1729,17 @@ committed fixtures and on live pages, which is how fixture-vs-live drift was che
 nondeterministic, so a byte diff of whole blobs produces false positives. That is
 the same distinction as the value-identical / byte-identical note above.
 
-No page was patched or instrumented at any point. No account was used, no login was
-attempted, and no bearer was minted — per the MEAL-15 scope constraints. **That
-constraint is also this document's ceiling**: an anonymous investigation can only
-observe refusals, and every conclusion here about what the platform will *accept*
-is inference. Probe 3 step B is the smallest experiment that changes that, and it
-is the one thing still worth a human's two minutes.
+No page was patched or instrumented at any point. Through 2026-08-06 no account was
+used, no login was attempted, and no bearer was minted — per the MEAL-15 scope
+constraints. **That constraint was also this document's ceiling**: an anonymous
+investigation can only observe refusals, and every conclusion drawn then about what
+the platform would *accept* was inference.
+
+**On 2026-08-11 that ceiling was lifted, deliberately and minimally.** Probe 3 ran
+on the author's own signed-in account, on his own cart: one add through the site's
+own UI to capture the shape, one replayed add differing only in product id, then a
+manual removal through the UI. No bearer was minted then either — the token was
+read from the page, as the rail would. No `DELETE` was called, nothing was left in
+the cart, and no other account was touched. That is the entire authenticated
+footprint behind every "measured" claim above, and it is the experiment worth
+repeating on the next banner rather than re-deriving.

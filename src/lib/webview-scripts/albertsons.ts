@@ -205,14 +205,24 @@ export function albertsonsSearchQuery(name: string): string {
 //      something: to the DOM (so the DOM heuristic still decides the racy case,
 //      and nothing is fixed) or to signed-out (a login wall for a signed-in user
 //      every time we inject early). It moves the race, it does not remove it.
-//   2. We have never observed it populated. MEAL-15's evidence is bundle source,
-//      the chat-widget snippet, and anonymous curl probes — it says outright that
-//      the confirming probe needs a logged-in human. We do not know that the
-//      property is non-empty for a signed-in user, what it holds for a guest
-//      (initSearchConfig ships userInfoSkipIfGuest:true, so plausibly an empty
-//      value rather than an absent one), or the format of tokenExpiration, so we
-//      cannot even bound staleness. Leading with it would mean trusting unseen
-//      evidence in the one direction that fails silently.
+//   2. We had never observed it populated, and now we have — but not the part
+//      that matters here. UPDATED 2026-08-11 (MEAL-137): the logged-in probe was
+//      run, and on a settled signed-in safeway.com tab the property IS non-empty.
+//      An in-page fetch reading it reached the cart service's application layer
+//      (a 400, where every bogus bearer got a 403), so the value is a credential
+//      the origin treats as real. Note the separate add-to-cart that returned 200
+//      in that session replayed a bearer CAPTURED from the site's own request —
+//      nobody has yet compared the two values byte for byte. What is
+//      still unobserved is everything this check actually turns on: the value
+//      DURING the hydration window (nobody has captured the immediate-vs-delayed
+//      read), what it holds for a guest (initSearchConfig ships
+//      userInfoSkipIfGuest:true, so plausibly an empty value rather than an
+//      absent one), the format of tokenExpiration, so we still cannot bound
+//      staleness — and none of it inside OUR WebView, which is the only place
+//      this code runs. One thing the probe did add: the token lives 45 minutes,
+//      so "present" and "usable" are not the same property.
+//      See docs/albertsons-network-rail-feasibility.md, "What the real token
+//      turned out to say".
 //   3. It is unexercisable here. Fixture tests load static HTML with scripts
 //      blocked, so window.AB never exists — the token path would ship with no
 //      coverage at all while the covered path went unused.
@@ -223,8 +233,11 @@ export function albertsonsSearchQuery(name: string): string {
 // the log shows hasToken:true alongside a rendered name, points 1 and 2 are
 // answerable and promoting it to a cross-check — a second signal that must AGREE
 // before we say logged in, never one that can say it alone — becomes a small,
-// evidenced change. tests/fixture-tests/albertsons.spec.ts pins the refusal so
-// it cannot be reversed by accident.
+// evidenced change. MEAL-137 moved that closer without reaching it: the token is
+// now known to be readable in a browser tab, but this diagnostic is still the
+// only thing that can show it inside our WebView, in the window we care about.
+// tests/fixture-tests/albertsons.spec.ts pins the refusal so it cannot be
+// reversed by accident.
 function buildCheckLoginScript(domain: string): string {
   const s = sel();
   return `(async function() {
