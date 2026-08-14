@@ -8,7 +8,7 @@ measurement in it was a *refusal*; probe 3 has now been run on a signed-in
 `www.safeway.com` session and the platform accepted an add-to-cart. The rail is
 **estimable**. It is not unblocked, on two counts: gap 4 (sustained load,
 **MEAL-115**) is untouched by that measurement and still gates it on its own, and
-**gap 6 — what `qty` means on a repeat add — is unmeasured and unticketed.** Gap 6
+**gap 6 — what `qty` means on a repeat add — is unmeasured (MEAL-194).** Gap 6
 does not decide whether the rail can be built; it decides whether the rail may
 retry or add the same item twice without silently producing a wrong cart.
 **Timebox:** 1 day (spike — findings, not shipped code).
@@ -364,7 +364,8 @@ back to confirm an add, and it is cheap to recover on the next authenticated run
 The bundle calls this operation "add / **update** item". Sending `qty: 1` twice for
 the same `itemId` may leave one in the cart or two, and nothing here measured it —
 the probe added one item, once. Everything else in the residue produces a failed
-call; this one produces a **wrong cart**. See gap 1's residue.
+call; this one produces a **wrong cart**. Tracked as **MEAL-194**; see gap 1's
+residue.
 
 #### What the bundle says, kept for the record
 
@@ -964,10 +965,12 @@ than vetoes it.
    read the cart. Cheaper than any of the alternatives, including finding out from
    a user.
 
-   ⚠️ **Unticketed as of 2026-08-11 — it needs one.** Gaps 1 and 4 have tickets
-   (**MEAL-137**, **MEAL-115**) and this does not, which is exactly how a
-   correctness prerequisite ends its life as a paragraph nobody re-reads. Whoever
-   picks up the Albertsons rail: file it before you write the add path, not after.
+   ✅ **Ticketed 2026-08-14 as MEAL-194** (p1 spike, 1 day), alongside gaps 1 and
+   4 (**MEAL-137**, **MEAL-115**). It was unticketed for three days, which is
+   exactly how a correctness prerequisite ends its life as a paragraph nobody
+   re-reads. Whoever picks up the Albertsons rail: settle MEAL-194 before you
+   write the add path, not after. The same class of bug is already live on HEB
+   (**MEAL-185**), so the wrong guess here is not hypothetical.
 
 ---
 
