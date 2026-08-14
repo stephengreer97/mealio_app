@@ -39,9 +39,11 @@ export type StoreSelectors = Record<string, string>;
  * selector table; saying it out loud is what stops a reader assuming the absence
  * of a `platform` field means "not yet classified".
  *
- * 'kroger' is declared but has no table: the Kroger family runs through the web
- * extension, not this app's WebView engine. It is here so a config push can
- * pre-stage one before the adapter ships.
+ * 'kroger' is declared but has no table, and never will need one: the Kroger
+ * family runs on Kroger's public API, not on DOM automation, so there are no
+ * selectors to name and nothing here for a redesign to break. It is declared so
+ * a Kroger store's `platform` field can say what it actually is rather than
+ * being mislabelled 'standalone'.
  */
 export type PlatformId = 'instacart' | 'albertsons' | 'kroger' | 'standalone';
 
