@@ -860,22 +860,21 @@ export interface CartCheckFindings {
    * those are strictly more specific, and the caller reports them instead.
    */
   countShortfall: { delta: number; expected: number } | null;
-  /**
-   * Intended items the CART does not account for (MEAL-199). Empty when there
-   * were no rows to diff — an unread cart accounts for nothing, and saying so as
-   * "none of it landed" would be the false-positive this whole audit exists to
-   * avoid. Callers must check `cartRead` before treating an empty list as good
-   * news.
-   *
-   * This supersedes `missing` as the thing to show a user. `missing` is scoped to
-   * what the run CLAIMED it added, so it can only catch the run lying in one
-   * direction; this is scoped to what was asked for, so it catches the run being
-   * wrong in either.
-   */
-  notInCart: UnaccountedItem[];
   /** Whether a per-item cart read actually happened. False means every list
    *  above is empty for want of evidence, not for want of findings. */
   cartRead: boolean;
+  /**
+   * The before/after comparison the user-facing message is built from
+   * (MEAL-199): products and units we meant to add, against products and units
+   * the cart gained, matched by exact name, skips excluded.
+   *
+   * Held apart from the lists above rather than replacing them. Those feed the
+   * funnel — `missing`, `recovered` and `over` are how we measure the run's own
+   * reporting against the cart, which is MEAL-47's subject and needs the lenient
+   * matcher to see a near-miss at all. This one decides what a person is told,
+   * where a near-miss is a wrong sentence.
+   */
+  comparison: SnapshotComparison;
 }
 
 /** Do an intended title and a title the RUN reported name the same product?
@@ -909,35 +908,8 @@ function wasReported(item: IntendedItem, reportedAdded: string[]): boolean {
 export interface CartLeftoverSplit {
   recovered: RecoveredAdd[];
   over: OverAdd[];
-  /** The third leftover: intended items the CART does not account for. */
-  unaccounted: UnaccountedItem[];
 }
 
-/**
- * An intended item the cart under-accounts for, absent ones included.
- *
- * This is what lets the cart say an item did not land (MEAL-199). `missing` is a
- * different and weaker claim — it names items the RUN said it added that the
- * cart contradicts, so it can only ever be as complete as the run's own
- * reporting. An item lands here because the cart does not show it, and whether
- * the run thought the add succeeded is not consulted.
- */
-export interface UnaccountedItem {
-  name: string;
-  /** Units requested. Presence-based items (weight, increment) count 1. */
-  expected: number;
-  /** Units the cart credits it. 0 means the cart shows nothing for it. */
-  got: number;
-}
-
-/** Units of an intended item the cart has to show before it is fully accounted
- *  for. Weight and increment items are presence-based — one line settles them,
- *  whatever the requested count — exactly as the claim passes treat them, so
- *  reading `expectedQty` here would report a satisfied deli line as short. */
-function unitsExpected(item: IntendedItem): number {
-  if (item.isWeight || item.weightStepLb != null) return 1;
-  return Math.max(1, item.expectedQty || 1);
-}
 
 /** One added cart row while it is being consumed. Weight rows are held apart:
  *  they carry no unit count (one line at N lb), so only a weight-priced item may
@@ -1074,21 +1046,6 @@ export function splitCartLeftover(
         matchQuality: c.loose ? ('loose' as const) : ('exact' as const),
       })),
     over,
-    // Read off the SAME claims the two lists above are read from, after every
-    // pass has run. One pool, one partition: a UNIT cannot be both claimed by an
-    // item and missing from it.
-    //
-    // That guarantee is per-unit, and the thing a user reads is per-product, so
-    // it is weaker than it looks. When a cart title shares too few tokens with
-    // the search term for cartNameMatches to connect them — a review substitute
-    // is the common way, "cilantro" picked as "Fresh Herb Bundle" — the row is
-    // claimed by nobody and the item claims nothing, so the row is over and the
-    // item is unaccounted, and one product is named twice in one sentence. The
-    // partition is intact; the matcher is what failed. That is MEAL-199's named
-    // blocking sub-problem and it is not fixed here.
-    unaccounted: claims
-      .filter((c) => c.qty < unitsExpected(c.item))
-      .map((c) => ({ name: c.item.name, expected: unitsExpected(c.item), got: c.qty })),
   };
 }
 
@@ -1225,7 +1182,6 @@ export function auditCartAfterRun(input: {
   let short: ShortAdd[] = [];
   let over: OverAdd[] = [];
   let recovered: RecoveredAdd[] = [];
-  let notInCart: UnaccountedItem[] = [];
   // The full set the run meant to add. After a parallel top-up `active` is
   // only the retry subset, so the reconcile's snapshot is preferred; the
   // serial path never reconciles and falls back to its (unnarrowed) active set.
@@ -1239,39 +1195,12 @@ export function auditCartAfterRun(input: {
     // Computing these separately let a single cart unit be reported as both a
     // recovery and an over-add — the same product named twice on the done
     // screen, "don't add it again" beside "nothing intended it".
-    ({ over, recovered, unaccounted: notInCart } = splitCartLeftover(addedRows, reportedAdded, intendedAll));
+    ({ over, recovered } = splitCartLeftover(addedRows, reportedAdded, intendedAll));
     // Rows the run already reports by name as unverified are accounted for, not
     // unintended — see dropExplainedOverAdds. Filtered here rather than inside
     // splitCartLeftover so the partition stays a partition: the row is still
     // consumed as nothing's claim, it just isn't ALSO called unwanted.
     over = dropExplainedOverAdds(over, explainedRows);
-    // `notInCart` is what the screen turns into "X is not in your cart", and a
-    // sentence in that form has to be true of the CART, not merely unproven by
-    // this run's claim pass. Three ways it could be false, each removed here
-    // rather than in splitCartLeftover — the pool discipline there must keep
-    // treating these as unclaimed, or a row they explain becomes an over-add.
-    //
-    //   1. A row the run already reports as unverified (MEAL-119). A count item
-    //      can never claim a weight row, so its claim stays 0 and it arrives
-    //      here — while the done screen is, in the same breath, naming that
-    //      exact line as one it could not verify. `over` is filtered for this
-    //      already; not filtering `notInCart` too put the item in the FAILED
-    //      list, which `failedNames` forbids by name ("they may well have
-    //      landed, so 'could not add' would be a lie").
-    //   2. The item is in the cart, just not from this run. `addedRows` is this
-    //      run's delta; a product the user already had is grey, unclaimed, and
-    //      absolutely present. Telling someone a thing in their cart is not in
-    //      their cart is the false positive this audit exists to avoid, and it
-    //      is the one that costs them money twice.
-    //   3. The user skipped it at review. It was never attempted, so its absence
-    //      is the outcome they chose. The done screen reports skips plainly and
-    //      separately, on purpose.
-    const presentSomehow = (name: string) => rows.some((r) => cartNameMatches(r.name, name));
-    notInCart = notInCart.filter((u) =>
-      !explainedRows.some((n) => cartNameMatches(n, u.name))
-      && !presentSomehow(u.name)
-      && !skippedNames.some((n) => namesSameProduct(u.name, n)),
-    );
     // Only audit items we reported as added (failures already route to review),
     // skip sold-by-weight ITEMS (presence, not count — see isWeightPriced), and
     // skip fully-missing items (covered by `missing`). The weight ROWS are
@@ -1304,8 +1233,10 @@ export function auditCartAfterRun(input: {
       clean && countBefore != null && countAfter != null && expected > 0 && countAfter - countBefore < expected
         ? { delta: Math.max(countAfter - countBefore, 0), expected }
         : null,
-    notInCart,
     cartRead: rows != null,
+    comparison: rows
+      ? compareCartToIntended({ addedRows: rows.filter((r) => r.added), intended: intendedAll, skippedNames })
+      : { short: [], extra: [] },
   };
 }
 
@@ -1333,6 +1264,97 @@ export function auditCartAfterRun(input: {
 /** Cart-check copy for one over-added product: bare name, or "name ×N". */
 function overLabel(o: OverAdd): string {
   return o.qty > 1 ? `${o.name} ×${o.qty}` : o.name;
+}
+
+/** One product the cart is short on. */
+export interface ShortProduct {
+  name: string;
+  expected: number;
+  got: number;
+}
+
+export interface SnapshotComparison {
+  /** Products the after-snapshot does not fully account for. `got === 0` means
+   *  the cart shows none of it. */
+  short: ShortProduct[];
+  /** Units the cart gained that no intended product accounts for. */
+  extra: { name: string; qty: number }[];
+}
+
+/**
+ * The whole comparison, as Stephen specified it (MEAL-199):
+ *
+ *   We are supposed to add 12 units of 10 products. Snapshot the cart before,
+ *   snapshot it at the very end, compare products and their units, matching by
+ *   EXACT name. Weight is matched as weight. Products skipped during reconcile
+ *   are not considered.
+ *
+ * `addedRows` is already that before/after comparison — diffCartItems keys rows
+ * by exact title and returns the delta, so every row here is a unit this run put
+ * in the cart. What this adds is the other half: matching that delta against the
+ * products we chose, again by exact title.
+ *
+ * WHY THE SEARCH TERM IS THE RIGHT NAME TO MATCH ON. The add path finds a
+ * product card by EXACT name (`heb.ts` and its siblings; `scoreMatch` must
+ * return 100 for the add gate to fire), so the title that reaches the cart is
+ * the term we searched for. `IntendedItem.name` is therefore not an approximate
+ * label for the product — it is the product's title, and equality against a cart
+ * row is a fair comparison rather than a lucky one.
+ *
+ * WHY EXACT AND NOTHING ELSE. The claim passes this replaces match with
+ * `cartNameMatches`, a 60% token overlap, and every false statement the cold
+ * review found came out of that leniency: "Bananas" swallowing "Bananas
+ * Organic", a substitute sharing no tokens with its search term landing in two
+ * clauses of one sentence about one product. A looser matcher cannot be made
+ * safe by filtering its output, because the mistakes are indistinguishable from
+ * findings. Exact equality has one failure mode, it is inspectable, and it fails
+ * toward silence: a title that does not match is a product we do not claim
+ * anything about.
+ *
+ * Weight lines are matched by presence, not units — one line at N lb has no unit
+ * count, which is the same rule every cart counter and MEAL-178 already apply.
+ */
+export function compareCartToIntended(input: {
+  /** The before/after delta — diffCartItems' added rows. */
+  addedRows: CartRow[];
+  intended: IntendedItem[];
+  /** Ingredients passed over at review. Never considered. */
+  skippedNames?: string[];
+}): SnapshotComparison {
+  const { addedRows, intended } = input;
+  const skippedNames = input.skippedNames ?? [];
+  const isSkipped = (item: IntendedItem) =>
+    skippedNames.some((s) => normalizeName(s) === normalizeName(item.name));
+
+  const countPool = addedRows.filter((r) => !r.isWeight).map((r) => ({ name: r.name, qty: r.qty }));
+  const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false }));
+  const considered = intended.filter((i) => !isSkipped(i));
+
+  const short: ShortProduct[] = [];
+  for (const item of considered) {
+    const presenceOnly = item.isWeight || item.weightStepLb != null;
+    const expected = presenceOnly ? 1 : Math.max(1, item.expectedQty || 1);
+    let got = 0;
+    if (presenceOnly) {
+      const w = weightPool.find((p) => !p.used && normalizeName(p.name) === normalizeName(item.name));
+      if (w) { w.used = true; got = 1; }
+    } else {
+      for (const rowEntry of countPool) {
+        if (got >= expected) break;
+        if (rowEntry.qty <= 0) continue;
+        if (normalizeName(rowEntry.name) !== normalizeName(item.name)) continue;
+        const take = Math.min(rowEntry.qty, expected - got);
+        rowEntry.qty -= take;
+        got += take;
+      }
+    }
+    if (got < expected) short.push({ name: item.name, expected, got });
+  }
+
+  const extra: { name: string; qty: number }[] = [];
+  for (const rowEntry of countPool) if (rowEntry.qty > 0) extra.push({ name: rowEntry.name, qty: rowEntry.qty });
+  for (const w of weightPool) if (!w.used) extra.push({ name: w.name, qty: 1 });
+  return { short, extra };
 }
 
 function joinNames(names: string[]): string {
@@ -1404,28 +1426,37 @@ export function buildCartVerdict(input: {
     };
   }
 
-  const absent = findings.notInCart.filter((u) => u.got === 0);
-  // Partial claims are reported from `short`, not from `notInCart`. Both describe
-  // an item the cart under-credits, and findShortAddedItems is the older and more
-  // careful of the two: it audits only items the run reported adding, drops
-  // weight rows itself, and has the wild failure modes in its history to show for
-  // it. Reading partials off the claim pass instead would have quietly changed
-  // which runs warn, on top of everything else this ticket changes.
+  // One comparison decides everything below: the products we meant to add and
+  // their units, against the products the cart gained and their units, matched
+  // by exact name. `absent` and `short` are the same finding at two depths —
+  // nothing of it arrived, or some of it did.
+  const comparison = findings.comparison;
+  const absent = comparison.short.filter((s) => s.got === 0);
+  const partial = comparison.short.filter((s) => s.got > 0);
   const clauses: string[] = [];
 
   if (absent.length > 0) {
-    const names = joinNames(absent.map((u) => u.name));
+    // "Mealio could not add X", never "X is not in your cart".
+    //
+    // The comparison measures what this run ADDED — the delta between the two
+    // snapshots — so a zero says we put nothing there. It does not say the cart
+    // is empty of it: the user may well have had that product before we started,
+    // in which case it is sitting in their cart right now and a sentence
+    // claiming otherwise sends them to buy a second one. What we always know is
+    // what we did, so that is what we say.
+    const names = joinNames(absent.map((s) => s.name));
     clauses.push(absent.length === 1
-      ? `${names} is not in your cart`
-      : `${absent.length} items are not in your cart (${names})`);
+      ? `Mealio could not add ${names}`
+      : `Mealio could not add ${absent.length} items (${names})`);
   }
-  if (findings.short.length > 0) {
-    const detail = findings.short.map((s) => `${s.name} (${s.got} of ${s.expected})`).join(', ');
-    clauses.push(`${findings.short.length} item${findings.short.length === 1 ? '' : 's'} came up short — ${detail} — which a store limit can cause`);
+  if (partial.length > 0) {
+    const detail = partial.map((s) => `${s.name} (${s.got} of ${s.expected})`).join(', ');
+    clauses.push(`${partial.length} item${partial.length === 1 ? '' : 's'} came up short — ${detail} — which a store limit can cause`);
   }
-  if (findings.over.length > 0) {
-    const names = joinNames(findings.over.map(overLabel));
-    clauses.push(`your cart has ${findings.overUnits} item${findings.overUnits === 1 ? '' : 's'} Mealio did not add (${names})`);
+  if (comparison.extra.length > 0) {
+    const units = comparison.extra.reduce((n, e) => n + e.qty, 0);
+    const names = joinNames(comparison.extra.map(overLabel));
+    clauses.push(`your cart has ${units} item${units === 1 ? '' : 's'} Mealio did not add (${names})`);
   }
   // Header-badge stores have no rows to name, so the count is all there is. Only
   // reachable when the per-item lists are empty — see countShortfall's own note.

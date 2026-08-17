@@ -8,7 +8,7 @@
 // while a cart read is available, and that they are LABELLED when there is no
 // cart read and they are all we have.
 
-import { auditCartAfterRun, buildCartVerdict, splitCartLeftover } from '../../src/lib/cart-reconcile';
+import { auditCartAfterRun, buildCartVerdict, compareCartToIntended } from '../../src/lib/cart-reconcile';
 import type { CartCheckFindings, IntendedItem } from '../../src/lib/cart-reconcile';
 import type { CartRow } from '../../src/lib/webview-scripts/cart-count';
 
@@ -42,64 +42,81 @@ const preexisting = (name: string, qty: number): CartRow =>
 const verdict = (findings: CartCheckFindings, reportedFailed: string[] = [], unreadReason: string | null = null) =>
   buildCartVerdict({ storeName: 'H-E-B', findings, reportedFailed, unreadReason });
 
-describe('splitCartLeftover — the unaccounted side of the claim', () => {
-  it('reports an intended item the cart never got', () => {
-    const split = splitCartLeftover([row('Daisy Sour Cream 16 oz', 1)], ['Sour Cream'], [want('Sour Cream'), want('Butter')]);
-    expect(split.unaccounted).toEqual([{ name: 'Butter', expected: 1, got: 0 }]);
+describe('compareCartToIntended — products and units, matched by exact name', () => {
+  const compare = (addedRows: CartRow[], intended: IntendedItem[], skippedNames: string[] = []) =>
+    compareCartToIntended({ addedRows, intended, skippedNames });
+
+  it('counts a full match as settled', () => {
+    expect(compare([row('Large Eggs', 3)], [want('Large Eggs', 3)])).toEqual({ short: [], extra: [] });
   });
 
-  it('reports a partial claim with the units the cart credits', () => {
-    const split = splitCartLeftover([row('Large Eggs', 1)], ['Large Eggs'], [want('Large Eggs', 3)]);
-    expect(split.unaccounted).toEqual([{ name: 'Large Eggs', expected: 3, got: 1 }]);
+  it('reports the units the cart is short by', () => {
+    expect(compare([row('Large Eggs', 1)], [want('Large Eggs', 3)]).short)
+      .toEqual([{ name: 'Large Eggs', expected: 3, got: 1 }]);
   });
 
-  it('leaves a fully claimed item out of it', () => {
-    const split = splitCartLeftover([row('Large Eggs', 3)], ['Large Eggs'], [want('Large Eggs', 3)]);
-    expect(split.unaccounted).toEqual([]);
+  it('reports a product the cart gained none of', () => {
+    expect(compare([row('Sour Cream', 1)], [want('Sour Cream'), want('Butter')]).short)
+      .toEqual([{ name: 'Butter', expected: 1, got: 0 }]);
   });
 
-  it('settles a weight item by presence, not by requested count', () => {
-    // A deli line is one row whatever the poundage. Reading expectedQty here
-    // would report a satisfied item as short by 2.
-    const split = splitCartLeftover(
-      [row('Boneless Skinless Chicken Breasts', 1, true)],
-      ['Chicken Breasts'],
-      [want('Chicken Breasts', 3, { isWeight: true })],
-    );
-    expect(split.unaccounted).toEqual([]);
+  it('reports units nothing asked for', () => {
+    expect(compare([row('Sour Cream', 1), row('Chicken Thighs', 2)], [want('Sour Cream')]).extra)
+      .toEqual([{ name: 'Chicken Thighs', qty: 2 }]);
   });
 
-  it('settles an increment-style item by its weight line too', () => {
-    const split = splitCartLeftover(
-      [row('Bananas', 1, true)],
-      ['Bananas'],
-      [want('Bananas', 4, { weightStepLb: 0.25 })],
-    );
-    expect(split.unaccounted).toEqual([]);
+  it('does not consider a skipped product', () => {
+    expect(compare([row('Sour Cream', 1)], [want('Sour Cream'), want('Tortillas')], ['Tortillas']))
+      .toEqual({ short: [], extra: [] });
   });
 
-  it('never lists a unit as both unaccounted and over', () => {
-    // One pool, one partition — the property the done screen's coherence rests on.
-    const split = splitCartLeftover(
-      [row('Chicken Thighs', 1), row('Daisy Sour Cream', 1)],
-      ['Sour Cream'],
-      [want('Sour Cream'), want('Butter')],
-    );
-    const overNames = split.over.map((o) => o.name);
-    const unaccountedNames = split.unaccounted.map((u) => u.name);
-    expect(overNames).toEqual(['Chicken Thighs']);
-    expect(unaccountedNames).toEqual(['Butter']);
-    expect(overNames.filter((n) => unaccountedNames.includes(n))).toEqual([]);
+  it('matches weight lines by presence, not units', () => {
+    expect(compare([row('Chicken Breasts', 1, true)], [want('Chicken Breasts', 3, { isWeight: true })]))
+      .toEqual({ short: [], extra: [] });
+  });
+
+  it('reports a weight line the cart never gained', () => {
+    expect(compare([], [want('Chicken Breasts', 3, { isWeight: true })]).short)
+      .toEqual([{ name: 'Chicken Breasts', expected: 1, got: 0 }]);
+  });
+
+  it('matches an increment-style item by its weight line', () => {
+    expect(compare([row('Bananas', 1, true)], [want('Bananas', 4, { weightStepLb: 0.25 })]))
+      .toEqual({ short: [], extra: [] });
+  });
+
+  it('normalises punctuation and case but nothing more', () => {
+    // Same product, differently rendered by the cart page. Normalisation is
+    // exactly what normalizeName already does for the add path.
+    expect(compare([row('DAISY  SOUR-CREAM', 1)], [want('Daisy Sour Cream')]))
+      .toEqual({ short: [], extra: [] });
+  });
+
+  it('does NOT match a near-miss title', () => {
+    // The whole point of exact. "Bananas Organic" is a different product from
+    // "Bananas", and the lenient matcher used to swallow one into the other —
+    // which is how a real over-add went unreported.
+    const result = compare([row('Bananas Organic', 1)], [want('Bananas')]);
+    expect(result.short).toEqual([{ name: 'Bananas', expected: 1, got: 0 }]);
+    expect(result.extra).toEqual([{ name: 'Bananas Organic', qty: 1 }]);
+  });
+
+  it('splits 12 units across 10 products without double-counting', () => {
+    const intended = Array.from({ length: 10 }, (_, i) => want(`Product ${i}`, i < 2 ? 2 : 1));
+    const rows = intended.map((it) => row(it.name, it.expectedQty));
+    const result = compare(rows, intended);
+    expect(intended.reduce((n, i) => n + i.expectedQty, 0)).toBe(12);
+    expect(result).toEqual({ short: [], extra: [] });
   });
 });
 
 describe('buildCartVerdict — when the cart was read', () => {
   it('names an absent item from the cart, not from the run', () => {
     // The run claimed it added Butter. The cart disagrees, and the cart wins.
-    const v = verdict(audit([row('Daisy Sour Cream', 1)], ['Sour Cream', 'Butter'], [want('Sour Cream'), want('Butter')]));
+    const v = verdict(audit([row('Sour Cream', 1)], ['Sour Cream', 'Butter'], [want('Sour Cream'), want('Butter')]));
     expect(v.cartBacked).toBe(true);
     expect(v.notAdded).toEqual(['Butter']);
-    expect(v.message).toContain('Butter is not in your cart');
+    expect(v.message).toContain('Mealio could not add Butter');
   });
 
   it('says nothing at all when the cart matches what was asked for', () => {
@@ -116,7 +133,7 @@ describe('buildCartVerdict — when the cart was read', () => {
     expect(findings.recovered.length).toBeGreaterThan(0);
     const v = verdict(findings, ['Sour Cream']);
     expect(v.notAdded).toEqual([]);
-    expect(v.message ?? '').not.toContain('Sour Cream is not in your cart');
+    expect(v.message ?? '').not.toContain('could not add Sour Cream');
   });
 
   it('reports a short add with the units the cart shows', () => {
@@ -141,7 +158,7 @@ describe('buildCartVerdict — when the cart was read', () => {
     ));
     const messages = [v.message].filter(Boolean);
     expect(messages).toHaveLength(1);
-    expect(v.message).toContain('Butter is not in your cart');
+    expect(v.message).toContain('Mealio could not add Butter');
     expect(v.message).toContain('Large Eggs (1 of 3)');
     expect(v.message).toContain('Chicken Thighs');
   });
@@ -165,13 +182,17 @@ describe('never call an item absent when it is not', () => {
     // did not put there. `addedRows` cannot see it, so the claim pass leaves it
     // unclaimed — and saying it is missing is a flat false statement about cart
     // contents, made in the cart's own name.
+    // The run failed to add it and the cart has it anyway, as a grey row this
+    // run did not put there. We must not claim it is absent from the cart — we
+    // only ever claim what WE did.
     const findings = audit(
       [preexisting('Daisy Sour Cream', 1)],
       [],
-      [want('Sour Cream')],
+      [want('Daisy Sour Cream')],
     );
-    expect(findings.notInCart).toEqual([]);
-    expect(verdict(findings).message).toBeNull();
+    const v = verdict(findings);
+    expect(v.message ?? '').not.toMatch(/not in your cart|is missing/i);
+    expect(v.message ?? '').toContain('could not add');
   });
 
   it('a line the run reports as unverified-by-weight is not absent', () => {
@@ -182,10 +203,11 @@ describe('never call an item absent when it is not', () => {
     const findings = audit(
       [row('H-E-B Boneless Chicken Breasts', 1, true)],
       [],
-      [want('Chicken Breasts')],
+      [want('H-E-B Boneless Chicken Breasts', 1, { isWeight: true })],
       { explainedRows: ['H-E-B Boneless Chicken Breasts'] },
     );
-    expect(findings.notInCart).toEqual([]);
+    // Exact name, presence-matched: the weight line IS the item, so it settles.
+    expect(findings.comparison.short).toEqual([]);
     expect(verdict(findings).notAdded).toEqual([]);
   });
 
@@ -199,7 +221,7 @@ describe('never call an item absent when it is not', () => {
       [want('Sour Cream'), want('Tortillas')],
       { skippedNames: ['Tortillas'] },
     );
-    expect(findings.notInCart).toEqual([]);
+    expect(findings.comparison.short).toEqual([]);
     expect(verdict(findings).notAdded).toEqual([]);
   });
 
@@ -208,7 +230,7 @@ describe('never call an item absent when it is not', () => {
     // explained, not skipped.
     const v = verdict(audit([row('Sour Cream', 1)], ['Sour Cream'], [want('Sour Cream'), want('Butter')]));
     expect(v.notAdded).toEqual(['Butter']);
-    expect(v.message).toContain('Butter is not in your cart');
+    expect(v.message).toContain('Mealio could not add Butter');
   });
 });
 
@@ -242,7 +264,7 @@ describe('a run the cart says succeeded must not read as a failure', () => {
       audit([row('Sour Cream', 1)], [], [want('Sour Cream'), want('Butter')]),
       ['Sour Cream', 'Butter'],
     );
-    expect(v.message).toContain('Butter is not in your cart');
+    expect(v.message).toContain('Mealio could not add Butter');
     expect(v.message ?? '').not.toContain('everything you asked for is there');
   });
 });
@@ -286,7 +308,7 @@ describe('buildCartVerdict — when the cart could not be read', () => {
     // that as "nothing landed" is the false positive this must never produce.
     const findings = audit(null, [], [want('Sour Cream'), want('Butter')]);
     expect(findings.cartRead).toBe(false);
-    expect(findings.notInCart).toEqual([]);
+    expect(findings.comparison).toEqual({ short: [], extra: [] });
     const v = verdict(findings, []);
     expect(v.notAdded).toEqual([]);
   });

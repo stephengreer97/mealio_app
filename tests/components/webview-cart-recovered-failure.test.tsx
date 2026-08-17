@@ -108,13 +108,15 @@ const sheet = (...ingredients: unknown[]) => (
   />
 );
 
-// The store's own title for the item the run will report as failed. Deliberately
-// NOT the search term the run is driven by: a cart row is titled by the store,
-// so the recovery that claims it is a LOOSE match (see RecoveredAdd), and a
-// correction that only ever fired on exact titles would do nothing on a real
-// cart. It is also the name the banner has to print — the user is looking for
-// this string in their cart, not for what Mealio searched.
-const TORTILLAS = 'H-E-B Bakery Corn Tortillas, 30 ct';
+// The title as it appears in BOTH the search result and the cart row.
+//
+// It used to differ between the two — search term 'tortillas', cart row
+// 'H-E-B Bakery Corn Tortillas, 30 ct' — which only made sense while the audit
+// matched on 60% token overlap. The add path finds a product card by EXACT
+// name, so the title that reaches the cart is the term we searched for, and the
+// audit compares them as equals (MEAL-199). A cart row bearing a different
+// title is a different product, and is now reported as one.
+const TORTILLAS = 'tortillas';
 
 /**
  * Drive a two-item serial run — one add confirmed, one reported failed — to the
@@ -243,7 +245,7 @@ describe('a failure the cart confirms', () => {
     // assertion follows the guarantee rather than the sentence that used to
     // carry it.
     const view = await genuineRun();
-    expect(view.queryByText(/tortillas is not in your cart/i)).toBeTruthy();
+    expect(view.queryByText(/could not add.*tortillas/i)).toBeTruthy();
   });
 
   it('claims nothing about it being in the cart', async () => {
