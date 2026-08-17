@@ -860,6 +860,22 @@ export interface CartCheckFindings {
    * those are strictly more specific, and the caller reports them instead.
    */
   countShortfall: { delta: number; expected: number } | null;
+  /**
+   * Intended items the CART does not account for (MEAL-199). Empty when there
+   * were no rows to diff — an unread cart accounts for nothing, and saying so as
+   * "none of it landed" would be the false-positive this whole audit exists to
+   * avoid. Callers must check `cartRead` before treating an empty list as good
+   * news.
+   *
+   * This supersedes `missing` as the thing to show a user. `missing` is scoped to
+   * what the run CLAIMED it added, so it can only catch the run lying in one
+   * direction; this is scoped to what was asked for, so it catches the run being
+   * wrong in either.
+   */
+  notInCart: UnaccountedItem[];
+  /** Whether a per-item cart read actually happened. False means every list
+   *  above is empty for want of evidence, not for want of findings. */
+  cartRead: boolean;
 }
 
 /** Do an intended title and a title the RUN reported name the same product?
@@ -893,6 +909,34 @@ function wasReported(item: IntendedItem, reportedAdded: string[]): boolean {
 export interface CartLeftoverSplit {
   recovered: RecoveredAdd[];
   over: OverAdd[];
+  /** The third leftover: intended items the CART does not account for. */
+  unaccounted: UnaccountedItem[];
+}
+
+/**
+ * An intended item the cart under-accounts for, absent ones included.
+ *
+ * This is what lets the cart say an item did not land (MEAL-199). `missing` is a
+ * different and weaker claim — it names items the RUN said it added that the
+ * cart contradicts, so it can only ever be as complete as the run's own
+ * reporting. An item lands here because the cart does not show it, and whether
+ * the run thought the add succeeded is not consulted.
+ */
+export interface UnaccountedItem {
+  name: string;
+  /** Units requested. Presence-based items (weight, increment) count 1. */
+  expected: number;
+  /** Units the cart credits it. 0 means the cart shows nothing for it. */
+  got: number;
+}
+
+/** Units of an intended item the cart has to show before it is fully accounted
+ *  for. Weight and increment items are presence-based — one line settles them,
+ *  whatever the requested count — exactly as the claim passes treat them, so
+ *  reading `expectedQty` here would report a satisfied deli line as short. */
+function unitsExpected(item: IntendedItem): number {
+  if (item.isWeight || item.weightStepLb != null) return 1;
+  return Math.max(1, item.expectedQty || 1);
 }
 
 /** One added cart row while it is being consumed. Weight rows are held apart:
@@ -1030,6 +1074,14 @@ export function splitCartLeftover(
         matchQuality: c.loose ? ('loose' as const) : ('exact' as const),
       })),
     over,
+    // Read off the SAME claims the two lists above are read from, after every
+    // pass has run. One pool, one partition: a unit cannot be both claimed by an
+    // item and missing from it, so the screen cannot say a product is absent and
+    // unwanted in the same breath — the bug this function's header describes,
+    // reached from the other direction.
+    unaccounted: claims
+      .filter((c) => c.qty < unitsExpected(c.item))
+      .map((c) => ({ name: c.item.name, expected: unitsExpected(c.item), got: c.qty })),
   };
 }
 
@@ -1162,6 +1214,7 @@ export function auditCartAfterRun(input: {
   let short: ShortAdd[] = [];
   let over: OverAdd[] = [];
   let recovered: RecoveredAdd[] = [];
+  let notInCart: UnaccountedItem[] = [];
   // The full set the run meant to add. After a parallel top-up `active` is
   // only the retry subset, so the reconcile's snapshot is preferred; the
   // serial path never reconciles and falls back to its (unnarrowed) active set.
@@ -1175,7 +1228,7 @@ export function auditCartAfterRun(input: {
     // Computing these separately let a single cart unit be reported as both a
     // recovery and an over-add — the same product named twice on the done
     // screen, "don't add it again" beside "nothing intended it".
-    ({ over, recovered } = splitCartLeftover(addedRows, reportedAdded, intendedAll));
+    ({ over, recovered, unaccounted: notInCart } = splitCartLeftover(addedRows, reportedAdded, intendedAll));
     // Rows the run already reports by name as unverified are accounted for, not
     // unintended — see dropExplainedOverAdds. Filtered here rather than inside
     // splitCartLeftover so the partition stays a partition: the row is still
@@ -1213,5 +1266,125 @@ export function auditCartAfterRun(input: {
       clean && countBefore != null && countAfter != null && expected > 0 && countAfter - countBefore < expected
         ? { delta: Math.max(countAfter - countBefore, 0), expected }
         : null,
+    notInCart,
+    cartRead: rows != null,
+  };
+}
+
+// ── The one thing the done screen says (MEAL-199) ───────────────────────────
+//
+// Before this, the done screen carried two warnings from two observers: "Could
+// not add: X", sourced from the run's own per-item reports, and a cart-check
+// banner sourced from the before/after snapshot diff. The second existed because
+// the first is known to lie, which made them a claim and its own rebuttal
+// printed as peers, and left the user to work out which to believe.
+//
+// The snapshot is the source of truth. This builds the single message from it,
+// and the run's reports are consulted in exactly one case: when there is no
+// snapshot to read, where saying so out loud beats quietly reverting to the
+// weaker source (MEAL-190 established `unverified` as its own outcome for the
+// same reason).
+//
+// CONSERVATISM IS A REQUIREMENT, NOT A STYLE. The original snapshot check
+// (`e5d92da`, 2026-06-12) recorded its own safety property: "the comparison can
+// only under-warn, never false-positive." Promoting the snapshot to sole arbiter
+// makes its false positives the only thing a user sees, so that property is
+// restored here deliberately — every clause below reports what the cart SHOWS,
+// and nothing is inferred from a silence.
+
+/** Cart-check copy for one over-added product: bare name, or "name ×N". */
+function overLabel(o: OverAdd): string {
+  return o.qty > 1 ? `${o.name} ×${o.qty}` : o.name;
+}
+
+function joinNames(names: string[]): string {
+  return names.join(', ');
+}
+
+export interface CartVerdict {
+  /**
+   * Items to name on the done screen as not in the cart. Cart-sourced when
+   * `cartBacked`, otherwise the run's own claim about itself.
+   */
+  notAdded: string[];
+  /** The single message, or null when there is nothing to tell the user. */
+  message: string | null;
+  /** True when the message rests on a cart read. False means it rests on the
+   *  run's own reporting and says so. */
+  cartBacked: boolean;
+}
+
+/**
+ * The done screen's whole verdict, in one place.
+ *
+ * `recovered` deliberately produces no copy. It names items the run called
+ * failed that the cart shows are present — advice not to re-add them only ever
+ * made sense as a rebuttal of a failure line sourced from the run. With the
+ * failure list now read off the cart, such an item is never called failed in the
+ * first place, so there is nothing to take back. It stays in the findings
+ * because it measures how often the confirmation rail lies, which is MEAL-47's
+ * subject and belongs on the funnel rather than on a kitchen counter.
+ */
+export function buildCartVerdict(input: {
+  storeName: string;
+  findings: CartCheckFindings;
+  /** The run's own failed list. Consulted only when the cart was not read. */
+  reportedFailed: string[];
+  /** Non-null when the cart could not be read at all — see MEAL-190. */
+  unreadReason: string | null;
+}): CartVerdict {
+  const { storeName, findings, reportedFailed, unreadReason } = input;
+
+  // No cart read. The run's own failed list is all there is, and it is returned
+  // UNPROMOTED: `cartBacked` false is what tells the screen this is the run
+  // talking about itself, so it can keep saying so plainly instead of dressing a
+  // guess as a finding.
+  //
+  // `message` is deliberately null rather than a "we could not check your cart"
+  // sentence. That copy already exists and is already rendered — MEAL-190 owns
+  // it, holds it in its own state, and distinguishes the ways a read can fail.
+  // Returning a second version here would either clobber that one (the done
+  // screen prefers this message when both are set) or print beside it, which is
+  // the two-sources-one-screen defect this function exists to end, rebuilt in
+  // the one case where the cart never spoke at all.
+  if (!findings.cartRead || unreadReason) {
+    return {
+      notAdded: reportedFailed.filter((n) => n.trim() !== ''),
+      cartBacked: false,
+      message: unreadReason,
+    };
+  }
+
+  const absent = findings.notInCart.filter((u) => u.got === 0);
+  const short = findings.notInCart.filter((u) => u.got > 0);
+  const clauses: string[] = [];
+
+  if (absent.length > 0) {
+    const names = joinNames(absent.map((u) => u.name));
+    clauses.push(absent.length === 1
+      ? `${names} is not in your cart`
+      : `${absent.length} items are not in your cart (${names})`);
+  }
+  if (short.length > 0) {
+    const detail = short.map((u) => `${u.name} (${u.got} of ${u.expected})`).join(', ');
+    clauses.push(`${short.length} item${short.length === 1 ? '' : 's'} came up short — ${detail} — which a store limit can cause`);
+  }
+  if (findings.over.length > 0) {
+    const names = joinNames(findings.over.map(overLabel));
+    clauses.push(`your cart has ${findings.overUnits} item${findings.overUnits === 1 ? '' : 's'} Mealio did not add (${names})`);
+  }
+  // Header-badge stores have no rows to name, so the count is all there is. Only
+  // reachable when the per-item lists are empty — see countShortfall's own note.
+  if (clauses.length === 0 && findings.countShortfall) {
+    const { delta, expected } = findings.countShortfall;
+    clauses.push(`your cart went up by ${delta} item${delta === 1 ? '' : 's'} where ${expected} were expected`);
+  }
+
+  return {
+    notAdded: absent.map((u) => u.name),
+    cartBacked: true,
+    message: clauses.length === 0
+      ? null
+      : `We checked your ${storeName} cart: ${clauses.join('; ')}. Please double-check it before checking out.`,
   };
 }

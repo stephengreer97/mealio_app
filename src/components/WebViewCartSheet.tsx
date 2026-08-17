@@ -52,7 +52,7 @@ import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-he
 import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation, buildHebCartProbeScript, hebCartQueryEnabled } from '../lib/webview-scripts/heb-cart-query';
-import { auditCartAfterRun, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
+import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
@@ -673,6 +673,12 @@ export default function WebViewCartSheet({
   const [cartRowsTimedOut, setCartRowsTimedOut] = useState(false);
   const cartRowsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [cartDeltaWarning, setCartDeltaWarning] = useState<string | null>(null);
+  // True once the done screen's verdict is the CART's rather than the run's
+  // (MEAL-199). It gates the "Could not add" sub-line: that line and the banner
+  // are now two renderings of one verdict, so printing both would restate the
+  // absent items in consecutive sentences — the duplication this ticket exists
+  // to remove, rebuilt from the same source instead of two.
+  const [verdictFromCart, setVerdictFromCart] = useState(false);
   // The run could not read the cart AT ALL — held apart from cartDeltaWarning
   // rather than folded into it (MEAL-190).
   //
@@ -1597,6 +1603,7 @@ export default function WebViewCartSheet({
       if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
       setCartDeltaWarning(null);
       setCartUnverified(null);
+      setVerdictFromCart(false);
 
       // Reset Wegmans parallel worker state. The hook clears its queue,
       // active flag, timers, and worker URIs in one call — workers unmount
@@ -3195,7 +3202,11 @@ export default function WebViewCartSheet({
               // beside the banner that already names them.
               explainedRows: unverifiedCartNamesRef.current,
             });
-            const { missing, short, over, recovered, countShortfall } = findings;
+            // `over` and `countShortfall` are no longer read here: they used to
+            // be assembled into copy at this call site, and that job moved into
+            // buildCartVerdict (MEAL-199). They are still on `findings`, which is
+            // what the verdict is built from.
+            const { missing, short, recovered } = findings;
             // Read from the ref, NOT from the `totalAdded` state: onMessage is
             // created once (deps []) so the state it closes over is this run's
             // initial 0. This expression is the same one every finalize path
@@ -3284,38 +3295,40 @@ export default function WebViewCartSheet({
                 },
               });
             }
-            if (missing.length > 0 || short.length > 0 || over.length > 0 || recovered.length > 0) {
-              const parts: string[] = [];
-              if (recovered.length > 0) {
-                // Says what the CART holds, and nothing about what the run
-                // claimed (MEAL-177). The old wording — "N items we reported as
-                // not added are in your cart already" — cited a report the user
-                // could not be assumed to have read: it was either the line
-                // directly above, now corrected, or nothing at all. What is left
-                // is the fact and the action, which is all this ever had to be.
-                const names = recovered.map((r) => r.cartName || r.name);
-                parts.push(recovered.length === 1
-                  ? `${names[0]} is already in your cart — don't add it again`
-                  : `${recovered.length} items are already in your cart (${names.join(', ')}) — don't add them again`);
-              }
-              if (missing.length > 0) {
-                parts.push(`${missing.length} item${missing.length === 1 ? '' : 's'} may not have been added (${missing.join(', ')})`);
-              }
-              if (short.length > 0) {
-                parts.push(`${short.length} item${short.length === 1 ? '' : 's'} added below the requested quantity, which a store limit can cause (${short.map((s) => `${s.name} (${s.got} of ${s.expected})`).join(', ')})`);
-              }
-              if (over.length > 0) {
-                parts.push(`${over.length} item${over.length === 1 ? '' : 's'} added that Mealio didn't intend (${over.map(overAddLabel).join(', ')})`);
-              }
-              setCartDeltaWarning(`Cart check on your ${lockedName} cart: ${parts.join('; ')}. Please double-check your cart.`);
-            } else if (countShortfall) {
-              // No per-item data (header-badge stores) or names didn't resolve —
-              // fall back to the count-shortfall message.
-              const { delta, expected } = countShortfall;
-              setCartDeltaWarning(
-                `Cart check: ${lockedName} shows ${delta} new item${delta === 1 ? '' : 's'} in the cart, but ${expected} ${expected === 1 ? 'was' : 'were'} reported added. Please double-check your cart.`
-              );
+            // ONE message, built from the cart (MEAL-199).
+            //
+            // What the screen says about this run is now decided in one place and
+            // read off one source. The failed list is set from the same verdict,
+            // so the sentence naming items as absent and the sentence explaining
+            // the cart can no longer be two views computed from two observers —
+            // which is what made "Could not add: Sour Cream" sit above "Sour
+            // Cream is already in your cart".
+            const verdict = buildCartVerdict({
+              storeName: lockedName,
+              findings,
+              // Only consulted when the cart could not be read. It is passed
+              // regardless so the no-read branch has something honest to fall
+              // back to, labelled as the run's own account rather than the
+              // cart's.
+              reportedFailed: failedNamesRef.current,
+              // Null on purpose: MEAL-190 owns the "we could not read your cart"
+              // copy and renders it from its own state. See buildCartVerdict.
+              unreadReason: null,
+            });
+            setVerdictFromCart(verdict.cartBacked);
+            if (verdict.cartBacked) {
+              // The cart decides what failed. `dropRecoveredFailures` above
+              // corrected this list item by item against the run's version;
+              // this replaces it outright, which is the same correction taken to
+              // its conclusion — an item is absent because the cart does not
+              // show it, not because the run said so and nothing overturned it.
+              setFailedItems(verdict.notAdded);
+              setTotalFailed(verdict.notAdded.length);
+              setCartDeltaWarning(verdict.message);
             }
+            // No cart read leaves both alone: the run's own failed list stands
+            // as the screen already has it, and cartUnverified says out loud
+            // that nothing checked it.
           }
           return;
         }
@@ -4789,7 +4802,12 @@ export default function WebViewCartSheet({
                     <Text style={styles.doneTitle}>
                       {addedUnits} item{addedUnits !== 1 ? 's' : ''} added to your {storeName} cart!
                     </Text>
-                    {totalFailed > 0 && (
+                    {/* Suppressed once the cart has spoken (MEAL-199): the banner
+                        below is built from the same verdict and already names
+                        these items, so printing both restates them in
+                        consecutive sentences. Until then this is the only place
+                        a failure is named, so it must stay. */}
+                    {totalFailed > 0 && !verdictFromCart && (
                       <Text style={[styles.doneSub, { color: '#b45309' }]}>
                         {failedNames.length > 0
                           ? `Could not add: ${failedNames.join(', ')}`
@@ -4817,11 +4835,19 @@ export default function WebViewCartSheet({
                         "no products were selected" is simply false — and it is
                         exactly the run the cart check below probes, so it can
                         contradict the banner it sits above. */}
-                    <Text style={styles.doneSub}>
-                      {addsAttemptedRef.current > 0
-                        ? "We couldn't confirm any adds."
-                        : 'No products were selected or all were skipped.'}
-                    </Text>
+                    {/* "We couldn't confirm any adds" is the RUN's account of
+                        itself, so it steps aside once the cart has given one
+                        (MEAL-199) — the banner below says what the cart holds,
+                        and the two together read as a hedge beside a fact.
+                        The "nothing was selected" half is not a confirmation
+                        claim at all and always stands. */}
+                    {!(verdictFromCart && addsAttemptedRef.current > 0) && (
+                      <Text style={styles.doneSub}>
+                        {addsAttemptedRef.current > 0
+                          ? "We couldn't confirm any adds."
+                          : 'No products were selected or all were skipped.'}
+                      </Text>
+                    )}
                     {/* A run that added nothing still gets the cart check now
                         (MEAL-47), and it is the run most likely to have found
                         something: an add that committed while the store's badge

@@ -189,10 +189,19 @@ describe('a failure the cart disproves', () => {
     expect(view.queryByText(/could not (add|be added)/i)).toBeNull();
   });
 
-  it('says the plain thing about the cart instead', async () => {
+  it('says nothing about it at all — there is no longer a claim to take back', async () => {
+    // Superseded by MEAL-199, and the assertion is inverted on purpose.
+    //
+    // This used to require "Tortillas is already in your cart — don't add it
+    // again", which was the right copy while the failed list came from the RUN:
+    // the item had been called failed, so the cart had to talk the user out of
+    // re-adding it. The failed list is now read off the cart itself, so a
+    // recovered item is never called failed in the first place and there is
+    // nothing left to rebut. Advice not to undo a claim nobody made is one more
+    // sentence on the screen that most needs to be short.
     const view = await recoveredRun();
-    expect(view.queryByText(new RegExp(`${TORTILLAS} is already in your cart`, 'i'))).toBeTruthy();
-    expect(view.queryByText(/don't add it again/i)).toBeTruthy();
+    expect(view.queryByText(/don't add it again/i)).toBeNull();
+    expect(view.queryByText(/already in your cart/i)).toBeNull();
   });
 
   it('no longer cites a report the user was never shown', async () => {
@@ -219,9 +228,18 @@ describe('a failure the cart confirms', () => {
   // without it — the same silence in the opposite direction.
   const genuineRun = () => runToDoneScreen([{ name: 'sour cream', qty: 1 }]);
 
-  it('still names the item under "Could not add"', async () => {
+  it('still names the item to the user', async () => {
+    // The safety property this describe block exists for, unchanged: an item the
+    // cart genuinely does not have MUST be named, or the user checks out without
+    // it and never learns why.
+    //
+    // Where it is named moved (MEAL-199). It used to be the "Could not add" line,
+    // sourced from the run; it is now the cart-check message, sourced from the
+    // cart read that is the only thing entitled to call an item absent. The
+    // assertion follows the guarantee rather than the sentence that used to
+    // carry it.
     const view = await genuineRun();
-    expect(view.queryByText(/could not add.*tortillas/i)).toBeTruthy();
+    expect(view.queryByText(/tortillas is not in your cart/i)).toBeTruthy();
   });
 
   it('claims nothing about it being in the cart', async () => {
