@@ -560,6 +560,13 @@ export default function WebViewCartSheet({
   // reviewIndex so re-deciding after Back clears the earlier skip. Reported on
   // the done snapshot — distinct from items the automation failed to add.
   const [skippedByIdx, setSkippedByIdx] = useState<Record<number, string>>({});
+  // Mirror for onMessage, which is created once (deps []) and so closes over
+  // this run's initial {}. The after-probe needs the skips to keep them out of
+  // the cart's failed list (MEAL-199), and every skip is decided long before
+  // that probe runs. Assigned during render rather than in an effect so a read
+  // can never see a value one commit stale.
+  const skippedByIdxRef = useRef<Record<number, string>>({});
+  skippedByIdxRef.current = skippedByIdx;
   // MEAL-119: count items whose cart line came back sold-by-weight — neither
   // re-added nor confirmed, only reported (see UnverifiedWeightLine). Held apart
   // from `addResults` (Mealio added nothing for these, so they cannot be counted
@@ -3201,6 +3208,12 @@ export default function WebViewCartSheet({
               // for the same reason as above: the done screen renders this warning
               // beside the banner that already names them.
               explainedRows: unverifiedCartNamesRef.current,
+              // A skipped ingredient was never attempted, so the cart not having
+              // it is what the user asked for — it must not come back as a
+              // cart-sourced failure beside the skipped banner that already
+              // reports it plainly (MEAL-199 review). Read from the ref because
+              // onMessage closes over this run's initial state.
+              skippedNames: Object.values(skippedByIdxRef.current),
             });
             // `over` and `countShortfall` are no longer read here: they used to
             // be assembled into copy at this call site, and that job moved into

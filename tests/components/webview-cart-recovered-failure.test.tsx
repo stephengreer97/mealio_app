@@ -189,19 +189,23 @@ describe('a failure the cart disproves', () => {
     expect(view.queryByText(/could not (add|be added)/i)).toBeNull();
   });
 
-  it('says nothing about it at all — there is no longer a claim to take back', async () => {
-    // Superseded by MEAL-199, and the assertion is inverted on purpose.
+  it('says the cart has it, in the cart’s own voice', async () => {
+    // Reworded by MEAL-199 rather than removed.
     //
-    // This used to require "Tortillas is already in your cart — don't add it
-    // again", which was the right copy while the failed list came from the RUN:
-    // the item had been called failed, so the cart had to talk the user out of
-    // re-adding it. The failed list is now read off the cart itself, so a
-    // recovered item is never called failed in the first place and there is
-    // nothing left to rebut. Advice not to undo a claim nobody made is one more
-    // sentence on the screen that most needs to be short.
+    // The old sentence — "Tortillas is already in your cart — don't add it
+    // again" — was a rebuttal: the item had been called failed by the RUN, so
+    // the cart had to talk the user out of re-adding it. The failed list is read
+    // off the cart now, so nothing calls it failed and there is no claim to
+    // take back. But silence would be wrong too: the headline is still the run's
+    // confirmed count, and on a fully-recovered run it says nothing was added.
+    // So the cart states the positive finding instead of rebutting a negative.
     const view = await recoveredRun();
-    expect(view.queryByText(/don't add it again/i)).toBeNull();
-    expect(view.queryByText(/already in your cart/i)).toBeNull();
+    expect(view.queryByText(/everything you asked for is there/i)).toBeTruthy();
+    // queryAllByText, not queryByText: the item is legitimately on this screen
+    // twice — once in this sentence and once in the per-line breakdown below it.
+    expect(view.queryAllByText(new RegExp(TORTILLAS, 'i')).length).toBeGreaterThan(0);
+    // Not "we added it": a recovery is a name match against a row (MEAL-177).
+    expect(view.queryByText(/we added|mealio added/i)).toBeNull();
   });
 
   it('no longer cites a report the user was never shown', async () => {

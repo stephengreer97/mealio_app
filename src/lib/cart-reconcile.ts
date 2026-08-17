@@ -1075,10 +1075,17 @@ export function splitCartLeftover(
       })),
     over,
     // Read off the SAME claims the two lists above are read from, after every
-    // pass has run. One pool, one partition: a unit cannot be both claimed by an
-    // item and missing from it, so the screen cannot say a product is absent and
-    // unwanted in the same breath — the bug this function's header describes,
-    // reached from the other direction.
+    // pass has run. One pool, one partition: a UNIT cannot be both claimed by an
+    // item and missing from it.
+    //
+    // That guarantee is per-unit, and the thing a user reads is per-product, so
+    // it is weaker than it looks. When a cart title shares too few tokens with
+    // the search term for cartNameMatches to connect them — a review substitute
+    // is the common way, "cilantro" picked as "Fresh Herb Bundle" — the row is
+    // claimed by nobody and the item claims nothing, so the row is over and the
+    // item is unaccounted, and one product is named twice in one sentence. The
+    // partition is intact; the matcher is what failed. That is MEAL-199's named
+    // blocking sub-problem and it is not fixed here.
     unaccounted: claims
       .filter((c) => c.qty < unitsExpected(c.item))
       .map((c) => ({ name: c.item.name, expected: unitsExpected(c.item), got: c.qty })),
@@ -1207,9 +1214,13 @@ export function auditCartAfterRun(input: {
   countBefore: number | null;
   countAfter: number | null;
   explainedRows?: string[];
+  /** Ingredients the user passed over at review. They were never attempted, so
+   *  the cart not having them is the outcome they asked for — see notInCart. */
+  skippedNames?: string[];
 }): CartCheckFindings {
   const { rows, reportedAdded, active, reconcileIntended, countBefore, countAfter } = input;
   const explainedRows = input.explainedRows ?? [];
+  const skippedNames = input.skippedNames ?? [];
   let missing: string[] = [];
   let short: ShortAdd[] = [];
   let over: OverAdd[] = [];
@@ -1234,6 +1245,33 @@ export function auditCartAfterRun(input: {
     // splitCartLeftover so the partition stays a partition: the row is still
     // consumed as nothing's claim, it just isn't ALSO called unwanted.
     over = dropExplainedOverAdds(over, explainedRows);
+    // `notInCart` is what the screen turns into "X is not in your cart", and a
+    // sentence in that form has to be true of the CART, not merely unproven by
+    // this run's claim pass. Three ways it could be false, each removed here
+    // rather than in splitCartLeftover — the pool discipline there must keep
+    // treating these as unclaimed, or a row they explain becomes an over-add.
+    //
+    //   1. A row the run already reports as unverified (MEAL-119). A count item
+    //      can never claim a weight row, so its claim stays 0 and it arrives
+    //      here — while the done screen is, in the same breath, naming that
+    //      exact line as one it could not verify. `over` is filtered for this
+    //      already; not filtering `notInCart` too put the item in the FAILED
+    //      list, which `failedNames` forbids by name ("they may well have
+    //      landed, so 'could not add' would be a lie").
+    //   2. The item is in the cart, just not from this run. `addedRows` is this
+    //      run's delta; a product the user already had is grey, unclaimed, and
+    //      absolutely present. Telling someone a thing in their cart is not in
+    //      their cart is the false positive this audit exists to avoid, and it
+    //      is the one that costs them money twice.
+    //   3. The user skipped it at review. It was never attempted, so its absence
+    //      is the outcome they chose. The done screen reports skips plainly and
+    //      separately, on purpose.
+    const presentSomehow = (name: string) => rows.some((r) => cartNameMatches(r.name, name));
+    notInCart = notInCart.filter((u) =>
+      !explainedRows.some((n) => cartNameMatches(n, u.name))
+      && !presentSomehow(u.name)
+      && !skippedNames.some((n) => namesSameProduct(u.name, n)),
+    );
     // Only audit items we reported as added (failures already route to review),
     // skip sold-by-weight ITEMS (presence, not count — see isWeightPriced), and
     // skip fully-missing items (covered by `missing`). The weight ROWS are
@@ -1348,15 +1386,31 @@ export function buildCartVerdict(input: {
   // the two-sources-one-screen defect this function exists to end, rebuilt in
   // the one case where the cart never spoke at all.
   if (!findings.cartRead || unreadReason) {
+    // One thing still gets through without rows: the badge count. A header-badge
+    // store has no per-item data ever, and the shortfall check is the only cart
+    // evidence it can produce — returning early past it made the warning
+    // unreachable in precisely the case it was written for.
+    //
+    // It does NOT make this verdict cart-backed. A count says something is
+    // short; it cannot say WHICH item, so the run's own failed list stays on
+    // screen rather than being replaced by a per-item verdict nobody can build.
+    const shortfall = findings.countShortfall;
     return {
       notAdded: reportedFailed.filter((n) => n.trim() !== ''),
       cartBacked: false,
-      message: unreadReason,
+      message: shortfall
+        ? `We checked your ${storeName} cart: it went up by ${shortfall.delta} item${shortfall.delta === 1 ? '' : 's'} where ${shortfall.expected} ${shortfall.expected === 1 ? 'was' : 'were'} expected. Please double-check it before checking out.`
+        : unreadReason,
     };
   }
 
   const absent = findings.notInCart.filter((u) => u.got === 0);
-  const short = findings.notInCart.filter((u) => u.got > 0);
+  // Partial claims are reported from `short`, not from `notInCart`. Both describe
+  // an item the cart under-credits, and findShortAddedItems is the older and more
+  // careful of the two: it audits only items the run reported adding, drops
+  // weight rows itself, and has the wild failure modes in its history to show for
+  // it. Reading partials off the claim pass instead would have quietly changed
+  // which runs warn, on top of everything else this ticket changes.
   const clauses: string[] = [];
 
   if (absent.length > 0) {
@@ -1365,9 +1419,9 @@ export function buildCartVerdict(input: {
       ? `${names} is not in your cart`
       : `${absent.length} items are not in your cart (${names})`);
   }
-  if (short.length > 0) {
-    const detail = short.map((u) => `${u.name} (${u.got} of ${u.expected})`).join(', ');
-    clauses.push(`${short.length} item${short.length === 1 ? '' : 's'} came up short — ${detail} — which a store limit can cause`);
+  if (findings.short.length > 0) {
+    const detail = findings.short.map((s) => `${s.name} (${s.got} of ${s.expected})`).join(', ');
+    clauses.push(`${findings.short.length} item${findings.short.length === 1 ? '' : 's'} came up short — ${detail} — which a store limit can cause`);
   }
   if (findings.over.length > 0) {
     const names = joinNames(findings.over.map(overLabel));
@@ -1378,6 +1432,30 @@ export function buildCartVerdict(input: {
   if (clauses.length === 0 && findings.countShortfall) {
     const { delta, expected } = findings.countShortfall;
     clauses.push(`your cart went up by ${delta} item${delta === 1 ? '' : 's'} where ${expected} were expected`);
+  }
+
+  // Nothing wrong with the cart — but silence is only safe if the rest of the
+  // screen is telling the truth, and on a fully-recovered run it is not.
+  //
+  // The shape: a stale badge fails every worker, the after-probe reads the cart,
+  // and everything is there. Nothing is absent, short or unintended, so there is
+  // no warning to print — while the headline, driven by the run's own confirmed
+  // count, still says "No items were added." That headline is itself a
+  // run-sourced failure claim, and dropping `recovered`'s copy removed the only
+  // thing that ever contradicted it. The user re-adds a full cart by hand.
+  //
+  // So the cart speaks up when it disagrees with the run in the GOOD direction
+  // too. Deliberately not phrased as "we added them": a recovery is a name match
+  // against a cart row, which is enough to say the row is there and not enough
+  // to claim this run put it there (see RecoveredAdd.matchQuality, and MEAL-177,
+  // which declined to promote recoveries into the added count for this reason).
+  if (clauses.length === 0 && findings.recovered.length > 0) {
+    const names = joinNames(findings.recovered.map((r) => r.cartName || r.name));
+    return {
+      notAdded: [],
+      cartBacked: true,
+      message: `We checked your ${storeName} cart and everything you asked for is there, including ${names} — no need to add ${findings.recovered.length === 1 ? 'it' : 'them'} again.`,
+    };
   }
 
   return {
