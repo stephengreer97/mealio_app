@@ -860,6 +860,21 @@ export interface CartCheckFindings {
    * those are strictly more specific, and the caller reports them instead.
    */
   countShortfall: { delta: number; expected: number } | null;
+  /** Whether a per-item cart read actually happened. False means every list
+   *  above is empty for want of evidence, not for want of findings. */
+  cartRead: boolean;
+  /**
+   * The before/after comparison the user-facing message is built from
+   * (MEAL-199): products and units we meant to add, against products and units
+   * the cart gained, matched by exact name, skips excluded.
+   *
+   * Held apart from the lists above rather than replacing them. Those feed the
+   * funnel — `missing`, `recovered` and `over` are how we measure the run's own
+   * reporting against the cart, which is MEAL-47's subject and needs the lenient
+   * matcher to see a near-miss at all. This one decides what a person is told,
+   * where a near-miss is a wrong sentence.
+   */
+  comparison: SnapshotComparison;
 }
 
 /** Do an intended title and a title the RUN reported name the same product?
@@ -894,6 +909,7 @@ export interface CartLeftoverSplit {
   recovered: RecoveredAdd[];
   over: OverAdd[];
 }
+
 
 /** One added cart row while it is being consumed. Weight rows are held apart:
  *  they carry no unit count (one line at N lb), so only a weight-priced item may
@@ -1155,9 +1171,13 @@ export function auditCartAfterRun(input: {
   countBefore: number | null;
   countAfter: number | null;
   explainedRows?: string[];
+  /** Ingredients the user passed over at review. They were never attempted, so
+   *  the cart not having them is the outcome they asked for — see notInCart. */
+  skippedNames?: string[];
 }): CartCheckFindings {
   const { rows, reportedAdded, active, reconcileIntended, countBefore, countAfter } = input;
   const explainedRows = input.explainedRows ?? [];
+  const skippedNames = input.skippedNames ?? [];
   let missing: string[] = [];
   let short: ShortAdd[] = [];
   let over: OverAdd[] = [];
@@ -1213,5 +1233,267 @@ export function auditCartAfterRun(input: {
       clean && countBefore != null && countAfter != null && expected > 0 && countAfter - countBefore < expected
         ? { delta: Math.max(countAfter - countBefore, 0), expected }
         : null,
+    cartRead: rows != null,
+    comparison: rows
+      ? compareCartToIntended({ addedRows: rows.filter((r) => r.added), intended: intendedAll, skippedNames })
+      : { short: [], extra: [] },
+  };
+}
+
+// ── The one thing the done screen says (MEAL-199) ───────────────────────────
+//
+// Before this, the done screen carried two warnings from two observers: "Could
+// not add: X", sourced from the run's own per-item reports, and a cart-check
+// banner sourced from the before/after snapshot diff. The second existed because
+// the first is known to lie, which made them a claim and its own rebuttal
+// printed as peers, and left the user to work out which to believe.
+//
+// The snapshot is the source of truth. This builds the single message from it,
+// and the run's reports are consulted in exactly one case: when there is no
+// snapshot to read, where saying so out loud beats quietly reverting to the
+// weaker source (MEAL-190 established `unverified` as its own outcome for the
+// same reason).
+//
+// CONSERVATISM IS A REQUIREMENT, NOT A STYLE. The original snapshot check
+// (`e5d92da`, 2026-06-12) recorded its own safety property: "the comparison can
+// only under-warn, never false-positive." Promoting the snapshot to sole arbiter
+// makes its false positives the only thing a user sees, so that property is
+// restored here deliberately — every clause below reports what the cart SHOWS,
+// and nothing is inferred from a silence.
+
+/** Cart-check copy for one over-added product: bare name, or "name ×N". */
+function overLabel(o: OverAdd): string {
+  return o.qty > 1 ? `${o.name} ×${o.qty}` : o.name;
+}
+
+/** One product the cart is short on. */
+export interface ShortProduct {
+  name: string;
+  expected: number;
+  got: number;
+}
+
+export interface SnapshotComparison {
+  /** Products the after-snapshot does not fully account for. `got === 0` means
+   *  the cart shows none of it. */
+  short: ShortProduct[];
+  /** Units the cart gained that no intended product accounts for. */
+  extra: { name: string; qty: number }[];
+}
+
+/**
+ * The whole comparison, as Stephen specified it (MEAL-199):
+ *
+ *   We are supposed to add 12 units of 10 products. Snapshot the cart before,
+ *   snapshot it at the very end, compare products and their units, matching by
+ *   EXACT name. Weight is matched as weight. Products skipped during reconcile
+ *   are not considered.
+ *
+ * `addedRows` is already that before/after comparison — diffCartItems keys rows
+ * by exact title and returns the delta, so every row here is a unit this run put
+ * in the cart. What this adds is the other half: matching that delta against the
+ * products we chose, again by exact title.
+ *
+ * WHY THE SEARCH TERM IS THE RIGHT NAME TO MATCH ON. The add path finds a
+ * product card by EXACT name (`heb.ts` and its siblings; `scoreMatch` must
+ * return 100 for the add gate to fire), so the title that reaches the cart is
+ * the term we searched for. `IntendedItem.name` is therefore not an approximate
+ * label for the product — it is the product's title, and equality against a cart
+ * row is a fair comparison rather than a lucky one.
+ *
+ * WHY EXACT AND NOTHING ELSE. The claim passes this replaces match with
+ * `cartNameMatches`, a 60% token overlap, and every false statement the cold
+ * review found came out of that leniency: "Bananas" swallowing "Bananas
+ * Organic", a substitute sharing no tokens with its search term landing in two
+ * clauses of one sentence about one product. A looser matcher cannot be made
+ * safe by filtering its output, because the mistakes are indistinguishable from
+ * findings. Exact equality has one failure mode, it is inspectable, and it fails
+ * toward silence: a title that does not match is a product we do not claim
+ * anything about.
+ *
+ * Weight lines are matched by presence, not units — one line at N lb has no unit
+ * count, which is the same rule every cart counter and MEAL-178 already apply.
+ */
+export function compareCartToIntended(input: {
+  /** The before/after delta — diffCartItems' added rows. */
+  addedRows: CartRow[];
+  intended: IntendedItem[];
+  /** Ingredients passed over at review. Never considered. */
+  skippedNames?: string[];
+}): SnapshotComparison {
+  const { addedRows, intended } = input;
+  const skippedNames = input.skippedNames ?? [];
+  const isSkipped = (item: IntendedItem) =>
+    skippedNames.some((s) => normalizeName(s) === normalizeName(item.name));
+
+  const countPool = addedRows.filter((r) => !r.isWeight).map((r) => ({ name: r.name, qty: r.qty }));
+  const weightPool = addedRows.filter((r) => r.isWeight).map((r) => ({ name: r.name, used: false }));
+  const considered = intended.filter((i) => !isSkipped(i));
+
+  const short: ShortProduct[] = [];
+  for (const item of considered) {
+    const presenceOnly = item.isWeight || item.weightStepLb != null;
+    const expected = presenceOnly ? 1 : Math.max(1, item.expectedQty || 1);
+    let got = 0;
+    if (presenceOnly) {
+      const w = weightPool.find((p) => !p.used && normalizeName(p.name) === normalizeName(item.name));
+      if (w) { w.used = true; got = 1; }
+    } else {
+      for (const rowEntry of countPool) {
+        if (got >= expected) break;
+        if (rowEntry.qty <= 0) continue;
+        if (normalizeName(rowEntry.name) !== normalizeName(item.name)) continue;
+        const take = Math.min(rowEntry.qty, expected - got);
+        rowEntry.qty -= take;
+        got += take;
+      }
+    }
+    if (got < expected) short.push({ name: item.name, expected, got });
+  }
+
+  const extra: { name: string; qty: number }[] = [];
+  for (const rowEntry of countPool) if (rowEntry.qty > 0) extra.push({ name: rowEntry.name, qty: rowEntry.qty });
+  for (const w of weightPool) if (!w.used) extra.push({ name: w.name, qty: 1 });
+  return { short, extra };
+}
+
+function joinNames(names: string[]): string {
+  return names.join(', ');
+}
+
+export interface CartVerdict {
+  /**
+   * Items to name on the done screen as not in the cart. Cart-sourced when
+   * `cartBacked`, otherwise the run's own claim about itself.
+   */
+  notAdded: string[];
+  /** The single message, or null when there is nothing to tell the user. */
+  message: string | null;
+  /** True when the message rests on a cart read. False means it rests on the
+   *  run's own reporting and says so. */
+  cartBacked: boolean;
+}
+
+/**
+ * The done screen's whole verdict, in one place.
+ *
+ * `recovered` deliberately produces no copy. It names items the run called
+ * failed that the cart shows are present — advice not to re-add them only ever
+ * made sense as a rebuttal of a failure line sourced from the run. With the
+ * failure list now read off the cart, such an item is never called failed in the
+ * first place, so there is nothing to take back. It stays in the findings
+ * because it measures how often the confirmation rail lies, which is MEAL-47's
+ * subject and belongs on the funnel rather than on a kitchen counter.
+ */
+export function buildCartVerdict(input: {
+  storeName: string;
+  findings: CartCheckFindings;
+  /** The run's own failed list. Consulted only when the cart was not read. */
+  reportedFailed: string[];
+  /** Non-null when the cart could not be read at all — see MEAL-190. */
+  unreadReason: string | null;
+}): CartVerdict {
+  const { storeName, findings, reportedFailed, unreadReason } = input;
+
+  // No cart read. The run's own failed list is all there is, and it is returned
+  // UNPROMOTED: `cartBacked` false is what tells the screen this is the run
+  // talking about itself, so it can keep saying so plainly instead of dressing a
+  // guess as a finding.
+  //
+  // `message` is deliberately null rather than a "we could not check your cart"
+  // sentence. That copy already exists and is already rendered — MEAL-190 owns
+  // it, holds it in its own state, and distinguishes the ways a read can fail.
+  // Returning a second version here would either clobber that one (the done
+  // screen prefers this message when both are set) or print beside it, which is
+  // the two-sources-one-screen defect this function exists to end, rebuilt in
+  // the one case where the cart never spoke at all.
+  if (!findings.cartRead || unreadReason) {
+    // One thing still gets through without rows: the badge count. A header-badge
+    // store has no per-item data ever, and the shortfall check is the only cart
+    // evidence it can produce — returning early past it made the warning
+    // unreachable in precisely the case it was written for.
+    //
+    // It does NOT make this verdict cart-backed. A count says something is
+    // short; it cannot say WHICH item, so the run's own failed list stays on
+    // screen rather than being replaced by a per-item verdict nobody can build.
+    const shortfall = findings.countShortfall;
+    return {
+      notAdded: reportedFailed.filter((n) => n.trim() !== ''),
+      cartBacked: false,
+      message: shortfall
+        ? `We checked your ${storeName} cart: it went up by ${shortfall.delta} item${shortfall.delta === 1 ? '' : 's'} where ${shortfall.expected} ${shortfall.expected === 1 ? 'was' : 'were'} expected. Please double-check it before checking out.`
+        : unreadReason,
+    };
+  }
+
+  // One comparison decides everything below: the products we meant to add and
+  // their units, against the products the cart gained and their units, matched
+  // by exact name. `absent` and `short` are the same finding at two depths —
+  // nothing of it arrived, or some of it did.
+  const comparison = findings.comparison;
+  const absent = comparison.short.filter((s) => s.got === 0);
+  const partial = comparison.short.filter((s) => s.got > 0);
+  const clauses: string[] = [];
+
+  if (absent.length > 0) {
+    // "Mealio could not add X", never "X is not in your cart".
+    //
+    // The comparison measures what this run ADDED — the delta between the two
+    // snapshots — so a zero says we put nothing there. It does not say the cart
+    // is empty of it: the user may well have had that product before we started,
+    // in which case it is sitting in their cart right now and a sentence
+    // claiming otherwise sends them to buy a second one. What we always know is
+    // what we did, so that is what we say.
+    const names = joinNames(absent.map((s) => s.name));
+    clauses.push(absent.length === 1
+      ? `Mealio could not add ${names}`
+      : `Mealio could not add ${absent.length} items (${names})`);
+  }
+  if (partial.length > 0) {
+    const detail = partial.map((s) => `${s.name} (${s.got} of ${s.expected})`).join(', ');
+    clauses.push(`${partial.length} item${partial.length === 1 ? '' : 's'} came up short — ${detail} — which a store limit can cause`);
+  }
+  if (comparison.extra.length > 0) {
+    const units = comparison.extra.reduce((n, e) => n + e.qty, 0);
+    const names = joinNames(comparison.extra.map(overLabel));
+    clauses.push(`your cart has ${units} item${units === 1 ? '' : 's'} Mealio did not add (${names})`);
+  }
+  // Header-badge stores have no rows to name, so the count is all there is. Only
+  // reachable when the per-item lists are empty — see countShortfall's own note.
+  if (clauses.length === 0 && findings.countShortfall) {
+    const { delta, expected } = findings.countShortfall;
+    clauses.push(`your cart went up by ${delta} item${delta === 1 ? '' : 's'} where ${expected} were expected`);
+  }
+
+  // Nothing wrong with the cart — but silence is only safe if the rest of the
+  // screen is telling the truth, and on a fully-recovered run it is not.
+  //
+  // The shape: a stale badge fails every worker, the after-probe reads the cart,
+  // and everything is there. Nothing is absent, short or unintended, so there is
+  // no warning to print — while the headline, driven by the run's own confirmed
+  // count, still says "No items were added." That headline is itself a
+  // run-sourced failure claim, and dropping `recovered`'s copy removed the only
+  // thing that ever contradicted it. The user re-adds a full cart by hand.
+  //
+  // So the cart speaks up when it disagrees with the run in the GOOD direction
+  // too. Deliberately not phrased as "we added them": a recovery is a name match
+  // against a cart row, which is enough to say the row is there and not enough
+  // to claim this run put it there (see RecoveredAdd.matchQuality, and MEAL-177,
+  // which declined to promote recoveries into the added count for this reason).
+  if (clauses.length === 0 && findings.recovered.length > 0) {
+    const names = joinNames(findings.recovered.map((r) => r.cartName || r.name));
+    return {
+      notAdded: [],
+      cartBacked: true,
+      message: `We checked your ${storeName} cart and everything you asked for is there, including ${names} — no need to add ${findings.recovered.length === 1 ? 'it' : 'them'} again.`,
+    };
+  }
+
+  return {
+    notAdded: absent.map((u) => u.name),
+    cartBacked: true,
+    message: clauses.length === 0
+      ? null
+      : `We checked your ${storeName} cart: ${clauses.join('; ')}. Please double-check it before checking out.`,
   };
 }
