@@ -1288,3 +1288,62 @@ describe('MEAL-14 target identity from a result card', () => {
     expect(rail.targetFromCard(null, 'x')).toBeNull();
   });
 });
+
+// ── The production document ─────────────────────────────────────────────────
+// Moved here when MEAL-16's probe ladder was removed. The ladder is gone; what
+// it PROVED is production behaviour and stays pinned.
+
+describe('the production document', () => {
+  // Pinned in full because this text is the whole finding of MEAL-16. `cartV2`
+  // returns the union CartResponse = Cart | CartError — H-E-B said so itself, in a
+  // live 400 naming the type (MEAL-16) — so the selection has to sit inside `... on Cart { … }`.
+  // For six runs it did not, which is why every add came back `unknown`.
+  it('selects the union arms, not fields on the union', () => {
+    expect(HEB_CART_QUERY).toBe(
+      'query CartLines {\n' +
+      '  cartV2 {\n' +
+      '    __typename\n' +
+      '    ... on Cart {\n' +
+      '      id\n' +
+      '      itemCount { total }\n' +
+      '      items {\n' +
+      '        id\n' +
+      '        quantity\n' +
+      '        estimatedWeight\n' +
+      '        product { id fullDisplayName }\n' +
+      '        sku { id twelveDigitUPC weightSelectionIncrements }\n' +
+      '      }\n' +
+      '    }\n' +
+      '    ... on CartError { code title message }\n' +
+      '  }\n' +
+      '}'
+    );
+  });
+
+  // A wrapper, not a rewrite. Every one of these appears in the storefront's own
+  // fragments spelled exactly this way, and in the committed __APOLLO_STATE__
+  // captures — so a fix that "corrected" a field name would be inventing drift
+  // the evidence says is not there.
+  it('asks for the same fields it always asked for', () => {
+    for (const f of [
+      'id', 'itemCount { total }', 'items', 'quantity', 'estimatedWeight',
+      'product { id fullDisplayName }', 'sku { id twelveDigitUPC weightSelectionIncrements }',
+    ]) {
+      expect(HEB_CART_QUERY).toContain(f);
+    }
+  });
+
+  // The other arm is selected even though nothing diffs it: unselected, a
+  // CartError arrives as an object with no `items` and reads as 'shape' — "the
+  // gateway sent something odd" — while H-E-B is in fact saying why in words.
+  it('asks CartError for its words', () => {
+    expect(HEB_CART_QUERY).toContain('... on CartError { code title message }');
+  });
+
+  it('puts cartV2 at line 2, column 3 — the position H-E-B reported back', () => {
+    // Every gateway complaint of all six runs is a statement about this
+    // position. Moving it would make those logs unreadable against this text.
+    const line = HEB_CART_QUERY.split('\n')[1];
+    expect(line.indexOf('cartV2')).toBe(2); // 0-indexed column 2 = 1-indexed 3
+  });
+});
