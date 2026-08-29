@@ -4771,6 +4771,22 @@ export default function WebViewCartSheet({
           const cartCheckMessage = cartDeltaWarning ?? cartUnverified;
           return (
             <>
+              {/* ONE scroll view over the whole result (MEAL-198).
+                *
+                * Everything above the breakdown — the title, the "could not add"
+                * line, the cart-check banner, the skipped notice and the weight
+                * notice — used to sit in a fixed-height View, with the breakdown
+                * scrolling inside it. So the banners did not push the page down,
+                * they SQUEEZED the breakdown toward zero height: on a run with
+                * several warnings the user got a screen of warnings and a sliver
+                * of the thing the warnings were about, which is precisely the run
+                * where they most need to read it.
+                *
+                * Nesting two vertical scroll views is what produced that, so the
+                * inner ones are plain Views now and this is the only scroller.
+                * The footer stays OUTSIDE it — "Open cart" and "Done" are the way
+                * off this screen and must not scroll away. */}
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 8 }}>
               <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 32, paddingBottom: 16 }}>
                 {wasChooseFlow ? (
                   <>
@@ -4910,7 +4926,7 @@ export default function WebViewCartSheet({
                 // in. Same gate as the probe itself so the two can't disagree —
                 // no baseline, or no add attempted, means no probe, so we skip
                 // the spinner and fall through to the plain list below.
-                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+                <View style={{ minHeight: 160, alignItems: 'center', justifyContent: 'center', gap: 10 }}>
                   <ActivityIndicator size="small" color={storeColor} />
                   <Text style={{ fontSize: 13, color: Colors.text3, fontFamily: 'Inter_400Regular' }}>
                     Updating your {storeName} cart…
@@ -4919,7 +4935,7 @@ export default function WebViewCartSheet({
               ) : cartResultRows ? (
                 // Cart-page stores: full cart breakdown — added qty in green with
                 // a +, pre-existing qty in grey. Qty shown on each row.
-                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+                <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 }}>
                     <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.text2 }}>
                       Your {storeName} cart
@@ -4960,9 +4976,9 @@ export default function WebViewCartSheet({
                       </View>
                     ))
                   )}
-                </ScrollView>
+                </View>
               ) : addedNames.length > 0 ? (
-                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+                <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
                   {addedNames.map((name, i) => (
                     <View
                       key={i}
@@ -4975,10 +4991,12 @@ export default function WebViewCartSheet({
                       <Text style={{ fontSize: 14, color: Colors.text1, fontFamily: 'Inter_400Regular' }}>{name}</Text>
                     </View>
                   ))}
-                </ScrollView>
+                </View>
               ) : (
-                <View style={{ flex: 1 }} />
+                null
               )}
+
+              </ScrollView>
 
               <View style={[styles.footer, { gap: 8 }]}>
                 {!wasChooseFlow && totalAdded > 0 && (
