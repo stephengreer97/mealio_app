@@ -808,7 +808,16 @@ export default function WebViewCartSheet({
     const skipped = Object.values(skippedByIdxRef.current);
     const wasSkipped = (name: string) =>
       skipped.some((s) => s.trim().toLowerCase() === (name ?? '').trim().toLowerCase());
-    setFailedItems(failures.map((f) => f.name).filter((n) => !wasSkipped(n)));
+    const stillFailed = failures.map((f) => f.name).filter((n) => !wasSkipped(n));
+    setFailedItems(stillFailed);
+    // The COUNT is set here too, and that is the whole point of it living in one
+    // function. `totalFailed` alone gates the "Could not add" line, and the line
+    // falls back to a bare "N items could not be added." when it has no names —
+    // so filtering the names while a caller set the count from the unfiltered
+    // list just re-prints the same wrong claim with the item's name taken off
+    // it. Measured on a device: one skipped ingredient, name correctly gone,
+    // "1 item could not be added." still sitting above the skipped banner.
+    setTotalFailed(stillFailed.length);
   }, [setFailedItems]);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
   // What every "N items" on screen is counted against (MEAL-178). "items" means
@@ -2066,11 +2075,10 @@ export default function WebViewCartSheet({
         } else {
           // Combined path: all items were search+added inline; results are in addResultsRef.
           const added = addResultsRef.current.filter((r) => r.success).length;
-          const failed = addResultsRef.current.filter((r) => !r.success).length;
           const names = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
           setTotalAdded(added);
-          setTotalFailed(failed);
           setAddedNames(names);
+          // See compileFailedNames — it owns the count too.
           compileFailedNames();
           setStep('done');
         }
@@ -2197,11 +2205,11 @@ export default function WebViewCartSheet({
     if (idx >= itemsToAdd.length) {
       // All done — navigate to cart
       const added = addResultsRef.current.filter((r) => r.success).length;
-      const failed = addResultsRef.current.filter((r) => !r.success).length;
       const names = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
       setTotalAdded(added);
-      setTotalFailed(failed);
       setAddedNames(names);
+      // No setTotalFailed here: compileFailedNames owns the failed count as well
+      // as the failed names, so a skip cannot drop off one and survive on the other.
       compileFailedNames();
       setStep('done');
       return;
@@ -3882,11 +3890,11 @@ export default function WebViewCartSheet({
     if (itemsToAdd.length === 0) {
       // No review items to add — compile done stats from combined-phase results.
       const added = addResultsRef.current.filter((r) => r.success).length;
-      const failed = addResultsRef.current.filter((r) => !r.success).length;
       const names = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
       setTotalAdded(added);
-      setTotalFailed(failed);
       setAddedNames(names);
+      // No setTotalFailed here: compileFailedNames owns the failed count as well
+      // as the failed names, so a skip cannot drop off one and survive on the other.
       compileFailedNames();
       setStep('done');
       return;
