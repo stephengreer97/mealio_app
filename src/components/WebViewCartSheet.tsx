@@ -2816,7 +2816,34 @@ export default function WebViewCartSheet({
                 'missing=', verdicts.missing.map((v) => `${v.name}(${v.skuId || v.productId || '?'}:${v.reason})`),
                 'unverified=', verdicts.unknown.length);
             }
-            if (!rows) {
+            // A cart read that says "empty" while the rail holds landed verdicts is
+            // not a reading, it is a failure to read (MEAL-16, run 7 of 2026-08-14).
+            //
+            // Under the Imperva wall the /cart page renders with no rows and the
+            // count script posts `{count: 0, items: []}` with `reason: null` and
+            // `onBlockedPage: false` — indistinguishable, to everything downstream,
+            // from a genuinely empty cart. `[]` is an array, so the `!rows` guard
+            // below never fired, and reconcile re-added all 18 items on top of the
+            // 12 it had just been told were `landed`. Stephen's cart ended 12 units
+            // over across 10 lines.
+            //
+            // The contradiction is already in this function's own hands: the rail
+            // computed those verdicts six lines up, from the same `attempts`. A
+            // read that disagrees with them about the whole cart loses, and the run
+            // falls into the path below — which trusts the worker reports and says
+            // out loud that the cart could not be checked. That is the honest
+            // answer, and critically it does NOT re-add anything.
+            //
+            // Deliberately narrow: it needs `landed` to be non-empty. A run that
+            // genuinely added nothing produces no verdicts, so an empty cart still
+            // reads as an empty cart.
+            const cartReadContradictsRail =
+              !!rows && rows.filter((r) => r.added).length === 0 && verdicts.landed.length > 0;
+            if (cartReadContradictsRail) {
+              console.log(`[Cart ${ts()}]`, 'cart read says EMPTY but the rail confirmed',
+                verdicts.landed.length, 'landed — treating as UNREAD, not as an empty cart');
+            }
+            if (!rows || cartReadContradictsRail) {
               // Can't diff per-item → trust the worker results, because there is
               // nothing better to trust.
               //

@@ -171,7 +171,13 @@ beforeEach(() => {
  * reconcile answer is the variable under test: one with `items` gives the diff a
  * cart to compare, one without is the MEAL-152 refusal.
  */
-async function runToReconcile(answer: Record<string, unknown>, workerSucceeded = true) {
+async function runToReconcile(
+  answer: Record<string, unknown>,
+  workerSucceeded = true,
+  // A rail verdict riding on the worker's report, exactly as heb-cart-query posts
+  // it. Present, it is what the walled-cart guard weighs the cart read against.
+  confirm?: Record<string, unknown>,
+) {
   // ONE item on purpose. With two, the pool hands one to the cold slot (the main
   // WebView enlisted as an extra add surface) and only a single worker WebView
   // ever mounts, so the pool cannot settle without waiting out a 35s worker
@@ -202,7 +208,7 @@ async function runToReconcile(answer: Record<string, unknown>, workerSucceeded =
 
   // Every add worker reports back, which settles the pool and arms the reconcile.
   postTo(1, workerSucceeded
-    ? { type: 'WORKER_RESULT', phase: 'add', success: true, productName: 'Sour Cream' }
+    ? { type: 'WORKER_RESULT', phase: 'add', success: true, productName: 'Sour Cream', ...(confirm ? { confirm } : {}) }
     : { type: 'WORKER_RESULT', phase: 'add', success: false, reason: 'add button not found' });
   act(() => { jest.advanceTimersByTime(5_000); });
 
@@ -303,5 +309,55 @@ describe('the outcome an unverifiable run reports (MEAL-190)', () => {
       false,
     );
     expect(completedRun()).toMatchObject({ itemsAdded: 0, outcome: 'failed' });
+  });
+});
+
+
+// ── The walled cart (MEAL-16, run 7 of 2026-08-14) ───────────────────────────
+//
+// Under the Imperva wall the /cart page renders with no rows and the count
+// script posts `{count: 0, items: []}` — `reason: null`, `onBlockedPage: false`.
+// Nothing downstream can tell that from a genuinely empty cart: `[]` IS an
+// array, so the `!rows` refusal above never fired. Reconcile believed it, and
+// re-added all 18 items on top of the 12 the rail had just confirmed `landed`.
+// The measured cost was 12 duplicate units across 10 lines.
+//
+// The contradiction is already in the caller's hands — the verdicts are computed
+// from the same `attempts` six lines earlier — so a read that disagrees with them
+// about the whole cart loses.
+describe('a cart read that contradicts the rail (MEAL-16)', () => {
+  const landed = { state: 'landed', reason: 'qty_increased', via: 'cart_query', skuId: '123', productId: null };
+
+  it('treats an empty cart read as UNREAD when the rail confirmed a landing', async () => {
+    const view = await runToReconcile(
+      { type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' },
+      true,
+      landed,
+    );
+    expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeTruthy();
+  });
+
+  it('does not re-add what the rail said landed', async () => {
+    // The defect this exists to stop. Believing the empty read sends the run back
+    // to 'searching' to re-add an item that is already in the cart; the honest
+    // path finishes on the done screen instead.
+    const view = await runToReconcile(
+      { type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' },
+      true,
+      landed,
+    );
+    expect(view.queryByText(/1 item added to your h-e-b cart/i)).toBeTruthy();
+    expect(view.queryByText(/topping up/i)).toBeNull();
+  });
+
+  it('still believes an empty cart when the rail confirmed nothing', async () => {
+    // Deliberately narrow. With no landed verdict there is no contradiction, so
+    // an empty cart has to keep reading as an empty cart — otherwise every run
+    // that genuinely added nothing would claim it could not check.
+    const view = await runToReconcile(
+      { type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' },
+      true,
+    );
+    expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeNull();
   });
 });
