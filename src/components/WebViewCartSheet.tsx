@@ -51,7 +51,7 @@ import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureC
 import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-health';
 import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
-import { HebAddConfirmation, hebCartQueryEnabled } from '../lib/webview-scripts/heb-cart-query';
+import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
@@ -606,7 +606,8 @@ export default function WebViewCartSheet({
   // can't wait forever.
   const cartProbeResultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cartProbeRetriedRef = useRef(false);
-  const CART_PROBE_RESULT_TIMEOUT_MS = cfgTimeouts.cartProbeResultMs;  // Worst case 3 ladders × 5 reads = 15 requests, and only on a run that keeps  // The separate flood stop, on injections rather than starts, so a page that  // …and a per-page share of it, which is the bound that actually matters.  // The done-screen breakdown spinner falls back to the plain list after this,
+  const CART_PROBE_RESULT_TIMEOUT_MS = cfgTimeouts.cartProbeResultMs;
+  // The done-screen breakdown spinner falls back to the plain list after this,
   // so a cart page that never loads/counts (e.g. Amazon's multi-hop cart) can't
   // hang on "Updating your … cart" forever.
   const CART_ROWS_TIMEOUT_MS = cfgTimeouts.cartRowsMs;
@@ -749,9 +750,14 @@ export default function WebViewCartSheet({
     // and the done screen reported it both ways.
     //
     // The skip is the later fact and the deliberate one, so it wins. Filtered
-    // here rather than in handleReviewDecision because every path to the done
-    // screen funnels through this one function, and the skip can be recorded
-    // before or after the failure depending on which rail failed.
+    // here rather than in handleReviewDecision because the skip can be recorded
+    // before or after the failure, depending on which rail failed first.
+    //
+    // This is not the only path to the done screen — finishParallelAdd and the
+    // after-probe both write the failed list without calling this. Neither is
+    // reachable with a skip today (the first runs pre-review; the second goes
+    // through auditCartAfterRun, which already excludes skippedNames). A new
+    // finalize path would have to honour the same rule itself.
     const skipped = Object.values(skippedByIdxRef.current);
     const wasSkipped = (name: string) =>
       skipped.some((s) => s.trim().toLowerCase() === (name ?? '').trim().toLowerCase());
@@ -1506,6 +1512,10 @@ export default function WebViewCartSheet({
       setViewerOpen(false);
       preview.reset();
       setSkippedByIdx({});
+      // Hand-cleared for the same reason as unverifiedCartNamesRef just below:
+      // this ref is written outside render now, and under the
+      // !FEATURE_BACKGROUND_CART mount the component survives between runs.
+      skippedByIdxRef.current = {};
       // MEAL-119: reset alongside the skips. Harmless while FEATURE_BACKGROUND_CART
       // keeps this sheet keyed and conditionally mounted, but under the
       // !FEATURE_BACKGROUND_CART mount (MyMealsScreen) the component survives
@@ -3292,7 +3302,8 @@ export default function WebViewCartSheet({
           console.log(`[Cart ${ts()}]`, 'EXTRACT_DEBUG', JSON.stringify(msg));
           if (msg.step === 'next_data') {
             extractWhyRef.current[MAIN_SURFACE] = msg.ndReason ?? null;
-          }          return;
+          }
+          return;
         }
 
         if (msg.type === 'SEARCH_AND_ADD_RESULT') {
@@ -3662,6 +3673,15 @@ export default function WebViewCartSheet({
       if (candidate && (action === 'choose' || !candidate.outOfStock)) {
         // Re-deciding this ingredient after a Back: drop any earlier skip for it,
         // since adding now supersedes it.
+        // The ref is cleared alongside the state for the same reason the skip
+        // path writes it: it now has a writer that does not wait for a render,
+        // so an adder without a remover would leave a stale skip behind for any
+        // path that finalizes in the same tick.
+        if (reviewIdx in skippedByIdxRef.current) {
+          const nextRef = { ...skippedByIdxRef.current };
+          delete nextRef[reviewIdx];
+          skippedByIdxRef.current = nextRef;
+        }
         setSkippedByIdx((prev) => {
           if (!(reviewIdx in prev)) return prev;
           const next = { ...prev };
