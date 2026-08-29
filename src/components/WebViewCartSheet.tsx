@@ -627,7 +627,11 @@ export default function WebViewCartSheet({
   // if the after-probe never returns, so we fall back instead of spinning forever.
   const [cartRowsTimedOut, setCartRowsTimedOut] = useState(false);
   const cartRowsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [cartDeltaWarning, setCartDeltaWarning] = useState<string | null>(null);
+  // Held as {title, detail} rather than one string so the banner can fold the
+  // product LIST without folding the verdict (MEAL-176). Only ever read for
+  // truthiness elsewhere — the run outcome and the funnel just ask whether the
+  // cart disagreed with the run.
+  const [cartDeltaWarning, setCartDeltaWarning] = useState<{ title: string; detail: string } | null>(null);
   // True once the done screen's verdict is the CART's rather than the run's
   // (MEAL-199). It gates the "Could not add" sub-line: that line and the banner
   // are now two renderings of one verdict, so printing both would restate the
@@ -3144,7 +3148,10 @@ export default function WebViewCartSheet({
               const list = unexplainedOver.map(overAddLabel).join(', ');
               const units = unexplainedOver.reduce((n, o) => n + o.qty, 0);
               console.log(`[Cart ${ts()}]`, 'reconcile: OVER-ADD detected', unexplainedOver);
-              setCartDeltaWarning(`Cart check: your ${lockedName} cart has ${units} item(s) Mealio didn't intend to add (${list}). Please review your cart.`);
+              setCartDeltaWarning({
+                title: `Cart check: your ${lockedName} cart has ${units} item(s) Mealio didn't intend to add. Please review your cart.`,
+                detail: `Mealio did not add: ${list}`,
+              });
             } else {
               setCartDeltaWarning(null);
             }
@@ -3314,7 +3321,7 @@ export default function WebViewCartSheet({
               // show it, not because the run said so and nothing overturned it.
               setFailedItems(verdict.notAdded);
               setTotalFailed(verdict.notAdded.length);
-              setCartDeltaWarning(verdict.message);
+              setCartDeltaWarning(verdict.title ? { title: verdict.title, detail: verdict.detail } : null);
             }
             // No cart read leaves both alone: the run's own failed list stands
             // as the screen already has it, and cartUnverified says out loud
@@ -4768,7 +4775,28 @@ export default function WebViewCartSheet({
           // The reading wins when both are somehow set: it says something specific
           // about the cart, and "we couldn't check" would be a strictly weaker
           // claim rendered over a stronger one.
-          const cartCheckMessage = cartDeltaWarning ?? cartUnverified;
+          // ONE banner definition for the two done-screen branches (MEAL-174).
+          // They drifted before precisely because the markup was written twice.
+          //
+          // `cartUnverified` has no list to fold — it is one sentence saying the
+          // cart could not be read — so it renders as the plain banner it always
+          // was. Only a cart that WAS read produces names, and only those get the
+          // expandable treatment.
+          const cartNotice: { title: string; detail: string } | null =
+            cartDeltaWarning ?? (cartUnverified ? { title: cartUnverified, detail: '' } : null);
+          const cartCheckBanner = !cartNotice ? null : cartNotice.detail ? (
+            <ExpandableNotice
+              testID="cart-check-warning"
+              containerStyle={styles.cartCheckBanner}
+              title={cartNotice.title}
+              body={cartNotice.detail}
+            />
+          ) : (
+            <View style={styles.cartCheckBanner} testID="cart-check-warning">
+              <Ionicons name="alert-circle" size={18} color="#b45309" />
+              <Text style={styles.cartCheckBannerText}>{cartNotice.title}</Text>
+            </View>
+          );
           return (
             <>
               {/* ONE scroll view over the whole result (MEAL-198).
@@ -4821,12 +4849,7 @@ export default function WebViewCartSheet({
                           : `${failedUnits} item${failedUnits !== 1 ? 's' : ''} could not be added.`}
                       </Text>
                     )}
-                    {cartCheckMessage && (
-                      <View style={styles.cartCheckBanner} testID="cart-check-warning">
-                        <Ionicons name="alert-circle" size={18} color="#b45309" />
-                        <Text style={styles.cartCheckBannerText}>{cartCheckMessage}</Text>
-                      </View>
-                    )}
+                    {cartCheckBanner}
                   </>
                 ) : (
                   <>
@@ -4862,12 +4885,7 @@ export default function WebViewCartSheet({
                         finding had nowhere to render — the banner only existed
                         on the added>0 branch — and the user would re-add an item
                         already in their cart. */}
-                    {cartCheckMessage && (
-                      <View style={styles.cartCheckBanner} testID="cart-check-warning">
-                        <Ionicons name="alert-circle" size={18} color="#b45309" />
-                        <Text style={styles.cartCheckBannerText}>{cartCheckMessage}</Text>
-                      </View>
-                    )}
+                    {cartCheckBanner}
                   </>
                 )}
               </View>
