@@ -2030,9 +2030,34 @@ export default function WebViewCartSheet({
   const navigateToResultsOrSearchInPage = useCallback((term: string, script: string) => {
     const s = scriptsRef.current!;
     const resultsUrl = s.getSearchUrl?.(term);
-    if (resultsUrl) {
+    // `forceSerialSearch` is what separates the two kinds of store, and it is
+    // the honest test rather than a store list.
+    //
+    // ALDI and Wegmans set it: the sequential single-WebView search IS their run,
+    // it is exercised on every item of every run, and the in-page search is the
+    // path they are known to work on. Nothing here has measured them, so nothing
+    // here changes them.
+    //
+    // H-E-B, Walmart, Amazon and Albertsons do not: for them the pool is the real
+    // path and this function is only the RETRY fallback — the path that runs a
+    // handful of times per run, on exactly the items that already went wrong once.
+    // On H-E-B the in-page search there simply hangs, measured 12 of 13 times
+    // across five runs, and the pool proves the same store answers a navigation
+    // to `getSearchUrl` in about 800 ms. So a store that merely falls back to
+    // this path gets the navigation the pool already trusts.
+    if (resultsUrl && !s.forceSerialSearch) {
+      // Cleared for the same reason the in-page branches clear it: the same
+      // ingredient can appear in two meals, and a repeat of an identical URL must
+      // still deliver onLoadEnd or the queued script never runs.
+      lastLoadEndUrlRef.current = '';
       loadQueueRef.current = [script];
       navTo(resultsUrl);
+      return;
+    }
+    if (onSearchPageRef.current) {
+      loadQueueRef.current = [script];
+      lastLoadEndUrlRef.current = '';
+      webviewRef.current?.injectJavaScript(s.buildSearchScript(term));
       return;
     }
     loadQueueRef.current = [s.buildSearchScript(term), script];
@@ -2108,25 +2133,11 @@ export default function WebViewCartSheet({
         ? { type: 'weight', selectedText: `${item.purchaseWeight} lb`, selectedValue: String(item.purchaseWeight) }
         : (item.dropdown ?? null);
       const script = scriptsRef.current!.buildSearchAndAddScript(term, item.productQty, addDropdown);
-      if (onSearchPageRef.current) {
-        loadQueueRef.current = [script];
-        // Clear dedup so onLoadEnd fires even if the search URL is identical (same ingredient across meals).
-        lastLoadEndUrlRef.current = '';
-        webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(term));
-      } else {
-        navigateToResultsOrSearchInPage(term, script);
-      }
+      navigateToResultsOrSearchInPage(term, script);
     } else {
       // Choose-product path: extract candidates for user to pick from.
       setSearchingLabel(`Searching for ${term}…`);
-      if (onSearchPageRef.current) {
-        loadQueueRef.current = [scriptsRef.current!.extractProductsScript];
-        // Clear dedup so onLoadEnd fires even if the search URL is identical (same ingredient across meals).
-        lastLoadEndUrlRef.current = '';
-        webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(term));
-      } else {
-        navigateToResultsOrSearchInPage(term, scriptsRef.current!.extractProductsScript);
-      }
+      navigateToResultsOrSearchInPage(term, scriptsRef.current!.extractProductsScript);
     }
     // Arm a safety timeout. If neither SEARCH_RESULT nor SEARCH_AND_ADD_RESULT
     // arrives within the window, mark this item as failed (where applicable)
