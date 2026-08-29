@@ -791,7 +791,24 @@ export default function WebViewCartSheet({
     if (failures.length > 0) {
       console.log(`[Cart ${ts()}]`, 'failed adds:', JSON.stringify(failures.map((f) => ({ name: f.name, reason: f.reason ?? 'unknown' }))));
     }
-    setFailedItems(failures.map((f) => f.name));
+    // An ingredient the user SKIPPED at review is not a failure, whatever the
+    // automation did with it first.
+    //
+    // The two are separate facts and the screen renders them separately — "Could
+    // not add: X" above, "1 item you skipped: X" below — so an item in both lists
+    // is named twice in the same breath, once as something that went wrong and
+    // once as something the user chose. Measured on a device 2026-08-29: the
+    // automation timed out searching for an onion, the user skipped it at review,
+    // and the done screen reported it both ways.
+    //
+    // The skip is the later fact and the deliberate one, so it wins. Filtered
+    // here rather than in handleReviewDecision because every path to the done
+    // screen funnels through this one function, and the skip can be recorded
+    // before or after the failure depending on which rail failed.
+    const skipped = Object.values(skippedByIdxRef.current);
+    const wasSkipped = (name: string) =>
+      skipped.some((s) => s.trim().toLowerCase() === (name ?? '').trim().toLowerCase());
+    setFailedItems(failures.map((f) => f.name).filter((n) => !wasSkipped(n)));
   }, [setFailedItems]);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
   // What every "N items" on screen is counted against (MEAL-178). "items" means
