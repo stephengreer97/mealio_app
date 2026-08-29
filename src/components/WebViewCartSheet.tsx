@@ -1998,6 +1998,47 @@ export default function WebViewCartSheet({
 
   // ── Navigation to next search item ──────────────────────────────────────
 
+  /**
+   * Get the single WebView onto a results page for `term`, then run `script`.
+   *
+   * Two ways to do that, and the choice is the whole of MEAL-16's last defect.
+   *
+   * NAVIGATE to the store's own results URL when it has one. This is the path
+   * the worker pool already uses — `buildSearchAndAddWorker` points a worker at
+   * `getSearchUrl(term)` and injects the fused add onto the loaded results page
+   * — and it is how 29 of 35 adds landed on the device on 2026-08-29, each in
+   * about 800 ms.
+   *
+   * SEARCH IN-PAGE from the store homepage otherwise. That was the only path
+   * here before, and on H-E-B it hangs: measured 7 retries out of 7 across four
+   * runs, every one dying on the 15 s `searchMs` timeout with zero candidates.
+   * Raising the timeout does not help — 800 ms against >15 000 ms is a hang, not
+   * slowness. The cost is not just the wait: the review screen is handed an
+   * empty candidate list, tells the user "No products found", and takes away the
+   * substitute they could have picked. On run 9 it was also why a shortfall the
+   * reconcile had CORRECTLY detected could not be repaired, so the cart stayed
+   * two units short of what was asked for.
+   *
+   * The in-page branch stays for stores with no `getSearchUrl`, and the
+   * already-on-a-results-page branch above is untouched — ALDI and Wegmans drive
+   * their whole run through it, and nothing here has measured them.
+   *
+   * No injected script changes. `script` is the same one either way; it finds
+   * its match on whatever results page it lands on, which is exactly what it
+   * already does inside a worker.
+   */
+  const navigateToResultsOrSearchInPage = useCallback((term: string, script: string) => {
+    const s = scriptsRef.current!;
+    const resultsUrl = s.getSearchUrl?.(term);
+    if (resultsUrl) {
+      loadQueueRef.current = [script];
+      navTo(resultsUrl);
+      return;
+    }
+    loadQueueRef.current = [s.buildSearchScript(term), script];
+    navTo(s.storeUrl);
+  }, [navTo]);
+
   const navigateToSearchItem = useCallback((idx: number) => {
     // Drive the progress ring: idx is the per-item position (0..N), advancing
     // once per ingredient through the sequential search/add funnel.
@@ -2073,8 +2114,7 @@ export default function WebViewCartSheet({
         lastLoadEndUrlRef.current = '';
         webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(term));
       } else {
-        loadQueueRef.current = [scriptsRef.current!.buildSearchScript(term), script];
-        navTo(scriptsRef.current!.storeUrl);
+        navigateToResultsOrSearchInPage(term, script);
       }
     } else {
       // Choose-product path: extract candidates for user to pick from.
@@ -2085,8 +2125,7 @@ export default function WebViewCartSheet({
         lastLoadEndUrlRef.current = '';
         webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(term));
       } else {
-        loadQueueRef.current = [scriptsRef.current!.buildSearchScript(term), scriptsRef.current!.extractProductsScript];
-        navTo(scriptsRef.current!.storeUrl);
+        navigateToResultsOrSearchInPage(term, scriptsRef.current!.extractProductsScript);
       }
     }
     // Arm a safety timeout. If neither SEARCH_RESULT nor SEARCH_AND_ADD_RESULT
