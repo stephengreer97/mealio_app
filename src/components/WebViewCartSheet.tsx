@@ -2232,14 +2232,20 @@ export default function WebViewCartSheet({
       detail: { path: 'sequential', qty: item.qty, onSearchPage: onSearchPageRef.current },
     });
     addsAttemptedRef.current += 1;
-    if (onSearchPageRef.current) {
-      loadQueueRef.current = [scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null)];
-      lastLoadEndUrlRef.current = '';
-      webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(item.searchTerm));
-    } else {
-      loadQueueRef.current = [scriptsRef.current!.buildSearchScript(item.searchTerm), scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null)];
-      navTo(scriptsRef.current!.storeUrl);
-    }
+    // Same routing as the search path, and for the same measured reason: this is
+    // the SUBSTITUTE add — the user picked a product on the review screen and we
+    // have to go get that exact one. It was reaching the results page through the
+    // in-page SPA search, which on H-E-B hangs, and this add died on the 10 s
+    // `addMs` timeout on 2026-08-29 the first time a substitute was ever picked
+    // on a device.
+    //
+    // That path was nearly unreachable until today: before the search fix the
+    // review screen had no candidates to offer, so nobody could choose one and
+    // nothing ever exercised the add behind it.
+    navigateToResultsOrSearchInPage(
+      item.searchTerm,
+      scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null),
+    );
     // Arm the per-item timeout. On fire: synthesize a failure ADD_RESULT,
     // wipe any pending queue/nav-intent, and advance.
     addTimeoutRef.current = setTimeout(() => {
