@@ -3766,7 +3766,17 @@ export default function WebViewCartSheet({
     if (action === 'skip') {
       // Remember this ingredient as skipped so the done snapshot can report it.
       const skippedName = currentReview?.term ?? '';
-      if (skippedName) setSkippedByIdx((prev) => ({ ...prev, [reviewIdx]: skippedName }));
+      if (skippedName) {
+        // The ref is written HERE as well as during render, and the difference
+        // shows on the last skip in the queue. `skippedByIdxRef` is assigned
+        // while rendering, so it only catches up on the next commit — and
+        // skipping the final ingredient advances straight to the done screen,
+        // where compileFailedNames reads the ref in the same tick. Measured on
+        // a device 2026-08-29: six items skipped, five dropped off "Could not
+        // add" and the sixth was still named there and in the skipped banner.
+        skippedByIdxRef.current = { ...skippedByIdxRef.current, [reviewIdx]: skippedName };
+        setSkippedByIdx((prev) => ({ ...prev, [reviewIdx]: skippedName }));
+      }
     }
 
     if (action !== 'skip' && currentReview) {
