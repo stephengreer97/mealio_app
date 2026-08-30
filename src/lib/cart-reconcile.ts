@@ -1171,12 +1171,16 @@ export function auditCartAfterRun(input: {
   countBefore: number | null;
   countAfter: number | null;
   explainedRows?: string[];
+  /** Cart rows the user added by hand during a manual pass — see
+   *  compareCartToIntended's userAddedRows. */
+  userAddedRows?: string[];
   /** Ingredients the user passed over at review. They were never attempted, so
    *  the cart not having them is the outcome they asked for — see notInCart. */
   skippedNames?: string[];
 }): CartCheckFindings {
   const { rows, reportedAdded, active, reconcileIntended, countBefore, countAfter } = input;
   const explainedRows = input.explainedRows ?? [];
+  const userAddedRows = input.userAddedRows ?? [];
   const skippedNames = input.skippedNames ?? [];
   let missing: string[] = [];
   let short: ShortAdd[] = [];
@@ -1235,7 +1239,12 @@ export function auditCartAfterRun(input: {
         : null,
     cartRead: rows != null,
     comparison: rows
-      ? compareCartToIntended({ addedRows: rows.filter((r) => r.added), intended: intendedAll, skippedNames })
+      ? compareCartToIntended({
+          addedRows: rows.filter((r) => r.added),
+          intended: intendedAll,
+          skippedNames,
+          userAddedRows,
+        })
       : { short: [], extra: [] },
   };
 }
@@ -1320,9 +1329,23 @@ export function compareCartToIntended(input: {
   intended: IntendedItem[];
   /** Ingredients passed over at review. Never considered. */
   skippedNames?: string[];
+  /**
+   * Cart rows the USER put there by hand (MEAL-197), which nothing in the run
+   * intended and nothing in the run should be asked to account for. Dropped
+   * from the pool outright.
+   *
+   * Deliberately NOT `explainedRows`, which is the opposite case: a weight row
+   * IS its intended item and has to stay in the pool to settle it — dropping
+   * those makes the item read as absent.
+   */
+  userAddedRows?: string[];
 }): SnapshotComparison {
-  const { addedRows, intended } = input;
+  const { intended } = input;
   const skippedNames = input.skippedNames ?? [];
+  const userAddedRows = input.userAddedRows ?? [];
+  const addedRows = userAddedRows.length === 0
+    ? input.addedRows
+    : input.addedRows.filter((r) => !userAddedRows.some((u) => normalizeName(u) === normalizeName(r.name)));
   const isSkipped = (item: IntendedItem) =>
     skippedNames.some((s) => normalizeName(s) === normalizeName(item.name));
 
