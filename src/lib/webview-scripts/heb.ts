@@ -53,6 +53,7 @@ const sel = () => selectorsFor(SELECTOR_KEY, SEL_FALLBACKS);
  * Default false — the DOM extractor is the shipped, known-good path.
  */
 const nextDataEnabled = () => storeConfig(SELECTOR_KEY).nextDataSearch === true;
+const networkAddEnabled = () => storeConfig(SELECTOR_KEY).networkAdd === true;
 
 // ── Shared: find genuine search-result cards (skip carousels) ──────────────────
 //
@@ -1507,6 +1508,94 @@ ${hebWaitFreshFn()}
     // WORKER_DEBUG and swallow the add script's other diagnostics, so a DEBUG line
     // here would be invisible on the PARALLEL path — the one this defect lives on.
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: '0_qty_baseline', base: __qtyBase, want: QTY, name: bestName }));
+
+    // ── Add by asking the store, instead of clicking (MEAL-200) ─────────────
+    //
+    // Measured working on a real cart: 333 ms against ~1.8 s just to load the
+    // page this script is running in. Everything it needs is already computed
+    // above — the product id and sku from the card, and the cart baseline.
+    //
+    // QUANTITY IS CART-ABSOLUTE. addItemToCartV2 SETS the line rather than
+    // incrementing it, so this sends __qtyBase + QTY for exactly the reason the
+    // click loop below targets __qtyBase + QTY (MEAL-185): sending QTY alone
+    // would REDUCE a line the cart already holds more of.
+    //
+    // DECLINES for weight-priced and preference-bearing items. Both work — both
+    // were measured — but a weight line cannot be UNDONE: quantity 0 errors,
+    // weight 0 is accepted without removing, and the storefront has no
+    // remove-item operation. A count line can be set back to 0. Shipping a path
+    // whose over-adds are permanent is not something the cart rules allow, so
+    // those items keep clicking until there is a way back.
+    //
+    // Any doubt at all falls through to the click path below: a missing id, a
+    // response that is not the Cart arm, a thrown request. Nothing is skipped on
+    // a maybe.
+    var __netAdded = false;
+    if (${networkAddEnabled()} && __cartTarget && __cartTarget.productId && __cartTarget.skuId
+        && !bestHasPopup && !__bestWeightSel) {
+      try {
+        // The baseline comes from the CART, not from the card's label.
+        //
+        // The click path can baseline off the label because clicking increments
+        // from whatever the page shows. This request SETS an absolute quantity,
+        // so the number it needs is how many the CART holds — and the label is
+        // the one thing known to lie about that: it reads 0 while unhydrated
+        // (MEAL-187), which would set the line DOWN to the requested count and
+        // report success, the exact silent under-add MEAL-185 fixed.
+        //
+        // No usable cart read means no baseline, so the request is not sent and
+        // the click path runs. Declining is free; guessing is not.
+        var __netBase = null;
+        try {
+          var __netMatch = (__cartQueryBefore && __cartQueryBefore.ok)
+            ? __hebCartMatch(__cartQueryBefore.lines, __cartTarget) : null;
+          if (__cartQueryBefore && __cartQueryBefore.ok) __netBase = __netMatch ? __netMatch.qty : 0;
+        } catch (e) { __netBase = null; }
+        if (__netBase == null) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'EXTRACT_DEBUG', step: 'cart_query_net_add', declined: 'no_cart_baseline',
+            name: bestName,
+          }));
+          throw new Error('no_cart_baseline');
+        }
+        var __netVars = {
+          productId: String(__cartTarget.productId),
+          skuId: String(__cartTarget.skuId),
+          quantity: __netBase + QTY,
+        };
+        var __netRes = await __hebCartAdd(__netVars, 8000);
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'EXTRACT_DEBUG', step: 'cart_query_net_add', name: bestName,
+          productId: __netVars.productId, skuId: __netVars.skuId,
+          cartBase: __netBase, labelBase: __qtyBase, want: QTY, sent: __netVars.quantity,
+          arm: __netRes.arm, status: __netRes.status, reason: __netRes.reason,
+          errMsg: __netRes.message, ms: __netRes.ms,
+        }));
+        __netAdded = __netRes.arm === 'Cart';
+      } catch (e) {
+        // Includes the deliberate no-baseline bail above. Every exit from this
+        // block leaves __netAdded false, so the click path below runs unchanged.
+        if (String(e).indexOf('no_cart_baseline') < 0) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'EXTRACT_DEBUG', step: 'cart_query_net_add', threw: String(e).slice(0, 120),
+          }));
+        }
+      }
+    }
+    if (__netAdded) {
+      // Confirmed by the SAME cart read the click path uses, so a network add and
+      // a clicked add are reported through one rail and cannot disagree about
+      // what "landed" means.
+      var __netConf = await __hebCartConfirmAdd(__cartTarget, __cartQueryBefore, {});
+      document.removeEventListener('focusin', __noKbd, true);
+      window.ReactNativeWebView.postMessage(JSON.stringify(
+        __netConf && __netConf.state === 'landed'
+          ? { type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName, confirm: __netConf, via: 'network' }
+          : { type: 'SEARCH_AND_ADD_RESULT', success: false,
+              reason: (__netConf && __netConf.state === 'missing') ? 'cart_absent' : 'cart_not_incremented',
+              productName: bestName, candidates: candidates, confirm: __netConf, via: 'network' }));
+      return;
+    }
 
     bestBtn.click();
 

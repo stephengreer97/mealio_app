@@ -137,6 +137,27 @@ export interface StoreConfigEntry {
    */
   cartSkuConfirm?: boolean;
   /**
+   * Add to the cart by ASKING the store, instead of clicking its Add button
+   * (MEAL-200). Measured working on a real cart: 333 ms, first attempt.
+   *
+   * Ships OFF. Turning it on can only affect items it is confident about — it
+   * needs a product id AND a sku, and it declines outright for anything sold by
+   * weight or carrying a purchase preference (see below). Everything else, and
+   * every failure, goes to the click path unchanged.
+   *
+   * WHY WEIGHT AND PREFERENCE ITEMS ARE EXCLUDED, and it is not squeamishness:
+   * a count line can be undone by setting its quantity to 0, and a weight line
+   * cannot be undone at all — `quantity: 0` errors, `weight: 0` is accepted and
+   * leaves the line in place, and no remove-item operation exists anywhere in
+   * the storefront's own code. An over-add on a count item is recoverable; on a
+   * weight item it is permanent, and the cart governing principles do not allow
+   * shipping a path whose mistakes cannot be walked back.
+   *
+   * Flip it with a config push:
+   *   {"stores":{"heb":{"networkAdd":true}}}
+   */
+  networkAdd?: boolean;
+  /**
    * Where the cart-confirmation rail POSTs its query — a same-origin path, not a
    * URL. `network-confirmation-findings.md` asks for cart endpoints to live in
    * remote config because they drift the way selectors do, and a hardcoded path

@@ -194,6 +194,7 @@ function mergeStore(
       case 'cacheBustNav':
       case 'spaSearch':
       case 'nextDataSearch':
+      case 'networkAdd':
       case 'cartSkuConfirm': {
         const b = takeBoolean(path, value, warnings);
         if (b !== undefined) target[key] = b;
