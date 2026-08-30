@@ -222,6 +222,14 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   no_trigger: 'selector_miss',
   stepper_not_found: 'selector_miss',
   pref_required: 'selector_miss',
+  // MEAL-200: the store's own add request answered with an error arm instead of a
+  // cart — "You must supply a weight to purchase this item.", say. Not a
+  // confirmation failure: nothing was attempted badly, the store declined the
+  // request as malformed for that product, and the run then CLICKS instead. It
+  // maps to match_rejected because the actionable reading is "this product is not
+  // one we can ask for on the terms we asked", and the store's own message rides
+  // in detail so the reason is recoverable per product.
+  error_arm: 'match_rejected',
   cart_not_incremented: 'confirm_failed',
   // MEAL-14: the store's own cart query answered and our line was absent (or
   // unchanged) after the click. `confirm_failed` is the right family — nothing
