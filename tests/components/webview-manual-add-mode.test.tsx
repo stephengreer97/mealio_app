@@ -223,14 +223,21 @@ describe('a walked item is not offered again', () => {
     expect(view.queryByTestId('manual-start')).toBeNull();
   });
 
-  it('keeps offering the tail the user never reached', async () => {
-    // Handled is tracked as they advance, not set to the whole queue up front:
-    // closing the sheet halfway must not mark the unseen items as dealt with.
+  it('carries on to the next item rather than ending the pass', async () => {
     const view = await runToDone(['sour cream', 'tortillas', 'limes'], ['sour cream']);
     act(() => { fireEvent.press(view.getByTestId('manual-start')); });
-    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });   // only tortillas walked
-    expect(view.queryByTestId('manual-bar')).toBeTruthy();              // still on limes
+    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });
+    expect(view.queryByTestId('manual-bar')).toBeTruthy();
+    expect(view.queryByText(/add it yourself \(2 of 2\)/i)).toBeTruthy();
   });
+
+  // NOT covered here, and named so nobody assumes it is: `manualHandled` is
+  // appended as the user advances rather than set to the whole queue up front,
+  // so an exit halfway through does not mark the unseen tail as dealt with.
+  // Mid-pass exit goes through the sheet's own close, which ends the run, so
+  // there is no screen left to assert the difference on — a mutant that marks
+  // the whole queue up front passes every test in this file. The incremental
+  // version is kept because it is the honest one, not because a test forces it.
 });
 
 describe('the safety property', () => {
