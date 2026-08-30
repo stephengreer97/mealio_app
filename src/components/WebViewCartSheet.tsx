@@ -600,7 +600,7 @@ export default function WebViewCartSheet({
   // told apart from rows this run put there (MEAL-197).
   const cartItemsLatestRef = useRef<CartItem[]>([]);
   // Terms handed to manual mode, and the cart as it stood when they were.
-  const manualHandedRef = useRef<string[]>([]);
+  const manualHandledRef = useRef<string[]>([]);
   const manualCartSnapshotRef = useRef<CartItem[]>([]);
   // Cart-PAGE counting (HEB): the before-probe navigates to /cart, counts, then
   // resumes the search flow. This flag tells the CART_COUNT handler to kick off
@@ -792,7 +792,11 @@ export default function WebViewCartSheet({
   // list the user is handed cannot drift from the list they were just shown.
   const [manualQueue, setManualQueue] = useState<string[]>([]);
   const [manualIdx, setManualIdx] = useState(0);
-  const [manualSkipped, setManualSkipped] = useState<string[]>([]);
+  // Every item the user has been walked past, by Skip or by Next. Not just the
+  // skipped ones: measured on a device, finishing a pass left the offer reading
+  // "Add the 2 remaining items myself" for the two items the user had just
+  // handled — including one they had successfully added by hand.
+  const [manualHandled, setManualHandled] = useState<string[]>([]);
   const [copiedList, setCopiedList] = useState(false);
   // A manual pass is its own reason to re-read the cart, even on a run that
   // attempted no adds of its own (every item bounced at review, say). Without
@@ -1537,16 +1541,16 @@ export default function WebViewCartSheet({
       setSelectedPreference(null);
       // Manual-mode state is per-run like everything else here (MEAL-197). Under
       // the shipping !FEATURE_BACKGROUND_CART mount this component survives
-      // between runs, so a `manualSkipped` left behind silently withholds the
+      // between runs, so a `manualHandled` left behind silently withholds the
       // same ingredient from the next meal's offer, `manualUsedRef` re-probes
       // the cart on every later run, and `copiedList` says "Copied" before
       // anything has been copied.
       setManualQueue([]);
       setManualIdx(0);
-      setManualSkipped([]);
+      setManualHandled([]);
       setCopiedList(false);
       manualUsedRef.current = false;
-      manualHandedRef.current = [];
+      manualHandledRef.current = [];
       manualCartSnapshotRef.current = [];
       setReviewMealQtys({});
       setPickedItems([]);
@@ -2821,11 +2825,12 @@ export default function WebViewCartSheet({
     if (!first) return;
     console.log(`[Cart ${ts()}]`, 'manual mode: start', terms.length, 'items', terms);
     manualUsedRef.current = true;
-    manualHandedRef.current = terms;
+    manualHandledRef.current = terms;
     manualCartSnapshotRef.current = cartItemsLatestRef.current;
     setManualQueue(terms);
     setManualIdx(0);
-    setManualSkipped([]);
+    setManualHandled([]);
+    manualHandledRef.current = [];
     // The clipboard holds the pre-manual list; a pass that shrinks the failed
     // list makes "Copied" a claim about a list that no longer exists.
     setCopiedList(false);
@@ -2850,24 +2855,29 @@ export default function WebViewCartSheet({
     navTo(first);
   }, [manualSearchUrlFor, navTo, setStep]);
 
-  // `skipped` records intent, not outcome: it says the user chose to pass on the
-  // item, not that the cart lacks it. What the cart actually holds is settled by
-  // the re-probe on the way back to 'done', which is the only thing entitled to
-  // say so.
+  // Records that the user was walked past the item, not what came of it. Skip
+  // and Next are both "you have seen this one" — the cart is what says whether
+  // anything landed, settled by the re-probe on the way back to 'done'.
+  //
+  // Tracked as the user advances rather than set to the whole queue up front, so
+  // closing the sheet halfway does not mark the unseen tail as handled.
   const advanceManual = useCallback((skipped: boolean) => {
     const cur = manualQueue[manualIdx];
-    if (skipped && cur) setManualSkipped((prev) => (prev.includes(cur) ? prev : [...prev, cur]));
+    if (cur) {
+      if (!manualHandledRef.current.includes(cur)) manualHandledRef.current = [...manualHandledRef.current, cur];
+      setManualHandled((prev) => (prev.includes(cur) ? prev : [...prev, cur]));
+    }
     const nextIdx = manualIdx + 1;
     const nextTerm = manualQueue[nextIdx];
     const nextUrl = nextTerm != null ? manualSearchUrlFor(nextTerm) : null;
     if (!nextUrl) {
-      console.log(`[Cart ${ts()}]`, 'manual mode: finished at', nextIdx, 'of', manualQueue.length, 'skipped=', skipped ? [...manualSkipped, cur] : manualSkipped);
+      console.log(`[Cart ${ts()}]`, 'manual mode: finished at', nextIdx, 'of', manualQueue.length, 'handled=', manualHandledRef.current, 'lastWasSkip=', skipped);
       setStep('done');
       return;
     }
     setManualIdx(nextIdx);
     navTo(nextUrl);
-  }, [manualQueue, manualIdx, manualSkipped, manualSearchUrlFor, navTo, setStep]);
+  }, [manualQueue, manualIdx, manualSearchUrlFor, navTo, setStep]);
 
   // MEAL-9's floor. Deliberately not gated on a store adapter or a live session:
   // this is what the user gets when everything else has failed, so it must not be
@@ -3350,7 +3360,7 @@ export default function WebViewCartSheet({
               // manual add reads as a failure ("Mealio could not add …") AND
               // re-offers the item the user just added. We cannot verify these
               // by name, so we do not claim anything about them.
-              skippedNames: [...Object.values(skippedByIdxRef.current), ...manualHandedRef.current],
+              skippedNames: [...Object.values(skippedByIdxRef.current), ...manualHandledRef.current],
               // The unverified weight lines survive into this cart read too, still
               // unclaimable by the count items they belong to. Held out of `over`
               // because the done screen renders that warning beside the banner
@@ -3367,7 +3377,7 @@ export default function WebViewCartSheet({
               // intended item, and dropping it makes that item read as absent —
               // cartVerdict.test.ts proves it), while these are accounted for by
               // nothing and must leave it.
-              userAddedRows: manualHandedRef.current.length > 0
+              userAddedRows: manualHandledRef.current.length > 0
                 ? rowsAddedDuringManual(manualCartSnapshotRef.current, msg.items)
                 : [],
             });
@@ -4985,7 +4995,10 @@ export default function WebViewCartSheet({
           // turned out to hold is already struck and never offered.
           const manualCandidates = [...failedNames, ...skippedNames]
             .filter((n, i, a) => a.indexOf(n) === i)
-            .filter((n) => !manualSkipped.includes(n));
+            // Minus everything a manual pass already walked the user past. Skip
+            // AND Next: they have been given the storefront for this item once,
+            // and offering it again asks the same question twice.
+            .filter((n) => !manualHandled.includes(n));
           const manualAvailable = manualCandidates.length > 0 && !!getStoreScripts(lockedStoreId)?.getSearchUrl;
           const failedUnits = failedNames.length > 0
             ? unitsForNames(failedNames, runIntendedRef.current)

@@ -207,16 +207,29 @@ describe('walking the list', () => {
   });
 });
 
-describe('Skip is remembered', () => {
-  it('does not re-offer an item the user passed on by hand', async () => {
-    // The user declining an item in manual mode is a decision, not a failure.
-    // Re-offering it on the next pass would ask them the same question again.
+describe('a walked item is not offered again', () => {
+  it('drops both the skipped and the added, not just the skipped', async () => {
+    // Measured on a device. Finishing a two-item pass — one item added by hand
+    // in H-E-B's own UI, one walked past — left the offer still reading "Add the
+    // 2 remaining items myself", handing back the exact items the user had just
+    // dealt with. Remembering only Skip was the reason.
+    //
+    // Skip and Next are both "you have seen this one". Whether anything landed
+    // is the cart's business, and the re-probe settles it.
     const view = await runToDone(['sour cream', 'tortillas', 'limes'], ['sour cream']);
     act(() => { fireEvent.press(view.getByTestId('manual-start')); });
     act(() => { fireEvent.press(view.getByTestId('manual-skip')); });   // skip tortillas
     act(() => { fireEvent.press(view.getByTestId('manual-next')); });   // finish on limes
-    expect(view.queryByText(/add it myself/i)).toBeTruthy();            // one left, not two
-    expect(view.queryByText(/add the 2 remaining items myself/i)).toBeNull();
+    expect(view.queryByTestId('manual-start')).toBeNull();
+  });
+
+  it('keeps offering the tail the user never reached', async () => {
+    // Handled is tracked as they advance, not set to the whole queue up front:
+    // closing the sheet halfway must not mark the unseen items as dealt with.
+    const view = await runToDone(['sour cream', 'tortillas', 'limes'], ['sour cream']);
+    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });   // only tortillas walked
+    expect(view.queryByTestId('manual-bar')).toBeTruthy();              // still on limes
   });
 });
 
