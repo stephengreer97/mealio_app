@@ -881,6 +881,9 @@ ${buildHebCartQueryFn()}
   // path. Awaited lazily (__cartBaseline) so the round trip overlaps the scroll
   // and modal-polling those paths already spend, rather than adding to them.
   if (__HEB_CART_RAIL) __cartTarget = __hebTargetFromCard(targetCard, TARGET_NAME);
+  // Logged because confirm.skuId comes from the matched CART line, so it is
+  // not evidence this card-side lookup ran (MEAL-139).
+  if (__cartTarget) window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_target', productId: __cartTarget.productId, skuId: __cartTarget.skuId }));
   var __cartBeforeP = __cartTarget ? __hebCartRead(6000) : null;
   async function __cartBaseline() {
     if (__cartBeforeP && !__cartQueryBefore) __cartQueryBefore = await __cartBeforeP;
@@ -1470,6 +1473,9 @@ ${hebWaitFreshFn()}
     // already does — the before-read costs the run almost nothing in wall clock.
     // One read per add, not two: the after-read doubles as the poll.
     if (__HEB_CART_RAIL) __cartTarget = __hebTargetFromCard(bestCard, bestName);
+    // Logged because confirm.skuId comes from the matched CART line, so it is
+    // not evidence this card-side lookup ran (MEAL-139).
+    if (__cartTarget) window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'EXTRACT_DEBUG', step: 'cart_query_target', productId: __cartTarget.productId, skuId: __cartTarget.skuId }));
     var __cartBeforeP = __cartTarget ? __hebCartRead(6000) : null;
     bestBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
     await wait(100);

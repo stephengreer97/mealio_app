@@ -918,12 +918,78 @@ ${buildHebCartQueryFn()}
       })(); true;`);
       const msg = await runner.waitForMessage('CART_TARGET', 12_000);
       expect(msg.cards).toBeGreaterThan(0);
-      // The first tile of the captured sour-cream page.
+      // The first tile of the captured sour-cream page. `skuId` was null until
+      // MEAL-139 — the card markup has no sku, but the page's embedded JSON
+      // carries one beside the product id the link already gave us.
       expect(msg.target).toEqual({
-        skuId: null,
+        skuId: '4122025475',
         productId: '314026',
         name: 'H-E-B Regular Sour Cream, 16 oz',
       });
+    },
+  );
+
+  // The sku is what makes an item ADDRESSABLE to H-E-B: its add-to-cart request
+  // declares `$skuId: String!`, non-null, so a null sku is the difference between
+  // being able to ask the store to add something and only being able to click.
+  itWithFixture(
+    'search-results-tortillas.html',
+    'reads the sku for a different page, so it is a lookup and not a constant',
+    async (runner) => {
+      await runner.inject(`(function() {
+${buildHebCartQueryFn()}
+        var cards = Array.prototype.slice.call(document.querySelectorAll('[data-qe-id="productCard"]'));
+        var first = cards[0] || null;
+        var title = first ? first.querySelector('[data-qe-id="productTitle"]') : null;
+        var target = __hebTargetFromCard(first, title ? title.textContent.trim() : null);
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'CART_TARGET', target: target }));
+      })(); true;`);
+      const msg = await runner.waitForMessage('CART_TARGET', 12_000);
+      expect(msg.target.productId).toBe('402171');
+      expect(msg.target.skuId).toBe('7373100830');
+    },
+  );
+
+  // Strictly additive is the whole safety argument (MEAL-139): where the payload
+  // cannot answer, the target must be exactly what it was before this change.
+  itWithFixture(
+    'search-results-stale-hoisin.html',
+    'leaves the sku null on a page with no embedded JSON at all',
+    async (runner) => {
+      await runner.inject(`(function() {
+${buildHebCartQueryFn()}
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'CART_TARGET',
+          hasPayload: !!document.getElementById('__NEXT_DATA__'),
+          sku: __hebSkuForProduct('314026'),
+        }));
+      })(); true;`);
+      const msg = await runner.waitForMessage('CART_TARGET', 12_000);
+      expect(msg.hasPayload).toBe(false);
+      expect(msg.sku).toBeNull();
+    },
+  );
+
+  // A stale payload is a payload for a DIFFERENT search, so it does not contain
+  // the product the script just picked. That is why this lookup needs no
+  // freshness gate: absence is the gate, and it cannot return a wrong sku for a
+  // right product id.
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'returns null for a product the payload does not contain',
+    async (runner) => {
+      await runner.inject(`(function() {
+${buildHebCartQueryFn()}
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'CART_TARGET',
+          known: __hebSkuForProduct('314026'),
+          // A product id from the tortillas page — a real id, wrong page.
+          foreign: __hebSkuForProduct('402171'),
+        }));
+      })(); true;`);
+      const msg = await runner.waitForMessage('CART_TARGET', 12_000);
+      expect(msg.known).toBe('4122025475');
+      expect(msg.foreign).toBeNull();
     },
   );
 });

@@ -85,17 +85,35 @@
 // IS obtainable, and the earlier claim that H-E-B's cards carry none anywhere was
 // wrong about the page.
 //
-// It is not wired yet, deliberately. MEAL-13's `__NEXT_DATA__` extractor lives in
-// heb.ts rather than here, the payload is the INITIAL server render and is not
-// rewritten by SPA search (MEAL-13's own staleness gate exists for that), and two
-// of the ten committed search fixtures carry no `__NEXT_DATA__` at all. Reaching
-// across for it is a real change with a real staleness question, not a one-liner.
+// WIRED as of MEAL-139. `__hebTargetFromCard` now reads the sku out of the page's
+// embedded payload, keyed by the product id the card's link already gave us. The
+// staleness question that held this back is answered by the shape of the lookup
+// rather than by a gate: a stale payload belongs to a DIFFERENT search and does
+// not contain this product id, so it yields null and every caller behaves exactly
+// as it did before. Absence is the gate. It cannot return a wrong sku for a right
+// product id, which is why this needs none of MEAL-13's freshness machinery even
+// though it reads the same JSON.
 //
-// The consequence, stated plainly rather than left to be discovered: because
-// `__hebTargetFromCard` always returns `skuId: null`, the sku half of
-// `__hebCartLineIs` and all of `__hebCartSkuKey`'s zero-padding are DEAD in
-// production, and the `missing` report names items with a null sku. The product-id
-// fallback carries the whole rail, and it is verified to: the card's
+// Why the sku matters beyond this rail: H-E-B's own add-to-cart request declares
+// `$skuId: String!`, non-null. A null sku is the difference between being able to
+// ASK the store to add something and only being able to click a button (MEAL-200).
+//
+// WHICH PAGES ACTUALLY YIELD ONE, since MEAL-200 depends on it. A payload is the
+// INITIAL server render. On a direct navigation to a results URL it describes the
+// search on screen and every card resolves. After an in-page SPA search it still
+// describes the PREVIOUS search, so most cards do not appear in it and get null —
+// on the committed out-of-stock capture (payload q=seasonal, DOM showing
+// seasoned-fajita tiles) only 4 of 19 cards resolve. That is correct and safe, and
+// the product-id fallback carries those, but "the sku comes from the page" should
+// not be read as "a sku is always available".
+//
+// The payload sku IS the cart's sku, verified across fixtures rather than assumed:
+// the search capture puts product 894630 at SKUs[0].id 61342, and the cart capture's
+// CartItem for 894630 references SKU:61342. Same for 1627072 -> 4122093426. Pinned
+// by a test so it cannot rot.
+//
+// The product-id fallback still carries the rail wherever the payload cannot
+// answer, and it is verified to: the card's
 // /product-detail/<slug>/<id> id equals `Product.id` for all 220 products, and all
 // 297 cards across the ten fixtures hold exactly one distinct product-detail id —
 // the pairings-carousel fixture included, its tiles correctly excluded by
@@ -1169,11 +1187,106 @@ export function buildHebCartQueryFn(): string {
     };
   }
 
-  // The identity a result card can give us. H-E-B's cards carry NO sku anywhere
-  // in their markup — verified across the committed search fixtures — but every
-  // card links to /product-detail/<slug>/<productId>, and the cart's own
-  // CartItem.id embeds that same product id. So product id is the join key on
-  // the DOM rail; skuId stays null and the cart's value is reported back up.
+  // The sku for a product id, read out of the page's own embedded JSON.
+  //
+  // Every search-result product in that payload carries SKUs:[{id}] beside the
+  // product-detail link the card already gives us — verified on all 220 distinct
+  // products across the committed search fixtures, zero exceptions (MEAL-139).
+  //
+  // Deliberately NOT gated on the payload being fresh, unlike the search
+  // extractor's use of the same JSON. This is a lookup BY the product id of the
+  // card this script actually chose: a stale payload does not contain that id, so
+  // it returns null and every caller behaves exactly as it did before. It cannot
+  // return a wrong sku for a right product id, which is the whole reason this is
+  // safe to do without the extractor's freshness machinery.
+  function __hebSkuForProduct(pid) {
+    if (!pid) return null;
+    // Every other function in this file is reachable from a sandbox with no DOM
+    // (the unit tests evaluate this string in one) and this is the first to reach
+    // for the document object. Unguarded it throws a ReferenceError from inside
+    // the add path, which is the opposite of the absent-payload-means-unchanged
+    // -behaviour promise the rest of this function is built on.
+    if (typeof document === 'undefined' || !document || !document.getElementById) return null;
+    var el = document.getElementById('__NEXT_DATA__');
+    if (!el) return null;
+    var nd = null;
+    try { nd = JSON.parse(el.textContent || 'null'); } catch (e) { return null; }
+    if (!nd) return null;
+    var want = String(pid);
+
+    function skuOf(o) {
+      if (!o || typeof o !== 'object') return null;
+      if (o.id == null || String(o.id) !== want) return null;
+      if (Object.prototype.toString.call(o.SKUs) !== '[object Array]' || !o.SKUs.length) return null;
+      var sk = o.SKUs[0];
+      return (sk && sk.id != null) ? String(sk.id) : null;
+    }
+
+    // Fast path: search products live at a known address. Going straight there
+    // costs a few dozen reads instead of walking a whole page render.
+    try {
+      var vcs = nd.props && nd.props.pageProps && nd.props.pageProps.layout
+        && nd.props.pageProps.layout.visualComponents;
+      if (Object.prototype.toString.call(vcs) === '[object Array]') {
+        for (var v = 0; v < vcs.length; v++) {
+          var items = vcs[v] && vcs[v].items;
+          if (Object.prototype.toString.call(items) !== '[object Array]') continue;
+          for (var i = 0; i < items.length; i++) {
+            var hit = skuOf(items[i]);
+            if (hit) return hit;
+          }
+        }
+      }
+    } catch (e) {}
+
+    // Fallback walk, for a payload shaped differently than today's.
+    //
+    // Only CONTAINERS are pushed. An earlier version counted every value it
+    // popped, primitives included, which made the budget a value budget: two
+    // committed fixtures (logged-in-home, 41.7k values; the account panel, 42.2k)
+    // exhausted a 40k cap and returned null for products those payloads actually
+    // contain. Search pages sit at 3k-10k values so the path that matters had
+    // headroom, but "gave up" and "not here" were indistinguishable — and
+    // MEAL-200 reads a null sku as "cannot ask the store to add this".
+    var budget = 20000;
+    var stack = [nd];
+    var exhausted = true;
+    while (stack.length) {
+      if (budget-- <= 0) break;
+      var o = stack.pop();
+      if (!o || typeof o !== 'object') continue;
+      if (Object.prototype.toString.call(o) === '[object Array]') {
+        for (var a = 0; a < o.length; a++) if (o[a] && typeof o[a] === 'object') stack.push(o[a]);
+        continue;
+      }
+      var found = skuOf(o);
+      if (found) return found;
+      for (var k in o) {
+        if (!Object.prototype.hasOwnProperty.call(o, k)) continue;
+        if (o[k] && typeof o[k] === 'object') stack.push(o[k]);
+      }
+      if (!stack.length) exhausted = false;
+    }
+    // Reported rather than silently folded into "absent": a walk that ran out of
+    // budget has NOT established that the product is missing.
+    if (budget <= 0) {
+      try {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'EXTRACT_DEBUG', step: 'cart_query_sku_budget', productId: want,
+        }));
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  // The identity a result card can give us. The card MARKUP carries no sku —
+  // verified across the committed search fixtures — but every card links to
+  // /product-detail/<slug>/<productId>, and the cart's own CartItem.id embeds
+  // that same product id. So product id is the join key, and the sku now comes
+  // from the page's embedded JSON beside it (MEAL-139). Where that payload is
+  // absent or does not hold this product, skuId is null and behaviour is
+  // unchanged — matching is "sku OR product id" and sums over every line matching
+  // either, so supplying a sku only ever widens the match set.
   function __hebTargetFromCard(card, name) {
     if (!card) return null;
     var pid = null;
@@ -1184,7 +1297,7 @@ export function buildHebCartQueryFn(): string {
       if (m) pid = m[1];
     } catch (e) {}
     if (!pid) return null;
-    return { skuId: null, productId: pid, name: name || null };
+    return { skuId: __hebSkuForProduct(pid), productId: pid, name: name || null };
   }
 `;
 }
