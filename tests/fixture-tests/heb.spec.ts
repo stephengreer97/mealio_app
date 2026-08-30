@@ -1445,6 +1445,63 @@ describe('HEB MEAL-200: add by request', () => {
   );
 
   itWithFixture(
+    'search-results-sour-cream.html',
+    'still reports success when the cart cannot be read afterwards',
+    async (runner) => {
+      // The store's own success arm is evidence the item went in. A cart that
+      // then refuses to answer is NOT evidence it did not — the click path treats
+      // an unreadable cart as "no evidence" for exactly this reason. Reporting
+      // failure here would claim a reading nobody took, and the run's after-probe
+      // still gets the last word.
+      await runner.inject([
+        '(function () {',
+        '  window.__gqlCalls = []; window.__clicks = 0; window.__reads = 0;',
+        '  document.addEventListener("click", function (e) {',
+        '    var b = e.target && e.target.closest && e.target.closest("button");',
+        '    if (b && b.getAttribute("data-qe-id") === "addToCart") window.__clicks++;',
+        '  }, true);',
+        '  window.fetch = function (url, init) {',
+        '    var body = null;',
+        '    try { body = JSON.parse((init && init.body) || "null"); } catch (e) {}',
+        '    window.__gqlCalls.push(body);',
+        '    if (body && body.operationName === "cartItemV2") {',
+        '      return Promise.resolve({ ok: true, status: 200, text: function () {',
+        '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2:',
+        '          { __typename: "Cart", id: "c1", itemCount: { total: 3 } } } }));',
+        '      } });',
+        '    }',
+        '    window.__reads++;',
+        '    // The baseline read answers; every read after the write does not.',
+        '    if (window.__reads > 1) {',
+        '      return Promise.resolve({ ok: false, status: 403, text: function () {',
+        '        return Promise.resolve("<html>blocked</html>"); } });',
+        '    }',
+        '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+        '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart",',
+        '        id: "c1", itemCount: { total: 1 },',
+        '        items: [{ id: "i1", quantity: 1, estimatedWeight: null,',
+        '          product: { id: "314026", fullDisplayName: "H-E-B Regular Sour Cream, 16 oz" },',
+        '          sku: { id: "4122025475", twelveDigitUPC: null, weightSelectionIncrements: [] } }] } } }));',
+        '    } });',
+        '  };',
+        '})(); true;',
+      ].join('\n'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      const res = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 25_000);
+      expect(res.success).toBe(true);
+      expect(res.via).toBe('network');
+    },
+  );
+
+  // NOT COVERED, and named so nobody assumes otherwise: the weight gate tests
+  // `bestIsWeight` as well as the presence of a weight <select>, because the
+  // extractor also calls a Deli / Fish Market line ending in ", lb" sold-by-weight.
+  // No committed capture has such a card WITHOUT a select, so a mutant that drops
+  // the bestIsWeight term passes every test here. The term is kept because it is
+  // the extractor's own definition and strictly the safer side, not because a
+  // test forces it. A capture of a deli search would close this.
+
+  itWithFixture(
     'search-results-weight-dropdown-closed.html',
     'declines a sold-by-weight item and clicks instead',
     async (runner) => {
