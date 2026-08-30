@@ -1141,12 +1141,16 @@ describe('HEB multi-quantity add (MEAL-185)', () => {
 // operation. Those must keep clicking.
 
 /** The add script with the network path pushed ON, through the real config path. */
-async function addScriptWithNetworkAdd(term: string, qty: number): Promise<string> {
+async function addScriptWithNetworkAdd(
+  term: string,
+  qty: number,
+  dropdown: { type: string; selectedText: string; selectedValue: string } | null = null,
+): Promise<string> {
   await loadAutomationConfig(async () => ({
     version: 14,
     config: { stores: { heb: { cartSkuConfirm: true, networkAdd: true } } },
   }));
-  return getStoreScripts('heb')!.buildSearchAndAddScript!(term, qty, null);
+  return getStoreScripts('heb')!.buildSearchAndAddScript!(term, qty, dropdown);
 }
 
 /** The same script with the flag OFF — the shipping default. */
@@ -1324,11 +1328,17 @@ describe('HEB MEAL-200: add by request', () => {
       // Not because the request would fail — it works, measured — but because a
       // weight line cannot be un-added if it goes wrong.
       //
-      // The term is an EXACT card title from this capture. An approximate one
-      // matched no card, so the script returned before reaching the decision and
-      // this test passed while a mutant that deleted the decline also passed.
+      // The term is an EXACT card title from this capture, and a chosen weight is
+      // supplied. Both matter: an approximate term matched no card, and WITHOUT a
+      // chosen weight the script returns earlier still, to ask the app which
+      // weight to buy — so a weight item never reaches the decision at all and a
+      // mutant deleting the gate passed twice over. With a weight chosen the
+      // script proceeds, and the gate is the only thing holding the request back.
       await runner.inject(stubNetwork('Cart'));
-      await runner.inject(await addScriptWithNetworkAdd('CAFE Olé by H-E-B Panama Medium Roast Whole Bean Bulk Coffee, lb', 1));
+      await runner.inject(await addScriptWithNetworkAdd(
+        'CAFE Olé by H-E-B Panama Medium Roast Whole Bean Bulk Coffee, lb', 1,
+        { type: 'weight', selectedText: '1 lb', selectedValue: '1' },
+      ));
       await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
       runner.clearMessages();
       await runner.inject(ASK_SENT);
