@@ -17,6 +17,7 @@ import WebView, { WebViewMessageEvent, WebViewNavigation } from 'react-native-we
 import FloatingPreviewImage from './FloatingPreviewImage';
 import ProductImageViewer from './ProductImageViewer';
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { Colors } from '../constants/colors';
 import ExpandableNotice from './ui/ExpandableNotice';
 import { Meal } from '../types';
@@ -147,7 +148,7 @@ interface PickedItem {
   reviewIndex?: number;
 }
 
-export type Step = 'qty' | 'login_check' | 'login' | 'searching' | 'searchResult' | 'review' | 'adding' | 'done' | 'robot_challenge';
+export type Step = 'qty' | 'login_check' | 'login' | 'searching' | 'searchResult' | 'review' | 'adding' | 'done' | 'robot_challenge' | 'manual';
 
 // Coarse state the floating bubble renders from. `kind` drives the icon and the
 // provider's collapse/expand decisions; `phase` is the raw step; `label` is a
@@ -777,6 +778,20 @@ export default function WebViewCartSheet({
     setTotalFailed(stillFailed.length);
   }, [setFailedItems]);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
+  // ── Manual add mode (MEAL-197 / MEAL-9 rung 3) ─────────────────────────────
+  // The queue is search TERMS, not ingredients. Everything this mode needs is a
+  // string to search for and a string to show the user, and `failedItems` is
+  // already exactly that — the same names printed under "Could not add", so the
+  // list the user is handed cannot drift from the list they were just shown.
+  const [manualQueue, setManualQueue] = useState<string[]>([]);
+  const [manualIdx, setManualIdx] = useState(0);
+  const [manualSkipped, setManualSkipped] = useState<string[]>([]);
+  const [copiedList, setCopiedList] = useState(false);
+  // A manual pass is its own reason to re-read the cart, even on a run that
+  // attempted no adds of its own (every item bounced at review, say). Without
+  // this the user could add five things by hand and land back on a done screen
+  // still insisting nothing is there.
+  const manualUsedRef = useRef(false);
   // What every "N items" on screen is counted against (MEAL-178). "items" means
   // UNITS — the total quantity, weight-priced lines counting 1 by presence — so
   // the labels measure the same thing the cart counters and the cart check do.
@@ -1171,6 +1186,7 @@ export default function WebViewCartSheet({
       searchResult: 'warning',
       review: 'warning',
       done: 'done',
+      manual: 'attention',
     };
     const labelMap: Record<Step, string> = {
       qty: 'Set quantities',
@@ -1182,6 +1198,7 @@ export default function WebViewCartSheet({
       searchResult: 'Choose a product',
       review: 'Review needed',
       done: 'Done',
+      manual: 'Add items yourself',
     };
     // Progress: per-item position through the search/add funnel. processedCount
     // advances once per ingredient and DOES trigger renders (unlike searchIdxRef,
@@ -1698,7 +1715,11 @@ export default function WebViewCartSheet({
     // The reconcile pass already read the cart with its own probe and set the
     // final state — don't fire a redundant second after-probe.
     if (reconcileFinalizedRef.current) { reconcileFinalizedRef.current = false; return; }
-    if (!shouldProbeAfterRun({
+    // A manual pass means the user may have put things in the cart that this
+    // run never attempted, so it re-reads regardless of the automated gate — but
+    // still not without a baseline, since a diff needs something to diff against.
+    const manualNeedsReread = manualUsedRef.current && cartCountBeforeRef.current != null;
+    if (!manualNeedsReread && !shouldProbeAfterRun({
       addsAttempted: addsAttemptedRef.current,
       hasBaseline: cartCountBeforeRef.current != null,
     })) return;
@@ -2452,6 +2473,13 @@ export default function WebViewCartSheet({
       console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'skipped: not store domain');
       return;
     }
+    // Manual mode injects NOTHING (MEAL-197). Checked before every other branch
+    // — including the cold-slot one — so no stale ref from the automated run can
+    // route a script into a page the user is driving by hand.
+    if (stepRef.current === 'manual') {
+      console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'manual mode — no injection');
+      return;
+    }
     // Cold-slot branch: the main WebView is acting as a 4th add surface — its
     // results page just loaded, so inject the fused search+add (once) and let
     // onMessage feed the result to the pool. Bypasses the normal cart-flow logic.
@@ -2729,6 +2757,71 @@ export default function WebViewCartSheet({
   // Manual retry from the blocked state: re-run the login check from a fresh
   // store load. If the block cleared (or the user solved a challenge) it
   // proceeds; if not, the 403 fires again and we land back here.
+  // ── Manual add mode (MEAL-197) ─────────────────────────────────────────────
+  //
+  // MEAL-9's rung 3 — "deep link the user to the store's search results for that
+  // item" — done statefully rather than as a one-shot link. The WebView is
+  // already open on the store and already logged in, so handing over the wheel
+  // costs one navigation per item and no new session.
+  //
+  // Nothing is injected while this mode runs (see onLoadEnd). That is the whole
+  // point: the button being pressed is the STORE'S, so a script of ours running
+  // alongside could add a second copy behind the user's back — the exact
+  // over-add the cart governing principles forbid.
+  const manualSearchUrlFor = useCallback((term: string) => {
+    const s = getStoreScripts(lockedStoreIdRef.current);
+    return s?.getSearchUrl ? s.getSearchUrl(term) : null;
+  }, []);
+
+  const startManualMode = useCallback((terms: string[]) => {
+    if (terms.length === 0) return;
+    const first = manualSearchUrlFor(terms[0]);
+    // No search URL for this store means no manual mode; the done screen offers
+    // the copyable list instead and never renders the button that lands here.
+    if (!first) return;
+    console.log(`[Cart ${ts()}]`, 'manual mode: start', terms.length, 'items', terms);
+    manualUsedRef.current = true;
+    setManualQueue(terms);
+    setManualIdx(0);
+    setManualSkipped([]);
+    // Drop the previous cart read. The done screen re-probes on the way back in
+    // and these rows are about to be stale — leaving them up would show the
+    // pre-manual cart under a screen the user reached by adding to it.
+    setCartResultRows(null);
+    setCartRowsTimedOut(false);
+    setStep('manual');
+    navTo(first);
+  }, [manualSearchUrlFor, navTo, setStep]);
+
+  // `skipped` records intent, not outcome: it says the user chose to pass on the
+  // item, not that the cart lacks it. What the cart actually holds is settled by
+  // the re-probe on the way back to 'done', which is the only thing entitled to
+  // say so.
+  const advanceManual = useCallback((skipped: boolean) => {
+    const cur = manualQueue[manualIdx];
+    if (skipped && cur) setManualSkipped((prev) => (prev.includes(cur) ? prev : [...prev, cur]));
+    const nextIdx = manualIdx + 1;
+    const nextTerm = manualQueue[nextIdx];
+    const nextUrl = nextTerm != null ? manualSearchUrlFor(nextTerm) : null;
+    if (!nextUrl) {
+      console.log(`[Cart ${ts()}]`, 'manual mode: finished at', nextIdx, 'of', manualQueue.length, 'skipped=', skipped ? [...manualSkipped, cur] : manualSkipped);
+      setStep('done');
+      return;
+    }
+    setManualIdx(nextIdx);
+    navTo(nextUrl);
+  }, [manualQueue, manualIdx, manualSkipped, manualSearchUrlFor, navTo, setStep]);
+
+  // MEAL-9's floor. Deliberately not gated on a store adapter or a live session:
+  // this is what the user gets when everything else has failed, so it must not be
+  // able to fail itself.
+  const copyFailedList = useCallback(async () => {
+    const names = failedNamesRef.current;
+    if (names.length === 0) return;
+    await Clipboard.setStringAsync(names.join('\n'));
+    setCopiedList(true);
+  }, []);
+
   const retryAfterBlock = useCallback(() => {
     setBlockReason(null);
     blockReasonRef.current = null;
@@ -3917,6 +4010,9 @@ export default function WebViewCartSheet({
         : `Pick a Substitute (${reviewIdx + 1} of ${searchResults.length})`,
     adding: 'Adding to Cart…',
     done: 'Done!',
+    manual: manualQueue.length > 0
+      ? `Add It Yourself (${Math.min(manualIdx + 1, manualQueue.length)} of ${manualQueue.length})`
+      : 'Add It Yourself',
     // One generic title for every "Mealio can't drive the store" state — the
     // banner tells the user what to do; the specific cause no longer matters.
     robot_challenge: `Action needed on ${storeName}`,
@@ -3937,7 +4033,7 @@ export default function WebViewCartSheet({
   // the WebView alive behind the panel for the cart snapshot).
   const browserVisible =
     step === 'login_check' || step === 'login' || step === 'searching' ||
-    step === 'adding' || step === 'robot_challenge';
+    step === 'adding' || step === 'robot_challenge' || step === 'manual';
   // Pre-search: any parked/committing worker has a live URI. The browser region
   // stays mounted while these exist (even on the qty screen) so the parked pages
   // survive the login_check + snapshot window; the tiles themselves are kept
@@ -4038,6 +4134,31 @@ export default function WebViewCartSheet({
               <TouchableOpacity style={styles.retryBtn} onPress={retryAfterBlock}>
                 <Text style={styles.retryBtnText}>Try again</Text>
               </TouchableOpacity>
+            </View>
+          ) : step === 'manual' ? (
+            <View style={styles.topBar} testID="manual-bar">
+              <Text style={styles.loginBanner}>
+                Find <Text style={{ fontFamily: 'Inter_600SemiBold' }}>{manualQueue[manualIdx] ?? ''}</Text> in the
+                {' '}{storeName} page below and add it yourself, then tap Next.
+              </Text>
+              <View style={styles.manualBtnRow}>
+                <TouchableOpacity
+                  style={[styles.retryBtn, styles.manualBtn]}
+                  onPress={() => advanceManual(true)}
+                  testID="manual-skip"
+                >
+                  <Text style={styles.retryBtnText}>Skip</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.retryBtn, styles.manualBtn, { backgroundColor: storeColor, borderColor: storeColor }]}
+                  onPress={() => advanceManual(false)}
+                  testID="manual-next"
+                >
+                  <Text style={[styles.retryBtnText, { color: '#fff' }]}>
+                    {manualIdx + 1 >= manualQueue.length ? 'Finish' : 'Next'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
           ) : (step === 'searching' || step === 'adding' || step === 'login_check') ? (
             <View style={styles.captionBar}>
@@ -4761,6 +4882,16 @@ export default function WebViewCartSheet({
           // Only reachable with no names at all (every finalize path compiles
           // them), and with no names there is nothing to resolve quantities
           // against — the product count is then the most that is true.
+          // What "Add it yourself" hands over (MEAL-197). `failedNames` and not
+          // the run's own failure list: MEAL-199 corrects it against the cart
+          // read, so an item the cart turned out to hold has already been struck
+          // and is never offered. Items the user SKIPPED at review are also
+          // absent from it, which is right — they said no once already.
+          //
+          // Minus anything skipped in a previous manual pass, so a second pass
+          // does not re-offer what the user just declined by hand.
+          const manualCandidates = failedNames.filter((n) => !manualSkipped.includes(n));
+          const manualAvailable = manualCandidates.length > 0 && !!getStoreScripts(lockedStoreId)?.getSearchUrl;
           const failedUnits = failedNames.length > 0
             ? unitsForNames(failedNames, runIntendedRef.current)
             : totalFailed;
@@ -5025,6 +5156,30 @@ export default function WebViewCartSheet({
                     <Text style={styles.primaryBtnText}>Open {storeName} Cart to Checkout</Text>
                   </TouchableOpacity>
                 )}
+                {/* MEAL-9 rung 3 (MEAL-197): a failed add stops being a dead
+                    end. The store is open, the session is live, and we know what
+                    to search for — so the user can finish by hand rather than
+                    abandon Mealio and shop with no list. */}
+                {manualAvailable && (
+                  <TouchableOpacity
+                    onPress={() => startManualMode(manualCandidates)}
+                    style={[styles.secondaryBtn, { borderColor: storeColor }]}
+                    testID="manual-start"
+                  >
+                    <Text style={[styles.secondaryBtnText, { color: storeColor }]}>
+                      Add {manualCandidates.length === 1 ? 'it' : `the ${manualCandidates.length} remaining items`} myself
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                {/* MEAL-9 rung 4, the floor. Works with no store adapter, no
+                    session and no network: the user still leaves with the list. */}
+                {failedNames.length > 0 && (
+                  <TouchableOpacity onPress={copyFailedList} style={styles.linkBtn} testID="manual-copy">
+                    <Text style={[styles.linkBtnText, { color: storeColor }]}>
+                      {copiedList ? 'Copied' : 'Copy the list instead'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity onPress={onClose} style={[styles.secondaryBtn, { borderColor: storeColor }]}>
                   <Text style={[styles.secondaryBtnText, { color: storeColor }]}>Done</Text>
                 </TouchableOpacity>
@@ -5149,6 +5304,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#fde68a',
   },
+  manualBtnRow: { flexDirection: 'row', gap: 8, alignSelf: 'stretch' },
+  manualBtn: { flex: 1, alignItems: 'center' },
+  linkBtn: { paddingVertical: 10, alignItems: 'center' },
+  linkBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
   retryBtn: {
     alignSelf: 'flex-start',
     marginHorizontal: 16,
