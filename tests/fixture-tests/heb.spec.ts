@@ -1323,8 +1323,12 @@ describe('HEB MEAL-200: add by request', () => {
     async (runner) => {
       // Not because the request would fail — it works, measured — but because a
       // weight line cannot be un-added if it goes wrong.
+      //
+      // The term is an EXACT card title from this capture. An approximate one
+      // matched no card, so the script returned before reaching the decision and
+      // this test passed while a mutant that deleted the decline also passed.
       await runner.inject(stubNetwork('Cart'));
-      await runner.inject(await addScriptWithNetworkAdd('CAFE Olé by H-E-B Whole Bean Colombian Coffee', 1));
+      await runner.inject(await addScriptWithNetworkAdd('CAFE Olé by H-E-B Panama Medium Roast Whole Bean Bulk Coffee, lb', 1));
       await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
       runner.clearMessages();
       await runner.inject(ASK_SENT);
