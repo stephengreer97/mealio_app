@@ -85,17 +85,21 @@
 // IS obtainable, and the earlier claim that H-E-B's cards carry none anywhere was
 // wrong about the page.
 //
-// It is not wired yet, deliberately. MEAL-13's `__NEXT_DATA__` extractor lives in
-// heb.ts rather than here, the payload is the INITIAL server render and is not
-// rewritten by SPA search (MEAL-13's own staleness gate exists for that), and two
-// of the ten committed search fixtures carry no `__NEXT_DATA__` at all. Reaching
-// across for it is a real change with a real staleness question, not a one-liner.
+// WIRED as of MEAL-139. `__hebTargetFromCard` now reads the sku out of the page's
+// embedded payload, keyed by the product id the card's link already gave us. The
+// staleness question that held this back is answered by the shape of the lookup
+// rather than by a gate: a stale payload belongs to a DIFFERENT search and does
+// not contain this product id, so it yields null and every caller behaves exactly
+// as it did before. Absence is the gate. It cannot return a wrong sku for a right
+// product id, which is why this needs none of MEAL-13's freshness machinery even
+// though it reads the same JSON.
 //
-// The consequence, stated plainly rather than left to be discovered: because
-// `__hebTargetFromCard` always returns `skuId: null`, the sku half of
-// `__hebCartLineIs` and all of `__hebCartSkuKey`'s zero-padding are DEAD in
-// production, and the `missing` report names items with a null sku. The product-id
-// fallback carries the whole rail, and it is verified to: the card's
+// Why the sku matters beyond this rail: H-E-B's own add-to-cart request declares
+// `$skuId: String!`, non-null. A null sku is the difference between being able to
+// ASK the store to add something and only being able to click a button (MEAL-200).
+//
+// The product-id fallback still carries the rail wherever the payload cannot
+// answer, and it is verified to: the card's
 // /product-detail/<slug>/<id> id equals `Product.id` for all 220 products, and all
 // 297 cards across the ten fixtures hold exactly one distinct product-detail id —
 // the pairings-carousel fixture included, its tiles correctly excluded by
@@ -1183,6 +1187,12 @@ export function buildHebCartQueryFn(): string {
   // safe to do without the extractor's freshness machinery.
   function __hebSkuForProduct(pid) {
     if (!pid) return null;
+    // Every other function in this file is reachable from a sandbox with no DOM
+    // (the unit tests evaluate this string in one) and this is the first to reach
+    // for the document object. Unguarded it throws a ReferenceError from inside
+    // the add path, which is the opposite of the absent-payload-means-unchanged
+    // -behaviour promise the rest of this function is built on.
+    if (typeof document === 'undefined' || !document || !document.getElementById) return null;
     var el = document.getElementById('__NEXT_DATA__');
     if (!el) return null;
     var nd = null;
