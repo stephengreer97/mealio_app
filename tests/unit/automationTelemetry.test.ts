@@ -361,6 +361,15 @@ describe('failure codes', () => {
       // plausible ADD_RESULT reason for some future store script, and a flat
       // entry would disarm this test for that script without anyone noticing.
       ['cart_error', 'heb-cart-query.ts'],
+      // MEAL-200: heb.ts COMPARES against the write transport's vocabulary to
+      // decide whether a lost answer needs a cart re-read
+      // (`__netRes.reason === 'unparseable' || ... === 'http'`). It does not emit
+      // either as an add result. Scoped to this one file rather than ignored
+      // flatly, for the same reason as the entries above: both are plausible
+      // reasons for some future store script to emit for real, and a flat entry
+      // would disarm this test for it silently.
+      ['unparseable', 'heb.ts'],
+      ['http', 'heb.ts'],
     ]);
 
     const found = new Map<string, string>();

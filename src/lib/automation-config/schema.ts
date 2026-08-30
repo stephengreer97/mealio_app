@@ -146,12 +146,24 @@ export interface StoreConfigEntry {
    * every failure, goes to the click path unchanged.
    *
    * WHY WEIGHT AND PREFERENCE ITEMS ARE EXCLUDED, and it is not squeamishness:
-   * a count line can be undone by setting its quantity to 0, and a weight line
-   * cannot be undone at all — `quantity: 0` errors, `weight: 0` is accepted and
-   * leaves the line in place, and no remove-item operation exists anywhere in
-   * the storefront's own code. An over-add on a count item is recoverable; on a
-   * weight item it is permanent, and the cart governing principles do not allow
-   * shipping a path whose mistakes cannot be walked back.
+   * their over-adds could not be walked back in testing.
+   *
+   * Removal is the SAME mutation with a zero — the storefront's own cart hook
+   * does `onRemove = () => eo(0, 'REMOVE')`, and an earlier version of this
+   * comment claimed no remove operation existed at all, which was wrong and
+   * would have sent the next reader looking for something that is right there.
+   *
+   * What was actually measured is narrower and still disqualifying: on a
+   * weight-priced line `quantity: 0` came back an error arm, and `weight: 0` was
+   * ACCEPTED and left the line in the cart anyway. Whatever the storefront does
+   * differently, we have no repeatable way to undo a weight add — so an over-add
+   * on one is permanent for us, and the cart rules do not allow shipping a path
+   * whose mistakes cannot be reversed. Count lines set back to 0 cleanly, and
+   * that was measured too.
+   *
+   * REQUIRES cartSkuConfirm. The write reuses the cart rail's transport and
+   * baseline, so with cartSkuConfirm off this flag is a silent no-op — push both
+   * or neither.
    *
    * Flip it with a config push:
    *   {"stores":{"heb":{"networkAdd":true}}}

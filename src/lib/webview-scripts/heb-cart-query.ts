@@ -1093,14 +1093,14 @@ export function buildHebCartQueryFn(): string {
     + ' addItemToCartV2(productId: $productId, skuId: $skuId, quantity: $quantity) {'
     + ' __typename'
     + ' ... on Cart { id itemCount { total } }'
-    + ' ... on AddOnsCart { id }'
+    + ' ... on AddOnsCart { id cart { id itemCount { total } } }'
     + ' ... on AddItemToCartV2Error { message title code }'
     + ' ... on AddItemToCartV2TimeslotError { message title errorCode: code } } }';
 
   async function __hebCartAdd(vars, timeoutMs) {
     var t0 = Date.now();
     var fail = function (reason, extra) {
-      var o = { arm: null, reason: reason, status: null, message: null, ms: Date.now() - t0 };
+      var o = { arm: null, added: false, reason: reason, status: null, message: null, ms: Date.now() - t0 };
       if (extra) for (var k in extra) o[k] = extra[k];
       return o;
     };
@@ -1133,13 +1133,24 @@ export function buildHebCartQueryFn(): string {
       var json = null;
       try { json = JSON.parse(text); } catch (e) { return fail('unparseable', { status: res.status }); }
       if (json && json.errors && json.errors.length) {
-        return fail('graphql_error', { status: res.status, message: String(json.errors[0] && json.errors[0].message).slice(0, 160) });
+        // Read the message, do not stringify the guard: String(e && e.message)
+        // yields the literal "false" for a falsy first error and "undefined" for
+        // one without a message, and this detail field is the thing that hid a
+        // union bug for six runs (see the MEAL-16 note above).
+        var e0 = json.errors[0];
+        var e0msg = (e0 && typeof e0.message === 'string') ? e0.message.slice(0, 160) : null;
+        return fail('graphql_error', { status: res.status, message: e0msg });
       }
       var a = json && json.data && json.data.addItemToCartV2;
       if (!a || !a.__typename) return fail('unexpected_shape', { status: res.status });
+      // Cart AND AddOnsCart both mean the item went in — AddOnsCart is the
+      // add-on flow's wrapper and carries a cart inside it. Treating it as a
+      // failure would send the run on to CLICK the same product, adding it twice.
+      var __added = a.__typename === 'Cart' || a.__typename === 'AddOnsCart';
       return {
         arm: a.__typename,
-        reason: a.__typename === 'Cart' ? null : 'error_arm',
+        added: __added,
+        reason: __added ? null : 'error_arm',
         status: res.status,
         // The store's own words. Measured to be genuinely useful — a
         // preference-only add on a deli item comes back "You must supply a weight
@@ -1149,7 +1160,13 @@ export function buildHebCartQueryFn(): string {
       };
     } catch (e) {
       if (timer) { clearTimeout(timer); }
-      return fail(String(e).indexOf('abort') >= 0 ? 'timeout' : 'network', { message: String(e).slice(0, 120) });
+      // e.name, not a substring of the stringified error: React Native's abort
+      // is DOMException('Aborted', 'AbortError'), which stringifies to
+      // "AbortError: Aborted" and contains no lowercase "abort" — so the
+      // substring test classified every timeout as a network error. The cart READ
+      // sixty lines above already gets this right.
+      var isAbort = !!(e && (e.name === 'AbortError' || String(e.name) === 'AbortError'));
+      return fail(isAbort ? 'timeout' : 'network', { message: String(e).slice(0, 120) });
     }
   }
 

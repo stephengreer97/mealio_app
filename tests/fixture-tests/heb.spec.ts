@@ -1172,6 +1172,12 @@ function stubNetwork(addArm: string): string {
     '(function () {',
     '  window.__gqlCalls = [];',
     '  window.__clicks = 0;',
+    '  // The stub cart MOVES when the write succeeds. A fixed cart made both',
+    '  // "Cart arm" tests end in success:false — the confirmation compared the',
+    '  // same quantity before and after and reported the item missing — so they',
+    '  // passed only on the recorded request and click count, and a regression',
+    '  // that made a landed add report failure would have sailed through.',
+    '  window.__cartQty = 1;',
     '  document.addEventListener("click", function (e) {',
     '    var b = e.target && e.target.closest && e.target.closest("button");',
     '    if (b && b.getAttribute("data-qe-id") === "addToCart") window.__clicks++;',
@@ -1186,14 +1192,20 @@ function stubNetwork(addArm: string): string {
     '    window.__gqlCalls.push(body);',
     '    var op = body && body.operationName;',
     '    if (op === "cartItemV2") {',
-    '      return reply({ data: { addItemToCartV2: { __typename: ' + JSON.stringify(addArm) + ',',
-    '        message: "You must supply a weight to purchase this item." } } });',
+    '      var arm = ' + JSON.stringify(addArm) + ';',
+    '      if (arm === "Cart" || arm === "AddOnsCart") {',
+    '        // The write SETS the line, so the stub cart becomes what was asked for.',
+    '        window.__cartQty = (body.variables && body.variables.quantity) || window.__cartQty;',
+    '      }',
+    '      var payload = arm === "AddOnsCart"',
+    '        ? { __typename: "AddOnsCart", id: "a1", cart: { id: "c1", itemCount: { total: 1 } } }',
+    '        : { __typename: arm, id: "c1", itemCount: { total: 1 },',
+    '            message: "You must supply a weight to purchase this item." };',
+    '      return reply({ data: { addItemToCartV2: payload } });',
     '    }',
-    '    // Cart reads: one line for the product the fixtures target, so the',
-    '    // confirmation has a baseline to move off.',
     '    return reply({ data: { cartV2: { __typename: "Cart", id: "c1",',
-    '      itemCount: { total: 1 },',
-    '      items: [{ id: "i1", quantity: 1, estimatedWeight: null,',
+    '      itemCount: { total: window.__cartQty },',
+    '      items: [{ id: "i1", quantity: window.__cartQty, estimatedWeight: null,',
     '        product: { id: "314026", fullDisplayName: "H-E-B Regular Sour Cream, 16 oz" },',
     '        sku: { id: "4122025475", twelveDigitUPC: null, weightSelectionIncrements: [] } }] } } });',
     '  };',
@@ -1234,6 +1246,34 @@ describe('HEB MEAL-200: add by request', () => {
       expect(seen.sent.productId).toBe('314026');
       expect(seen.sent.skuId).toBe('4122025475');
       expect(seen.sent.quantity).toBe(3);
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'reports success, sourced from the network, when the cart confirms it',
+    async (runner) => {
+      await runner.inject(stubNetwork('Cart'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      const res = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      expect(res.success).toBe(true);
+      expect(res.via).toBe('network');
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'treats the add-on cart arm as added rather than clicking again',
+    async (runner) => {
+      // AddOnsCart wraps a cart — the item went in. Reading it as a failure sends
+      // the run on to click the same product, adding it twice.
+      await runner.inject(stubNetwork('AddOnsCart'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.clicks).toBe(0);
     },
   );
 
@@ -1308,16 +1348,99 @@ describe('HEB MEAL-200: add by request', () => {
         '})(); true;',
       ].join('\n'));
       await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
-      // Deliberately NOT waiting for the terminal result: with the cart
-      // unreadable the confirmation retries against a wall and outruns jest's
-      // budget. The decline happens before any of that, and the claim under test
-      // is only that no write was issued.
-      await new Promise((r) => setTimeout(r, 6_000));
+      // Driven off the decline the code already posts, not a wall-clock guess.
+      // Waiting for the terminal result outruns jest's budget here (the
+      // confirmation retries against a wall), and a fixed sleep was a bet against
+      // a retry schedule that will change.
+      await runner.waitForMessage('EXTRACT_DEBUG', 20_000, (m: any) => m.declined === 'no_cart_baseline');
       runner.clearMessages();
       await runner.inject(ASK_SENT);
       const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
       expect(seen.sent).toBeNull();
       expect(seen.clicks).toBeGreaterThan(0);
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'sends nothing when the product holds more than one cart line',
+    async (runner) => {
+      // One product can hold several lines, keyed by preference. The cart lookup
+      // SUMS them; the write sets ONE. With two lines of 1 each the sum is 2, the
+      // write would set its line to 2 + asked, the other line keeps its 1, and
+      // the cart ends up over. Nothing says which line to set, so decline.
+      await runner.inject([
+        '(function () {',
+        '  window.__gqlCalls = []; window.__clicks = 0;',
+        '  document.addEventListener("click", function (e) {',
+        '    var b = e.target && e.target.closest && e.target.closest("button");',
+        '    if (b && b.getAttribute("data-qe-id") === "addToCart") window.__clicks++;',
+        '  }, true);',
+        '  var line = function (id, q) { return { id: id, quantity: q, estimatedWeight: null,',
+        '    product: { id: "314026", fullDisplayName: "H-E-B Regular Sour Cream, 16 oz" },',
+        '    sku: { id: "4122025475", twelveDigitUPC: null, weightSelectionIncrements: [] } }; };',
+        '  window.fetch = function (url, init) {',
+        '    var body = null;',
+        '    try { body = JSON.parse((init && init.body) || "null"); } catch (e) {}',
+        '    window.__gqlCalls.push(body);',
+        '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+        '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart",',
+        '        id: "c1", itemCount: { total: 2 }, items: [line("i1", 1), line("i2", 1)] } } }));',
+        '    } });',
+        '  };',
+        '})(); true;',
+      ].join('\n'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      const decline = await runner.waitForMessage('EXTRACT_DEBUG', 20_000, (m: any) => m.declined === 'multiple_cart_lines');
+      expect(decline.lines).toBe(2);
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.sent).toBeNull();
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'does not click after a write whose answer was lost but which landed',
+    async (runner) => {
+      // The dangerous case. A timeout does not mean the store ignored the write.
+      // Clicking on top of a set that DID apply adds the item twice, and reports
+      // success while doing it, because the click loop baselines off a label
+      // captured before the write.
+      await runner.inject([
+        '(function () {',
+        '  window.__gqlCalls = []; window.__clicks = 0;',
+        '  window.__cartQty = 1;',
+        '  document.addEventListener("click", function (e) {',
+        '    var b = e.target && e.target.closest && e.target.closest("button");',
+        '    if (b && b.getAttribute("data-qe-id") === "addToCart") window.__clicks++;',
+        '  }, true);',
+        '  window.fetch = function (url, init) {',
+        '    var body = null;',
+        '    try { body = JSON.parse((init && init.body) || "null"); } catch (e) {}',
+        '    window.__gqlCalls.push(body);',
+        '    if (body && body.operationName === "cartItemV2") {',
+        '      // The store APPLIED it, then the connection dropped.',
+        '      window.__cartQty = body.variables.quantity;',
+        '      return Promise.reject(new Error("Network request failed"));',
+        '    }',
+        '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+        '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart",',
+        '        id: "c1", itemCount: { total: window.__cartQty },',
+        '        items: [{ id: "i1", quantity: window.__cartQty, estimatedWeight: null,',
+        '          product: { id: "314026", fullDisplayName: "H-E-B Regular Sour Cream, 16 oz" },',
+        '          sku: { id: "4122025475", twelveDigitUPC: null, weightSelectionIncrements: [] } }] } } }));',
+        '    } });',
+        '  };',
+        '})(); true;',
+      ].join('\n'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.clicks).toBe(0);
     },
   );
 

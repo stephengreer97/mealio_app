@@ -1412,7 +1412,7 @@ ${hebWaitFreshFn()}
   var cards = (await __hebFreshCards(wait, 14000, 8000)).cards;
   var candidates = [];
   var seen = new Set();
-  var bestCard = null, bestBtn = null, bestName = null;
+  var bestCard = null, bestBtn = null, bestName = null, bestIsWeight = false;
   var bestHasPopup = false;
 
   for (var ci = 0; ci < cards.length; ci++) {
@@ -1432,7 +1432,7 @@ ${hebWaitFreshFn()}
     candidates.push({ productName: name, imageUrl: imgEl ? imgEl.src : null, outOfStock: oos, preferences: null, price: null, isWeightItem: isWt, weightOptions: weightOptions });
     // Accept hasPopup products when a saved dropdown preference is available
     if (!bestName && scoreMatch(SEARCH_TERM, name) === 100 && !oos && (!hasPopup || DROPDOWN)) {
-      bestCard = card; bestBtn = addBtn; bestName = name; bestHasPopup = hasPopup;
+      bestCard = card; bestBtn = addBtn; bestName = name; bestHasPopup = hasPopup; bestIsWeight = isWt;
     }
     if (candidates.length >= 8) break;
   }
@@ -1531,8 +1531,13 @@ ${hebWaitFreshFn()}
     // response that is not the Cart arm, a thrown request. Nothing is skipped on
     // a maybe.
     var __netAdded = false;
+    // bestIsWeight, not the presence of a weight <select>. The extractor above
+    // calls an item sold-by-weight when it has weight options OR it is a Deli /
+    // Fish Market line ending in ", lb" — a deli card with neither a select nor a
+    // popup satisfies that and would have slipped through a select-only gate,
+    // which is exactly the product whose over-add cannot be undone.
     if (${networkAddEnabled()} && __cartTarget && __cartTarget.productId && __cartTarget.skuId
-        && !bestHasPopup && !__bestWeightSel) {
+        && !bestHasPopup && !bestIsWeight && !__bestWeightSel) {
       try {
         // The baseline comes from the CART, not from the card's label.
         //
@@ -1549,8 +1554,35 @@ ${hebWaitFreshFn()}
         try {
           var __netMatch = (__cartQueryBefore && __cartQueryBefore.ok)
             ? __hebCartMatch(__cartQueryBefore.lines, __cartTarget) : null;
-          if (__cartQueryBefore && __cartQueryBefore.ok) __netBase = __netMatch ? __netMatch.qty : 0;
-        } catch (e) { __netBase = null; }
+          if (__cartQueryBefore && __cartQueryBefore.ok) {
+            // __hebCartMatch SUMS every line for this product — one product can
+            // hold several, keyed by preference — while the request sets ONE
+            // line. With 2 lines of 1 each the sum is 2, the write would set the
+            // line it picks to 2 + QTY, the other line keeps its 1, and the cart
+            // ends up over. There is no way to say which line to set, so a
+            // multi-line product is not ours to write.
+            if (__netMatch && __netMatch.lineCount > 1) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'EXTRACT_DEBUG', step: 'cart_query_net_add',
+                declined: 'multiple_cart_lines', lines: __netMatch.lineCount, name: bestName,
+              }));
+              throw new Error('no_cart_baseline');
+            }
+            // A weight line counts 1 per line by construction, so its qty is not a
+            // unit count and adding QTY to it means nothing.
+            if (__netMatch && __netMatch.isWeight) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'EXTRACT_DEBUG', step: 'cart_query_net_add',
+                declined: 'cart_line_is_weight', name: bestName,
+              }));
+              throw new Error('no_cart_baseline');
+            }
+            __netBase = __netMatch ? __netMatch.qty : 0;
+          }
+        } catch (e) {
+          if (String(e).indexOf('no_cart_baseline') >= 0) throw e;
+          __netBase = null;
+        }
         if (__netBase == null) {
           window.ReactNativeWebView.postMessage(JSON.stringify({
             type: 'EXTRACT_DEBUG', step: 'cart_query_net_add', declined: 'no_cart_baseline',
@@ -1571,7 +1603,44 @@ ${hebWaitFreshFn()}
           arm: __netRes.arm, status: __netRes.status, reason: __netRes.reason,
           errMsg: __netRes.message, ms: __netRes.ms,
         }));
-        __netAdded = __netRes.arm === 'Cart';
+        __netAdded = !!__netRes.added;
+        // ── An unresolved write is not a failed write ────────────────────────
+        //
+        // timeout, network and unparseable all mean we do not know whether the
+        // store applied the set. Falling straight through to the click path
+        // would add the item a SECOND time, and it would report success while
+        // doing it: the click loop baselines off a label captured before the
+        // write, so the write's own effect satisfies its exit condition and the
+        // confirmation then sees a quantity that moved.
+        //
+        // So re-read the cart and let it decide. This is the one place where
+        // "we could not tell" has to become "we looked again".
+        if (!__netAdded && (__netRes.reason === 'timeout' || __netRes.reason === 'network'
+            || __netRes.reason === 'unparseable' || __netRes.reason === 'http')) {
+          var __reread = await __hebCartRead(6000);
+          var __rm = (__reread && __reread.ok) ? __hebCartMatch(__reread.lines, __cartTarget) : null;
+          var __nowQty = __rm ? __rm.qty : (__reread && __reread.ok ? 0 : null);
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'EXTRACT_DEBUG', step: 'cart_query_net_reread', name: bestName,
+            reason: __netRes.reason, base: __netBase, want: QTY, now: __nowQty,
+          }));
+          if (__nowQty != null && __nowQty >= __netVars.quantity) {
+            // The set landed after all.
+            __netAdded = true;
+          } else if (__nowQty != null) {
+            // It did not. The click path is safe to run, but ONLY against a
+            // baseline as fresh as this read — the label is older than the write.
+            __qtyBase = __nowQty;
+          } else {
+            // Cart unreadable and the write unresolved. Clicking now could double
+            // it, so refuse the item rather than risk an add nobody asked for.
+            document.removeEventListener('focusin', __noKbd, true);
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'write_unresolved',
+              productName: bestName, candidates: candidates, via: 'network' }));
+            return;
+          }
+        }
       } catch (e) {
         // Includes the deliberate no-baseline bail above. Every exit from this
         // block leaves __netAdded false, so the click path below runs unchanged.
@@ -1588,12 +1657,21 @@ ${hebWaitFreshFn()}
       // what "landed" means.
       var __netConf = await __hebCartConfirmAdd(__cartTarget, __cartQueryBefore, {});
       document.removeEventListener('focusin', __noKbd, true);
+      // Three outcomes, and only ONE of them is a failure.
+      //
+      // 'missing' is the cart answering and not showing the item — real evidence,
+      // real failure. 'unknown' is the cart not answering at all, and the click
+      // path treats that as "not evidence" for exactly this reason. Reporting it
+      // as cart_not_incremented would claim a reading nobody took, about an item
+      // the store's own success arm says it added. The arm is the evidence here;
+      // the run's after-probe still gets the last word.
+      var __netFailed = !!(__netConf && __netConf.state === 'missing');
       window.ReactNativeWebView.postMessage(JSON.stringify(
-        __netConf && __netConf.state === 'landed'
-          ? { type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName, confirm: __netConf, via: 'network' }
-          : { type: 'SEARCH_AND_ADD_RESULT', success: false,
-              reason: (__netConf && __netConf.state === 'missing') ? 'cart_absent' : 'cart_not_incremented',
-              productName: bestName, candidates: candidates, confirm: __netConf, via: 'network' }));
+        __netFailed
+          ? { type: 'SEARCH_AND_ADD_RESULT', success: false, reason: 'cart_absent',
+              productName: bestName, candidates: candidates, confirm: __netConf, via: 'network' }
+          : { type: 'SEARCH_AND_ADD_RESULT', success: true, productName: bestName,
+              confirm: __netConf, via: 'network' }));
       return;
     }
 
