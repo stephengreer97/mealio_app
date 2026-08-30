@@ -1169,11 +1169,52 @@ export function buildHebCartQueryFn(): string {
     };
   }
 
-  // The identity a result card can give us. H-E-B's cards carry NO sku anywhere
-  // in their markup — verified across the committed search fixtures — but every
-  // card links to /product-detail/<slug>/<productId>, and the cart's own
-  // CartItem.id embeds that same product id. So product id is the join key on
-  // the DOM rail; skuId stays null and the cart's value is reported back up.
+  // The sku for a product id, read out of the page's own embedded JSON.
+  //
+  // Every search-result product in that payload carries SKUs:[{id}] beside the
+  // product-detail link the card already gives us — verified on all 220 distinct
+  // products across the committed search fixtures, zero exceptions (MEAL-139).
+  //
+  // Deliberately NOT gated on the payload being fresh, unlike the search
+  // extractor's use of the same JSON. This is a lookup BY the product id of the
+  // card this script actually chose: a stale payload does not contain that id, so
+  // it returns null and every caller behaves exactly as it did before. It cannot
+  // return a wrong sku for a right product id, which is the whole reason this is
+  // safe to do without the extractor's freshness machinery.
+  function __hebSkuForProduct(pid) {
+    if (!pid) return null;
+    var el = document.getElementById('__NEXT_DATA__');
+    if (!el) return null;
+    var nd = null;
+    try { nd = JSON.parse(el.textContent || 'null'); } catch (e) { return null; }
+    if (!nd) return null;
+    var want = String(pid);
+    var found = null;
+    // Bounded walk: the payload is a page render, not a data feed, but a cap
+    // keeps a pathological shape from stalling the add path it sits in front of.
+    var budget = 40000;
+    var stack = [nd];
+    while (stack.length && budget-- > 0) {
+      var o = stack.pop();
+      if (!o || typeof o !== 'object') continue;
+      if (Array.isArray(o)) { for (var i = 0; i < o.length; i++) stack.push(o[i]); continue; }
+      if (o.id != null && String(o.id) === want && Object.prototype.toString.call(o.SKUs) === '[object Array]' && o.SKUs.length > 0) {
+        var sk = o.SKUs[0];
+        if (sk && sk.id != null) { found = String(sk.id); break; }
+      }
+      for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k)) stack.push(o[k]); }
+    }
+    return found;
+  }
+
+  // The identity a result card can give us. The card MARKUP carries no sku —
+  // verified across the committed search fixtures — but every card links to
+  // /product-detail/<slug>/<productId>, and the cart's own CartItem.id embeds
+  // that same product id. So product id is the join key, and the sku now comes
+  // from the page's embedded JSON beside it (MEAL-139). Where that payload is
+  // absent or does not hold this product, skuId is null and behaviour is
+  // unchanged — matching is "sku OR product id" and sums over every line matching
+  // either, so supplying a sku only ever widens the match set.
   function __hebTargetFromCard(card, name) {
     if (!card) return null;
     var pid = null;
@@ -1184,7 +1225,7 @@ export function buildHebCartQueryFn(): string {
       if (m) pid = m[1];
     } catch (e) {}
     if (!pid) return null;
-    return { skuId: null, productId: pid, name: name || null };
+    return { skuId: __hebSkuForProduct(pid), productId: pid, name: name || null };
   }
 `;
 }
