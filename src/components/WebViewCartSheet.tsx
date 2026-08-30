@@ -595,6 +595,13 @@ export default function WebViewCartSheet({
   // null anywhere means "couldn't read the badge" → validation is skipped.
   const cartCountBeforeRef = useRef<number | null>(null);
   const cartCountPendingRef = useRef<'before' | 'after' | 'reconcile' | null>(null);
+  // The most recent cart read, whatever phase produced it. Manual mode snapshots
+  // this on the way in so the rows that appear while the USER is driving can be
+  // told apart from rows this run put there (MEAL-197).
+  const cartItemsLatestRef = useRef<CartItem[]>([]);
+  // Terms handed to manual mode, and the cart as it stood when they were.
+  const manualHandedRef = useRef<string[]>([]);
+  const manualCartSnapshotRef = useRef<CartItem[]>([]);
   // Cart-PAGE counting (HEB): the before-probe navigates to /cart, counts, then
   // resumes the search flow. This flag tells the CART_COUNT handler to kick off
   // the search once the before-count lands; the timer is a safety net so a /cart
@@ -1528,6 +1535,19 @@ export default function WebViewCartSheet({
       setReviewIdx(0);
       setSelectedSuggIdx(0);
       setSelectedPreference(null);
+      // Manual-mode state is per-run like everything else here (MEAL-197). Under
+      // the shipping !FEATURE_BACKGROUND_CART mount this component survives
+      // between runs, so a `manualSkipped` left behind silently withholds the
+      // same ingredient from the next meal's offer, `manualUsedRef` re-probes
+      // the cart on every later run, and `copiedList` says "Copied" before
+      // anything has been copied.
+      setManualQueue([]);
+      setManualIdx(0);
+      setManualSkipped([]);
+      setCopiedList(false);
+      manualUsedRef.current = false;
+      manualHandedRef.current = [];
+      manualCartSnapshotRef.current = [];
       setReviewMealQtys({});
       setPickedItems([]);
       setViewerOpen(false);
@@ -2731,7 +2751,11 @@ export default function WebViewCartSheet({
     const st = stepRef.current;
     // Only meaningful while we're driving the store; ignore once the user is in
     // the review/done UI or already looking at a challenge.
-    if (st === 'qty' || st === 'review' || st === 'searchResult' || st === 'done' || st === 'robot_challenge') return;
+    // 'manual' is on this list for a stronger reason than the rest (MEAL-197):
+    // surfacing the blocker would abandon the queue with no route back, and the
+    // only button it offers is "Try again" — which restarts the whole add pass
+    // and re-adds every item that already landed on this run.
+    if (st === 'qty' || st === 'review' || st === 'searchResult' || st === 'done' || st === 'robot_challenge' || st === 'manual') return;
     console.log(`[Cart ${ts()}]`, `HTTP ${statusCode} block on`, url, '— surfacing challenge');
     surfaceBlocker('http-' + statusCode);
   }, [surfaceBlocker]);
@@ -2768,6 +2792,22 @@ export default function WebViewCartSheet({
   // point: the button being pressed is the STORE'S, so a script of ours running
   // alongside could add a second copy behind the user's back — the exact
   // over-add the cart governing principles forbid.
+  // Cart rows that appeared while the user was driving. Quantity-aware, because
+  // adding a second of something already in the cart shows up as a bigger qty on
+  // an existing row rather than as a new one.
+  const rowsAddedDuringManual = (before: CartItem[], after: unknown): string[] => {
+    if (!Array.isArray(after)) return [];
+    const qtyBefore = new Map<string, number>();
+    for (const r of before) qtyBefore.set((r?.name ?? '').trim().toLowerCase(), (qtyBefore.get((r?.name ?? '').trim().toLowerCase()) ?? 0) + (r?.qty ?? 0));
+    const grew: string[] = [];
+    for (const r of after as CartItem[]) {
+      const key = (r?.name ?? '').trim().toLowerCase();
+      if (!key) continue;
+      if ((r?.qty ?? 0) > (qtyBefore.get(key) ?? 0)) grew.push(r.name);
+    }
+    return grew;
+  };
+
   const manualSearchUrlFor = useCallback((term: string) => {
     const s = getStoreScripts(lockedStoreIdRef.current);
     return s?.getSearchUrl ? s.getSearchUrl(term) : null;
@@ -2781,14 +2821,31 @@ export default function WebViewCartSheet({
     if (!first) return;
     console.log(`[Cart ${ts()}]`, 'manual mode: start', terms.length, 'items', terms);
     manualUsedRef.current = true;
+    manualHandedRef.current = terms;
+    manualCartSnapshotRef.current = cartItemsLatestRef.current;
     setManualQueue(terms);
     setManualIdx(0);
     setManualSkipped([]);
-    // Drop the previous cart read. The done screen re-probes on the way back in
-    // and these rows are about to be stale — leaving them up would show the
-    // pre-manual cart under a screen the user reached by adding to it.
+    // The clipboard holds the pre-manual list; a pass that shrinks the failed
+    // list makes "Copied" a claim about a list that no longer exists.
+    setCopiedList(false);
+    // Drop the previous cart read AND the verdict built from it. The done screen
+    // re-probes on the way back in, and all four of these are about to be stale:
+    // leaving the banner up while discarding the rows would land the user on a
+    // screen with no breakdown and a pre-manual sentence still asserting what
+    // their cart holds — under a screen they reached by changing it.
     setCartResultRows(null);
     setCartRowsTimedOut(false);
+    setCartDeltaWarning(null);
+    setCartUnverified(null);
+    setVerdictFromCart(false);
+    // The offer is tappable while "Updating your cart…" is still spinning. An
+    // after-probe left in flight would land during the manual pass and write its
+    // results — undoing the clear above and rebuilding the verdict from a cart
+    // read taken partway through.
+    cartCountPendingRef.current = null;
+    if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
+    if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
     setStep('manual');
     navTo(first);
   }, [manualSearchUrlFor, navTo, setStep]);
@@ -2935,6 +2992,7 @@ export default function WebViewCartSheet({
           // reaches nobody, and a redirect stays indistinguishable from a
           // selector miss.
           console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count, 'reason=', msg.reason ?? null, 'url=', msg.url);
+          if (Array.isArray(msg.items)) cartItemsLatestRef.current = msg.items as CartItem[];
           if (phase === 'before') {
             cartCountBeforeRef.current = count;
             cartItemsBeforeRef.current = Array.isArray(msg.items) ? msg.items : [];
@@ -3280,17 +3338,38 @@ export default function WebViewCartSheet({
               reconcileIntended: reconcileIntendedRef.current,
               countBefore: cartCountBeforeRef.current,
               countAfter: count,
-              // The unverified weight lines survive into this cart read too, still
-              // unclaimable by the count items they belong to. Held out of `over`
-              // for the same reason as above: the done screen renders this warning
-              // beside the banner that already names them.
-              explainedRows: unverifiedCartNamesRef.current,
               // A skipped ingredient was never attempted, so the cart not having
               // it is what the user asked for — it must not come back as a
               // cart-sourced failure beside the skipped banner that already
               // reports it plainly (MEAL-199 review). Read from the ref because
               // onMessage closes over this run's initial state.
-              skippedNames: Object.values(skippedByIdxRef.current),
+              // Plus anything handed to manual mode (MEAL-197). The product the
+              // user picks by hand is titled by the STORE — "H-E-B Fresh Mint,
+              // 0.5 oz" against an intended "Soli Organic Fresh Mint, 0.5 oz" —
+              // and this audit matches names exactly. Left in, a successful
+              // manual add reads as a failure ("Mealio could not add …") AND
+              // re-offers the item the user just added. We cannot verify these
+              // by name, so we do not claim anything about them.
+              skippedNames: [...Object.values(skippedByIdxRef.current), ...manualHandedRef.current],
+              // The unverified weight lines survive into this cart read too, still
+              // unclaimable by the count items they belong to. Held out of `over`
+              // because the done screen renders that warning beside the banner
+              // that already names them.
+              explainedRows: unverifiedCartNamesRef.current,
+              // The other half of the manual problem. The row the user added is
+              // one this run did not intend, which is the definition of an
+              // over-add — and "your cart has 1 item Mealio did not add" about a
+              // product they chose thirty seconds ago is nonsense. Rows that grew
+              // while the USER was driving are theirs.
+              //
+              // A separate input from `explainedRows` because the two want
+              // opposite things: a weight row has to STAY in the pool (it is its
+              // intended item, and dropping it makes that item read as absent —
+              // cartVerdict.test.ts proves it), while these are accounted for by
+              // nothing and must leave it.
+              userAddedRows: manualHandedRef.current.length > 0
+                ? rowsAddedDuringManual(manualCartSnapshotRef.current, msg.items)
+                : [],
             });
             // `over` and `countShortfall` are no longer read here: they used to
             // be assembled into copy at this call site, and that job moved into
@@ -4882,15 +4961,31 @@ export default function WebViewCartSheet({
           // Only reachable with no names at all (every finalize path compiles
           // them), and with no names there is nothing to resolve quantities
           // against — the product count is then the most that is true.
-          // What "Add it yourself" hands over (MEAL-197). `failedNames` and not
-          // the run's own failure list: MEAL-199 corrects it against the cart
-          // read, so an item the cart turned out to hold has already been struck
-          // and is never offered. Items the user SKIPPED at review are also
-          // absent from it, which is right — they said no once already.
+          // What "Add it yourself" hands over (MEAL-197).
           //
-          // Minus anything skipped in a previous manual pass, so a second pass
-          // does not re-offer what the user just declined by hand.
-          const manualCandidates = failedNames.filter((n) => !manualSkipped.includes(n));
+          // Failed AND skipped, and the skipped half is the important one. On a
+          // device run of a 12-ingredient meal, the two items H-E-B could not
+          // match reached the mid-run "Items Not Added" gate, offered wrong
+          // substitutes (tea bags, for fresh mint), and were skipped — so they
+          // landed in `skippedNames`, `failedNames` came back EMPTY, and the
+          // hand-over never appeared on the one run that needed it.
+          //
+          // "Skip this ingredient" on the Pick a Substitute screen does not mean
+          // "I don't want this". An ingredient the user did not want was
+          // unchecked on the qty screen and never entered the run at all;
+          // reaching review means they asked for it and none of the offered
+          // substitutes were it. That user still wants fresh mint.
+          //
+          // Offering is not adding — nothing enters the cart without their tap —
+          // so the failure mode of including these is a button they ignore,
+          // against a dead end for the failure mode of leaving them out.
+          //
+          // `failedNames` is used rather than the run's own failure list because
+          // MEAL-199 corrects it against the cart read, so an item the cart
+          // turned out to hold is already struck and never offered.
+          const manualCandidates = [...failedNames, ...skippedNames]
+            .filter((n, i, a) => a.indexOf(n) === i)
+            .filter((n) => !manualSkipped.includes(n));
           const manualAvailable = manualCandidates.length > 0 && !!getStoreScripts(lockedStoreId)?.getSearchUrl;
           const failedUnits = failedNames.length > 0
             ? unitsForNames(failedNames, runIntendedRef.current)
@@ -5068,7 +5163,7 @@ export default function WebViewCartSheet({
                 </View>
               )}
 
-              {!cartResultRows && !cartRowsTimedOut && (buildCartPageCountScript(lockedStoreId) || buildInlineCartScript(lockedStoreId)) && shouldProbeAfterRun({ addsAttempted: addsAttemptedRef.current, hasBaseline: cartCountBeforeRef.current != null }) ? (
+              {!cartResultRows && !cartRowsTimedOut && (buildCartPageCountScript(lockedStoreId) || buildInlineCartScript(lockedStoreId)) && (manualUsedRef.current ? cartCountBeforeRef.current != null : shouldProbeAfterRun({ addsAttempted: addsAttemptedRef.current, hasBaseline: cartCountBeforeRef.current != null })) ? (
                 // Cart-page store (or inline side-panel store like ALDI) with a
                 // baseline: the after-probe is reading the cart. Show a loading
                 // state instead of the plain list so the breakdown doesn't flash
