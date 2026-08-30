@@ -1278,6 +1278,11 @@ describe('MEAL-14 target identity from a result card', () => {
     const card = {
       querySelector: () => ({ getAttribute: () => '/product-detail/h-e-b-regular-sour-cream-16-oz/314026' }),
     };
+    // Pins the NO-DOM fallback, not the general contract. This sandbox has no
+    // document, so the guard in __hebSkuForProduct short-circuits and the sku is
+    // null. On a real page it is not — MEAL-139 reads it from the embedded
+    // payload; see the fixture tests for that, and hebSkuIdentity below for the
+    // proof that the value agrees with the cart's own sku.
     expect(rail.targetFromCard(card, 'H-E-B Regular Sour Cream, 16 oz')).toEqual({
       skuId: null, productId: '314026', name: 'H-E-B Regular Sour Cream, 16 oz',
     });

@@ -98,6 +98,20 @@
 // `$skuId: String!`, non-null. A null sku is the difference between being able to
 // ASK the store to add something and only being able to click a button (MEAL-200).
 //
+// WHICH PAGES ACTUALLY YIELD ONE, since MEAL-200 depends on it. A payload is the
+// INITIAL server render. On a direct navigation to a results URL it describes the
+// search on screen and every card resolves. After an in-page SPA search it still
+// describes the PREVIOUS search, so most cards do not appear in it and get null —
+// on the committed out-of-stock capture (payload q=seasonal, DOM showing
+// seasoned-fajita tiles) only 4 of 19 cards resolve. That is correct and safe, and
+// the product-id fallback carries those, but "the sku comes from the page" should
+// not be read as "a sku is always available".
+//
+// The payload sku IS the cart's sku, verified across fixtures rather than assumed:
+// the search capture puts product 894630 at SKUs[0].id 61342, and the cart capture's
+// CartItem for 894630 references SKU:61342. Same for 1627072 -> 4122093426. Pinned
+// by a test so it cannot rot.
+//
 // The product-id fallback still carries the rail wherever the payload cannot
 // answer, and it is verified to: the card's
 // /product-detail/<slug>/<id> id equals `Product.id` for all 220 products, and all
@@ -1199,22 +1213,70 @@ export function buildHebCartQueryFn(): string {
     try { nd = JSON.parse(el.textContent || 'null'); } catch (e) { return null; }
     if (!nd) return null;
     var want = String(pid);
-    var found = null;
-    // Bounded walk: the payload is a page render, not a data feed, but a cap
-    // keeps a pathological shape from stalling the add path it sits in front of.
-    var budget = 40000;
+
+    function skuOf(o) {
+      if (!o || typeof o !== 'object') return null;
+      if (o.id == null || String(o.id) !== want) return null;
+      if (Object.prototype.toString.call(o.SKUs) !== '[object Array]' || !o.SKUs.length) return null;
+      var sk = o.SKUs[0];
+      return (sk && sk.id != null) ? String(sk.id) : null;
+    }
+
+    // Fast path: search products live at a known address. Going straight there
+    // costs a few dozen reads instead of walking a whole page render.
+    try {
+      var vcs = nd.props && nd.props.pageProps && nd.props.pageProps.layout
+        && nd.props.pageProps.layout.visualComponents;
+      if (Object.prototype.toString.call(vcs) === '[object Array]') {
+        for (var v = 0; v < vcs.length; v++) {
+          var items = vcs[v] && vcs[v].items;
+          if (Object.prototype.toString.call(items) !== '[object Array]') continue;
+          for (var i = 0; i < items.length; i++) {
+            var hit = skuOf(items[i]);
+            if (hit) return hit;
+          }
+        }
+      }
+    } catch (e) {}
+
+    // Fallback walk, for a payload shaped differently than today's.
+    //
+    // Only CONTAINERS are pushed. An earlier version counted every value it
+    // popped, primitives included, which made the budget a value budget: two
+    // committed fixtures (logged-in-home, 41.7k values; the account panel, 42.2k)
+    // exhausted a 40k cap and returned null for products those payloads actually
+    // contain. Search pages sit at 3k-10k values so the path that matters had
+    // headroom, but "gave up" and "not here" were indistinguishable — and
+    // MEAL-200 reads a null sku as "cannot ask the store to add this".
+    var budget = 20000;
     var stack = [nd];
-    while (stack.length && budget-- > 0) {
+    var exhausted = true;
+    while (stack.length) {
+      if (budget-- <= 0) break;
       var o = stack.pop();
       if (!o || typeof o !== 'object') continue;
-      if (Array.isArray(o)) { for (var i = 0; i < o.length; i++) stack.push(o[i]); continue; }
-      if (o.id != null && String(o.id) === want && Object.prototype.toString.call(o.SKUs) === '[object Array]' && o.SKUs.length > 0) {
-        var sk = o.SKUs[0];
-        if (sk && sk.id != null) { found = String(sk.id); break; }
+      if (Object.prototype.toString.call(o) === '[object Array]') {
+        for (var a = 0; a < o.length; a++) if (o[a] && typeof o[a] === 'object') stack.push(o[a]);
+        continue;
       }
-      for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k)) stack.push(o[k]); }
+      var found = skuOf(o);
+      if (found) return found;
+      for (var k in o) {
+        if (!Object.prototype.hasOwnProperty.call(o, k)) continue;
+        if (o[k] && typeof o[k] === 'object') stack.push(o[k]);
+      }
+      if (!stack.length) exhausted = false;
     }
-    return found;
+    // Reported rather than silently folded into "absent": a walk that ran out of
+    // budget has NOT established that the product is missing.
+    if (budget <= 0) {
+      try {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'EXTRACT_DEBUG', step: 'cart_query_sku_budget', productId: want,
+        }));
+      } catch (e) {}
+    }
+    return null;
   }
 
   // The identity a result card can give us. The card MARKUP carries no sku —
