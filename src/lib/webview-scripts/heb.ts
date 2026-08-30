@@ -898,17 +898,33 @@ ${buildHebCartQueryFn()}
     addBtn.click();
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '2_atc_clicked' }));
 
-    var modal = null;
+    // Pick the container that actually HOLDS preference rows, not the first one
+    // that matches (MEAL-181).
+    //
+    // H-E-B leaves earlier dialogs in the DOM. Measured on a device 2026-08-29:
+    // two [role="dialog"] elements, identical class
+    // (ModalContainers_modalContent__o_tcp), and the rows lived in the SECOND —
+    // so document.querySelector handed back a stale shell, scoping found nothing
+    // inside it, and the add died as no_row with every class name on the page
+    // unchanged. Nothing was renamed; we were looking in the wrong box. That is
+    // easy to reach here because spaSearch means the whole run happens in one
+    // document, so modals accumulate.
+    var modal = null, anyContainer = null;
     for (var mi = 0; mi < 15; mi++) {
-      modal = document.querySelector('[data-qe-id="preferencesRowContainer"]');
-      if (!modal) {
-        var fs = document.querySelector('fieldset[aria-live="polite"]');
-        if (fs) modal = fs.parentElement || fs;
+      var cands = Array.prototype.slice.call(document.querySelectorAll('[data-qe-id="preferencesRowContainer"],fieldset[aria-live="polite"],[role="dialog"]:not([aria-label="Search"]),[role="presentation"]:not([aria-label="Search"])'));
+      for (var ci = 0; ci < cands.length; ci++) {
+        var cand = cands[ci].tagName === 'FIELDSET' ? (cands[ci].parentElement || cands[ci]) : cands[ci];
+        // Last match wins among equals: a freshly opened modal is appended after
+        // the stale one, so the newest is the one the user is looking at.
+        if (cand.querySelector('[class*="preferenceContainer"]')) modal = cand;
+        anyContainer = cand;
       }
-      if (!modal) modal = document.querySelector('[role="dialog"]:not([aria-label="Search"]),[role="presentation"]:not([aria-label="Search"])');
       if (modal) break;
       await wait(150);
     }
+    // Fall back to SOME container so a genuinely unfamiliar layout still reports
+    // no_row, which names the rows, rather than no_modal, which blames the shell.
+    if (!modal) modal = anyContainer;
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '3_modal', found: !!modal }));
 
     if (!modal) {
@@ -923,7 +939,26 @@ ${buildHebCartQueryFn()}
       if (rows.length > 0) break;
       await wait(100);
     }
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ADD_DEBUG', step: '4_rows', rowCount: rows.length }));
+    // MEAL-181. When rowCount is 0 the run dies as no_row, and a bare count
+    // cannot separate a renamed class from a wrongly-scoped modal, which are
+    // opposite fixes. So a zero reports what it looked at and what the document
+    // actually holds. Failing branch only, class names only, so the bridge
+    // carries a few hundred bytes rather than a DOM.
+    // MEAL-181. A bare rowCount of 0 cannot separate a renamed class from a
+    // wrongly-scoped container, and those have opposite fixes — chasing the
+    // first cost this ticket its whole first pass. So a zero says which box it
+    // looked in and whether the rows exist elsewhere. Failing branch only.
+    var __dbg = { type: 'ADD_DEBUG', step: '4_rows', rowCount: rows.length };
+    if (rows.length === 0) {
+      try {
+        var __row = document.querySelector('[class*="preferenceContainer"]');
+        __dbg.modalClass = String(modal.className || '').slice(0, 60);
+        __dbg.dialogCount = document.querySelectorAll('[role="dialog"]:not([aria-label="Search"]),[role="presentation"]:not([aria-label="Search"])').length;
+        __dbg.rowExistsElsewhere = !!__row;
+        __dbg.modalContainsRow = !!__row && modal.contains(__row);
+      } catch (e) { __dbg.probeErr = String(e).slice(0, 60); }
+    }
+    window.ReactNativeWebView.postMessage(JSON.stringify(__dbg));
 
     // Find matching preference row (fall back to first row)
     var targetRow = null;

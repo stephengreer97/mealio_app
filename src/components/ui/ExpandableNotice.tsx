@@ -22,12 +22,21 @@
 // that something needs attention — has to survive whatever the body does.
 //
 // When expanded the body scrolls inside its own bounded height rather than
-// growing the sheet. The reason is stronger than "tidier": the done screen's
-// banner column is NOT inside a ScrollView — it is a direct child of the
-// SafeAreaView, and its siblings do not shrink — so an unbounded body has
-// nowhere to overflow to and pushes the cart rows, and eventually the Done
-// button, off the screen. An earlier version of this comment claimed the column
-// already scrolled; it does not. MEAL-193 covers making that true.
+// growing the sheet.
+//
+// The original reason was that the done screen's banner column was NOT inside a
+// ScrollView, so an unbounded body had nowhere to overflow to and pushed the
+// cart rows — and eventually the Done button — off the screen. As of MEAL-198
+// that column IS a scroll view, and the Done button has moved outside it, so
+// that particular disaster is no longer available.
+//
+// The bound stays, for a different and better reason: this is a WARNING, and a
+// warning that can grow to any height stops being a banner and becomes the
+// page. Bounding it is what keeps the thing the warning is ABOUT — the cart
+// breakdown underneath — reachable without scrolling past a wall of names.
+// It also keeps the nesting honest: one bounded scroller inside the page
+// scroller is a scroll view with a known size, not two competing for the same
+// gesture.
 
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -135,11 +144,14 @@ export default function ExpandableNotice({
         style={{ maxHeight: maxBodyHeight }}
         // No nestedScrollEnabled: an earlier version set it and justified it as
         // required on iOS, which is backwards — RN documents it as Android-only
-        // and iOS nests by default. Nothing competes for the gesture anyway,
-        // because the done screen's banner column is NOT inside a ScrollView
-        // (it is a direct child of the SafeAreaView). That last fact is also why
-        // the height cap below matters more than it looks: the column cannot
-        // scroll, so an unbounded body has nowhere to overflow to. See MEAL-193.
+        // and iOS nests by default.
+        //
+        // Since MEAL-198 the done screen's banner column IS a scroll view, so
+        // this one really is nested now and the flag earns its keep on both
+        // platforms. The two do not fight over the gesture because this one has
+        // a hard height: a bounded scroller hands the drag back at its ends,
+        // which is what makes the page keep scrolling past a fully-scrolled
+        // warning instead of trapping the finger.
         testID={testID ? `${testID}-body` : undefined}
       >
         <Text style={styles.body}>{body}</Text>

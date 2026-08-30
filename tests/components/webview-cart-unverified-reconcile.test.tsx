@@ -171,7 +171,13 @@ beforeEach(() => {
  * reconcile answer is the variable under test: one with `items` gives the diff a
  * cart to compare, one without is the MEAL-152 refusal.
  */
-async function runToReconcile(answer: Record<string, unknown>, workerSucceeded = true) {
+async function runToReconcile(
+  answer: Record<string, unknown>,
+  workerSucceeded = true,
+  // A rail verdict riding on the worker's report, exactly as heb-cart-query posts
+  // it. Present, it is what the walled-cart guard weighs the cart read against.
+  confirm?: Record<string, unknown>,
+) {
   // ONE item on purpose. With two, the pool hands one to the cold slot (the main
   // WebView enlisted as an extra add surface) and only a single worker WebView
   // ever mounts, so the pool cannot settle without waiting out a 35s worker
@@ -202,7 +208,7 @@ async function runToReconcile(answer: Record<string, unknown>, workerSucceeded =
 
   // Every add worker reports back, which settles the pool and arms the reconcile.
   postTo(1, workerSucceeded
-    ? { type: 'WORKER_RESULT', phase: 'add', success: true, productName: 'Sour Cream' }
+    ? { type: 'WORKER_RESULT', phase: 'add', success: true, productName: 'Sour Cream', ...(confirm ? { confirm } : {}) }
     : { type: 'WORKER_RESULT', phase: 'add', success: false, reason: 'add button not found' });
   act(() => { jest.advanceTimersByTime(5_000); });
 
@@ -303,5 +309,121 @@ describe('the outcome an unverifiable run reports (MEAL-190)', () => {
       false,
     );
     expect(completedRun()).toMatchObject({ itemsAdded: 0, outcome: 'failed' });
+  });
+});
+
+
+// ── The walled cart (MEAL-16, run 7 of 2026-08-14) ───────────────────────────
+//
+// Under the Imperva wall the /cart page renders with no rows and the count
+// script posts `{count: 0, items: []}` — `reason: null`, `onBlockedPage: false`.
+// Nothing downstream can tell that from a genuinely empty cart: `[]` IS an
+// array, so the `!rows` refusal above never fired. Reconcile believed it, and
+// re-added all 18 items on top of the 12 the rail had just confirmed `landed`.
+// The measured cost was 12 duplicate units across 10 lines.
+//
+// The contradiction is already in the caller's hands — the verdicts are computed
+// from the same `attempts` six lines earlier — so a read that disagrees with them
+// about the whole cart loses.
+describe('a cart read that contradicts the rail (MEAL-16)', () => {
+  const landed = { state: 'landed', reason: 'qty_increased', via: 'cart_query', skuId: '123', productId: null };
+
+  it('treats an empty cart read as UNREAD when the rail confirmed a landing', async () => {
+    const view = await runToReconcile(
+      { type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' },
+      true,
+      landed,
+    );
+    expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeTruthy();
+  });
+
+  it('does not re-add what the rail said landed', async () => {
+    // The defect this exists to stop. Believing the empty read sends the run back
+    // to 'searching' to re-add an item that is already in the cart; the honest
+    // path finishes on the done screen instead.
+    const view = await runToReconcile(
+      { type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' },
+      true,
+      landed,
+    );
+    expect(view.queryByText(/1 item added to your h-e-b cart/i)).toBeTruthy();
+    expect(view.queryByText(/topping up/i)).toBeNull();
+  });
+
+  it('still believes an empty cart when the rail confirmed nothing', async () => {
+    // Deliberately narrow. With no landed verdict there is no contradiction, so
+    // an empty cart has to keep reading as an empty cart — otherwise every run
+    // that genuinely added nothing would claim it could not check.
+    const view = await runToReconcile(
+      { type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' },
+      true,
+    );
+    expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeNull();
+  });
+});
+
+
+// ── The cart-check banner folds its list (MEAL-174 / MEAL-176) ───────────────
+//
+// The banner is the ONLY place a user is told a run may have over- or
+// under-added, and it names every product it applies to. On a big cart that
+// list ran to a wall of text. So the LIST folds and the VERDICT does not —
+// collapsing the whole thing would hide the fact that anything is wrong, which
+// is the one job this banner has.
+describe('the cart-check banner (MEAL-174 / MEAL-176)', () => {
+  const landed = { state: 'landed', reason: 'qty_increased', via: 'cart_query', skuId: '123', productId: null };
+
+  /** A cart read holding something nobody asked for — the shape that makes the
+   *  banner name products. */
+  const withAnExtraProduct = () => runToReconcile(
+    {
+      type: 'CART_COUNT',
+      count: 2,
+      items: [{ name: 'Sour Cream', qty: 1 }, { name: 'Chicken Thighs', qty: 1 }],
+      url: 'https://www.heb.com/cart',
+    },
+    true,
+    landed,
+  );
+
+  it('states the verdict without needing to be expanded', async () => {
+    // This is the finishParallelAdd over-add warning, not buildCartVerdict's —
+    // the reconcile probe answers before the after-probe ever runs, so this is
+    // the wording a real over-add reaches the user through.
+    const view = await withAnExtraProduct();
+    expect(view.queryByText(/cart check: your h-e-b cart has/i)).toBeTruthy();
+  });
+
+  it('folds the list behind a toggle, and opens it on tap', async () => {
+    // The discriminator: only ExpandableNotice emits these. A plain <Text>
+    // banner — what this used to be — has none, so this fails if the banner
+    // ever regresses to one string.
+    const view = await withAnExtraProduct();
+    expect(view.queryByTestId('cart-check-warning-toggle')).toBeTruthy();
+    // Collapsed the list is a line-capped preview; the scrolling body only
+    // exists once opened, which is what stops a long list being the page.
+    expect(view.queryByTestId('cart-check-warning-preview')).toBeTruthy();
+    expect(view.queryByTestId('cart-check-warning-body')).toBeNull();
+
+    act(() => { fireEvent.press(view.getByTestId('cart-check-warning-toggle')); });
+    expect(view.queryByTestId('cart-check-warning-body')).toBeTruthy();
+  });
+
+  it('keeps the product names out of the always-visible verdict', async () => {
+    // The verdict line counts them; it must not carry the list, or folding the
+    // list saves nothing.
+    const view = await withAnExtraProduct();
+    const verdict = view.queryByText(/cart check: your h-e-b cart has/i);
+    expect(String(verdict?.props.children)).not.toMatch(/Chicken Thighs/);
+  });
+
+  it('stays a plain banner when there is no list to fold', async () => {
+    // The unread-cart message is one sentence naming nothing. Giving it a
+    // disclosure arrow would promise detail that does not exist.
+    const view = await runToReconcile({
+      type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: 'https://www.heb.com/',
+    });
+    expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeTruthy();
+    expect(view.queryByTestId('cart-check-warning-toggle')).toBeNull();
   });
 });

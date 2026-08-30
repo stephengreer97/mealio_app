@@ -51,7 +51,7 @@ import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureC
 import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-health';
 import { confirmDetail, presearchAddDispatched, recordPoolAdd } from '../lib/pool-add-funnel';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
-import { HebAddConfirmation, buildHebCartProbeScript, hebCartQueryEnabled } from '../lib/webview-scripts/heb-cart-query';
+import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
@@ -607,58 +607,6 @@ export default function WebViewCartSheet({
   const cartProbeResultTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cartProbeRetriedRef = useRef(false);
   const CART_PROBE_RESULT_TIMEOUT_MS = cfgTimeouts.cartProbeResultMs;
-  // MEAL-16 probe-ladder state. THE latch is native — there is no in-page one
-  // that survives a navigation without leaving a Mealio artifact on H-E-B's
-  // origin, and #110's in-page `var` printed its line 18 times in an 18-item
-  // cart because every add is its own injection. See the ladder's own header in
-  // webview-scripts/heb-cart-query.
-  //
-  // A LOG OF LADDERS, not a set of booleans, because "it was injected" and "it
-  // ran" are different facts and only the second is worth anything — a ladder
-  // killed by a navigation has to be retried, and a flag set at injection would
-  // have spent the run's only shot on a document that died. Each entry is
-  // identified, because the retry means more than one can be outstanding and a
-  // done line has to retire the ladder that sent it and no other.
-  const hebCartProbeLaddersRef = useRef<
-    { id: string; url: string; search: boolean; started: boolean; done: boolean }[]
-  >([]);
-  /**
-   * Steps at which a page load is NOT part of a running H-E-B cart.
-   *
-   * 'qty' is before the user has committed; 'login'/'login_check' are before
-   * there is a session worth reading a cart with, and a ladder there would
-   * measure a logged-out gateway and read as a finding; 'robot_challenge' is a
-   * wall the user is being asked to clear, which is the last moment to add
-   * automated traffic; 'done' and the two review steps are after the run.
-   * Everything else — 'searching' and 'adding' — is the run.
-   */
-  const HEB_CART_PROBE_IDLE_STEPS = new Set<Step>([
-    'qty', 'login', 'login_check', 'robot_challenge', 'searchResult', 'review', 'done',
-  ]);
-  // Worst case 3 ladders × 5 reads = 15 requests, and only on a run that keeps
-  // killing them; the ordinary shape is two (the cart page, then the first
-  // search page). Against ~18-36 cart reads in the same run this is
-  // proportionate, and it is bounded so a page that reloads in a loop cannot
-  // turn a diagnostic into a request flood.
-  //
-  // Counted in ladders that actually STARTED, not injections. An injection into
-  // a document where one is already running returns without sending anything —
-  // and H-E-B's same-URL /cart re-render produces exactly those, so charging
-  // them to this budget would spend it all on /cart and starve the search-page
-  // rung, which is the reading the ticket most wants.
-  const HEB_CART_PROBE_MAX_TRIES = 3;
-  // The separate flood stop, on injections rather than starts, so a page that
-  // reloads in a loop cannot make the sheet inject forever just because each
-  // attempt was inert. Deliberately loose: an inert injection costs one
-  // `injectJavaScript` and no network at all.
-  const HEB_CART_PROBE_MAX_INJECTIONS = 8;
-  // …and a per-page share of it, which is the bound that actually matters.
-  // /cart is where the churn is: its dedup is bypassed while the cart-count probe
-  // is pending, and heb ships `spaSearch: true` so the re-inject early return
-  // never fires either, meaning every duplicate onLoadEnd reaches the injector.
-  // Without a per-page cap one document can eat the whole budget — and it would
-  // be the one page whose reading we already have.
-  const HEB_CART_PROBE_MAX_PER_URL = 2;
   // The done-screen breakdown spinner falls back to the plain list after this,
   // so a cart page that never loads/counts (e.g. Amazon's multi-hop cart) can't
   // hang on "Updating your … cart" forever.
@@ -679,7 +627,11 @@ export default function WebViewCartSheet({
   // if the after-probe never returns, so we fall back instead of spinning forever.
   const [cartRowsTimedOut, setCartRowsTimedOut] = useState(false);
   const cartRowsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [cartDeltaWarning, setCartDeltaWarning] = useState<string | null>(null);
+  // Held as {title, detail} rather than one string so the banner can fold the
+  // product LIST without folding the verdict (MEAL-176). Only ever read for
+  // truthiness elsewhere — the run outcome and the funnel just ask whether the
+  // cart disagreed with the run.
+  const [cartDeltaWarning, setCartDeltaWarning] = useState<{ title: string; detail: string } | null>(null);
   // True once the done screen's verdict is the CART's rather than the run's
   // (MEAL-199). It gates the "Could not add" sub-line: that line and the banner
   // are now two renderings of one verdict, so printing both would restate the
@@ -791,7 +743,38 @@ export default function WebViewCartSheet({
     if (failures.length > 0) {
       console.log(`[Cart ${ts()}]`, 'failed adds:', JSON.stringify(failures.map((f) => ({ name: f.name, reason: f.reason ?? 'unknown' }))));
     }
-    setFailedItems(failures.map((f) => f.name));
+    // An ingredient the user SKIPPED at review is not a failure, whatever the
+    // automation did with it first.
+    //
+    // The two are separate facts and the screen renders them separately — "Could
+    // not add: X" above, "1 item you skipped: X" below — so an item in both lists
+    // is named twice in the same breath, once as something that went wrong and
+    // once as something the user chose. Measured on a device 2026-08-29: the
+    // automation timed out searching for an onion, the user skipped it at review,
+    // and the done screen reported it both ways.
+    //
+    // The skip is the later fact and the deliberate one, so it wins. Filtered
+    // here rather than in handleReviewDecision because the skip can be recorded
+    // before or after the failure, depending on which rail failed first.
+    //
+    // This is not the only path to the done screen — finishParallelAdd and the
+    // after-probe both write the failed list without calling this. Neither is
+    // reachable with a skip today (the first runs pre-review; the second goes
+    // through auditCartAfterRun, which already excludes skippedNames). A new
+    // finalize path would have to honour the same rule itself.
+    const skipped = Object.values(skippedByIdxRef.current);
+    const wasSkipped = (name: string) =>
+      skipped.some((s) => s.trim().toLowerCase() === (name ?? '').trim().toLowerCase());
+    const stillFailed = failures.map((f) => f.name).filter((n) => !wasSkipped(n));
+    setFailedItems(stillFailed);
+    // The COUNT is set here too, and that is the whole point of it living in one
+    // function. `totalFailed` alone gates the "Could not add" line, and the line
+    // falls back to a bare "N items could not be added." when it has no names —
+    // so filtering the names while a caller set the count from the unfiltered
+    // list just re-prints the same wrong claim with the item's name taken off
+    // it. Measured on a device: one skipped ingredient, name correctly gone,
+    // "1 item could not be added." still sitting above the skipped banner.
+    setTotalFailed(stillFailed.length);
   }, [setFailedItems]);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
   // What every "N items" on screen is counted against (MEAL-178). "items" means
@@ -1533,6 +1516,10 @@ export default function WebViewCartSheet({
       setViewerOpen(false);
       preview.reset();
       setSkippedByIdx({});
+      // Hand-cleared for the same reason as unverifiedCartNamesRef just below:
+      // this ref is written outside render now, and under the
+      // !FEATURE_BACKGROUND_CART mount the component survives between runs.
+      skippedByIdxRef.current = {};
       // MEAL-119: reset alongside the skips. Harmless while FEATURE_BACKGROUND_CART
       // keeps this sheet keyed and conditionally mounted, but under the
       // !FEATURE_BACKGROUND_CART mount (MyMealsScreen) the component survives
@@ -1592,7 +1579,6 @@ export default function WebViewCartSheet({
       parallelReconcileArmedRef.current = false;
       reconcileFinalizedRef.current = false;
       cartProbeRetriedRef.current = false;
-      hebCartProbeLaddersRef.current = [];
       parallelOriginalTotalRef.current = 0;
       if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
       parallelResultByIdxRef.current = new Map();
@@ -2016,6 +2002,72 @@ export default function WebViewCartSheet({
 
   // ── Navigation to next search item ──────────────────────────────────────
 
+  /**
+   * Get the single WebView onto a results page for `term`, then run `script`.
+   *
+   * Two ways to do that, and the choice is the whole of MEAL-16's last defect.
+   *
+   * NAVIGATE to the store's own results URL when it has one. This is the path
+   * the worker pool already uses — `buildSearchAndAddWorker` points a worker at
+   * `getSearchUrl(term)` and injects the fused add onto the loaded results page
+   * — and it is how 29 of 35 adds landed on the device on 2026-08-29, each in
+   * about 800 ms.
+   *
+   * SEARCH IN-PAGE from the store homepage otherwise. That was the only path
+   * here before, and on H-E-B it hangs: measured 7 retries out of 7 across four
+   * runs, every one dying on the 15 s `searchMs` timeout with zero candidates.
+   * Raising the timeout does not help — 800 ms against >15 000 ms is a hang, not
+   * slowness. The cost is not just the wait: the review screen is handed an
+   * empty candidate list, tells the user "No products found", and takes away the
+   * substitute they could have picked. On run 9 it was also why a shortfall the
+   * reconcile had CORRECTLY detected could not be repaired, so the cart stayed
+   * two units short of what was asked for.
+   *
+   * The in-page branch stays for stores with no `getSearchUrl`, and the
+   * already-on-a-results-page branch above is untouched — ALDI and Wegmans drive
+   * their whole run through it, and nothing here has measured them.
+   *
+   * No injected script changes. `script` is the same one either way; it finds
+   * its match on whatever results page it lands on, which is exactly what it
+   * already does inside a worker.
+   */
+  const navigateToResultsOrSearchInPage = useCallback((term: string, script: string) => {
+    const s = scriptsRef.current!;
+    const resultsUrl = s.getSearchUrl?.(term);
+    // `forceSerialSearch` is what separates the two kinds of store, and it is
+    // the honest test rather than a store list.
+    //
+    // ALDI and Wegmans set it: the sequential single-WebView search IS their run,
+    // it is exercised on every item of every run, and the in-page search is the
+    // path they are known to work on. Nothing here has measured them, so nothing
+    // here changes them.
+    //
+    // H-E-B, Walmart, Amazon and Albertsons do not: for them the pool is the real
+    // path and this function is only the RETRY fallback — the path that runs a
+    // handful of times per run, on exactly the items that already went wrong once.
+    // On H-E-B the in-page search there simply hangs, measured 12 of 13 times
+    // across five runs, and the pool proves the same store answers a navigation
+    // to `getSearchUrl` in about 800 ms. So a store that merely falls back to
+    // this path gets the navigation the pool already trusts.
+    if (resultsUrl && !s.forceSerialSearch) {
+      // Cleared for the same reason the in-page branches clear it: the same
+      // ingredient can appear in two meals, and a repeat of an identical URL must
+      // still deliver onLoadEnd or the queued script never runs.
+      lastLoadEndUrlRef.current = '';
+      loadQueueRef.current = [script];
+      navTo(resultsUrl);
+      return;
+    }
+    if (onSearchPageRef.current) {
+      loadQueueRef.current = [script];
+      lastLoadEndUrlRef.current = '';
+      webviewRef.current?.injectJavaScript(s.buildSearchScript(term));
+      return;
+    }
+    loadQueueRef.current = [s.buildSearchScript(term), script];
+    navTo(s.storeUrl);
+  }, [navTo]);
+
   const navigateToSearchItem = useCallback((idx: number) => {
     // Drive the progress ring: idx is the per-item position (0..N), advancing
     // once per ingredient through the sequential search/add funnel.
@@ -2049,11 +2101,10 @@ export default function WebViewCartSheet({
         } else {
           // Combined path: all items were search+added inline; results are in addResultsRef.
           const added = addResultsRef.current.filter((r) => r.success).length;
-          const failed = addResultsRef.current.filter((r) => !r.success).length;
           const names = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
           setTotalAdded(added);
-          setTotalFailed(failed);
           setAddedNames(names);
+          // See compileFailedNames — it owns the count too.
           compileFailedNames();
           setStep('done');
         }
@@ -2086,27 +2137,11 @@ export default function WebViewCartSheet({
         ? { type: 'weight', selectedText: `${item.purchaseWeight} lb`, selectedValue: String(item.purchaseWeight) }
         : (item.dropdown ?? null);
       const script = scriptsRef.current!.buildSearchAndAddScript(term, item.productQty, addDropdown);
-      if (onSearchPageRef.current) {
-        loadQueueRef.current = [script];
-        // Clear dedup so onLoadEnd fires even if the search URL is identical (same ingredient across meals).
-        lastLoadEndUrlRef.current = '';
-        webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(term));
-      } else {
-        loadQueueRef.current = [scriptsRef.current!.buildSearchScript(term), script];
-        navTo(scriptsRef.current!.storeUrl);
-      }
+      navigateToResultsOrSearchInPage(term, script);
     } else {
       // Choose-product path: extract candidates for user to pick from.
       setSearchingLabel(`Searching for ${term}…`);
-      if (onSearchPageRef.current) {
-        loadQueueRef.current = [scriptsRef.current!.extractProductsScript];
-        // Clear dedup so onLoadEnd fires even if the search URL is identical (same ingredient across meals).
-        lastLoadEndUrlRef.current = '';
-        webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(term));
-      } else {
-        loadQueueRef.current = [scriptsRef.current!.buildSearchScript(term), scriptsRef.current!.extractProductsScript];
-        navTo(scriptsRef.current!.storeUrl);
-      }
+      navigateToResultsOrSearchInPage(term, scriptsRef.current!.extractProductsScript);
     }
     // Arm a safety timeout. If neither SEARCH_RESULT nor SEARCH_AND_ADD_RESULT
     // arrives within the window, mark this item as failed (where applicable)
@@ -2180,11 +2215,11 @@ export default function WebViewCartSheet({
     if (idx >= itemsToAdd.length) {
       // All done — navigate to cart
       const added = addResultsRef.current.filter((r) => r.success).length;
-      const failed = addResultsRef.current.filter((r) => !r.success).length;
       const names = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
       setTotalAdded(added);
-      setTotalFailed(failed);
       setAddedNames(names);
+      // No setTotalFailed here: compileFailedNames owns the failed count as well
+      // as the failed names, so a skip cannot drop off one and survive on the other.
       compileFailedNames();
       setStep('done');
       return;
@@ -2201,14 +2236,20 @@ export default function WebViewCartSheet({
       detail: { path: 'sequential', qty: item.qty, onSearchPage: onSearchPageRef.current },
     });
     addsAttemptedRef.current += 1;
-    if (onSearchPageRef.current) {
-      loadQueueRef.current = [scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null)];
-      lastLoadEndUrlRef.current = '';
-      webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(item.searchTerm));
-    } else {
-      loadQueueRef.current = [scriptsRef.current!.buildSearchScript(item.searchTerm), scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null)];
-      navTo(scriptsRef.current!.storeUrl);
-    }
+    // Same routing as the search path, and for the same measured reason: this is
+    // the SUBSTITUTE add — the user picked a product on the review screen and we
+    // have to go get that exact one. It was reaching the results page through the
+    // in-page SPA search, which on H-E-B hangs, and this add died on the 10 s
+    // `addMs` timeout on 2026-08-29 the first time a substitute was ever picked
+    // on a device.
+    //
+    // That path was nearly unreachable until today: before the search fix the
+    // review screen had no candidates to offer, so nobody could choose one and
+    // nothing ever exercised the add behind it.
+    navigateToResultsOrSearchInPage(
+      item.searchTerm,
+      scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null),
+    );
     // Arm the per-item timeout. On fire: synthesize a failure ADD_RESULT,
     // wipe any pending queue/nav-intent, and advance.
     addTimeoutRef.current = setTimeout(() => {
@@ -2411,91 +2452,6 @@ export default function WebViewCartSheet({
       console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'skipped: not store domain');
       return;
     }
-    // MEAL-16 probe ladder — five diagnostic GraphQL reads. Declared here and
-    // called from the two places a run's H-E-B page load can END UP: the normal
-    // dispatch below, and the cold-slot branch above it, which returns early and
-    // is the ONE main-WebView search page a pre-search run produces. Missing that
-    // branch left the search-page rung — the reading this ticket most wants —
-    // unreachable on the default config.
-    const maybeInjectHebCartProbe = () => {
-      const hebCartProbeLadders = hebCartProbeLaddersRef.current;
-      const isSearch = s.isSearchUrl(url);
-      // CALLED from below the auth-redirect skip, the NAV_INTENT match and the
-      // same-URL dedup — never above them. Those gates exist to drop loads for a
-      // document that is already being replaced, and a ladder fired on one of
-      // those spends its requests on a page about to die.
-      //
-      // Everything the ladder needs is true at both call sites: the page is loaded
-      // and is the storefront's own origin, ABP was cleared by the very load that
-      // fired this event, and the step says the run is past its login gate, so the
-      // session is the one the run's own cart reads use.
-      //
-      // Runs alongside whatever the caller injects rather than instead of it — the
-      // ladder makes network calls and touches no DOM, so the two cannot interact.
-      if (
-        lockedStoreIdRef.current === 'heb' &&
-        // The run is under way and past the login gate — NOT `step === 'searching'`,
-        // which is a window a few milliseconds wide. `beginSearchFlow` sets
-        // 'searching' and then routes straight into `presearch`/`parallelAdd`, both
-        // of which call setStep('adding') synchronously, so every page load after
-        // the before-cart snapshot — the search pages included, i.e. the reading
-        // this ladder most wants — arrives at 'adding'. Naming the steps that are
-        // NOT a running H-E-B run is the version of this that cannot go stale the
-        // next time a strategy adds a step of its own.
-        !HEB_CART_PROBE_IDLE_STEPS.has(stepRef.current) &&
-        // NOT s.domain: that gate is a substring test (see the note at the top of
-        // this callback), so `accounts.heb.com/authorize` satisfies it — and the
-        // ladder POSTs to a SAME-ORIGIN path, so it would send all five rungs to
-        // the wrong gateway and read the answers as findings about the storefront.
-        /^https?:\/\/(www\.)?heb\.com([/?#]|$)/i.test(url) &&
-        // Gated on the rail's own flag: with `cartSkuConfirm` off there is no rail
-        // to diagnose, and this must not be the one thing that puts H-E-B GraphQL
-        // traffic on a device where the rail itself is disabled.
-        hebCartQueryEnabled() &&
-        hebCartProbeLadders.length < HEB_CART_PROBE_MAX_INJECTIONS &&
-        hebCartProbeLadders.filter((l) => l.url === url).length < HEB_CART_PROBE_MAX_PER_URL &&
-        hebCartProbeLadders.filter((l) => l.started).length < HEB_CART_PROBE_MAX_TRIES &&
-        // THE LAST TRY IS THE SEARCH PAGE'S. A ladder killed by /cart's re-render
-        // still posted its start, so it still spends a try, and three of those
-        // would exhaust the budget before a search page ever loads — leaving the
-        // run with three readings of the page we already understand and none of
-        // the page whose reads are the ones failing.
-        (isSearch || hebCartProbeLadders.filter((l) => l.started).length < HEB_CART_PROBE_MAX_TRIES - 1) &&
-        (
-          // The first qualifying page of the run, whatever it is.
-          hebCartProbeLadders.length === 0 ||
-          // No ladder has yet reported `cart_query_probe_done`, so none has survived
-          // the page it ran on — H-E-B re-renders /cart a beat after load and kills
-          // injected scripts there. Retry rather than spending the run's only shot
-          // on a document that died.
-          //
-          // Two ladders alive in one JS context is what this must NOT cause, and the
-          // native side cannot rule it out: onLoadEnd fires for same-URL re-renders
-          // and for SPA route changes that never replace the document, so neither
-          // "same URL" nor "different URL" says whether the previous ladder is still
-          // running. The document itself carries the interlock — see
-          // HEB_CART_PROBE_GUARD — and an injection that lands while one is running
-          // simply returns, posting nothing. That is why there is no same-URL rule
-          // here: /cart's re-render fires onLoadEnd at the IDENTICAL url, and it is
-          // the one page the retry was built for.
-          !hebCartProbeLadders.some((l) => l.done) ||
-          // And once COMPLETED on a SEARCH page, because that is where the rail's
-          // own reads actually happen. Candidate A includes a page-level fetch
-          // wrapper, which is per-document: a clean ladder from /cart cannot retire
-          // it, and /cart answering differently from /search would be that candidate
-          // with a mechanism attached. Keyed on completion and not on injection —
-          // a search-page ladder that was killed has answered nothing, and retiring
-          // the clause on it would lose the ticket's most valuable reading.
-          (isSearch && !hebCartProbeLadders.some((l) => l.done && l.search))
-        )
-      ) {
-        const id = `p${hebCartProbeLadders.length + 1}`;
-        hebCartProbeLadders.push({ id, url, search: isSearch, started: false, done: false });
-        console.log(`[Cart ${ts()}]`, 'MEAL-16 cart-query probe ladder — injecting', id,
-          'search=', isSearch, 'on', url);
-        webviewRef.current?.injectJavaScript(buildHebCartProbeScript(id));
-      }
-    };
     // Cold-slot branch: the main WebView is acting as a 4th add surface — its
     // results page just loaded, so inject the fused search+add (once) and let
     // onMessage feed the result to the pool. Bypasses the normal cart-flow logic.
@@ -2508,7 +2464,6 @@ export default function WebViewCartSheet({
       // Before the return, not after it. This IS a loaded results page in the main
       // WebView — on a pre-search run it is the only one — so skipping the ladder
       // here is what made the search-page rung unreachable.
-      maybeInjectHebCartProbe();
       return;
     }
     // Walmart anti-bot redirect: /blocked?url=<encoded original>. We surface
@@ -2650,7 +2605,6 @@ export default function WebViewCartSheet({
     }
     // Track whether we're on a search results page so subsequent items skip homepage reload.
     onSearchPageRef.current = s.isSearchUrl(url);
-    maybeInjectHebCartProbe();
     if (loadQueueRef.current.length > 0) {
       const script = loadQueueRef.current.shift()!;
       const label = script.slice(0, 60).replace(/\n/g, ' ');
@@ -2932,7 +2886,34 @@ export default function WebViewCartSheet({
                 'missing=', verdicts.missing.map((v) => `${v.name}(${v.skuId || v.productId || '?'}:${v.reason})`),
                 'unverified=', verdicts.unknown.length);
             }
-            if (!rows) {
+            // A cart read that says "empty" while the rail holds landed verdicts is
+            // not a reading, it is a failure to read (MEAL-16, run 7 of 2026-08-14).
+            //
+            // Under the Imperva wall the /cart page renders with no rows and the
+            // count script posts `{count: 0, items: []}` with `reason: null` and
+            // `onBlockedPage: false` — indistinguishable, to everything downstream,
+            // from a genuinely empty cart. `[]` is an array, so the `!rows` guard
+            // below never fired, and reconcile re-added all 18 items on top of the
+            // 12 it had just been told were `landed`. Stephen's cart ended 12 units
+            // over across 10 lines.
+            //
+            // The contradiction is already in this function's own hands: the rail
+            // computed those verdicts six lines up, from the same `attempts`. A
+            // read that disagrees with them about the whole cart loses, and the run
+            // falls into the path below — which trusts the worker reports and says
+            // out loud that the cart could not be checked. That is the honest
+            // answer, and critically it does NOT re-add anything.
+            //
+            // Deliberately narrow: it needs `landed` to be non-empty. A run that
+            // genuinely added nothing produces no verdicts, so an empty cart still
+            // reads as an empty cart.
+            const cartReadContradictsRail =
+              !!rows && rows.filter((r) => r.added).length === 0 && verdicts.landed.length > 0;
+            if (cartReadContradictsRail) {
+              console.log(`[Cart ${ts()}]`, 'cart read says EMPTY but the rail confirmed',
+                verdicts.landed.length, 'landed — treating as UNREAD, not as an empty cart');
+            }
+            if (!rows || cartReadContradictsRail) {
               // Can't diff per-item → trust the worker results, because there is
               // nothing better to trust.
               //
@@ -3167,7 +3148,10 @@ export default function WebViewCartSheet({
               const list = unexplainedOver.map(overAddLabel).join(', ');
               const units = unexplainedOver.reduce((n, o) => n + o.qty, 0);
               console.log(`[Cart ${ts()}]`, 'reconcile: OVER-ADD detected', unexplainedOver);
-              setCartDeltaWarning(`Cart check: your ${lockedName} cart has ${units} item(s) Mealio didn't intend to add (${list}). Please review your cart.`);
+              setCartDeltaWarning({
+                title: `Cart check: your ${lockedName} cart has ${units} item(s) Mealio didn't intend to add. Please review your cart.`,
+                detail: `Mealio did not add: ${list}`,
+              });
             } else {
               setCartDeltaWarning(null);
             }
@@ -3337,7 +3321,7 @@ export default function WebViewCartSheet({
               // show it, not because the run said so and nothing overturned it.
               setFailedItems(verdict.notAdded);
               setTotalFailed(verdict.notAdded.length);
-              setCartDeltaWarning(verdict.message);
+              setCartDeltaWarning(verdict.title ? { title: verdict.title, detail: verdict.detail } : null);
             }
             // No cart read leaves both alone: the run's own failed list stands
             // as the screen already has it, and cartUnverified says out loud
@@ -3381,24 +3365,6 @@ export default function WebViewCartSheet({
           console.log(`[Cart ${ts()}]`, 'EXTRACT_DEBUG', JSON.stringify(msg));
           if (msg.step === 'next_data') {
             extractWhyRef.current[MAIN_SURFACE] = msg.ndReason ?? null;
-          }
-          // MEAL-16: a ladder that reached its own last line. This is the only
-          // evidence that one ran end to end rather than being cut off by a
-          // navigation, and it is what stops the retry in onLoadEnd — so it is
-          // recorded against the ladder that SENT it, by the id that rode out on
-          // the injected script. Retiring "some ladder finished" instead would let
-          // a late done from the /cart ladder cash in the search-page clause that
-          // only a search-page ladder can answer.
-          if (msg.step === 'cart_query_probe_start' || msg.step === 'cart_query_probe_done') {
-            const ladder = hebCartProbeLaddersRef.current.find((l) => l.id === msg.probeId);
-            if (ladder) {
-              // A start says this injection found the document free and is really
-              // running — the only injections that cost a try. A done says it
-              // reached its last statement; both are recorded against the ladder
-              // that SENT them, by the id that rode out on the injected script.
-              ladder.started = true;
-              if (msg.step === 'cart_query_probe_done') ladder.done = true;
-            }
           }
           return;
         }
@@ -3749,7 +3715,17 @@ export default function WebViewCartSheet({
     if (action === 'skip') {
       // Remember this ingredient as skipped so the done snapshot can report it.
       const skippedName = currentReview?.term ?? '';
-      if (skippedName) setSkippedByIdx((prev) => ({ ...prev, [reviewIdx]: skippedName }));
+      if (skippedName) {
+        // The ref is written HERE as well as during render, and the difference
+        // shows on the last skip in the queue. `skippedByIdxRef` is assigned
+        // while rendering, so it only catches up on the next commit — and
+        // skipping the final ingredient advances straight to the done screen,
+        // where compileFailedNames reads the ref in the same tick. Measured on
+        // a device 2026-08-29: six items skipped, five dropped off "Could not
+        // add" and the sixth was still named there and in the skipped banner.
+        skippedByIdxRef.current = { ...skippedByIdxRef.current, [reviewIdx]: skippedName };
+        setSkippedByIdx((prev) => ({ ...prev, [reviewIdx]: skippedName }));
+      }
     }
 
     if (action !== 'skip' && currentReview) {
@@ -3760,6 +3736,15 @@ export default function WebViewCartSheet({
       if (candidate && (action === 'choose' || !candidate.outOfStock)) {
         // Re-deciding this ingredient after a Back: drop any earlier skip for it,
         // since adding now supersedes it.
+        // The ref is cleared alongside the state for the same reason the skip
+        // path writes it: it now has a writer that does not wait for a render,
+        // so an adder without a remover would leave a stale skip behind for any
+        // path that finalizes in the same tick.
+        if (reviewIdx in skippedByIdxRef.current) {
+          const nextRef = { ...skippedByIdxRef.current };
+          delete nextRef[reviewIdx];
+          skippedByIdxRef.current = nextRef;
+        }
         setSkippedByIdx((prev) => {
           if (!(reviewIdx in prev)) return prev;
           const next = { ...prev };
@@ -3855,11 +3840,11 @@ export default function WebViewCartSheet({
     if (itemsToAdd.length === 0) {
       // No review items to add — compile done stats from combined-phase results.
       const added = addResultsRef.current.filter((r) => r.success).length;
-      const failed = addResultsRef.current.filter((r) => !r.success).length;
       const names = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
       setTotalAdded(added);
-      setTotalFailed(failed);
       setAddedNames(names);
+      // No setTotalFailed here: compileFailedNames owns the failed count as well
+      // as the failed names, so a skip cannot drop off one and survive on the other.
       compileFailedNames();
       setStep('done');
       return;
@@ -4790,9 +4775,46 @@ export default function WebViewCartSheet({
           // The reading wins when both are somehow set: it says something specific
           // about the cart, and "we couldn't check" would be a strictly weaker
           // claim rendered over a stronger one.
-          const cartCheckMessage = cartDeltaWarning ?? cartUnverified;
+          // ONE banner definition for the two done-screen branches (MEAL-174).
+          // They drifted before precisely because the markup was written twice.
+          //
+          // `cartUnverified` has no list to fold — it is one sentence saying the
+          // cart could not be read — so it renders as the plain banner it always
+          // was. Only a cart that WAS read produces names, and only those get the
+          // expandable treatment.
+          const cartNotice: { title: string; detail: string } | null =
+            cartDeltaWarning ?? (cartUnverified ? { title: cartUnverified, detail: '' } : null);
+          const cartCheckBanner = !cartNotice ? null : cartNotice.detail ? (
+            <ExpandableNotice
+              testID="cart-check-warning"
+              containerStyle={styles.cartCheckBanner}
+              title={cartNotice.title}
+              body={cartNotice.detail}
+            />
+          ) : (
+            <View style={styles.cartCheckBanner} testID="cart-check-warning">
+              <Ionicons name="alert-circle" size={18} color="#b45309" />
+              <Text style={styles.cartCheckBannerText}>{cartNotice.title}</Text>
+            </View>
+          );
           return (
             <>
+              {/* ONE scroll view over the whole result (MEAL-198).
+                *
+                * Everything above the breakdown — the title, the "could not add"
+                * line, the cart-check banner, the skipped notice and the weight
+                * notice — used to sit in a fixed-height View, with the breakdown
+                * scrolling inside it. So the banners did not push the page down,
+                * they SQUEEZED the breakdown toward zero height: on a run with
+                * several warnings the user got a screen of warnings and a sliver
+                * of the thing the warnings were about, which is precisely the run
+                * where they most need to read it.
+                *
+                * Nesting two vertical scroll views is what produced that, so the
+                * inner ones are plain Views now and this is the only scroller.
+                * The footer stays OUTSIDE it — "Open cart" and "Done" are the way
+                * off this screen and must not scroll away. */}
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 8 }}>
               <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 32, paddingBottom: 16 }}>
                 {wasChooseFlow ? (
                   <>
@@ -4827,12 +4849,7 @@ export default function WebViewCartSheet({
                           : `${failedUnits} item${failedUnits !== 1 ? 's' : ''} could not be added.`}
                       </Text>
                     )}
-                    {cartCheckMessage && (
-                      <View style={styles.cartCheckBanner} testID="cart-check-warning">
-                        <Ionicons name="alert-circle" size={18} color="#b45309" />
-                        <Text style={styles.cartCheckBannerText}>{cartCheckMessage}</Text>
-                      </View>
-                    )}
+                    {cartCheckBanner}
                   </>
                 ) : (
                   <>
@@ -4868,12 +4885,7 @@ export default function WebViewCartSheet({
                         finding had nowhere to render — the banner only existed
                         on the added>0 branch — and the user would re-add an item
                         already in their cart. */}
-                    {cartCheckMessage && (
-                      <View style={styles.cartCheckBanner} testID="cart-check-warning">
-                        <Ionicons name="alert-circle" size={18} color="#b45309" />
-                        <Text style={styles.cartCheckBannerText}>{cartCheckMessage}</Text>
-                      </View>
-                    )}
+                    {cartCheckBanner}
                   </>
                 )}
               </View>
@@ -4932,7 +4944,7 @@ export default function WebViewCartSheet({
                 // in. Same gate as the probe itself so the two can't disagree —
                 // no baseline, or no add attempted, means no probe, so we skip
                 // the spinner and fall through to the plain list below.
-                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+                <View style={{ minHeight: 160, alignItems: 'center', justifyContent: 'center', gap: 10 }}>
                   <ActivityIndicator size="small" color={storeColor} />
                   <Text style={{ fontSize: 13, color: Colors.text3, fontFamily: 'Inter_400Regular' }}>
                     Updating your {storeName} cart…
@@ -4941,7 +4953,7 @@ export default function WebViewCartSheet({
               ) : cartResultRows ? (
                 // Cart-page stores: full cart breakdown — added qty in green with
                 // a +, pre-existing qty in grey. Qty shown on each row.
-                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+                <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 }}>
                     <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.text2 }}>
                       Your {storeName} cart
@@ -4982,9 +4994,9 @@ export default function WebViewCartSheet({
                       </View>
                     ))
                   )}
-                </ScrollView>
+                </View>
               ) : addedNames.length > 0 ? (
-                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+                <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
                   {addedNames.map((name, i) => (
                     <View
                       key={i}
@@ -4997,10 +5009,12 @@ export default function WebViewCartSheet({
                       <Text style={{ fontSize: 14, color: Colors.text1, fontFamily: 'Inter_400Regular' }}>{name}</Text>
                     </View>
                   ))}
-                </ScrollView>
+                </View>
               ) : (
-                <View style={{ flex: 1 }} />
+                null
               )}
+
+              </ScrollView>
 
               <View style={[styles.footer, { gap: 8 }]}>
                 {!wasChooseFlow && totalAdded > 0 && (

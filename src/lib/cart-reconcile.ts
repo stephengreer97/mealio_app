@@ -1369,6 +1369,13 @@ export interface CartVerdict {
   notAdded: string[];
   /** The single message, or null when there is nothing to tell the user. */
   message: string | null;
+  /** The verdict WITHOUT the product names — how many, and that something needs
+   *  attention. Never collapsed by the banner (MEAL-176). Null with `message`. */
+  title: string | null;
+  /** The product names, one labelled line per finding. The part the banner folds
+   *  away. Empty string when there is nothing to list (a badge-only shortfall,
+   *  or the everything-is-there message). */
+  detail: string;
   /** True when the message rests on a cart read. False means it rests on the
    *  run's own reporting and says so. */
   cartBacked: boolean;
@@ -1417,12 +1424,15 @@ export function buildCartVerdict(input: {
     // short; it cannot say WHICH item, so the run's own failed list stays on
     // screen rather than being replaced by a per-item verdict nobody can build.
     const shortfall = findings.countShortfall;
+    const unreadMsg = shortfall
+      ? `We checked your ${storeName} cart: it went up by ${shortfall.delta} item${shortfall.delta === 1 ? '' : 's'} where ${shortfall.expected} ${shortfall.expected === 1 ? 'was' : 'were'} expected. Please double-check it before checking out.`
+      : unreadReason;
     return {
       notAdded: reportedFailed.filter((n) => n.trim() !== ''),
       cartBacked: false,
-      message: shortfall
-        ? `We checked your ${storeName} cart: it went up by ${shortfall.delta} item${shortfall.delta === 1 ? '' : 's'} where ${shortfall.expected} ${shortfall.expected === 1 ? 'was' : 'were'} expected. Please double-check it before checking out.`
-        : unreadReason,
+      message: unreadMsg,
+      title: unreadMsg,
+      detail: '',
     };
   }
 
@@ -1434,6 +1444,15 @@ export function buildCartVerdict(input: {
   const absent = comparison.short.filter((s) => s.got === 0);
   const partial = comparison.short.filter((s) => s.got > 0);
   const clauses: string[] = [];
+  // The same findings said twice, on purpose (MEAL-176). `clauses` name every
+  // product inline and become `message`, which is what the funnel and the tests
+  // read. `summaries` and `details` are the same facts split at the seam the
+  // banner collapses on: the VERDICT — how many, and that something needs
+  // attention — must survive collapsing, and only the LIST may fold away. A
+  // single blob cannot be elided that way without hiding the fact that anything
+  // is wrong, which is the one thing this banner exists to say.
+  const summaries: string[] = [];
+  const details: string[] = [];
 
   if (absent.length > 0) {
     // "Mealio could not add X", never "X is not in your cart".
@@ -1448,21 +1467,30 @@ export function buildCartVerdict(input: {
     clauses.push(absent.length === 1
       ? `Mealio could not add ${names}`
       : `Mealio could not add ${absent.length} items (${names})`);
+    summaries.push(absent.length === 1 ? 'Mealio could not add 1 item' : `Mealio could not add ${absent.length} items`);
+    details.push(`Could not add: ${names}`);
   }
   if (partial.length > 0) {
     const detail = partial.map((s) => `${s.name} (${s.got} of ${s.expected})`).join(', ');
     clauses.push(`${partial.length} item${partial.length === 1 ? '' : 's'} came up short — ${detail} — which a store limit can cause`);
+    summaries.push(`${partial.length} item${partial.length === 1 ? '' : 's'} came up short, which a store limit can cause`);
+    details.push(`Came up short: ${detail}`);
   }
   if (comparison.extra.length > 0) {
     const units = comparison.extra.reduce((n, e) => n + e.qty, 0);
     const names = joinNames(comparison.extra.map(overLabel));
     clauses.push(`your cart has ${units} item${units === 1 ? '' : 's'} Mealio did not add (${names})`);
+    summaries.push(`your cart has ${units} item${units === 1 ? '' : 's'} Mealio did not add`);
+    details.push(`Mealio did not add: ${names}`);
   }
   // Header-badge stores have no rows to name, so the count is all there is. Only
   // reachable when the per-item lists are empty — see countShortfall's own note.
   if (clauses.length === 0 && findings.countShortfall) {
     const { delta, expected } = findings.countShortfall;
-    clauses.push(`your cart went up by ${delta} item${delta === 1 ? '' : 's'} where ${expected} were expected`);
+    const shortfall = `your cart went up by ${delta} item${delta === 1 ? '' : 's'} where ${expected} were expected`;
+    clauses.push(shortfall);
+    // Nothing to fold: a badge-only store has no product names to list.
+    summaries.push(shortfall);
   }
 
   // Nothing wrong with the cart — but silence is only safe if the rest of the
@@ -1482,18 +1510,25 @@ export function buildCartVerdict(input: {
   // which declined to promote recoveries into the added count for this reason).
   if (clauses.length === 0 && findings.recovered.length > 0) {
     const names = joinNames(findings.recovered.map((r) => r.cartName || r.name));
+    const okTitle = `We checked your ${storeName} cart and everything you asked for is there — no need to add ${findings.recovered.length === 1 ? 'it' : 'them'} again.`;
     return {
       notAdded: [],
       cartBacked: true,
       message: `We checked your ${storeName} cart and everything you asked for is there, including ${names} — no need to add ${findings.recovered.length === 1 ? 'it' : 'them'} again.`,
+      title: okTitle,
+      detail: `Already there: ${names}`,
     };
   }
 
   return {
-    notAdded: absent.map((u) => u.name),
+    notAdded: absent.map((s) => s.name),
     cartBacked: true,
     message: clauses.length === 0
       ? null
       : `We checked your ${storeName} cart: ${clauses.join('; ')}. Please double-check it before checking out.`,
+    title: summaries.length === 0
+      ? null
+      : `We checked your ${storeName} cart: ${summaries.join('; ')}. Please double-check it before checking out.`,
+    detail: details.join('\n'),
   };
 }
