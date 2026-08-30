@@ -324,19 +324,53 @@ describe('coming back from a manual pass', () => {
 });
 
 describe('state does not leak into the next run', () => {
-  it('forgets a Skip when the sheet re-opens', async () => {
-    // This component survives between runs in the shipping configuration, so a
-    // `manualSkipped` left behind silently withholds the same ingredient from
-    // the next meal.
-    const view = await runToDone(['sour cream', 'fresh mint'], ['sour cream']);
-    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
-    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });   // skip + finish
-    act(() => { jest.advanceTimersByTime(2_000); });
+  it('forgets a Skip when the sheet re-opens', () => {
+    // Under the shipping !FEATURE_BACKGROUND_CART mount this component is not
+    // remounted between runs — it is hidden and shown. So this drives ONE
+    // instance through two runs via the `visible` prop. Rendering a second
+    // component instead (the obvious way to write it) starts run 2 from a fresh
+    // mount, where the leak cannot show: that version passed with the reset
+    // deleted.
+    const view = render(sheet(chosen('sour cream'), chosen('fresh mint')));
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    const drive = () => {
+      act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+      post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+      post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
+      for (const productName of ['sour cream', 'fresh mint']) {
+        post({ type: 'SEARCH_RESULT', candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2' }] });
+      }
+      post({ type: 'ADD_RESULT', success: true });
+      post({ type: 'ADD_RESULT', success: false, reason: 'add button not found' });
+      act(() => { jest.advanceTimersByTime(30_000); });
+      post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], url: 'https://heb.test/cart' });
+      act(() => { jest.advanceTimersByTime(2_000); });
+    };
 
-    view.rerender(<WebViewCartSheet visible={false} meals={[] as never} storeId="heb" storeName="H-E-B" onClose={() => {}} />);
+    drive();
+    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });   // skip, and finish
+    act(() => { jest.advanceTimersByTime(2_000); });
+    // The skip took effect: nothing left to hand over on this run.
+    expect(view.queryByTestId('manual-start')).toBeNull();
+
+    // Close and re-open the SAME sheet on the same ingredients.
+    view.rerender(
+      <WebViewCartSheet visible={false} meals={[{ id: 'm1', name: 'Tacos', ingredients: [chosen('sour cream'), chosen('fresh mint')] }] as never}
+        storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+    );
     act(() => { jest.advanceTimersByTime(500); });
-    const second = await runToDone(['sour cream', 'fresh mint'], ['sour cream']);
-    expect(second.queryByTestId('manual-start')).toBeTruthy();
+    view.rerender(sheet(chosen('sour cream'), chosen('fresh mint')));
+    act(() => { jest.advanceTimersByTime(500); });
+    drive();
+
+    // Run 2 fails on fresh mint too. A `manualSkipped` carried over from run 1
+    // would silently withhold it.
+    expect(view.queryByTestId('manual-start')).toBeTruthy();
   });
 });
 
@@ -400,6 +434,50 @@ describe('the hand-over survives what the store throws at it', () => {
     expect(view.queryAllByText(/we checked your/i).length).toBeGreaterThan(0);
 
     act(() => { fireEvent.press(view.getByTestId('manual-start')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });   // Finish
+
+    // Back on the done screen, with the re-probe still in flight and no new cart
+    // read yet. Asserting while the manual bar is up would prove nothing — the
+    // done panel is unmounted there, so the banner is absent whatever the state
+    // says. This is the moment the stale sentence would be visible.
+    expect(view.queryByTestId('manual-bar')).toBeNull();
+    expect(view.queryAllByText(/we checked your/i).length).toBe(0);
+  });
+});
+
+describe('a probe still in flight when the user takes over', () => {
+  it('does not let it write results for the screen they just left', () => {
+    // The offer is tappable while "Updating your cart…" is still spinning, so
+    // the after-probe can be mid-navigation when manual mode starts. Its
+    // CART_COUNT then lands DURING the manual pass, describing a cart from
+    // before the user touched it — and writes rows and a verdict from it.
+    const view = render(sheet(chosen('sour cream'), chosen('fresh mint')));
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
+    for (const productName of ['sour cream', 'fresh mint']) {
+      post({ type: 'SEARCH_RESULT', candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2' }] });
+    }
+    post({ type: 'ADD_RESULT', success: true });
+    post({ type: 'ADD_RESULT', success: false, reason: 'add button not found' });
+    act(() => { jest.advanceTimersByTime(30_000); });
+
+    // No after CART_COUNT yet: the probe is in flight and the failed list is the
+    // run's own. The offer is already on screen.
+    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
+    expect(view.queryByTestId('manual-bar')).toBeTruthy();
+
+    // The stale read arrives now, describing the pre-manual cart.
+    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], url: 'https://heb.test/cart' });
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });   // Finish
+
+    // Nothing from that read may be on the screen: it is a snapshot of a cart
+    // taken before the user added to it.
     expect(view.queryAllByText(/we checked your/i).length).toBe(0);
   });
 });
