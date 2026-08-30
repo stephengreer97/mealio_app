@@ -1078,6 +1078,98 @@ export function buildHebCartQueryFn(): string {
     return out('missing', 'qty_unchanged', a);
   }
 
+  // ── The write (MEAL-200) ──────────────────────────────────────────────────
+  //
+  // Same endpoint, same headers and same credentials as the read above, because
+  // it IS the same conversation with the same gateway — a request that differed
+  // would be a second thing to keep in step and a second thing to profile.
+  //
+  // Returns a verdict, never throws: an add that cannot be issued must look
+  // exactly like an add that was refused, so the caller falls back to clicking
+  // either way. The only answer that means "done" is the Cart arm.
+  var __HEB_ADD_OP = 'cartItemV2';
+  var __HEB_ADD_QUERY =
+    'mutation cartItemV2($productId: String!, $skuId: String!, $quantity: Int) {'
+    + ' addItemToCartV2(productId: $productId, skuId: $skuId, quantity: $quantity) {'
+    + ' __typename'
+    + ' ... on Cart { id itemCount { total } }'
+    + ' ... on AddOnsCart { id cart { id itemCount { total } } }'
+    + ' ... on AddItemToCartV2Error { message title code }'
+    + ' ... on AddItemToCartV2TimeslotError { message title errorCode: code } } }';
+
+  async function __hebCartAdd(vars, timeoutMs) {
+    var t0 = Date.now();
+    var fail = function (reason, extra) {
+      var o = { arm: null, added: false, reason: reason, status: null, message: null, ms: Date.now() - t0 };
+      if (extra) for (var k in extra) o[k] = extra[k];
+      return o;
+    };
+    var ctl = null;
+    try { ctl = new AbortController(); } catch (e) { ctl = null; }
+    var timer = null;
+    try {
+      var init = {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'content-type': 'application/json',
+          'accept': '*/*',
+          'apollographql-client-name': __HEB_CART_CLIENT
+        },
+        body: JSON.stringify({ operationName: __HEB_ADD_OP, variables: vars, query: __HEB_ADD_QUERY })
+      };
+      if (ctl) init.signal = ctl.signal;
+      var p = fetch(__HEB_CART_ENDPOINT, init);
+      if (ctl) timer = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, timeoutMs || 8000);
+      var res = await p;
+      var text = '';
+      try { text = await res.text(); } catch (e) { text = ''; }
+      if (timer) { clearTimeout(timer); timer = null; }
+      // The wall answers 403 with an HTML incident page, not JSON. Named as its
+      // own reason because it is transient and self-healing (MEAL-16 measured
+      // 71-84 s), so it says "try again", not "this item cannot be added".
+      if (res.status === 403) return fail('blocked', { status: 403 });
+      if (!res.ok) return fail('http', { status: res.status });
+      var json = null;
+      try { json = JSON.parse(text); } catch (e) { return fail('unparseable', { status: res.status }); }
+      if (json && json.errors && json.errors.length) {
+        // Read the message, do not stringify the guard: String(e && e.message)
+        // yields the literal "false" for a falsy first error and "undefined" for
+        // one without a message, and this detail field is the thing that hid a
+        // union bug for six runs (see the MEAL-16 note above).
+        var e0 = json.errors[0];
+        var e0msg = (e0 && typeof e0.message === 'string') ? e0.message.slice(0, 160) : null;
+        return fail('graphql_error', { status: res.status, message: e0msg });
+      }
+      var a = json && json.data && json.data.addItemToCartV2;
+      if (!a || !a.__typename) return fail('unexpected_shape', { status: res.status });
+      // Cart AND AddOnsCart both mean the item went in — AddOnsCart is the
+      // add-on flow's wrapper and carries a cart inside it. Treating it as a
+      // failure would send the run on to CLICK the same product, adding it twice.
+      var __added = a.__typename === 'Cart' || a.__typename === 'AddOnsCart';
+      return {
+        arm: a.__typename,
+        added: __added,
+        reason: __added ? null : 'error_arm',
+        status: res.status,
+        // The store's own words. Measured to be genuinely useful — a
+        // preference-only add on a deli item comes back "You must supply a weight
+        // to purchase this item."
+        message: a.message ? String(a.message).slice(0, 160) : null,
+        ms: Date.now() - t0
+      };
+    } catch (e) {
+      if (timer) { clearTimeout(timer); }
+      // e.name, not a substring of the stringified error: React Native's abort
+      // is DOMException('Aborted', 'AbortError'), which stringifies to
+      // "AbortError: Aborted" and contains no lowercase "abort" — so the
+      // substring test classified every timeout as a network error. The cart READ
+      // sixty lines above already gets this right.
+      var isAbort = !!(e && (e.name === 'AbortError' || String(e.name) === 'AbortError'));
+      return fail(isAbort ? 'timeout' : 'network', { message: String(e).slice(0, 120) });
+    }
+  }
+
   async function __hebCartRead(timeoutMs) {
     var ctl = null;
     try { ctl = new AbortController(); } catch (e) { ctl = null; }

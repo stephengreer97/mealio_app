@@ -137,6 +137,39 @@ export interface StoreConfigEntry {
    */
   cartSkuConfirm?: boolean;
   /**
+   * Add to the cart by ASKING the store, instead of clicking its Add button
+   * (MEAL-200). Measured working on a real cart: 333 ms, first attempt.
+   *
+   * Ships OFF. Turning it on can only affect items it is confident about — it
+   * needs a product id AND a sku, and it declines outright for anything sold by
+   * weight or carrying a purchase preference (see below). Everything else, and
+   * every failure, goes to the click path unchanged.
+   *
+   * WHY WEIGHT AND PREFERENCE ITEMS ARE EXCLUDED, and it is not squeamishness:
+   * their over-adds could not be walked back in testing.
+   *
+   * Removal is the SAME mutation with a zero — the storefront's own cart hook
+   * does `onRemove = () => eo(0, 'REMOVE')`, and an earlier version of this
+   * comment claimed no remove operation existed at all, which was wrong and
+   * would have sent the next reader looking for something that is right there.
+   *
+   * What was actually measured is narrower and still disqualifying: on a
+   * weight-priced line `quantity: 0` came back an error arm, and `weight: 0` was
+   * ACCEPTED and left the line in the cart anyway. Whatever the storefront does
+   * differently, we have no repeatable way to undo a weight add — so an over-add
+   * on one is permanent for us, and the cart rules do not allow shipping a path
+   * whose mistakes cannot be reversed. Count lines set back to 0 cleanly, and
+   * that was measured too.
+   *
+   * REQUIRES cartSkuConfirm. The write reuses the cart rail's transport and
+   * baseline, so with cartSkuConfirm off this flag is a silent no-op — push both
+   * or neither.
+   *
+   * Flip it with a config push:
+   *   {"stores":{"heb":{"networkAdd":true}}}
+   */
+  networkAdd?: boolean;
+  /**
    * Where the cart-confirmation rail POSTs its query — a same-origin path, not a
    * URL. `network-confirmation-findings.md` asks for cart endpoints to live in
    * remote config because they drift the way selectors do, and a hardcoded path

@@ -222,6 +222,25 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   no_trigger: 'selector_miss',
   stepper_not_found: 'selector_miss',
   pref_required: 'selector_miss',
+  // MEAL-200: the store's add request answered with an error arm instead of a
+  // cart — "You must supply a weight to purchase this item.", say.
+  //
+  // MAPPED BUT NOT REACHABLE, and that is the honest state. The guard below
+  // requires a code for every reason the store scripts can emit, and this one is
+  // emitted — but only onto the EXTRACT_DEBUG channel. The run then CLICKS, and
+  // whatever the click does is what reaches a failure row, so addFailureCode is
+  // never called with this. It is here to satisfy the guard and to be correct on
+  // the day the network path reports its own failures; nothing looks it up today.
+  // match_rejected is the family it belongs to: the store declined the request
+  // as malformed for that product, which is not a confirmation failure.
+  error_arm: 'match_rejected',
+  // MEAL-200: the network write's answer was lost (timeout / dropped connection)
+  // AND the cart could not be re-read to find out whether it landed. The run
+  // deliberately does NOT click in that state — clicking on top of a set that did
+  // apply adds the item twice — so nothing was attempted twice and nothing is
+  // confirmed. confirm_failed is the family: no evidence it landed. The raw
+  // reason in detail is what separates it from a click that simply did not take.
+  write_unresolved: 'confirm_failed',
   cart_not_incremented: 'confirm_failed',
   // MEAL-14: the store's own cart query answered and our line was absent (or
   // unchanged) after the click. `confirm_failed` is the right family — nothing

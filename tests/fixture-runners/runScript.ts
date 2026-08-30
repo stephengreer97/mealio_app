@@ -277,7 +277,11 @@ export interface FixtureRunner {
    * with the first matching message. Rejects on timeout (with a helpful dump
    * of what WAS captured) so test failures show the actual script output.
    */
-  waitForMessage: (type: string, timeoutMs?: number) => Promise<PostedMessage>;
+  waitForMessage: (
+    type: string,
+    timeoutMs?: number,
+    match?: (m: PostedMessage) => boolean,
+  ) => Promise<PostedMessage>;
 
   /** Clear the captured message buffer (rarely useful, but available). */
   clearMessages: () => void;
@@ -401,16 +405,21 @@ export async function loadFixture(
     },
     messages: () => [...messages],
     messagesOfType: (type: string) => messages.filter((m) => m.type === type),
-    waitForMessage: async (type: string, timeoutMs = 15_000) => {
+    waitForMessage: async (type: string, timeoutMs = 15_000, match?: (m: PostedMessage) => boolean) => {
       const start = Date.now();
       while (Date.now() - start < timeoutMs) {
-        const hit = messages.find((m) => m.type === type);
+        // `match` narrows within a type. Diagnostic channels like EXTRACT_DEBUG
+        // carry many messages per run, so waiting on the type alone returns the
+        // first one and tells you nothing; a test that wants a specific decline
+        // would otherwise have to sleep and hope.
+        const hit = messages.find((m) => m.type === type && (!match || match(m)));
         if (hit) return hit;
         await new Promise((r) => setTimeout(r, 50));
       }
       const captured = messages.map((m) => m.type).join(', ');
       throw new Error(
-        `Timed out after ${timeoutMs}ms waiting for postMessage type="${type}". ` +
+        `Timed out after ${timeoutMs}ms waiting for postMessage type="${type}"` +
+          `${match ? ' matching the given predicate' : ''}. ` +
           `Captured types so far: [${captured}]`,
       );
     },

@@ -1126,3 +1126,404 @@ describe('HEB multi-quantity add (MEAL-185)', () => {
     { url: 'https://www.heb.com/search?q=sour%20cream' },
   );
 });
+
+// ── MEAL-200: adding by request instead of by click ──────────────────────────
+//
+// The store's own add endpoint SETS a line's quantity rather than incrementing
+// it. That is the same trap MEAL-185 fixed on the click path, where targeting the
+// raw requested quantity under-added any product the cart already held — and
+// reported success while doing it. So the quantity actually SENT is the property
+// under test here, not merely that a request went out.
+//
+// The other half is what the path DECLINES. Weight-priced and preference-bearing
+// items are excluded because a weight line cannot be undone: quantity 0 errors,
+// weight 0 is accepted without removing, and the storefront has no remove-item
+// operation. Those must keep clicking.
+
+/** The add script with the network path pushed ON, through the real config path. */
+async function addScriptWithNetworkAdd(
+  term: string,
+  qty: number,
+  dropdown: { type: string; selectedText: string; selectedValue: string } | null = null,
+): Promise<string> {
+  await loadAutomationConfig(async () => ({
+    version: 14,
+    config: { stores: { heb: { cartSkuConfirm: true, networkAdd: true } } },
+  }));
+  return getStoreScripts('heb')!.buildSearchAndAddScript!(term, qty, dropdown);
+}
+
+/** The same script with the flag OFF — the shipping default. */
+async function addScriptDefault(term: string, qty: number): Promise<string> {
+  await loadAutomationConfig(async () => ({
+    version: 14,
+    config: { stores: { heb: { cartSkuConfirm: true } } },
+  }));
+  return getStoreScripts('heb')!.buildSearchAndAddScript!(term, qty, null);
+}
+
+/**
+ * Replace fetch so no test reaches H-E-B, record what the add path asked for, and
+ * count Add-button clicks. `addArm` chooses which side of the response union the
+ * write gets back.
+ */
+function stubNetwork(addArm: string): string {
+  return [
+    '(function () {',
+    '  window.__gqlCalls = [];',
+    '  window.__clicks = 0;',
+    '  // The stub cart MOVES when the write succeeds. A fixed cart made both',
+    '  // "Cart arm" tests end in success:false — the confirmation compared the',
+    '  // same quantity before and after and reported the item missing — so they',
+    '  // passed only on the recorded request and click count, and a regression',
+    '  // that made a landed add report failure would have sailed through.',
+    '  window.__cartQty = 1;',
+    '  document.addEventListener("click", function (e) {',
+    '    var b = e.target && e.target.closest && e.target.closest("button");',
+    '    if (b && b.getAttribute("data-qe-id") === "addToCart") window.__clicks++;',
+    '  }, true);',
+    '  var reply = function (obj) {',
+    '    return Promise.resolve({ ok: true, status: 200,',
+    '      text: function () { return Promise.resolve(JSON.stringify(obj)); } });',
+    '  };',
+    '  window.fetch = function (url, init) {',
+    '    var body = null;',
+    '    try { body = JSON.parse((init && init.body) || "null"); } catch (e) {}',
+    '    window.__gqlCalls.push(body);',
+    '    var op = body && body.operationName;',
+    '    if (op === "cartItemV2") {',
+    '      var arm = ' + JSON.stringify(addArm) + ';',
+    '      if (arm === "Cart" || arm === "AddOnsCart") {',
+    '        // The write SETS the line, so the stub cart becomes what was asked for.',
+    '        window.__cartQty = (body.variables && body.variables.quantity) || window.__cartQty;',
+    '      }',
+    '      var payload = arm === "AddOnsCart"',
+    '        ? { __typename: "AddOnsCart", id: "a1", cart: { id: "c1", itemCount: { total: 1 } } }',
+    '        : { __typename: arm, id: "c1", itemCount: { total: 1 },',
+    '            message: "You must supply a weight to purchase this item." };',
+    '      return reply({ data: { addItemToCartV2: payload } });',
+    '    }',
+    '    return reply({ data: { cartV2: { __typename: "Cart", id: "c1",',
+    '      itemCount: { total: window.__cartQty },',
+    '      items: [{ id: "i1", quantity: window.__cartQty, estimatedWeight: null,',
+    '        product: { id: "314026", fullDisplayName: "H-E-B Regular Sour Cream, 16 oz" },',
+    '        sku: { id: "4122025475", twelveDigitUPC: null, weightSelectionIncrements: [] } }] } } });',
+    '  };',
+    '})(); true;',
+  ].join('\n');
+}
+
+/** What the add path sent to the write endpoint, if anything. */
+const ASK_SENT = [
+  '(function () {',
+  '  var add = null;',
+  '  for (var i = 0; i < (window.__gqlCalls || []).length; i++) {',
+  '    var c = window.__gqlCalls[i];',
+  '    if (c && c.operationName === "cartItemV2") add = c;',
+  '  }',
+  '  window.ReactNativeWebView.postMessage(JSON.stringify({',
+  '    type: "NET_ADD_SEEN", sent: add ? add.variables : null,',
+  '    clicks: window.__clicks || 0,',
+  '  }));',
+  '})(); true;',
+].join('\n');
+
+describe('HEB MEAL-200: add by request', () => {
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'sends the cart-ABSOLUTE quantity, not the requested one',
+    async (runner) => {
+      // The stub says the cart already holds 1 of this product, and the fixture's
+      // own card label agrees. Asking for 2 more must send 3, not 2. Sending 2
+      // would SET the line to 2 — one short — and report success (MEAL-185).
+      await runner.inject(stubNetwork('Cart'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.sent).toBeTruthy();
+      expect(seen.sent.productId).toBe('314026');
+      expect(seen.sent.skuId).toBe('4122025475');
+      expect(seen.sent.quantity).toBe(3);
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'reports success, sourced from the network, when the cart confirms it',
+    async (runner) => {
+      await runner.inject(stubNetwork('Cart'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      const res = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      expect(res.success).toBe(true);
+      expect(res.via).toBe('network');
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'treats the add-on cart arm as added rather than clicking again',
+    async (runner) => {
+      // AddOnsCart wraps a cart — the item went in. Reading it as a failure sends
+      // the run on to click the same product, adding it twice.
+      await runner.inject(stubNetwork('AddOnsCart'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.clicks).toBe(0);
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'does not click the Add button when the request succeeded',
+    async (runner) => {
+      // The point of the path. A request AND a click would add twice.
+      await runner.inject(stubNetwork('Cart'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 1));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.clicks).toBe(0);
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'falls back to clicking when the store answers the error arm',
+    async (runner) => {
+      // Anything that is not the Cart arm means the add did not happen, so the
+      // click path must still run. Never skipped on a maybe.
+      await runner.inject(stubNetwork('AddItemToCartV2Error'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 1));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.sent).toBeTruthy();
+      expect(seen.clicks).toBeGreaterThan(0);
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'issues no request at all with the flag at its shipping default',
+    async (runner) => {
+      await runner.inject(stubNetwork('Cart'));
+      await runner.inject(await addScriptDefault('H-E-B Regular Sour Cream, 16 oz', 1));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.sent).toBeNull();
+      expect(seen.clicks).toBeGreaterThan(0);
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'sends nothing when the cart could not be read',
+    async (runner) => {
+      // No baseline means no way to know what quantity to SET. Guessing would
+      // set the line to the requested count and silently drop whatever the cart
+      // already held, so the request is not sent at all.
+      await runner.inject([
+        '(function () {',
+        '  window.__gqlCalls = []; window.__clicks = 0;',
+        '  document.addEventListener("click", function (e) {',
+        '    var b = e.target && e.target.closest && e.target.closest("button");',
+        '    if (b && b.getAttribute("data-qe-id") === "addToCart") window.__clicks++;',
+        '  }, true);',
+        '  window.fetch = function (url, init) {',
+        '    var body = null;',
+        '    try { body = JSON.parse((init && init.body) || "null"); } catch (e) {}',
+        '    window.__gqlCalls.push(body);',
+        '    return Promise.resolve({ ok: false, status: 403,',
+        '      text: function () { return Promise.resolve("<html>blocked</html>"); } });',
+        '  };',
+        '})(); true;',
+      ].join('\n'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      // Driven off the decline the code already posts, not a wall-clock guess.
+      // Waiting for the terminal result outruns jest's budget here (the
+      // confirmation retries against a wall), and a fixed sleep was a bet against
+      // a retry schedule that will change.
+      await runner.waitForMessage('EXTRACT_DEBUG', 20_000, (m: any) => m.declined === 'no_cart_baseline');
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.sent).toBeNull();
+      expect(seen.clicks).toBeGreaterThan(0);
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'sends nothing when the product holds more than one cart line',
+    async (runner) => {
+      // One product can hold several lines, keyed by preference. The cart lookup
+      // SUMS them; the write sets ONE. With two lines of 1 each the sum is 2, the
+      // write would set its line to 2 + asked, the other line keeps its 1, and
+      // the cart ends up over. Nothing says which line to set, so decline.
+      await runner.inject([
+        '(function () {',
+        '  window.__gqlCalls = []; window.__clicks = 0;',
+        '  document.addEventListener("click", function (e) {',
+        '    var b = e.target && e.target.closest && e.target.closest("button");',
+        '    if (b && b.getAttribute("data-qe-id") === "addToCart") window.__clicks++;',
+        '  }, true);',
+        '  var line = function (id, q) { return { id: id, quantity: q, estimatedWeight: null,',
+        '    product: { id: "314026", fullDisplayName: "H-E-B Regular Sour Cream, 16 oz" },',
+        '    sku: { id: "4122025475", twelveDigitUPC: null, weightSelectionIncrements: [] } }; };',
+        '  window.fetch = function (url, init) {',
+        '    var body = null;',
+        '    try { body = JSON.parse((init && init.body) || "null"); } catch (e) {}',
+        '    window.__gqlCalls.push(body);',
+        '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+        '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart",',
+        '        id: "c1", itemCount: { total: 2 }, items: [line("i1", 1), line("i2", 1)] } } }));',
+        '    } });',
+        '  };',
+        '})(); true;',
+      ].join('\n'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      const decline = await runner.waitForMessage('EXTRACT_DEBUG', 20_000, (m: any) => m.declined === 'multiple_cart_lines');
+      expect(decline.lines).toBe(2);
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.sent).toBeNull();
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'does not click after a write whose answer was lost but which landed',
+    async (runner) => {
+      // The dangerous case. A timeout does not mean the store ignored the write.
+      // Clicking on top of a set that DID apply adds the item twice, and reports
+      // success while doing it, because the click loop baselines off a label
+      // captured before the write.
+      await runner.inject([
+        '(function () {',
+        '  window.__gqlCalls = []; window.__clicks = 0;',
+        '  window.__cartQty = 1;',
+        '  document.addEventListener("click", function (e) {',
+        '    var b = e.target && e.target.closest && e.target.closest("button");',
+        '    if (b && b.getAttribute("data-qe-id") === "addToCart") window.__clicks++;',
+        '  }, true);',
+        '  window.fetch = function (url, init) {',
+        '    var body = null;',
+        '    try { body = JSON.parse((init && init.body) || "null"); } catch (e) {}',
+        '    window.__gqlCalls.push(body);',
+        '    if (body && body.operationName === "cartItemV2") {',
+        '      // The store APPLIED it, then the connection dropped.',
+        '      window.__cartQty = body.variables.quantity;',
+        '      return Promise.reject(new Error("Network request failed"));',
+        '    }',
+        '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+        '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart",',
+        '        id: "c1", itemCount: { total: window.__cartQty },',
+        '        items: [{ id: "i1", quantity: window.__cartQty, estimatedWeight: null,',
+        '          product: { id: "314026", fullDisplayName: "H-E-B Regular Sour Cream, 16 oz" },',
+        '          sku: { id: "4122025475", twelveDigitUPC: null, weightSelectionIncrements: [] } }] } } }));',
+        '    } });',
+        '  };',
+        '})(); true;',
+      ].join('\n'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.clicks).toBe(0);
+    },
+  );
+
+  itWithFixture(
+    'search-results-sour-cream.html',
+    'still reports success when the cart cannot be read afterwards',
+    async (runner) => {
+      // The store's own success arm is evidence the item went in. A cart that
+      // then refuses to answer is NOT evidence it did not — the click path treats
+      // an unreadable cart as "no evidence" for exactly this reason. Reporting
+      // failure here would claim a reading nobody took, and the run's after-probe
+      // still gets the last word.
+      await runner.inject([
+        '(function () {',
+        '  window.__gqlCalls = []; window.__clicks = 0; window.__reads = 0;',
+        '  document.addEventListener("click", function (e) {',
+        '    var b = e.target && e.target.closest && e.target.closest("button");',
+        '    if (b && b.getAttribute("data-qe-id") === "addToCart") window.__clicks++;',
+        '  }, true);',
+        '  window.fetch = function (url, init) {',
+        '    var body = null;',
+        '    try { body = JSON.parse((init && init.body) || "null"); } catch (e) {}',
+        '    window.__gqlCalls.push(body);',
+        '    if (body && body.operationName === "cartItemV2") {',
+        '      return Promise.resolve({ ok: true, status: 200, text: function () {',
+        '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2:',
+        '          { __typename: "Cart", id: "c1", itemCount: { total: 3 } } } }));',
+        '      } });',
+        '    }',
+        '    window.__reads++;',
+        '    // The baseline read answers; every read after the write does not.',
+        '    if (window.__reads > 1) {',
+        '      return Promise.resolve({ ok: false, status: 403, text: function () {',
+        '        return Promise.resolve("<html>blocked</html>"); } });',
+        '    }',
+        '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+        '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart",',
+        '        id: "c1", itemCount: { total: 1 },',
+        '        items: [{ id: "i1", quantity: 1, estimatedWeight: null,',
+        '          product: { id: "314026", fullDisplayName: "H-E-B Regular Sour Cream, 16 oz" },',
+        '          sku: { id: "4122025475", twelveDigitUPC: null, weightSelectionIncrements: [] } }] } } }));',
+        '    } });',
+        '  };',
+        '})(); true;',
+      ].join('\n'));
+      await runner.inject(await addScriptWithNetworkAdd('H-E-B Regular Sour Cream, 16 oz', 2));
+      const res = await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 25_000);
+      expect(res.success).toBe(true);
+      expect(res.via).toBe('network');
+    },
+  );
+
+  // NOT COVERED, and named so nobody assumes otherwise: the weight gate tests
+  // `bestIsWeight` as well as the presence of a weight <select>, because the
+  // extractor also calls a Deli / Fish Market line ending in ", lb" sold-by-weight.
+  // No committed capture has such a card WITHOUT a select, so a mutant that drops
+  // the bestIsWeight term passes every test here. The term is kept because it is
+  // the extractor's own definition and strictly the safer side, not because a
+  // test forces it. A capture of a deli search would close this.
+
+  itWithFixture(
+    'search-results-weight-dropdown-closed.html',
+    'declines a sold-by-weight item and clicks instead',
+    async (runner) => {
+      // Not because the request would fail — it works, measured — but because a
+      // weight line cannot be un-added if it goes wrong.
+      //
+      // The term is an EXACT card title from this capture, and a chosen weight is
+      // supplied. Both matter: an approximate term matched no card, and WITHOUT a
+      // chosen weight the script returns earlier still, to ask the app which
+      // weight to buy — so a weight item never reaches the decision at all and a
+      // mutant deleting the gate passed twice over. With a weight chosen the
+      // script proceeds, and the gate is the only thing holding the request back.
+      await runner.inject(stubNetwork('Cart'));
+      await runner.inject(await addScriptWithNetworkAdd(
+        'CAFE Olé by H-E-B Panama Medium Roast Whole Bean Bulk Coffee, lb', 1,
+        { type: 'weight', selectedText: '1 lb', selectedValue: '1' },
+      ));
+      await runner.waitForMessage('SEARCH_AND_ADD_RESULT', 20_000);
+      runner.clearMessages();
+      await runner.inject(ASK_SENT);
+      const seen = await runner.waitForMessage('NET_ADD_SEEN', 10_000);
+      expect(seen.sent).toBeNull();
+    },
+  );
+});
