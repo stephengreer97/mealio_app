@@ -32,6 +32,7 @@ import { getStores } from '../lib/store-catalog';
 import { useStores } from '../lib/store-catalog/useStores';
 import { buildBlankPageRecoveryScript } from '../lib/webview-scripts/blank-page-recovery';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
+import { getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
 import { useLoginPrewarm } from '../context/LoginPrewarmContext';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
@@ -61,9 +62,6 @@ import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecover
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 import {
-  buildHebNetworkAddBatchScript,
-  buildHebNetworkSearchBatchScript,
-  buildHebSessionScript,
 } from '../lib/webview-scripts/heb-network-search';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 
@@ -814,6 +812,10 @@ export default function WebViewCartSheet({
   // done screen and the telemetry are untouched and cannot disagree with a
   // pool-driven run.
   const netSessionRef = useRef<{ storeId: string; shoppingContext: string } | null>(null);
+  // Which protocol this store's rail speaks. Read from a ref rather than closed
+  // over, for the same reason the rest of this file resolves the store that way:
+  // the callbacks below froze at an early render.
+  const netRail = useCallback(() => getNetworkRail(lockedStoreIdRef.current), []);
   const netCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
   const netFailedTermsRef = useRef<Set<string>>(new Set());
   const netResultsRef = useRef<Map<number, AddResult>>(new Map());
@@ -1762,7 +1764,9 @@ export default function WebViewCartSheet({
       return;
     }
 
-    const script = buildHebNetworkAddBatchScript(coalesced);
+    const rail = netRail();
+    if (!rail) { netFallBackToPool('no_rail'); return; }
+    const script = rail.addBatch(coalesced);
     if (!script) { netFallBackToPool('add_script_unbuildable'); return; }
     netPhaseRef.current = 'add';
     setStep('adding');
@@ -1792,7 +1796,9 @@ export default function WebViewCartSheet({
     if (!sess) { netFallBackToPool('no_session'); return; }
     const terms = Array.from(new Set(active.map((i) => i.searchTerm ?? i.ingredientName).filter(Boolean)));
     if (!terms.length) { netFallBackToPool('no_terms'); return; }
-    const script = buildHebNetworkSearchBatchScript(terms, sess);
+    const rail = netRail();
+    if (!rail) { netFallBackToPool('no_rail'); return; }
+    const script = rail.searchBatch(terms, sess);
     if (!script) { netFallBackToPool('search_script_unbuildable'); return; }
     netCandidatesRef.current = new Map();
     netFailedTermsRef.current = new Set();
@@ -1824,8 +1830,10 @@ export default function WebViewCartSheet({
     // Re-injecting is safe: the script only reads, and a duplicate answer is
     // ignored once the phase has moved on.
     netArm(25_000, 'session_timeout');
-    webviewRef.current?.injectJavaScript(buildHebSessionScript());
-  }, [netArm, setStep]);
+    const rail = netRail();
+    if (!rail) { netFallBackToPool('no_rail'); return; }
+    webviewRef.current?.injectJavaScript(rail.sessionScript());
+  }, [netArm, setStep, netRail, netFallBackToPool]);
 
   const startParallelAdd = useCallback(() => {
     const active = activeItemsRef.current;
@@ -2807,10 +2815,15 @@ export default function WebViewCartSheet({
     // clicking to add would be a run that loads no page for search and then
     // loads one per item anyway, which is slower than either path alone.
     const netCfg = getAutomationConfig().stores?.[lockedStoreIdRef.current ?? ''] ?? {};
-    const networkCapable = netCfg.networkSearch === true
+    // Capability, not a store name. A store qualifies when it HAS a rail and both
+    // of its switches are on. H-E-B additionally requires cartSkuConfirm, because
+    // that is what makes its write verifiable — Albertsons verifies from the
+    // write's own response, which returns the whole cart, so it has no
+    // equivalent switch to demand.
+    const networkCapable = !!getNetworkRail(lockedStoreIdRef.current)
+      && netCfg.networkSearch === true
       && netCfg.networkAdd === true
-      && netCfg.cartSkuConfirm === true
-      && lockedStoreIdRef.current === 'heb';
+      && (lockedStoreIdRef.current !== 'heb' || netCfg.cartSkuConfirm === true);
     const strategy = chooseAddStrategy({
       canParallel,
       allChoose,
@@ -2956,7 +2969,8 @@ export default function WebViewCartSheet({
     // while the page is mid-navigation and go nowhere. This is the retry.
     if (netActiveRef.current && netPhaseRef.current === 'session') {
       console.log(`[Cart ${ts()}]`, 'network run: re-reading the session on', url.slice(0, 60));
-      webviewRef.current?.injectJavaScript(buildHebSessionScript());
+      const railForSession = getNetworkRail(lockedStoreIdRef.current);
+      if (railForSession) webviewRef.current?.injectJavaScript(railForSession.sessionScript());
       return;
     }
     // Manual mode injects NOTHING (MEAL-197). Checked before every other branch
@@ -3809,7 +3823,7 @@ export default function WebViewCartSheet({
                     maxOrderQuantity: m.maxOrderQuantity,
                   });
                 });
-                const script = writes.length > 0 ? buildHebNetworkAddBatchScript(writes) : null;
+                const script = writes.length > 0 ? (getNetworkRail(lockedStoreIdRef.current)?.addBatch(writes) ?? null) : null;
                 if (script && stillNeedsPage.size === 0) {
                   console.log(`[Cart ${ts()}]`, 'network top-up: re-writing', writes.length, 'without a page load');
                   netTopUpRef.current = new Map(routing.retry.map((t, n) => [t.index, retryItems[n]]));
@@ -4061,7 +4075,7 @@ export default function WebViewCartSheet({
         // netActiveRef so a late message from an abandoned run cannot revive it
         // after the pool has taken over — which would leave two paths writing
         // results for the same items.
-        if (msg.type === 'HEB_SESSION') {
+        if (NETWORK_SESSION_MESSAGE_TYPES.includes(msg.type)) {
           if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
           if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
           console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));
