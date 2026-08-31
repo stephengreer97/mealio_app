@@ -66,10 +66,17 @@
         <td><b>off</b></td><td><b>true</b></td>
         <td>5 parallel workers still 403'd with the cache-buster removed &mdash;
         <b>concurrency itself is the trigger</b>; the <code>?_t=</code> query is a second one</td></tr>
-    <tr><td><b>Albertsons family</b></td><td>parallel</td><td><b>3 &times; 400 ms</b> <i>(explicit)</i></td>
+    <tr><td><b>Albertsons family</b></td>
+        <td>parallel, or <b>network</b> <i>(on by default)</i></td>
+        <td><b>3 &times; 400 ms</b> <i>(explicit)</i>; the network rail searches <b>2 at a time</b></td>
         <td>on</td><td>&mdash;</td>
         <td>5 concurrent WebViews crashed the iOS WKWebView content process on its shared
-        memory budget &mdash; a limit, not an anti-bot concession</td></tr>
+        memory budget &mdash; a limit, not an anti-bot concession.
+        The network rail is REST, not GraphQL:
+        <code>GET /abs/pub/xapi/pgmsearch/v1/search/products</code>, keyed by
+        <code>searchConfig.apimProgramSubscriptionKey</code> &mdash; a DIFFERENT key from
+        the cart's. Concurrency is 2 rather than 3 because MEAL-207 has this
+        operation degrading under burst</td></tr>
     <tr><td><b>Kroger family</b></td><td colspan="5">n/a &mdash; the <b>server</b> fans out per
         ingredient (<code>POST /api/kroger/search-products</code>, 60 s)</td></tr>
     <tr><td><b>Mock Store</b></td><td>parallel</td><td>3 &times; 400 ms <i>(default)</i></td>
@@ -118,8 +125,14 @@
         <td>bail on the SSO interstitial &rarr; passive read of the account span
             (<b>settled</b> text only) &rarr; click the profile and look for "sign out" &rarr;
             <code>sessionStorage</code> tiebreak</td>
-        <td>qty bubble, then the increment control</td>
-        <td><code>/erums/cart</code>, <b>path-guarded</b></td></tr>
+        <td>qty bubble, then the increment control &mdash; or a <b>network add</b>
+            (<code>networkAdd</code>, <b>on</b>):
+            <code>POST /abs/pub/erums/cartservice/api/v2/cart/items</code>, which needs
+            <code>Authorization: Bearer</code> AND a subscription key, either alone being a 401.
+            <b><code>qty</code> SETS the line</b> (MEAL-194), so every write is
+            cart-held + wanted and duplicate products are coalesced into one write</td>
+        <td><code>/erums/cart</code>, <b>path-guarded</b>; the network add verifies from
+            the write's own response, which returns the whole cart</td></tr>
     <tr><td><b>Kroger family</b></td>
         <td><code>GET /api/kroger/status</code> &mdash; an OAuth connection, not a page</td>
         <td>the REST response</td><td>n/a</td></tr>

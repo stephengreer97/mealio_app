@@ -155,6 +155,7 @@ flowchart TD
     <tr><th>The store's <code>StoreScripts</code></th><th>The engine</th></tr>
     <tr><td>URLs, domain, <code>appScheme</code></td><td>the ten-step machine and every transition</td></tr>
     <tr><td><code>checkLoginScript</code>, <code>isLoginPageUrl</code>, <code>isLoginSuccessUrl</code>, <code>reinjectLoginCheckOnNav</code></td><td>the login loop, and when to re-inject</td></tr>
+    <tr><td><code>webview-scripts/network-rail.ts</code></td><td>which network protocol a store speaks, if any &mdash; H-E-B in GraphQL, the Albertsons family in REST. The engine asks for &ldquo;this store&rsquo;s rail&rdquo; and never names a store</td></tr>
     <tr><td><code>extractProductsScript</code>, <code>buildSearchScript</code>, <code>buildSearchAndAddScript</code>, <code>buildAddToCartScript</code></td><td>which one to inject, when, and into which WebView</td></tr>
     <tr><td><code>buildWorkerScript</code> / <code>buildPresearchWorkerScript</code> / <code>buildAddWorkerScript</code></td><td>the three pools, their queues and their timeouts</td></tr>
     <tr><td><code>workerCount</code>, <code>workerStaggerMs</code>, <code>forceSerialSearch</code>, <code>cacheBustNav</code>, <code>spaSearch</code></td><td><code>chooseAddStrategy</code>, and the re-injection guard</td></tr>
