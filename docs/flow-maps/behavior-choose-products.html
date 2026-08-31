@@ -119,6 +119,20 @@ flowchart TD
 </pre></div>
 
 <div class="notes">
+  <h2>An empty search glows at the one control that helps (MEAL-202)</h2>
+  <p>A search that finds nothing leaves the user on a review screen whose only useful control is
+  the one that looks least like a control: a row of placeholder text under an empty list. The
+  "Other &mdash; type a product name" row pulses in the store's colour while that is true.</p>
+  <p><b>It is off whenever there is anything to pick</b>, including an out-of-stock product &mdash;
+  a list with something in it still lets the user see what the store carries and decide, and a glow
+  there would point away from the products they should be reading. The glow means "there is nothing
+  here, do this instead", so it has to be silent the rest of the time or it stops meaning anything.
+  It also goes out the moment the user's own custom search returns results.</p>
+  <p>Only <code>opacity</code> animates, which keeps it on the native driver; animating a shadow or
+  a border colour would drop to the JS thread and stutter inside the scroll it lives in. With the
+  system's reduce-motion setting on it holds steady at full strength rather than pulsing &mdash;
+  still the thing that stands out, just not moving.</p>
+
   <h2>Three independent reasons ranking cannot affect a cart</h2>
   <ol>
     <li>It is never called on the add path — only in the <code>isChooseFlow</code> branch.</li>
