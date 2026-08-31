@@ -10,6 +10,9 @@ import {
   TextInput,
   Linking,
   Platform,
+  Animated,
+  Easing,
+  AccessibilityInfo,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
@@ -838,6 +841,59 @@ export default function WebViewCartSheet({
   // "your cart is already at the limit for this" are different things to be
   // told: the second is not a failure of the run, and re-running will not help.
   const [capReached, setCapReached] = useState<Array<{ name: string; detail: string }>>([]);
+
+  // ── The "type a product name" row glows when a search found nothing ────────
+  //
+  // A search with no results leaves the user on a screen whose only useful
+  // control is the one that looks least like a control: a row of placeholder
+  // text under a list that is empty. The glow is there to say "this one" — it is
+  // the only thing on the screen that can move the run forward.
+  //
+  // Held here rather than in the review branch because that branch re-runs on
+  // every keystroke of the custom search; an animation started there would be
+  // restarted, and a pulse that restarts reads as a flicker.
+  const glowAnim = useRef(new Animated.Value(0)).current;
+
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled?.().then((on) => { if (alive) setReduceMotion(!!on); }).catch(() => {});
+    const sub = AccessibilityInfo.addEventListener?.('reduceMotionChanged', (on) => setReduceMotion(!!on));
+    return () => { alive = false; sub?.remove?.(); };
+  }, []);
+
+  /**
+   * True while the review screen is showing an item with nothing to choose from.
+   *
+   * Derived from the same two inputs the screen itself reads, rather than set
+   * during its render: a setState in a render path that re-runs on every
+   * keystroke of the custom search is a re-render loop waiting to happen.
+   *
+   * `customSuggestions` is what the user's own search returned, so the glow goes
+   * out the moment they find something — it points at the control, it does not
+   * decorate it.
+   */
+  const glowCustomRow = step === 'review'
+    && customSuggestions.length === 0
+    && (searchResults[reviewIdx]?.candidates.length ?? 0) === 0;
+  useEffect(() => {
+    if (!glowCustomRow || reduceMotion) {
+      glowAnim.stopAnimation();
+      // Settles at a steady, still-visible glow rather than nothing: with reduce
+      // motion on, the row should still be the thing that stands out — it just
+      // should not move.
+      glowAnim.setValue(reduceMotion && glowCustomRow ? 1 : 0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glowAnim, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(glowAnim, { toValue: 0.25, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [glowCustomRow, reduceMotion, glowAnim]);
   // The pool path is declared BELOW the network path (it is the thing the
   // network path falls back to, so it reads better after it). A ref breaks the
   // cycle without reordering two hundred lines.
@@ -5350,22 +5406,38 @@ export default function WebViewCartSheet({
                   );
                 })}
 
-                {/* Custom search option */}
-                <TouchableOpacity
-                  onPress={() => setSelectedSuggIdx('custom')}
-                  style={[
-                    styles.suggRow,
-                    {
-                      borderColor: selectedSuggIdx === 'custom' ? storeColor : Colors.border,
-                      backgroundColor: selectedSuggIdx === 'custom' ? '#fff0f0' : Colors.surface,
-                    },
-                  ]}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.suggText, { color: selectedSuggIdx === 'custom' ? Colors.text1 : Colors.text3 }]}>
-                    {customSuggestions.length > 0 ? 'Try a different search…' : 'Other — type a product name…'}
-                  </Text>
-                </TouchableOpacity>
+                {/* Custom search option.
+                    When the search found NOTHING this is the only control on the
+                    screen that can move the run forward — and it is the one that
+                    looks least like a control, being placeholder text under an
+                    empty list. The glow points at it. */}
+                <View>
+                  {!hasCandidates && (
+                    <Animated.View
+                      pointerEvents="none"
+                      testID="custom-row-glow"
+                      style={[
+                        styles.customGlow,
+                        { borderColor: storeColor, shadowColor: storeColor, opacity: glowAnim },
+                      ]}
+                    />
+                  )}
+                  <TouchableOpacity
+                    onPress={() => setSelectedSuggIdx('custom')}
+                    style={[
+                      styles.suggRow,
+                      {
+                        borderColor: selectedSuggIdx === 'custom' ? storeColor : Colors.border,
+                        backgroundColor: selectedSuggIdx === 'custom' ? '#fff0f0' : Colors.surface,
+                      },
+                    ]}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.suggText, { color: selectedSuggIdx === 'custom' ? Colors.text1 : Colors.text3 }]}>
+                      {customSuggestions.length > 0 ? 'Try a different search…' : 'Other — type a product name…'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
                 {selectedSuggIdx === 'custom' && (
                   <TextInput
                     autoFocus
@@ -6192,6 +6264,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 6,
+  },
+  // Sits BEHIND the row and matches its box exactly, so the glow reads as the
+  // row's own edge rather than a rectangle around it. Only `opacity` animates,
+  // which keeps it on the native driver — animating a shadow or a border colour
+  // would drop to the JS thread and stutter on the scroll this lives inside.
+  customGlow: {
+    position: 'absolute',
+    top: -2, left: -2, right: -2,
+    bottom: 4,          // the row carries marginBottom: 6
+    borderRadius: 12,
+    borderWidth: 2,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 8,
+    elevation: 6,
   },
   suggText: { fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text1 },
   outOfStockText: { fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginTop: 2 },
