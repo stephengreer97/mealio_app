@@ -61,17 +61,19 @@ describe('blank-page recovery', () => {
     async (runner) => {
       await runner.page.evaluate(() => {
         window.sessionStorage.setItem('__mealioBlankReload', '1');
-      });
-
-      let navigations = 0;
-      runner.page.on('framenavigated', (f) => {
-        if (f === runner.page.mainFrame()) navigations++;
+        (window as unknown as { __preReload?: number }).__preReload = 1;
       });
 
       await runner.inject(buildBlankPageRecoveryScript());
       const msg = await runner.waitForMessage('BLANK_PAGE', 8_000);
       expect(msg.retried).toBe(true);
-      expect(navigations).toBe(0);
+
+      // The marker SURVIVING is the assertion: the reload in this script runs
+      // synchronously on the line after the message is posted, so if the latch
+      // failed to stop it the document would already be on its way out by the
+      // time the message reached us. Settling first keeps that honest.
+      await runner.page.waitForTimeout(500);
+      expect(await runner.page.evaluate('window.__preReload')).toBe(1);
     },
     { url: STORE_URL },
   );
@@ -84,16 +86,14 @@ describe('blank-page recovery leaves a page that rendered alone', () => {
     'search-results-tortillas.html',
     'a real store page posts nothing and is never reloaded',
     async (runner) => {
-      let navigations = 0;
-      runner.page.on('framenavigated', (f) => {
-        if (f === runner.page.mainFrame()) navigations++;
+      await runner.page.evaluate(() => {
+        (window as unknown as { __preReload?: number }).__preReload = 1;
       });
 
       await runner.inject(buildBlankPageRecoveryScript());
-      // The script is synchronous, so once this round-trip resolves it has run.
-      expect(await runner.page.evaluate('document.body.children.length > 0')).toBe(true);
+      await runner.page.waitForTimeout(500);
       expect(runner.messagesOfType('BLANK_PAGE')).toHaveLength(0);
-      expect(navigations).toBe(0);
+      expect(await runner.page.evaluate('window.__preReload')).toBe(1);
     },
   );
 });
