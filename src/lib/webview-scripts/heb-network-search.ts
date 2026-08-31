@@ -172,6 +172,108 @@ const SEARCH_QUERY = [
 ].join('\n');
 
 /**
+ * Turning the gateway's products into candidates.
+ *
+ * ONE copy, shared by the single-term and batch scripts. Two copies of this is
+ * exactly how a candidate ends up meaning something slightly different depending
+ * on which path produced it — and the add path matches names EXACTLY, so
+ * "slightly different" is "matches nothing".
+ */
+const CANDIDATE_HELPERS = `
+  function __hebGridItems(page) {
+    var items = null;
+    try {
+      var vcs = page.layout.visualComponents;
+      for (var i = 0; i < vcs.length; i++) {
+        // Found by TYPE, not by having items in it. Requiring a non-empty list
+        // made "the store has nothing matching this" indistinguishable from "the
+        // grid was not where we expected" — and the two have opposite answers:
+        // one is a real result to show, the other is a reason to load the page.
+        if (vcs[i] && vcs[i].__typename === 'SearchGridV2' && vcs[i].items) { items = vcs[i].items; break; }
+      }
+      if (items == null) {
+        for (var j = 0; j < vcs.length; j++) {
+          if (vcs[j] && vcs[j].items && vcs[j].items.length) { items = vcs[j].items; break; }
+        }
+      }
+    } catch (e) {}
+    return items;
+  }
+
+  function __hebImageOf(p) {
+    var urls = p.productImageUrls || [];
+    var bySize = {};
+    for (var i = 0; i < urls.length; i++) { if (urls[i] && urls[i].size) bySize[urls[i].size] = urls[i].url; }
+    return bySize.MEDIUM || bySize.SMALL || bySize.LARGE || (urls[0] && urls[0].url) || null;
+  }
+
+  // Same rule the embedded-JSON reader uses, so a candidate's price does not
+  // change depending on which path produced it.
+  function __hebPriceOf(p, sku) {
+    var cps = (sku && sku.contextPrices) || [];
+    if (!cps.length) return null;
+    var want = String(p.shoppingContext || '').split('_')[0];
+    var pick = null;
+    for (var i = 0; i < cps.length; i++) { if (cps[i] && cps[i].context === want) { pick = cps[i]; break; } }
+    if (!pick) for (var j = 0; j < cps.length; j++) { if (cps[j] && cps[j].context === 'ONLINE') { pick = cps[j]; break; } }
+    if (!pick) pick = cps[0];
+    var amt = pick && (pick.salePrice || pick.listPrice);
+    var f = amt && amt.formattedAmount;
+    return (typeof f === 'string' && /[0-9]/.test(f)) ? f : null;
+  }
+
+  // The size is appended for the same reason the JSON reader appends it: the card
+  // the user sees reads "Sour Cream, 16 oz", and the add path matches names
+  // EXACTLY, so a name without the size matches nothing.
+  function __hebNameOf(p, sku) {
+    var base = null;
+    if (typeof p.decodedDisplayName === 'string' && p.decodedDisplayName) base = p.decodedDisplayName;
+    else if (typeof p.fullDisplayName === 'string' && p.fullDisplayName) base = p.fullDisplayName;
+    else if (typeof p.displayName === 'string' && p.displayName) base = p.displayName;
+    if (!base) return null;
+    var size = sku && sku.customerFriendlySize;
+    if (typeof size === 'string' && size && base.indexOf(size) === -1) base = base + ', ' + size;
+    return base;
+  }
+
+  function __hebPrefsOf(p) {
+    var out = [];
+    try {
+      var list = p.purchasePreferenceList.purchasePreferences;
+      for (var i = 0; i < list.length; i++) {
+        var t = list[i] && list[i].text;
+        if (t) out.push({ text: String(t).trim(), value: String(t).trim() });
+      }
+    } catch (e) {}
+    return out.length ? out : null;
+  }
+
+  function __hebCandidates(items) {
+    var out = [];
+    for (var i = 0; i < items.length; i++) {
+      var p = items[i];
+      if (!p || p.__typename !== 'Product') continue;
+      var sku = (p.SKUs && p.SKUs[0]) || null;
+      var name = __hebNameOf(p, sku);
+      if (!name) continue;
+      var incr = (sku && sku.weightSelectionIncrements) || [];
+      out.push({
+        productName: name,
+        imageUrl: __hebImageOf(p),
+        outOfStock: !!(p.inventory && p.inventory.inventoryState !== 'IN_STOCK'),
+        preferences: __hebPrefsOf(p),
+        price: __hebPriceOf(p, sku),
+        isWeightItem: !!p.pricedByWeight || incr.length > 0,
+        weightOptions: incr.slice(),
+        productId: p.id != null ? String(p.id) : null,
+        skuId: (sku && sku.id != null) ? String(sku.id) : null,
+      });
+    }
+    return out;
+  }
+`;
+
+/**
  * Search for one term and post SEARCH_RESULT, or post a failure the caller can
  * fall back on.
  *
@@ -197,6 +299,7 @@ export function buildHebNetworkSearchScript(
   const pageSize = opts.pageSize && opts.pageSize > 0 ? Math.min(opts.pageSize, 60) : 40;
   return `(async function () {
 ${GQL_FN}
+${CANDIDATE_HELPERS}
   var TERM = ${JSON.stringify(term)};
   var post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
@@ -227,97 +330,102 @@ ${GQL_FN}
   if (!page) { fail('unexpected_shape'); return; }
   if (page.__typename === 'SearchPageError') { fail('search_page_error', (page.message || page.code || '').slice(0, 160)); return; }
 
-  var items = null;
-  try {
-    var vcs = page.layout.visualComponents;
-    for (var i = 0; i < vcs.length; i++) {
-      // Found by TYPE, not by having items in it. Requiring a non-empty list
-      // made "the store has nothing matching this" indistinguishable from "the
-      // grid was not where we expected" — and the two have opposite answers:
-      // one is a real result the review screen should show, the other is a
-      // reason to load the page and read it. Reporting no-results as a failure
-      // would spend 1.8 s re-asking a question already answered.
-      if (vcs[i] && vcs[i].__typename === 'SearchGridV2' && vcs[i].items) { items = vcs[i].items; break; }
-    }
-    // Fallback for a grid whose typename we did not get: any component that
-    // actually carries items is still a grid for our purposes.
-    if (items == null) {
-      for (var j = 0; j < vcs.length; j++) {
-        if (vcs[j] && vcs[j].items && vcs[j].items.length) { items = vcs[j].items; break; }
-      }
-    }
-  } catch (e) {}
-  // No grid at all is a shape we did not expect; an EMPTY grid is a real answer,
-  // and the difference matters — one means fall back, the other means the store
-  // genuinely has nothing.
+  var items = __hebGridItems(page);
   if (items == null) { fail('no_grid'); return; }
 
-  var imageOf = function (p) {
-    var urls = p.productImageUrls || [];
-    var bySize = {};
-    for (var i = 0; i < urls.length; i++) { if (urls[i] && urls[i].size) bySize[urls[i].size] = urls[i].url; }
-    return bySize.MEDIUM || bySize.SMALL || bySize.LARGE || (urls[0] && urls[0].url) || null;
+  post({ type: 'SEARCH_RESULT', source: 'network', term: TERM, candidates: __hebCandidates(items) });
+
+})(); true;`;
+}
+
+/**
+ * Search MANY terms from ONE page, with no navigation between them.
+ *
+ * This is where the time actually goes. The parallel worker pool exists to load
+ * four results pages at once, because loading a page is what costs ~1.8 s per
+ * ingredient. A network search needs no page at all: the WebView is already on
+ * the store with a live session, so twelve ingredients are twelve requests from
+ * where we already are.
+ *
+ * Measured single-search latency is ~280 ms, so a twelve-item run is a few
+ * seconds of network against 22.5 s of navigation — and it needs no worker
+ * WebViews, which is also where the memory goes (about 187 MB of the peak).
+ *
+ * CONCURRENCY IS DELIBERATELY SMALL. The bot defence did not react to 30 writes
+ * at ~2/s (MEAL-115), and this is lighter than that, but a burst of twelve
+ * simultaneous requests is a different shape from anything measured. Three at a
+ * time stays inside what has been observed while still finishing quickly.
+ *
+ * Each term posts its own SEARCH_RESULT or SEARCH_RESULT_FAILED as it lands, so
+ * the caller can fall back to loading a page for JUST the terms that failed
+ * rather than abandoning the whole batch.
+ */
+export function buildHebNetworkSearchBatchScript(
+  terms: string[],
+  opts: { storeId: string; shoppingContext: string; pageSize?: number; concurrency?: number },
+): string | null {
+  const storeId = Number(opts.storeId);
+  if (!Number.isInteger(storeId) || storeId <= 0) return null;
+  if (!opts.shoppingContext) return null;
+  if (!terms.length) return null;
+  const pageSize = opts.pageSize && opts.pageSize > 0 ? Math.min(opts.pageSize, 60) : 40;
+  const concurrency = Math.max(1, Math.min(opts.concurrency ?? 3, 4));
+  return `(async function () {
+${GQL_FN}
+  var TERMS = ${JSON.stringify(terms)};
+  var post = function (o) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
-  // Same rule the embedded-JSON reader uses, so a candidate's price does not
-  // change depending on which path produced it.
-  var priceOf = function (p, sku) {
-    var cps = (sku && sku.contextPrices) || [];
-    if (!cps.length) return null;
-    var want = String(p.shoppingContext || '').split('_')[0];
-    var pick = null;
-    for (var i = 0; i < cps.length; i++) { if (cps[i] && cps[i].context === want) { pick = cps[i]; break; } }
-    if (!pick) for (var j = 0; j < cps.length; j++) { if (cps[j] && cps[j].context === 'ONLINE') { pick = cps[j]; break; } }
-    if (!pick) pick = cps[0];
-    var amt = pick && (pick.salePrice || pick.listPrice);
-    var f = amt && amt.formattedAmount;
-    return (typeof f === 'string' && /[0-9]/.test(f)) ? f : null;
+
+${CANDIDATE_HELPERS}
+
+  var searchOne = async function (term) {
+    var res = await __hebGql('productSearchPageV2', ${JSON.stringify(SEARCH_QUERY)}, {
+      params: {
+        query: term,
+        storeId: ${storeId},
+        shoppingContext: ${JSON.stringify(opts.shoppingContext)},
+        excludeSponsoredContent: true,
+        includeOutOfStock: true,
+        pageSize: ${pageSize},
+      },
+    }, 9000);
+    if (!res.ok) {
+      post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term,
+             why: res.why, detail: res.detail || (res.status ? 'status ' + res.status : null) });
+      return;
+    }
+    var page = null;
+    try { page = res.data.productSearchPageV2; } catch (e) {}
+    if (!page) { post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'unexpected_shape' }); return; }
+    if (page.__typename === 'SearchPageError') {
+      post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'search_page_error',
+             detail: String(page.message || page.code || '').slice(0, 160) });
+      return;
+    }
+    var items = __hebGridItems(page);
+    if (items == null) { post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'no_grid' }); return; }
+    post({ type: 'SEARCH_RESULT', source: 'network', term: term, candidates: __hebCandidates(items) });
   };
-  // The size is appended for the same reason the JSON reader appends it: the
-  // card the user sees reads "Sour Cream, 16 oz", and the add path matches names
-  // EXACTLY, so a name without the size matches nothing.
-  var nameOf = function (p, sku) {
-    var base = null;
-    if (typeof p.decodedDisplayName === 'string' && p.decodedDisplayName) base = p.decodedDisplayName;
-    else if (typeof p.fullDisplayName === 'string' && p.fullDisplayName) base = p.fullDisplayName;
-    else if (typeof p.displayName === 'string' && p.displayName) base = p.displayName;
-    if (!base) return null;
-    var size = sku && sku.customerFriendlySize;
-    if (typeof size === 'string' && size && base.indexOf(size) === -1) base = base + ', ' + size;
-    return base;
-  };
-  var prefsOf = function (p) {
-    var out = [];
-    try {
-      var list = p.purchasePreferenceList.purchasePreferences;
-      for (var i = 0; i < list.length; i++) {
-        var t = list[i] && list[i].text;
-        if (t) out.push({ text: String(t).trim(), value: String(t).trim() });
+
+  // A fixed-size worker pool over the term list. Not Promise.all: twelve
+  // simultaneous requests is a burst shape nothing has measured, and the point
+  // of this rail is to stop guessing about what the store tolerates.
+  var next = 0;
+  var runner = async function () {
+    while (true) {
+      var i = next++;
+      if (i >= TERMS.length) return;
+      try { await searchOne(TERMS[i]); }
+      catch (e) {
+        post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: TERMS[i],
+               why: 'threw', detail: String(e).slice(0, 120) });
       }
-    } catch (e) {}
-    return out.length ? out : null;
+    }
   };
-
-  var candidates = [];
-  for (var i = 0; i < items.length; i++) {
-    var p = items[i];
-    if (!p || p.__typename !== 'Product') continue;
-    var sku = (p.SKUs && p.SKUs[0]) || null;
-    var name = nameOf(p, sku);
-    if (!name) continue;
-    var incr = (sku && sku.weightSelectionIncrements) || [];
-    candidates.push({
-      productName: name,
-      imageUrl: imageOf(p),
-      outOfStock: !!(p.inventory && p.inventory.inventoryState !== 'IN_STOCK'),
-      preferences: prefsOf(p),
-      price: priceOf(p, sku),
-      isWeightItem: !!p.pricedByWeight || incr.length > 0,
-      weightOptions: incr.slice(),
-      productId: p.id != null ? String(p.id) : null,
-      skuId: (sku && sku.id != null) ? String(sku.id) : null,
-    });
-  }
-
-  post({ type: 'SEARCH_RESULT', source: 'network', term: TERM, candidates: candidates });
+  var lanes = [];
+  for (var L = 0; L < ${concurrency}; L++) lanes.push(runner());
+  await Promise.all(lanes);
+  post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length });
 })(); true;`;
 }

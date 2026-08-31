@@ -13,6 +13,7 @@
 // thrown.
 
 import {
+  buildHebNetworkSearchBatchScript,
   buildHebNetworkSearchScript,
   buildHebSessionScript,
 } from '../../src/lib/webview-scripts/heb-network-search';
@@ -250,5 +251,109 @@ describe('HEB MEAL-202: the session, which is also the login gate', () => {
     await runner.inject(buildHebSessionScript());
     const msg = await runner.waitForMessage('HEB_SESSION', 15_000);
     expect(msg.shoppingContext).toBe('CURBSIDE_PICKUP');
+  });
+});
+
+describe('HEB MEAL-202: many terms, one page, no navigation', () => {
+  // This is where the run's time actually goes. The worker pool exists to load
+  // four results pages at once because loading a page is the ~1.8 s cost per
+  // ingredient; a network search needs no page, so twelve ingredients are twelve
+  // requests from where the WebView already is.
+  const batch = (terms: string[], over: Record<string, unknown> = {}) =>
+    buildHebNetworkSearchBatchScript(terms, {
+      storeId: '476', shoppingContext: 'CURBSIDE_DELIVERY', ...over,
+    })!;
+
+  itWithFixture('logged-in-home.html', 'answers every term and says when it is finished', async (runner) => {
+    await runner.inject(stub(searchPayload([product()])));
+    await runner.inject(batch(['sour cream', 'tortillas', 'limes']));
+    const done = await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+    expect(done.count).toBe(3);
+    const results = runner.messagesOfType('SEARCH_RESULT');
+    expect(results).toHaveLength(3);
+    expect(results.map((r: any) => r.term).sort()).toEqual(['limes', 'sour cream', 'tortillas']);
+  });
+
+  itWithFixture('logged-in-home.html', 'never loads a page — the WebView stays put', async (runner) => {
+    // The whole point. If this ever starts navigating, the speed is gone and the
+    // worker WebViews come back with it.
+    // Read from inside the page, which is the only place that knows.
+    const whereAmI = '(function(){ window.ReactNativeWebView.postMessage(JSON.stringify({ type: "WHERE", href: location.href })); })(); true;';
+    await runner.inject(whereAmI);
+    const before = (await runner.waitForMessage('WHERE', 10_000)).href;
+    runner.clearMessages();
+    await runner.inject(stub(searchPayload([product()])));
+    await runner.inject(batch(['sour cream', 'tortillas']));
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+    await runner.inject(whereAmI);
+    expect((await runner.waitForMessage('WHERE', 10_000)).href).toBe(before);
+    // And every result carries the identifiers the network ADD needs, which is
+    // the thing a page-read candidate cannot supply.
+    for (const r of runner.messagesOfType('SEARCH_RESULT')) {
+      expect(r.candidates[0].productId).toBe('314026');
+      expect(r.candidates[0].skuId).toBe('4122025475');
+    }
+  });
+
+  itWithFixture('logged-in-home.html', 'reports failures per term, not per batch', async (runner) => {
+    // A term that fails must not take the other eleven down with it: the caller
+    // falls back to loading a page for JUST that term.
+    await runner.inject([
+      '(function () {',
+      '  window.fetch = function (url, init) {',
+      '    var body = JSON.parse(init.body);',
+      '    var term = body.variables.params.query;',
+      '    if (term === "tortillas") {',
+      '      return Promise.resolve({ ok: false, status: 403,',
+      '        text: function () { return Promise.resolve("<html>blocked</html>"); } });',
+      '    }',
+      '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+      '      return Promise.resolve(JSON.stringify(' + JSON.stringify(searchPayload([product()])) + '));',
+      '    } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+    await runner.inject(batch(['sour cream', 'tortillas', 'limes']));
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+    const ok = runner.messagesOfType('SEARCH_RESULT').map((r: any) => r.term).sort();
+    const bad = runner.messagesOfType('SEARCH_RESULT_FAILED');
+    expect(ok).toEqual(['limes', 'sour cream']);
+    expect(bad).toHaveLength(1);
+    expect(bad[0].term).toBe('tortillas');
+    expect(bad[0].why).toBe('blocked');
+  });
+
+  itWithFixture('logged-in-home.html', 'keeps concurrency small rather than firing all at once', async (runner) => {
+    // Twelve simultaneous requests is a burst shape nothing has measured. The
+    // bot defence tolerated 30 writes at about 2/s (MEAL-115); this stays inside
+    // what has actually been observed.
+    await runner.inject([
+      '(function () {',
+      '  window.__inflight = 0; window.__peak = 0;',
+      '  window.fetch = function () {',
+      '    window.__inflight++;',
+      '    if (window.__inflight > window.__peak) window.__peak = window.__inflight;',
+      '    return new Promise(function (resolve) {',
+      '      setTimeout(function () {',
+      '        window.__inflight--;',
+      '        resolve({ ok: true, status: 200, text: function () {',
+      '          return Promise.resolve(JSON.stringify(' + JSON.stringify(searchPayload([product()])) + ')); } });',
+      '      }, 60);',
+      '    });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+    await runner.inject(batch(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']));
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+    await runner.inject('(function(){ window.ReactNativeWebView.postMessage(JSON.stringify({ type: "PEAK", peak: window.__peak })); })(); true;');
+    const peak = await runner.waitForMessage('PEAK', 10_000);
+    expect(peak.peak).toBeLessThanOrEqual(3);
+    expect(peak.peak).toBeGreaterThan(1);
+  });
+
+  it('refuses a batch it cannot address', () => {
+    expect(buildHebNetworkSearchBatchScript([], { storeId: '476', shoppingContext: 'CURBSIDE_DELIVERY' })).toBeNull();
+    expect(buildHebNetworkSearchBatchScript(['x'], { storeId: 'abc', shoppingContext: 'CURBSIDE_DELIVERY' })).toBeNull();
+    expect(buildHebNetworkSearchBatchScript(['x'], { storeId: '476', shoppingContext: '' })).toBeNull();
   });
 });
