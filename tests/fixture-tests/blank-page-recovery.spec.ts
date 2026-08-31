@@ -6,6 +6,11 @@
 // mid-flight. The user is shown a white sheet with no way to sign in, and no
 // check script can report it, because they all read document.body first.
 //
+// The fixture lives under tests/fixtures/albertsons/ because that is where the
+// document came from, and because tests/fixtures/ has one directory per
+// registered store — a `_generic` dir there fails the drift-surface guard, which
+// reads every directory as a store that ought to be censused.
+//
 // The fixture is head-only on purpose. A parser always synthesizes a body even
 // when the markup has none, so `body.children.length === 0` — not `!document.body`
 // — is the condition a test can actually reach; the script accepts either, since
@@ -26,10 +31,10 @@ import { storeFixtures } from './_helpers';
 const STORE_URL = 'https://www.albertsons.com/';
 
 describe('blank-page recovery', () => {
-  const { itWithFixture } = storeFixtures('_generic');
+  const { itWithFixture } = storeFixtures('albertsons');
 
   itWithFixture(
-    'head-only.html',
+    'login-head-only.html',
     'reports the blank page and reloads it once',
     async (runner) => {
       // A marker on the current context. A reload replaces the document, so its
@@ -56,7 +61,7 @@ describe('blank-page recovery', () => {
   );
 
   itWithFixture(
-    'head-only.html',
+    'login-head-only.html',
     'reloads at most once — with the latch set it reports and stands down',
     async (runner) => {
       await runner.page.evaluate(() => {
