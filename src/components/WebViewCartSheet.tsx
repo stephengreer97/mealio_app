@@ -1493,8 +1493,19 @@ export default function WebViewCartSheet({
       const item = active[idx];
       const term = item.searchTerm ?? item.ingredientName;
       // A term the network could not answer for is not "no match" — it is "not
-      // asked". Those go to the pool, so the whole run does.
-      if (netFailedTermsRef.current.has(term)) { netFallBackToPool('term_unanswered:' + term); return; }
+      // asked", so it must not be reported as though the store had nothing.
+      //
+      // It does NOT take the run with it. Falling the whole run back for one
+      // unanswered term threw away eleven good answers and re-ran the entire
+      // search the slow way — measured doing exactly that on the first device
+      // run. The item goes to review instead, which is where an item nobody
+      // could answer for belongs, and the user can pick or skip it.
+      if (netFailedTermsRef.current.has(term)) {
+        netResultsRef.current.set(idx, {
+          success: false, productName: null, reason: 'search_unanswered', candidates: [],
+        });
+        continue;
+      }
       const candidates = netCandidatesRef.current.get(term) ?? [];
       // The SAME rule the page path uses: an exact name, in stock. Anything
       // looser here would add a product the user did not ask for, which is the

@@ -331,7 +331,12 @@ ${CANDIDATE_HELPERS}
   if (page.__typename === 'SearchPageError') { fail('search_page_error', (page.message || page.code || '').slice(0, 160)); return; }
 
   var items = __hebGridItems(page);
-  if (items == null) { fail('no_grid'); return; }
+  if (items == null) {
+    // See the batch script: no grid on a well-formed page means the store has
+    // nothing, which is an answer rather than a reason to load a page.
+    post({ type: 'SEARCH_RESULT', source: 'network', term: TERM, candidates: [], noGrid: true });
+    return;
+  }
 
   post({ type: 'SEARCH_RESULT', source: 'network', term: TERM, candidates: __hebCandidates(items) });
 
@@ -404,7 +409,24 @@ ${CANDIDATE_HELPERS}
       return;
     }
     var items = __hebGridItems(page);
-    if (items == null) { post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'no_grid' }); return; }
+    if (items == null) {
+      // A well-formed SearchPage with no product grid is the store saying it has
+      // NOTHING for this term — a no-results page renders a different set of
+      // components (suggestions, promos) instead of an empty grid. That is a real
+      // answer, not a transport failure, so it must not send the caller off to
+      // load a page: the page would show the same nothing, 1.8 s later.
+      //
+      // The component names ride along so the day this assumption is wrong is a
+      // day someone can see in the log rather than infer from bad matches.
+      var seen = [];
+      try {
+        var vcs = page.layout.visualComponents;
+        for (var v = 0; v < vcs.length; v++) if (vcs[v] && vcs[v].__typename) seen.push(vcs[v].__typename);
+      } catch (e) {}
+      post({ type: 'SEARCH_RESULT', source: 'network', term: term, candidates: [],
+             noGrid: true, components: seen.join(',') });
+      return;
+    }
     post({ type: 'SEARCH_RESULT', source: 'network', term: term, candidates: __hebCandidates(items) });
   };
 

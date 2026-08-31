@@ -171,6 +171,21 @@ describe('HEB MEAL-202: search over the network', () => {
     expect(msg.source).toBe('network');
   });
 
+  itWithFixture('logged-in-home.html', 'treats a page with no grid as no results, not as a failure', async (runner) => {
+    // A no-results search renders a different set of components instead of an
+    // empty grid. Calling that a transport failure sent the caller off to load a
+    // page that would show the same nothing 1.8 s later — and on the first device
+    // run it fell the ENTIRE run back to the pool over one such term.
+    await runner.inject(stub({
+      data: { productSearchPageV2: { __typename: 'SearchPage',
+        layout: { visualComponents: [{ __typename: 'SearchSuggestions' }] } } },
+    }));
+    await runner.inject(search());
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 15_000);
+    expect(msg.candidates).toEqual([]);
+    expect(msg.noGrid).toBe(true);
+  });
+
   itWithFixture('logged-in-home.html', 'separates "no such product" from "could not ask"', async (runner) => {
     // An EMPTY grid is a real answer and must NOT trigger a page load: the store
     // genuinely has nothing, and re-asking a slower way changes nothing.

@@ -240,6 +240,12 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   // apply adds the item twice — so nothing was attempted twice and nothing is
   // confirmed. confirm_failed is the family: no evidence it landed. The raw
   // reason in detail is what separates it from a click that simply did not take.
+  // MEAL-202: the network search could not answer for this term — the wall, a
+  // timeout, a shape we did not expect. NOT "the store has nothing", which comes
+  // back as an ordinary empty candidate list. The item goes to review, so this
+  // is a rejected match rather than a failed confirmation: nothing was attempted
+  // and nothing needed confirming.
+  search_unanswered: 'match_rejected',
   write_unresolved: 'confirm_failed',
   cart_not_incremented: 'confirm_failed',
   // MEAL-14: the store's own cart query answered and our line was absent (or
