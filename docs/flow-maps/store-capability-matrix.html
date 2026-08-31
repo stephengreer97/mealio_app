@@ -122,9 +122,15 @@
         <td><b>side panel</b> &mdash; there is no cart page.
             Registry-driven, not <code>storeId === 'aldi'</code></td></tr>
     <tr><td><b>Albertsons family</b></td>
-        <td>bail on the SSO interstitial &rarr; passive read of the account span
+        <td><b>page path:</b> bail on the SSO interstitial &rarr; passive read of the account span
             (<b>settled</b> text only) &rarr; click the profile and look for "sign out" &rarr;
-            <code>sessionStorage</code> tiebreak</td>
+            <code>sessionStorage</code> tiebreak.<br/>
+            <b>network path:</b> wait for the Angular bootstrap, then
+            <code>SWY_SHOP_TOKEN</code> + a real cart read &mdash; a token is only
+            <i>present</i>, the cart read is what proves it <i>usable</i> (it lives 45 min).
+            Absence before hydration is answered <code>not_hydrated</code>, never
+            "signed out" &mdash; MEAL-124's reason 1, which walls a signed-in user
+            if you get it wrong</td>
         <td>qty bubble, then the increment control &mdash; or a <b>network add</b>
             (<code>networkAdd</code>, <b>on</b>):
             <code>POST /abs/pub/erums/cartservice/api/v2/cart/items</code>, which needs
