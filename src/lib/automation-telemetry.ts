@@ -245,6 +245,17 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   // back as an ordinary empty candidate list. The item goes to review, so this
   // is a rejected match rather than a failed confirmation: nothing was attempted
   // and nothing needed confirming.
+  // MEAL-202: the store's own per-item cap is already met by what the cart holds,
+  // so there is nothing this run can add. Not a confirmation failure — nothing was
+  // attempted — and not a scoring one: the product matched exactly. It is the
+  // store declining on stock policy, which is the same family as out_of_stock.
+  // MEAL-202: the store answered, and the answer was not a shape we know. Not a
+  // wall and not a refusal — the contract moved, or a field we depend on is gone.
+  // It rides confirm_failed because nothing landed and nothing can be said about
+  // why; the raw reason in detail is what separates it from a cart that simply
+  // did not move.
+  unexpected_shape: 'confirm_failed',
+  quantity_limit_reached: 'out_of_stock',
   search_unanswered: 'match_rejected',
   write_unresolved: 'confirm_failed',
   cart_not_incremented: 'confirm_failed',

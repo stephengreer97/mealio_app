@@ -82,7 +82,9 @@ interface Candidate {
   productName: string;
   imageUrl: string | null;
   outOfStock: boolean;
-  preferences: Array<{ text: string; value: string }> | null;
+  /** `preferenceId` is present only on network candidates — the page path builds
+   *  these from a modal row label and has no id to give. */
+  preferences: Array<{ text: string; value: string; preferenceId?: string }> | null;
   price: string | null;
   isWeightItem?: boolean;
   /** For sold-by-weight items: the buyable weights (lb) from the addByWeight
@@ -95,6 +97,9 @@ interface Candidate {
   productId?: string | null;
   /** Store's SKU id, same availability caveat as productId. */
   skuId?: string | null;
+  /** The store's per-item cap, when the extractor can see one. The network write
+   *  sets an ABSOLUTE quantity, so cart-held + asked can exceed it. */
+  maxOrderQuantity?: number | null;
 }
 
 interface SearchResult {
@@ -1486,7 +1491,10 @@ export default function WebViewCartSheet({
     const sess = netSessionRef.current;
     if (!sess) { netFallBackToPool('no_session_at_add'); return; }
 
-    const toWrite: Array<{ idx: number; productId: string; skuId: string; quantity: number; name: string; isWeightItem?: boolean }> = [];
+    const toWrite: Array<{
+      idx: number; productId: string; skuId: string; quantity: number; name: string;
+      isWeightItem?: boolean; purchasePreferenceId?: string | null; maxOrderQuantity?: number | null;
+    }> = [];
     netResultsRef.current = new Map();
 
     for (let idx = 0; idx < active.length; idx++) {
@@ -1528,6 +1536,17 @@ export default function WebViewCartSheet({
         });
         continue;
       }
+      // The preference the user already chose, matched to the store's id for it.
+      //
+      // The page path clicks a modal row by its LABEL; the network path states an
+      // id. Both come from the same choice, so this looks the id up by the label
+      // that was chosen rather than asking the user again. No choice made means
+      // no preference sent — which is what the storefront itself does, and is a
+      // different statement from sending a null one.
+      const chosenLabel = item.dropdown?.selectedText ?? null;
+      const preference = chosenLabel
+        ? (match.preferences ?? []).find((pr) => pr.text === chosenLabel)
+        : undefined;
       toWrite.push({
         idx,
         productId: match.productId,
@@ -1535,6 +1554,12 @@ export default function WebViewCartSheet({
         quantity: Math.max(1, Math.round(item.productQty || 1)),
         name: match.productName,
         isWeightItem: false,
+        purchasePreferenceId: preference?.preferenceId ?? null,
+        // The store's per-item cap. The write sets an ABSOLUTE quantity, so
+        // cart-held + asked can exceed it and the store refuses the whole write —
+        // which is what "Quantity limit reached." was on the first full device
+        // run, for an avocado earlier test runs had already stocked up on.
+        maxOrderQuantity: match.maxOrderQuantity ?? null,
       });
     }
 

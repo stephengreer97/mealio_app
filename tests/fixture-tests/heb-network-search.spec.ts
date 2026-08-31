@@ -13,6 +13,7 @@
 // thrown.
 
 import {
+  buildHebNetworkAddBatchScript,
   buildHebNetworkSearchBatchScript,
   buildHebNetworkSearchScript,
   buildHebSessionScript,
@@ -115,6 +116,9 @@ describe('HEB MEAL-202: search over the network', () => {
       weightOptions: [],
       productId: '314026',
       skuId: '4122025475',
+      // The store's per-item cap, carried because the write sets an ABSOLUTE
+      // quantity and cart-held + asked can exceed it.
+      maxOrderQuantity: 20,
     });
   });
 
@@ -155,9 +159,12 @@ describe('HEB MEAL-202: search over the network', () => {
     const c = msg.candidates[0];
     expect(c.isWeightItem).toBe(true);
     expect(c.weightOptions).toEqual([0.25, 0.5, 1]);
+    // text/value keep the shape the page path built from a modal row label, so a
+    // candidate stays interchangeable. preferenceId is additive and only the
+    // network add reads it — the page path cannot click an id.
     expect(c.preferences).toEqual([
-      { text: 'No preference', value: 'No preference' },
-      { text: 'Shaved', value: 'Shaved' },
+      { text: 'No preference', value: 'No preference', preferenceId: 'default' },
+      { text: 'Shaved', value: 'Shaved', preferenceId: 'b58' },
     ]);
   });
 
@@ -370,5 +377,93 @@ describe('HEB MEAL-202: many terms, one page, no navigation', () => {
     expect(buildHebNetworkSearchBatchScript([], { storeId: '476', shoppingContext: 'CURBSIDE_DELIVERY' })).toBeNull();
     expect(buildHebNetworkSearchBatchScript(['x'], { storeId: 'abc', shoppingContext: 'CURBSIDE_DELIVERY' })).toBeNull();
     expect(buildHebNetworkSearchBatchScript(['x'], { storeId: '476', shoppingContext: '' })).toBeNull();
+  });
+});
+
+describe('HEB MEAL-202: the store\'s own limits', () => {
+  const addStub = (armByProduct: Record<string, string>, cartLines: unknown[]) => [
+    '(function () {',
+    '  window.__writes = [];',
+    '  var ARMS = ' + JSON.stringify(armByProduct) + ';',
+    '  var LINES = ' + JSON.stringify(cartLines) + ';',
+    '  window.fetch = function (url, init) {',
+    '    var body = JSON.parse(init.body);',
+    '    if (body.operationName === "cartItemV2") {',
+    '      window.__writes.push(body.variables);',
+    '      var arm = ARMS[body.variables.productId] || "Cart";',
+    '      return Promise.resolve({ ok: true, status: 200, text: function () {',
+    '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: {',
+    '          __typename: arm, id: "c1", message: "Quantity limit reached." } } })); } });',
+    '    }',
+    '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+    '      return Promise.resolve(JSON.stringify({ data: { cartV2: {',
+    '        __typename: "Cart", id: "c1", items: LINES } } })); } });',
+    '  };',
+    '})(); true;',
+  ].join('\n');
+
+  const line = (pid: string, qty: number) => ({
+    id: 'i' + pid, quantity: qty, estimatedWeight: null,
+    product: { id: pid, fullDisplayName: 'X' }, sku: { id: 's' + pid },
+  });
+
+  const REPORT_WRITES = [
+    '(function () {',
+    '  window.ReactNativeWebView.postMessage(JSON.stringify({ type: "WRITES", writes: window.__writes || [] }));',
+    '})(); true;',
+  ].join('\n');
+
+  itWithFixture('logged-in-home.html', 'clamps to the cap instead of being refused outright', async (runner) => {
+    // The write sets an ABSOLUTE quantity, so cart-held + asked can exceed the
+    // store's per-item cap and it refuses the WHOLE write. Measured on a device:
+    // an avocado came back "Quantity limit reached." because earlier runs had
+    // already stocked the cart. Adding what fits beats adding nothing.
+    await runner.inject(addStub({}, [line('377478', 18)]));
+    await runner.inject(buildHebNetworkAddBatchScript([{
+      idx: 0, productId: '377478', skuId: '4046', quantity: 3,
+      name: 'Fresh Small Hass Avocado, Each', maxOrderQuantity: 20,
+    }])!);
+    await runner.waitForMessage('NET_ADD_DONE', 15_000);
+    runner.clearMessages();
+    await runner.inject(REPORT_WRITES);
+    const w = await runner.waitForMessage('WRITES', 10_000);
+    // 18 held + 3 asked = 21, over the cap of 20 — so it asks for 20, not 21.
+    expect(w.writes).toHaveLength(1);
+    expect(w.writes[0].quantity).toBe(20);
+  });
+
+  itWithFixture('logged-in-home.html', 'refuses rather than writing a quantity the cart already has', async (runner) => {
+    // Clamping to a number the cart ALREADY holds writes no change and would
+    // report success — an under-add dressed as a win. It has to be a failure.
+    await runner.inject(addStub({}, [line('377478', 20)]));
+    await runner.inject(buildHebNetworkAddBatchScript([{
+      idx: 0, productId: '377478', skuId: '4046', quantity: 3,
+      name: 'Fresh Small Hass Avocado, Each', maxOrderQuantity: 20,
+    }])!);
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 15_000);
+    expect(res.success).toBe(false);
+    expect(res.reason).toBe('quantity_limit_reached');
+    runner.clearMessages();
+    await runner.inject(REPORT_WRITES);
+    expect((await runner.waitForMessage('WRITES', 10_000)).writes).toHaveLength(0);
+  });
+
+  itWithFixture('logged-in-home.html', 'sends a chosen purchase preference, and omits it when there is none', async (runner) => {
+    // Deli thickness, avocado ripeness. The storefront OMITS the field rather
+    // than nulling it when nothing was chosen, and a null is a different
+    // statement from an absent one.
+    await runner.inject(addStub({}, []));
+    await runner.inject(buildHebNetworkAddBatchScript([
+      { idx: 0, productId: '1', skuId: 's1', quantity: 1, name: 'Sliced', purchasePreferenceId: 'b58-shaved' },
+      { idx: 1, productId: '2', skuId: 's2', quantity: 1, name: 'Plain' },
+    ])!);
+    await runner.waitForMessage('NET_ADD_DONE', 15_000);
+    runner.clearMessages();
+    await runner.inject(REPORT_WRITES);
+    const w = await runner.waitForMessage('WRITES', 10_000);
+    const withPref = w.writes.find((v: any) => v.productId === '1');
+    const without = w.writes.find((v: any) => v.productId === '2');
+    expect(withPref.purchasePreferenceId).toBe('b58-shaved');
+    expect('purchasePreferenceId' in without).toBe(false);
   });
 });

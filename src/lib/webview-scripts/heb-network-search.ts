@@ -242,7 +242,15 @@ const CANDIDATE_HELPERS = `
       var list = p.purchasePreferenceList.purchasePreferences;
       for (var i = 0; i < list.length; i++) {
         var t = list[i] && list[i].text;
-        if (t) out.push({ text: String(t).trim(), value: String(t).trim() });
+        if (!t) continue;
+        // text/value keep the shape the page path built from a modal ROW LABEL,
+        // so a candidate stays interchangeable. preferenceId is additive and only
+        // the network add reads it — the page path has no use for an id it cannot
+        // click.
+        var e = { text: String(t).trim(), value: String(t).trim() };
+        var pid = list[i].preferenceId;
+        if (pid != null) e.preferenceId = String(pid);
+        out.push(e);
       }
     } catch (e) {}
     return out.length ? out : null;
@@ -267,6 +275,12 @@ const CANDIDATE_HELPERS = `
         weightOptions: incr.slice(),
         productId: p.id != null ? String(p.id) : null,
         skuId: (sku && sku.id != null) ? String(sku.id) : null,
+        // The store's own per-item cap. Carried because the write sets an
+        // ABSOLUTE quantity: cart-held + asked can exceed it, and the store then
+        // refuses the whole write with "Quantity limit reached." — which is
+        // exactly what happened to an avocado on the first full device run.
+        maxOrderQuantity: (typeof p.maximumOrderQuantity === 'number' && p.maximumOrderQuantity > 0)
+          ? p.maximumOrderQuantity : null,
       });
     }
     return out;
@@ -472,7 +486,15 @@ ${CANDIDATE_HELPERS}
  * page path instead.
  */
 export function buildHebNetworkAddBatchScript(
-  items: Array<{ idx: number; productId: string; skuId: string; quantity: number; name: string; isWeightItem?: boolean }>,
+  items: Array<{
+    idx: number; productId: string; skuId: string; quantity: number; name: string;
+    isWeightItem?: boolean;
+    /** The chosen purchase preference, for products that offer them (deli
+     *  thickness, avocado ripeness). Absent means "no preference stated". */
+    purchasePreferenceId?: string | null;
+    /** The store's per-item cap, when known. */
+    maxOrderQuantity?: number | null;
+  }>,
   opts?: { concurrency?: number },
 ): string | null {
   const usable = items.filter(
@@ -496,8 +518,10 @@ ${GQL_FN}
     + ' ... on Cart { id items { id quantity estimatedWeight product { id fullDisplayName }'
     + '   sku { id } } }'
     + ' ... on CartError { code title message } } }';
-  var ADD = 'mutation cartItemV2($productId: String!, $skuId: String!, $quantity: Int) {'
-    + ' addItemToCartV2(productId: $productId, skuId: $skuId, quantity: $quantity) {'
+  var ADD = 'mutation cartItemV2($productId: String!, $skuId: String!, $quantity: Int,'
+    + ' $purchasePreferenceId: String) {'
+    + ' addItemToCartV2(productId: $productId, skuId: $skuId, quantity: $quantity,'
+    + ' purchasePreferenceId: $purchasePreferenceId) {'
     + ' __typename'
     + ' ... on Cart { id }'
     + ' ... on AddOnsCart { id cart { id } }'
@@ -551,9 +575,31 @@ ${GQL_FN}
         if (h && h.weight) { report(it, false, 'cart_line_is_weight'); continue; }
         if (h && h.lines > 1) { report(it, false, 'multiple_cart_lines'); continue; }
         var base = h ? h.qty : 0;
-        var res = await __hebGql('cartItemV2', ADD, {
-          productId: it.productId, skuId: it.skuId, quantity: base + it.quantity,
-        }, 9000);
+        var want = base + it.quantity;
+
+        // The store's per-item cap, respected BEFORE asking.
+        //
+        // The write sets an absolute quantity, so cart-held + asked can exceed
+        // the cap and the store refuses the whole write — "Quantity limit
+        // reached." is what an avocado got on the first full device run, because
+        // earlier test runs had already put several in the cart.
+        //
+        // Clamping is right where it still adds something, and wrong where it
+        // does not: clamping to a number the cart ALREADY holds would write no
+        // change and report success, which is an under-add dressed as a win. So
+        // a cap already reached is reported as its own reason instead.
+        var cap = (typeof it.maxOrderQuantity === 'number' && it.maxOrderQuantity > 0) ? it.maxOrderQuantity : null;
+        if (cap != null && want > cap) {
+          if (base >= cap) { report(it, false, 'quantity_limit_reached', 'cart already holds ' + base + ' of ' + cap); continue; }
+          want = cap;
+        }
+
+        var vars = { productId: it.productId, skuId: it.skuId, quantity: want };
+        // Only sent when there is one. A null preference on a product that
+        // offers them is a different statement from an absent one, and the
+        // store's own site omits the field rather than nulling it.
+        if (it.purchasePreferenceId) vars.purchasePreferenceId = it.purchasePreferenceId;
+        var res = await __hebGql('cartItemV2', ADD, vars, 9000);
         if (!res.ok) { report(it, false, res.why, res.detail || null); continue; }
         var arm = null, msg = null;
         try {
@@ -565,7 +611,14 @@ ${GQL_FN}
         // would send the caller on to add the same product a second way.
         var ok = arm === 'Cart' || arm === 'AddOnsCart';
         if (ok) wrote++;
-        report(it, ok, ok ? null : (arm ? 'error_arm' : 'unexpected_shape'), msg);
+        // The sent quantity rides along so a clamped add is visible as a SHORT
+        // add rather than passing for a full one — the reconcile's own short-add
+        // detection then reports it to the user.
+        post({ type: 'NET_ADD_RESULT', idx: it.idx, name: it.name, productId: it.productId,
+               skuId: it.skuId, asked: it.quantity, sent: want, base: base,
+               preferenceId: it.purchasePreferenceId || null,
+               success: ok, reason: ok ? null : (arm ? 'error_arm' : 'unexpected_shape'),
+               detail: msg || null });
       } catch (e) {
         report(it, false, 'threw', String(e).slice(0, 120));
       }
