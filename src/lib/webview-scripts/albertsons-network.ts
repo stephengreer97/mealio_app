@@ -145,9 +145,29 @@ ${ALB_PRELUDE}
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
   try {
-    var u = __albUser();
-    var loggedIn = !!u.SWY_SHOP_TOKEN;
-    if (!loggedIn) { post({ ok: true, loggedIn: false }); return; }
+    // MEAL-124's reason 1, which applies to this probe too: window.AB.userInfo is
+    // populated by the AEM/Angular bootstrap, so before hydration the property is
+    // ABSENT rather than empty. Reading that as "signed out" walls a signed-in
+    // user every time we inject early — the exact bug that kept the token out of
+    // the page login check.
+    //
+    // So absence and emptiness are answered differently. Wait a bounded time for
+    // the bootstrap, then:
+    //   userInfo present, no token -> genuinely signed out, say so
+    //   userInfo never appeared    -> we do not know; hand the question back so
+    //                                 the page path runs its own check rather
+    //                                 than asserting anything about the user
+    var u = null;
+    for (var t = 0; t < 20; t++) {
+      var cand = (window.AB && window.AB.userInfo) || null;
+      if (cand && Object.keys(cand).length) { u = cand; break; }
+      await new Promise(function (r) { setTimeout(r, 250); });
+    }
+    if (!u) { post({ ok: false, why: 'not_hydrated' }); return; }
+    if (!u.SWY_SHOP_TOKEN) { post({ ok: true, loggedIn: false }); return; }
+    // "Present" and "usable" are not the same property — MEAL-137 measured this
+    // token at a 45-minute life. The cart read turns a present token into a
+    // proven one, and it is the same call the add path depends on.
     var cart = await __albReadCart(12000);
     post({
       ok: true,

@@ -331,12 +331,37 @@ describe('Albertsons add over the network — qty is ABSOLUTE', () => {
 });
 
 describe('Albertsons session probe', () => {
-  itWithFixture('search-results-tortillas.html', 'reports logged out without a token', async (runner) => {
-    await runner.inject('(function(){ window.AB = { userInfo: {} }; window.SWY = { CONFIGSERVICE: {} }; })(); true;');
+  itWithFixture('search-results-tortillas.html', 'reports logged out when the page HAS hydrated and there is no token', async (runner) => {
+    await runner.inject('(function(){ window.AB = { userInfo: { branchId: "161" } }; window.SWY = { CONFIGSERVICE: {} }; })(); true;');
     await runner.inject(buildAlbertsonsSessionScript());
     const msg = await runner.waitForMessage('ALB_SESSION', 15_000);
     expect(msg.ok).toBe(true);
     expect(msg.loggedIn).toBe(false);
+  });
+
+  itWithFixture('search-results-tortillas.html', 'does NOT claim signed-out before the page has hydrated', async (runner) => {
+    // MEAL-124: window.AB.userInfo is populated by the Angular bootstrap, so
+    // before hydration it is absent rather than empty. Calling that "signed out"
+    // walls a signed-in user every time we inject early. The probe must hand the
+    // question back instead of answering it.
+    await runner.inject('(function(){ delete window.AB; window.SWY = { CONFIGSERVICE: {} }; })(); true;');
+    await runner.inject(buildAlbertsonsSessionScript());
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    expect(msg.ok).toBe(false);
+    expect(msg.why).toBe('not_hydrated');
+    // Emphatically not an assertion about the user.
+    expect(msg.loggedIn).toBeUndefined();
+  });
+
+  itWithFixture('search-results-tortillas.html', 'waits for a late bootstrap rather than racing it', async (runner) => {
+    await runner.inject('(function(){ delete window.AB; window.SWY = { CONFIGSERVICE: { searchConfig: { apimProgramSubscriptionKey: "k" } } };'
+      + ' setTimeout(function(){ window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok", branchId: "161", zipcode: "83713" } }; }, 1200); })(); true;');
+    await runner.inject(cartStub({ '1': 1 }));
+    await runner.inject(buildAlbertsonsSessionScript());
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    expect(msg.ok).toBe(true);
+    expect(msg.loggedIn).toBe(true);
+    expect(msg.storeId).toBe('161');
   });
 
   itWithFixture('search-results-tortillas.html', 'reports the store and that the cart is actually reachable', async (runner) => {
