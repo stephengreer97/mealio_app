@@ -1,0 +1,180 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Choose Products Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Behaviors &rsaquo; <b>Choose Products &amp; matching</b></span></div>
+<header>
+  <h1>Choose Products &mdash; matching, ranking, and what it must never do</h1>
+  <div class="sub">Read off <code>lib/chooseRun.ts</code>, <code>lib/chooseRanking.ts</code>,
+  <code>lib/webview-scripts/_scoring.ts</code>, <code>lib/saveChosenIngredient.ts</code>,
+  <code>components/ChooseProductsIntroSheet.tsx</code> and the choose branch of
+  <code>WebViewCartSheet.tsx</code>. The one flow that touches no cart at all.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Step</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Saved</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Vetoed / blocked</b></span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Presentational only</b> — cannot reach a cart</span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · Is this a choose run? Two questions that are not the same</h3><pre class="mermaid">
+flowchart TD
+    SEL(["user selects meals<br/>and taps the floating button"]) --> Q1{{"<b>isChooseRun(items)</b><br/>does EVERY item still<br/>need choosing?"}}
+    Q1 -->|yes| LBL1["button + sheet title:<br/><b>'Choose Products'</b>"]
+    Q1 -->|"no — even ONE item<br/>already has a product"| LBL2["button + sheet title:<br/><b>'Add to Cart'</b><br/><i>a run holding one chosen item<br/>adds it to a real cart, so it<br/>is shopping</i>"]
+
+    LBL1 --> INTRO{"first time on<br/>this device?"}
+    INTRO -->|yes| SHEET["<b>ChooseProductsIntroSheet</b><br/><i>explains; does not gate</i>"]
+    INTRO -->|no| RUN
+    SHEET -->|"Start"| RUN
+    SHEET -->|"Cancel"| BACK(["back to My Meals"])
+
+    LBL2 --> RUN["open <b>WebViewCartSheet</b>"]
+
+    RUN --> Q2{{"<b>runKindRef</b> — what does<br/>THIS run do to a cart?"}}
+    Q2 -->|"only unchosen items;<br/>adds nothing"| KCHOOSE["<b>'choose'</b> — excluded from<br/>both north-star rates <i>whole</i>,<br/>rather than scored as a zero"]
+    Q2 -->|"adds something"| KADD["<b>'add'</b> — counted"]
+
+    MIX{{"the two DISAGREE on a mixed selection.<br/>isChooseRun is false (the screen says 'Add to Cart')<br/>while the run itself only searches the unchosen items<br/>and adds nothing — so for the METRIC it is a choose run.<br/>Tying the metric to the title would score that run<br/>0-of-N against a cart it never touched."}}
+    Q2 -.-> MIX
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class RUN,SHEET state
+    class MIX,Q1,Q2 spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · Scoring — the same function, two completely different jobs</h3><pre class="mermaid">
+flowchart TD
+    IN(["query: the ingredient name<br/>candidate: a product name"]) --> N1["<b>collapseCriticalPhrases</b><br/>on BOTH sides<br/><i>cage free range &rarr; cagefree freerange<br/>cage free · free range · grass fed ·<br/>low fat · non fat</i>"]
+    N1 --> N2["normalise twice:<br/><b>normDiacritic</b> (ñ &rarr; n) and<br/><b>normStrip</b>; take the better score"]
+    N2 --> EQ{"identical after<br/>normalisation?"}
+    EQ -->|yes| S100(["<b>100</b>"])
+    EQ -->|no| VETO{"a CRITICAL word in the query<br/>missing from the candidate?<br/><i>organic · boneless · unsalted ·<br/>lowfat · grassfed · …</i>"}
+    VETO -->|yes| S0(["<b>0</b> — hard veto.<br/><i>'Organic Boneless Chicken' must<br/>not match 'Boneless Chicken'</i>"])
+    VETO -->|no| FRAC["weighted overlap:<br/>matched &divide; total<br/><i>a collapsed token weighs 2 —<br/>it replaced two words</i>"]
+    FRAC --> FLOOR{"&ge; 0.70?"}
+    FLOOR -->|no| S0
+    FLOOR -->|yes| SN(["<b>min(99, round(p × 100))</b>"])
+
+    S100 --> USE1
+    SN --> USE2
+    S0 --> USE2
+
+    USE1{{"<b>THE ADD GATE</b><br/>score = 100, reachable ONLY via<br/>the equality fast path.<br/>Exact after normalisation and<br/>phrase collapse — nothing else<br/>is ever added to a cart."}}
+    USE2{{"<b>RANKING ONLY</b><br/>rankChoiceCandidates reorders a<br/>list a human is about to read."}}
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class S100,USE1 good
+    class S0 danger
+    class USE2,SN spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 3 · Ranking the choices — two tiers, and one tiebreak</h3><pre class="mermaid">
+flowchart TD
+    C(["candidates, in the STORE's own order<br/><i>its relevance ranking — influenced by<br/>paid placement and whatever it thinks<br/>it can upsell</i>"]) --> WHY{{"on the labelled corpus that put an<br/>unacceptable product in the first row —<br/>and therefore under the default<br/>selection — on <b>7 of 17</b> answerable queries"}}
+    WHY --> SCORE["scoreMatch(query, name)<br/><b>read-only</b>"]
+    SCORE --> TIER{"score &gt; 0?"}
+    TIER -->|"yes — recognised"| T1["<b>tier 1</b><br/>sort by <code>score &minus; 1 × unrequestedWordCount</code>"]
+    TIER -->|"no — no opinion"| T2["<b>tier 2</b><br/>keep the store's order<br/><i>when our matcher recognises nothing,<br/>the store's ranking beats anything<br/>we can invent</i>"]
+    T1 --> OUT
+    T2 --> OUT
+    OUT(["a NEW array — nothing added,<br/>removed or edited. Ties keep the<br/>store's order (sort is stable)."])
+
+    PEN{{"<b>the unrequested-word penalty</b><br/>scoreOne measures how much of the QUERY the<br/>product covers, never the other direction — so<br/>every extra word in the product name is free.<br/>'sour cream' ties at 99 across sour cream, sour<br/>cream dip, and sour cream &amp; onion chips.<br/>Of two products covering the query equally,<br/>prefer the one that is less about something else."}}
+    T1 -.-> PEN
+
+    SAFETY{{"the tier split is a <b>SAFETY</b> property, not a<br/>scoring one — a flat single score matches it<br/>16/17 at every weight tried. Separate sort keys<br/>mean <b>no</b> penalty weight can float an<br/>unrecognised product above a recognised one."}}
+    TIER -.-> SAFETY
+
+    MEAS{{"measured, choose-flow P@1 over 17 answerable queries:<br/>store order <b>10/17</b> &rarr; score-ranked <b>15/17</b> &rarr;<br/>with the tiebreak <b>16/17</b>"}}
+    OUT -.-> MEAS
+
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    class PEN,SAFETY,MEAS,WHY spec
+    class OUT good
+</pre></div>
+
+<div class="wrap"><h3>Diagram 4 · Saving a choice, and the last-write-wins bug it fixes</h3><pre class="mermaid">
+flowchart TD
+    P(["user picks a product"]) --> M["<b>mergeChosenProduct</b> — pure<br/>match the row by display name<br/>OR by existing searchTerm"]
+    M --> F["set <code>searchTerm</code><br/>+ <code>productQty</code> if supplied<br/>+ <code>dropdown</code>, else <b>null it</b><br/>&nbsp;&nbsp;<i>clearing a stale preference</i><br/>+ <code>purchaseWeight</code> / <code>weightStep</code>"]
+    F --> Q["<b>createMealSaveQueue</b>"]
+    Q --> QQ{{"a per-meal promise chain:<br/>saves on the SAME meal serialise —<br/>each reads the result of the prior one —<br/>while different meals still save in parallel"}}
+    QQ --> PATCH["PATCH the meal's<br/><b>entire</b> ingredient array"]
+    PATCH --> SAVED(["saved · this ingredient will<br/>match exactly on the next run"])
+
+    BUG{{"<b>why the queue exists.</b> Choices arrive faster than the<br/>round trip. Two concurrent saves on one meal both rebuilt<br/>the array from the same pre-save snapshot, and the later<br/>write clobbered the earlier one. On a meal with many<br/>ingredients, choosing several in a row silently dropped<br/>all but the last."}}
+    QQ -.-> BUG
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class SAVED good
+    class QQ,BUG spec
+</pre></div>
+
+<div class="notes">
+  <h2>Three independent reasons ranking cannot affect a cart</h2>
+  <ol>
+    <li>It is never called on the add path — only in the <code>isChooseFlow</code> branch.</li>
+    <li>The choose flow adds nothing. Picking a product saves it as the ingredient's
+    <code>searchTerm</code>; a later run still has to clear the same exact-match gate.</li>
+    <li>It reorders. It never adds, removes or edits a candidate — the set of products the user can
+    choose from is byte-for-byte what the store returned.</li>
+  </ol>
+  <p>That is why the ranking lives in its own module and not in <code>_scoring.ts</code>:
+  <code>scoreMatch</code> is copied verbatim into six injected store scripts, and each store's
+  add gate is <code>scoreMatch(term, name) === 100</code> or the equivalent equality. Changing
+  <code>_scoring.ts</code> risks widening or narrowing what the add gate accepts, which is the one
+  governing-principle breach this work could cause.</p>
+
+  <h2>What the intro sheet is for</h2>
+  <p>Choose Products is a new user's first real interaction with Mealio: up to a dozen modal screens
+  in a row, each asking which store product matches an ingredient. Read cold it looks like the cart
+  being filled one slow item at a time — which is why people abandoned it halfway. They thought they
+  were watching the shopping happen, and it was taking forever.</p>
+  <p>It is none of those things: it is one-time matching, it saves, and it puts nothing in the cart.
+  The sheet says that <i>before</i> the run rather than on the completion screen where the
+  reassurance used to live. It explains; it does not gate — "Choose products" starts the same flow
+  the floating button always started, one tap away, and it shows once per device either way.</p>
+
+  <h2>Two spelling bugs the collapse fixes (MEAL-160)</h2>
+  <p>The veto is a set-membership test on tokens, so it is only as good as the agreement between how
+  a shopper writes an ingredient and how a store writes a product. <code>lowfat</code> and
+  <code>nonfat</code> sat in the critical set as single tokens while the normalisers turn every
+  hyphen into a space, so they misfired in <b>both directions at once</b>:</p>
+  <table class="src">
+    <tr><th>Query vs product</th><th>Score</th><th>What went wrong</th></tr>
+    <tr><td>"low fat cottage cheese" vs "Full Fat Cottage Cheese"</td><td>75</td><td>tokenises to <code>low</code>+<code>fat</code>, neither critical — the entry protected <b>nothing</b></td></tr>
+    <tr><td>"lowfat cottage cheese" vs "Low-Fat Cottage Cheese"</td><td>0</td><td>the <b>right</b> product scored zero</td></tr>
+    <tr><td>"grassfed beef" vs "Grass Fed Beef"</td><td>0</td><td>same shape, two-token entry</td></tr>
+  </table>
+  <p>Collapsing every spelling to one canonical token on both sides before the membership test makes
+  the entry mean the <i>concept</i> rather than one spelling of it. The collapsed token is then
+  weighted as the two words it replaced — otherwise it shrinks both sides of the overlap fraction
+  and quietly raises the bar (3/4 passes the 0.70 floor; the same match after a collapse is 2/3 and
+  fails).</p>
+  <p><b>Order matters inside the collapse</b>, and not for the reason you would guess: "cage free"
+  and "free range" share the word <i>free</i>, so whichever runs first eats it. "Cage Free Range
+  Eggs" is a real label, and the three-word rule runs first to hand both concepts their own token —
+  otherwise a "free range eggs" request vetoes the very product it was looking for.</p>
+
+  <h2>What was measured and deliberately left alone</h2>
+  <p>The same defect shape exists on families that are not in the critical set at all —
+  "glutenfree white sandwich bread" vs "White Sandwich Bread" scores 75, as do fat-free and
+  dairy-free variants. Those score 75, not 100, so nothing auto-adds: it is a wrong <i>suggestion</i>,
+  not a wrong <i>add</i>. Adding them means introducing new veto concepts rather than reconciling
+  spellings of existing ones, which changes matching broadly and wants its own measurement. Filed as
+  MEAL-168.</p>
+  <p><code>sodium</code> is deliberately not extended either: it is a single word that works as a
+  single word, and a <code>lowsodium</code> concept would newly veto "Reduced Sodium" against a "low
+  sodium" request — a real behaviour change, not a spelling fix.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

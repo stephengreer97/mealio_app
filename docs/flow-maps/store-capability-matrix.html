@@ -1,0 +1,177 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Store Capability Matrix</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Stores &rsaquo; <b>Capability matrix</b> &middot; every store, every knob</span></div>
+<header>
+  <h1>Store capability matrix</h1>
+  <div class="sub">Every value below is read from the code, not from the docs &mdash; the adapters,
+  <code>automation-config/schema.ts</code>, <code>webview-scripts/cart-count.ts</code> and the
+  defaults in <code>WebViewCartSheet.tsx</code>. Where a comment and the code disagree, the code
+  is what is listed and the disagreement is named at the bottom.</div>
+</header>
+
+<div class="notes" style="margin-top:0">
+  <h2>1 &middot; Identity and capability</h2>
+  <table class="src">
+    <tr>
+      <th>Store</th><th>Platform</th><th>Banners</th><th>Kill-switch key</th>
+      <th>Adapter</th><th>Selector probe</th>
+    </tr>
+    <tr><td><b>H-E-B</b></td><td><code>standalone</code></td><td>1</td><td><code>heb</code></td>
+        <td><code>webview-scripts/heb.ts</code></td><td>yes</td></tr>
+    <tr><td><b>Walmart</b></td><td><code>standalone</code></td><td>1</td><td><code>walmart</code></td>
+        <td><code>walmart.ts</code></td><td>yes</td></tr>
+    <tr><td><b>Wegmans</b></td><td><code>standalone</code></td><td>1</td><td><code>wegmans</code></td>
+        <td><code>wegmans.ts</code></td><td>yes</td></tr>
+    <tr><td><b>Amazon Fresh</b></td><td><code>standalone</code></td><td>1</td><td><code>amazon</code></td>
+        <td><code>amazon-fresh.ts</code></td><td>yes</td></tr>
+    <tr><td><b>ALDI</b></td><td><code>instacart</code></td><td>1 tenant<br/><i>the only one ever run</i></td>
+        <td><code>aldi</code> <i>(per banner)</i></td><td><code>instacart.ts</code></td><td>yes</td></tr>
+    <tr><td><b>Albertsons family</b></td><td><code>albertsons</code></td><td><b>15</b></td>
+        <td><code>albertsons</code><br/><i><b>shared</b> &mdash; stops all 15</i></td>
+        <td><code>albertsons.ts</code></td><td>yes <i>(one shared surface)</i></td></tr>
+    <tr><td><b>Kroger family</b></td><td><code>kroger</code><br/><i>declared, no table &mdash; and never needs one</i></td>
+        <td><b>15</b></td><td>&mdash; <i>no scripts to disable</i></td>
+        <td>REST via <code>lib/api.ts</code></td><td>n/a</td></tr>
+    <tr><td><b>Mock Store</b></td><td>&mdash;</td><td>1</td><td><code>mockstore</code></td>
+        <td><code>mockstore.ts</code></td><td><b>no</b> &mdash; deliberately: a deterministic
+        fixture store has no drift to catch</td></tr>
+  </table>
+
+  <h2>2 &middot; How a run is shaped</h2>
+  <table class="src">
+    <tr>
+      <th>Store</th><th>Search path</th><th>Workers &times; stagger</th>
+      <th><code>cacheBustNav</code></th><th><code>spaSearch</code></th><th>Why</th>
+    </tr>
+    <tr><td><b>H-E-B</b></td><td>parallel</td><td>3 &times; 400 ms <i>(both default)</i></td>
+        <td>on</td><td><b>true</b></td>
+        <td>the search route re-renders and fires <code>onLoadEnd</code> twice for one URL</td></tr>
+    <tr><td><b>Walmart</b></td><td>parallel</td><td>3 &times; 400 ms <i>(default)</i></td>
+        <td>on</td><td><b>true</b> <i>(own default)</i></td>
+        <td>SPA; without it a duplicate add double-adds, then the next nav race-cancels the POST</td></tr>
+    <tr><td><b>Wegmans</b></td><td><b>serial (forced)</b></td>
+        <td>2 &times; 400 ms &mdash; <i>built, never reached</i></td>
+        <td><b>off</b></td><td>&mdash;</td>
+        <td>the WAF 403s concurrent searches; even 2 staggered workers were blocked</td></tr>
+    <tr><td><b>Amazon Fresh</b></td><td>parallel</td><td>3 &times; 400 ms <i>(default)</i></td>
+        <td>on</td><td>&mdash;</td><td>&mdash;</td></tr>
+    <tr><td><b>ALDI</b></td><td><b>serial (forced)</b></td>
+        <td>3 &times; 400 ms &mdash; <i>built, never reached</i></td>
+        <td><b>off</b></td><td><b>true</b></td>
+        <td>5 parallel workers still 403'd with the cache-buster removed &mdash;
+        <b>concurrency itself is the trigger</b>; the <code>?_t=</code> query is a second one</td></tr>
+    <tr><td><b>Albertsons family</b></td><td>parallel</td><td><b>3 &times; 400 ms</b> <i>(explicit)</i></td>
+        <td>on</td><td>&mdash;</td>
+        <td>5 concurrent WebViews crashed the iOS WKWebView content process on its shared
+        memory budget &mdash; a limit, not an anti-bot concession</td></tr>
+    <tr><td><b>Kroger family</b></td><td colspan="5">n/a &mdash; the <b>server</b> fans out per
+        ingredient (<code>POST /api/kroger/search-products</code>, 60 s)</td></tr>
+    <tr><td><b>Mock Store</b></td><td>parallel</td><td>3 &times; 400 ms <i>(default)</i></td>
+        <td>on</td><td>&mdash;</td><td>every route is exercisable on purpose</td></tr>
+  </table>
+  <p>A store opts into the worker pool by exposing <b>both</b> <code>getSearchUrl</code> and
+  <code>buildWorkerScript</code> and not setting <code>forceSerialSearch</code>. Omit either and it
+  falls back to the sequential single-WebView path with nothing else needing to know.</p>
+
+  <h2>3 &middot; How each store is read</h2>
+  <table class="src">
+    <tr><th>Store</th><th>Login detection</th><th>Add confirmation</th><th>Cart read (snapshots)</th></tr>
+    <tr><td><b>H-E-B</b></td>
+        <td>inject <code>CHECK_LOGIN_SCRIPT</code>; a logged-out profile click redirects to
+            <code>accounts.heb.com</code>, matched by its own <code>isLoginPageUrl</code>;
+            re-inject on nav</td>
+        <td>header badge &rarr; optionally the store's own <b>cart query</b>
+            (<code>cartSkuConfirm</code>, off) &rarr; optionally a <b>network add</b>
+            (<code>networkAdd</code>, off)</td>
+        <td>cart page, <b>path-guarded</b></td></tr>
+    <tr><td><b>Walmart</b></td>
+        <td>click the hamburger, read the drawer: "Sign in or create account" vs "Hi, &lt;name&gt;".
+            <b>Both or neither &rarr; logged out.</b></td>
+        <td>the cart header's <b>$ total</b> &mdash; server-authoritative. The per-card stepper is
+            optimistic and is read for diagnostics only</td>
+        <td>cart page, <b>path-guarded</b></td></tr>
+    <tr><td><b>Wegmans</b></td>
+        <td>greeting button: "Hello,&hellip;" vs "Sign In". MutationObserver, 8 s watchdog,
+            then a <code>sessionStorage</code> tiebreak, then <b>fail closed</b></td>
+        <td>the stepper appears, then one settled click per unit</td>
+        <td>cart page, <b>path-guarded</b></td></tr>
+    <tr><td><b>Amazon Fresh</b></td>
+        <td><code>#nav-logobar-greeting</code> carries <code>nav-greeting-recognized</code>
+            <b>and</b> <code>#nav-greeting-name</code> exists</td>
+        <td>header badge via <code>buildCartConfirmFn</code> &mdash; the only store that imports it.
+            An <b>unreadable</b> badge settles 2.5 s and reports success</td>
+        <td>cart page, <b>unguarded</b></td></tr>
+    <tr><td><b>ALDI</b></td>
+        <td>open the Main Menu; signed-out words checked <b>first and decisive</b>; signed-in words
+            only once the text has stabilised; <code>unknown</code> &rarr; not logged in.
+            3-minute background poll for SPA sign-ins</td>
+        <td>the qty bubble reads the requested count</td>
+        <td><b>side panel</b> &mdash; there is no cart page.
+            Registry-driven, not <code>storeId === 'aldi'</code></td></tr>
+    <tr><td><b>Albertsons family</b></td>
+        <td>bail on the SSO interstitial &rarr; passive read of the account span
+            (<b>settled</b> text only) &rarr; click the profile and look for "sign out" &rarr;
+            <code>sessionStorage</code> tiebreak</td>
+        <td>qty bubble, then the increment control</td>
+        <td><code>/erums/cart</code>, <b>path-guarded</b></td></tr>
+    <tr><td><b>Kroger family</b></td>
+        <td><code>GET /api/kroger/status</code> &mdash; an OAuth connection, not a page</td>
+        <td>the REST response</td><td>n/a</td></tr>
+    <tr><td><b>Mock Store</b></td>
+        <td><code>body[data-logged-in]</code>, read synchronously</td>
+        <td><code>#mock-cart-count</code> ticks up</td>
+        <td><code>/cart</code>, unguarded</td></tr>
+  </table>
+  <p>The <b>path guard</b> asserts the page really is the cart before anything is counted, and it is
+  derived from the <i>effective</i> (possibly remotely overridden) cart URL &mdash; so a config push
+  repoints the navigation and the guard together, or not at all. A null path makes the script refuse
+  to build rather than count the wrong page.</p>
+
+  <h2>4 &middot; Cart deep links</h2>
+  <table class="src">
+    <tr><th>Store</th><th><code>appScheme</code></th><th>Note</th></tr>
+    <tr><td>H-E-B</td><td><code>myheb://</code></td>
+        <td>lands on the app's home &mdash; H-E-B exposes no cart-specific deep link.
+        <code>heb://</code> was wrong (copied from Kroger-family naming)</td></tr>
+    <tr><td>Amazon Fresh</td><td><code>com.amazon.mobile.shopping.web://amazon.com/gp/cart/view.html</code></td>
+        <td>the URL-carrying scheme. Bare <code>amazon://</code> and <code>amzn://</code> do not work</td></tr>
+    <tr><td>every other store</td><td>&mdash;</td><td>opens <code>cartUrl</code> in the browser</td></tr>
+  </table>
+
+  <h2>5 &middot; Defaults, and where they actually come from</h2>
+  <table class="src">
+    <tr><th>Knob</th><th>Effective default</th><th>Set in</th></tr>
+    <tr><td>parallel <b>search</b> workers</td><td><b>3</b></td><td><code>scripts?.workerCount ?? 3</code> &mdash; WebViewCartSheet</td></tr>
+    <tr><td>parallel <b>add</b> workers</td><td><b>3</b></td><td><code>parallelAddWorkerCount()</code> &rarr; store, then <code>flags.parallelAddWorkers</code>, then <code>PARALLEL_ADD_WORKERS</code></td></tr>
+    <tr><td>dispatch stagger</td><td><b>400 ms</b></td><td><code>scripts?.workerStaggerMs ?? 400</code></td></tr>
+    <tr><td>add-commit jitter</td><td><b>500 ms</b> + up to one more</td><td><code>commitJitterMs()</code>, <code>flags.addCommitJitterMs</code></td></tr>
+    <tr><td>add-worker timeout</td><td><b>35 s</b></td><td>hard-coded &mdash; longer than search because the worker also runs the badge poll</td></tr>
+    <tr><td><code>cacheBustNav</code></td><td>on</td><td>per store; off only for ALDI and Wegmans</td></tr>
+  </table>
+  <p>Worker count and stagger are kept low <b>globally</b> for anti-bot reasons, and the stagger also
+  activates the pool's per-worker jitter &mdash; so the request pattern is not a fixed metronome.</p>
+
+  <h2>One place the comment and the code disagree</h2>
+  <p><code>StoreScripts.workerCount</code> in <code>webview-scripts/index.ts</code> is documented as
+  &ldquo;<i>Defaults to 5. Lower it for stores with aggressive anti-bot (ALDI: 3).</i>&rdquo;
+  The call site is <code>scripts?.workerCount ?? 3</code>, and the note beside it records the change
+  (&ldquo;3 workers (was 5)&rdquo;). <b>The effective default is 3</b>, and it has been for as long as
+  that call site has read <code>?? 3</code> &mdash; so the interface docblock now describes a value
+  no store gets. It is stale documentation rather than a behavioural bug: every store either sets
+  <code>workerCount</code> explicitly or wants the low default. Worth a one-line fix next time
+  someone is in that file.</p>
+
+  <h2>What is deliberately <i>not</i> remote</h2>
+  <p>Everything in tables 2&ndash;4 is remotely tunable. <b>Nothing in table 1 is.</b>
+  <code>KROGER_BRAND_IDS</code> and <code>WEBVIEW_STORE_IDS</code> assert that this binary contains
+  code for a store, and no server response can make that true &mdash; a database row would otherwise
+  promise automation the installed app cannot deliver. The catalog can add a store's <i>name</i>;
+  only a release can add its <i>automation</i>.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

@@ -1,0 +1,168 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Walmart Add-to-Cart Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Stores &rsaquo; <b>Walmart</b> &middot; standalone storefront</span></div>
+<header>
+  <h1>Walmart add-to-cart automation</h1>
+  <div class="sub">Read off <code>webview-scripts/walmart.ts</code>, <code>WebViewCartSheet.tsx</code>
+  and the <code>stores.walmart</code> entry in <code>automation-config/schema.ts</code>.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Good outcome</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Degraded / refused</b></span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Walmart-specific</b> — nothing else does this</span>
+</div>
+
+<div class="wrap"><h3>The run, end to end</h3><pre class="mermaid">
+flowchart TD
+    START(["User taps<br/>Add N meals to Walmart cart"]) --> QTY
+    QTY["<b>qty</b><br/>uncheck items, set quantities"]
+    QTY -->|"tap Add Ingredients"| LOGINCHK
+
+    subgraph LOGINSG ["1 · Login check — a CLICK, not a cookie read"]
+        LOGINCHK["<b>login_check</b><br/>inject CHECK_LOGIN_SCRIPT"]
+        LOGINCHK --> HAM["poll ~4s for the hamburger<br/><i>SPA shell renders late</i>"]
+        HAM --> OPEN["click it, find the drawer<br/>dialog / aside / role=menu"]
+        OPEN --> SCAN{"read the drawer"}
+        SCAN -->|"'Sign in or create account'<br/>and NO greeting"| OUT["click sign-in<br/><i>Walmart navigates to /account/login</i>"]
+        SCAN -->|"'Hi, name' and<br/>NO sign-in button"| IN(["logged in"])
+        SCAN -->|"both, or neither"| AMB["<b>ambiguous</b><br/>default to LOGGED OUT<br/><i>surface a login, never fail silently</i>"]
+        AMB --> OUT
+    end
+
+    OUT --> LOGIN["<b>login</b><br/>user signs in in the WebView"]
+    LOGIN --> LOGINCHK
+    IN --> BEFORE["<b>before-snapshot</b><br/><code>CART_COUNT phase=before</code>"]
+    BEFORE --> ROUTE{{"chooseAddStrategy"}}
+    ROUTE -->|"workers parked"| SP["<b>presearch</b>"]
+    ROUTE -->|"all need a product"| PS["<b>parallelSearch</b>"]
+    ROUTE -->|"normal path"| PA["<b>parallelAdd</b><br/>worker pool"]
+    ROUTE -->|"fallback / retry"| SER["<b>serial</b>"]
+    SP --> NAV
+    PS --> NAV
+    PA --> NAV
+    SER --> NAV
+
+    subgraph PERITEM ["2 · Per item, inside a worker"]
+        NAV["navigate<br/>walmart.com/search?q=term"]
+        NAV --> WAITQ["wait for the URL to carry ?q=<br/><i>up to 5s</i>"]
+        WAITQ --> GRID["poll for cards"]
+        GRID --> STACK{"card inside<br/><code>data-testid=item-stack</code>?"}
+        STACK -->|"no — sponsored rail<br/>or 'Explore related items'"| DROPC["discard the card"]
+        STACK -->|yes| STAB{"count STABLE<br/>for 2 polls?"}
+        STAB -->|"no — grid still filling"| GRID
+        STAB -->|"stable, &ge; 4 cards"| READ["read titles"]
+        STAB -->|"stable but few —<br/>keep polling to ~3.6s"| READ
+        READ --> MATCH{"scoreMatch = 100?"}
+        MATCH -->|no| TOREVIEW(["queue for review"])
+        MATCH -->|yes| CLICK
+    end
+
+    subgraph ADDSG ["3 · The add — Walmart's optimistic UI is not evidence"]
+        CLICK{"already in cart?"}
+        CLICK -->|"stepper present"| INC["click stepper +"]
+        CLICK -->|no| ADDB["click Add to cart"]
+        INC --> VER
+        ADDB --> VER
+        VER["wait ~1s, then read TWO things"]
+        VER --> SIG{"which moved?"}
+        SIG -->|"cart-header <b>$ total</b> went up"| OKI["count this unit added"]
+        SIG -->|"stepper went up but<br/>the total did NOT"| REVERT["<b>optimistic revert</b><br/>Walmart's card UI updated,<br/>the server rejected it<br/><i>logged, NOT counted</i>"]
+        SIG -->|"neither"| STOPL["stop the loop"]
+        OKI --> MORE{"added &lt; QTY?"}
+        MORE -->|yes| CLICK
+        MORE -->|no| DONEI(["success"])
+        REVERT --> STOPL
+        STOPL --> PART(["partial / click_failed"])
+    end
+
+    DONEI --> RECON
+    PART --> RECON
+    TOREVIEW --> GATE
+    DROPC -.-> GRID
+
+    RECON["<b>reconcile</b><br/><code>CART_COUNT phase=reconcile</code>"]
+    RECON --> SPLIT{"cart readable?"}
+    SPLIT -->|no| UNVER["<b>cartUnverified</b><br/>fall back to worker reports"]
+    SPLIT -->|yes| THREE["reconcileParallelAdd<br/>confirmed / retry / unverified"]
+    THREE --> GATE
+    UNVER --> DONE
+
+    GATE{"any item without<br/>an exact match?"}
+    GATE -->|yes| SR["<b>searchResult</b><br/>'Items Not Added'"]
+    SR --> REVIEW["<b>review</b><br/>pick a substitute, or Skip"]
+    REVIEW --> DONE
+    GATE -->|no| DONE
+    DONE["<b>done</b>"] --> AFTER["<b>after-probe</b> &rarr; diff &rarr; audit &rarr; verdict"]
+    AFTER --> FINAL(["done screen<br/>N added · could not add · you skipped"])
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class QTY,LOGINCHK,LOGIN,DONE,SR,REVIEW state
+    class AMB,REVERT,UNVER,PART danger
+    class IN,OKI,DONEI,FINAL good
+    class STACK,SIG,STAB spec
+</pre></div>
+
+<div class="notes">
+  <h2>What is unique to Walmart</h2>
+  <p><b>The dollar total is the only honest signal.</b> Walmart's per-card stepper updates
+  <i>optimistically</i> — it shows the new quantity before the server has agreed. The cart header's
+  <code>aria-label</code> ("Cart contains N item Total Amount $X.XX") only moves after the API
+  commits. So <code>clickOnce</code> reads both, and success is <code>totalUp</code> alone; the
+  stepper reading is kept purely so that "stepper went up, total did not" shows up in the log as
+  the smoking gun for a server rejection.</p>
+
+  <p><b>Login is decided by opening a menu.</b> There is no cookie or endpoint to read, so the
+  check clicks the hamburger, waits for the drawer, and looks for exactly two indicators. The
+  <i>both-or-neither</i> case defaults to logged out on purpose — showing a login the user does not
+  need is recoverable; running an add against a signed-out session is not.</p>
+
+  <p><b>The grid fills progressively, so a low card count is distrusted.</b> A cold load can render
+  two cards, hold long enough to look settled, then fill in the rest. The extractor accepts a
+  healthy count (&ge; 4) as soon as it is stable for two polls, but keeps polling ~3.6&nbsp;s before
+  it will believe a small one.</p>
+
+  <p><b>Three layers of card that are not results.</b> Sponsored (<code>sba-container</code>) and
+  "Explore related items" (<code>carousel-container</code>) use the identical product markup. The
+  only thing that separates a real result is an ancestor with
+  <code>data-testid="item-stack"</code>, so every card walks up to 15 levels looking for it.</p>
+
+  <p><b><code>spaSearch</code> defaults true and should stay true.</b> Navigating to
+  <code>/search?q=</code> fires <code>onLoadEnd</code> more than once while the search-and-add
+  script is still running. Without the flag the engine re-injects and runs a duplicate add — which
+  double-adds, then the next item's navigation race-cancels the cart POST so the item reverts to
+  zero, <i>and</i> overwrites the next item's result slot so that item is skipped.</p>
+
+  <h2>Selectors and where they come from</h2>
+  <table class="src">
+    <tr><th>Role</th><th>Selector</th></tr>
+    <tr><td>card</td><td><code>[data-automation-id="product"], [data-item-id]</code></td></tr>
+    <tr><td>title</td><td><code>[data-automation-id="product-title"], [data-automation-id="name"]</code></td></tr>
+    <tr><td>addBtn</td><td><code>[data-automation-id="add-to-cart"], button[aria-label*="Add to cart"]</code></td></tr>
+    <tr><td>incBtn</td><td><code>[data-testid="quantity-stepper-inc-button"]</code></td></tr>
+  </table>
+  <p>All four ship as fallbacks in <code>SEL_FALLBACKS</code> and are overridden live from the
+  remote automation config — a Walmart redesign is a config push, not an App Store release. They are
+  read inside a build <i>function</i>, never at module scope, because the remote config lands after
+  import and a module-scope capture would freeze the fallbacks forever.</p>
+
+  <h2>Where the branches are decided</h2>
+  <table class="src">
+    <tr><th>Branch</th><th>Source</th></tr>
+    <tr><td>Login decide (three arms)</td><td><code>src/lib/webview-scripts/walmart.ts</code> → <code>CHECK_LOGIN_SCRIPT</code></td></tr>
+    <tr><td>item-stack filter, stability poll</td><td><code>buildExtractProductsScript</code></td></tr>
+    <tr><td>Total-vs-stepper verification</td><td><code>buildAddToCartScript</code> → <code>clickOnce</code></td></tr>
+    <tr><td>Name matching</td><td><code>src/lib/webview-scripts/_scoring.ts</code> (inlined copy)</td></tr>
+    <tr><td>Store config</td><td><code>automation-config/schema.ts</code> → <code>stores.walmart</code></td></tr>
+  </table>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

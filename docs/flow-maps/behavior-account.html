@@ -1,0 +1,178 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Account &amp; Subscription Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Behaviors &rsaquo; <b>Account, subscription &amp; admin</b></span></div>
+<header>
+  <h1>Account, subscription, and the admin tab</h1>
+  <div class="sub">Read off <code>screens/account/AccountScreen.tsx</code>,
+  <code>lib/purchases.ts</code>, <code>navigation/MainTabs.tsx</code> and
+  <code>screens/admin/AdminScreen.tsx</code>. Three purchase stores, two sign-out scopes, and one
+  tab that only exists for two people.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Screen / action</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Entitled</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Destructive</b></span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Platform fork</b></span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · Which tabs exist at all</h3><pre class="mermaid">
+flowchart TD
+    A(["signed in"]) --> TABS["<b>MainTabs</b>"]
+    TABS --> T1["Discover"]
+    TABS --> T2["My Meals"]
+    TABS --> T3["Account"]
+    TABS --> T4{"<code>isCreator</code>?"}
+    T4 -->|yes| CR["<b>Creator</b><br/>badge = <code>waiting</code> drafts"]
+    T4 -->|no| NOCR(["no Creator tab"])
+    TABS --> T5{"<code>isAdmin</code><br/><i>= !!user.isAdmin</i>"}
+    T5 -->|yes| AD["<b>Admin</b>"]
+    T5 -->|no| NOAD(["no Admin tab"])
+    TABS --> T6["Help"]
+
+    CR --> BADGE{{"the <b>count</b>, never a dot —<br/>'10' says set an evening aside,<br/>'1' says two-minute job;<br/>a dot says the same thing to both.<br/><br/><b>undefined, not 0</b> — React Navigation<br/>renders a 0 badge as a visible zero,<br/>which reads as a broken counter"}}
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    classDef dim fill:#1f2937,stroke:#4b5563,color:#9ca3af
+    class TABS,CR,AD state
+    class BADGE spec
+    class NOCR,NOAD dim
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · Subscription — buy, restore, and the manage fork</h3><pre class="mermaid">
+flowchart TD
+    LAUNCH(["app launch"]) --> INIT["<b>initPurchases()</b>"]
+    INIT --> EXPO{"Expo Go?"}
+    EXPO -->|yes| SKIP(["no native store — return"])
+    EXPO -->|no| KEY{"a RevenueCat key<br/>for this platform?"}
+    KEY -->|no| SKIP
+    KEY -->|yes| CFG["configure &middot; <code>configured = true</code>"]
+    CFG -->|"on beginSession"| IDF["<code>Purchases.logIn(user.id)</code>"]
+    CFG -->|"on logout"| RST["<code>Purchases.logOut()</code>"]
+
+    ACC(["Account tab"]) --> TIER{"<code>user.tier</code>"}
+    TIER -->|"'paid'"| PAID["<b>Full Access</b><br/>+ live entitlement details"]
+    TIER -->|"free"| FREE["<b>free</b> — up to 3 saved meals"]
+    FREE --> OFFER["load offerings<br/><i>keyed on tier, so a late-resolving<br/>plan still populates</i>"]
+    OFFER --> PICK["monthly / annual toggle<br/><i>fallback copy $3.99 / $39.99</i>"]
+    PICK -->|Upgrade| BUY["purchasePackage"]
+    BUY --> ENT{"entitlement active?"}
+    ENT -->|yes| WELCOME(["'Welcome to Full Access!'"])
+    ENT -->|"purchase received,<br/>not yet entitled"| PENDING(["'Activating… this can take a moment'"])
+    PAID -.->|"onEntitlementChange"| LIVE["a cancellation surfaces<br/><b>without a reload</b>"]
+
+    ACC -->|Restore| RES["restorePurchases"]
+    RES -->|found| RESOK(["restored"])
+    RES -->|none| RESNO(["'Nothing to restore'"])
+
+    ACC -->|"Manage subscription"| MG["<b>getActiveSubscriptionStore()</b>"]
+    MG --> MFORK{"where was it bought,<br/>and what device is this?"}
+    MFORK -->|"app_store + iOS"| M1["<code>Purchases.showManageSubscriptions()</code><br/><i>iOS-only — it throws on Android</i>"]
+    MFORK -->|"play_store + Android"| M2["<code>managementURL</code>, else the generic<br/>Play page filtered to <code>co.mealio.app</code>"]
+    MFORK -->|"app_store, viewing from Android"| M3["explain + offer<br/>apps.apple.com/account/subscriptions"]
+    MFORK -->|"play_store, viewing from iOS"| M4["explain + offer<br/>play.google.com/&hellip;/subscriptions"]
+    MFORK -->|"Stripe, or not in RevenueCat<br/>(a web-only subscriber)"| M5["GET /api/payments/portal &rarr;<br/>open it <b>in-app</b>, not handed<br/>to the external browser"]
+    M1 --> REFRESH["re-read entitlement details —<br/>they may have just cancelled"]
+    M2 --> REFRESH
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class ACC,PICK state
+    class WELCOME,RESOK,PAID good
+    class MFORK,M1,M2,M3,M4,M5 spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 3 · The three sign-outs, and account deletion</h3><pre class="mermaid">
+flowchart TD
+    S(["Account &rsaquo; Sign Out"]) --> SC{"scope"}
+    SC -->|"This device"| L1["<code>logout()</code>"]
+    SC -->|"All devices"| L2["POST /api/auth/logout-all,<br/><b>then</b> <code>logout()</code>"]
+    L1 --> OUT(["AuthStack"])
+    L2 --> OUT
+
+    G(["Log Out of Grocery Stores"]) --> GW["<b>CookieManager.clearAll(true)</b><br/><b>and clearAll(false)</b><br/><i>both, to cover iOS WKWebView AND the<br/>shared NSHTTPCookieStorage; the<br/>argument is ignored on Android</i>"]
+    GW --> GK{"Kroger connected?"}
+    GK -->|yes| GD["POST /api/kroger/disconnect<br/><i>Kroger is OAuth, not a cookie —<br/>so 'all stores' really means all</i>"]
+    GK -->|no| GDONE
+    GD --> GDONE(["signed out of every store.<br/><b>the Mealio account stays signed in</b>"])
+
+    D(["Delete Account"]) --> DC["type <b>Delete Account</b> exactly"]
+    DC --> DOK{"matches?"}
+    DOK -->|no| DBLOCK(["button stays inert"])
+    DOK -->|yes| DEL["DELETE /api/account/delete"]
+    DEL --> DOUT(["signed out, gone"])
+
+    P(["Change Password"]) --> PP["POST /api/account/change-password"]
+    PP --> PT{"a fresh accessToken<br/>came back?"}
+    PT -->|yes| PSAVE["store it — the old one<br/>may have been invalidated"]
+
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    class D,DEL,DOUT,L2,G danger
+    class GDONE,OUT good
+</pre></div>
+
+<div class="wrap"><h3>Diagram 4 · The Admin tab — fixture capture on a real device</h3><pre class="mermaid">
+flowchart TD
+    AD["<b>AdminScreen</b><br/><i>gated at the navigator, not inside:<br/>the tab is never mounted for a<br/>non-admin</i>"] --> URL["dev-machine server URL<br/>persisted in SecureStore"]
+    URL --> VU{"starts http:// or https://?"}
+    VU -->|no| VE(["'Bad URL'"])
+    VU -->|yes| TEST["reachability check"]
+    TEST --> LIST["for each store in<br/><code>FIXTURE_CAPTURE_STORES</code>:<br/>GET /list/&lt;storeId&gt;"]
+    LIST --> GRID["per-store capture status:<br/>which fixtures already exist"]
+    GRID -->|"tap a store"| SHEET["<b>FixtureCaptureSheet</b>"]
+
+    subgraph CAP ["capture, one fixture at a time"]
+        SHEET --> C1["show <code>instruction</code><br/><i>what the page must look like</i>"]
+        C1 --> C2["navigate <code>url</code>,<br/>wait for <code>waitFor</code>"]
+        C2 --> C3{"<code>suggestedDelayMs</code>?"}
+        C3 -->|"yes — a fleeting state,<br/>e.g. an open stepper that<br/>auto-collapses"| C4["pre-select that delay"]
+        C3 -->|no| C5["capture now"]
+        C4 --> C5
+        C5 --> C6["POST the HTML to the dev server"]
+        C6 --> C7{"more fixtures?"}
+        C7 -->|yes| C1
+        C7 -->|"<code>optional</code> ones missing"| C8(["fine — they do not<br/>fail the suite<br/><i>e.g. HEB's preference modal</i>"])
+    end
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    class AD,SHEET state
+    class C8 good
+</pre></div>
+
+<div class="notes">
+  <h2>Why the manage-subscription fork exists</h2>
+  <p>A store subscription can only be managed on the platform it was bought on. Calling the native
+  manage UI for the <i>other</i> store throws ("this method is not available in the current
+  platform"), so the native call is only made when the purchase store matches the device — and
+  otherwise the user is told where to go, with a web link as the escape hatch. The fifth arm covers
+  the case RevenueCat does not know about at all: a Stripe or web-only subscriber, who gets the
+  billing portal in an in-app browser sheet rather than a hand-off to the system browser.</p>
+
+  <h2>Two cookie clears, not one</h2>
+  <p><code>CookieManager.clearAll</code> is called with both <code>true</code> and
+  <code>false</code>. On iOS those are two different jars — WKWebView's own store and the shared
+  <code>NSHTTPCookieStorage</code> — and store auth cookies are HttpOnly, so nothing else reaches
+  them. On Android the argument is ignored and the second call is harmless.</p>
+  <p>Kroger is the exception that has to be handled separately: it is an OAuth connection held
+  server-side, not a cookie in a jar, so "log out of all grocery stores" disconnects it explicitly.
+  Otherwise the button would quietly mean "all stores except the one that is not a WebView".</p>
+
+  <h2>The admin tab is one repo boundary away from a test harness</h2>
+  <p><code>fixture-capture-config.ts</code> is shared verbatim between the Node/Playwright capture
+  runner and this screen, and is deliberately dependency-free — no React Native imports, no
+  Playwright imports — so both runtimes can pull it in. The reason the app has a capture path at all
+  is that a real iOS WebView's DOM is not the DOM Playwright sees, and the fixtures are what every
+  store's spec runs against.</p>
+  <p>The dev-server URL lives in SecureStore because that is the storage this app already has; the
+  value is not a secret.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

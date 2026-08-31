@@ -1,0 +1,184 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Cart Reconciliation Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Behaviors &rsaquo; <b>Cart reconciliation &amp; the verdict</b></span></div>
+<header>
+  <h1>Reconciliation &mdash; trust the cart, not the workers</h1>
+  <div class="sub">Read off <code>lib/cart-reconcile.ts</code> (1,557 lines, and every one of them
+  a case somebody hit). Shared by every WebView store. This is the layer that decides what the done
+  screen is allowed to say.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Confirmed by the cart</b></span>
+  <span class="chip"><span class="sw" style="background:#f59e0b"></span><b>Undecidable</b> — reported, never acted on</span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Failed / unintended</b></span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Cart-sourced</b> vs run-sourced</span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · reconcileParallelAdd — a worker's "added" is a claim, not a fact</h3><pre class="mermaid">
+flowchart TD
+    IN(["worker reports + the cart's<br/><b>added (green) rows</b> from diffCartItems"]) --> ROUTE{"per item"}
+
+    ROUTE -->|"worker said<br/>out_of_stock / no_results"| DEF(["<b>definiteFailure</b><br/>&rarr; review queue.<br/><i>never qty-matched — productName is<br/>null and the search term loosely<br/>collides with a sibling's row —<br/>and never blindly retried</i>"])
+    ROUTE -->|"has a product name"| MATCH["match cart rows by <b>exact</b> title"]
+
+    MATCH --> KIND{"how is this item counted?"}
+    KIND -->|"by unit count"| CNT{"units in the cart<br/>vs expectedQty"}
+    KIND -->|"sold by weight<br/>(purchaseWeight)"| PRES{"a weight row<br/>bearing this name?"}
+    KIND -->|"unit count, but the STORE<br/>line is weight-priced<br/>(weightStep, no purchaseWeight)"| ARITH
+
+    CNT -->|"&ge; expected"| OK(["<b>confirmed</b>"])
+    CNT -->|"short by k"| TU(["<b>topUp</b>, shortfall = k<br/><i>only the shortfall — re-adding<br/>the full qty over-adds the<br/>units that already landed</i>"])
+    CNT -->|"none"| TUALL(["<b>topUp</b>, full quantity"])
+    PRES -->|yes| OK
+    PRES -->|no| TUALL
+
+    ARITH["<b>landedIncrements</b><br/><i>diagram 2</i>"]
+    ARITH -->|"the line covers N clicks"| OK
+    ARITH -->|"short by a whole<br/>number of clicks"| TU
+    ARITH -->|"<b>null</b> — cannot decide"| UNV(["<b>countItemOnWeightRow</b><br/>report only, <b>never re-added</b><br/><i>the line plausibly DID land;<br/>re-adding unattended buys<br/>the meat a second time</i>"])
+
+    MATCH -->|"cart units no intended<br/>item accounts for"| OVER(["<b>overAdd</b><br/><i>a safety net: even if a future<br/>bug re-adds something, the cart<br/>check surfaces it rather than<br/>trusting the run silently</i>"])
+
+    TU --> SPLIT["<b>splitUnverifiableTopUps</b>"]
+    TUALL --> SPLIT
+    UNV --> SPLIT
+    SPLIT --> RETRY(["serial re-add, unattended"])
+    SPLIT --> REPORT(["report only"])
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef warn fill:#78350f,stroke:#f59e0b,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    class OK good
+    class UNV,REPORT,ARITH warn
+    class DEF,OVER danger
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · landedIncrements — a weight line checked by arithmetic, not a threshold</h3><pre class="mermaid">
+flowchart TD
+    A(["an item the meal counts in units<br/>('2 chicken breasts') whose store line<br/>is priced by weight — added by clicking<br/>an increment N times"]) --> G1{"increment known<br/>AND poundage read?"}
+    G1 -->|no| NULL(["<b>null</b> — undecidable"])
+    G1 -->|yes| EXP["expectedLb = <b>snapToWeightLadder</b><br/>(N × step, the ROW's own option ladder)"]
+    EXP --> LAD{{"snapped onto the ladder because that is the<br/>set of weights the line could actually hold.<br/>The in-page twin of <code>__closestOpt</code> in heb.ts,<br/>down to the tie-break (ties keep the LOWEST)."}}
+    EXP --> CMP{"addedLb &ge; expectedLb<br/><i>(&plusmn; 1e-4 lb float noise)</i>"}
+    CMP -->|yes| FULL(["<b>N</b> — the line covers the request"])
+    CMP -->|no| MISS["missingClicks =<br/>(expectedLb &minus; addedLb) &divide; step"]
+    MISS --> WHOLE{"a whole number<br/><i>(&plusmn; 1e-3)</i>?"}
+    WHOLE -->|"no — the line moved by something<br/>this increment cannot explain"| NULL
+    WHOLE -->|yes| RANGE{"1 &le; missing &lt; N?"}
+    RANGE -->|"no — short by the WHOLE request<br/>while demonstrably heavier than<br/>before: the two facts contradict"| NULL
+    RANGE -->|yes| PART(["<b>N &minus; missing</b><br/>top up by exactly<br/>the clicks that are missing"])
+
+    NEVER0{{"it never returns <b>0</b>. addedLb comes from a GREEN row,<br/>and a weight row is green only when the line GREW — so at<br/>least one click landed. That is what makes the top-up safe to<br/>run unattended: the shortfall is always strictly less than the<br/>request, so 'buy the meat twice' is unreachable from here."}}
+    PART -.-> NEVER0
+
+    HEAVY{{"a line that came back HEAVIER than asked is not<br/>reported here — that is the over-add channel's<br/>business, and it counts units, not pounds"}}
+    FULL -.-> HEAVY
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef warn fill:#78350f,stroke:#f59e0b,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class FULL,PART good
+    class NULL warn
+    class LAD,NEVER0,HEAVY spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 3 · buildCartVerdict — the ONE thing the done screen says</h3><pre class="mermaid">
+flowchart TD
+    S(["run finished"]) --> READ{"was the cart read at all?"}
+
+    READ -->|"no — <code>unreadReason</code>"| BADGE{"a header-badge<br/>count shortfall?"}
+    BADGE -->|yes| BMSG["'your cart went up by D items<br/>where E were expected'<br/><b>cartBacked: false</b><br/><i>a count says something is short;<br/>it cannot say WHICH item, so the<br/>run's own failed list stays on screen</i>"]
+    BADGE -->|no| UMSG["the run's failed list, <b>UNPROMOTED</b>.<br/><code>message = null</code> — MEAL-190 already<br/>owns and renders the 'we could not<br/>check your cart' copy"]
+
+    READ -->|yes| CMP["<b>compareCartToIntended</b><br/>added rows vs intended products,<br/>matched by <b>EXACT name</b>"]
+    CMP --> C1["drop <code>skippedNames</code> — passed over at review"]
+    CMP --> C2["drop <code>userAddedRows</code> — rows the USER<br/>put there by hand (MEAL-197)"]
+    CMP --> C3{{"<b>NOT</b> <code>explainedRows</code>, which is the opposite<br/>case: a weight row IS its intended item and has<br/>to stay in the pool to settle it — dropping<br/>those makes the item read as absent"}}
+
+    CMP --> FIND{"findings"}
+    FIND -->|"got = 0"| ABS["<b>'Mealio could not add X'</b><br/><i>never 'X is not in your cart' —<br/>the comparison measures what this<br/>RUN added; the user may already<br/>have had it, and telling them<br/>otherwise sends them to buy a second</i>"]
+    FIND -->|"0 &lt; got &lt; expected"| SHORT["'N items came up short —<br/>X (1 of 2) — which a store<br/>limit can cause'"]
+    FIND -->|"units nothing intended"| EXTRA["'your cart has N items<br/>Mealio did not add'"]
+    FIND -->|"nothing wrong, but items<br/>the run CALLED failed are<br/>sitting in the cart"| REC["'everything you asked for is<br/>there — no need to add it again'<br/><i>never 'we added them': a recovery is<br/>a name match against a row, enough to<br/>say the row is there and not enough<br/>to claim this run put it there</i>"]
+    FIND -->|"nothing at all"| NONE(["no message"])
+
+    ABS --> SPLITM
+    SHORT --> SPLITM
+    EXTRA --> SPLITM
+    SPLITM["split at the seam the banner collapses on"]
+    SPLITM --> TITLE["<b>title</b> — how many, and that<br/>something needs attention.<br/><i>NEVER folded away</i>"]
+    SPLITM --> DETAIL["<b>detail</b> — the product names,<br/>one labelled line each.<br/><i>the part that folds</i>"]
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class REC,NONE good
+    class ABS,EXTRA danger
+    class C3,CMP,TITLE spec
+</pre></div>
+
+<div class="notes">
+  <h2>Why there is exactly one message</h2>
+  <p>The done screen used to carry two warnings from two observers: "Could not add: X", sourced from
+  the run's own per-item reports, and a cart-check banner sourced from the before/after snapshot
+  diff. The second existed <i>because the first is known to lie</i> — which made them a claim and
+  its own rebuttal, printed as peers, leaving the user to work out which to believe.</p>
+  <p>The snapshot is the source of truth. The run's reports are consulted in exactly one case: when
+  there is no snapshot to read, where saying so out loud beats quietly reverting to the weaker
+  source. <code>cartBacked</code> is the flag that keeps the two honest.</p>
+
+  <h2>Conservatism is a requirement, not a style</h2>
+  <p>The original snapshot check recorded its own safety property: <i>the comparison can only
+  under-warn, never false-positive.</i> Promoting the snapshot to sole arbiter makes its false
+  positives the only thing a user sees, so that property is restored deliberately — every clause
+  reports what the cart <b>shows</b>, and nothing is inferred from a silence.</p>
+
+  <h2>Why exact name matching, and nothing looser</h2>
+  <p>The add path finds a product card by exact name — <code>scoreMatch</code> must return 100 for
+  the add gate to fire — so the title that reaches the cart <i>is</i> the term we searched for.
+  <code>IntendedItem.name</code> is not an approximate label for the product; it is the product's
+  title, and equality against a cart row is a fair comparison rather than a lucky one.</p>
+  <p>The version this replaced matched on a 60% token overlap, and every false statement the cold
+  review found came out of that leniency: "Bananas" swallowing "Bananas Organic"; a substitute
+  sharing no tokens with its search term landing in two clauses of one sentence about one product.
+  <b>A looser matcher cannot be made safe by filtering its output, because the mistakes are
+  indistinguishable from findings.</b> Exact equality has one failure mode, it is inspectable, and
+  it fails toward silence: a title that does not match is a product we do not claim anything
+  about.</p>
+
+  <h2>The same findings, said twice, on purpose</h2>
+  <p><code>message</code> names every product inline and is what the funnel and the tests read.
+  <code>title</code> and <code>detail</code> are the same facts split at the seam the banner
+  collapses on. The verdict — how many, and that something needs attention — must survive
+  collapsing; only the list may fold away. A single blob cannot be elided that way without hiding
+  the fact that anything is wrong, which is the one thing the banner exists to say.</p>
+
+  <h2>Why the good direction gets copy too</h2>
+  <p>The shape: a stale badge fails every worker, the after-probe reads the cart, and everything is
+  there. Nothing is absent, short or unintended — so there is no warning to print — while the
+  headline, driven by the run's own confirmed count, still says "No items were added." That headline
+  is itself a run-sourced failure claim, and dropping the recovery copy removed the only thing that
+  ever contradicted it. The user re-adds a full cart by hand. So the cart speaks up when it
+  disagrees with the run in the <i>good</i> direction as well.</p>
+
+  <h2>Two float tolerances that are not judgement thresholds</h2>
+  <p><code>WEIGHT_EPSILON_LB = 1e-4</code> and <code>CLICK_EPSILON = 1e-3</code> absorb the
+  arithmetic and nothing else. The store does not round these lines: the weight a cart row reports
+  is one of the discrete options the row offers, chosen when the line was set, so N clicks × the
+  increment lands exactly on an option. A tolerance wide enough to hide a missed click would be the
+  wrong shape of answer — a missed click is exactly what the check exists to catch.</p>
+
+  <h2>The invariant behind qty-step exclusion</h2>
+  <p><code>isZeroedOut</code> carries a sold-by-weight exception keyed on <code>purchaseWeight</code>.
+  On a surface whose item type has no such field the exception is <i>unreachable</i>, and the
+  predicate reduces to a plain <code>productQty &gt; 0</code> filter — which is what makes the
+  Kroger path provably unchanged by MEAL-65. That is why the Kroger item type deliberately carries
+  no weight fields, and why the type is exported so a test can pin it.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

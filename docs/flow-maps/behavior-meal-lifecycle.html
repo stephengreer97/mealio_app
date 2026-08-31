@@ -1,0 +1,165 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Meal Lifecycle Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Behaviors &rsaquo; <b>Meal lifecycle &amp; ingredients</b></span></div>
+<header>
+  <h1>A meal, from Discover to a cart line</h1>
+  <div class="sub">Read off <code>screens/discover/</code>, <code>screens/mymeals/</code>,
+  <code>screens/shared/</code>, <code>lib/normalizeIngredients.ts</code> and
+  <code>lib/consolidateIngredients.ts</code>. Most of the difficulty is in one question:
+  <b>how many packages does a recipe line actually ask you to buy?</b></div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Screen</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Saved</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Blocked</b></span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>The expensive decision</b></span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · How a meal gets into My Meals</h3><pre class="mermaid">
+flowchart TD
+    D["<b>Discover</b><br/>GET /api/preset-meals"] --> SORT{"sort"}
+    SORT -->|"default"| TR["<b>trending</b><br/><i>server-side RPC, cached 10 min,<br/>tag <code>trending-meals</code></i>"]
+    SORT -->|"<code>sort=new</code>"| NW["<b>new</b> — DB direct, no cache"]
+    SORT -->|"<code>followed=true</code>"| FL["<b>following</b> — DB direct, no cache"]
+    D -->|"filters"| F["tags · difficulty · limit/offset"]
+
+    TR --> CARD["a preset meal card"]
+    NW --> CARD
+    FL --> CARD
+    CARD -->|"tap"| SHEET["<b>MealDetailSheet</b>"]
+    SHEET -->|"Save"| PICKSTORE["<b>StoreSelectorSheet</b><br/><i>getStores() — remote catalog,<br/>filtered by isSupportedStore</i>"]
+    PICKSTORE --> SAVE["POST /api/preset-meals/:id/save<br/>{ storeId }"]
+
+    SH(["shared link<br/><code>/meal/&lt;token&gt;</code>"]) --> SS["<b>SharedMealScreen</b><br/>GET /api/shared/:token<br/><i>public</i>"]
+    SS -->|"Save"| PICKSTORE2["pick a store"] --> SAVE2["POST /api/shared/:token/save"]
+
+    NEW(["My Meals &rsaquo; +"]) --> FORM["name · ingredients ·<br/>store · photo"]
+    FORM --> CREATE["POST /api/meals"]
+
+    SAVE --> LIMIT{"free tier,<br/>already 3 meals?"}
+    SAVE2 --> LIMIT
+    CREATE --> LIMIT
+    LIMIT -->|"403"| UP(["'Limit Reached' &rarr;<br/>upgrade to Full Access"])
+    LIMIT -->|ok| MM(["<b>My Meals</b>, under that store's tab"])
+
+    MM -->|"delete"| DEL["soft delete &rarr;<br/>GET /api/meals/deleted<br/>&middot; POST /:id/restore<br/>&middot; DELETE ?permanent=true"]
+    MM -->|"share"| SHARE["POST /api/meals/:id/share<br/>&rarr; shareUrl"]
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    class D,SHEET,SS,MM,FORM state
+    class MM good
+    class UP danger
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · From My Meals to a cart run</h3><pre class="mermaid">
+flowchart TD
+    MM["<b>My Meals</b>, one tab per store<br/><i>tabs sorted by how many meals<br/>each store holds</i>"] --> CAP{"<code>isKrogerBrand</code> or<br/><code>isWebViewStore</code>?"}
+    CAP -->|no| VIEWONLY["cards open the meal.<br/>no multi-select, no cart"]
+    CAP -->|yes| SELECT["cards multi-select.<br/>a card with unchosen products<br/>carries 'Choose products once<br/>to add this to your cart'"]
+
+    SELECT -->|"tap a store tab"| PREWARM["<code>loginPrewarm.checkStore(id)</code><br/><i>silently probes the store's login<br/>state so the run does not open<br/>on a login wall</i>"]
+    SELECT --> FLOAT["floating button"]
+    FLOAT --> CONS["<b>consolidateIngredients</b>"]
+
+    subgraph CONSSG ["consolidation"]
+        CONS --> K{"merge key"}
+        K -->|"searchTerm + dropdown<br/>both present"| MERGE["merge across meals —<br/>one cart line, quantities added"]
+        K -->|"<b>no searchTerm</b>"| NOMERGE["<b>never merged</b>.<br/>each meal picks its<br/>product independently"]
+        MERGE --> PERMEAL["keep <code>mealIngredients[]</code>:<br/>per-meal qty, measure, unit, prep"]
+        PERMEAL --> WHY{{"the entry's own measure/unit is whichever meal<br/>happened to create it — every later meal merged in<br/>and its amount was dropped. Two meals sharing chicken<br/>both claimed the first one's '2 lb', on the one screen<br/>whose entire job is asking how much to buy.<br/><br/>prep is per-meal for the same reason and one more:<br/>two meals can want one onion diced and sliced."}}
+    end
+
+    NOMERGE --> RUN
+    PERMEAL --> RUN
+    RUN["<b>WebViewCartSheet</b> / <b>KrogerCartReviewSheet</b>"]
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class MM,RUN state
+    class WHY,NOMERGE spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 3 · packageQtyFor — how many packages to buy (MEAL-108)</h3><pre class="mermaid">
+flowchart TD
+    IN(["a recipe line:<br/>ingredientName · qty · unit"]) --> U{"<code>unit === 'qty'</code>?"}
+    U -->|"no — a measured unit<br/>(tbsp, cup, lb) or a cook's<br/>unit (cloves, sprigs)"| ONE(["<b>1 package</b>"])
+    U -->|yes| NAME{"<b>isSoldSingly(name)</b>"}
+
+    NAME --> HEAD{"head noun in<br/>SINGLE_UNIT_COUNTABLES?<br/><i>lemon · avocado · onion ·<br/>tomato · apple · leek · …</i>"}
+    HEAD -->|no| ONE
+    HEAD -->|yes| QUAL{"any PACK_QUALIFIER<br/>in the name?<br/><i>green · cherry · crushed ·<br/>canned · pickled · pepper · …</i>"}
+    QUAL -->|yes| ONE
+    QUAL -->|no| N["take the count from <code>qty</code>"]
+    N --> FRAC{"fractional?<br/><i>'1/2 onion' — 45 catalogue rows</i>"}
+    FRAC -->|yes| CEIL(["<b>ceil</b> — you cannot buy half<br/>an onion, and rounding down<br/>would zero the row out"])
+    FRAC -->|no| NPKG(["<b>N packages</b>"])
+
+    M1{{"<b>a measured unit is an amount OUT OF a package.</b><br/>'3 tbsp olive oil' is one bottle. The amount lives in<br/><code>qty</code> on catalogue rows, so anything reading qty<br/>without consulting unit buys three bottles."}}
+    M2{{"<b>a cook's unit is a PART of a package</b>, which is worse.<br/>'3 cloves garlic' is one head. '4 sprigs thyme' one bunch."}}
+    M3{{"<b>the count unit alone is not sufficient</b> — the catalogue<br/>bakes sub-package nouns into the NAME: 'Garlic cloves'<br/>(156 rows), 'Corn tortillas', 'Bacon strips', 'Egg yolks',<br/>'Nori sheets' all carry <code>unit: 'qty'</code>. Reading their<br/>count off qty orders four HEADS of garlic for four cloves."}}
+    U -.-> M1
+    U -.-> M2
+    NAME -.-> M3
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class ONE,NPKG,CEIL good
+    class M1,M2,M3 spec
+</pre></div>
+
+<div class="notes">
+  <h2>The recipe's amount and the shopper's count are different numbers</h2>
+  <p><code>qty</code>/<code>measure</code> is what the <i>recipe</i> asks for. <code>productQty</code>
+  is how many <i>packages</i> to buy. They are only ever equal on a countable line. This is not a
+  new heuristic — it is the rule <code>IngredientEditor.fromFormIng</code> already writes with
+  (countable &rArr; <code>qty: N, productQty: N</code>; measured &rArr; <code>qty: 1, productQty:
+  1</code>) and the rule <code>canonicalizeIngredient</code> writes with on the server, read back
+  out. A row that lost its <code>productQty</code> derives the number the editor would have
+  stored.</p>
+
+  <h2>Why the countable list is an allow-list, and a short one</h2>
+  <p>A deny-list can never be finished, and every noun missing from it would be an
+  <b>over-buy</b>. A name missing from the allow-list is merely a <b>1</b> — the failure the shopper
+  can see and fix, on a screen built to ask.</p>
+  <p>The bar for entry is that buying N of it cannot over-charge: three lemons is three lemons at
+  every store we support. Items sold loose <i>or</i> bagged are left out on purpose — carrots and
+  potatoes are the near misses, and "3 carrots" fetching three 1&nbsp;lb bags is exactly the outcome
+  the list exists to avoid. <code>pepper</code> sits in the <i>disqualifiers</i> rather than the
+  countables for the same reason: bell peppers are sold singly, but the word attaches to too many
+  things that are not, and losing the bell peppers to a 1 is the cheap mistake.</p>
+  <p>Package-ish words with no vocabulary behind them — "bottle", "jar", "pkg", "head", "rack" —
+  also resolve to 1. Buying N of those is often right, but "often" is not good enough for a number
+  that spends money: a can sold as a 4-pack turns 2 into 8. <b>One is the reading that can only ever
+  be too small</b>, and the stepper is right there to raise it.</p>
+  <p>Recovering the rest of these counts is catalogue work, not a parse: whether a given product is
+  sold loose or in a bag is store data the app does not have.</p>
+
+  <h2>Three key names for one field</h2>
+  <p>DB rows carry <code>ingredientName</code>, <code>productName</code>,
+  <code>product_name</code> or <code>name</code> depending on which writer last touched them — web,
+  mobile, the creator portal, or a preset import. Everything reads through
+  <code>normIngName</code> / <code>normalizeIngredients</code>, never the raw key.</p>
+  <p><code>prep</code> is read off the row with a spreadable (<code>prepOf</code>) so that "no
+  preparation" stays <i>absent</i> rather than becoming <code>null</code> — a row with none has to
+  serialise exactly like one written before the field existed. It is also kept structurally away
+  from <code>ingredientName</code> and <code>searchTerm</code>, which are what the cart searches for:
+  nothing that builds a store query reads it.</p>
+  <p><code>normProductQty</code> clamps non-positive or invalid values to 1, because saved meal data
+  can leak <code>qty: 0</code> from the chooser flow — which would otherwise disable the cart
+  button entirely.</p>
+
+  <h2>Trending is cached; the other two sorts are not</h2>
+  <p>Trending is computed by the <code>get_preset_meals_with_trending</code> RPC and cached
+  server-side for 10 minutes under the tag <code>trending-meals</code>, invalidated whenever a
+  creator creates, updates or deletes a meal. "New" and "Following" query the database directly.
+  The cache is server-side only — nothing in the app holds it.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

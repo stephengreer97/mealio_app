@@ -1,0 +1,113 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mealio Flow Maps</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="hero">
+  <h1>Mealio flow maps</h1>
+  <div class="sub">How each part of Mealio actually decides what it does &mdash; read off the code,
+  not off the design. Every branch on these pages exists because something went wrong once.</div>
+</div>
+
+<div class="section">
+  <h2>Stores &middot; add-to-cart automation</h2>
+  <div class="blurb">A matrix across all of them, then eight maps for 36 store rows. Four storefronts stand alone; ALDI and the
+  Albertsons family are each one platform wearing several banners; the Kroger family runs on an API
+  and has no DOM automation at all.</div>
+  <div class="grid">
+    <a class="tile" href="store-capability-matrix.html" style="border-left-color:#a78bfa">
+      <div class="t">Capability matrix</div>
+      <div class="d">Every store against every knob &mdash; platform, workers, cache-bust, login
+      detection, confirmation, cart read, kill-switch key.</div>
+      <div class="tag">all stores &middot; one table</div></a>
+    <a class="tile heb" href="store-heb.html">
+      <div class="t">H-E-B</div>
+      <div class="d">The full run, plus the MEAL-200 network-add rail and every way it declines.</div>
+      <div class="tag">standalone</div></a>
+    <a class="tile wm" href="store-walmart.html">
+      <div class="t">Walmart</div>
+      <div class="d">Login by opening a menu; the dollar total is the only honest add signal.</div>
+      <div class="tag">standalone</div></a>
+    <a class="tile weg" href="store-wegmans.html">
+      <div class="t">Wegmans</div>
+      <div class="d">Serial by force of the WAF, and a login cache that is a tiebreaker, not a fast path.</div>
+      <div class="tag">standalone &middot; serial</div></a>
+    <a class="tile amz" href="store-amazon-fresh.html">
+      <div class="t">Amazon Fresh</div>
+      <div class="d">Two card layouts, a modal that intercepts clicks, and zero results that mean "no store".</div>
+      <div class="tag">standalone</div></a>
+    <a class="tile aldi" href="store-aldi-instacart.html">
+      <div class="t">ALDI</div>
+      <div class="d">The Instacart Storefront platform &mdash; one adapter, many banners, one that has ever run.</div>
+      <div class="tag">instacart platform</div></a>
+    <a class="tile alb" href="store-albertsons-family.html">
+      <div class="t">Albertsons family</div>
+      <div class="d">15 banners, one storefront. Three login defences, and a session token deliberately unused.</div>
+      <div class="tag">15 banners</div></a>
+    <a class="tile kro" href="store-kroger-family.html">
+      <div class="t">Kroger family</div>
+      <div class="d">OAuth and a REST cart. No WebView, no selectors, nothing for a redesign to break.</div>
+      <div class="tag">15 banners &middot; API</div></a>
+    <a class="tile mock" href="store-mockstore.html">
+      <div class="t">Mock Store</div>
+      <div class="d">The deterministic storefront Maestro drives, and the failures it can be told to produce.</div>
+      <div class="tag">dev / e2e only</div></a>
+  </div>
+</div>
+
+<div class="section">
+  <h2>The cart, across all stores</h2>
+  <div class="blurb">The parts every WebView store shares.</div>
+  <div class="grid">
+    <a class="tile beh" href="behavior-cart-engine.html">
+      <div class="t">The cart engine</div>
+      <div class="d">Ten steps, two kinds of block, and a run that reports even when abandoned.</div>
+      <div class="tag">state machine</div></a>
+    <a class="tile beh" href="behavior-cart-reconcile.html">
+      <div class="t">Reconciliation &amp; the verdict</div>
+      <div class="d">Trust the cart, not the workers &mdash; and the one thing the done screen is allowed to say.</div>
+      <div class="tag">ground truth</div></a>
+    <a class="tile beh" href="behavior-choose-products.html">
+      <div class="t">Choose Products &amp; matching</div>
+      <div class="d">The scorer, the add gate, the ranking that cannot reach a cart, and the save queue.</div>
+      <div class="tag">matching</div></a>
+    <a class="tile beh" href="behavior-remote-config.html">
+      <div class="t">Remote config &amp; catalog</div>
+      <div class="d">Fixing a store without shipping a build &mdash; and the line capability may never cross.</div>
+      <div class="tag">config pushes</div></a>
+    <a class="tile beh" href="behavior-telemetry.html">
+      <div class="t">Telemetry &amp; the north-star</div>
+      <div class="d">Did the user get their groceries? What counts, what is excluded, and how much to trust it.</div>
+      <div class="tag">metrics</div></a>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Accounts &amp; content</h2>
+  <div class="blurb">Everything that is not a cart.</div>
+  <div class="grid">
+    <a class="tile beh" href="behavior-auth.html">
+      <div class="t">Login, tokens &amp; session</div>
+      <div class="d">Five doors into a session, one seam, and two cross-account bugs running opposite ways.</div>
+      <div class="tag">auth</div></a>
+    <a class="tile beh" href="behavior-account.html">
+      <div class="t">Account, subscription &amp; admin</div>
+      <div class="d">Three purchase stores, two sign-out scopes, and a tab that exists for two people.</div>
+      <div class="tag">account</div></a>
+    <a class="tile beh" href="behavior-creator.html">
+      <div class="t">Creator account</div>
+      <div class="d">Apply, publish, the YouTube read/write split, and the import review queue.</div>
+      <div class="tag">creator</div></a>
+    <a class="tile beh" href="behavior-meal-lifecycle.html">
+      <div class="t">Meal lifecycle &amp; ingredients</div>
+      <div class="d">Discover to cart line &mdash; and how many packages a recipe line actually asks you to buy.</div>
+      <div class="tag">meals</div></a>
+  </div>
+</div>
+
+<div class="foot">
+  18 maps &middot; generated from <code>~/mealio_app</code> on branch
+  <code>feat/meal-202-network-search</code>, 2026-08-30. Diagrams render locally &mdash; nothing on
+  these pages calls out to the network.
+</div>
+</body></html>

@@ -4,10 +4,21 @@ name: Tests
 # ubuntu runners. Runs on every push and PR. The expensive iOS Maestro
 # workflow (ios-maestro.yml) is separate and only fires on PRs to main.
 
+# Documentation cannot change what the suite tests, so a change touching only
+# docs is not worth a run. The filter skips ONLY when every changed file
+# matches it — docs alongside source still runs everything — and it is repeated
+# under each event because a paths-ignore belongs to one trigger, not to `on`.
+# workflow_dispatch deliberately has none: a manual run should always run.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
 
 concurrency:

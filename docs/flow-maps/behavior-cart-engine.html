@@ -1,0 +1,180 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Cart Engine State Machine</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Behaviors &rsaquo; <b>The cart engine</b> &middot; shared by every WebView store</span></div>
+<header>
+  <h1>The cart engine &mdash; one state machine, six storefronts</h1>
+  <div class="sub">Read off <code>components/WebViewCartSheet.tsx</code> (5,657 lines) and
+  <code>context/CartJobContext.tsx</code>. The per-store maps show what happens <i>inside</i> a
+  step; this is the skeleton they all hang on.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>running</b> — the bubble spins</span>
+  <span class="chip"><span class="sw" style="background:#f59e0b"></span><b>attention</b> — forces the sheet open</span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>warning</b> — badges the bubble, does not yank</span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>done</b></span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · The ten steps, and what each one does to the UI</h3><pre class="mermaid">
+flowchart TD
+    START(["startJob()"]) --> QTY
+
+    QTY["<b>qty</b><br/><i>setup</i> · 'Set quantities'"]
+    QTY -->|"tap Add Ingredients"| LC
+    LC["<b>login_check</b><br/><i>running</i> · 'Checking login…'"]
+    LC -->|"LOGIN_STATUS false"| LOGIN
+    LC -->|"LOGIN_STATUS true"| SEARCHING
+    LOGIN["<b>login</b><br/><i>attention</i> · 'Log in to &lt;store&gt;'"]
+    LOGIN -->|"LOGIN_COMPLETE, or a<br/>re-inject that now says true"| LC
+
+    SEARCHING["<b>searching</b><br/><i>running</i> · 'Adding to cart…'"]
+    SEARCHING --> ADDING["<b>adding</b><br/><i>running</i>"]
+    ADDING --> SEARCHING
+    SEARCHING -->|"no exact match<br/>for some item"| SR
+    ADDING -->|"all items settled"| DONE
+
+    SR["<b>searchResult</b><br/><i>warning</i> · 'Choose a product'<br/>the 'Items Not Added' gate"]
+    SR -->|"tap Review N Ingredients"| REV
+    REV["<b>review</b><br/><i>warning</i> · 'Review needed'<br/>pick a substitute, or Skip"]
+    REV -->|"pick"| ADDING
+    REV -->|"Skip &rarr; skippedNames"| DONE
+
+    DONE["<b>done</b><br/><i>done</i>"]
+    DONE -->|"anything failed or skipped"| MAN["<b>manual</b><br/><i>attention</i> · 'Add items yourself'<br/><i>PR #124, not yet merged</i>"]
+    MAN --> DONE
+
+    BLK["<b>robot_challenge</b><br/><i>attention</i> · 'Verification needed'"]
+    LC -.-> BLK
+    SEARCHING -.-> BLK
+    ADDING -.-> BLK
+    BLK -->|"URL leaves /blocked"| RESUME["resume at the SAVED item index"]
+    RESUME --> SEARCHING
+
+    classDef run fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef att fill:#78350f,stroke:#f59e0b,color:#fff
+    classDef warn fill:#4c1d95,stroke:#a78bfa,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    class LC,SEARCHING,ADDING run
+    class LOGIN,BLK,MAN att
+    class SR,REV warn
+    class DONE good
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · Two ways to be blocked, and only one of them can be retried automatically</h3><pre class="mermaid">
+flowchart TD
+    B{"how were we blocked?"}
+    B -->|"a redirect to <code>/blocked?url=…</code><br/><i>Walmart's press-and-hold wall</i>"| URLB["<b>robot_challenge</b>, with a URL marker.<br/>clear the three timeouts, empty the load<br/>queue, and <b>save the current item index</b>"]
+    B -->|"HTTP <b>403 / 429 / 503</b>"| HTTPB["<b>robot_challenge</b>, <code>blockReason = 'http-403'</code>.<br/>same step UI, different banner"]
+    B -->|"<code>consecutiveTimeoutBlock</code><br/>timeouts in a row (default 2)"| TOB["declared WAF-blocked"]
+
+    URLB --> WATCH["watch onLoadEnd"]
+    WATCH --> OFF{"URL no longer /blocked?"}
+    OFF -->|"yes — the user solved it"| RES(["<b>auto-resume</b> at the saved index"])
+    OFF -->|no| WATCH
+
+    HTTPB --> STAY["<b>stay put.</b> do NOT re-navigate"]
+    TOB --> STAY
+    STAY --> WHY{{"an HTTP block has no URL marker and nothing to solve.<br/>Re-navigating just re-blocks — that was the tight 403 loop.<br/>Only the user's explicit <b>Try again</b> moves it."}}
+    STAY --> MANUAL(["wait for <b>Try again</b>"])
+    MANUAL --> LC(["back to login_check"])
+
+    classDef att fill:#78350f,stroke:#f59e0b,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class URLB,HTTPB,TOB att
+    class RES good
+    class WHY spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 3 · The job lives above navigation — the sheet is a layer, not a modal</h3><pre class="mermaid">
+flowchart TD
+    ROOT["<b>CartJobProvider</b> at the app root<br/><i>the WebView engine is mounted HERE, so it<br/>survives navigation between screens</i>"] --> START(["startJob()"])
+    START --> EXP["<b>start expanded</b> — login is<br/>handled up front, in the foreground"]
+    EXP --> WORK{"work reaches search / add?"}
+    WORK -->|yes| COL["<b>auto-collapse</b> to the floating bubble.<br/>the WebView keeps running behind it"]
+    COL --> KIND{"the step's <code>kind</code>"}
+    KIND -->|"<b>attention</b><br/>login · robot_challenge · manual"| FORCE(["<b>force the sheet open</b>"])
+    KIND -->|"<b>warning</b><br/>searchResult · review"| BADGE(["badge the bubble.<br/><i>the user taps to expand —<br/>we do not yank the sheet<br/>open under them</i>"])
+    KIND -->|"<b>done</b>"| CHECK(["a check on the bubble"])
+    KIND -->|"<b>running</b>"| RING
+
+    RING["determinate progress ring"]
+    RING --> SPLIT{{"<b>the ring must never run backward.</b> The concurrent<br/>pass owns the first <b>85%</b>; the cart check and the<br/>sequential top-up own the last 15%. Previously the<br/>parallel pass reached 100% (completed/total) and the<br/>reconcile baseline — confirmed/original, always lower —<br/>snapped the ring back."}}
+    RING --> SRC{{"progress counts <code>processedCount</code>, which advances once<br/>per ingredient AND triggers a render. Not <code>searchIdxRef</code><br/>(a ref, so no render) and not <code>totalAdded</code> (which the<br/>sequential search-and-add path never updates — that<br/>left the ring frozen)."}}
+
+    classDef att fill:#78350f,stroke:#f59e0b,color:#fff
+    classDef warn fill:#4c1d95,stroke:#a78bfa,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class FORCE att
+    class BADGE warn
+    class CHECK good
+    class SPLIT,SRC spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 4 · A run that is abandoned still reports</h3><pre class="mermaid">
+flowchart TD
+    U(["user closes the sheet<br/>mid-run"]) --> ER["<b>endRun()</b>, from a cleanup"]
+    ER --> HAS{"is there a runId?"}
+    HAS -->|"no — the server issued no run,<br/>so there is no automation_runs row<br/>for this to be the missing half of"| NOOP(["drop it"])
+    HAS -->|yes| ALREADY{"<code>automationCompletedRef</code>?<br/><i>did this run already reach 'done'?</i>"}
+    ALREADY -->|yes| NOOP2(["<b>no second terminal row.</b><br/><i>mealio_central takes the LAST run_summary<br/>as the run's terminal row — a 'skipped' one<br/>landing after a clean finish blanks that<br/>run's code and relabels it in the drilldown</i>"])
+    ALREADY -->|no| ROW["emit run_summary<br/><code>outcome: 'skipped'</code><br/><code>detail.abandonedAt = &lt;the step&gt;</code>"]
+
+    ROW --> WHY1{{"<b>'skipped', not 'error'</b> — the run did not fail, it stopped.<br/>It is the one non-success outcome carrying no failure code,<br/>so these rows cannot leak into the code tally or the<br/>failure charts, and <code>detail.terminal</code> lets the read side<br/>count or exclude them deliberately."}}
+    ROW --> WHY2{{"<b><code>abandonedAt</code> is the actionable field.</b> A pile of 'qty' is<br/>people changing their mind before any automation ran.<br/>A pile of 'robot_challenge' is a store beating us.<br/><b>Those must not be one number.</b>"}}
+    ROW --> WHY3{{"<b>it biases OPTIMISTICALLY, and that is the direction that<br/>matters.</b> A run a user abandons is not a random run — it is<br/>disproportionately one that was going badly, so the rows<br/>that vanish are the failures."}}
+
+    REF{{"<code>endRun</code> reads nothing but <b>refs</b>, deliberately. It is called<br/>from a cleanup with <code>[]</code> deps, so the closure it runs from may<br/>be the first render's — a rule that holds only as long as every<br/>value is read through <code>.current</code>."}}
+    ER -.-> REF
+
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class WHY1,WHY2,WHY3,REF spec
+</pre></div>
+
+<div class="notes">
+  <h2>What the store adapter supplies, and what the engine owns</h2>
+  <table class="src">
+    <tr><th>The store's <code>StoreScripts</code></th><th>The engine</th></tr>
+    <tr><td>URLs, domain, <code>appScheme</code></td><td>the ten-step machine and every transition</td></tr>
+    <tr><td><code>checkLoginScript</code>, <code>isLoginPageUrl</code>, <code>isLoginSuccessUrl</code>, <code>reinjectLoginCheckOnNav</code></td><td>the login loop, and when to re-inject</td></tr>
+    <tr><td><code>extractProductsScript</code>, <code>buildSearchScript</code>, <code>buildSearchAndAddScript</code>, <code>buildAddToCartScript</code></td><td>which one to inject, when, and into which WebView</td></tr>
+    <tr><td><code>buildWorkerScript</code> / <code>buildPresearchWorkerScript</code> / <code>buildAddWorkerScript</code></td><td>the three pools, their queues and their timeouts</td></tr>
+    <tr><td><code>workerCount</code>, <code>workerStaggerMs</code>, <code>forceSerialSearch</code>, <code>cacheBustNav</code>, <code>spaSearch</code></td><td><code>chooseAddStrategy</code>, and the re-injection guard</td></tr>
+    <tr><td>—</td><td>the before/after snapshots, reconcile, audit, verdict, telemetry</td></tr>
+  </table>
+  <p>A store that omits <code>getSearchUrl</code> + <code>buildWorkerScript</code> simply stays on
+  the sequential single-WebView path. Nothing else has to know.</p>
+
+  <h2>Why <code>spaSearch</code> exists at all</h2>
+  <p>An SPA storefront changes its URL via <code>pushState</code> and fires
+  <code>onLoadEnd</code> more than once for one route change, while the injected script is still
+  running. Without the flag the engine reads that second same-URL load as a script-killing reload and
+  re-injects — spawning a duplicate <code>SEARCH_AND_ADD_RESULT</code> that over-advances the item
+  index. The concrete damage differs per store and all of it is silent: on H-E-B the skipped item's
+  slot was consumed and the after-snapshot fired while a search page was still up, reporting 0
+  items; on Walmart the duplicate double-added, then the next item's navigation race-cancelled the
+  cart POST so the item reverted to zero <i>and</i> overwrote the next item's result slot.</p>
+
+  <h2>Three timeouts, cleared together</h2>
+  <p><code>searchTimeoutRef</code>, <code>addTimeoutRef</code> and
+  <code>loginCheckTimeoutRef</code> are cleared as a set whenever the engine leaves the flow —
+  entering <code>robot_challenge</code>, or ending the run. A surviving timer fires into a step that
+  no longer exists and advances an index nobody is reading.</p>
+
+  <h2>Where the other maps pick up</h2>
+  <table class="src">
+    <tr><th>Step</th><th>Detail lives in</th></tr>
+    <tr><td><code>login_check</code> / <code>login</code></td><td>each store's map — this is where they differ most</td></tr>
+    <tr><td><code>searching</code> / <code>adding</code></td><td>each store's map, plus <a href="behavior-choose-products.html">Choose Products &amp; matching</a></td></tr>
+    <tr><td>reconcile, after-probe, verdict</td><td><a href="behavior-cart-reconcile.html">Cart reconciliation</a></td></tr>
+    <tr><td>every knob named above</td><td><a href="behavior-remote-config.html">Remote config &amp; catalog</a></td></tr>
+    <tr><td>what a run reports</td><td><a href="behavior-telemetry.html">Telemetry &amp; the north-star metric</a></td></tr>
+  </table>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

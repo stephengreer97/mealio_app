@@ -1,0 +1,232 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>H-E-B Add-to-Cart Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Stores &rsaquo; <b>H-E-B</b> &middot; standalone storefront</span></div>
+<header>
+  <h1>H-E-B add-to-cart automation</h1>
+  <div class="sub">The path a run actually takes, read off <code>WebViewCartSheet.tsx</code>,
+  <code>automation-config/</code>, <code>webview-scripts/heb.ts</code> and <code>cart-reconcile.ts</code>.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b> — the state machine</span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Good outcome</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Degraded</b> — blocked, or nothing can check the run</span>
+  <span class="chip"><span class="sw" style="background:#f59e0b"></span><b>Manual mode</b> — PR #124, not yet merged</span>
+</div>
+<div class="wrap"><h3>The run, end to end</h3><pre class="mermaid">
+flowchart TD
+    START(["User taps<br/>Add N meals to H-E-B cart"]) --> QTY
+
+    subgraph SETUP ["1 · Setup"]
+        QTY["<b>qty</b><br/>uncheck items, set quantities"]
+        PARK{{"every item already has<br/>a chosen product?"}}
+        PRESEARCH["park pre-search workers<br/><i>results pages held open</i>"]
+        QTY -.-> PARK
+        PARK -->|yes, and logged in| PRESEARCH
+    end
+
+    QTY -->|"tap Add Ingredients"| LOGINCHK
+    LOGINCHK["<b>login_check</b><br/>inject CHECK_LOGIN_SCRIPT"]
+    LOGINCHK --> ISLOGGED{"logged in?"}
+    ISLOGGED -->|no| LOGIN["<b>login</b><br/>user signs in<br/>in the WebView"]
+    LOGIN --> LOGINCHK
+    ISLOGGED -->|yes| BEFORE
+
+    BEFORE["<b>before-snapshot</b><br/>navigate /cart, count<br/><code>CART_COUNT phase=before</code>"]
+    BEFORE --> NOBASE{"baseline read?"}
+    NOBASE -->|"no"| NOPROBE(["no after-probe later<br/><i>nothing can check the run</i>"])
+    NOBASE -->|yes| ROUTE
+
+    ROUTE{{"chooseAddStrategy"}}
+    ROUTE -->|"workers parked"| SP["<b>presearch</b><br/>commit parked adds ~1s"]
+    ROUTE -->|"all items need a product"| PS["<b>parallelSearch</b><br/>choose-run, adds nothing"]
+    ROUTE -->|"H-E-B's normal path"| PA["<b>parallelAdd</b><br/>pool of 4 WebViews"]
+    ROUTE -->|"fallback / retry"| SER["<b>serial</b><br/>one item at a time"]
+
+    SP --> WORKER
+    PA --> WORKER
+    SER --> WORKER
+
+    subgraph PERITEM ["2 · Per item, inside a worker"]
+        WORKER["navigate<br/>heb.com/search?q=term"]
+        WORKER --> EXTRACT["extract cards<br/><code>[data-qe-id=productTitle]</code>"]
+        EXTRACT --> MATCH{"EXACT name match?"}
+        MATCH -->|no| TOREVIEW(["queue for review"])
+        MATCH -->|"yes, out of stock"| TOREVIEW
+        MATCH -->|yes| RAIL{{"network add eligible?<br/><i>see diagram 2</i>"}}
+        RAIL -->|yes| NETADD["ask the cart<br/><code>addItemToCartV2</code>"]
+        RAIL -->|no / declined| ADDBTN["click Add to cart"]
+        NETADD --> REPORTED
+        ADDBTN --> PREFS{"preference modal?<br/><i>deli slicing</i>"}
+        PREFS -->|yes| PICKPREF["pick preference"]
+        PREFS -->|no| QTYLOOP
+        PICKPREF --> QTYLOOP
+        QTYLOOP{"qty > 1?"}
+        QTYLOOP -->|yes| INC["click + until<br/>__qtyBase + QTY"]
+        QTYLOOP -->|no| REPORTED
+        INC --> REPORTED(["worker reports<br/>success / failure"])
+    end
+
+    REPORTED --> RECON
+
+    subgraph RECONCILE ["3 · Reconcile — trust the CART, not the workers"]
+        RECON["<code>CART_COUNT phase=reconcile</code>"]
+        RECON --> READABLE{"cart readable?"}
+        READABLE -->|no| UNVER["<b>cartUnverified</b><br/>fall back to worker reports<br/><i>a guess, labelled as one</i>"]
+        READABLE -->|yes| SPLIT["reconcileParallelAdd"]
+        SPLIT --> C1(["confirmed"])
+        SPLIT --> C2(["retry — genuinely missing"])
+        SPLIT --> C3(["unverified — weight-row<br/>disagreement, reported only"])
+        C2 --> SERRETRY["serial re-add,<br/>one at a time"]
+    end
+
+    C1 --> GATE
+    C3 --> GATE
+    SERRETRY --> GATE
+    UNVER --> DONE
+    TOREVIEW --> GATE
+
+    GATE{"any item without<br/>an exact match?"}
+    GATE -->|yes| SR["<b>searchResult</b><br/>'Items Not Added' gate"]
+    SR -->|"tap Review N Ingredients"| REVIEW
+    REVIEW["<b>review</b><br/>'Pick a Substitute'"]
+    REVIEW -->|"pick one"| ADDSUB["add the substitute"]
+    REVIEW -->|"Skip this ingredient"| SKIPPED(["skippedNames"])
+    ADDSUB --> DONE
+    SKIPPED --> DONE
+    GATE -->|no| DONE
+
+    DONE["<b>done</b>"]
+    DONE --> AFTER["<b>after-probe</b><br/><code>CART_COUNT phase=after</code>"]
+    AFTER --> DIFF["diffCartItems(before, after)"]
+    DIFF --> AUDIT["auditCartAfterRun<br/><i>missing · short · over · recovered</i>"]
+    AUDIT --> VERDICT["buildCartVerdict<br/><i>the ONE banner the screen shows</i>"]
+    VERDICT --> RECOVERED{"cart holds something<br/>we called failed?"}
+    RECOVERED -->|yes| DROP["drop it from the failed list<br/><i>never 'we added it'</i>"]
+    RECOVERED -->|no| FINAL
+    DROP --> FINAL
+
+    FINAL["<b>done screen</b><br/>N added · could not add · you skipped"]
+
+    FINAL --> MANUAL{"anything failed<br/>or skipped?"}
+    MANUAL -->|yes| OFFER["<b>Add the N remaining items myself</b>"]
+    MANUAL -->|no| END(["Open H-E-B Cart to Checkout"])
+
+    subgraph MANUALMODE ["4 · Manual add mode — PR #124, NOT YET MERGED"]
+        OFFER --> MSTEP["<b>manual</b><br/>navigate to search page per item<br/><b>inject NOTHING</b>"]
+        MSTEP --> MUSER["user adds it in H-E-B's own UI"]
+        MUSER --> MNEXT{"Skip / Next"}
+        MNEXT -->|"more items"| MSTEP
+        MNEXT -->|"last item — Finish"| MBACK["mark handled,<br/>re-probe the cart"]
+    end
+    MBACK --> AFTER
+
+    BLOCK["<b>robot_challenge</b><br/>HTTP 403 / 429 / 503"]
+    BLOCK -->|"user clears it, taps Try again"| LOGINCHK
+    LOGINCHK -.->|"anti-bot"| BLOCK
+    WORKER -.->|"anti-bot"| BLOCK
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef unmerged fill:#78350f,stroke:#f59e0b,color:#fff
+    class QTY,LOGINCHK,LOGIN,DONE,SR,REVIEW,FINAL state
+    class BLOCK,UNVER,NOPROBE danger
+    class END,C1,DROP good
+    class OFFER,MSTEP,MUSER,MBACK unmerged
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · The network-add rail (MEAL-200) — every way it declines</h3><pre class="mermaid">
+flowchart TD
+    IN(["exact match found<br/>card carries productId + skuId"]) --> F1{"<code>networkAdd</code> on?<br/><i>ships OFF</i>"}
+    F1 -->|no| CLICK
+    F1 -->|yes| F2{"has productId<br/>AND skuId?"}
+    F2 -->|no| CLICK
+    F2 -->|yes| F3{"preference popup,<br/>or sold by weight?"}
+    F3 -->|"yes — an over-add<br/>here cannot be undone"| CLICK
+    F3 -->|no| F4{"cart baseline read?<br/><code>cartSkuConfirm</code> rail"}
+    F4 -->|"no usable read"| CLICK
+    F4 -->|yes| F5{"product on more<br/>than one cart line?"}
+    F5 -->|"yes — cannot say<br/>which line to set"| CLICK
+    F5 -->|no| F6{"matched cart line<br/>is weight-priced?"}
+    F6 -->|yes| CLICK
+    F6 -->|no| SEND["POST addItemToCartV2<br/><code>quantity = cartBase + QTY</code><br/><i>SETS the line, absolute</i>"]
+
+    SEND --> ARM{"response arm"}
+    ARM -->|"Cart — applied"| OK(["added &middot; via=network"])
+    ARM -->|"error arm"| CLICK
+    ARM -->|"timeout / network /<br/>unparseable / http"| UNRES["<b>unresolved</b><br/>we do not know if it landed"]
+
+    UNRES --> RE["re-read the cart"]
+    RE --> RQ{"cart now holds<br/>&ge; the quantity we sent?"}
+    RQ -->|yes| OK
+    RQ -->|"no, and cart readable"| REBASE["click path,<br/>but re-baselined off<br/>THIS read, not the label"]
+    RQ -->|"cart unreadable"| REFUSE(["<b>refuse the item</b><br/>reason <code>write_unresolved</code><br/><i>clicking could double it</i>"])
+    REBASE --> CLICK
+
+    CLICK["click path, unchanged<br/><i>the shipped, known-good route</i>"]
+    CLICK --> OK2(["added &middot; via=click"])
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef warn fill:#78350f,stroke:#f59e0b,color:#fff
+    class OK,OK2 good
+    class REFUSE danger
+    class UNRES,RE,RQ,REBASE warn
+</pre></div>
+
+<div class="notes">
+  <h2>Three things the shape is hiding</h2>
+  <p><b>The before-snapshot is load-bearing.</b> If <code>CART_COUNT phase=before</code> never
+  answers, there is no baseline, so there is no after-probe — and nothing in the run can
+  contradict the workers. Every silent add defect reports success on its own checks; the cart
+  diff is the only thing that has ever disagreed.</p>
+  <p><b>Reconcile trusts the cart, not the workers.</b> A worker saying "added" is a claim.
+  <code>reconcileParallelAdd</code> splits those claims three ways against a real cart read:
+  confirmed, retry (re-added serially, unattended), and unverified — the count-item-on-a-weight-row
+  case, which is neither re-added (that buys it twice) nor confirmed (that claims a delivery
+  nobody checked).</p>
+  <p><b>A search failure ends as <i>skipped</i>, not <i>failed</i>.</b> No exact match sends the
+  item to the review screen, and the user's Skip there puts it in <code>skippedNames</code>. That is
+  why manual mode offers failed <b>and</b> skipped — offering only the failed ones made the
+  feature unreachable on the run that needed it.</p>
+
+  <h2>What is unique to H-E-B</h2>
+  <ul>
+    <li><b><code>spaSearch: true</code></b> — the search route re-renders and fires
+        <code>onLoadEnd</code> a second time for the same URL. Without the flag the engine
+        re-injects, spawning a duplicate <code>SEARCH_AND_ADD_RESULT</code> that over-advances the
+        item index and silently skips an item.</li>
+    <li><b><code>nextDataSearch</code></b> (off) — read results out of
+        <code>&lt;script id="__NEXT_DATA__"&gt;</code> instead of scraping cards, which is where the
+        sponsored and "perfect pairings" carousels simply are not present. Degrades back to the DOM
+        extractor at runtime, so it can lose speed but not correctness.</li>
+    <li><b><code>cartSkuConfirm</code></b> (off) — confirm each add against H-E-B's own cart query
+        instead of the header badge. Every failure mode resolves to "we could not read the cart",
+        never to "the item is missing".</li>
+    <li><b><code>networkAdd</code></b> (off, requires <code>cartSkuConfirm</code>) — diagram 2.</li>
+    <li><b>Two login URLs.</b> A logged-out profile click redirects to <code>accounts.heb.com</code>,
+        an OIDC <code>/authorize</code> URL the generic auth-redirect skip would swallow, so H-E-B
+        declares its own <code>isLoginPageUrl</code> and re-injects the login check when the chain
+        settles back on the store.</li>
+  </ul>
+
+  <h2>Where the branches are decided</h2>
+  <table class="src">
+    <tr><th>Branch</th><th>Source</th></tr>
+    <tr><td><code>chooseAddStrategy</code></td><td><code>src/lib/automation-config/decisions.ts:75</code></td></tr>
+    <tr><td><code>shouldStartPresearch</code></td><td><code>src/lib/automation-config/decisions.ts:113</code></td></tr>
+    <tr><td>H-E-B store config (spaSearch, nextDataSearch, cartSkuConfirm, cartEndpoint)</td><td><code>src/lib/automation-config/schema.ts</code> → <code>stores.heb</code></td></tr>
+    <tr><td>Card extraction, exact match, network-add rail</td><td><code>src/lib/webview-scripts/heb.ts</code></td></tr>
+    <tr><td>Cart query transport and line matching</td><td><code>src/lib/webview-scripts/heb-cart-query.ts</code></td></tr>
+    <tr><td>Reconcile / audit / verdict</td><td><code>src/lib/cart-reconcile.ts</code></td></tr>
+  </table>
+  <p>Exact-name matching in the add path is not a heuristic choice — it is the cart governing
+  principle: never add what the user did not ask for, never over- or under-add.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>
