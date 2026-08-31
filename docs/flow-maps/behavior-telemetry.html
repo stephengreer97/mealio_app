@@ -120,6 +120,21 @@ flowchart TD
 </pre></div>
 
 <div class="notes">
+  <h2>Two reasons the network rails added (MEAL-200, MEAL-202)</h2>
+  <ul>
+    <li><b><code>search_unanswered</code></b> &rarr; <code>match_rejected</code>. The network
+      search could not answer for a term &mdash; the wall, a timeout, a shape we did not expect.
+      NOT "the store has nothing", which comes back as an ordinary empty candidate list. The item
+      goes to review, so nothing was attempted and nothing needed confirming.</li>
+    <li><b><code>write_unresolved</code></b> &rarr; <code>confirm_failed</code>. A network write
+      whose answer was lost AND whose cart could not be re-read. The run deliberately does not
+      click in that state &mdash; clicking on top of a write that did apply adds the item twice
+      &mdash; so there is no evidence either way.</li>
+  </ul>
+  <p><code>error_arm</code> is mapped too, and is deliberately unreachable today: the guard
+  requires a code for every reason the scripts can emit, and that one only ever reaches a debug
+  line because the run falls back to clicking and reports whatever the click did.</p>
+
   <h2>The one debatable call, taken conservatively</h2>
   <p>A skipped-in-review item stays in the denominator. Review is only ever <i>reached</i> because
   the automation failed to match the item on its own, so a skip is a user giving up on our miss more

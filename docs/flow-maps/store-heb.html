@@ -178,6 +178,47 @@ flowchart TD
     class UNRES,RE,RQ,REBASE warn
 </pre></div>
 
+<div class="wrap"><h3>Diagram 3 &middot; The network run (MEAL-202) &mdash; three phases, no page loads</h3><pre class="mermaid">
+flowchart TD
+    A(["beginSearchFlow &mdash; strategy 'network'"]) --> S1
+
+    S1["<b>1 &middot; session</b><br/>myPreferredStore &rarr; is there a user?<br/>SessionContext &rarr; store + pickup/delivery"]
+    S1 -->|"no user"| LOGIN(["login step &mdash; this IS the login gate"])
+    S1 -->|"cannot answer"| POOL(["hand the whole run to the pool"])
+    S1 --> S2
+
+    S2["<b>2 &middot; search</b><br/>every term, 3 at a time, one script<br/><b>the WebView never navigates</b>"]
+    S2 -->|"well-formed page,<br/>no product grid"| NORES(["the store has NOTHING &mdash;<br/>an answer, not a failure"])
+    S2 -->|"wall / timeout<br/>for ONE term"| REV1(["that item &rarr; review<br/><i>the other eleven carry on</i>"])
+    S2 --> S3
+
+    S3["<b>3 &middot; add</b><br/>exact name + in stock, same rule as the page path<br/>quantity = what the cart already holds + asked"]
+    S3 -->|"no exact match"| REV2(["review, carrying its candidates"])
+    S3 -->|"sold by weight,<br/>or a preference item"| REV3(["review &mdash; an over-add on<br/>a weight line cannot be undone"])
+    S3 -->|"no cart baseline"| POOL
+    S3 --> FIN(["finishParallelAdd()"])
+
+    FIN --> REC(["the ordinary reconcile, review routing,<br/>done screen and telemetry &mdash; unchanged"])
+
+    classDef net fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef warn fill:#4c1d95,stroke:#a78bfa,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    class S1,S2,S3 net
+    class REV1,REV2,REV3,NORES warn
+    class FIN,REC good
+</pre>
+<p>Three request parameters do more than the speed does.
+<code>excludeSponsoredContent</code> means the sponsored and "perfect pairings" tiles are never
+asked for, so they cannot be mistaken for results &mdash; a class of extraction bug that stops
+existing rather than being fixed. <code>includeOutOfStock</code> replaces reading stock off button
+text. <code>pageSize</code> states the result count instead of accepting however many tiles
+rendered.</p>
+<p><b>The store identifier is the trap.</b> <code>me.preferredStore.storeNumber</code> and
+<code>cartV2.fulfillment.store.id</code> are both store identifiers and they differ &mdash;
+measured 243 and 476 for one shop. Search wants fulfillment's. Sending the other searches a
+different catalogue and returns results that look entirely reasonable.</p>
+</div>
+
 <div class="notes">
   <h2>Three things the shape is hiding</h2>
   <p><b>The before-snapshot is load-bearing.</b> If <code>CART_COUNT phase=before</code> never
@@ -208,6 +249,12 @@ flowchart TD
         instead of the header badge. Every failure mode resolves to "we could not read the cart",
         never to "the item is missing".</li>
     <li><b><code>networkAdd</code></b> (off, requires <code>cartSkuConfirm</code>) — diagram 2.</li>
+    <li><b><code>networkSearch</code></b> (off, requires <code>networkAdd</code> +
+        <code>cartSkuConfirm</code>) — ask the store's gateway for results instead of loading a
+        results page. Together the two make a run that never navigates: <b>10.8&nbsp;s
+        tap-to-reconcile against 22.5&nbsp;s</b>, measured on a device over twelve ingredients,
+        with all twelve searches taking 1.0&nbsp;s. It also runs no worker WebViews, which is about
+        187&nbsp;MB of the memory peak. See diagram 3.</li>
     <li><b>Two login URLs.</b> A logged-out profile click redirects to <code>accounts.heb.com</code>,
         an OIDC <code>/authorize</code> URL the generic auth-redirect skip would swallow, so H-E-B
         declares its own <code>isLoginPageUrl</code> and re-injects the login check when the chain

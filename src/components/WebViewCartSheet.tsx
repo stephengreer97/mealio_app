@@ -1583,7 +1583,16 @@ export default function WebViewCartSheet({
     setStep('searching');
     setSearchingLabel('Connecting…');
     console.log(`[Cart ${ts()}]`, 'network run: reading the session');
-    netArm(20_000, 'session_timeout');
+    // Tried now AND re-tried on the next store page load.
+    //
+    // Every request here is same-origin, so the script is useless unless the
+    // WebView is actually sitting on the store. It usually is by this point —
+    // the login check and the cart baseline both put it there — but "usually"
+    // produced a 20 s session timeout on the second device run, where this fired
+    // while the page was still mid-navigation and the injection went nowhere.
+    // Re-injecting is safe: the script only reads, and a duplicate answer is
+    // ignored once the phase has moved on.
+    netArm(25_000, 'session_timeout');
     webviewRef.current?.injectJavaScript(buildHebSessionScript());
   }, [netArm, setStep]);
 
@@ -2679,6 +2688,13 @@ export default function WebViewCartSheet({
     // with its own blast radius across 20+ banners; MEAL-136 fixed the host.
     if (!s || !url.includes(s.domain)) {
       console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'skipped: not store domain');
+      return;
+    }
+    // A network run waiting on its session: the injection at run start can land
+    // while the page is mid-navigation and go nowhere. This is the retry.
+    if (netActiveRef.current && netPhaseRef.current === 'session') {
+      console.log(`[Cart ${ts()}]`, 'network run: re-reading the session on', url.slice(0, 60));
+      webviewRef.current?.injectJavaScript(buildHebSessionScript());
       return;
     }
     // Manual mode injects NOTHING (MEAL-197). Checked before every other branch

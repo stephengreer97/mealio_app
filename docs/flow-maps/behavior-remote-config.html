@@ -143,6 +143,18 @@ flowchart TD
 </pre></div>
 
 <div class="notes">
+  <h2>The H-E-B network switches (MEAL-200, MEAL-202)</h2>
+  <p>Three keys that only mean something together:
+  <code>cartSkuConfirm</code> supplies the transport, <code>networkAdd</code> writes with it, and
+  <code>networkSearch</code> reads with it. All three off by default.</p>
+  <pre>{"stores":{"heb":{"cartSkuConfirm":true,"networkAdd":true,"networkSearch":true}}}</pre>
+  <p><b>Pushing <code>networkSearch</code> alone does nothing</b>, and pushing it with
+  <code>networkAdd</code> off would be worse than either path alone &mdash; no page load for the
+  search, then one per item to click the add. The engine requires all three before it takes the
+  route, so a partial push degrades to the pooled path rather than to something slower.</p>
+  <p>An older client that does not know these keys drops them with a warning and runs its bundled
+  defaults, which is what makes them safe to push without gating on an app version.</p>
+
   <h2>The exact rejection pattern</h2>
   <p>A selector or URL is refused if it matches
   <code>/['"\\`\r\n\u2028\u2029&lt;&gt;]|\$&#123;/</code> — a quote, a backslash, a backtick, a

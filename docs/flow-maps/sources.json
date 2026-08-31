@@ -7,7 +7,6 @@
     "When you update a map, update `readAt` for that map to the commit you read.",
     "`npm run flow-maps:bless` does that for every map at once."
   ],
-  "defaultReadAt": "f2218a9",
   "maps": {
     "index.html": {
       "title": "Index",
@@ -21,7 +20,8 @@
         "src/components/WebViewCartSheet.tsx",
         "src/constants/features.ts",
         "src/constants/stores.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "store-heb.html": {
       "title": "H-E-B",
@@ -32,7 +32,8 @@
         "src/lib/automation-config/decisions.ts",
         "src/lib/cart-reconcile.ts",
         "src/components/WebViewCartSheet.tsx"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "store-walmart.html": {
       "title": "Walmart",
@@ -40,14 +41,16 @@
         "src/lib/webview-scripts/walmart.ts",
         "src/lib/webview-scripts/_scoring.ts",
         "src/lib/automation-config/schema.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "store-wegmans.html": {
       "title": "Wegmans",
       "sources": [
         "src/lib/webview-scripts/wegmans.ts",
         "src/lib/automation-config/schema.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "store-amazon-fresh.html": {
       "title": "Amazon Fresh",
@@ -55,7 +58,8 @@
         "src/lib/webview-scripts/amazon-fresh.ts",
         "src/lib/webview-scripts/cart-confirm.ts",
         "src/lib/automation-config/schema.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "store-aldi-instacart.html": {
       "title": "ALDI / Instacart Storefront",
@@ -64,7 +68,8 @@
         "src/lib/webview-scripts/index.ts",
         "src/lib/webview-scripts/cart-count.ts",
         "src/lib/automation-config/schema.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "store-albertsons-family.html": {
       "title": "Albertsons family",
@@ -73,7 +78,8 @@
         "src/lib/webview-scripts/auth-urls.ts",
         "src/lib/selector-health.ts",
         "src/lib/automation-config/schema.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "store-kroger-family.html": {
       "title": "Kroger family",
@@ -82,7 +88,8 @@
         "src/components/ProductChooserSheet.tsx",
         "src/lib/api.ts",
         "src/constants/stores.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "store-mockstore.html": {
       "title": "Mock Store",
@@ -90,7 +97,8 @@
         "src/lib/webview-scripts/mockstore.ts",
         "src/lib/webview-scripts/index.ts",
         "src/constants/stores.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "behavior-cart-engine.html": {
       "title": "The cart engine",
@@ -99,13 +107,15 @@
         "src/context/CartJobContext.tsx",
         "src/lib/webview-scripts/index.ts",
         "src/lib/automation-config/decisions.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "behavior-cart-reconcile.html": {
       "title": "Reconciliation & the verdict",
       "sources": [
         "src/lib/cart-reconcile.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "behavior-choose-products.html": {
       "title": "Choose Products & matching",
@@ -115,7 +125,8 @@
         "src/lib/webview-scripts/_scoring.ts",
         "src/lib/saveChosenIngredient.ts",
         "src/components/ChooseProductsIntroSheet.tsx"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "behavior-remote-config.html": {
       "title": "Remote config & catalog",
@@ -124,14 +135,16 @@
         "src/lib/store-catalog",
         "src/lib/selector-health.ts",
         "src/constants/stores.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "behavior-telemetry.html": {
       "title": "Telemetry & the north-star",
       "sources": [
         "src/lib/north-star.ts",
         "src/lib/automation-telemetry.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "behavior-auth.html": {
       "title": "Login, tokens & session",
@@ -140,7 +153,8 @@
         "src/lib/tokenStorage.ts",
         "src/screens/auth",
         "src/navigation/RootNavigator.tsx"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "behavior-account.html": {
       "title": "Account, subscription & admin",
@@ -150,7 +164,8 @@
         "src/lib/purchases.ts",
         "src/lib/fixture-capture-config.ts",
         "src/navigation/MainTabs.tsx"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "behavior-creator.html": {
       "title": "Creator account",
@@ -158,7 +173,8 @@
         "src/screens/creator",
         "src/components/YouTubeConnectCard.tsx",
         "src/components/PlatformLinksCard.tsx"
-      ]
+      ],
+      "readAt": "97cc7ec"
     },
     "behavior-meal-lifecycle.html": {
       "title": "Meal lifecycle & ingredients",
@@ -168,7 +184,8 @@
         "src/screens/shared/SharedMealScreen.tsx",
         "src/lib/normalizeIngredients.ts",
         "src/lib/consolidateIngredients.ts"
-      ]
+      ],
+      "readAt": "97cc7ec"
     }
   }
 }
