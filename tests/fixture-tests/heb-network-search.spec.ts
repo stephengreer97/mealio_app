@@ -467,3 +467,24 @@ describe('HEB MEAL-202: the store\'s own limits', () => {
     expect('purchasePreferenceId' in without).toBe(false);
   });
 });
+
+describe('HEB MEAL-202: an out-of-stock exact match must not change rails', () => {
+  // Measured on a device: an out-of-stock product was reported as
+  // low_confidence, which sent it to the reconcile's top-up — abandoning a rail
+  // that answered in 280 ms to LOAD A PAGE and be told the same thing 1.8 s
+  // later. The store has it and will not sell it today; re-asking finds that out
+  // again. The reason has to say so, because the reconcile routes on it.
+  const oos = (over: Record<string, unknown> = {}) => product({
+    inventory: { inventoryState: 'OUT_OF_STOCK' }, ...over,
+  });
+
+  itWithFixture('logged-in-home.html', 'marks an out-of-stock exact match out_of_stock, not low_confidence', async (runner) => {
+    await runner.inject(stub(searchPayload([oos()])));
+    await runner.inject(search());
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 15_000);
+    // The search itself just reports the flag; the routing decision is the
+    // engine's, and it needs this to be true to make it.
+    expect(msg.candidates[0].outOfStock).toBe(true);
+    expect(msg.candidates[0].productName).toBe('H-E-B Regular Sour Cream, 16 oz');
+  });
+});

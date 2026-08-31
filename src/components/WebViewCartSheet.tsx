@@ -108,7 +108,11 @@ interface SearchResult {
   mealIngredients: MealIngredientQty[];
   unit: string;
   measure: string | null;
-  reason: 'out_of_stock' | 'no_results' | 'low_confidence' | 'needs_weight';
+  /** `quantity_limit_reached` is MEAL-202's: the cart already holds the store's
+   *  per-item maximum, so there is nothing this run can add and a retry cannot
+   *  change that. It reaches the review screen like any other definitive
+   *  failure. */
+  reason: 'out_of_stock' | 'no_results' | 'low_confidence' | 'needs_weight' | 'quantity_limit_reached';
   isChoose: boolean; // true = choose-product flow (no searchTerm yet); false = review unmatched (searchTerm set but no match)
 }
 
@@ -811,6 +815,11 @@ export default function WebViewCartSheet({
   const netActiveRef = useRef(false);
   const netPhaseRef = useRef<'idle' | 'session' | 'search' | 'add'>('idle');
   const netTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Items the store refused because the cart ALREADY holds its per-item maximum.
+  // Held separately from the failed list because "we could not add this" and
+  // "your cart is already at the limit for this" are different things to be
+  // told: the second is not a failure of the run, and re-running will not help.
+  const [capReached, setCapReached] = useState<Array<{ name: string; detail: string }>>([]);
   // The pool path is declared BELOW the network path (it is the thing the
   // network path falls back to, so it reads better after it). A ref breaks the
   // cycle without reordering two hundred lines.
@@ -1518,12 +1527,25 @@ export default function WebViewCartSheet({
       // The SAME rule the page path uses: an exact name, in stock. Anything
       // looser here would add a product the user did not ask for, which is the
       // one thing the cart rules never allow.
-      const match = candidates.find((c) => scoreMatch(term, c.productName) === 100 && !c.outOfStock);
-      if (!match || !match.productId || !match.skuId) {
+      const exact = candidates.filter((c) => scoreMatch(term, c.productName) === 100);
+      const match = exact.find((c) => !c.outOfStock && c.productId && c.skuId);
+      if (!match) {
+        // The reason has to distinguish three different situations, because the
+        // reconcile routes on it and one of them must NOT be retried.
+        //
+        // An exact match that is OUT OF STOCK is a definitive failure: the store
+        // has the product and will not sell it today, so re-running the same
+        // search finds the same thing. Reporting it as low_confidence sent it to
+        // the reconcile's top-up, which abandoned a rail that answered in 280 ms
+        // and LOADED A PAGE to be told the same thing 1.8 s later — measured
+        // doing exactly that on a device run.
+        const outOfStockExact = exact.length > 0 && exact.every((c) => c.outOfStock);
         netResultsRef.current.set(idx, {
           success: false,
-          productName: null,
-          reason: candidates.length === 0 ? 'no_results' : 'low_confidence',
+          productName: outOfStockExact ? exact[0].productName : null,
+          reason: candidates.length === 0
+            ? 'no_results'
+            : outOfStockExact ? 'out_of_stock' : 'low_confidence',
           candidates,
         });
         continue;
@@ -1547,10 +1569,20 @@ export default function WebViewCartSheet({
       const preference = chosenLabel
         ? (match.preferences ?? []).find((pr) => pr.text === chosenLabel)
         : undefined;
+      // Re-read after the find: the predicate proved these are present, but that
+      // narrowing does not survive out of it.
+      const productId = match.productId;
+      const skuId = match.skuId;
+      if (!productId || !skuId) {
+        netResultsRef.current.set(idx, {
+          success: false, productName: match.productName, reason: 'low_confidence', candidates,
+        });
+        continue;
+      }
       toWrite.push({
         idx,
-        productId: match.productId,
-        skuId: match.skuId,
+        productId,
+        skuId,
         quantity: Math.max(1, Math.round(item.productQty || 1)),
         name: match.productName,
         isWeightItem: false,
@@ -1752,6 +1784,7 @@ export default function WebViewCartSheet({
       // same ingredient from the next meal's offer, `manualUsedRef` re-probes
       // the cart on every later run, and `copiedList` says "Copied" before
       // anything has been copied.
+      setCapReached([]);
       setManualQueue([]);
       setManualIdx(0);
       setManualHandled([]);
@@ -3780,6 +3813,11 @@ export default function WebViewCartSheet({
           const at = typeof msg.idx === 'number' ? msg.idx : -1;
           if (at < 0) return;
           console.log(`[Cart ${ts()}]`, 'network add', msg.name, msg.success ? 'ok' : ('failed: ' + msg.reason));
+          if (!msg.success && msg.reason === 'quantity_limit_reached') {
+            setCapReached((prev) => (prev.some((c) => c.name === msg.name)
+              ? prev
+              : [...prev, { name: String(msg.name ?? ''), detail: String(msg.detail ?? '') }]));
+          }
           netResultsRef.current.set(at, {
             success: !!msg.success,
             productName: msg.name ?? null,
@@ -5449,6 +5487,25 @@ export default function WebViewCartSheet({
                   title={`${skippedUnits} item${skippedUnits !== 1 ? 's' : ''} you skipped`}
                   body={skippedNames.join(', ')}
                 />
+              )}
+
+              {/* MEAL-202: the store's per-item cap, already met by what the cart
+                  holds. Its own banner rather than a line in "could not add",
+                  because it is not a failure of the run and re-running changes
+                  nothing — the user's cart simply already has as many as H-E-B
+                  will sell them. Saying only "could not add" would send them to
+                  add it by hand, which the store would refuse too. */}
+              {capReached.length > 0 && (
+                <View style={styles.skippedBanner} testID="snapshot-cap-reached">
+                  <Text style={styles.skippedBannerTitle}>
+                    {capReached.length} item{capReached.length !== 1 ? 's' : ''} already at {storeName}'s limit
+                  </Text>
+                  <Text style={styles.skippedBannerBody} numberOfLines={4}>
+                    {capReached.map((c) => c.name).join(', ')}
+                    {' — '}your cart already holds as many as {storeName} allows per order, so we
+                    did not add more.
+                  </Text>
+                </View>
               )}
 
               {/* MEAL-119: count items whose cart line came back priced by weight.

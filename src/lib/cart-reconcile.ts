@@ -324,8 +324,13 @@ export interface WorkerReport {
 
 /** Failure reasons that are definitive: the item is genuinely not in the cart
  *  and re-running the same search would only fail the same way, so it goes to
- *  the user for review rather than to the top-up. */
-export type DefiniteFailureReason = 'out_of_stock' | 'no_results';
+ *  the user for review rather than to the top-up.
+ *
+ *  `quantity_limit_reached` joined them for MEAL-202. The cart already holds the
+ *  store's per-item maximum, so a retry cannot add anything — and on the network
+ *  route a retry is worse than useless: it abandons a rail that answered in
+ *  280 ms for one that loads a page, to be told the same thing 1.8 s later. */
+export type DefiniteFailureReason = 'out_of_stock' | 'no_results' | 'quantity_limit_reached';
 
 /**
  * One item the parallel pass attempted, paired with its worker's report.
@@ -433,7 +438,8 @@ export function reconcileParallelAdd(
   }[] = [];
   attempts.forEach((attempt, index) => {
     const r = attempt.report;
-    if (r && !r.success && (r.reason === 'out_of_stock' || r.reason === 'no_results')) {
+    if (r && !r.success && (r.reason === 'out_of_stock' || r.reason === 'no_results'
+        || r.reason === 'quantity_limit_reached')) {
       definiteFailures.push({ index, reason: r.reason });
       return;
     }
