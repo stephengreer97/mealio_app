@@ -36,7 +36,7 @@ flowchart TD
     SEARCHING -->|"no exact match<br/>for some item"| SR
     ADDING -->|"all items settled"| DONE
 
-    SR["<b>searchResult</b><br/><i>warning</i> · 'Choose a product'<br/>the 'Items Not Added' gate"]
+    SR["<b>searchResult</b><br/><i>warning</i> · 'Choose a product'<br/>the 'Items Not Added' gate<br/><i>each item says WHY</i>"]
     SR -->|"tap Review N Ingredients"| REV
     REV["<b>review</b><br/><i>warning</i> · 'Review needed'<br/>pick a substitute, or Skip"]
     REV -->|"pick"| ADDING
@@ -136,6 +136,18 @@ flowchart TD
 </pre></div>
 
 <div class="notes">
+  <h2>The gate says why, per item (MEAL-202)</h2>
+  <p>It used to carry one blanket sentence for every item &mdash; "this may be because the item is
+  out of stock or the store no longer carries it" &mdash; a guess covering two possibilities out of
+  five. The network rail reports a real per-item reason, so the screen stops guessing.</p>
+  <p>The distinction is not cosmetic. <b>"Out of stock" and "no exact match" ask the user for
+  completely different things</b>: the first is nothing they can fix by choosing better, the second
+  is exactly that. A screen that says the same for both sends half its readers to do the wrong
+  thing.</p>
+  <p>The blanket sentence still appears, but only for an item whose reason has no honest sentence
+  &mdash; where every item can say why, a guess underneath them offers two explanations for
+  problems already named, and one of them will be wrong.</p>
+
   <h2>What the store adapter supplies, and what the engine owns</h2>
   <table class="src">
     <tr><th>The store's <code>StoreScripts</code></th><th>The engine</th></tr>

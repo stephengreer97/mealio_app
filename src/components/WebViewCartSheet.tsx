@@ -10,6 +10,9 @@ import {
   TextInput,
   Linking,
   Platform,
+  Animated,
+  Easing,
+  AccessibilityInfo,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
@@ -819,11 +822,78 @@ export default function WebViewCartSheet({
   /** One write can speak for several items (same product, two ingredients).
    *  Maps the write's index to every item index it answers for. */
   const netWriteFanoutRef = useRef<Map<number, number[]>>(new Map());
+  /** What the network run matched, by item index. Kept so a top-up can re-write
+   *  the shortfall without searching again — it already knows the product. */
+  const netMatchedRef = useRef<Map<number, {
+    productId: string; skuId: string; name: string;
+    purchasePreferenceId: string | null; maxOrderQuantity: number | null;
+  }>>(new Map());
+  /** This run went down the network route. The top-up reads it to decide whether
+   *  it may stay on that rail. */
+  const netRunRef = useRef(false);
+  /** A network top-up is in flight; its results finalize the run. */
+  const netTopUpRef = useRef<Map<number, ConsolidatedIngredient> | null>(null);
+  /** Assigned once finishParallelAdd exists, so the add deadline can finalize
+   *  without depending on a function declared after it. */
+  const netFinalizeRef = useRef<() => void>(() => {});
   // Items the store refused because the cart ALREADY holds its per-item maximum.
   // Held separately from the failed list because "we could not add this" and
   // "your cart is already at the limit for this" are different things to be
   // told: the second is not a failure of the run, and re-running will not help.
   const [capReached, setCapReached] = useState<Array<{ name: string; detail: string }>>([]);
+
+  // ── The "type a product name" row glows when a search found nothing ────────
+  //
+  // A search with no results leaves the user on a screen whose only useful
+  // control is the one that looks least like a control: a row of placeholder
+  // text under a list that is empty. The glow is there to say "this one" — it is
+  // the only thing on the screen that can move the run forward.
+  //
+  // Held here rather than in the review branch because that branch re-runs on
+  // every keystroke of the custom search; an animation started there would be
+  // restarted, and a pulse that restarts reads as a flicker.
+  const glowAnim = useRef(new Animated.Value(0)).current;
+
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled?.().then((on) => { if (alive) setReduceMotion(!!on); }).catch(() => {});
+    const sub = AccessibilityInfo.addEventListener?.('reduceMotionChanged', (on) => setReduceMotion(!!on));
+    return () => { alive = false; sub?.remove?.(); };
+  }, []);
+
+  /**
+   * True while the review screen is showing an item with nothing to choose from.
+   *
+   * Derived from the same two inputs the screen itself reads, rather than set
+   * during its render: a setState in a render path that re-runs on every
+   * keystroke of the custom search is a re-render loop waiting to happen.
+   *
+   * `customSuggestions` is what the user's own search returned, so the glow goes
+   * out the moment they find something — it points at the control, it does not
+   * decorate it.
+   */
+  const glowCustomRow = step === 'review'
+    && customSuggestions.length === 0
+    && (searchResults[reviewIdx]?.candidates.length ?? 0) === 0;
+  useEffect(() => {
+    if (!glowCustomRow || reduceMotion) {
+      glowAnim.stopAnimation();
+      // Settles at a steady, still-visible glow rather than nothing: with reduce
+      // motion on, the row should still be the thing that stands out — it just
+      // should not move.
+      glowAnim.setValue(reduceMotion && glowCustomRow ? 1 : 0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glowAnim, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(glowAnim, { toValue: 0.25, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [glowCustomRow, reduceMotion, glowAnim]);
   // The pool path is declared BELOW the network path (it is the thing the
   // network path falls back to, so it reads better after it). A ref breaks the
   // cycle without reordering two hundred lines.
@@ -1506,9 +1576,9 @@ export default function WebViewCartSheet({
           });
         }
       }
-      finishParallelAdd(netResultsRef.current);
+      netFinalizeRef.current();
     }, ms);
-  }, [finishParallelAdd]);
+  }, []);
 
   /** Arm a deadline so a phase that never answers cannot strand the run. */
   const netArm = useCallback((ms: number, why: string) => {
@@ -1634,6 +1704,11 @@ export default function WebViewCartSheet({
         });
         continue;
       }
+      netMatchedRef.current.set(idx, {
+        productId, skuId, name: match.productName,
+        purchasePreferenceId: preference?.preferenceId ?? null,
+        maxOrderQuantity: match.maxOrderQuantity ?? null,
+      });
       toWrite.push({
         idx,
         productId,
@@ -1731,6 +1806,8 @@ export default function WebViewCartSheet({
   /** Phase 1. Who is signed in, which store, pickup or delivery. */
   const startNetworkRun = useCallback(() => {
     netActiveRef.current = true;
+    netRunRef.current = true;
+    netMatchedRef.current = new Map();
     netSessionRef.current = null;
     netPhaseRef.current = 'session';
     setStep('searching');
@@ -1759,6 +1836,33 @@ export default function WebViewCartSheet({
     addPool.start(active, finishParallelAdd);
   }, [addPool, finishParallelAdd, setStep]);
   startParallelAddRef.current = startParallelAdd;
+
+  /**
+   * End a network write phase.
+   *
+   * A first pass hands its results to `finishParallelAdd`, which reconciles them
+   * against the cart. A TOP-UP must not: it is already the reconcile's own
+   * correction, and reconciling it again would read the cart, find a shortfall,
+   * and top up the top-up. It finishes the run, and the after-probe on the done
+   * screen is what audits the result.
+   */
+  const netFinalize = useCallback(() => {
+    const topUp = netTopUpRef.current;
+    netTopUpRef.current = null;
+    if (!topUp) { finishParallelAdd(netResultsRef.current); return; }
+    const landed: { name: string; success: true }[] = [];
+    netResultsRef.current.forEach((r) => {
+      if (r.success) landed.push({ name: r.productName || '', success: true });
+    });
+    console.log(`[Cart ${ts()}]`, 'network top-up: finished —', landed.length, 'of', topUp.size, 'landed');
+    // ADDED to what the reconcile already confirmed, not replacing it: these are
+    // the units it found short, and the pass that confirmed the rest still holds.
+    addResultsRef.current = [...addResultsRef.current, ...landed];
+    setTotalAdded(addResultsRef.current.length);
+    setAddedNames(addResultsRef.current.map((a) => a.name));
+    setStep('done');
+  }, [finishParallelAdd, setStep]);
+  netFinalizeRef.current = netFinalize;
 
   const onAddWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
     try {
@@ -1881,6 +1985,9 @@ export default function WebViewCartSheet({
       // the cart on every later run, and `copiedList` says "Copied" before
       // anything has been copied.
       setCapReached([]);
+      netRunRef.current = false;
+      netTopUpRef.current = null;
+      netMatchedRef.current = new Map();
       setManualQueue([]);
       setManualIdx(0);
       setManualHandled([]);
@@ -3648,6 +3755,55 @@ export default function WebViewCartSheet({
                 retryItems.map(toIntendedItem),
               );
               setSearchingLabel(`Topping up ${topUpUnits} item${topUpUnits === 1 ? '' : 's'} we couldn't confirm…`);
+
+              // ── Stay on the network rail for the top-up too (MEAL-202) ──────
+              //
+              // The top-up was the last place a network run still loaded pages.
+              // It does not need to: the run already matched these products, so
+              // the shortfall is a write, not a search. Re-searching would spend
+              // ~1.8 s per item to rediscover an id we are holding.
+              //
+              // The write is ABSOLUTE and the script re-reads the cart for its own
+              // baseline, so sending the shortfall is right: base is what the cart
+              // holds NOW, after the adds this top-up is correcting for.
+              //
+              // Only for items the network actually matched. A retry item with no
+              // match — one that reached the top-up some other way — has no id to
+              // write, and those fall through to the page path below.
+              if (netRunRef.current && netMatchedRef.current.size > 0) {
+                const writes: Array<{
+                  idx: number; productId: string; skuId: string; quantity: number; name: string;
+                  purchasePreferenceId?: string | null; maxOrderQuantity?: number | null;
+                }> = [];
+                const stillNeedsPage = new Map<number, ConsolidatedIngredient>();
+                routing.retry.forEach((t, n) => {
+                  const m = netMatchedRef.current.get(t.index);
+                  const shortfall = Math.max(1, Math.round(retryItems[n].productQty || 1));
+                  if (!m) { stillNeedsPage.set(t.index, retryItems[n]); return; }
+                  writes.push({
+                    idx: t.index, productId: m.productId, skuId: m.skuId,
+                    quantity: shortfall, name: m.name,
+                    purchasePreferenceId: m.purchasePreferenceId,
+                    maxOrderQuantity: m.maxOrderQuantity,
+                  });
+                });
+                const script = writes.length > 0 ? buildHebNetworkAddBatchScript(writes) : null;
+                if (script && stillNeedsPage.size === 0) {
+                  console.log(`[Cart ${ts()}]`, 'network top-up: re-writing', writes.length, 'without a page load');
+                  netTopUpRef.current = new Map(routing.retry.map((t, n) => [t.index, retryItems[n]]));
+                  netResultsRef.current = new Map();
+                  netWriteFanoutRef.current = new Map();
+                  netActiveRef.current = true;
+                  netPhaseRef.current = 'add';
+                  setStep('adding');
+                  netArmFinalize(45_000);
+                  webviewRef.current?.injectJavaScript(script);
+                  return;
+                }
+                console.log(`[Cart ${ts()}]`, 'network top-up: falling back to pages —',
+                  writes.length, 'writable of', routing.retry.length);
+              }
+
               setStep('searching');
               navigateToSearchItem(0);
               return;
@@ -3956,10 +4112,12 @@ export default function WebViewCartSheet({
           netActiveRef.current = false;
           netPhaseRef.current = 'idle';
           console.log(`[Cart ${ts()}]`, 'network run: wrote', msg.wrote, 'of', msg.count);
-          // The same completion the add pool calls. Everything after this point —
-          // the cart reconcile, the review routing, the done screen — cannot tell
-          // a network run from a pooled one, which is the point.
-          finishParallelAdd(netResultsRef.current);
+          // A first pass hands its results to the reconcile, which is the same
+          // completion the add pool calls — so nothing downstream can tell a
+          // network run from a pooled one. A TOP-UP finishes the run instead:
+          // it IS the reconcile's correction, and reconciling it again would
+          // find a shortfall and top up the top-up. See netFinalize.
+          netFinalizeRef.current();
           return;
         }
 
@@ -4542,6 +4700,44 @@ export default function WebViewCartSheet({
   // Shared with the button that opens this sheet — see lib/chooseRun.ts.
   const isChooseRun = isChooseRunItems(items);
 
+  /**
+   * Why one item did not make it into the cart, in the user's words.
+   *
+   * The gate used to carry one blanket sentence — "this may be because the item
+   * is out of stock or the store no longer carries it" — for every item, which
+   * was a guess covering two possibilities out of five. The network rail reports
+   * a real per-item reason, so the screen can stop guessing.
+   *
+   * The distinction is not cosmetic. "Out of stock" and "no exact match" ask the
+   * user for completely different things: the first is nothing they can fix by
+   * choosing better, the second is exactly that.
+   *
+   * Returns null for a reason with no honest sentence, and the caller keeps the
+   * general note for those rather than inventing one.
+   */
+  const unaddedReasonText = useCallback((reason: string | null | undefined, store: string): string | null => {
+    switch (reason) {
+      case 'out_of_stock':
+        // The store HAS this product and will not sell it today. Choosing again
+        // will not help, which is why it reads differently from a bad match.
+        return `Out of stock at ${store}`;
+      case 'no_results':
+        return `${store} had no match for this`;
+      case 'low_confidence':
+        return 'No exact match — pick the right product';
+      case 'needs_weight':
+        return 'Sold by weight — choose an amount';
+      case 'needs_preference':
+        return 'Needs a choice, like thickness or ripeness';
+      case 'quantity_limit_reached':
+        return `Your cart is already at ${store}'s limit for this`;
+      case 'search_unanswered':
+        return 'We could not check this one';
+      default:
+        return null;
+    }
+  }, []);
+
   const titleMap: Record<Step, string> = {
     qty: isChooseRun ? 'Choose Products' : 'Add to Cart',
     login_check: 'Connecting…',
@@ -5003,9 +5199,15 @@ export default function WebViewCartSheet({
                 <Text style={[styles.doneTitle, { marginBottom: 8 }]}>
                   {unaddedUnits} item{unaddedUnits !== 1 ? 's' : ''} could not be added to cart
                 </Text>
-                <Text style={[styles.doneSub, { marginBottom: 20 }]}>
-                  This may be because the item is out of stock or the store no longer carries it.
-                </Text>
+                {/* Kept only for items whose reason has no honest sentence. Where
+                    every item can say why, a blanket guess underneath them is
+                    worse than nothing — it offers two explanations for problems
+                    that are already named, and one of them will be wrong. */}
+                {searchResults.some((r) => !unaddedReasonText(r.reason, storeName)) && (
+                  <Text style={[styles.doneSub, { marginBottom: 20 }]}>
+                    This may be because the item is out of stock or the store no longer carries it.
+                  </Text>
+                )}
                 {autoAdded.length > 0 && (
                   <Text style={[styles.doneSub, { marginBottom: 20 }]}>
                     {autoAddedUnits} item{autoAddedUnits !== 1 ? 's' : ''} matched and will be added automatically.
@@ -5023,6 +5225,17 @@ export default function WebViewCartSheet({
                       }}
                     >
                       <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text1 }}>{r.term}</Text>
+                      {(() => {
+                        const why = unaddedReasonText(r.reason, storeName);
+                        return why ? (
+                          <Text
+                            testID={`unadded-reason-${i}`}
+                            style={{ fontSize: 12.5, fontFamily: 'Inter_400Regular', color: Colors.text3, marginTop: 3 }}
+                          >
+                            {why}
+                          </Text>
+                        ) : null;
+                      })()}
                     </View>
                   ))}
                 </View>
@@ -5193,22 +5406,38 @@ export default function WebViewCartSheet({
                   );
                 })}
 
-                {/* Custom search option */}
-                <TouchableOpacity
-                  onPress={() => setSelectedSuggIdx('custom')}
-                  style={[
-                    styles.suggRow,
-                    {
-                      borderColor: selectedSuggIdx === 'custom' ? storeColor : Colors.border,
-                      backgroundColor: selectedSuggIdx === 'custom' ? '#fff0f0' : Colors.surface,
-                    },
-                  ]}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.suggText, { color: selectedSuggIdx === 'custom' ? Colors.text1 : Colors.text3 }]}>
-                    {customSuggestions.length > 0 ? 'Try a different search…' : 'Other — type a product name…'}
-                  </Text>
-                </TouchableOpacity>
+                {/* Custom search option.
+                    When the search found NOTHING this is the only control on the
+                    screen that can move the run forward — and it is the one that
+                    looks least like a control, being placeholder text under an
+                    empty list. The glow points at it. */}
+                <View>
+                  {!hasCandidates && (
+                    <Animated.View
+                      pointerEvents="none"
+                      testID="custom-row-glow"
+                      style={[
+                        styles.customGlow,
+                        { borderColor: storeColor, shadowColor: storeColor, opacity: glowAnim },
+                      ]}
+                    />
+                  )}
+                  <TouchableOpacity
+                    onPress={() => setSelectedSuggIdx('custom')}
+                    style={[
+                      styles.suggRow,
+                      {
+                        borderColor: selectedSuggIdx === 'custom' ? storeColor : Colors.border,
+                        backgroundColor: selectedSuggIdx === 'custom' ? '#fff0f0' : Colors.surface,
+                      },
+                    ]}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.suggText, { color: selectedSuggIdx === 'custom' ? Colors.text1 : Colors.text3 }]}>
+                      {customSuggestions.length > 0 ? 'Try a different search…' : 'Other — type a product name…'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
                 {selectedSuggIdx === 'custom' && (
                   <TextInput
                     autoFocus
@@ -6035,6 +6264,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 6,
+  },
+  // Sits BEHIND the row and matches its box exactly, so the glow reads as the
+  // row's own edge rather than a rectangle around it. Only `opacity` animates,
+  // which keeps it on the native driver — animating a shadow or a border colour
+  // would drop to the JS thread and stutter on the scroll this lives inside.
+  customGlow: {
+    position: 'absolute',
+    top: -2, left: -2, right: -2,
+    bottom: 4,          // the row carries marginBottom: 6
+    borderRadius: 12,
+    borderWidth: 2,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 8,
+    elevation: 6,
   },
   suggText: { fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text1 },
   outOfStockText: { fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginTop: 2 },
