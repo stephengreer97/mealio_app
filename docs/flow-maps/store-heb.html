@@ -194,7 +194,9 @@ flowchart TD
 
     S3["<b>3 &middot; add</b><br/>exact name + in stock, same rule as the page path<br/>quantity = what the cart already holds + asked"]
     S3 -->|"no exact match"| REV2(["review, carrying its candidates"])
-    S3 -->|"sold by weight,<br/>or a preference item"| REV3(["review &mdash; an over-add on<br/>a weight line cannot be undone"])
+    S3 -->|"sold by weight"| REV3(["review &mdash; an over-add on<br/>a weight line cannot be undone"])
+    S3 -->|"cart already holds the<br/>store's per-item cap"| CAP(["quantity_limit_reached<br/><i>no request sent</i>"])
+    S3 -->|"cap would be exceeded,<br/>but is not yet met"| CLAMP(["ask for the cap &mdash; a SHORT add,<br/>reported as one"])
     S3 -->|"no cart baseline"| POOL
     S3 --> FIN(["finishParallelAdd()"])
 
@@ -204,7 +206,7 @@ flowchart TD
     classDef warn fill:#4c1d95,stroke:#a78bfa,color:#fff
     classDef good fill:#14532d,stroke:#22c55e,color:#fff
     class S1,S2,S3 net
-    class REV1,REV2,REV3,NORES warn
+    class REV1,REV2,REV3,NORES,CAP,CLAMP warn
     class FIN,REC good
 </pre>
 <p>Three request parameters do more than the speed does.
@@ -213,6 +215,17 @@ asked for, so they cannot be mistaken for results &mdash; a class of extraction 
 existing rather than being fixed. <code>includeOutOfStock</code> replaces reading stock off button
 text. <code>pageSize</code> states the result count instead of accepting however many tiles
 rendered.</p>
+<p><b>The per-item cap has to be respected before asking.</b> The write sets an ABSOLUTE
+quantity, so what the cart already holds plus what was asked for can exceed the store's
+<code>maximumOrderQuantity</code> &mdash; and the store refuses the WHOLE write. Measured: an
+avocado came back "Quantity limit reached." because earlier runs had already put twenty in the
+cart. Clamping is right where it still adds something and wrong where it does not, because
+clamping to a number the cart already holds writes no change and would report success &mdash; an
+under-add dressed as a win.</p>
+<p><b>Purchase preferences travel as the choice already does.</b> The page path clicks a modal row
+by its LABEL; the network path states a <code>purchasePreferenceId</code>. Both come from the same
+user choice, so the id is looked up by the label that was chosen rather than asking again. Nothing
+chosen means the field is OMITTED rather than nulled, which is what the storefront itself does.</p>
 <p><b>The store identifier is the trap.</b> <code>me.preferredStore.storeNumber</code> and
 <code>cartV2.fulfillment.store.id</code> are both store identifiers and they differ &mdash;
 measured 243 and 476 for one shop. Search wants fulfillment's. Sending the other searches a

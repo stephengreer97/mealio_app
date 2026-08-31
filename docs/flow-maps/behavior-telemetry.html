@@ -131,6 +131,14 @@ flowchart TD
       click in that state &mdash; clicking on top of a write that did apply adds the item twice
       &mdash; so there is no evidence either way.</li>
   </ul>
+  <ul>
+    <li><b><code>quantity_limit_reached</code></b> &rarr; <code>out_of_stock</code>. The store's own
+      per-item cap is already met by what the cart holds, so there is nothing this run can add. Not
+      a confirmation failure (nothing was attempted) and not a scoring one (the product matched
+      exactly) &mdash; the store is declining on stock policy.</li>
+    <li><b><code>unexpected_shape</code></b> &rarr; <code>confirm_failed</code>. The store answered
+      and the answer was not a shape we know: the contract moved, or a field we depend on is gone.</li>
+  </ul>
   <p><code>error_arm</code> is mapped too, and is deliberately unreachable today: the guard
   requires a code for every reason the scripts can emit, and that one only ever reaches a debug
   line because the run falls back to clicking and reports whatever the click did.</p>
