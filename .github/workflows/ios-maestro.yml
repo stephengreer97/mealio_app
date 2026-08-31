@@ -19,11 +19,21 @@ name: iOS Maestro
 # Requires the EXPO_TOKEN repo secret (expo.dev → Account settings →
 # Access tokens).
 
+# The macos job bills at 10x, so a docs-only change is the one most worth not
+# running here. Same filter and same reasoning as test.yml: it skips only when
+# EVERY changed file matches, and workflow_dispatch keeps none so a manual run
+# always runs.
 on:
   workflow_dispatch:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
 
 concurrency:
   group: ios-maestro-${{ github.ref }}
