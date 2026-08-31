@@ -56,6 +56,11 @@ import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
+import {
+  buildHebNetworkAddBatchScript,
+  buildHebNetworkSearchBatchScript,
+  buildHebSessionScript,
+} from '../lib/webview-scripts/heb-network-search';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -785,6 +790,26 @@ export default function WebViewCartSheet({
     setTotalFailed(stillFailed.length);
   }, [setFailedItems]);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
+  // ── Network run (MEAL-202) ────────────────────────────────────────────────
+  // Search and add by asking the store, from one page, with no navigation. The
+  // pools exist to load results pages concurrently; this needs no page, so it
+  // replaces them rather than driving them.
+  //
+  // Everything it produces is funnelled into finishParallelAdd, the SAME
+  // completion the add pool calls, so the reconcile, the review routing, the
+  // done screen and the telemetry are untouched and cannot disagree with a
+  // pool-driven run.
+  const netSessionRef = useRef<{ storeId: string; shoppingContext: string } | null>(null);
+  const netCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
+  const netFailedTermsRef = useRef<Set<string>>(new Set());
+  const netResultsRef = useRef<Map<number, AddResult>>(new Map());
+  const netActiveRef = useRef(false);
+  const netPhaseRef = useRef<'idle' | 'session' | 'search' | 'add'>('idle');
+  const netTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The pool path is declared BELOW the network path (it is the thing the
+  // network path falls back to, so it reads better after it). A ref breaks the
+  // cycle without reordering two hundred lines.
+  const startParallelAddRef = useRef<() => void>(() => {});
   // ── Manual add mode (MEAL-197 / MEAL-9 rung 3) ─────────────────────────────
   // The queue is search TERMS, not ingredients. Everything this mode needs is a
   // string to search for and a string to show the user, and `failedItems` is
@@ -1415,6 +1440,142 @@ export default function WebViewCartSheet({
     triggerCartProbe('reconcile');
   }, [triggerCartProbe]);
 
+  // ── The network run (MEAL-202) ────────────────────────────────────────────
+  //
+  // Three phases, each driven by one injected script on the MAIN WebView:
+  //   session -> search every term -> add every matched item
+  //
+  // Nothing navigates. That is the entire speed argument: the ~1.8 s per
+  // ingredient the pools exist to parallelise is page loading, and this does not
+  // load pages.
+  //
+  // Any phase that cannot answer hands the whole run back to the pool path. That
+  // is not caution for its own sake — a half-network run would have to reconcile
+  // two different notions of what was attempted, and the pool path already works.
+
+  /** Give up on the network and run the item set the way it has always run. */
+  const netFallBackToPool = useCallback((why: string) => {
+    if (!netActiveRef.current) return;
+    netActiveRef.current = false;
+    netPhaseRef.current = 'idle';
+    if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+    console.log(`[Cart ${ts()}]`, 'network run: falling back to the pool —', why);
+    tel().record('search', 'error', { detail: { phase: 'network_fallback', why }, code: 'match_rejected' });
+    startParallelAddRef.current();
+  }, []);
+
+  /** Arm a deadline so a phase that never answers cannot strand the run. */
+  const netArm = useCallback((ms: number, why: string) => {
+    if (netTimeoutRef.current) clearTimeout(netTimeoutRef.current);
+    netTimeoutRef.current = setTimeout(() => {
+      netTimeoutRef.current = null;
+      netFallBackToPool(why);
+    }, ms);
+  }, [netFallBackToPool]);
+
+  /**
+   * Phase 3. Everything is matched; write it.
+   *
+   * Items with no exact match do not get written and do not fail silently — they
+   * become an unsuccessful AddResult carrying their candidates, which is exactly
+   * what a pool worker produces when it cannot match, so they land on the review
+   * screen by the ordinary route.
+   */
+  const netStartAdds = useCallback(() => {
+    const active = activeItemsRef.current;
+    const sess = netSessionRef.current;
+    if (!sess) { netFallBackToPool('no_session_at_add'); return; }
+
+    const toWrite: Array<{ idx: number; productId: string; skuId: string; quantity: number; name: string; isWeightItem?: boolean }> = [];
+    netResultsRef.current = new Map();
+
+    for (let idx = 0; idx < active.length; idx++) {
+      const item = active[idx];
+      const term = item.searchTerm ?? item.ingredientName;
+      // A term the network could not answer for is not "no match" — it is "not
+      // asked". Those go to the pool, so the whole run does.
+      if (netFailedTermsRef.current.has(term)) { netFallBackToPool('term_unanswered:' + term); return; }
+      const candidates = netCandidatesRef.current.get(term) ?? [];
+      // The SAME rule the page path uses: an exact name, in stock. Anything
+      // looser here would add a product the user did not ask for, which is the
+      // one thing the cart rules never allow.
+      const match = candidates.find((c) => scoreMatch(term, c.productName) === 100 && !c.outOfStock);
+      if (!match || !match.productId || !match.skuId) {
+        netResultsRef.current.set(idx, {
+          success: false,
+          productName: null,
+          reason: candidates.length === 0 ? 'no_results' : 'low_confidence',
+          candidates,
+        });
+        continue;
+      }
+      if (match.isWeightItem) {
+        // Sold by weight: the user has to choose a weight, and an over-add on one
+        // cannot be undone (MEAL-200). Route it to review like any unmatched item.
+        netResultsRef.current.set(idx, {
+          success: false, productName: match.productName, reason: 'needs_weight', candidates,
+        });
+        continue;
+      }
+      toWrite.push({
+        idx,
+        productId: match.productId,
+        skuId: match.skuId,
+        quantity: Math.max(1, Math.round(item.productQty || 1)),
+        name: match.productName,
+        isWeightItem: false,
+      });
+    }
+
+    if (toWrite.length === 0) {
+      console.log(`[Cart ${ts()}]`, 'network run: nothing matched exactly — straight to review');
+      netActiveRef.current = false;
+      netPhaseRef.current = 'idle';
+      finishParallelAdd(netResultsRef.current);
+      return;
+    }
+
+    const script = buildHebNetworkAddBatchScript(toWrite);
+    if (!script) { netFallBackToPool('add_script_unbuildable'); return; }
+    netPhaseRef.current = 'add';
+    setStep('adding');
+    setSearchingLabel(`Adding ${toWrite.length} ingredients…`);
+    console.log(`[Cart ${ts()}]`, 'network run: writing', toWrite.length, 'of', active.length);
+    netArm(45_000, 'add_timeout');
+    webviewRef.current?.injectJavaScript(script);
+  }, [finishParallelAdd, netArm, netFallBackToPool, setStep]);
+
+  /** Phase 2. One script, every term, no navigation. */
+  const netStartSearch = useCallback(() => {
+    const active = activeItemsRef.current;
+    const sess = netSessionRef.current;
+    if (!sess) { netFallBackToPool('no_session'); return; }
+    const terms = Array.from(new Set(active.map((i) => i.searchTerm ?? i.ingredientName).filter(Boolean)));
+    if (!terms.length) { netFallBackToPool('no_terms'); return; }
+    const script = buildHebNetworkSearchBatchScript(terms, sess);
+    if (!script) { netFallBackToPool('search_script_unbuildable'); return; }
+    netCandidatesRef.current = new Map();
+    netFailedTermsRef.current = new Set();
+    netPhaseRef.current = 'search';
+    setStep('searching');
+    setSearchingLabel(`Searching ${terms.length} ingredients…`);
+    console.log(`[Cart ${ts()}]`, 'network run: searching', terms.length, 'terms with no page load');
+    netArm(40_000, 'search_timeout');
+    webviewRef.current?.injectJavaScript(script);
+  }, [netArm, netFallBackToPool, setStep]);
+
+  /** Phase 1. Who is signed in, which store, pickup or delivery. */
+  const startNetworkRun = useCallback(() => {
+    netActiveRef.current = true;
+    netSessionRef.current = null;
+    netPhaseRef.current = 'session';
+    setStep('searching');
+    setSearchingLabel('Connecting…');
+    console.log(`[Cart ${ts()}]`, 'network run: reading the session');
+    netArm(20_000, 'session_timeout');
+    webviewRef.current?.injectJavaScript(buildHebSessionScript());
+  }, [netArm, setStep]);
+
   const startParallelAdd = useCallback(() => {
     const active = activeItemsRef.current;
     if (active.length === 0) return;
@@ -1424,6 +1585,7 @@ export default function WebViewCartSheet({
     setSearchingLabel(`Adding ${active.length} ingredients…`);
     addPool.start(active, finishParallelAdd);
   }, [addPool, finishParallelAdd, setStep]);
+  startParallelAddRef.current = startParallelAdd;
 
   const onAddWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
     try {
@@ -2359,15 +2521,26 @@ export default function WebViewCartSheet({
     // for why these conditions no longer live inline. Flags are read off the ref
     // for the same reason `s` is resolved live above: this callback's deps do not
     // include the config.
+    // The network route needs BOTH switches: searching over the network and then
+    // clicking to add would be a run that loads no page for search and then
+    // loads one per item anyway, which is slower than either path alone.
+    const netCfg = getAutomationConfig().stores?.[lockedStoreIdRef.current ?? ''] ?? {};
+    const networkCapable = netCfg.networkSearch === true
+      && netCfg.networkAdd === true
+      && netCfg.cartSkuConfirm === true
+      && lockedStoreIdRef.current === 'heb';
     const strategy = chooseAddStrategy({
       canParallel,
       allChoose,
       presearchCommitArmed: presearchCommitArmedRef.current,
       features: { presearchAdd: FEATURE_PRESEARCH_ADD, parallelAdd: FEATURE_PARALLEL_ADD },
       flags: cfgFlagsRef.current,
+      networkCapable,
     });
     console.log(`[Cart ${ts()}]`, 'beginSearchFlow: strategy=', strategy);
-    if (strategy === 'presearch') {
+    if (strategy === 'network') {
+      startNetworkRun();
+    } else if (strategy === 'presearch') {
       // Parked pre-search workers are ready — commit their adds instead of the
       // fused pool. The before-snapshot already ran, so the reconcile is sound.
       startPresearchCommit();
@@ -2380,7 +2553,7 @@ export default function WebViewCartSheet({
     } else {
       navigateToSearchItem(0);
     }
-  }, [startParallelSearch, startParallelAdd, navigateToSearchItem, startPresearchCommit]);
+  }, [startParallelSearch, startParallelAdd, navigateToSearchItem, startPresearchCommit, startNetworkRun]);
 
   // Snapshot the cart BEFORE any adds, then start the search. For cart-page
   // stores (HEB, Albertsons family) navigate to the cart URL, count there, and
@@ -3512,6 +3685,70 @@ export default function WebViewCartSheet({
           return;
         }
 
+        // ── Network run (MEAL-202) ──────────────────────────────────────
+        //
+        // These only ever arrive while a network run is in flight. Guarded on
+        // netActiveRef so a late message from an abandoned run cannot revive it
+        // after the pool has taken over — which would leave two paths writing
+        // results for the same items.
+        if (msg.type === 'HEB_SESSION') {
+          if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
+          if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+          console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));
+          if (!msg.ok) { netFallBackToPool('session_' + (msg.why || 'failed')); return; }
+          if (!msg.loggedIn) {
+            // The gate did its job. Hand the user the login screen exactly as the
+            // page-based login check would have.
+            netActiveRef.current = false;
+            netPhaseRef.current = 'idle';
+            setStep('login');
+            return;
+          }
+          if (!msg.storeId || !msg.shoppingContext) { netFallBackToPool('session_no_store'); return; }
+          netSessionRef.current = { storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext) };
+          netStartSearch();
+          return;
+        }
+        if (msg.type === 'SEARCH_RESULT_FAILED' && msg.source === 'network') {
+          if (!netActiveRef.current) return;
+          console.log(`[Cart ${ts()}]`, 'network search failed for', msg.term, '—', msg.why);
+          if (typeof msg.term === 'string') netFailedTermsRef.current.add(msg.term);
+          return;
+        }
+        if (msg.type === 'SEARCH_BATCH_DONE') {
+          if (!netActiveRef.current || netPhaseRef.current !== 'search') return;
+          if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+          console.log(`[Cart ${ts()}]`, 'network search done:', netCandidatesRef.current.size, 'answered,',
+            netFailedTermsRef.current.size, 'failed');
+          netStartAdds();
+          return;
+        }
+        if (msg.type === 'NET_ADD_RESULT') {
+          if (!netActiveRef.current || netPhaseRef.current !== 'add') return;
+          const at = typeof msg.idx === 'number' ? msg.idx : -1;
+          if (at < 0) return;
+          console.log(`[Cart ${ts()}]`, 'network add', msg.name, msg.success ? 'ok' : ('failed: ' + msg.reason));
+          netResultsRef.current.set(at, {
+            success: !!msg.success,
+            productName: msg.name ?? null,
+            reason: msg.success ? null : (msg.reason ?? 'cart_not_incremented'),
+            candidates: [],
+          });
+          return;
+        }
+        if (msg.type === 'NET_ADD_DONE') {
+          if (!netActiveRef.current || netPhaseRef.current !== 'add') return;
+          if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+          netActiveRef.current = false;
+          netPhaseRef.current = 'idle';
+          console.log(`[Cart ${ts()}]`, 'network run: wrote', msg.wrote, 'of', msg.count);
+          // The same completion the add pool calls. Everything after this point —
+          // the cart reconcile, the review routing, the done screen — cannot tell
+          // a network run from a pooled one, which is the point.
+          finishParallelAdd(netResultsRef.current);
+          return;
+        }
+
         // Popup-based login (e.g. Albertsons): background poll detected login success.
         if (msg.type === 'LOGIN_COMPLETE') {
           loginCheckActiveRef.current = false;
@@ -3655,6 +3892,17 @@ export default function WebViewCartSheet({
           return;
         }
 
+        // A network SEARCH_RESULT is keyed by TERM and collected for the batch,
+        // not fed to the sequential handler below — that one assumes it is the
+        // answer to the ONE item the run is currently walking, and a batch posts
+        // twelve of them in no particular order.
+        if (msg.type === 'SEARCH_RESULT' && msg.source === 'network') {
+          if (!netActiveRef.current || netPhaseRef.current !== 'search') return;
+          if (typeof msg.term === 'string' && Array.isArray(msg.candidates)) {
+            netCandidatesRef.current.set(msg.term, msg.candidates as Candidate[]);
+          }
+          return;
+        }
         if (msg.type === 'SEARCH_RESULT') {
           if (searchTimeoutRef.current) {
             clearTimeout(searchTimeoutRef.current);

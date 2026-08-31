@@ -47,7 +47,7 @@ import type { FlagConfig } from './schema';
 type Flags = Partial<FlagConfig>;
 
 /** Which route `beginSearchFlow` takes. */
-export type AddStrategy = 'presearch' | 'parallelSearch' | 'parallelAdd' | 'serial';
+export type AddStrategy = 'network' | 'presearch' | 'parallelSearch' | 'parallelAdd' | 'serial';
 
 export interface AddStrategyInput {
   /** The store has the scripts for a worker pool and does not force serial. */
@@ -60,6 +60,8 @@ export interface AddStrategyInput {
   features: { presearchAdd: boolean; parallelAdd: boolean };
   /** Remote config — what operations has turned on. */
   flags: Pick<Flags, 'parallelAdd'>;
+  /** The store can search AND add over the network, and both are switched on. */
+  networkCapable?: boolean;
 }
 
 /**
@@ -74,6 +76,15 @@ export interface AddStrategyInput {
  */
 export function chooseAddStrategy(input: AddStrategyInput): AddStrategy {
   const { canParallel, allChoose, presearchCommitArmed, features, flags } = input;
+  // The network route is checked FIRST and ignores every other condition,
+  // because none of them are about it. canParallel asks whether the store has a
+  // search URL and a worker script — both are about loading pages, and this
+  // route loads none. presearchCommitArmed is about parked pages that a network
+  // run never opened.
+  //
+  // It does not apply to a choose-only run: those need no adds, so the pooled
+  // search already does the right thing and there is nothing to gain.
+  if (input.networkCapable && !allChoose) return 'network';
   if (canParallel && !allChoose && features.presearchAdd && presearchCommitArmed) return 'presearch';
   if (canParallel && allChoose) return 'parallelSearch';
   if (canParallel && !allChoose && features.parallelAdd && !!flags.parallelAdd) return 'parallelAdd';

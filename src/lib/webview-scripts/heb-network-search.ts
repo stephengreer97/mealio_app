@@ -429,3 +429,134 @@ ${CANDIDATE_HELPERS}
   post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length });
 })(); true;`;
 }
+
+/**
+ * Add many products by request, from one page, with no navigation.
+ *
+ * Each item arrives already MATCHED — product id, sku and quantity decided by the
+ * caller from search results — so this script makes no product choices. It reads
+ * the cart once for a baseline, issues one write per item, and reads once more.
+ *
+ * QUANTITY IS CART-ABSOLUTE. The store SETS a line rather than incrementing it,
+ * so each write sends (what the cart already holds) + (what was asked for). The
+ * card label cannot be used for that baseline here — there is no card — and it
+ * could not be trusted anyway (MEAL-187). No usable cart read means no writes at
+ * all, reported as such, because the alternative is setting lines to a number
+ * derived from nothing.
+ *
+ * DECLINES weight-priced items, for the same reason the click-path rail does: a
+ * count line can be set back to zero, a weight line cannot be undone at all
+ * (MEAL-200). Those come back with a reason so the caller can route them to the
+ * page path instead.
+ */
+export function buildHebNetworkAddBatchScript(
+  items: Array<{ idx: number; productId: string; skuId: string; quantity: number; name: string; isWeightItem?: boolean }>,
+  opts?: { concurrency?: number },
+): string | null {
+  const usable = items.filter(
+    (i) => i && i.productId && i.skuId && Number.isInteger(i.quantity) && i.quantity > 0,
+  );
+  if (!usable.length) return null;
+  const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 2, 3));
+  return `(async function () {
+${GQL_FN}
+  var ITEMS = ${JSON.stringify(usable)};
+  var post = function (o) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
+  };
+  var report = function (it, ok, reason, detail) {
+    post({ type: 'NET_ADD_RESULT', idx: it.idx, name: it.name, productId: it.productId,
+           skuId: it.skuId, asked: it.quantity, success: !!ok, reason: reason || null,
+           detail: detail || null });
+  };
+
+  var CART = 'query CartLines { cartV2 { __typename'
+    + ' ... on Cart { id items { id quantity estimatedWeight product { id fullDisplayName }'
+    + '   sku { id } } }'
+    + ' ... on CartError { code title message } } }';
+  var ADD = 'mutation cartItemV2($productId: String!, $skuId: String!, $quantity: Int) {'
+    + ' addItemToCartV2(productId: $productId, skuId: $skuId, quantity: $quantity) {'
+    + ' __typename'
+    + ' ... on Cart { id }'
+    + ' ... on AddOnsCart { id cart { id } }'
+    + ' ... on AddItemToCartV2Error { message title code }'
+    + ' ... on AddItemToCartV2TimeslotError { message title errorCode: code } } }';
+
+  var readCart = async function () {
+    var r = await __hebGql('CartLines', CART, {}, 8000);
+    if (!r.ok) return null;
+    try {
+      var c = r.data.cartV2;
+      if (!c || c.__typename !== 'Cart') return null;
+      return c.items || [];
+    } catch (e) { return null; }
+  };
+  // Summed across every line for the product, because one product can hold
+  // several lines keyed by preference — and reported with the COUNT, because the
+  // write sets ONE line and cannot address a product that holds more than one.
+  var held = function (lines, pid) {
+    if (!lines) return null;
+    var qty = 0, n = 0, weight = false;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      var lp = l && l.product && l.product.id;
+      if (lp == null || String(lp) !== String(pid)) continue;
+      qty += (l.quantity || 0); n++;
+      if (l.estimatedWeight != null) weight = true;
+    }
+    return { qty: qty, lines: n, weight: weight };
+  };
+
+  var before = await readCart();
+  if (before == null) {
+    // No baseline means no way to know what to SET. Guessing would drop whatever
+    // the cart already held, silently.
+    for (var i = 0; i < ITEMS.length; i++) report(ITEMS[i], false, 'no_cart_baseline');
+    post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0 });
+    return;
+  }
+
+  var wrote = 0;
+  var next = 0;
+  var runner = async function () {
+    while (true) {
+      var k = next++;
+      if (k >= ITEMS.length) return;
+      var it = ITEMS[k];
+      try {
+        if (it.isWeightItem) { report(it, false, 'weight_item_declined'); continue; }
+        var h = held(before, it.productId);
+        if (h && h.weight) { report(it, false, 'cart_line_is_weight'); continue; }
+        if (h && h.lines > 1) { report(it, false, 'multiple_cart_lines'); continue; }
+        var base = h ? h.qty : 0;
+        var res = await __hebGql('cartItemV2', ADD, {
+          productId: it.productId, skuId: it.skuId, quantity: base + it.quantity,
+        }, 9000);
+        if (!res.ok) { report(it, false, res.why, res.detail || null); continue; }
+        var arm = null, msg = null;
+        try {
+          var a = res.data.addItemToCartV2;
+          arm = a && a.__typename;
+          msg = a && a.message ? String(a.message).slice(0, 160) : null;
+        } catch (e) {}
+        // AddOnsCart wraps a cart — the item went in. Reading it as a failure
+        // would send the caller on to add the same product a second way.
+        var ok = arm === 'Cart' || arm === 'AddOnsCart';
+        if (ok) wrote++;
+        report(it, ok, ok ? null : (arm ? 'error_arm' : 'unexpected_shape'), msg);
+      } catch (e) {
+        report(it, false, 'threw', String(e).slice(0, 120));
+      }
+    }
+  };
+  var lanes = [];
+  for (var L = 0; L < ${concurrency}; L++) lanes.push(runner());
+  await Promise.all(lanes);
+
+  // One read after, so the caller has the cart's own account of what landed
+  // rather than only the store's per-write answer.
+  var after = await readCart();
+  post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: wrote,
+         cartLines: after ? after.length : null });
+})(); true;`;
+}
