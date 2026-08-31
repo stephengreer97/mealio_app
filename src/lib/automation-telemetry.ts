@@ -255,6 +255,38 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   // why; the raw reason in detail is what separates it from a cart that simply
   // did not move.
   unexpected_shape: 'confirm_failed',
+  // MEAL-202: the product offers a purchase preference (deli thickness, avocado
+  // ripeness) and this run has no confident id for it — either nothing was
+  // chosen, or the saved label does not match any the store offered. Writing
+  // anyway lets the STORE choose the variant, so the item goes to review. Not a
+  // confirmation failure: nothing was attempted.
+  // MEAL-202: the product already has a cart line and this write carries a
+  // purchase preference. Lines are keyed by preference and the cart read does not
+  // expose which one a line belongs to, so the existing units cannot be
+  // attributed — and the write sets an ABSOLUTE quantity against them. Declined
+  // rather than guessed.
+  // ── MEAL-202: the network add's own vocabulary ─────────────────────────────
+  //
+  // These were invisible to the guard below until the reasons were written where
+  // it could see them, which is how a whole rail's failures nearly shipped
+  // riding the unmapped default.
+  //
+  // No baseline means no way to know what quantity to SET, so nothing was
+  // written — a confirmation that never happened rather than one that failed.
+  no_cart_baseline: 'confirm_failed',
+  // Declined on purpose: an over-add on a weight line cannot be undone, and a
+  // product holding several lines cannot be addressed by a write that sets one.
+  // Both are the engine refusing to guess, not the store refusing us.
+  weight_item_declined: 'match_rejected',
+  multiple_cart_lines: 'match_rejected',
+  cart_line_is_weight: 'match_rejected',
+  // The request itself never completed. `network` and `timeout` already carry
+  // their own codes; these are the rest of the transport's vocabulary.
+  http: 'nav_failed',
+  unparseable: 'confirm_failed',
+  threw: 'confirm_failed',
+  preference_line_ambiguous: 'match_rejected',
+  needs_preference: 'match_rejected',
   quantity_limit_reached: 'out_of_stock',
   search_unanswered: 'match_rejected',
   write_unresolved: 'confirm_failed',

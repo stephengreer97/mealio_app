@@ -508,11 +508,39 @@ ${GQL_FN}
   var post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
+  // Named, not positional, and deliberately so: the taxonomy guard in
+  // tests/unit/automationTelemetry.test.ts finds reasons by scanning for
+  // single-quoted snake_case on a line mentioning "reason". Passed positionally,
+  // every reason in this file was invisible to it — the guard was silently
+  // disarmed for what is now the primary rail, which is the exact failure it was
+  // written to catch.
   var report = function (it, ok, reason, detail) {
     post({ type: 'NET_ADD_RESULT', idx: it.idx, name: it.name, productId: it.productId,
            skuId: it.skuId, asked: it.quantity, success: !!ok, reason: reason || null,
            detail: detail || null });
   };
+  // One per line, each carrying the word the scanner looks for. An uppercase
+  // constant name did NOT work: the guard matches a lowercase word-boundary
+  // "reason", so the first attempt at this list was invisible too and the test
+  // went on passing.
+  var reasonCatalog = [
+    { reason: 'no_cart_baseline' },
+    { reason: 'weight_item_declined' },
+    { reason: 'multiple_cart_lines' },
+    { reason: 'cart_line_is_weight' },
+    { reason: 'preference_line_ambiguous' },
+    { reason: 'quantity_limit_reached' },
+    { reason: 'error_arm' },
+    { reason: 'unexpected_shape' },
+    { reason: 'threw' },
+    { reason: 'blocked' },
+    { reason: 'http' },
+    { reason: 'unparseable' },
+    { reason: 'graphql_error' },
+    { reason: 'timeout' },
+    { reason: 'network' },
+  ];
+  void reasonCatalog;
 
   var CART = 'query CartLines { cartV2 { __typename'
     + ' ... on Cart { id items { id quantity estimatedWeight product { id fullDisplayName }'
@@ -574,6 +602,22 @@ ${GQL_FN}
         var h = held(before, it.productId);
         if (h && h.weight) { report(it, false, 'cart_line_is_weight'); continue; }
         if (h && h.lines > 1) { report(it, false, 'multiple_cart_lines'); continue; }
+        // A single existing line is not necessarily OUR line.
+        //
+        // held() sums across every line for the product, and lines are keyed by
+        // preference. One existing line of 2 under "Ripe", plus a write for the
+        // same product under "Firm", makes base 2 — so the new Firm line is set
+        // to 2 + asked while the Ripe line keeps its 2, and the cart ends up
+        // over by 2. The multi-line guard above does not catch it because there
+        // is only one line so far.
+        //
+        // The cart read does not tell us which preference a line belongs to, so
+        // there is nothing to reconcile against: decline and let the user add it
+        // on the page, where the variants are visible.
+        if (it.purchasePreferenceId && h && h.lines > 0) {
+          report(it, false, 'preference_line_ambiguous', 'cart already holds ' + h.qty + ' of this product');
+          continue;
+        }
         var base = h ? h.qty : 0;
         var want = base + it.quantity;
 

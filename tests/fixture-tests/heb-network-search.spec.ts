@@ -488,3 +488,67 @@ describe('HEB MEAL-202: an out-of-stock exact match must not change rails', () =
     expect(msg.candidates[0].productName).toBe('H-E-B Regular Sour Cream, 16 oz');
   });
 });
+
+describe('HEB MEAL-202: the absolute quantity, and what it makes unsafe', () => {
+  const addStub2 = (cartLines: unknown[]) => [
+    '(function () {',
+    '  window.__writes = [];',
+    '  var LINES = ' + JSON.stringify([]) + ';',
+    '  window.__lines = ' + JSON.stringify(cartLines) + ';',
+    '  window.fetch = function (url, init) {',
+    '    var body = JSON.parse(init.body);',
+    '    if (body.operationName === "cartItemV2") {',
+    '      window.__writes.push(body.variables);',
+    '      return Promise.resolve({ ok: true, status: 200, text: function () {',
+    '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: { __typename: "Cart", id: "c1" } } })); } });',
+    '    }',
+    '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+    '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart", id: "c1", items: window.__lines } } })); } });',
+    '  };',
+    '})(); true;',
+  ].join('\n');
+
+  const cartLine = (pid: string, qty: number) => ({
+    id: 'i' + pid, quantity: qty, estimatedWeight: null,
+    product: { id: pid, fullDisplayName: 'X' }, sku: { id: 's' + pid },
+  });
+
+  const REPORT = [
+    '(function () {',
+    '  window.ReactNativeWebView.postMessage(JSON.stringify({ type: "WRITES", writes: window.__writes || [] }));',
+    '})(); true;',
+  ].join('\n');
+
+  itWithFixture('logged-in-home.html', 'declines a preference write when the product already has a line', async (runner) => {
+    // Lines are keyed by preference and the cart read does not say which one a
+    // line belongs to. One existing line of 2 under "Ripe" plus a write under
+    // "Firm" would set the Firm line to 2 + asked while Ripe keeps its 2 — the
+    // cart ends up over by 2, and the single-line case slips past the multi-line
+    // guard precisely because there is only one line so far.
+    await runner.inject(addStub2([cartLine('377478', 2)]));
+    await runner.inject(buildHebNetworkAddBatchScript([{
+      idx: 0, productId: '377478', skuId: '4046', quantity: 1,
+      name: 'Avocado', purchasePreferenceId: 'firm',
+    }])!);
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 15_000);
+    expect(res.success).toBe(false);
+    expect(res.reason).toBe('preference_line_ambiguous');
+    runner.clearMessages();
+    await runner.inject(REPORT);
+    expect((await runner.waitForMessage('WRITES', 10_000)).writes).toHaveLength(0);
+  });
+
+  itWithFixture('logged-in-home.html', 'still writes a preference for a product the cart does not hold', async (runner) => {
+    await runner.inject(addStub2([]));
+    await runner.inject(buildHebNetworkAddBatchScript([{
+      idx: 0, productId: '377478', skuId: '4046', quantity: 1,
+      name: 'Avocado', purchasePreferenceId: 'firm',
+    }])!);
+    await runner.waitForMessage('NET_ADD_DONE', 15_000);
+    runner.clearMessages();
+    await runner.inject(REPORT);
+    const w = await runner.waitForMessage('WRITES', 10_000);
+    expect(w.writes).toHaveLength(1);
+    expect(w.writes[0].purchasePreferenceId).toBe('firm');
+  });
+});
