@@ -819,6 +819,20 @@ export default function WebViewCartSheet({
   /** One write can speak for several items (same product, two ingredients).
    *  Maps the write's index to every item index it answers for. */
   const netWriteFanoutRef = useRef<Map<number, number[]>>(new Map());
+  /** What the network run matched, by item index. Kept so a top-up can re-write
+   *  the shortfall without searching again — it already knows the product. */
+  const netMatchedRef = useRef<Map<number, {
+    productId: string; skuId: string; name: string;
+    purchasePreferenceId: string | null; maxOrderQuantity: number | null;
+  }>>(new Map());
+  /** This run went down the network route. The top-up reads it to decide whether
+   *  it may stay on that rail. */
+  const netRunRef = useRef(false);
+  /** A network top-up is in flight; its results finalize the run. */
+  const netTopUpRef = useRef<Map<number, ConsolidatedIngredient> | null>(null);
+  /** Assigned once finishParallelAdd exists, so the add deadline can finalize
+   *  without depending on a function declared after it. */
+  const netFinalizeRef = useRef<() => void>(() => {});
   // Items the store refused because the cart ALREADY holds its per-item maximum.
   // Held separately from the failed list because "we could not add this" and
   // "your cart is already at the limit for this" are different things to be
@@ -1506,9 +1520,9 @@ export default function WebViewCartSheet({
           });
         }
       }
-      finishParallelAdd(netResultsRef.current);
+      netFinalizeRef.current();
     }, ms);
-  }, [finishParallelAdd]);
+  }, []);
 
   /** Arm a deadline so a phase that never answers cannot strand the run. */
   const netArm = useCallback((ms: number, why: string) => {
@@ -1634,6 +1648,11 @@ export default function WebViewCartSheet({
         });
         continue;
       }
+      netMatchedRef.current.set(idx, {
+        productId, skuId, name: match.productName,
+        purchasePreferenceId: preference?.preferenceId ?? null,
+        maxOrderQuantity: match.maxOrderQuantity ?? null,
+      });
       toWrite.push({
         idx,
         productId,
@@ -1731,6 +1750,8 @@ export default function WebViewCartSheet({
   /** Phase 1. Who is signed in, which store, pickup or delivery. */
   const startNetworkRun = useCallback(() => {
     netActiveRef.current = true;
+    netRunRef.current = true;
+    netMatchedRef.current = new Map();
     netSessionRef.current = null;
     netPhaseRef.current = 'session';
     setStep('searching');
@@ -1759,6 +1780,33 @@ export default function WebViewCartSheet({
     addPool.start(active, finishParallelAdd);
   }, [addPool, finishParallelAdd, setStep]);
   startParallelAddRef.current = startParallelAdd;
+
+  /**
+   * End a network write phase.
+   *
+   * A first pass hands its results to `finishParallelAdd`, which reconciles them
+   * against the cart. A TOP-UP must not: it is already the reconcile's own
+   * correction, and reconciling it again would read the cart, find a shortfall,
+   * and top up the top-up. It finishes the run, and the after-probe on the done
+   * screen is what audits the result.
+   */
+  const netFinalize = useCallback(() => {
+    const topUp = netTopUpRef.current;
+    netTopUpRef.current = null;
+    if (!topUp) { finishParallelAdd(netResultsRef.current); return; }
+    const landed: { name: string; success: true }[] = [];
+    netResultsRef.current.forEach((r) => {
+      if (r.success) landed.push({ name: r.productName || '', success: true });
+    });
+    console.log(`[Cart ${ts()}]`, 'network top-up: finished —', landed.length, 'of', topUp.size, 'landed');
+    // ADDED to what the reconcile already confirmed, not replacing it: these are
+    // the units it found short, and the pass that confirmed the rest still holds.
+    addResultsRef.current = [...addResultsRef.current, ...landed];
+    setTotalAdded(addResultsRef.current.length);
+    setAddedNames(addResultsRef.current.map((a) => a.name));
+    setStep('done');
+  }, [finishParallelAdd, setStep]);
+  netFinalizeRef.current = netFinalize;
 
   const onAddWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
     try {
@@ -1881,6 +1929,9 @@ export default function WebViewCartSheet({
       // the cart on every later run, and `copiedList` says "Copied" before
       // anything has been copied.
       setCapReached([]);
+      netRunRef.current = false;
+      netTopUpRef.current = null;
+      netMatchedRef.current = new Map();
       setManualQueue([]);
       setManualIdx(0);
       setManualHandled([]);
@@ -3648,6 +3699,55 @@ export default function WebViewCartSheet({
                 retryItems.map(toIntendedItem),
               );
               setSearchingLabel(`Topping up ${topUpUnits} item${topUpUnits === 1 ? '' : 's'} we couldn't confirm…`);
+
+              // ── Stay on the network rail for the top-up too (MEAL-202) ──────
+              //
+              // The top-up was the last place a network run still loaded pages.
+              // It does not need to: the run already matched these products, so
+              // the shortfall is a write, not a search. Re-searching would spend
+              // ~1.8 s per item to rediscover an id we are holding.
+              //
+              // The write is ABSOLUTE and the script re-reads the cart for its own
+              // baseline, so sending the shortfall is right: base is what the cart
+              // holds NOW, after the adds this top-up is correcting for.
+              //
+              // Only for items the network actually matched. A retry item with no
+              // match — one that reached the top-up some other way — has no id to
+              // write, and those fall through to the page path below.
+              if (netRunRef.current && netMatchedRef.current.size > 0) {
+                const writes: Array<{
+                  idx: number; productId: string; skuId: string; quantity: number; name: string;
+                  purchasePreferenceId?: string | null; maxOrderQuantity?: number | null;
+                }> = [];
+                const stillNeedsPage = new Map<number, ConsolidatedIngredient>();
+                routing.retry.forEach((t, n) => {
+                  const m = netMatchedRef.current.get(t.index);
+                  const shortfall = Math.max(1, Math.round(retryItems[n].productQty || 1));
+                  if (!m) { stillNeedsPage.set(t.index, retryItems[n]); return; }
+                  writes.push({
+                    idx: t.index, productId: m.productId, skuId: m.skuId,
+                    quantity: shortfall, name: m.name,
+                    purchasePreferenceId: m.purchasePreferenceId,
+                    maxOrderQuantity: m.maxOrderQuantity,
+                  });
+                });
+                const script = writes.length > 0 ? buildHebNetworkAddBatchScript(writes) : null;
+                if (script && stillNeedsPage.size === 0) {
+                  console.log(`[Cart ${ts()}]`, 'network top-up: re-writing', writes.length, 'without a page load');
+                  netTopUpRef.current = new Map(routing.retry.map((t, n) => [t.index, retryItems[n]]));
+                  netResultsRef.current = new Map();
+                  netWriteFanoutRef.current = new Map();
+                  netActiveRef.current = true;
+                  netPhaseRef.current = 'add';
+                  setStep('adding');
+                  netArmFinalize(45_000);
+                  webviewRef.current?.injectJavaScript(script);
+                  return;
+                }
+                console.log(`[Cart ${ts()}]`, 'network top-up: falling back to pages —',
+                  writes.length, 'writable of', routing.retry.length);
+              }
+
               setStep('searching');
               navigateToSearchItem(0);
               return;
@@ -3956,10 +4056,12 @@ export default function WebViewCartSheet({
           netActiveRef.current = false;
           netPhaseRef.current = 'idle';
           console.log(`[Cart ${ts()}]`, 'network run: wrote', msg.wrote, 'of', msg.count);
-          // The same completion the add pool calls. Everything after this point —
-          // the cart reconcile, the review routing, the done screen — cannot tell
-          // a network run from a pooled one, which is the point.
-          finishParallelAdd(netResultsRef.current);
+          // A first pass hands its results to the reconcile, which is the same
+          // completion the add pool calls — so nothing downstream can tell a
+          // network run from a pooled one. A TOP-UP finishes the run instead:
+          // it IS the reconcile's correction, and reconciling it again would
+          // find a shortfall and top up the top-up. See netFinalize.
+          netFinalizeRef.current();
           return;
         }
 
