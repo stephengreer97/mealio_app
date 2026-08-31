@@ -195,6 +195,8 @@ flowchart TD
     S3["<b>3 &middot; add</b><br/>exact name + in stock, same rule as the page path<br/>quantity = what the cart already holds + asked"]
     S3 -->|"no exact match"| REV2(["review, carrying its candidates"])
     S3 -->|"sold by weight"| REV3(["review &mdash; an over-add on<br/>a weight line cannot be undone"])
+    S3 -->|"offers a preference and<br/>no confident id for it"| REV4(["review &mdash; the STORE would<br/>pick the variant otherwise"])
+    S3 -->|"a preference write, and the<br/>product already has a line"| REV5(["review &mdash; lines are keyed by<br/>preference and the read does not say which"])
     S3 -->|"cart already holds the<br/>store's per-item cap"| CAP(["quantity_limit_reached<br/><i>no request sent</i>"])
     S3 -->|"cap would be exceeded,<br/>but is not yet met"| CLAMP(["ask for the cap &mdash; a SHORT add,<br/>reported as one"])
     S3 -->|"no cart baseline"| POOL
@@ -206,7 +208,7 @@ flowchart TD
     classDef warn fill:#4c1d95,stroke:#a78bfa,color:#fff
     classDef good fill:#14532d,stroke:#22c55e,color:#fff
     class S1,S2,S3 net
-    class REV1,REV2,REV3,NORES,CAP,CLAMP warn
+    class REV1,REV2,REV3,REV4,REV5,NORES,CAP,CLAMP warn
     class FIN,REC good
 </pre>
 <p>Three request parameters do more than the speed does.
@@ -226,6 +228,18 @@ under-add dressed as a win.</p>
 by its LABEL; the network path states a <code>purchasePreferenceId</code>. Both come from the same
 user choice, so the id is looked up by the label that was chosen rather than asking again. Nothing
 chosen means the field is OMITTED rather than nulled, which is what the storefront itself does.</p>
+<p><b>Once writing starts, falling back to the page path is forbidden.</b> Every earlier phase can
+hand the run over safely because nothing has been written. This one cannot: the pool re-adds the
+whole list by clicking, and its loop baselines off the card label &mdash; which by then reflects
+our own writes &mdash; so the user ends up with roughly double. The add phase's deadline finalizes
+with what came back instead, and the cart read settles the rest.</p>
+<p><b>The write is ABSOLUTE, which makes three ordinary things unsafe.</b> Two ingredients
+resolving to one product would set the line twice and land base + max rather than base + both, so
+writes are coalesced by product first. A product that already has a line cannot take a
+preference-carrying write, because lines are keyed by preference and the cart read does not say
+which line is which. And a product that offers preferences is never written without a confident
+id &mdash; the saved label comes from a DOM modal row while the network's texts come from
+<code>purchasePreferenceList</code>, so a drift would silently let the store choose the variant.</p>
 <p><b>The store identifier is the trap.</b> <code>me.preferredStore.storeNumber</code> and
 <code>cartV2.fulfillment.store.id</code> are both store identifiers and they differ &mdash;
 measured 243 and 476 for one shop. Search wants fulfillment's. Sending the other searches a

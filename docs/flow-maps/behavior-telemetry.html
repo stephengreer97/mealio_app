@@ -139,6 +139,11 @@ flowchart TD
     <li><b><code>unexpected_shape</code></b> &rarr; <code>confirm_failed</code>. The store answered
       and the answer was not a shape we know: the contract moved, or a field we depend on is gone.</li>
   </ul>
+  <p><b>The guard was disarmed for this rail, and the test went on passing.</b> It finds reasons by
+  scanning for a lowercase word-boundary "reason", and the network add passed its reasons
+  POSITIONALLY &mdash; so fifteen were invisible, seven of them with no code at all, riding the
+  unmapped default. Naming them exposed the seven. An uppercase constant did not work either.
+  Anything new in these scripts has to be written where the scanner can see it.</p>
   <p><code>error_arm</code> is mapped too, and is deliberately unreachable today: the guard
   requires a code for every reason the scripts can emit, and that one only ever reaches a debug
   line because the run falls back to clicking and reports whatever the click did.</p>
