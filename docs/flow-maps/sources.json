@@ -1,0 +1,174 @@
+{
+  "_comment": [
+    "Which source files each flow map was read from, and the commit it was read at.",
+    "scripts/check-flow-maps.js compares these against git history to say which maps",
+    "may have gone stale. Paths are repo-relative and may name a file or a directory.",
+    "",
+    "When you update a map, update `readAt` for that map to the commit you read.",
+    "`npm run flow-maps:bless` does that for every map at once."
+  ],
+  "defaultReadAt": "f2218a9",
+  "maps": {
+    "index.html": {
+      "title": "Index",
+      "sources": []
+    },
+    "store-capability-matrix.html": {
+      "title": "Store capability matrix",
+      "sources": [
+        "src/lib/webview-scripts",
+        "src/lib/automation-config/schema.ts",
+        "src/components/WebViewCartSheet.tsx",
+        "src/constants/features.ts",
+        "src/constants/stores.ts"
+      ]
+    },
+    "store-heb.html": {
+      "title": "H-E-B",
+      "sources": [
+        "src/lib/webview-scripts/heb.ts",
+        "src/lib/webview-scripts/heb-cart-query.ts",
+        "src/lib/automation-config/schema.ts",
+        "src/lib/automation-config/decisions.ts",
+        "src/lib/cart-reconcile.ts",
+        "src/components/WebViewCartSheet.tsx"
+      ]
+    },
+    "store-walmart.html": {
+      "title": "Walmart",
+      "sources": [
+        "src/lib/webview-scripts/walmart.ts",
+        "src/lib/webview-scripts/_scoring.ts",
+        "src/lib/automation-config/schema.ts"
+      ]
+    },
+    "store-wegmans.html": {
+      "title": "Wegmans",
+      "sources": [
+        "src/lib/webview-scripts/wegmans.ts",
+        "src/lib/automation-config/schema.ts"
+      ]
+    },
+    "store-amazon-fresh.html": {
+      "title": "Amazon Fresh",
+      "sources": [
+        "src/lib/webview-scripts/amazon-fresh.ts",
+        "src/lib/webview-scripts/cart-confirm.ts",
+        "src/lib/automation-config/schema.ts"
+      ]
+    },
+    "store-aldi-instacart.html": {
+      "title": "ALDI / Instacart Storefront",
+      "sources": [
+        "src/lib/webview-scripts/instacart.ts",
+        "src/lib/webview-scripts/index.ts",
+        "src/lib/webview-scripts/cart-count.ts",
+        "src/lib/automation-config/schema.ts"
+      ]
+    },
+    "store-albertsons-family.html": {
+      "title": "Albertsons family",
+      "sources": [
+        "src/lib/webview-scripts/albertsons.ts",
+        "src/lib/webview-scripts/auth-urls.ts",
+        "src/lib/selector-health.ts",
+        "src/lib/automation-config/schema.ts"
+      ]
+    },
+    "store-kroger-family.html": {
+      "title": "Kroger family",
+      "sources": [
+        "src/components/KrogerCartReviewSheet.tsx",
+        "src/components/ProductChooserSheet.tsx",
+        "src/lib/api.ts",
+        "src/constants/stores.ts"
+      ]
+    },
+    "store-mockstore.html": {
+      "title": "Mock Store",
+      "sources": [
+        "src/lib/webview-scripts/mockstore.ts",
+        "src/lib/webview-scripts/index.ts",
+        "src/constants/stores.ts"
+      ]
+    },
+    "behavior-cart-engine.html": {
+      "title": "The cart engine",
+      "sources": [
+        "src/components/WebViewCartSheet.tsx",
+        "src/context/CartJobContext.tsx",
+        "src/lib/webview-scripts/index.ts",
+        "src/lib/automation-config/decisions.ts"
+      ]
+    },
+    "behavior-cart-reconcile.html": {
+      "title": "Reconciliation & the verdict",
+      "sources": [
+        "src/lib/cart-reconcile.ts"
+      ]
+    },
+    "behavior-choose-products.html": {
+      "title": "Choose Products & matching",
+      "sources": [
+        "src/lib/chooseRun.ts",
+        "src/lib/chooseRanking.ts",
+        "src/lib/webview-scripts/_scoring.ts",
+        "src/lib/saveChosenIngredient.ts",
+        "src/components/ChooseProductsIntroSheet.tsx"
+      ]
+    },
+    "behavior-remote-config.html": {
+      "title": "Remote config & catalog",
+      "sources": [
+        "src/lib/automation-config",
+        "src/lib/store-catalog",
+        "src/lib/selector-health.ts",
+        "src/constants/stores.ts"
+      ]
+    },
+    "behavior-telemetry.html": {
+      "title": "Telemetry & the north-star",
+      "sources": [
+        "src/lib/north-star.ts",
+        "src/lib/automation-telemetry.ts"
+      ]
+    },
+    "behavior-auth.html": {
+      "title": "Login, tokens & session",
+      "sources": [
+        "src/context/AuthContext.tsx",
+        "src/lib/tokenStorage.ts",
+        "src/screens/auth",
+        "src/navigation/RootNavigator.tsx"
+      ]
+    },
+    "behavior-account.html": {
+      "title": "Account, subscription & admin",
+      "sources": [
+        "src/screens/account/AccountScreen.tsx",
+        "src/screens/admin/AdminScreen.tsx",
+        "src/lib/purchases.ts",
+        "src/lib/fixture-capture-config.ts",
+        "src/navigation/MainTabs.tsx"
+      ]
+    },
+    "behavior-creator.html": {
+      "title": "Creator account",
+      "sources": [
+        "src/screens/creator",
+        "src/components/YouTubeConnectCard.tsx",
+        "src/components/PlatformLinksCard.tsx"
+      ]
+    },
+    "behavior-meal-lifecycle.html": {
+      "title": "Meal lifecycle & ingredients",
+      "sources": [
+        "src/screens/discover/DiscoverScreen.tsx",
+        "src/screens/mymeals/MyMealsScreen.tsx",
+        "src/screens/shared/SharedMealScreen.tsx",
+        "src/lib/normalizeIngredients.ts",
+        "src/lib/consolidateIngredients.ts"
+      ]
+    }
+  }
+}

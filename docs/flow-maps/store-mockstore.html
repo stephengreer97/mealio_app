@@ -1,0 +1,127 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mock Store Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Stores &rsaquo; <b>Mock Store</b> &middot; dev / e2e only</span></div>
+<header>
+  <h1>Mock Store &mdash; the deterministic storefront</h1>
+  <div class="sub">Read off <code>webview-scripts/mockstore.ts</code>. A real remote https site
+  (<code>mealiomockstore.vercel.app</code>) whose DOM we own, so Maestro can drive the entire
+  orchestration — login, search, choose, add, cart-count confirm, snapshot, reconcile, skip,
+  parallel — with no real store, no anti-bot, and no drift.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Good outcome</b></span>
+  <span class="chip"><span class="sw" style="background:#f59e0b"></span><b>Fixture-driven</b> — the page decides</span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · How it gets into the build at all</h3><pre class="mermaid">
+flowchart TD
+    B0(["build"]) --> B1{"<code>__DEV__</code><br/>or <code>EXPO_PUBLIC_E2E=1</code>?"}
+    B1 -->|no| B2(["<b>MOCK_STORE_ENABLED = false</b><br/>not in the picker,<br/><code>getStoreScripts</code> returns null<br/><i>even if a meal carries the id</i>"])
+    B1 -->|yes| B3["<code>BUNDLED_STORES.push(mockstore)</code>"]
+    B3 --> B4["<code>isSupportedStore</code> special-cases it<br/><i>so a REMOTE catalog row named<br/>mockstore cannot surface it in prod</i>"]
+    B4 --> B5(["selectable, automatable"])
+
+    NOTE["<code>WEBVIEW_STORE_IDS</code> contains it<br/><b>unconditionally</b> — selectorHealth<br/>derives coverage from that set<br/>and must keep seeing it"] -.-> B4
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef dim fill:#1f2937,stroke:#4b5563,color:#9ca3af
+    class B5 good
+    class B2,NOTE dim
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · A run, and the failures the page can be told to produce</h3><pre class="mermaid">
+flowchart TD
+    START(["Maestro: add meals<br/>to the Mock Store cart"]) --> LOGINCHK
+    LOGINCHK["<b>login_check</b><br/>read <code>body[data-logged-in]</code><br/><i>one synchronous line</i>"]
+    LOGINCHK --> ISIN{"= 'true'?"}
+    ISIN -->|no| LOGIN["<b>login</b> — store pages 302 to /login,<br/>matched by <code>isLoginPageUrl</code>"]
+    LOGIN -->|"back on the store &rarr;<br/><code>reinjectLoginCheckOnNav</code>"| LOGINCHK
+    ISIN -->|yes| BEFORE["<b>before-snapshot</b><br/>read <code>#mock-cart-count</code>"]
+    BEFORE --> ROUTE{{"chooseAddStrategy<br/><i>every route is exercisable</i>"}}
+    ROUTE --> NAV["navigate <code>/search?q=term</code>"]
+
+    subgraph W ["Worker mode — the parallel pools"]
+        NAV --> HASH{"URL carries<br/><code>#mealio=&lt;json&gt;</code>?"}
+        HASH -->|yes| OVERRIDE["term and qty come from the hash<br/><i>server-invisible, so one built<br/>script serves every item</i>"]
+        HASH -->|no| PLAIN["term and qty are baked<br/>into the script"]
+    end
+
+    OVERRIDE --> CARDS
+    PLAIN --> CARDS
+    CARDS["poll &le;25× for <code>.mock-product</code><br/>or <code>.mock-no-results</code>"]
+    CARDS --> FIND{"a card whose<br/><code>data-name</code> === term?"}
+    FIND -->|"no, and cards exist"| LOWC(["<b>low_confidence</b><br/>hand back candidates"])
+    FIND -->|"no cards"| NORES(["<b>no_results</b>"])
+    FIND -->|yes| BTN{"<code>button[data-qe=add]</code><br/>present?"}
+    BTN -->|no| NOBTN(["<b>no_button</b>"])
+    BTN -->|yes| CLICK["click it QTY times,<br/>250ms apart"]
+    CLICK --> CONF["<b>__waitForCartIncrease</b><br/>40 ticks × 150ms"]
+    CONF --> UP{"<code>#mock-cart-count</code><br/>went up?"}
+    UP -->|yes| SETTLE{"worker mode?"}
+    SETTLE -->|yes| S3["settle 300ms so the add<br/>flushes before the pool<br/>re-navigates this worker"]
+    SETTLE -->|no| OK
+    S3 --> OK(["success"])
+    UP -->|"no — the button carried<br/><code>data-failadd</code>"| NOTINC(["<b>cart_not_incremented</b>"])
+
+    OK --> RECON["reconcile against<br/><code>.mock-cart-line[data-name]</code><br/>and <code>.mock-cart-qty</code>"]
+    LOWC --> REVIEW
+    NORES --> REVIEW
+    NOBTN --> REVIEW
+    NOTINC --> RECON
+    RECON --> REVIEW["<b>review</b> / skip"]
+    REVIEW --> DONE(["done screen"])
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef fix fill:#78350f,stroke:#f59e0b,color:#fff
+    class LOGINCHK,LOGIN,REVIEW state
+    class OK,DONE good
+    class LOWC,NORES,NOBTN,NOTINC,HASH fix
+</pre></div>
+
+<div class="notes">
+  <h2>What the mock store exists to prove</h2>
+  <p>Nine green unit tests can describe a feature no user can reach. The mock store is the answer to
+  that: a real remote https site, loaded in a real WebView, driven by the real registry through the
+  real orchestration. What it removes is only the parts that are not ours — anti-bot, hydration
+  races, markup drift.</p>
+
+  <h2>The DOM contract</h2>
+  <table class="src">
+    <tr><th>Element</th><th>Means</th></tr>
+    <tr><td><code>body[data-logged-in]</code></td><td>login state, read synchronously</td></tr>
+    <tr><td><code>.mock-product[data-name][data-price][data-oos]</code></td><td>a search-result tile</td></tr>
+    <tr><td><code>button[data-qe="add"][data-name][data-failadd]</code></td><td>its add button — <code>data-failadd</code> makes the add <i>silently not commit</i></td></tr>
+    <tr><td><code>#mock-cart-count</code></td><td>the header badge total</td></tr>
+    <tr><td><code>.mock-cart-line[data-name] .mock-cart-qty</code></td><td>a cart line on <code>/cart</code></td></tr>
+    <tr><td><code>.mock-no-results</code></td><td>an explicit empty state, so a zero-card poll ends early</td></tr>
+  </table>
+  <p><code>data-oos</code> and <code>data-failadd</code> are the point: they let a test produce the
+  two failures that are hardest to reproduce against a real store — an out-of-stock exact match, and
+  an add that reports success at the button while the cart never moves.</p>
+
+  <h2>Three deliberate details</h2>
+  <p><b>It is not probed for selector health.</b> <code>getStoreScripts</code> passes
+  <code>null</code> as its surface: a deterministic fixture store has no drift to catch, and it has
+  no automation-config selector table to sample against.</p>
+
+  <p><b>It lives in <code>WEBVIEW_STORE_IDS</code> unconditionally</b> — <code>selectorHealth</code>
+  derives its coverage from that set and must keep seeing it — so <code>isSupportedStore</code>
+  special-cases the id against <code>MOCK_STORE_ENABLED</code>. Without that line, a remote catalog
+  row named <code>mockstore</code> would surface the dev store in a production build.</p>
+
+  <p><b>The URL hash is how one script serves every item.</b> In worker mode the term and quantity
+  ride in <code>#mealio=&lt;json&gt;</code>, which the server never sees. That is the same mechanism
+  the real stores' parallel-add workers use, so exercising it here exercises it there.</p>
+
+  <p><b>Point it anywhere.</b> <code>EXPO_PUBLIC_MOCK_STORE_URL</code> overrides the deployment, so
+  a local mock server can stand in for the Vercel one.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

@@ -1,0 +1,146 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Kroger Family Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Stores &rsaquo; <b>Kroger family</b> &middot; OAuth API, no DOM automation</span></div>
+<header>
+  <h1>Kroger family &mdash; the API path</h1>
+  <div class="sub">Kroger, King Soopers, Ralphs, Fred Meyer, Fry's, QFC, Harris Teeter, Mariano's,
+  Smith's, Baker's, Dillons, Pay-Less, Pick 'n Save, Metro Market, City Market.
+  Read off <code>components/KrogerCartReviewSheet.tsx</code>, <code>lib/api.ts</code> and
+  <code>screens/account/AccountScreen.tsx</code>. <b>No WebView, no selectors, nothing for a
+  redesign to break.</b></div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Good outcome</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Needs the user</b></span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Server-side</b> — mealio.co fans out</span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · Connecting the account (one time, in Account)</h3><pre class="mermaid">
+flowchart TD
+    A0(["Account &rsaquo; Connect Kroger Account"]) --> A1["POST /api/kroger/connect<br/><code>{ mobile: true, storeId }</code>"]
+    A1 --> A2["<b>WebBrowser.openAuthSessionAsync</b><br/>Kroger's OAuth consent"]
+    A2 --> A3{"deep link back"}
+    A3 -->|"<code>mealio://kroger/connected</code>"| A4["GET /api/kroger/status"]
+    A3 -->|"<code>mealio://kroger/denied</code>"| ADEN(["user declined"])
+    A3 -->|"<code>mealio://kroger/error</code>"| AERR(["connect failed"])
+    A4 --> A5{"a location set<br/>for this banner?"}
+    A5 -->|no| A6["type a ZIP &rarr;<br/>GET /api/kroger/locations?term="]
+    A6 --> A7["pick a store &rarr;<br/>POST /api/kroger/set-location"]
+    A7 --> A8
+    A5 -->|yes| A8(["<b>connected</b><br/>locationId per storeId"])
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    class A8 good
+    class ADEN,AERR danger
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · The cart run — search server-side, review what is not exact</h3><pre class="mermaid">
+flowchart TD
+    START(["My Meals &rsaquo; select meals<br/>&rsaquo; Add to cart"]) --> DISP{{"<b>isKrogerBrand(storeId)</b>"}}
+    DISP -->|true| KSHEET["<b>KrogerCartReviewSheet</b>"]
+    DISP -->|"false, isWebViewStore"| WSHEET["WebViewCartSheet<br/><i>a different map entirely</i>"]
+
+    KSHEET --> QTY["<b>qty</b><br/>uncheck items, set quantities"]
+    QTY --> FILTER{{"active = checked<br/>AND <b>not isZeroedOut</b>"}}
+    FILTER --> SEARCH["<b>searching</b><br/>POST /api/kroger/search-products<br/><i>60s timeout — the server fans<br/>out per ingredient</i>"]
+
+    SEARCH --> RESULTS["one result per term:<br/><code>upc</code> · <code>description</code> ·<br/><code>exact</code> · <code>suggestions[]</code>"]
+    RESULTS --> SPLIT{"any result<br/>with <code>exact = false</code>?"}
+    SPLIT -->|no| ADDALL["<b>adding</b> — everything at once"]
+    SPLIT -->|yes| SR["<b>searchResult</b><br/>then one review card per item"]
+
+    subgraph REVIEW ["review — one ingredient at a time"]
+        SR --> RC["show the reason:<br/><i>out_of_stock</i> · <i>no_results</i> ·<br/><i>low_confidence</i>"]
+        RC --> RCH{"user decides"}
+        RCH -->|"pick a suggestion &rarr; <b>Add</b>"| PICK["push {upc, totalQty}"]
+        RCH -->|"pick &rarr; <b>Update</b>"| UPD["push it AND write<br/><code>searchTerm</code> back onto<br/>every meal that used it<br/><i>so next run is exact</i>"]
+        RCH -->|"<b>Skip</b>"| SKIP["add nothing"]
+        RCH -->|"type a custom term"| CUST["POST search-products for it<br/><b>always show suggestions</b>,<br/><i>never auto-add even on an<br/>exact score — the user typed<br/>it in order to choose</i>"]
+        CUST --> RC
+        PICK --> NEXT
+        UPD --> NEXT
+        SKIP --> NEXT
+        NEXT{"more to review?"}
+        NEXT -->|yes| RC
+    end
+
+    NEXT -->|no| MERGE["exact results <b>+</b> picked items"]
+    MERGE --> ADDALL
+    ADDALL --> POST["POST /api/kroger/add-to-cart<br/><code>{ items: [{upc, quantity}], locationId }</code>"]
+    POST --> OK{"succeeded?"}
+    OK -->|yes| COUNT["totalAdded = <b>sum of quantities</b><br/><i>units, not lines — the same<br/>meaning as every other store</i>"]
+    OK -->|no| CERR(["cartError shown on the done screen"])
+    COUNT --> DONE(["<b>done</b> · N items added<br/>· Open Kroger cart"])
+    CERR --> DONE
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class QTY,SR,KSHEET,RC state
+    class DONE,COUNT good
+    class CERR danger
+    class SEARCH,POST,CUST spec
+</pre></div>
+
+<div class="notes">
+  <h2>Why this store family has no selectors</h2>
+  <p>The Kroger family runs on Kroger's public API, not on DOM automation. That is why
+  <code>PlatformId</code> declares a <code>'kroger'</code> platform with <b>no selector table</b> and
+  never will need one: there is nothing for a storefront redesign to break, no anti-bot to negotiate
+  with, no login heuristic. It is declared at all so a Kroger store's <code>platform</code> field can
+  say what it actually is rather than being mislabelled <code>'standalone'</code>.</p>
+  <p>Everything else in the app treats it as a peer: <code>isCartEnabled = isKroger ||
+  isWebView</code>, the same multi-select on the meal cards, the same "Choose products once to add
+  this to your cart" warning, the same <code>lastAutomationRun</code> bookkeeping.</p>
+
+  <h2>Three things worth knowing</h2>
+  <p><b>Two match tiers, and only one auto-adds.</b> The server returns <code>exact</code> per
+  ingredient. Exact results go straight into the cart payload; everything else goes to the review
+  queue with a reason the sheet renders in the user's words. That is the same cart governing
+  principle as the WebView stores, arrived at server-side instead of in an injected script.</p>
+
+  <p><b>A custom search never auto-adds.</b> Even if the term the user typed scores exact,
+  <code>resolveCurrentSelection</code> shows the suggestion list. The user typed a term
+  <i>in order to choose</i>; silently adding would take that back.</p>
+
+  <p><b>"Update" is the one action that changes the meal.</b> Picking a substitute and choosing
+  Update writes <code>searchTerm</code> (and the per-meal quantity) back onto every meal that used
+  that ingredient, so the next run matches exactly and skips the review entirely.</p>
+
+  <h2>An invariant hiding in a type</h2>
+  <p><code>ConsolidatedIngredient</code> here carries <b>no weight fields</b>, and that is
+  load-bearing rather than incidental. <code>isZeroedOut</code>'s sold-by-weight exception keys off
+  <code>purchaseWeight</code>; with no such key the exception is unreachable and the predicate
+  reduces to the plain <code>productQty &gt; 0</code> filter Kroger ran before MEAL-65 — which is
+  what makes add-to-cart provably unchanged on this surface. Add a weight field and rows would start
+  surviving quantity 0. Both the type and its builder are exported so
+  <code>qtyStepExclusion.test.ts</code> pins the invariant rather than leaving it to a comment.</p>
+
+  <h2>Counting</h2>
+  <p><code>totalAdded</code> is the <b>sum of quantities</b>, not the number of lines (MEAL-178).
+  "N items added to your cart" has to mean the same thing here as on every other store, and this API
+  hands us the quantities outright. Nothing on this path is sold by weight — the REST cart takes a
+  discrete <code>quantity</code> per UPC.</p>
+
+  <h2>Endpoints</h2>
+  <table class="src">
+    <tr><th>Call</th><th>Purpose</th></tr>
+    <tr><td><code>GET /api/kroger/status</code></td><td>connected? plus the saved location per storeId</td></tr>
+    <tr><td><code>POST /api/kroger/connect</code></td><td>returns the OAuth redirect URL</td></tr>
+    <tr><td><code>POST /api/kroger/disconnect</code></td><td>drops the connection</td></tr>
+    <tr><td><code>GET /api/kroger/locations?term=</code></td><td>ZIP &rarr; nearby stores, each with its banner storeId</td></tr>
+    <tr><td><code>POST /api/kroger/set-location</code></td><td>pins a locationId to a banner</td></tr>
+    <tr><td><code>POST /api/kroger/search-products</code></td><td>ingredients &rarr; upc / exact / suggestions <i>(60&nbsp;s)</i></td></tr>
+    <tr><td><code>POST /api/kroger/add-to-cart</code></td><td><code>{upc, quantity}[]</code> &rarr; the real cart <i>(60&nbsp;s)</i></td></tr>
+  </table>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

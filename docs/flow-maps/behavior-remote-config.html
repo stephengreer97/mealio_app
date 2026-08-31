@@ -1,0 +1,197 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Remote Config &amp; Catalog Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Behaviors &rsaquo; <b>Remote config, catalog &amp; selector health</b></span></div>
+<header>
+  <h1>Fixing a store without shipping a build</h1>
+  <div class="sub">Read off <code>lib/automation-config/</code>, <code>lib/store-catalog/</code> and
+  <code>lib/selector-health.ts</code>. Two identical pipelines and one measurement loop — the
+  machinery that turns "Albertsons renamed a button" from an App Store review into a config push.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Pipeline step</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Applied</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Refused</b> — bundled default stands</span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Trust boundary</b></span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · The load path — nothing ever waits on the network</h3><pre class="mermaid">
+flowchart TD
+    M(["module load"]) --> B["<b>bundled defaults are live immediately</b><br/><i>reads are SYNCHRONOUS — the store scripts<br/>interpolate selectors while building an<br/>injectable string, deep inside render.<br/>There is nowhere to await.</i>"]
+    B --> L["<b>loadAutomationConfig()</b> once at app start<br/>(and <b>loadStoreCatalog()</b> after sign-in)"]
+    L --> C1["read the SecureStore cache"]
+    C1 -->|"a cached version"| APPLY
+    C1 -->|"nothing, or it throws"| F1["cache is best-effort"]
+    F1 --> FETCH
+    APPLY --> FETCH["fetch the active version from mealio.co"]
+    FETCH -->|"unreachable / 401 / throws"| KEEP(["<b>keep what you have</b><br/>cache or bundled — the<br/>intended degradation"])
+    FETCH -->|"a payload"| APPLY
+
+    APPLY{{"<b>apply(version, raw)</b>"}}
+    APPLY --> G1{"raw is null, or an<br/>EMPTY override tree?"}
+    G1 -->|yes| NOINSTR(["<b>no instruction</b> — NOT 'revert to bundled'.<br/><i>the server briefly has no active row while a<br/>publish or rollback swaps rows; a client that<br/>reverted in that window would undo a shipped<br/>fix for one run</i>"])
+    G1 -->|no| G2{"<code>version &le; 0</code>?"}
+    G2 -->|yes| NOINSTR
+    G2 -->|no| G3{"<code>version &lt; currentVersion</code>?"}
+    G3 -->|"yes — a rollback in flight,<br/>or a CDN serving a stale body"| REFUSE(["refuse to go backwards"])
+    G3 -->|no| MERGE["<b>mergeAutomationConfig(raw)</b><br/><i>diagram 2</i>"]
+    MERGE --> LIVE(["applied · version recorded on<br/>every telemetry row"])
+    LIVE --> PERSIST["persist the <b>RAW</b> override tree,<br/>never the merged result"]
+    PERSIST --> WHYRAW{{"a future build with different bundled defaults<br/>must re-merge against ITS OWN baseline,<br/>not inherit this build's"}}
+
+    BUG{{"<b>the clause this shape comes from.</b> The earlier form was<br/><code>version &gt; 0 &amp;&amp; version &lt; currentVersion</code>, which EXEMPTED 0 from<br/>the ordering check instead of refusing it. A served v0 overwrote<br/>a cached v9, reset currentVersion to 0, and got persisted — leaving<br/>the client with no rollback protection at all until the next<br/>positive version, on the config carrying the selectors and the<br/>kill switches. Found in MEAL-23's copy and fixed in both;<br/><b>the two must stay identical.</b>"}}
+    G2 -.-> BUG
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class LIVE,KEEP good
+    class REFUSE,NOINSTR danger
+    class BUG,WHYRAW,APPLY spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · The merge — deciding which remote values are safe to believe</h3><pre class="mermaid">
+flowchart TD
+    IN(["untyped JSON off the network.<br/>Its values drive timers <b>and get<br/>interpolated into JavaScript we<br/>inject into a store's page.</b>"]) --> K{"per key"}
+    K -->|"a key this build<br/>does not know"| DROP(["dropped, never merged<br/><i>a newer server can publish fields<br/>an older build has never heard of<br/>without corrupting what it does know</i>"])
+    K -->|known| T{"type"}
+    T -->|"wrong type"| REJ(["rejected — bundled default kept.<br/><i>one bad field never takes the<br/>rest of the tree down with it</i>"])
+    T -->|number| NB{"inside NUMERIC_BOUNDS?"}
+    NB -->|no| REJC(["<b>rejected, not clamped</b><br/><i>a 100ms search timeout fails every<br/>run and a 10-minute one hangs the UI —<br/>both are bugs, and silently substituting<br/>a value nobody chose hides the bug</i>"])
+    NB -->|yes| OK
+    T -->|"selector string"| SS{"contains a quote, backslash,<br/>backtick, newline, line separator,<br/>angle bracket, or a template<br/>substitution opener?"}
+    SS -->|"yes — could break out of the<br/>JS string literal it lands in"| REJ
+    SS -->|"no, and &le; 500 chars"| OK
+    T -->|"URL"| UU{"absolute <b>https</b>?"}
+    UU -->|"no — http downgrades a store to<br/>cleartext; javascript:/data: in a<br/>WebView src is straightforwardly<br/>an exploit"| REJ
+    UU -->|yes| OK
+    T -->|"platform id"| PP{"one this build knows?"}
+    PP -->|no| REJP(["refused — the store stays on its<br/><b>bundled</b> platform rather than<br/>being stripped of selectors"])
+    PP -->|yes| OK
+
+    OK(["merged"]) --> WARN["every rejection lands in <code>warnings</code><br/>and is logged loudly"]
+    WARN --> WHYW{{"silence here would mean a 'pushed' fix that<br/>never applied. A bad push has to be visible<br/>in the telemetry funnel."}}
+
+    PLAT{{"<b>platform-level values go through the same validation as<br/>store-level ones.</b> They reach MORE stores, which is a<br/>reason to gate them identically, not loosely."}}
+    K -.-> PLAT
+
+    TWO{{"<b>two independent defences.</b> merge.ts rejects selectors<br/>containing quotes or backslashes; selectorsFor() ALSO<br/>JSON.stringify()s them at the interpolation site —<br/>because a config push is a remote code path into a WebView."}}
+    SS -.-> TWO
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class OK good
+    class DROP,REJ,REJC,REJP danger
+    class PLAT,TWO,WHYW spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 3 · Selector resolution — three layers, and the capability line</h3><pre class="mermaid">
+flowchart TD
+    ASK(["a store script needs a selector"]) --> S1{"<code>stores.&lt;id&gt;.selectors[key]</code>"}
+    S1 -->|present| USE(["use it"])
+    S1 -->|no| S2{"<code>platforms.&lt;platform&gt;.selectors[key]</code><br/><i>platform from config, else the one<br/>the ADAPTER declares about itself</i>"}
+    S2 -->|present| USE
+    S2 -->|no| S3["the adapter's compiled-in<br/><code>SEL_FALLBACKS</code>"]
+    S3 --> USE
+    USE --> JS["returned as a JS string <b>literal</b><br/>via JSON.stringify —<br/><code>var ATC_SEL = ${sel.atc};</code>,<br/>never <code>'${sel.atc}'</code>"]
+
+    NOTABLE{{"a platform with no table — 'standalone', 'kroger', or an id a<br/>newer server knows and this build does not — returns <b>{}</b>,<br/>never undefined and never a throw. A store can lose its<br/>INHERITANCE without ever losing its selectors."}}
+    S2 -.-> NOTABLE
+
+    subgraph CAT ["the store catalog — the same pipeline, a different question"]
+        CFG(["published catalog from mealio.co"]) --> CM["mergeStoreCatalog"]
+        CM --> FILT{"<b>isSupportedStore(id)</b><br/><i>bundled, never remote</i>"}
+        FILT -->|"this binary has code for it"| SHOW(["appears in the picker"])
+        FILT -->|"it does not"| HIDE(["<b>filtered out</b> — behaves exactly<br/>as though it does not exist.<br/><i>no badge, no 'update your app' prompt,<br/>no half-working row that dead-ends<br/>at getStoreScripts() === null</i>"])
+    end
+
+    LINE{{"<b>the line this whole subsystem is drawn around.</b><br/>The catalog can add a store's NAME to the app.<br/>Only a RELEASE can add its automation. KROGER_BRAND_IDS<br/>and WEBVIEW_STORE_IDS stay bundled in constants/stores.ts<br/>and must never become remote — a database row would<br/>otherwise promise automation the installed app cannot<br/>deliver. <b>Capability ships with the binary or it is a lie.</b>"}}
+    FILT -.-> LINE
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class USE,SHOW good
+    class HIDE danger
+    class LINE,NOTABLE spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 4 · Selector health — measuring drift before it becomes an outage</h3><pre class="mermaid">
+flowchart TD
+    P0(["a store script is built"]) --> P1["<b>buildSelectorProbe()</b> prefix is<br/><b>PREPENDED</b> to the finished text"]
+    P1 --> P2["in the page: install ONE hook on<br/><code>window.ReactNativeWebView.postMessage</code><br/>and register the selectors this<br/>script actually interpolates"]
+    P2 --> P3["script runs, posts its terminal result<br/><i>SEARCH_RESULT · ADD_RESULT · WORKER_RESULT</i>"]
+    P3 --> P4["the hook forwards that message <b>untouched</b>,<br/>then samples every registered selector<br/>against the settled page"]
+    P4 --> P5["posts one extra <b>SELECTOR_HEALTH</b> message"]
+    P5 --> P6["<b>SelectorHealthTally</b> in RN accumulates<br/>across the run &rarr; one flat,<br/>sanitizer-safe string at the end"]
+
+    WHYPRE{{"<b>why PREPENDED and not appended.</b> The parallel-pool wrappers<br/>install postMessage overrides that re-tag a store's SEARCH_RESULT<br/>as WORKER_RESULT and <b>swallow everything they do not recognise.</b><br/>Text order decides the chain: running FIRST puts the probe's hook<br/>closest to the native bridge — under the wrapper's whitelist<br/>rather than into it. Appending would have every worker's<br/>samples eaten in silence."}}
+    P1 -.-> WHYPRE
+
+    WHYFIN{{"<b>'prepended' is a property of the FINISHED worker</b>, and that<br/>distinction is the bug this shipped with. The pools were composed<br/>in WebViewCartSheet from scripts it had already been handed —<br/><code>wrapper(probe + body)</code>. Each half was individually correct and the<br/>result was the one arrangement that discards everything. Both pools<br/>reported nothing on the four stores where they ARE the add path,<br/>while the main WebView kept the row looking populated.<br/>Composition now lives at one seam: attachWorkerScripts runs<br/>before withSelectorProbes."}}
+    P1 -.-> WHYFIN
+
+    GAP{{"<b>what was missing.</b> <code>selector_miss</code> is only recorded when a<br/>STEP FAILS — so a selector resolving on 60% of runs (a half-shipped<br/>redesign, or a fallback branch carrying a dead primary) is invisible<br/>until it breaks completely, and then reads as a sudden outage rather<br/>than three weeks of drift. The DENOMINATOR — how often each selector<br/>was QUERIED — was never recorded at all."}}
+    P0 -.-> GAP
+
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class WHYPRE,WHYFIN,GAP spec
+</pre></div>
+
+<div class="notes">
+  <h2>The exact rejection pattern</h2>
+  <p>A selector or URL is refused if it matches
+  <code>/['"\\`\r\n\u2028\u2029&lt;&gt;]|\$&#123;/</code> — a quote, a backslash, a backtick, a
+  newline or carriage return, a Unicode line or paragraph separator, an angle bracket, or a template
+  substitution opener. Every one of those is a way out of the JavaScript string literal the value
+  gets interpolated into. URLs additionally have to be absolute <code>https</code> and at most 500
+  characters; selectors at most 500.</p>
+
+  <h2>Two rules that make a config safe to push without gating on app version</h2>
+  <ol>
+    <li><b>The payload is partial.</b> It carries only the keys that differ from what the binary
+    ships, so an empty <code>{}</code> is valid and means "the bundled table is fine".</li>
+    <li><b>Unknown keys are ignored, and every known key is type-checked and bounded.</b> A malformed
+    push degrades to the bundled default <i>for that one field</i> — it can never brick the
+    engine.</li>
+  </ol>
+
+  <h2>Selectors must be read inside a build function</h2>
+  <p>The remote config arrives <i>after</i> the store-script modules are imported. A module-scope
+  capture would freeze whatever the bundled default was at import time and a config push could never
+  turn it on — so every script constant carrying a selector is a function, not a template-literal
+  const. That is why adapters are built per call rather than once: a push takes effect on the next
+  cart run instead of requiring an app restart.</p>
+
+  <h2>Why two identical pipelines instead of one</h2>
+  <p>The automation config and the store catalog answer different questions — <i>how</i> to drive a
+  store, and <i>which</i> stores exist — but they have the same failure modes, so they have the same
+  shape down to the clause. Neither imports its own persistence: <code>./store</code> pulls in
+  <code>expo-secure-store</code>, which the pure-node test project cannot transform, and every store
+  script imports the config to read selectors. Persistence is injected instead, wired in
+  <code>App.tsx</code> and faked in tests. The catalog keeps React out for the same reason; its hook
+  lives in <code>./useStores</code>.</p>
+
+  <h2>Kill switches, and what they take down</h2>
+  <table class="src">
+    <tr><th>Switch</th><th>Scope</th></tr>
+    <tr><td><code>stores.&lt;id&gt;.enabled: false</code></td><td>one store — <code>getStoreScripts</code> returns null and the store surfaces the normal "unavailable" UI</td></tr>
+    <tr><td><code>stores.albertsons.enabled: false</code></td><td><b>all 15 Albertsons banners</b> — they share one config key</td></tr>
+    <tr><td><code>flags.parallelAdd</code> + <code>flags.presearchAdd</code></td><td>concurrency — both must be published together to mean "stop adding concurrently", because the pre-search branch is checked before the parallel-add switch</td></tr>
+    <tr><td><code>telemetry.sampleRate</code></td><td>reporting cost, without a release</td></tr>
+  </table>
+  <p>Only <i>selectors</i> live in the platform table. URLs, kill switches and worker knobs stay
+  per-store deliberately: a switch that took down 15 brands at once would be a worse tool than one
+  that takes down the banner that broke.</p>
+
+  <h2>A re-platforming push is bounded, not dangerous</h2>
+  <p>Adapters keep their full compiled-in fallback set, so the worst a wrong <code>platform</code>
+  value can do is drop the store back to the selectors that shipped in the binary.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

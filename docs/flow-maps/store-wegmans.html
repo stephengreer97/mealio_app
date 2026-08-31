@@ -1,0 +1,166 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Wegmans Add-to-Cart Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Stores &rsaquo; <b>Wegmans</b> &middot; standalone storefront, serial only</span></div>
+<header>
+  <h1>Wegmans add-to-cart automation</h1>
+  <div class="sub">Read off <code>webview-scripts/wegmans.ts</code> and the
+  <code>stores.wegmans</code> entry in <code>automation-config/schema.ts</code>.
+  Wegmans is the store where the WAF, not the markup, sets the shape of the run.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Good outcome</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Fail closed</b> — deliberately pessimistic</span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Wegmans-specific</b></span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · The run — no worker pool, one WebView</h3><pre class="mermaid">
+flowchart TD
+    START(["User taps<br/>Add N meals to Wegmans cart"]) --> QTY
+    QTY["<b>qty</b><br/>uncheck items, set quantities"]
+    QTY -->|"tap Add Ingredients"| LOGINCHK
+    LOGINCHK["<b>login_check</b><br/><i>see diagram 2</i>"]
+    LOGINCHK --> ISIN{"logged in?"}
+    ISIN -->|no| LOGIN["<b>login</b><br/>MSAL sign-in in the WebView"]
+    LOGIN -->|"any wegmans.com URL that is<br/>not /sign-in or /login"| LOGINCHK
+    ISIN -->|yes| BEFORE["<b>before-snapshot</b><br/><code>CART_COUNT phase=before</code>"]
+
+    BEFORE --> ROUTE{{"chooseAddStrategy"}}
+    ROUTE -->|"<code>forceSerialSearch: true</code><br/>always"| SER["<b>serial</b><br/>one item at a time,<br/>one WebView"]
+    ROUTE -.->|"parallelAdd / presearch<br/>never reached here"| NEVER["worker pool<br/><i>code kept for a retry;<br/>the WAF 403s even<br/>2 staggered workers</i>"]
+
+    SER --> NAV["navigate to the search URL<br/><b>no <code>?_t=</code> cache-buster</b><br/><i>cacheBustNav: false</i>"]
+
+    subgraph PERITEM ["Per item"]
+        NAV --> TILES["poll for<br/><code>div.component--product-tile</code>"]
+        TILES --> NAMES["read <code>h3[data-testid=-baseHeading]</code>"]
+        NAMES --> MATCH{"scoreMatch = 100?"}
+        MATCH -->|no| TOREVIEW(["queue for review"])
+        MATCH -->|yes| SCROLL["scrollIntoCenter<br/><i>then nudge clear of the<br/>~100px sticky header</i>"]
+        SCROLL --> RCLICK["<b>robustClick</b><br/>pointerdown · mousedown ·<br/>pointerup · mouseup · click"]
+        RCLICK --> WAITINC["wait up to 5s for the<br/>stepper to appear<br/><code>button.add-button</code>"]
+        WAITINC --> QLOOP{"qty &gt; 1?"}
+        QLOOP -->|yes| INC["click + once per unit,<br/><b>settling between clicks</b>"]
+        QLOOP -->|no| OK(["ADD_RESULT success"])
+        INC --> OK
+    end
+
+    OK --> NEXT{"more items?"}
+    NEXT -->|yes| NAV
+    NEXT -->|no| GATE
+    TOREVIEW --> GATE
+    GATE{"any item without<br/>an exact match?"}
+    GATE -->|yes| REVIEW["<b>review</b><br/>pick a substitute, or Skip"]
+    GATE -->|no| DONE
+    REVIEW --> DONE
+    DONE["<b>done</b>"] --> AFTER["<b>after-probe</b> &rarr; diff &rarr; audit &rarr; verdict"]
+    AFTER --> FINAL(["done screen"])
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    classDef dim fill:#1f2937,stroke:#4b5563,color:#9ca3af
+    class QTY,LOGINCHK,LOGIN,DONE,REVIEW state
+    class OK,FINAL good
+    class RCLICK,SCROLL,NAV spec
+    class NEVER dim
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · Login detection — and the cache that is not a fast path</h3><pre class="mermaid">
+flowchart TD
+    INJ(["inject checkLoginScript"]) --> POSTED{"already posted<br/>this page?"}
+    POSTED -->|yes| STOP(["do nothing"])
+    POSTED -->|no| READ0["<b>readState()</b> — live, first, always"]
+
+    READ0 --> R0{"greeting button"}
+    R0 -->|"text starts 'Hello,'"| IN(["<b>in</b> · cache 'in'"])
+    R0 -->|"text is 'Sign In'"| OUT(["<b>out</b> · CLEAR any cached 'in'"])
+    R0 -->|"button present,<br/>some other text"| UNK
+    R0 -->|"no button"| SPAN{"any header/nav span<br/>starting 'Hello,'?"}
+    SPAN -->|yes| IN
+    SPAN -->|no| UNK["<b>unknown</b>"]
+
+    UNK --> OBS["wire a MutationObserver<br/><i>survives the MSAL bootstrap<br/>bouncing the URL</i>"]
+    OBS --> FIRE{"button renders<br/>within 8s?"}
+    FIRE -->|yes| READ0
+    FIRE -->|"no — watchdog fires"| RETRY["readState() once more"]
+    RETRY -->|"conclusive"| READ0
+    RETRY -->|"still unknown"| CACHE{"sessionStorage<br/><code>mealio_wegmans_login_state</code><br/>= 'in'?"}
+    CACHE -->|yes| INC2(["<b>in</b> · via sessionStorage"])
+    CACHE -->|no| FAILC(["<b>out</b> ·<br/><code>inconclusive_fail_closed</code>"])
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class IN,INC2 good
+    class FAILC danger
+    class CACHE,OBS spec
+</pre></div>
+
+<div class="notes">
+  <h2>What is unique to Wegmans</h2>
+  <p><b>Serial by force, and it is the WAF's decision.</b> <code>forceSerialSearch</code> defaults
+  <i>true</i> here: Wegmans's WAF 403s the concurrent worker searches, and even two staggered
+  workers still got blocked. <code>cacheBustNav</code> defaults <i>false</i> for the same reason —
+  the synthetic <code>?_t=</code> query is itself a signal. The worker scripts
+  (<code>buildWegmansWorkerScript</code>, <code>workerCount: 2</code>,
+  <code>workerStaggerMs: 400</code>) are still built and exported so the parallel path can be
+  retried later without archaeology; they simply are not reached at runtime.</p>
+
+  <p><b>The cache is consulted last, not first.</b> A positive login detection is written to
+  <code>sessionStorage</code> so it survives the MSAL bootstrap killing the script mid-page. That
+  read used to sit at the <i>top</i> of the script as a fast path — and because nothing ever removed
+  the entry, a mid-session logout left the header plainly reading "Sign In" while the cache kept
+  answering <i>true</i> for the life of the WebView. <code>SilentLoginProbe</code> latches, so it
+  never asked again; <code>WebViewCartSheet</code> waited for a <code>LOGIN_STATUS:false</code> that
+  could no longer arrive. Every search and every add then ran signed out, with no login wall and no
+  error. The order in diagram 2 is the fix: live detection always wins when it can read the button,
+  the cache answers only when eight seconds of observing found no button at all, and a negative
+  verdict actively <i>clears</i> a cached positive. <code>'out'</code> is still never cached, so a
+  post-sign-in re-check always runs fresh.</p>
+  <p>Albertsons carries the identical shape (MEAL-42 / MEAL-114) on purpose — <b>change the two
+  together</b>.</p>
+
+  <p><b>One click means one click.</b> <code>robustClick</code> dispatches the full pointer sequence
+  because React's synthetic event system in a mobile WebView does not reliably see a bare
+  <code>.click()</code>. It used to <i>also</i> call <code>btn.click()</code> unconditionally
+  afterwards — so every call fired Wegmans's handler twice and a qty-1 request put 2 in the cart.
+  The native call is now only a fallback for an environment with no
+  <code>PointerEvent</code> constructor.</p>
+
+  <p><b>Clicks are settled, not batched.</b> Wegmans's cart API is async and its optimistic update
+  reconciles against the server response; clicking <code>+</code> again before that lands races the
+  reconciliation and can visually reset the quantity to 0. Each increment waits.</p>
+
+  <p><b>The sticky header eats buttons.</b> <code>scrollIntoView({block:'center'})</code> alone left
+  the add button behind the ~100&nbsp;px sticky header — earlier runs logged a rect <code>y</code>
+  of &minus;36 — so <code>scrollIntoCenter</code> re-reads the rect and scrolls clear of it before
+  clicking.</p>
+
+  <h2>Selectors</h2>
+  <table class="src">
+    <tr><th>Role</th><th>Selector</th></tr>
+    <tr><td>tile</td><td><code>div.component--product-tile</code></td></tr>
+    <tr><td>name</td><td><code>h3[data-testid="-baseHeading"]</code></td></tr>
+    <tr><td>addBtn</td><td><code>button.default-add-button</code></td></tr>
+    <tr><td>incBtn</td><td><code>button.add-button</code> <i>(appears only after the first add)</i></td></tr>
+    <tr><td>searchInput</td><td><code>input[type="search"], input[placeholder*="earch" i]</code></td></tr>
+    <tr><td>greeting</td><td><code>button.component--site-header-desktop-sign-in-greeting-button</code>, plus two looser variants</td></tr>
+  </table>
+
+  <h2>Where the branches are decided</h2>
+  <table class="src">
+    <tr><th>Branch</th><th>Source</th></tr>
+    <tr><td>Login order: live &rarr; observer &rarr; watchdog &rarr; cache &rarr; fail closed</td><td><code>buildCheckLoginScript</code></td></tr>
+    <tr><td>Serial forcing, no cache-buster</td><td><code>getScripts()</code> defaults, overridable by config</td></tr>
+    <tr><td>Single-fire click</td><td><code>robustClick</code></td></tr>
+    <tr><td>Name matching</td><td><code>src/lib/webview-scripts/_scoring.ts</code> (inlined copy)</td></tr>
+  </table>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

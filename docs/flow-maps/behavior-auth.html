@@ -1,0 +1,171 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Login &amp; Session Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Behaviors &rsaquo; <b>Login, tokens &amp; session</b></span></div>
+<header>
+  <h1>Login, tokens and the account boundary</h1>
+  <div class="sub">Read off <code>context/AuthContext.tsx</code>, <code>lib/api.ts</code>,
+  <code>lib/tokenStorage.ts</code>, <code>screens/auth/</code> and
+  <code>navigation/RootNavigator.tsx</code>. Five different doors lead into a signed-in session;
+  every one of them goes through <code>beginSession</code>.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Screen / step</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Signed in</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Signed out / cleared</b></span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>The one seam</b> — beginSession</span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · Every door into a session</h3><pre class="mermaid">
+flowchart TD
+    LAUNCH(["app launch"]) --> INIT["<b>initAuth</b><br/>read token + user from SecureStore"]
+    INIT --> HAVE{"both present?"}
+    HAVE -->|no| SIGNEDOUT
+    HAVE -->|yes| VER["GET /api/auth/verify"]
+    VER -->|ok| BEGIN
+    VER -->|"401 / expired"| RENEW["POST /api/auth/renew<br/><i>with the CURRENT access token</i>"]
+    RENEW -->|"returns a token"| SAVE1["save it &middot; keep the stored user<br/>if renew omitted one"] --> BEGIN
+    RENEW -->|"no token, or throws"| CLEAR["tokenStorage.clear()"] --> SIGNEDOUT
+
+    LOGINS(["Login screen<br/>email + password"]) --> L1["POST /api/auth/login"]
+    L1 --> L2{"what came back?"}
+    L2 -->|"requiresVerification"| CE["&rarr; <b>CheckEmail</b>"]
+    L2 -->|"requiresTwoFactor"| OTP["&rarr; <b>OTP</b><br/>carries twoFactorToken"]
+    L2 -->|"accessToken"| SAVE2["save"] --> BEGIN
+    OTP --> V2["POST /api/auth/2fa/verify<br/><i>+ /2fa/resend</i>"]
+    V2 -->|accessToken| SAVE2
+
+    G(["Continue with Google"]) --> GT["idToken &rarr; POST /api/auth/oauth/google"]
+    AP(["Continue with Apple"]) --> AT["identityToken &rarr; POST /api/auth/oauth/apple"]
+    GT --> LWT
+    AT --> LWT
+
+    DL(["deep link<br/><code>mealio://verified?token=…</code>"]) --> LWT
+
+    LWT["<b>loginWithToken</b><br/><i>diagram 2</i>"] --> BEGIN
+
+    BEGIN["<b>beginSession(nextUser)</b>"]
+    BEGIN --> IDCHK{"a DIFFERENT user id<br/>was signed in?"}
+    IDCHK -->|yes| TEARDOWN["<b>endSessionDiagnostics()</b><br/>clearSessionLogs +<br/>clearLastAutomationRun,<br/>and isCreator &rarr; false"]
+    IDCHK -->|"no — same person,<br/>new User object"| KEEP["keep everything<br/><i>a renewal or a profile refresh<br/>is not an account switch</i>"]
+    TEARDOWN --> SET
+    KEEP --> SET
+    SET["userRef.current = nextUser<br/><b>then</b> setUser(nextUser)"]
+    SET --> IN(["signed in ·<br/>checkCreatorStatus + identifyUser"])
+
+    SIGNEDOUT(["signed out — AuthStack"])
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class LOGINS,OTP,CE,INIT state
+    class IN good
+    class SIGNEDOUT,CLEAR danger
+    class BEGIN,TEARDOWN,SET spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · Validate first, install second — and the 401 retry that must not run</h3><pre class="mermaid">
+flowchart TD
+    subgraph LWTSG ["loginWithToken(token) — MEAL-155"]
+        T0(["a token from OUTSIDE:<br/>an email link, an OAuth exchange"]) --> T1["<b>auth.verify(token)</b><br/>sent as a ONE-REQUEST override,<br/>never written first"]
+        T1 --> T2{"verified?"}
+        T2 -->|"no — expired, bad,<br/>or a transient blip"| THROW(["<b>throw, having written nothing</b><br/><i>A keeps their token, their user,<br/>their creator flag, their diagnostics.<br/>The next request still goes out as A.</i>"])
+        T2 -->|yes| T3["NOW save to SecureStore"]
+        T3 --> T4["beginSession(verifiedUser)"]
+    end
+
+    subgraph REQ ["request() — the stored session's 401 path"]
+        R0(["any API call"]) --> R1{"401?"}
+        R1 -->|no| ROK(["return"])
+        R1 -->|yes| R2{"<code>retry</code> AND<br/><b>no explicit authToken</b>?"}
+        R2 -->|"an authToken was passed"| RTHROW(["<b>do not renew</b><br/><i>otherwise a stranger's expired<br/>token would renew the signed-in<br/>user's session to answer for it —<br/>and sign THEM out when it failed</i>"])
+        R2 -->|yes| R3["<b>renewOnce()</b><br/>single-flight: concurrent 401s<br/>share one /renew"]
+        R3 -->|ok| R4["retry the original request<br/>once, with retry=false"]
+        R3 -->|fails| R5["clear() &rarr; signed out"]
+    end
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    class T3,T4,ROK,R4 good
+    class THROW,RTHROW,R5 danger
+</pre></div>
+
+<div class="wrap"><h3>Diagram 3 · Sign-out, and the window it leaves open</h3><pre class="mermaid">
+flowchart TD
+    O0(["Account &rsaquo; Sign out"]) --> O1["<b>unregisterDevice()</b> FIRST<br/><i>a shared phone must not keep getting<br/>the previous account's notifications —<br/>and once the token is gone this<br/>call cannot authenticate</i>"]
+    O1 --> O2["POST /api/auth/logout"]
+    O2 --> O3["tokenStorage.clear() + resetUser()"]
+    O3 --> O4["<b>finally</b> &rarr; endSessionDiagnostics()<br/><i>in a finally because clear() is three<br/>bare SecureStore deletes in a Promise.all;<br/>one keychain rejection used to skip both</i>"]
+    O4 --> O5["<b>userRef.current = null</b>, then setUser(null)"]
+    O5 --> OUT(["signed out"])
+
+    RACE["a verification deep link tapped<br/>DURING those four round trips lands<br/>beginSession(B) after logout's tail<br/>and before React commits"] -.->|"a stale ref still naming A<br/>would read that as A &rarr; B and clear<br/>the diagnostics written in between"| O5
+
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef warn fill:#78350f,stroke:#f59e0b,color:#fff
+    class OUT danger
+    class RACE warn
+</pre></div>
+
+<div class="notes">
+  <h2>The shape of the whole thing</h2>
+  <p>The server issues one long-lived access token (90 days) and no separate refresh token —
+  <code>/api/auth/renew</code> takes a valid access token and returns a fresh one. Storage is
+  <code>expo-secure-store</code> (the device keychain). Everything else here exists to answer one
+  question correctly: <b>who is the app right now?</b></p>
+
+  <h2>Two cross-account bugs, running in opposite directions</h2>
+  <p><b>MEAL-146 — the account boundary.</b> <code>loginWithToken</code> is called from an app-wide
+  deep-link listener with no signed-in check, so account B could take over from A without a sign-out
+  in between. The console ring buffer deliberately retains product names and cart contents, and a
+  bug report attaches it; the last cart run is the key that joins such a report to an account's
+  automation rows. Neither may follow the previous person into the next person's report. The fix is
+  <code>beginSession</code> — the single seam every door goes through — with
+  <code>endSessionDiagnostics</code> called from <i>both</i> boundaries rather than copied, because
+  the two boundaries drifting apart is exactly what MEAL-146 was.</p>
+  <p><b>MEAL-155 — the install order.</b> The reverse: B's token was written to the keychain and
+  <i>then</i> verified, because verify reads from the keychain like every other request. A transient
+  verify failure left B's token installed while <code>user</code> was still A — every request from
+  that moment authenticating as B, A shown B's meals under A's name, with no visible transition and
+  <code>beginSession</code> never running at all. Passing the token explicitly is what lets the
+  check happen before anything is committed.</p>
+
+  <h2>Three orderings that are load-bearing</h2>
+  <table class="src">
+    <tr><th>Order</th><th>Why</th></tr>
+    <tr><td>teardown <b>before</b> <code>setUser</code></td><td>the instant React commits B, B's session starts — the creator check, the RevenueCat identify, every screen keyed on <code>user?.id</code>. A clear that has not happened by then clears B's fresh state, not A's stale state. (A synchronous move below <code>setUser</code> changes nothing — React batches. It is the <i>deferred</i> form that is real, and that is what the test pins.)</td></tr>
+    <tr><td><code>userRef.current</code> kept in step, in both directions</td><td>so a second call landing before a re-render compares against the account this one just installed — and a sign-in landing during sign-out's round trips sees that nobody is here</td></tr>
+    <tr><td><code>unregisterDevice</code> first at logout</td><td>after the token is cleared the call can no longer authenticate, and the device keeps receiving the old account's pushes</td></tr>
+  </table>
+
+  <h2>Keyed on the id, never on the object</h2>
+  <p>A token renewal or a profile refresh hands down a new <code>User</code> object for the same
+  person. Tearing their session down for that would be a new bug of the same family, so the switch
+  test is <code>previous.id !== nextUser.id</code>.</p>
+
+  <h2>What is deliberately not decided here</h2>
+  <p>An expired link and a dead network both throw out of <code>loginWithToken</code>, and both
+  callers currently swallow it or show a generic sign-in failure. Telling the two apart is a product
+  question, not a correctness one — and inventing the copy inside the auth context would be the
+  wrong place for it either way.</p>
+
+  <h2>Endpoints</h2>
+  <table class="src">
+    <tr><th>Call</th><th>Purpose</th></tr>
+    <tr><td><code>POST /api/auth/login</code></td><td>&rarr; token, or <code>requiresVerification</code> / <code>requiresTwoFactor</code></td></tr>
+    <tr><td><code>POST /api/auth/register</code></td><td>sign up</td></tr>
+    <tr><td><code>GET /api/auth/verify</code></td><td>whose session is this — stored, or an explicit token</td></tr>
+    <tr><td><code>POST /api/auth/renew</code></td><td>access token in, fresh access token out</td></tr>
+    <tr><td><code>POST /api/auth/2fa/verify</code> · <code>/2fa/resend</code></td><td>email OTP</td></tr>
+    <tr><td><code>POST /api/auth/forgot-password</code> · <code>/resend-verification</code></td><td>recovery mail</td></tr>
+    <tr><td><code>POST /api/auth/oauth/google</code> · <code>/oauth/apple</code></td><td>social sign-in exchange</td></tr>
+    <tr><td><code>POST /api/auth/logout</code> · <code>/logout-all</code></td><td>end this session / every session</td></tr>
+  </table>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

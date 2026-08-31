@@ -1,0 +1,201 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Albertsons Family Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Stores &rsaquo; <b>Albertsons family</b> &middot; 15 banners, one storefront</span></div>
+<header>
+  <h1>Albertsons family &mdash; 15 banners, one platform</h1>
+  <div class="sub">Safeway, Vons, Jewel-Osco, Shaw's, Acme, Tom Thumb, Randalls, Pavilions,
+  Star Market, Haggen, Carrs, Kings, Balducci's, United &mdash; and Albertsons itself.
+  Read off <code>webview-scripts/albertsons.ts</code>. One selector table, one kill switch, one
+  cart path; only the host differs.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Decided</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Fail closed</b> — show a login wall</span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Family-wide</b></span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · The run</h3><pre class="mermaid">
+flowchart TD
+    START(["User taps Add N meals<br/>to a family banner's cart"]) --> RESOLVE
+    RESOLVE["<b>resolve the banner</b><br/>DOMAIN_MAP[storeId] &rarr; host<br/><i>all URLs derived from it</i>"]
+    RESOLVE --> KILL{"<code>stores.albertsons.enabled</code>?"}
+    KILL -->|"false"| OFF(["getStoreScripts returns null<br/><b>all 15 banners stop together</b>"])
+    KILL -->|true| QTY["<b>qty</b>"]
+    QTY -->|"tap Add Ingredients"| LOGINCHK
+    LOGINCHK["<b>login_check</b><br/><i>diagram 2</i>"]
+    LOGINCHK --> ISIN{"logged in?"}
+    ISIN -->|no| LOGIN["<b>login</b><br/>a popup on the same page —<br/>no URL change to watch"]
+    LOGIN -->|"background poll sees<br/>'sign out' &rarr; LOGIN_COMPLETE"| BEFORE
+    LOGIN -->|"page reloads, killing the poll &rarr;<br/><code>reinjectLoginCheckOnNav</code>"| LOGINCHK
+    ISIN -->|yes| BEFORE["<b>before-snapshot</b><br/>navigate <code>/erums/cart</code>"]
+
+    BEFORE --> ROUTE{{"chooseAddStrategy"}}
+    ROUTE --> POOL["<b>parallel</b> — 3 workers,<br/>staggered 400ms"]
+    POOL --> NAV
+
+    subgraph PERITEM ["Per item"]
+        NAV["navigate<br/><code>/shop/search-results.html?q=…</code>"]
+        NAV --> TRIM{{"<b>albertsonsSearchQuery</b><br/>first 5 words ONLY"}}
+        TRIM --> CARDS["poll for cards"]
+        CARDS --> MATCH{"exact match against<br/>the FULL saved name?"}
+        MATCH -->|no| TOREVIEW(["queue for review"])
+        MATCH -->|yes| ATC["click<br/><code>button[aria-label^='Add 1 unit of']</code>"]
+        ATC --> QL{"qty &gt; 1?"}
+        QL -->|yes| BUB["expand the collapsed bubble<br/><code>[data-qa=qty-stppr-bbl]</code>"]
+        BUB --> INC["click <code>[data-qa=prdctincrmntr]</code><br/>until QTY"]
+        QL -->|no| OK(["success"])
+        INC --> OK
+    end
+
+    OK --> RECON["<b>reconcile</b> against <code>/erums/cart</code>"]
+    TOREVIEW --> GATE
+    RECON --> GATE
+    GATE{"any item unmatched?"}
+    GATE -->|yes| REVIEW["<b>review</b><br/>substitute, or Skip"]
+    GATE -->|no| DONE
+    REVIEW --> DONE
+    DONE["<b>done</b>"] --> AFTER["after-probe &rarr; diff &rarr; audit &rarr; verdict"]
+    AFTER --> FINAL(["done screen &middot; Open cart<br/><i>opens <code>/erums/cart</code></i>"])
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class QTY,LOGINCHK,LOGIN,DONE,REVIEW state
+    class OK,FINAL good
+    class OFF danger
+    class RESOLVE,TRIM,KILL spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · Login — three defences, then passive, then a click</h3><pre class="mermaid">
+flowchart TD
+    INJ(["inject checkLoginScript"]) --> D1{"URL is the SSO<br/>interstitial?<br/><code>…/sso/authorize?code=…</code>"}
+    D1 -->|yes| BAIL(["<b>post NO verdict</b><br/><i>defence 1 — the old script polled<br/>3s on a page with no header<br/>and posted a WRONG false<br/>that SilentLoginProbe latched</i>"])
+    D1 -->|no| D3{"<code>__albLoginPosted</code><br/>already latched?"}
+    D3 -->|yes| STOP(["return — defence 3:<br/>no second 3-minute poll<br/>stacked on the first"])
+    D3 -->|no| POLLN["poll &le;3s for the account<br/>control AND a <b>settled</b> name"]
+
+    POLLN --> PASS["<b>passive determination</b> — no click"]
+    PASS --> P1{"account span or any header<br/>control matches<br/><i>sign in · log in · sign up ·<br/>create account</i>?"}
+    P1 -->|yes| OUT(["<b>loggedOut</b>"])
+    P1 -->|no| P2{"<b>acctTextResolved</b><br/>AND the label reads like<br/>an account menu?"}
+    P2 -->|yes| IN(["<b>loggedIn</b>"])
+    P2 -->|"no — empty"| AMB1["ambiguous_empty_acct_name"]
+    P2 -->|"no — placeholder<br/>'…' · spinner · 'Loading'"| AMB2["ambiguous_unresolved_acct_name"]
+    P2 -->|"settled but unknown text"| AMB3["ambiguous_click_fallback"]
+
+    AMB1 --> CLICK
+    AMB2 --> CLICK
+    AMB3 --> CLICK
+    CLICK["<b>click the profile control</b><br/>poll 6 × 250ms for<br/>'sign out' / 'log out'"]
+    CLICK -->|found| IN
+    CLICK -->|"1500ms, nothing"| OUT
+
+    IN --> CACHEW["cache 'in' in sessionStorage"]
+    OUT --> CACHEC["<b>clear</b> any cached 'in'<br/><i>never cache 'out'</i>"]
+
+    POLLN -->|"no account control at all<br/>after the full budget"| CACHE{"defence 2 —<br/>cached 'in'?<br/><b>consulted last, not first</b>"}
+    CACHE -->|yes| IN
+    CACHE -->|no| OUT
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class IN,CACHEW good
+    class OUT,BAIL danger
+    class CACHE,PASS spec
+</pre></div>
+
+<div class="notes">
+  <h2>One config entry for fifteen stores</h2>
+  <p>All 15 banners read the shared <code>albertsons</code> key. The adapter passes that fixed key to
+  <code>selectorsFor()</code> and <code>storeConfig()</code>, and <code>getStoreScripts</code> checks
+  the kill switch against it, so <code>enabled: false</code> stops the whole family — deliberately.
+  A switch that took down 15 brands at once would be a worse tool than one that takes down the
+  banner that broke, which is why <i>only selectors</i> live in the platform table and URLs, kill
+  switches and worker knobs stay per-store elsewhere. Here the URLs are derived from the storeId
+  instead: a per-banner URL override would need 15 entries to say one thing.</p>
+
+  <h2>Two host mistakes that cost real runs</h2>
+  <p><b>United is <code>shopunitedsupermarkets.com</code>, not
+  <code>unitedsupermarkets.com</code></b> (MEAL-136). The latter is the banner's Squarespace
+  <i>marketing</i> site: it 301s to the shop host <b>discarding the path</b>, which then 301s to
+  <code>www</code>. Every URL built for that banner — <code>/erums/cart</code>,
+  <code>/shop/search-results.html</code> — landed on a marketing home page. No cart, no product
+  tiles, nothing that failed loudly. A path-discarding redirect is invisible at runtime, so
+  <code>url-builders.test.ts</code> pins it.</p>
+  <p><b>The cart is <code>/erums/cart</code>, not <code>/shop/cart.html</code></b> (MEAL-151). The
+  old path 404s. <code>cartUrl</code> has exactly one consumer — the <code>Linking.openURL</code>
+  that opens the user's cart in the real app — so every tap of that button landed on a 404 page. The
+  path is written once, as <code>ALBERTSONS_CART_PATH</code>, because two copies of a path is how
+  one goes stale without the other noticing.</p>
+
+  <h2>Search the first five words, match the full name</h2>
+  <p>Albertsons over-constrains on long queries — a full product title, especially with its size
+  suffix, returns zero results. <code>albertsonsSearchQuery</code> sends the first five words only;
+  the matcher still compares candidates against the complete saved name, so precision is not traded
+  away for recall.</p>
+
+  <h2>Why the login check is this elaborate</h2>
+  <p>The storefront bounces through an SSO <code>authorize</code> URL and straight back, ~5&nbsp;s,
+  and both injection sites re-inject on every page load. Defence 1 (bail on the interstitial) is the
+  one that saves the time; defences 2 and 3 stop a wrong or duplicated verdict.</p>
+  <p><b>The cache is a tiebreaker, not a fast path.</b> As an unconditional fast path a cached
+  <code>'in'</code> outlived session expiry forever: the header plainly read "Sign In" and the cache
+  still answered true. <code>SilentLoginProbe</code> latches so it never asked again;
+  <code>WebViewCartSheet</code> waited for a <code>LOGIN_STATUS:false</code> that could not arrive;
+  every add then failed silently against a signed-out session. Live detection now always wins when
+  it can see the header, and a negative verdict clears the cached positive. That ordering costs
+  ~20&ndash;30&nbsp;ms against a ~1&nbsp;ms cache read. Wegmans carries the identical shape —
+  <b>change the two together</b>.</p>
+  <p><b>The empty-span bug, twice.</b> The passive rule's regex (<code>account menu</code>) matches
+  <i>static markup present in both auth states</i>, so the entire verdict rests on the conjunct in
+  front of it. MEAL-124 made that conjunct "the name is non-empty" — but a skeleton placeholder
+  ("&hellip;", a spinner glyph, "Loading") satisfied "non-empty" and read as a signed-in user just
+  as an empty span had. MEAL-140 raised the standard to <code>acctTextResolved</code>: text that has
+  <i>settled</i> — letters, not a loading word. An unsettled span now spends the full budget and
+  takes the click-check path, which resolves to signed <b>out</b> — the direction that shows a login
+  wall rather than failing every add in silence. The three ambiguous outcomes are logged under three
+  distinct labels on purpose: a log that conflates them cannot tell a thin rule from a moved
+  header.</p>
+
+  <h2>The session token that is deliberately not used</h2>
+  <p>MEAL-15 found the session bearer on a page global —
+  <code>window.AB.userInfo.SWY_SHOP_TOKEN</code>, which Albertsons' own chat widget labels
+  <code>okta_token</code> — and proposed it as the passive login marker. It reads strictly better
+  than a markup heuristic: a positive fact about the session rather than an inference from DOM that
+  exists in both states. It is still not wired in:</p>
+  <ol>
+    <li><b>It would not fix the bug.</b> The property is populated by the Angular bootstrap at
+    runtime, so pre-hydration it is simply <i>absent</i> — exactly the window MEAL-124 is about.
+    Absent has to fall back to the DOM heuristic (nothing fixed) or to signed-out (a login wall for
+    every signed-in user we inject early). It moves the race; it does not remove it.</li>
+    <li><b>What matters is still unobserved.</b> MEAL-137 confirmed the property is non-empty on a
+    settled signed-in tab, and that an in-page fetch carrying it reached the cart service's
+    application layer. Unobserved: its value <i>during</i> hydration, what a guest holds, the format
+    of <code>tokenExpiration</code> — and none of it inside our WebView, the only place this code
+    runs. The token lives 45 minutes, so "present" and "usable" are not the same property.</li>
+    <li><b>It is unexercisable here.</b> Fixture tests load static HTML with scripts blocked, so
+    <code>window.AB</code> never exists; the token path would ship with no coverage while the
+    covered path went unused.</li>
+  </ol>
+  <p>So it is recorded as a <i>presence-only</i> diagnostic (never the value — it is a live bearer)
+  in the <code>passive_decision</code> payload, so the missing observation can come off a device log
+  instead of a hand-run DevTools probe. Promoting it later means making it a <b>cross-check that
+  must agree</b>, never a signal that can decide alone.
+  <code>tests/fixture-tests/albertsons.spec.ts</code> pins the refusal.</p>
+
+  <h2>Worker count is a memory limit, not just an anti-bot one</h2>
+  <p>3 workers staggered 400&nbsp;ms. Five concurrent WebViews crashed the iOS WKWebView content
+  process on its shared memory budget; three also happens to match the low global default for
+  anti-bot reasons. Unlike ALDI and Wegmans the parallel path stays <i>on</i> — and both knobs are
+  remotely tunable, so a new WAF can be answered with a config push.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

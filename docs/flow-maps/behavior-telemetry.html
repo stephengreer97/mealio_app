@@ -1,0 +1,161 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Telemetry &amp; North-Star Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Behaviors &rsaquo; <b>Telemetry &amp; the north-star metric</b></span></div>
+<header>
+  <h1>Did the user get their groceries?</h1>
+  <div class="sub">Read off <code>lib/north-star.ts</code> and
+  <code>lib/automation-telemetry.ts</code>. "The automation ran" and "the user got their groceries"
+  are different numbers, and only the second one is worth steering by.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>In the numerator</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>A miss</b> — whoever's fault</span>
+  <span class="chip"><span class="sw" style="background:#f59e0b"></span><b>Excluded</b></span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Trust qualifier</b></span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · What counts, and what does not</h3><pre class="mermaid">
+flowchart TD
+    RUN(["a cart run"]) --> KIND{"<code>kind</code>"}
+    KIND -->|"<b>'choose'</b>"| EXCL(["excluded <b>WHOLE</b><br/><i>that run adds nothing by design —<br/>scoring it against a cart would report<br/>a permanent 0% for a flow that<br/>worked perfectly</i>"])
+    KIND -->|"'add'"| ITEMS{"per line, at the moment<br/>the add phase started"}
+
+    ITEMS -->|"box unchecked, or<br/>stepped to zero"| OUT(["<b>out</b> — never requested,<br/>so never a miss"])
+    ITEMS -->|"checked, non-zero"| IN["<b>in the denominator</b>"]
+
+    IN --> W{"sold by weight?<br/><i>isWeightPriced — imported from<br/>cart-reconcile, never restated</i>"}
+    W -->|yes| WP["+1 denominator, confirmed<br/>by <b>PRESENCE</b> of a matching row,<br/>whatever poundage it shows"]
+    W -->|no| CNT["confirmed when the line's <b>full<br/>requested quantity</b> is accounted<br/>for in the CART"]
+
+    CNT --> RES{"was it?"}
+    WP --> RES
+    RES -->|yes| NUM(["<b>confirmed</b>"])
+    RES -->|"out of stock"| MISS
+    RES -->|"no results"| MISS
+    RES -->|"user skipped it in review"| MISS
+    MISS(["<b>a miss</b> — all three mean the user<br/>did not get that ingredient.<br/><i>whose FAULT belongs on the<br/>failure-code chart; the north-star<br/>only asks whether it landed</i>"])
+
+    NUM --> RATES
+    MISS --> RATES
+    RATES["<b>itemSuccessRate</b> = confirmed / requested<br/><b>runSuccessRate</b> = runs where confirmed === requested"]
+    RATES --> GAP{{"the run rate is much lower <b>on purpose</b>: a 90% item<br/>rate over an 8-item meal is 0.9^8 = <b>43%</b> chance of a<br/>clean run. The GAP is the point of the metric — it is the<br/>argument for per-item confirmation over badge-count<br/>inference, and it is invisible unless both are shown<br/>side by side."}}
+
+    UNITS{{"<b>items, not units.</b> A line asked for ×2 and given ×1 is<br/>ONE unconfirmed item, not a half — the denominator keeps<br/>the shape of what the user experiences ('did I get the<br/>sour cream') rather than a units-weighted average a<br/>single bulk line can dominate."}}
+    ITEMS -.-> UNITS
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef warn fill:#78350f,stroke:#f59e0b,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class NUM good
+    class MISS danger
+    class EXCL,OUT warn
+    class GAP,UNITS spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · How much to trust the number — <code>confirmedSource</code></h3><pre class="mermaid">
+flowchart TD
+    C(["where did <code>itemsAdded</code><br/>come from?"]) --> S{"confirmedSource"}
+    S -->|"<b>cart_reconcile</b>"| CR(["a before/after <b>per-item</b> cart diff.<br/><b>ground truth</b> — render a rate"])
+    S -->|"<b>worker_reports</b>"| WR(["the store scripts' own success flags,<br/>known wrong in <b>both directions</b>.<br/><i>usable only once the after-probe<br/>correction row lands on top</i>"])
+    S -->|"<b>none</b>"| NO(["no cart adds this run<br/>(a Choose Products run)"])
+
+    NOTCONF{{"<b>a <code>confirm</code> step row is NOT the numerator</b>, on every store,<br/>however many now emit one. A confirm row records what the RUN<br/>could observe at the moment it clicked — a cart badge, a per-card<br/>label, at best a one-item cart query — and those are wrong in both<br/>directions under concurrency (a worker can falsely confirm against<br/>a shared counter). The cart read is ground truth; the confirm row<br/>is evidence toward it. <b>Counting rows would be counting the guess.</b>"}}
+    S -.-> NOTCONF
+
+    OUT4{{"<code>outcome</code> gained a fourth value in MEAL-190: <b>'unverified'</b> —<br/>the run that finished without reading the cart at all. Read it<br/>as the COVERAGE flag it is: on such a run <code>itemsAdded</code> is the<br/>run's own report of itself with nothing able to contradict it."}}
+    WR -.-> OUT4
+
+    WEAK{{"<b>a real weakening, made visible rather than buried.</b> A weight<br/>item is confirmed as 'something by that name is in the cart',<br/>not as 'the right amount is in the cart' — the add rounds to a<br/>weight the store actually sells, so any numeric comparison would<br/>report a shortfall on nearly every run. <code>weightRequested</code> ships<br/>on every run so the dashboard can say how much of a store's<br/>rate rests on presence. HEB Deli / Fish Market / bulk lines<br/>are the only source of them today."}}
+    CR -.-> WEAK
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef warn fill:#78350f,stroke:#f59e0b,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class CR good
+    class WR,NO warn
+    class NOTCONF,WEAK,OUT4 spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 3 · Step telemetry — sampled, sequenced, and unable to break a run</h3><pre class="mermaid">
+flowchart TD
+    ST(["a step happens in the engine"]) --> SAMP{"<code>telemetry.enabled</code><br/>and inside <code>sampleRate</code>?"}
+    SAMP -->|no| DROP(["dropped"])
+    SAMP -->|yes| ROW["build a row:<br/><b>step</b> · <b>outcome</b> · <b>code</b> · ms · store"]
+    ROW --> SEQ["assign <code>seq</code> client-side"]
+    SEQ --> WHYSEQ{{"batches upload out of order and many rows share a<br/>millisecond, so ordering cannot come from the timestamp.<br/><code>seq</code> is also the idempotency key the server dedupes on."}}
+    SEQ --> BUF["bounded buffer"]
+    BUF --> FLUSH{"<code>batchSize</code> reached, or<br/><code>flushIntervalMs</code> elapsed?"}
+    FLUSH -->|yes| UP["fire-and-forget upload,<br/>short timeout"]
+    UP --> SWALLOW{{"<b>every entry point swallows its own errors.</b><br/>Losing telemetry is always preferable to<br/>disturbing an add-to-cart."}}
+
+    subgraph STEPS ["the steps"]
+        S1["login_check"] --- S2["search"] --- S3["candidates"]
+        S4["add_click"] --- S5["confirm"] --- S6["reconcile"]
+        S7["blocked"] --- S8["<b>run_summary</b> — one terminal row per run"]
+    end
+
+    subgraph CODES ["failure codes — each names a FIX FAMILY"]
+        F1["<b>selector_miss</b> &rarr; selector config / healing"]
+        F2["<b>waf_block</b> &rarr; backoff, fingerprint, handoff"]
+        F3["<b>auth_required</b> &rarr; pre-warm, session"]
+        F4["<b>no_candidates</b> &rarr; search / matching"]
+        F5["<b>match_rejected</b> &rarr; scoring"]
+        F6["<b>confirm_failed</b> &rarr; the confirmation rail"]
+        F7["<b>timeout</b> &rarr; timeouts, perf"]
+        F8["<b>nav_failed</b> &rarr; URL / routing"]
+        F9["<b>out_of_stock</b> &rarr; <b>nothing. not our failure.</b>"]
+    end
+
+    ROW --> CODES
+    HEAD{{"a row's own <code>code</code> is the most <b>EXPLANATORY</b> of the run's<br/>codes (FAILURE_CODE_SEVERITY), not the most frequent.<br/><code>failureCodes</code> on run_summary carries the distribution —<br/>a STRING like 'confirm_failed:3,waf_block:1', because<br/>sanitizeDetail drops nested values."}}
+    CODES -.-> HEAD
+
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class WHYSEQ,SWALLOW,HEAD spec
+</pre></div>
+
+<div class="notes">
+  <h2>The one debatable call, taken conservatively</h2>
+  <p>A skipped-in-review item stays in the denominator. Review is only ever <i>reached</i> because
+  the automation failed to match the item on its own, so a skip is a user giving up on our miss more
+  often than it is a change of mind. We cannot tell the two apart, so the number takes the reading
+  that never flatters us — and <code>skippedInReview</code> ships alongside so the read side can
+  compute the other one.</p>
+
+  <h2>The one code that makes a store look better</h2>
+  <p><code>out_of_stock</code> is the only failure code that names no fix family, because there is no
+  fix: the store is out of the item. It exists so that outcome stops being counted as one of ours —
+  before it, that case rode <code>match_rejected</code>, which put the store's inventory on the same
+  bar as our scoring being wrong.</p>
+  <p>It is also the only code that <i>improves</i> a store's numbers: the server subtracts these
+  items from the item-success denominator, so a store reporting more of them reports a higher success
+  rate. That puts real weight on the store scripts being right about which items get it.</p>
+
+  <h2>Codes are appended, never renamed or removed</h2>
+  <p>The code is stored as a raw string on every row ever written, so a rename splits a metric's
+  history and a removal orphans the rows already carrying it — neither of which fails anywhere
+  visible. Nothing reads the <i>order</i> of the code list; what is order-sensitive is
+  <code>FAILURE_CODE_SEVERITY</code>, which is a separate list for exactly that reason.</p>
+  <p>This list used to be described as a contract shared with the Kroger Brands web extension,
+  needing agreement on both sides before a code could be added — which had become a standing block
+  on work. That is no longer true: the extensions are retired, the Kroger Brands integration writes
+  no <code>automation_steps</code> rows at all, and the ingest route stores the string as-is without
+  checking it against any enum. This app is the only producer, so appending is a one-repo change.</p>
+
+  <h2>What the dashboard receives</h2>
+  <table class="src">
+    <tr><th>Source</th><th>Carries</th></tr>
+    <tr><td><code>automation_runs</code> — POST <code>/api/usage/automation</code> phase 'complete'</td><td><code>store_id</code>, <code>items_requested</code>, <code>items_added</code>, <code>outcome</code>. <b>Both rates are computable from this table alone</b>, per store per day, no join. The intended primary read.</td></tr>
+    <tr><td><code>run_summary</code> step row, one per run</td><td>the trust qualifiers: <code>kind</code>, <code>requested</code>, <code>itemsAdded</code>, <code>runComplete</code>, <code>confirmedSource</code>, <code>weightRequested</code>, <code>skippedInReview</code>, <code>weightRowUnverified</code>, <code>failureCodes</code>, <code>outcome</code>, <code>cartDeltaWarning</code>, <code>codeSource</code>. Join to the run for <code>store_id</code>.</td></tr>
+  </table>
+  <p>Whether <code>weightRowUnverified</code> belongs in the denominator is still open. It is counted
+  apart from skips (which pass over an item nobody has) and apart from <code>itemsAdded</code>.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

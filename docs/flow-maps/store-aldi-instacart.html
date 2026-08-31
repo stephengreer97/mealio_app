@@ -1,0 +1,186 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ALDI / Instacart Storefront Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Stores &rsaquo; <b>ALDI</b> &middot; Instacart Storefront platform</span></div>
+<header>
+  <h1>ALDI &mdash; and the Instacart Storefront platform</h1>
+  <div class="sub">Read off <code>webview-scripts/instacart.ts</code>,
+  <code>automation-config/schema.ts</code> (<code>platforms.instacart</code>) and
+  <code>webview-scripts/index.ts</code>. One adapter, parameterized by tenant. One tenant has
+  ever run through it.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Good outcome</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Fail closed</b></span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Anti-bot shaped</b></span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · The run — everything the anti-bot dictates</h3><pre class="mermaid">
+flowchart TD
+    START(["User taps<br/>Add N meals to ALDI cart"]) --> QTY
+    QTY["<b>qty</b>"] -->|"tap Add Ingredients"| LOGINCHK
+    LOGINCHK["<b>login_check</b><br/><i>diagram 2</i>"]
+    LOGINCHK --> ISIN{"verdict"}
+    ISIN -->|"'in'"| BEFORE
+    ISIN -->|"'out' or 'unknown'"| LOGIN["<b>login</b><br/>menu left OPEN so the user<br/>sees Sign In when the<br/>WebView becomes visible"]
+    LOGIN --> POLL["background poll,<br/>every 2s for 3 min"]
+    POLL -->|"LOGIN_COMPLETE"| BEFORE
+    BEFORE["<b>before-snapshot</b><br/>side panel + header badge"]
+
+    BEFORE --> ROUTE{{"chooseAddStrategy"}}
+    ROUTE -->|"<code>forceSerialSearch: true</code>"| SER["<b>serial</b> — always"]
+    ROUTE -.->|"never reached"| POOLX["3-worker pool<br/><i>5 parallel workers still 403'd<br/>on 2026-06-17 even with the<br/>cache-buster removed —<br/>concurrency itself is the trigger</i>"]
+
+    SER --> NAV["navigate<br/><code>{origin}/store/{slug}/s?k=term</code><br/><b>clean URL, no <code>?_t=</code></b>"]
+
+    subgraph PERITEM ["Per item — an SPA, so nothing reloads"]
+        NAV --> STALE["record the first card link's name<br/><i>staleness marker</i>"]
+        STALE --> TYPE["click the search trigger,<br/>set the input via the<br/>native value setter,<br/>dispatch input + change"]
+        TYPE --> WAITR["wait for results whose first<br/>card link differs from the marker"]
+        WAITR --> CANDS["read candidates from<br/><code>button[aria-label^='Add 1 ']</code>"]
+        CANDS --> EX{"<b>isExactMatch</b><br/>exact after normalization"}
+        EX -->|no| TOREVIEW(["queue for review"])
+        EX -->|"yes, but out of stock"| TOREVIEW
+        EX -->|yes| ATC["click Add 1"]
+        ATC --> QL{"qty &gt; 1?"}
+        QL -->|yes| INCB["click Increment quantity<br/>until the qty bubble reads QTY"]
+        QL -->|no| OK(["success"])
+        INCB --> OK
+    end
+
+    OK --> NEXT{"more items?"}
+    NEXT -->|yes| NAV
+    NEXT -->|no| GATE
+    TOREVIEW --> GATE
+    GATE{"any item unmatched?"}
+    GATE -->|yes| REVIEW["<b>review</b><br/>substitute, or Skip"]
+    GATE -->|no| DONE
+    REVIEW --> DONE
+    DONE["<b>done</b>"] --> AFTER["after-probe &rarr; diff &rarr; audit &rarr; verdict"]
+    AFTER --> FINAL(["done screen"])
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    classDef dim fill:#1f2937,stroke:#4b5563,color:#9ca3af
+    class QTY,LOGINCHK,LOGIN,DONE,REVIEW state
+    class OK,FINAL good
+    class NAV,SER,STALE spec
+    class POOLX dim
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · Login — read inside the Main Menu, and never guess "in"</h3><pre class="mermaid">
+flowchart TD
+    INJ(["inject checkLoginScript"]) --> FLAG{"<code>window.__aldiLoginCheckActive</code>?"}
+    FLAG -->|set| STOP(["return — a re-inject must not<br/>double-drive the menu"])
+    FLAG -->|clear| OPEN["<b>openMenu()</b><br/>click the hamburger,<br/>poll up to 4s for the dialog"]
+    OPEN -->|"never appears"| UNK
+    OPEN --> LOOP["read menu text, up to ~7s"]
+
+    LOOP --> OUTRE{"matches<br/><i>sign in · log in ·<br/>register · create account</i>?"}
+    OUTRE -->|"yes — checked FIRST,<br/>and decisive"| OUT(["<b>out</b>"])
+    OUTRE -->|no| STABLE{"text length unchanged<br/>for 2 ticks?"}
+    STABLE -->|"no — still rendering"| LOOP
+    STABLE -->|yes| INRE{"matches<br/><i>buy it again · saved recipes ·<br/>sign out · your account</i>?"}
+    INRE -->|yes| IN(["<b>in</b> — close the menu,<br/>proceed"])
+    INRE -->|no| UNK["<b>unknown</b>"]
+    UNK --> FAILC(["treated as NOT logged in<br/><i>only a positive 'in' counts</i>"])
+
+    OUT --> BG
+    FAILC --> BG
+    BG["background poll — 90 × 2s"]
+    BG --> OTHER{"another modal up?<br/><i>the sign-in form</i>"}
+    OTHER -->|yes| SKIPT["skip this tick —<br/>do not yank the<br/>Main Menu open over it"]
+    SKIPT --> BG
+    OTHER -->|no| REEVAL{"evaluateMenu() = 'in'?"}
+    REEVAL -->|yes| DONE2(["<b>LOGIN_COMPLETE</b>"])
+    REEVAL -->|no| BG
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    class IN,DONE2 good
+    class FAILC,UNK danger
+</pre></div>
+
+<div class="notes">
+  <h2>One adapter, many banners — but only one has ever run</h2>
+  <p>Instacart white-labels one storefront to many grocery banners, so this module is the
+  <i>platform's</i> adapter, parameterized by an <code>InstacartTenant</code> (origin, slug, cookie
+  domain, and the login word lists, which is where banners diverge most). It began as
+  <code>aldi.ts</code> when ALDI moved onto the platform in its Q1 2026 relaunch and was generalised
+  in place, so every injected script is the exact text that drove ALDI before the extraction.</p>
+  <p><b>ALDI is the only tenant in <code>INSTACART_TENANTS</code>, and the only banner we hold
+  captured HTML for.</b> MEAL-20 records that <code>aldi.us</code>,
+  <code>delivery.publix.com</code> and <code>shop.sprouts.com</code> all return 200 for the same
+  <code>/store/{slug}/s?k=</code> route — but a matching URL contract is not a matching DOM. Treat
+  every selector here as the platform's <i>likely</i> shape, not its confirmed one.</p>
+
+  <h2>Selector inheritance — three layers</h2>
+  <table class="src">
+    <tr><th>Layer</th><th>Where</th><th>Wins over</th></tr>
+    <tr><td>Compile-time floor</td><td><code>selFallbacks(tenant)</code> in this module</td><td>nothing</td></tr>
+    <tr><td>Platform table</td><td><code>platforms.instacart.selectors</code></td><td>the floor</td></tr>
+    <tr><td>Banner table</td><td><code>stores.&lt;banner&gt;.selectors</code></td><td>both</td></tr>
+  </table>
+  <p><code>cardLink</code> cannot move up into the platform table — it weaves in the tenant's own
+  <code>/store/{slug}/</code> path, and the platform table is static JSON that does not know which
+  tenant is reading it. Slug-parameterised selectors stay at the floor.</p>
+
+  <h2>What is unique to ALDI</h2>
+  <p><b>Every runtime knob here is an anti-bot concession.</b> <code>forceSerialSearch: true</code>,
+  <code>cacheBustNav: false</code>, <code>workerCount: 3</code>,
+  <code>workerStaggerMs: 400</code> — the worker path is built and kept so a config push can
+  re-enable it without a release, but it is not reached. Concurrency itself is the trigger, not the
+  cache-buster.</p>
+
+  <p><b>No cart page and no login page.</b> The cart is a side panel and login is inside the
+  hamburger menu, so <code>cartUrl</code> and <code>loginUrl</code> both fall back to the banner
+  origin. <code>isSearchUrl</code> returns true for <i>any</i> <code>/store/</code> URL, because the
+  search bar is available on every store page — which skips a storefront reload and injects search
+  directly.</p>
+
+  <p><b><code>spaSearch: true</code>.</b> Search is a pushState route change, so the same page fires
+  <code>onLoadEnd</code> repeatedly while the add script is still running. Suppressing inflight
+  re-injection is what stops a double-add and a skipped item.</p>
+
+  <p><b>Cart probing comes free.</b> <code>buildInlineCartScript()</code> and
+  <code>extractorFor()</code> in <code>cart-count.ts</code> dispatch on
+  <code>isInstacartStore()</code>, not on the string <code>'aldi'</code> — which they used to, giving
+  any second banner no cart probe at all.</p>
+
+  <h2>The inline scorer that no longer decides anything</h2>
+  <p><code>buildSearchAndAddScript</code> carries its own <code>scoreOne</code>/<code>scoreMatch</code>
+  that has drifted from <code>_scoring.ts</code>: a 0.3 overlap floor instead of 0.7, a &plusmn;15
+  critical-word penalty instead of a hard veto, &minus;5 per extra candidate word, and a stopword
+  set with no counterpart. Over 469 real pairs the two disagree on 427.</p>
+  <p><b>None of that decides a purchase any more.</b> It used to gate the add — keep the top scorer,
+  buy it above 30/100 — so a name sharing under a third of its words with the request could go into
+  a cart unattended. <code>isExactMatch</code> gates the add now, exact after normalization like
+  every other store, and the two functions are unreachable from the decision path. Deleting them
+  would touch the generated-script snapshot and nothing else.</p>
+  <p>If anyone does reconcile them: <b>the argument order is inverted.</b> This
+  <code>scoreOne(nf, nt)</code> reads its <i>second</i> parameter as the query;
+  <code>_scoring.ts</code>'s <code>scoreMatch(a, b)</code> scores candidate <code>b</code> against
+  term <code>a</code>. A naive substitution silently flips the comparison and still returns
+  plausible numbers, so nothing fails loudly.</p>
+
+  <h2>Adding a banner — the checklist, in the order a missing step bites</h2>
+  <table class="src">
+    <tr><th>#</th><th>Step</th><th>What breaks without it</th></tr>
+    <tr><td>1</td><td><code>WEBVIEW_STORE_IDS</code> + <code>BUNDLED_STORES</code> in <code>constants/stores.ts</code></td><td>never automated / never in the picker — the most silent miss</td></tr>
+    <tr><td>2</td><td>An <code>INSTACART_TENANTS</code> entry</td><td>no scripts at all</td></tr>
+    <tr><td>3</td><td><i>Optional</i> — a <code>stores.&lt;id&gt;</code> config entry</td><td>only loses the per-banner kill switch; selectors inherit</td></tr>
+    <tr><td>4</td><td>A <code>fixture-capture-config.ts</code> entry</td><td><code>npm run capture</code> has nothing to drive</td></tr>
+    <tr><td>5</td><td><i>Nothing</i> — cart probing dispatches on the registry</td><td>—</td></tr>
+    <tr><td>6</td><td>Captured fixtures + a spec</td><td><b>cannot be skipped.</b> Without them the banner is a guess, not a supported store</td></tr>
+  </table>
+  <p>Expect real work past the registrations: the scripts still carry English copy, a USD price
+  regex and scorer word lists tuned on ALDI.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

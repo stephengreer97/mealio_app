@@ -1,0 +1,182 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Creator Account Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Behaviors &rsaquo; <b>Creator account</b></span></div>
+<header>
+  <h1>Creator account &mdash; apply, publish, and the review queue</h1>
+  <div class="sub">Read off <code>screens/creator/</code>, <code>components/YouTubeConnectCard.tsx</code>,
+  <code>components/PlatformLinksCard.tsx</code> and the <code>creators</code> /
+  <code>creatorMeals</code> / <code>creatorDrafts</code> clients in <code>lib/api.ts</code>.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Screen / state</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Published / granted</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Declined / revoked</b></span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Server decides</b> — never derived here</span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · Becoming a creator, and what the tab shows</h3><pre class="mermaid">
+flowchart TD
+    T0(["Creator tab"]) --> ME["GET /api/creator/me"]
+    ME --> S{"creator? application?"}
+    S -->|"creator exists"| PORTAL["<b>CreatorPortalScreen</b>"]
+    S -->|"application.status = pending"| PEND(["<b>pending</b><br/>'we'll be in touch'"])
+    S -->|"neither, or the call failed"| FORM["<b>CreatorApplyScreen</b> form"]
+
+    FORM --> VAL{"validate"}
+    VAL -->|"display name empty"| E1["required"]
+    VAL -->|"handle fails<br/><code>^[a-z0-9_-]{3,30}$</code>"| E2["3–30 chars: letters,<br/>numbers, hyphens, underscores"]
+    VAL -->|"phone or 'how did you find us' empty"| E3["required"]
+    VAL -->|"terms not accepted"| E4["must accept"]
+    VAL -->|"clean"| SUB["POST /api/creator/apply"]
+    SUB --> PEND
+
+    FORM -.->|"optional"| PHOTO["pick a photo &rarr;<br/>base64 data URL &rarr;<br/>POST /api/images/upload"]
+    PHOTO -.-> SUB
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    class FORM,PORTAL,PEND state
+    class PORTAL good
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · The portal — profile, links, YouTube, meals</h3><pre class="mermaid">
+flowchart TD
+    P["<b>CreatorPortalScreen</b><br/>GET /api/creator/me &rarr;<br/>creator · stats · meals"] --> P1["profile<br/>photo · bio · display name"]
+    P --> P2["<b>PlatformLinksCard</b>"]
+    P --> P3["<b>YouTubeConnectCard</b>"]
+    P --> P4["meals"]
+    P --> P5["earnings / stats"]
+
+    P1 -->|"PATCH /api/creator/me"| SAVED1(["saved"])
+
+    subgraph LINKS ["Platform links — MEAL-94"]
+        P2 --> L1["send <b>all four</b> boxes<br/>as strings, every time"]
+        L1 --> L2{{"missing key = 'not touched'<br/>empty string = '<b>remove this</b>'<br/><i>different things — never send<br/>null/undefined for one you keep</i>"}}
+        L2 --> L3["PATCH /api/creator/me { links }"]
+        L3 --> L4["render <code>notices[]</code> <b>verbatim</b><br/><i>the server's own prose about<br/>what the save did</i>"]
+        L3 --> L5{"<code>importPaused</code>?"}
+        L5 -->|true| L6["stop claiming the link<br/>is being polled"]
+    end
+
+    subgraph YT ["YouTube — two different things on one card"]
+        P3 --> Y0{"creator has a<br/>YouTube channel?"}
+        Y0 -->|no| YHIDE(["<b>render nothing at all</b><br/>hidden, not disabled"])
+        Y0 -->|yes| Y1["<b>connection</b> = permission to READ<br/>titles, descriptions, captions"]
+        Y0 -->|yes| Y2["<b>append switch</b> = consent to WRITE<br/>add the Mealio link to a<br/>video's description"]
+        Y1 -->|"Connect"| YOPEN["opens the WEB portal<br/><i>Google refuses its consent screen<br/>in an embedded WebView, and the<br/>callback redirects to mealio.co/creator<br/>with no deep link back</i>"]
+        Y2 -->|"turn ON"| YON{"a live grant carrying<br/>the write scope?"}
+        YON -->|no| YREF(["refused by the route —<br/>surfaced verbatim,<br/>not pre-empted here"])
+        YON -->|yes| YOK(["appendOptIn = true"])
+        Y2 -->|"turn OFF"| YOFF(["works from <b>every</b> state,<br/>including a broken connection<br/><i>a switch that only flips one<br/>way is not revocation</i>"])
+        Y1 -->|"Disconnect"| YDEL(["DELETE /api/creator/youtube<br/><i>one authenticated call,<br/>no redirect — stays in-app</i>"])
+    end
+
+    subgraph MEALS ["Meals"]
+        P4 -->|"new"| M1["fill the form &rarr;<br/>upload the pending photo &rarr;<br/>POST /api/creator/meals"]
+        P4 -->|"edit"| M2["PUT /api/creator/meals/:id"]
+        P4 -->|"delete"| M3["DELETE /api/creator/meals/:id"]
+        M1 --> M4(["<b>PublishedLinkSheet</b><br/>share the new meal"])
+        M1 -.-> INVAL["server revalidates<br/><code>trending-meals</code>"]
+        M2 -.-> INVAL
+        M3 -.-> INVAL
+    end
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class P,P2,P3,P4 state
+    class YOK,M4,SAVED1 good
+    class YREF,YOFF,YDEL,YHIDE danger
+    class L2,L4,YON spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 3 · The import review queue (MEAL-89)</h3><pre class="mermaid">
+flowchart TD
+    POLL(["the poller extracts a recipe<br/>from the creator's own post"]) --> Q0["a draft, with per-field<br/><b>notices worded server-side</b>"]
+    Q0 --> BADGE["tab badge:<br/>GET /api/creator/import-drafts?count=1<br/><i>launch + every foreground;<br/>a HEAD count, no recipes;<br/>answers 0 for a non-creator</i>"]
+    BADGE --> OPEN(["<b>CreatorReviewQueueScreen</b>"])
+
+    OPEN --> LIST["GET /api/creator/import-drafts"]
+    LIST --> WAIT{{"badge from <b>waiting</b>,<br/>NOT drafts.length<br/><i>the server reads at most 200 rows<br/>and counts all of them — badging<br/>from the list rewrote a creator's<br/>250 down to 200 on open</i>"}}
+    WAIT --> CUR["restore the cursor<br/><b>by draft id</b>, from SecureStore"]
+    CUR --> C1{{"an INDEX would point at a<br/>different recipe after two<br/>decisions and a background —<br/>worse than starting over,<br/>because it looks right"}}
+    C1 --> CARD
+
+    CARD["<b>one draft</b> · '3 of 10'"]
+    CARD --> FIELDS{"per field"}
+    FIELDS -->|"verified"| SILENT["shown plainly.<br/><b>Silence is the signal</b>"]
+    FIELDS -->|"flagged"| NOTICE["a line underneath: the reason,<br/>and the span we read.<br/><i>kind: adjusted · unverified ·<br/>absent · generated</i>"]
+    SILENT --> SUMMARY["'4 of 15 fields verified.<br/>11 need a look.'<br/><b>counts, never a score</b>"]
+    NOTICE --> SUMMARY
+
+    SUMMARY --> ACT{"creator decides"}
+    ACT -->|"<b>Approve</b>"| AP["POST decide('approve', [id])<br/><i>exactly one id — the server<br/>refuses a batch</i>"]
+    ACT -->|"<b>Decline</b>"| DE["POST decide('cancel', [ids])<br/><i>several is fine — nothing<br/>is published either way</i>"]
+    ACT -->|"<b>Edit a field</b>"| ED["PATCH import-drafts<br/><i>stays in the queue —<br/>fixing is not deciding</i>"]
+    ACT -->|"<b>Skip</b>"| SK["next draft.<br/><b>Skipping decides nothing</b>,<br/>and is as reachable as Approve"]
+
+    ED --> CARD
+    SK --> CARD
+    AP --> RES{"result"}
+    RES -->|"published[0]"| PUB(["live · name shown"])
+    RES -->|"done: 0 + an error"| ALREADY(["usually 'already decided' —<br/>a second tap landing.<br/><i>every decision is a conditional<br/>write, so retry is safe</i>"])
+    DE --> RES
+    PUB --> CARD
+    ALREADY --> CARD
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class OPEN,CARD state
+    class PUB good
+    class WAIT,C1,NOTICE,SUMMARY spec
+</pre></div>
+
+<div class="notes">
+  <h2>Nothing about a draft is derived in the app</h2>
+  <p>Which fields are flagged, what the callout says, and which span of the source it quotes are all
+  decided server-side in <code>lib/import/draft-form.ts</code> and arrive <i>already worded</i>. A
+  second copy of those rules in the mobile repo would drift behind whatever version of the app a
+  creator happens to have installed — and the two would then disagree about which fields we
+  verified. The same reasoning governs the links card's <code>notices</code> and
+  <code>importPaused</code>: <code>importPaused</code> is the fact stated as a fact, so the screen
+  can stop claiming a link is being polled without matching a string against prose.</p>
+
+  <h2>Design rules the queue is built on</h2>
+  <table class="src">
+    <tr><th>Rule</th><th>Why</th></tr>
+    <tr><td>Position is shown — "3 of 10"</td><td>an unbounded stack of cards is what people force-quit</td></tr>
+    <tr><td>Cursor persisted as an <b>id</b></td><td>"backgrounded" and "the OS killed it while backgrounded" are the same thing from here; an index survives neither correctly</td></tr>
+    <tr><td>Skip is first-class</td><td>otherwise the only way to leave an uncertain draft is to decide it — and the decision made under that pressure is Approve</td></tr>
+    <tr><td>A view in the tab, not a modal</td><td>the tab bar stays up, so a creator who came to fill a cart is one tap from Discover at every moment, including one who arrived from a notification</td></tr>
+    <tr><td>Exceptions only</td><td>a verified field is simply shown; the summary line is what tells the creator that silence means <i>checked</i>, not <i>skipped</i></td></tr>
+    <tr><td>No "approve all" — anywhere</td><td>bulk-approving unreviewed extractions is precisely what the per-field checks exist to prevent, so the button does not exist and the server refuses a batched approve as well</td></tr>
+    <tr><td>Counts, never a confidence score</td><td>a "92% confident" badge is the anti-pattern</td></tr>
+  </table>
+
+  <h2>Read and write are not the same permission</h2>
+  <p>A YouTube <i>connection</i> lets Mealio read a channel — titles, descriptions, and captions for
+  a video whose description is thin. The switch beside it is consent to <i>write</i>: to append the
+  Mealio link to a video's description once a recipe from that video is live. MEAL-77 forbids
+  conflating them, so the switch is separate, off unless turned on, and revocable in one tap.</p>
+  <p>For a creator with no channel the card renders <b>nothing</b> — hidden, not disabled. A
+  permission prompt about a channel that does not exist is one a creator learns to tap past, which
+  is exactly what makes the next one worthless. Adding a channel link in the links card above makes
+  the card appear.</p>
+  <p>Connecting leaves the app and disconnecting does not, and that asymmetry is forced: Google
+  refuses its consent screen in an embedded WebView, and
+  <code>/api/creator/youtube/callback</code> redirects to <code>mealio.co/creator</code> with no
+  deep link back. An in-app attempt would strand the creator on a web page half way through.
+  Disconnecting is one authenticated DELETE with no redirect — and it is revocation, which should
+  never be the harder direction.</p>
+  <p>The append consent is enforced by <code>assertAppendAllowed</code> on the server. Nothing on
+  this card is the enforcement.</p>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>

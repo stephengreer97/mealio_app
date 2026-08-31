@@ -1,0 +1,182 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Amazon Fresh Add-to-Cart Flow</title>
+<link rel="stylesheet" href="assets/flow.css">
+<link rel="icon" href="assets/favicon.svg"></head>
+<body>
+<div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
+  <span class="crumb">Stores &rsaquo; <b>Amazon Fresh</b> &middot; standalone, two card layouts</span></div>
+<header>
+  <h1>Amazon Fresh add-to-cart automation</h1>
+  <div class="sub">Read off <code>webview-scripts/amazon-fresh.ts</code> and
+  <code>webview-scripts/cart-confirm.ts</code>. The only store where the page can be perfectly
+  healthy and still return nothing — because the account has no Fresh store selected.</div>
+</header>
+<div class="legend">
+  <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b></span>
+  <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Good outcome</b></span>
+  <span class="chip"><span class="sw" style="background:#ef4444"></span><b>Reported failure</b></span>
+  <span class="chip"><span class="sw" style="background:#a78bfa"></span><b>Layout fork</b> — A vs B</span>
+</div>
+
+<div class="wrap"><h3>Diagram 1 · The run</h3><pre class="mermaid">
+flowchart TD
+    START(["User taps<br/>Add N meals to Amazon Fresh cart"]) --> QTY
+    QTY["<b>qty</b>"] -->|"tap Add Ingredients"| LOGINCHK
+    LOGINCHK["<b>login_check</b><br/>wait 1.5s, then read<br/><code>#nav-logobar-greeting</code>"]
+    LOGINCHK --> ISIN{"class <code>nav-greeting-recognized</code><br/>AND <code>#nav-greeting-name</code>?"}
+    ISIN -->|no| LOGIN["<b>login</b><br/>amazon.com/ap/signin"]
+    LOGIN -->|"back on amazon.com,<br/>not /ap/ /ax/ openid."| LOGINCHK
+    ISIN -->|yes| BEFORE["<b>before-snapshot</b>"]
+    BEFORE --> NAV
+
+    subgraph PERITEM ["Per item"]
+        NAV["navigate<br/><code>/s?k=term&amp;i=amazonfresh</code>"]
+        NAV --> EMPTY{{"<b>__freshEmptyState()</b><br/>'no results … Amazon Fresh',<br/>or a prompt to pick a<br/>store / address"}}
+        EMPTY -->|"matches"| NOSTORE(["<b>storeUnavailable</b><br/><i>not a per-item miss,<br/>not an anti-bot block —<br/>the ACCOUNT has no<br/>Fresh store selected</i>"])
+        EMPTY -->|no| CARDS["poll for cards<br/><i>lazy render</i>"]
+        CARDS --> TYPE{"which layout?"}
+        TYPE -->|"<code>[data-component-type=s-search-result]</code>"| B["<b>TYPE B</b><br/>search results"]
+        TYPE -->|"<code>[data-csa-c-item-type=asin]</code>"| A["<b>TYPE A</b><br/>storefront carousel"]
+        B --> MATCH
+        A --> MATCH
+        MATCH{"scoreMatch = 100?"}
+        MATCH -->|no| TOREVIEW(["queue for review"])
+        MATCH -->|yes| CARTB["record <code>__cartCount()</code><br/>as the baseline"]
+    end
+
+    CARTB --> ADD{"which layout?"}
+    ADD -->|B| BFLOW["Type B add<br/><i>diagram 2</i>"]
+    ADD -->|A| AFLOW["Type A add<br/><i>diagram 2</i>"]
+    BFLOW --> CONFIRM
+    AFLOW --> CONFIRM
+
+    CONFIRM["<b>__waitForCartIncrease(baseline, 50)</b><br/>200ms ticks &middot; up to 10s"]
+    CONFIRM --> DIDIT{"header badge<br/>ticked up?"}
+    DIDIT -->|yes| OK(["success"])
+    DIDIT -->|"no"| NOTINC(["<b>cart_not_incremented</b><br/><i>the card said yes,<br/>the cart did not</i>"])
+    DIDIT -->|"badge unreadable<br/>(baseline &lt; 0)"| SETTLE(["2.5s settle, then<br/>report success<br/><i>a markup change must not<br/>hard-fail every add</i>"])
+
+    OK --> RECON
+    SETTLE --> RECON
+    NOTINC --> RECON
+    NOSTORE --> RECON
+    TOREVIEW --> GATE
+    RECON["<b>reconcile</b>"] --> GATE
+    GATE{"any item unmatched<br/>or failed?"}
+    GATE -->|yes| REVIEW["<b>review</b><br/>substitute, or Skip"]
+    GATE -->|no| DONE
+    REVIEW --> DONE
+    DONE["<b>done</b>"] --> AFTER["after-probe &rarr; diff &rarr; audit &rarr; verdict"]
+    AFTER --> FINAL(["done screen"])
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class QTY,LOGINCHK,LOGIN,DONE,REVIEW state
+    class OK,SETTLE,FINAL good
+    class NOSTORE,NOTINC danger
+    class TYPE,ADD,A,B spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2 · The two add paths, and the modal that intercepts them</h3><pre class="mermaid">
+flowchart TD
+    subgraph TB ["TYPE B — search results"]
+        B0["read qty:<br/>max(legacy, new-layout)"]
+        B0 --> B1{"already in cart?"}
+        B1 -->|"qty = 0"| B2["click Add to Cart<br/>wait 800ms"]
+        B2 --> B3["confirmWeightModal"]
+        B3 --> B4["loop from 1"]
+        B1 -->|"qty &gt; 0 —<br/>the button opens a modal<br/>pre-set to the current qty,<br/>so committing is a no-op"| B5["<b>skip the add button</b><br/>loop from 0"]
+        B4 --> B6
+        B5 --> B6
+        B6{"reached QTY?"}
+        B6 -->|no| B7["wait &le;5s for the<br/>stepper increment"]
+        B7 -->|"never appears"| BOUT(["stop the loop"])
+        B7 --> B8["click + &middot; wait 800ms<br/>&middot; confirmWeightModal"]
+        B8 --> B6
+        B6 -->|yes| BOUT
+    end
+
+    subgraph TA ["TYPE A — storefront carousel"]
+        A0{"card qty = 0?"}
+        A0 -->|yes| A1["find a NON-hidden<br/><code>.qs-atc-plus</code> wrapper,<br/>then its Add button"]
+        A1 -->|"none, and card text says<br/>out of stock / unavailable"| AOOS(["<b>out_of_stock</b>"])
+        A1 -->|"none, no such text"| ANOB(["<b>no_button</b>"])
+        A1 --> A2["click &middot; waitForQtyToChange"]
+        A2 --> A3
+        A0 -->|"qty &gt; 0"| A3
+        A3{"added &lt; QTY?"}
+        A3 -->|yes| A4["wait for + &middot; click<br/>&middot; waitForQtyToChange"]
+        A4 --> A3
+        A3 -->|no| AOUT(["done adding"])
+    end
+
+    subgraph MODAL ["confirmWeightModal — a click can open a sheet instead of adding"]
+        M0["wait 300ms, then poll"]
+        M0 --> M1{"card qty advanced<br/>past the baseline?"}
+        M1 -->|yes| MNONE(["no modal — the add<br/>landed directly"])
+        M1 -->|no| M2["look for the sheet, three ways"]
+        M2 --> S1["1 · visible<br/><code>[class*=qs-widget-summary-atc]</code>"]
+        M2 --> S2["2 · a 'Select quantity' header,<br/>walk up &le;12 levels to its<br/>container, take the primary button"]
+        M2 --> S3["3 · a visible 'Add to Cart' /<br/>'Update Cart' control<br/><b>outside the source card</b>"]
+        S1 --> PICK
+        S2 --> PICK
+        S3 --> PICK
+        PICK["click, priority 1 &rarr; 2 &rarr; 3"]
+    end
+
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
+    class AOOS,ANOB danger
+    class MNONE,AOUT,BOUT good
+</pre></div>
+
+<div class="notes">
+  <h2>What is unique to Amazon Fresh</h2>
+  <p><b>Two card layouts, not one.</b> The storefront carousel (Type A) and search results (Type B)
+  are different components with different add controls, different steppers and different quantity
+  readouts. Almost every selector in <code>SEL_FALLBACKS</code> comes as an A/B pair, and the add
+  path forks on <code>bestCard.matches(CARD_B)</code>. Both are lazily rendered, so both poll.</p>
+
+  <p><b>Zero results can mean "your account has no store".</b> When the Amazon account has no Fresh
+  store or serviceable delivery address selected, <i>every</i> search returns Fresh's own empty
+  state. Counting products would report that as a per-item miss for every ingredient in the meal.
+  <code>__freshEmptyState()</code> matches the distinct phrasing instead — which also means a broken
+  card selector cannot be mistaken for "no store", because zero cards alone never triggers it. The
+  flag rides back as <code>storeUnavailable</code> so the app can say the real thing.</p>
+
+  <p><b>A click may open a sheet rather than add.</b> Weight- and quantity-selected items intercept
+  the add with a "Select quantity" modal. <code>confirmWeightModal</code> first checks whether the
+  quantity simply advanced (no modal at all), and only then hunts for the sheet three ways, in
+  descending specificity. Strategy 3 explicitly excludes controls <i>inside</i> the source card —
+  those are the <code>+</code> buttons already clicked.</p>
+
+  <p><b>Re-adding an item already in the cart skips the add button entirely.</b> On Type B that
+  button opens a modal whose quantity selector is pre-set to what the cart already holds, so
+  committing it changes nothing. The loop starts at 0 instead of 1 and goes straight to increments —
+  otherwise the first requested unit is silently lost.</p>
+
+  <p><b>The badge is the only confirmation this store has.</b> <code>buildCartConfirmFn</code> is
+  imported only here. H-E-B has a real per-product cart query in front of its badge; Amazon Fresh
+  has the counter and nothing else, so success is "the header count went up within ~10&nbsp;s".
+  An unreadable badge deliberately resolves to success after a 2.5&nbsp;s settle rather than
+  failing — a markup change must not turn every add into a reported failure.</p>
+
+  <p><b>Cart deep link.</b> <code>appScheme</code> is
+  <code>com.amazon.mobile.shopping.web://amazon.com/gp/cart/view.html</code> — the URL-carrying
+  scheme. Bare <code>amazon://</code> and <code>amzn://</code> do not work.</p>
+
+  <h2>Where the branches are decided</h2>
+  <table class="src">
+    <tr><th>Branch</th><th>Source</th></tr>
+    <tr><td>Empty-state / no-store detection</td><td><code>buildFreshEmptyStateFn</code></td></tr>
+    <tr><td>Type A vs Type B fork</td><td><code>buildSearchAndAddScript</code>, <code>bestCard.matches(CARD_B)</code></td></tr>
+    <tr><td>Modal interception</td><td><code>confirmWeightModal</code> (two copies — add and search+add)</td></tr>
+    <tr><td>Badge confirmation</td><td><code>src/lib/webview-scripts/cart-confirm.ts</code></td></tr>
+    <tr><td>Selectors (A/B pairs)</td><td><code>automation-config/schema.ts</code> → <code>stores.amazon</code></td></tr>
+  </table>
+</div>
+<script src="assets/mermaid.min.js"></script>
+<script src="assets/flow-init.js"></script>
+</body></html>
