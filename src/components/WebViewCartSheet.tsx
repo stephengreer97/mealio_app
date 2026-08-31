@@ -4644,6 +4644,44 @@ export default function WebViewCartSheet({
   // Shared with the button that opens this sheet — see lib/chooseRun.ts.
   const isChooseRun = isChooseRunItems(items);
 
+  /**
+   * Why one item did not make it into the cart, in the user's words.
+   *
+   * The gate used to carry one blanket sentence — "this may be because the item
+   * is out of stock or the store no longer carries it" — for every item, which
+   * was a guess covering two possibilities out of five. The network rail reports
+   * a real per-item reason, so the screen can stop guessing.
+   *
+   * The distinction is not cosmetic. "Out of stock" and "no exact match" ask the
+   * user for completely different things: the first is nothing they can fix by
+   * choosing better, the second is exactly that.
+   *
+   * Returns null for a reason with no honest sentence, and the caller keeps the
+   * general note for those rather than inventing one.
+   */
+  const unaddedReasonText = useCallback((reason: string | null | undefined, store: string): string | null => {
+    switch (reason) {
+      case 'out_of_stock':
+        // The store HAS this product and will not sell it today. Choosing again
+        // will not help, which is why it reads differently from a bad match.
+        return `Out of stock at ${store}`;
+      case 'no_results':
+        return `${store} had no match for this`;
+      case 'low_confidence':
+        return 'No exact match — pick the right product';
+      case 'needs_weight':
+        return 'Sold by weight — choose an amount';
+      case 'needs_preference':
+        return 'Needs a choice, like thickness or ripeness';
+      case 'quantity_limit_reached':
+        return `Your cart is already at ${store}'s limit for this`;
+      case 'search_unanswered':
+        return 'We could not check this one';
+      default:
+        return null;
+    }
+  }, []);
+
   const titleMap: Record<Step, string> = {
     qty: isChooseRun ? 'Choose Products' : 'Add to Cart',
     login_check: 'Connecting…',
@@ -5105,9 +5143,15 @@ export default function WebViewCartSheet({
                 <Text style={[styles.doneTitle, { marginBottom: 8 }]}>
                   {unaddedUnits} item{unaddedUnits !== 1 ? 's' : ''} could not be added to cart
                 </Text>
-                <Text style={[styles.doneSub, { marginBottom: 20 }]}>
-                  This may be because the item is out of stock or the store no longer carries it.
-                </Text>
+                {/* Kept only for items whose reason has no honest sentence. Where
+                    every item can say why, a blanket guess underneath them is
+                    worse than nothing — it offers two explanations for problems
+                    that are already named, and one of them will be wrong. */}
+                {searchResults.some((r) => !unaddedReasonText(r.reason, storeName)) && (
+                  <Text style={[styles.doneSub, { marginBottom: 20 }]}>
+                    This may be because the item is out of stock or the store no longer carries it.
+                  </Text>
+                )}
                 {autoAdded.length > 0 && (
                   <Text style={[styles.doneSub, { marginBottom: 20 }]}>
                     {autoAddedUnits} item{autoAddedUnits !== 1 ? 's' : ''} matched and will be added automatically.
@@ -5125,6 +5169,17 @@ export default function WebViewCartSheet({
                       }}
                     >
                       <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text1 }}>{r.term}</Text>
+                      {(() => {
+                        const why = unaddedReasonText(r.reason, storeName);
+                        return why ? (
+                          <Text
+                            testID={`unadded-reason-${i}`}
+                            style={{ fontSize: 12.5, fontFamily: 'Inter_400Regular', color: Colors.text3, marginTop: 3 }}
+                          >
+                            {why}
+                          </Text>
+                        ) : null;
+                      })()}
                     </View>
                   ))}
                 </View>
