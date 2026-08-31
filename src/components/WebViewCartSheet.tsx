@@ -30,6 +30,7 @@ import { Meal } from '../types';
 // in those closures can be several renders stale.
 import { getStores } from '../lib/store-catalog';
 import { useStores } from '../lib/store-catalog/useStores';
+import { buildBlankPageRecoveryScript } from '../lib/webview-scripts/blank-page-recovery';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
 import { useLoginPrewarm } from '../context/LoginPrewarmContext';
@@ -3118,6 +3119,16 @@ export default function WebViewCartSheet({
     }
     // Track whether we're on a search results page so subsequent items skip homepage reload.
     onSearchPageRef.current = s.isSearchUrl(url);
+    // A login page that finished loading with an empty document is terminal for
+    // the user — they cannot sign in to a blank sheet, and no check script can
+    // report the problem because they all throw on the first document.body read.
+    // Runs before the inject chain below so the reload happens instead of a
+    // check script being fired into a document that has no body to inspect.
+    // See buildBlankPageRecoveryScript for what the condition is and why one
+    // reload is the whole of the remedy.
+    if (stepRef.current === 'login') {
+      webviewRef.current?.injectJavaScript(buildBlankPageRecoveryScript());
+    }
     if (loadQueueRef.current.length > 0) {
       const script = loadQueueRef.current.shift()!;
       const label = script.slice(0, 60).replace(/\n/g, ' ');
@@ -3418,6 +3429,17 @@ export default function WebViewCartSheet({
           } else {
             console.log(`[Cart ${ts()}]`, 'EXTRACT_NOW — queue empty (onLoadEnd already consumed it)');
           }
+          return;
+        }
+
+        if (msg.type === 'BLANK_PAGE') {
+          // The login page arrived with no body. `retried: true` means the
+          // reload did not fix it, so the emptiness is the store's answer rather
+          // than a truncated stream — worth seeing in a device log, since the
+          // recovery deliberately stops after one attempt and the user is then
+          // looking at the same blank sheet this was meant to clear.
+          console.log(`[Cart ${ts()}]`, 'BLANK_PAGE on login step — retried=', !!msg.retried,
+            'hasBody=', !!msg.hasBody, msg.url);
           return;
         }
 

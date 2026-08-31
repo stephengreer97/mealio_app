@@ -29,6 +29,8 @@ flowchart TD
     LC -->|"LOGIN_STATUS true"| SEARCHING
     LOGIN["<b>login</b><br/><i>attention</i> · 'Log in to &lt;store&gt;'"]
     LOGIN -->|"LOGIN_COMPLETE, or a<br/>re-inject that now says true"| LC
+    LOGIN -->|"load finished with an<br/>empty document · BLANK_PAGE"| BLANKR
+    BLANKR{{"reload it — once,<br/>latched in sessionStorage"}} --> LOGIN
 
     SEARCHING["<b>searching</b><br/><i>running</i> · 'Adding to cart…'"]
     SEARCHING --> ADDING["<b>adding</b><br/><i>running</i>"]
