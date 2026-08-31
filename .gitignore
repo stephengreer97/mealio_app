@@ -29,6 +29,11 @@ yarn-error.*
 # macOS
 .DS_Store
 *.pem
+# ...except this one. It is a PUBLIC root CA (Sectigo Public Server
+# Authentication Root R46), not a key — the anchor Android's WebView is missing
+# for Albertsons' identity host. The build cannot produce a working login
+# without it, and its fingerprint is pinned in tests/unit/webviewTrustAnchors.
+!assets/certs/*.pem
 
 # local env files
 .env*.local
