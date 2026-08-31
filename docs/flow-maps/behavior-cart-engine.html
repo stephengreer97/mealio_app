@@ -149,6 +149,44 @@ flowchart TD
   <p>A store that omits <code>getSearchUrl</code> + <code>buildWorkerScript</code> simply stays on
   the sequential single-WebView path. Nothing else has to know.</p>
 
+  <h2>The network route &mdash; a fifth strategy that loads no page at all (MEAL-202)</h2>
+  <p>Everything above is about <i>which WebView loads which page</i>. H-E-B has a
+  route where that question does not arise: it asks the store's own gateway
+  directly, from wherever the WebView already sits.</p>
+  <pre class="mermaid">
+flowchart LR
+    BSF["beginSearchFlow"] --> DEC{{"chooseAddStrategy"}}
+    DEC -->|"networkSearch + networkAdd<br/>+ cartSkuConfirm, and not a<br/>choose-only run"| NET
+    DEC -->|"otherwise"| POOL["presearch / parallelAdd /<br/>parallelSearch / serial<br/><i>every path above</i>"]
+
+    NET["<b>network</b>"] --> S1["<b>1 · session</b><br/>myPreferredStore + SessionContext<br/><i>login gate, store id, pickup or delivery</i>"]
+    S1 -->|"no user"| LOGIN(["login step"])
+    S1 --> S2["<b>2 · search</b><br/>every term, 3 at a time<br/><b>no navigation</b>"]
+    S2 --> S3["<b>3 · add</b><br/>one write per matched item<br/>quantity = what the cart holds + asked"]
+    S3 --> FIN(["finishParallelAdd()<br/><i>the SAME completion the add pool calls</i>"])
+
+    S1 -.->|"cannot answer"| POOL
+    S2 -.->|"one term unanswered"| REV(["that item &rarr; review"])
+    S3 -.->|"no cart baseline"| POOL
+
+    classDef net fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    class NET,S1,S2,S3 net
+    class FIN good
+  </pre>
+  <p><b>It funnels into <code>finishParallelAdd</code></b>, which is what the add pool
+  calls. So the reconcile, the review routing, the done screen and the telemetry
+  cannot tell a network run from a pooled one &mdash; an item with no exact match
+  becomes an unsuccessful <code>AddResult</code> carrying its candidates, exactly
+  what a pool worker produces, and reaches review by the ordinary road.</p>
+  <p><b>Measured on a device, twelve ingredients:</b> 10.8&nbsp;s tap-to-reconcile
+  against 22.5&nbsp;s for the pooled path, and the search half of that is
+  1.0&nbsp;s for all twelve terms. It also runs no worker WebViews, which is
+  roughly 187&nbsp;MB of the memory peak.</p>
+  <p>Both switches are required together. Searching over the network and then
+  <i>clicking</i> to add would load no page for search and then one per item
+  anyway &mdash; slower than either path alone.</p>
+
   <h2>Why <code>spaSearch</code> exists at all</h2>
   <p>An SPA storefront changes its URL via <code>pushState</code> and fires
   <code>onLoadEnd</code> more than once for one route change, while the injected script is still

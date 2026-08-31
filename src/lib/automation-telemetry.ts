@@ -240,6 +240,55 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   // apply adds the item twice — so nothing was attempted twice and nothing is
   // confirmed. confirm_failed is the family: no evidence it landed. The raw
   // reason in detail is what separates it from a click that simply did not take.
+  // MEAL-202: the network search could not answer for this term — the wall, a
+  // timeout, a shape we did not expect. NOT "the store has nothing", which comes
+  // back as an ordinary empty candidate list. The item goes to review, so this
+  // is a rejected match rather than a failed confirmation: nothing was attempted
+  // and nothing needed confirming.
+  // MEAL-202: the store's own per-item cap is already met by what the cart holds,
+  // so there is nothing this run can add. Not a confirmation failure — nothing was
+  // attempted — and not a scoring one: the product matched exactly. It is the
+  // store declining on stock policy, which is the same family as out_of_stock.
+  // MEAL-202: the store answered, and the answer was not a shape we know. Not a
+  // wall and not a refusal — the contract moved, or a field we depend on is gone.
+  // It rides confirm_failed because nothing landed and nothing can be said about
+  // why; the raw reason in detail is what separates it from a cart that simply
+  // did not move.
+  unexpected_shape: 'confirm_failed',
+  // MEAL-202: the product offers a purchase preference (deli thickness, avocado
+  // ripeness) and this run has no confident id for it — either nothing was
+  // chosen, or the saved label does not match any the store offered. Writing
+  // anyway lets the STORE choose the variant, so the item goes to review. Not a
+  // confirmation failure: nothing was attempted.
+  // MEAL-202: the product already has a cart line and this write carries a
+  // purchase preference. Lines are keyed by preference and the cart read does not
+  // expose which one a line belongs to, so the existing units cannot be
+  // attributed — and the write sets an ABSOLUTE quantity against them. Declined
+  // rather than guessed.
+  // ── MEAL-202: the network add's own vocabulary ─────────────────────────────
+  //
+  // These were invisible to the guard below until the reasons were written where
+  // it could see them, which is how a whole rail's failures nearly shipped
+  // riding the unmapped default.
+  //
+  // No baseline means no way to know what quantity to SET, so nothing was
+  // written — a confirmation that never happened rather than one that failed.
+  no_cart_baseline: 'confirm_failed',
+  // Declined on purpose: an over-add on a weight line cannot be undone, and a
+  // product holding several lines cannot be addressed by a write that sets one.
+  // Both are the engine refusing to guess, not the store refusing us.
+  weight_item_declined: 'match_rejected',
+  multiple_cart_lines: 'match_rejected',
+  cart_line_is_weight: 'match_rejected',
+  // The request itself never completed. `network` and `timeout` already carry
+  // their own codes; these are the rest of the transport's vocabulary.
+  http: 'nav_failed',
+  unparseable: 'confirm_failed',
+  threw: 'confirm_failed',
+  preference_line_ambiguous: 'match_rejected',
+  needs_preference: 'match_rejected',
+  quantity_limit_reached: 'out_of_stock',
+  search_unanswered: 'match_rejected',
   write_unresolved: 'confirm_failed',
   cart_not_incremented: 'confirm_failed',
   // MEAL-14: the store's own cart query answered and our line was absent (or

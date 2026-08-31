@@ -1664,3 +1664,24 @@ describe('toIntendedItem', () => {
     expect(toIntendedItem({ ingredientName: 'Brisket', purchaseWeight: 3 }).isWeight).toBe(true);
   });
 });
+
+// ── MEAL-202: a cap already met is definitive ────────────────────────────────
+//
+// The cart holds the store's per-item maximum, so a retry cannot add anything.
+// On the network route a retry is worse than useless: it abandons a rail that
+// answered in 280 ms for one that loads a page, to be told the same thing.
+describe('reconcileParallelAdd: quantity_limit_reached', () => {
+  it('routes to review rather than to the top-up', () => {
+    const outcome = reconcileParallelAdd(
+      [{
+        name: 'Fresh Small Hass Avocado, Each',
+        expectedQty: 3,
+        isWeight: false,
+        report: { success: false, productName: 'Fresh Small Hass Avocado, Each', reason: 'quantity_limit_reached' },
+      }],
+      [],
+    );
+    expect(outcome.topUps).toEqual([]);
+    expect(outcome.definiteFailures).toEqual([{ index: 0, reason: 'quantity_limit_reached' }]);
+  });
+});

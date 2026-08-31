@@ -170,6 +170,30 @@ export interface StoreConfigEntry {
    */
   networkAdd?: boolean;
   /**
+   * Search by asking the store, instead of loading a results page (MEAL-202).
+   *
+   * Measured 282 ms against ~1,800 ms to load and read a page, and it needs no
+   * page at all — every term is answered from wherever the WebView already sits,
+   * which also removes the worker WebViews and roughly 187 MB of the memory peak.
+   *
+   * The speed is the smaller half. Three request parameters retire classes of
+   * extraction bug rather than fixing them: `excludeSponsoredContent` means
+   * sponsored tiles are never asked for and so cannot be mistaken for results,
+   * `includeOutOfStock` replaces reading stock off button text, and `pageSize`
+   * states the result count instead of accepting however many tiles rendered.
+   *
+   * REQUIRES cartSkuConfirm, which is what supplies the shared transport. The
+   * store and shopping context are read from the session on every run — nothing
+   * is pinned to one store.
+   *
+   * Falls back to loading a page PER TERM. One term hitting the wall does not
+   * take the rest of the run with it.
+   *
+   * Flip it with a config push:
+   *   {"stores":{"heb":{"networkSearch":true}}}
+   */
+  networkSearch?: boolean;
+  /**
    * Where the cart-confirmation rail POSTs its query — a same-origin path, not a
    * URL. `network-confirmation-findings.md` asks for cart endpoints to live in
    * remote config because they drift the way selectors do, and a hardcoded path

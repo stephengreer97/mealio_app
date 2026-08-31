@@ -1,0 +1,681 @@
+/**
+ * H-E-B search over the network, instead of loading a results page (MEAL-202).
+ *
+ * The page reader — DOM or embedded JSON — needs a rendered results page, which
+ * costs about 1.8 s per ingredient and is the single biggest cost in a run. The
+ * store's own gateway answers the same question in about 280 ms, from inside the
+ * WebView we are already holding.
+ *
+ * WHAT THIS BUYS BEYOND SPEED, and it is the better half:
+ *
+ *   - `excludeSponsoredContent` — sponsored and "perfect pairings" tiles stop
+ *     being something the extractor has to recognise and discard. We do not ask
+ *     for them, so they cannot be mistaken for results.
+ *   - `includeOutOfStock` — stock stops being read off button text (MEAL-172).
+ *   - `pageSize` — the result count is stated rather than however many tiles the
+ *     page happened to render.
+ *   - Product id and sku arrive with every candidate, which is what the network
+ *     ADD needs (MEAL-139, MEAL-200) and what the DOM card cannot supply.
+ *
+ * NOTHING HERE IS HARDCODED TO A STORE. `storeId` and `shoppingContext` are read
+ * from the session on every run — see buildHebSessionScript, and read its note
+ * about which identifier is the right one, because there are two and they differ.
+ *
+ * Every failure returns null rather than throwing, because the caller's answer to
+ * "the network could not tell me" is always the same: load the page and read it.
+ */
+
+/** Shared transport. Same endpoint, headers and credentials as the cart rail. */
+const GQL_FN = `
+  function __hebGql(op, query, variables, timeoutMs) {
+    var ctl = null;
+    try { ctl = new AbortController(); } catch (e) { ctl = null; }
+    var timer = null;
+    return (async function () {
+      try {
+        var init = {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'content-type': 'application/json',
+            'accept': '*/*',
+            'apollographql-client-name': 'WebPlatform-Solar (Production)'
+          },
+          body: JSON.stringify({ operationName: op, variables: variables || {}, query: query })
+        };
+        if (ctl) init.signal = ctl.signal;
+        var p = fetch('/graphql', init);
+        if (ctl) timer = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, timeoutMs || 8000);
+        var res = await p;
+        var text = '';
+        try { text = await res.text(); } catch (e) { text = ''; }
+        if (timer) { clearTimeout(timer); timer = null; }
+        // The wall answers 403 with an HTML incident page. Named on its own
+        // because it is transient and self-healing (MEAL-16 measured 71-84 s):
+        // it means try again, not "this store has no such product".
+        if (res.status === 403) return { ok: false, why: 'blocked', status: 403 };
+        if (!res.ok) return { ok: false, why: 'http', status: res.status };
+        var json = null;
+        try { json = JSON.parse(text); } catch (e) { return { ok: false, why: 'unparseable', status: res.status }; }
+        if (json && json.errors && json.errors.length) {
+          var e0 = json.errors[0];
+          return { ok: false, why: 'graphql_error', status: res.status,
+                   detail: (e0 && typeof e0.message === 'string') ? e0.message.slice(0, 200) : null };
+        }
+        return { ok: true, status: res.status, data: json && json.data };
+      } catch (e) {
+        if (timer) clearTimeout(timer);
+        var isAbort = !!(e && e.name === 'AbortError');
+        return { ok: false, why: isAbort ? 'timeout' : 'network', detail: String(e).slice(0, 120) };
+      }
+    })();
+  }
+`;
+
+/**
+ * Reads the session: is the user signed in, which store, and pickup or delivery.
+ *
+ * This is the login gate as well. A signed-out session has no `me`, so one
+ * request answers what the login script needed a page load and a DOM check for.
+ *
+ * THE STORE IDENTIFIER IS THE SUBTLE PART. `me.preferredStore.storeNumber` and
+ * `cartV2.fulfillment.store.id` are BOTH store identifiers and they are NOT the
+ * same number — measured 243 and 476 for one shop. Search wants the fulfillment
+ * store's id; sending the preferred store's number searches a different
+ * catalogue and returns results that look entirely reasonable. So the
+ * fulfillment store is what this returns, and the preferred store number is
+ * carried only as a diagnostic.
+ */
+export function buildHebSessionScript(): string {
+  return `(async function () {
+${GQL_FN}
+  var post = function (o) {
+    o.type = 'HEB_SESSION';
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
+  };
+
+  var who = await __hebGql('myPreferredStore',
+    'query myPreferredStore { me { id preferredStore { storeNumber } } }', {}, 8000);
+  if (!who.ok) { post({ ok: false, why: who.why, status: who.status || null, detail: who.detail || null }); return; }
+  var me = null, prefNumber = null;
+  try { me = who.data.me && who.data.me.id; } catch (e) {}
+  try { prefNumber = who.data.me.preferredStore.storeNumber; } catch (e) {}
+  if (!me) { post({ ok: true, loggedIn: false }); return; }
+
+  var sess = await __hebGql('SessionContext',
+    'query SessionContext { cartV2 { __typename'
+    + ' ... on Cart { id fulfillment { selectionState curbsideFulfillmentMode store { id name } } }'
+    + ' ... on CartError { code title message } } }', {}, 8000);
+  var storeId = null, storeName = null, mode = null;
+  if (sess.ok) {
+    try {
+      var f = sess.data.cartV2.fulfillment;
+      storeId = f.store && f.store.id;
+      storeName = f.store && f.store.name;
+      mode = f.curbsideFulfillmentMode;
+    } catch (e) {}
+  }
+  post({
+    ok: true,
+    loggedIn: true,
+    storeId: storeId != null ? String(storeId) : null,
+    storeName: storeName || null,
+    // Pickup and delivery price and stock differently, so this is not cosmetic.
+    shoppingContext: (mode && String(mode).toUpperCase().indexOf('PICKUP') >= 0)
+      ? 'CURBSIDE_PICKUP' : 'CURBSIDE_DELIVERY',
+    fulfillmentMode: mode || null,
+    preferredStoreNumber: prefNumber != null ? String(prefNumber) : null,
+  });
+})(); true;`;
+}
+
+/** The search document, written out so the nesting can be read. */
+const SEARCH_QUERY = [
+  'query productSearchPageV2($params: SearchPageParamsV2!) {',
+  '  productSearchPageV2(params: $params) {',
+  '    __typename',
+  '    ... on SearchPage {',
+  '      layout {',
+  '        ... on VerticalStackLayout {',
+  '          visualComponents {',
+  '            ... on SearchGridV2 {',
+  '              items {',
+  '                __typename',
+  '                ... on Product {',
+  '                  id',
+  '                  displayName',
+  '                  decodedDisplayName',
+  '                  fullDisplayName',
+  '                  pricedByWeight',
+  '                  shoppingContext',
+  '                  minimumOrderQuantity',
+  '                  maximumOrderQuantity',
+  '                  inventory { inventoryState }',
+  '                  productImageUrls { url size }',
+  '                  purchasePreferenceList { label purchasePreferences { preferenceId text } }',
+  '                  SKUs {',
+  '                    id',
+  '                    customerFriendlySize',
+  '                    weightSelectionIncrements',
+  '                    contextPrices { context salePrice { formattedAmount } listPrice { formattedAmount } }',
+  '                  }',
+  '                }',
+  '              }',
+  '            }',
+  '          }',
+  '        }',
+  '      }',
+  '    }',
+  '    ... on SearchPageError { code message }',
+  '  }',
+  '}',
+].join('\n');
+
+/**
+ * Turning the gateway's products into candidates.
+ *
+ * ONE copy, shared by the single-term and batch scripts. Two copies of this is
+ * exactly how a candidate ends up meaning something slightly different depending
+ * on which path produced it — and the add path matches names EXACTLY, so
+ * "slightly different" is "matches nothing".
+ */
+const CANDIDATE_HELPERS = `
+  function __hebGridItems(page) {
+    var items = null;
+    try {
+      var vcs = page.layout.visualComponents;
+      for (var i = 0; i < vcs.length; i++) {
+        // Found by TYPE, not by having items in it. Requiring a non-empty list
+        // made "the store has nothing matching this" indistinguishable from "the
+        // grid was not where we expected" — and the two have opposite answers:
+        // one is a real result to show, the other is a reason to load the page.
+        if (vcs[i] && vcs[i].__typename === 'SearchGridV2' && vcs[i].items) { items = vcs[i].items; break; }
+      }
+      if (items == null) {
+        for (var j = 0; j < vcs.length; j++) {
+          if (vcs[j] && vcs[j].items && vcs[j].items.length) { items = vcs[j].items; break; }
+        }
+      }
+    } catch (e) {}
+    return items;
+  }
+
+  function __hebImageOf(p) {
+    var urls = p.productImageUrls || [];
+    var bySize = {};
+    for (var i = 0; i < urls.length; i++) { if (urls[i] && urls[i].size) bySize[urls[i].size] = urls[i].url; }
+    return bySize.MEDIUM || bySize.SMALL || bySize.LARGE || (urls[0] && urls[0].url) || null;
+  }
+
+  // Same rule the embedded-JSON reader uses, so a candidate's price does not
+  // change depending on which path produced it.
+  function __hebPriceOf(p, sku) {
+    var cps = (sku && sku.contextPrices) || [];
+    if (!cps.length) return null;
+    var want = String(p.shoppingContext || '').split('_')[0];
+    var pick = null;
+    for (var i = 0; i < cps.length; i++) { if (cps[i] && cps[i].context === want) { pick = cps[i]; break; } }
+    if (!pick) for (var j = 0; j < cps.length; j++) { if (cps[j] && cps[j].context === 'ONLINE') { pick = cps[j]; break; } }
+    if (!pick) pick = cps[0];
+    var amt = pick && (pick.salePrice || pick.listPrice);
+    var f = amt && amt.formattedAmount;
+    return (typeof f === 'string' && /[0-9]/.test(f)) ? f : null;
+  }
+
+  // The size is appended for the same reason the JSON reader appends it: the card
+  // the user sees reads "Sour Cream, 16 oz", and the add path matches names
+  // EXACTLY, so a name without the size matches nothing.
+  function __hebNameOf(p, sku) {
+    var base = null;
+    if (typeof p.decodedDisplayName === 'string' && p.decodedDisplayName) base = p.decodedDisplayName;
+    else if (typeof p.fullDisplayName === 'string' && p.fullDisplayName) base = p.fullDisplayName;
+    else if (typeof p.displayName === 'string' && p.displayName) base = p.displayName;
+    if (!base) return null;
+    var size = sku && sku.customerFriendlySize;
+    if (typeof size === 'string' && size && base.indexOf(size) === -1) base = base + ', ' + size;
+    return base;
+  }
+
+  function __hebPrefsOf(p) {
+    var out = [];
+    try {
+      var list = p.purchasePreferenceList.purchasePreferences;
+      for (var i = 0; i < list.length; i++) {
+        var t = list[i] && list[i].text;
+        if (!t) continue;
+        // text/value keep the shape the page path built from a modal ROW LABEL,
+        // so a candidate stays interchangeable. preferenceId is additive and only
+        // the network add reads it — the page path has no use for an id it cannot
+        // click.
+        var e = { text: String(t).trim(), value: String(t).trim() };
+        var pid = list[i].preferenceId;
+        if (pid != null) e.preferenceId = String(pid);
+        out.push(e);
+      }
+    } catch (e) {}
+    return out.length ? out : null;
+  }
+
+  function __hebCandidates(items) {
+    var out = [];
+    for (var i = 0; i < items.length; i++) {
+      var p = items[i];
+      if (!p || p.__typename !== 'Product') continue;
+      var sku = (p.SKUs && p.SKUs[0]) || null;
+      var name = __hebNameOf(p, sku);
+      if (!name) continue;
+      var incr = (sku && sku.weightSelectionIncrements) || [];
+      out.push({
+        productName: name,
+        imageUrl: __hebImageOf(p),
+        outOfStock: !!(p.inventory && p.inventory.inventoryState !== 'IN_STOCK'),
+        preferences: __hebPrefsOf(p),
+        price: __hebPriceOf(p, sku),
+        isWeightItem: !!p.pricedByWeight || incr.length > 0,
+        weightOptions: incr.slice(),
+        productId: p.id != null ? String(p.id) : null,
+        skuId: (sku && sku.id != null) ? String(sku.id) : null,
+        // The store's own per-item cap. Carried because the write sets an
+        // ABSOLUTE quantity: cart-held + asked can exceed it, and the store then
+        // refuses the whole write with "Quantity limit reached." — which is
+        // exactly what happened to an avocado on the first full device run.
+        maxOrderQuantity: (typeof p.maximumOrderQuantity === 'number' && p.maximumOrderQuantity > 0)
+          ? p.maximumOrderQuantity : null,
+      });
+    }
+    return out;
+  }
+`;
+
+/**
+ * Search for one term and post SEARCH_RESULT, or post a failure the caller can
+ * fall back on.
+ *
+ * The candidate shape is deliberately IDENTICAL to what the page readers emit,
+ * name-for-name, so nothing downstream knows or cares where a candidate came
+ * from. `source: 'network'` rides along only so the two can be compared in
+ * telemetry before the page path is retired.
+ */
+export function buildHebNetworkSearchScript(
+  term: string,
+  opts: { storeId: string; shoppingContext: string; pageSize?: number },
+): string | null {
+  // The store id is coerced HERE, not in the injected script, and a bad one
+  // returns null so the caller loads the page instead.
+  //
+  // `"476" | 0` would have worked and `"abc" | 0` would have searched store ZERO
+  // — a real store id somewhere, answering with a real catalogue for a shop the
+  // user has never been to. There is no error to notice in that; the results
+  // just quietly belong to someone else.
+  const storeId = Number(opts.storeId);
+  if (!Number.isInteger(storeId) || storeId <= 0) return null;
+  if (!opts.shoppingContext) return null;
+  const pageSize = opts.pageSize && opts.pageSize > 0 ? Math.min(opts.pageSize, 60) : 40;
+  return `(async function () {
+${GQL_FN}
+${CANDIDATE_HELPERS}
+  var TERM = ${JSON.stringify(term)};
+  var post = function (o) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
+  };
+  var fail = function (why, detail) {
+    post({ type: 'SEARCH_RESULT_FAILED', source: 'network', why: why, detail: detail || null, term: TERM });
+  };
+
+  var res = await __hebGql('productSearchPageV2', ${JSON.stringify(SEARCH_QUERY)}, {
+    params: {
+      query: TERM,
+      storeId: ${storeId},
+      shoppingContext: ${JSON.stringify(opts.shoppingContext)},
+      // Asked for, rather than filtered out afterwards. The page reader has to
+      // recognise sponsored tiles and drop them; not requesting them means they
+      // can never be mistaken for a result in the first place.
+      excludeSponsoredContent: true,
+      // Out of stock still comes back, flagged. The review screen needs to be
+      // able to SAY an item is out of stock rather than silently finding nothing.
+      includeOutOfStock: true,
+      pageSize: ${pageSize},
+    },
+  }, 9000);
+  if (!res.ok) { fail(res.why, res.detail || (res.status ? 'status ' + res.status : null)); return; }
+
+  var page = null;
+  try { page = res.data.productSearchPageV2; } catch (e) {}
+  if (!page) { fail('unexpected_shape'); return; }
+  if (page.__typename === 'SearchPageError') { fail('search_page_error', (page.message || page.code || '').slice(0, 160)); return; }
+
+  var items = __hebGridItems(page);
+  if (items == null) {
+    // See the batch script: no grid on a well-formed page means the store has
+    // nothing, which is an answer rather than a reason to load a page.
+    post({ type: 'SEARCH_RESULT', source: 'network', term: TERM, candidates: [], noGrid: true });
+    return;
+  }
+
+  post({ type: 'SEARCH_RESULT', source: 'network', term: TERM, candidates: __hebCandidates(items) });
+
+})(); true;`;
+}
+
+/**
+ * Search MANY terms from ONE page, with no navigation between them.
+ *
+ * This is where the time actually goes. The parallel worker pool exists to load
+ * four results pages at once, because loading a page is what costs ~1.8 s per
+ * ingredient. A network search needs no page at all: the WebView is already on
+ * the store with a live session, so twelve ingredients are twelve requests from
+ * where we already are.
+ *
+ * Measured single-search latency is ~280 ms, so a twelve-item run is a few
+ * seconds of network against 22.5 s of navigation — and it needs no worker
+ * WebViews, which is also where the memory goes (about 187 MB of the peak).
+ *
+ * CONCURRENCY IS DELIBERATELY SMALL. The bot defence did not react to 30 writes
+ * at ~2/s (MEAL-115), and this is lighter than that, but a burst of twelve
+ * simultaneous requests is a different shape from anything measured. Three at a
+ * time stays inside what has been observed while still finishing quickly.
+ *
+ * Each term posts its own SEARCH_RESULT or SEARCH_RESULT_FAILED as it lands, so
+ * the caller can fall back to loading a page for JUST the terms that failed
+ * rather than abandoning the whole batch.
+ */
+export function buildHebNetworkSearchBatchScript(
+  terms: string[],
+  opts: { storeId: string; shoppingContext: string; pageSize?: number; concurrency?: number },
+): string | null {
+  const storeId = Number(opts.storeId);
+  if (!Number.isInteger(storeId) || storeId <= 0) return null;
+  if (!opts.shoppingContext) return null;
+  if (!terms.length) return null;
+  const pageSize = opts.pageSize && opts.pageSize > 0 ? Math.min(opts.pageSize, 60) : 40;
+  const concurrency = Math.max(1, Math.min(opts.concurrency ?? 3, 4));
+  return `(async function () {
+${GQL_FN}
+  var TERMS = ${JSON.stringify(terms)};
+  var post = function (o) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
+  };
+
+${CANDIDATE_HELPERS}
+
+  var searchOne = async function (term) {
+    var res = await __hebGql('productSearchPageV2', ${JSON.stringify(SEARCH_QUERY)}, {
+      params: {
+        query: term,
+        storeId: ${storeId},
+        shoppingContext: ${JSON.stringify(opts.shoppingContext)},
+        excludeSponsoredContent: true,
+        includeOutOfStock: true,
+        pageSize: ${pageSize},
+      },
+    }, 9000);
+    if (!res.ok) {
+      post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term,
+             why: res.why, detail: res.detail || (res.status ? 'status ' + res.status : null) });
+      return;
+    }
+    var page = null;
+    try { page = res.data.productSearchPageV2; } catch (e) {}
+    if (!page) { post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'unexpected_shape' }); return; }
+    if (page.__typename === 'SearchPageError') {
+      post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'search_page_error',
+             detail: String(page.message || page.code || '').slice(0, 160) });
+      return;
+    }
+    var items = __hebGridItems(page);
+    if (items == null) {
+      // A well-formed SearchPage with no product grid is the store saying it has
+      // NOTHING for this term — a no-results page renders a different set of
+      // components (suggestions, promos) instead of an empty grid. That is a real
+      // answer, not a transport failure, so it must not send the caller off to
+      // load a page: the page would show the same nothing, 1.8 s later.
+      //
+      // The component names ride along so the day this assumption is wrong is a
+      // day someone can see in the log rather than infer from bad matches.
+      var seen = [];
+      try {
+        var vcs = page.layout.visualComponents;
+        for (var v = 0; v < vcs.length; v++) if (vcs[v] && vcs[v].__typename) seen.push(vcs[v].__typename);
+      } catch (e) {}
+      post({ type: 'SEARCH_RESULT', source: 'network', term: term, candidates: [],
+             noGrid: true, components: seen.join(',') });
+      return;
+    }
+    post({ type: 'SEARCH_RESULT', source: 'network', term: term, candidates: __hebCandidates(items) });
+  };
+
+  // A fixed-size worker pool over the term list. Not Promise.all: twelve
+  // simultaneous requests is a burst shape nothing has measured, and the point
+  // of this rail is to stop guessing about what the store tolerates.
+  var next = 0;
+  var runner = async function () {
+    while (true) {
+      var i = next++;
+      if (i >= TERMS.length) return;
+      try { await searchOne(TERMS[i]); }
+      catch (e) {
+        post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: TERMS[i],
+               why: 'threw', detail: String(e).slice(0, 120) });
+      }
+    }
+  };
+  var lanes = [];
+  for (var L = 0; L < ${concurrency}; L++) lanes.push(runner());
+  await Promise.all(lanes);
+  post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length });
+})(); true;`;
+}
+
+/**
+ * Add many products by request, from one page, with no navigation.
+ *
+ * Each item arrives already MATCHED — product id, sku and quantity decided by the
+ * caller from search results — so this script makes no product choices. It reads
+ * the cart once for a baseline, issues one write per item, and reads once more.
+ *
+ * QUANTITY IS CART-ABSOLUTE. The store SETS a line rather than incrementing it,
+ * so each write sends (what the cart already holds) + (what was asked for). The
+ * card label cannot be used for that baseline here — there is no card — and it
+ * could not be trusted anyway (MEAL-187). No usable cart read means no writes at
+ * all, reported as such, because the alternative is setting lines to a number
+ * derived from nothing.
+ *
+ * DECLINES weight-priced items, for the same reason the click-path rail does: a
+ * count line can be set back to zero, a weight line cannot be undone at all
+ * (MEAL-200). Those come back with a reason so the caller can route them to the
+ * page path instead.
+ */
+export function buildHebNetworkAddBatchScript(
+  items: Array<{
+    idx: number; productId: string; skuId: string; quantity: number; name: string;
+    isWeightItem?: boolean;
+    /** The chosen purchase preference, for products that offer them (deli
+     *  thickness, avocado ripeness). Absent means "no preference stated". */
+    purchasePreferenceId?: string | null;
+    /** The store's per-item cap, when known. */
+    maxOrderQuantity?: number | null;
+  }>,
+  opts?: { concurrency?: number },
+): string | null {
+  const usable = items.filter(
+    (i) => i && i.productId && i.skuId && Number.isInteger(i.quantity) && i.quantity > 0,
+  );
+  if (!usable.length) return null;
+  const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 2, 3));
+  return `(async function () {
+${GQL_FN}
+  var ITEMS = ${JSON.stringify(usable)};
+  var post = function (o) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
+  };
+  // Named, not positional, and deliberately so: the taxonomy guard in
+  // tests/unit/automationTelemetry.test.ts finds reasons by scanning for
+  // single-quoted snake_case on a line mentioning "reason". Passed positionally,
+  // every reason in this file was invisible to it — the guard was silently
+  // disarmed for what is now the primary rail, which is the exact failure it was
+  // written to catch.
+  var report = function (it, ok, reason, detail) {
+    post({ type: 'NET_ADD_RESULT', idx: it.idx, name: it.name, productId: it.productId,
+           skuId: it.skuId, asked: it.quantity, success: !!ok, reason: reason || null,
+           detail: detail || null });
+  };
+  // One per line, each carrying the word the scanner looks for. An uppercase
+  // constant name did NOT work: the guard matches a lowercase word-boundary
+  // "reason", so the first attempt at this list was invisible too and the test
+  // went on passing.
+  var reasonCatalog = [
+    { reason: 'no_cart_baseline' },
+    { reason: 'weight_item_declined' },
+    { reason: 'multiple_cart_lines' },
+    { reason: 'cart_line_is_weight' },
+    { reason: 'preference_line_ambiguous' },
+    { reason: 'quantity_limit_reached' },
+    { reason: 'error_arm' },
+    { reason: 'unexpected_shape' },
+    { reason: 'threw' },
+    { reason: 'blocked' },
+    { reason: 'http' },
+    { reason: 'unparseable' },
+    { reason: 'graphql_error' },
+    { reason: 'timeout' },
+    { reason: 'network' },
+  ];
+  void reasonCatalog;
+
+  var CART = 'query CartLines { cartV2 { __typename'
+    + ' ... on Cart { id items { id quantity estimatedWeight product { id fullDisplayName }'
+    + '   sku { id } } }'
+    + ' ... on CartError { code title message } } }';
+  var ADD = 'mutation cartItemV2($productId: String!, $skuId: String!, $quantity: Int,'
+    + ' $purchasePreferenceId: String) {'
+    + ' addItemToCartV2(productId: $productId, skuId: $skuId, quantity: $quantity,'
+    + ' purchasePreferenceId: $purchasePreferenceId) {'
+    + ' __typename'
+    + ' ... on Cart { id }'
+    + ' ... on AddOnsCart { id cart { id } }'
+    + ' ... on AddItemToCartV2Error { message title code }'
+    + ' ... on AddItemToCartV2TimeslotError { message title errorCode: code } } }';
+
+  var readCart = async function () {
+    var r = await __hebGql('CartLines', CART, {}, 8000);
+    if (!r.ok) return null;
+    try {
+      var c = r.data.cartV2;
+      if (!c || c.__typename !== 'Cart') return null;
+      return c.items || [];
+    } catch (e) { return null; }
+  };
+  // Summed across every line for the product, because one product can hold
+  // several lines keyed by preference — and reported with the COUNT, because the
+  // write sets ONE line and cannot address a product that holds more than one.
+  var held = function (lines, pid) {
+    if (!lines) return null;
+    var qty = 0, n = 0, weight = false;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      var lp = l && l.product && l.product.id;
+      if (lp == null || String(lp) !== String(pid)) continue;
+      qty += (l.quantity || 0); n++;
+      if (l.estimatedWeight != null) weight = true;
+    }
+    return { qty: qty, lines: n, weight: weight };
+  };
+
+  var before = await readCart();
+  if (before == null) {
+    // No baseline means no way to know what to SET. Guessing would drop whatever
+    // the cart already held, silently.
+    for (var i = 0; i < ITEMS.length; i++) report(ITEMS[i], false, 'no_cart_baseline');
+    post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0 });
+    return;
+  }
+
+  var wrote = 0;
+  var next = 0;
+  var runner = async function () {
+    while (true) {
+      var k = next++;
+      if (k >= ITEMS.length) return;
+      var it = ITEMS[k];
+      try {
+        if (it.isWeightItem) { report(it, false, 'weight_item_declined'); continue; }
+        var h = held(before, it.productId);
+        if (h && h.weight) { report(it, false, 'cart_line_is_weight'); continue; }
+        if (h && h.lines > 1) { report(it, false, 'multiple_cart_lines'); continue; }
+        // A single existing line is not necessarily OUR line.
+        //
+        // held() sums across every line for the product, and lines are keyed by
+        // preference. One existing line of 2 under "Ripe", plus a write for the
+        // same product under "Firm", makes base 2 — so the new Firm line is set
+        // to 2 + asked while the Ripe line keeps its 2, and the cart ends up
+        // over by 2. The multi-line guard above does not catch it because there
+        // is only one line so far.
+        //
+        // The cart read does not tell us which preference a line belongs to, so
+        // there is nothing to reconcile against: decline and let the user add it
+        // on the page, where the variants are visible.
+        if (it.purchasePreferenceId && h && h.lines > 0) {
+          report(it, false, 'preference_line_ambiguous', 'cart already holds ' + h.qty + ' of this product');
+          continue;
+        }
+        var base = h ? h.qty : 0;
+        var want = base + it.quantity;
+
+        // The store's per-item cap, respected BEFORE asking.
+        //
+        // The write sets an absolute quantity, so cart-held + asked can exceed
+        // the cap and the store refuses the whole write — "Quantity limit
+        // reached." is what an avocado got on the first full device run, because
+        // earlier test runs had already put several in the cart.
+        //
+        // Clamping is right where it still adds something, and wrong where it
+        // does not: clamping to a number the cart ALREADY holds would write no
+        // change and report success, which is an under-add dressed as a win. So
+        // a cap already reached is reported as its own reason instead.
+        var cap = (typeof it.maxOrderQuantity === 'number' && it.maxOrderQuantity > 0) ? it.maxOrderQuantity : null;
+        if (cap != null && want > cap) {
+          if (base >= cap) { report(it, false, 'quantity_limit_reached', 'cart already holds ' + base + ' of ' + cap); continue; }
+          want = cap;
+        }
+
+        var vars = { productId: it.productId, skuId: it.skuId, quantity: want };
+        // Only sent when there is one. A null preference on a product that
+        // offers them is a different statement from an absent one, and the
+        // store's own site omits the field rather than nulling it.
+        if (it.purchasePreferenceId) vars.purchasePreferenceId = it.purchasePreferenceId;
+        var res = await __hebGql('cartItemV2', ADD, vars, 9000);
+        if (!res.ok) { report(it, false, res.why, res.detail || null); continue; }
+        var arm = null, msg = null;
+        try {
+          var a = res.data.addItemToCartV2;
+          arm = a && a.__typename;
+          msg = a && a.message ? String(a.message).slice(0, 160) : null;
+        } catch (e) {}
+        // AddOnsCart wraps a cart — the item went in. Reading it as a failure
+        // would send the caller on to add the same product a second way.
+        var ok = arm === 'Cart' || arm === 'AddOnsCart';
+        if (ok) wrote++;
+        // The sent quantity rides along so a clamped add is visible as a SHORT
+        // add rather than passing for a full one — the reconcile's own short-add
+        // detection then reports it to the user.
+        post({ type: 'NET_ADD_RESULT', idx: it.idx, name: it.name, productId: it.productId,
+               skuId: it.skuId, asked: it.quantity, sent: want, base: base,
+               preferenceId: it.purchasePreferenceId || null,
+               success: ok, reason: ok ? null : (arm ? 'error_arm' : 'unexpected_shape'),
+               detail: msg || null });
+      } catch (e) {
+        report(it, false, 'threw', String(e).slice(0, 120));
+      }
+    }
+  };
+  var lanes = [];
+  for (var L = 0; L < ${concurrency}; L++) lanes.push(runner());
+  await Promise.all(lanes);
+
+  // One read after, so the caller has the cart's own account of what landed
+  // rather than only the store's per-write answer.
+  var after = await readCart();
+  post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: wrote,
+         cartLines: after ? after.length : null });
+})(); true;`;
+}

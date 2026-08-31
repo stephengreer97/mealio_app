@@ -56,6 +56,11 @@ import { HebAddConfirmation } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
+import {
+  buildHebNetworkAddBatchScript,
+  buildHebNetworkSearchBatchScript,
+  buildHebSessionScript,
+} from '../lib/webview-scripts/heb-network-search';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -77,7 +82,9 @@ interface Candidate {
   productName: string;
   imageUrl: string | null;
   outOfStock: boolean;
-  preferences: Array<{ text: string; value: string }> | null;
+  /** `preferenceId` is present only on network candidates — the page path builds
+   *  these from a modal row label and has no id to give. */
+  preferences: Array<{ text: string; value: string; preferenceId?: string }> | null;
   price: string | null;
   isWeightItem?: boolean;
   /** For sold-by-weight items: the buyable weights (lb) from the addByWeight
@@ -90,6 +97,9 @@ interface Candidate {
   productId?: string | null;
   /** Store's SKU id, same availability caveat as productId. */
   skuId?: string | null;
+  /** The store's per-item cap, when the extractor can see one. The network write
+   *  sets an ABSOLUTE quantity, so cart-held + asked can exceed it. */
+  maxOrderQuantity?: number | null;
 }
 
 interface SearchResult {
@@ -98,7 +108,12 @@ interface SearchResult {
   mealIngredients: MealIngredientQty[];
   unit: string;
   measure: string | null;
-  reason: 'out_of_stock' | 'no_results' | 'low_confidence' | 'needs_weight';
+  /** `quantity_limit_reached` is MEAL-202's: the cart already holds the store's
+   *  per-item maximum, so there is nothing this run can add and a retry cannot
+   *  change that. It reaches the review screen like any other definitive
+   *  failure. */
+  reason: 'out_of_stock' | 'no_results' | 'low_confidence' | 'needs_weight'
+    | 'quantity_limit_reached' | 'needs_preference';
   isChoose: boolean; // true = choose-product flow (no searchTerm yet); false = review unmatched (searchTerm set but no match)
 }
 
@@ -785,6 +800,34 @@ export default function WebViewCartSheet({
     setTotalFailed(stillFailed.length);
   }, [setFailedItems]);
   const activeItemsRef = useRef<ConsolidatedIngredient[]>([]);
+  // ── Network run (MEAL-202) ────────────────────────────────────────────────
+  // Search and add by asking the store, from one page, with no navigation. The
+  // pools exist to load results pages concurrently; this needs no page, so it
+  // replaces them rather than driving them.
+  //
+  // Everything it produces is funnelled into finishParallelAdd, the SAME
+  // completion the add pool calls, so the reconcile, the review routing, the
+  // done screen and the telemetry are untouched and cannot disagree with a
+  // pool-driven run.
+  const netSessionRef = useRef<{ storeId: string; shoppingContext: string } | null>(null);
+  const netCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
+  const netFailedTermsRef = useRef<Set<string>>(new Set());
+  const netResultsRef = useRef<Map<number, AddResult>>(new Map());
+  const netActiveRef = useRef(false);
+  const netPhaseRef = useRef<'idle' | 'session' | 'search' | 'add'>('idle');
+  const netTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** One write can speak for several items (same product, two ingredients).
+   *  Maps the write's index to every item index it answers for. */
+  const netWriteFanoutRef = useRef<Map<number, number[]>>(new Map());
+  // Items the store refused because the cart ALREADY holds its per-item maximum.
+  // Held separately from the failed list because "we could not add this" and
+  // "your cart is already at the limit for this" are different things to be
+  // told: the second is not a failure of the run, and re-running will not help.
+  const [capReached, setCapReached] = useState<Array<{ name: string; detail: string }>>([]);
+  // The pool path is declared BELOW the network path (it is the thing the
+  // network path falls back to, so it reads better after it). A ref breaks the
+  // cycle without reordering two hundred lines.
+  const startParallelAddRef = useRef<() => void>(() => {});
   // ── Manual add mode (MEAL-197 / MEAL-9 rung 3) ─────────────────────────────
   // The queue is search TERMS, not ingredients. Everything this mode needs is a
   // string to search for and a string to show the user, and `failedItems` is
@@ -1415,6 +1458,297 @@ export default function WebViewCartSheet({
     triggerCartProbe('reconcile');
   }, [triggerCartProbe]);
 
+  // ── The network run (MEAL-202) ────────────────────────────────────────────
+  //
+  // Three phases, each driven by one injected script on the MAIN WebView:
+  //   session -> search every term -> add every matched item
+  //
+  // Nothing navigates. That is the entire speed argument: the ~1.8 s per
+  // ingredient the pools exist to parallelise is page loading, and this does not
+  // load pages.
+  //
+  // Any phase that cannot answer hands the whole run back to the pool path. That
+  // is not caution for its own sake — a half-network run would have to reconcile
+  // two different notions of what was attempted, and the pool path already works.
+
+  /** Give up on the network and run the item set the way it has always run. */
+  const netFallBackToPool = useCallback((why: string) => {
+    if (!netActiveRef.current) return;
+    netActiveRef.current = false;
+    netPhaseRef.current = 'idle';
+    if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+    console.log(`[Cart ${ts()}]`, 'network run: falling back to the pool —', why);
+    tel().record('search', 'error', { detail: { phase: 'network_fallback', why }, code: 'match_rejected' });
+    startParallelAddRef.current();
+  }, []);
+
+  /**
+   * The add phase's deadline. Finalizes with what has come back instead of
+   * handing over to the pool, because the pool would write a second time.
+   */
+  const netArmFinalize = useCallback((ms: number) => {
+    if (netTimeoutRef.current) clearTimeout(netTimeoutRef.current);
+    netTimeoutRef.current = setTimeout(() => {
+      netTimeoutRef.current = null;
+      if (!netActiveRef.current || netPhaseRef.current !== 'add') return;
+      netActiveRef.current = false;
+      netPhaseRef.current = 'idle';
+      console.log(`[Cart ${ts()}]`, 'network run: add phase timed out — finalizing with what landed');
+      tel().record('confirm', 'error', { detail: { phase: 'network_add_timeout' }, code: 'timeout' });
+      // Items with no result at all are unresolved, not failed: a write may have
+      // landed and simply not been reported, so claiming failure could send the
+      // reconcile to add them a second time.
+      const active = activeItemsRef.current;
+      for (let i = 0; i < active.length; i++) {
+        if (!netResultsRef.current.has(i)) {
+          netResultsRef.current.set(i, {
+            success: false, productName: null, reason: 'write_unresolved', candidates: [],
+          });
+        }
+      }
+      finishParallelAdd(netResultsRef.current);
+    }, ms);
+  }, [finishParallelAdd]);
+
+  /** Arm a deadline so a phase that never answers cannot strand the run. */
+  const netArm = useCallback((ms: number, why: string) => {
+    if (netTimeoutRef.current) clearTimeout(netTimeoutRef.current);
+    netTimeoutRef.current = setTimeout(() => {
+      netTimeoutRef.current = null;
+      netFallBackToPool(why);
+    }, ms);
+  }, [netFallBackToPool]);
+
+  /**
+   * Phase 3. Everything is matched; write it.
+   *
+   * Items with no exact match do not get written and do not fail silently — they
+   * become an unsuccessful AddResult carrying their candidates, which is exactly
+   * what a pool worker produces when it cannot match, so they land on the review
+   * screen by the ordinary route.
+   */
+  const netStartAdds = useCallback(() => {
+    const active = activeItemsRef.current;
+    const sess = netSessionRef.current;
+    if (!sess) { netFallBackToPool('no_session_at_add'); return; }
+
+    const toWrite: Array<{
+      idx: number; productId: string; skuId: string; quantity: number; name: string;
+      isWeightItem?: boolean; purchasePreferenceId?: string | null; maxOrderQuantity?: number | null;
+    }> = [];
+    netResultsRef.current = new Map();
+
+    for (let idx = 0; idx < active.length; idx++) {
+      const item = active[idx];
+      const term = item.searchTerm ?? item.ingredientName;
+      // A term the network could not answer for is not "no match" — it is "not
+      // asked", so it must not be reported as though the store had nothing.
+      //
+      // It does NOT take the run with it. Falling the whole run back for one
+      // unanswered term threw away eleven good answers and re-ran the entire
+      // search the slow way — measured doing exactly that on the first device
+      // run. The item goes to review instead, which is where an item nobody
+      // could answer for belongs, and the user can pick or skip it.
+      if (netFailedTermsRef.current.has(term)) {
+        netResultsRef.current.set(idx, {
+          success: false, productName: null, reason: 'search_unanswered', candidates: [],
+        });
+        continue;
+      }
+      const candidates = netCandidatesRef.current.get(term) ?? [];
+      // The SAME rule the page path uses: an exact name, in stock. Anything
+      // looser here would add a product the user did not ask for, which is the
+      // one thing the cart rules never allow.
+      const exact = candidates.filter((c) => scoreMatch(term, c.productName) === 100);
+      const match = exact.find((c) => !c.outOfStock && c.productId && c.skuId);
+      if (!match) {
+        // The reason has to distinguish three different situations, because the
+        // reconcile routes on it and one of them must NOT be retried.
+        //
+        // An exact match that is OUT OF STOCK is a definitive failure: the store
+        // has the product and will not sell it today, so re-running the same
+        // search finds the same thing. Reporting it as low_confidence sent it to
+        // the reconcile's top-up, which abandoned a rail that answered in 280 ms
+        // and LOADED A PAGE to be told the same thing 1.8 s later — measured
+        // doing exactly that on a device run.
+        const outOfStockExact = exact.length > 0 && exact.every((c) => c.outOfStock);
+        netResultsRef.current.set(idx, {
+          success: false,
+          productName: outOfStockExact ? exact[0].productName : null,
+          reason: candidates.length === 0
+            ? 'no_results'
+            : outOfStockExact ? 'out_of_stock' : 'low_confidence',
+          candidates,
+        });
+        continue;
+      }
+      if (match.isWeightItem) {
+        // Sold by weight: the user has to choose a weight, and an over-add on one
+        // cannot be undone (MEAL-200). Route it to review like any unmatched item.
+        netResultsRef.current.set(idx, {
+          success: false, productName: match.productName, reason: 'needs_weight', candidates,
+        });
+        continue;
+      }
+      // The preference the user already chose, matched to the store's id for it.
+      //
+      // The page path clicks a modal row by its LABEL; the network path states an
+      // id. Both come from the same choice, so the id is looked up by the label
+      // that was chosen rather than asking again.
+      //
+      // A PRODUCT THAT OFFERS PREFERENCES IS NEVER WRITTEN ON A GUESS. Two ways
+      // that could happen, and both add a variant nobody asked for:
+      //
+      //   - the user chose nothing, so the store would apply its own default —
+      //     the page path refuses this too, declining to pick a card with a
+      //     preference popup unless a choice was supplied (heb.ts);
+      //   - the user chose something but the saved LABEL does not match any of
+      //     the network's preference texts. The label was captured from a DOM
+      //     modal row and these come from purchasePreferenceList, so wording or
+      //     whitespace can drift. Sending nothing then means the store picks,
+      //     and the run reports success for a variant the user did not choose.
+      //
+      // Either way it goes to review, where the user picks on the page. Silence
+      // is the one outcome not available.
+      const offersPreference = (match.preferences ?? []).some((pr) => pr.preferenceId);
+      const chosenLabel = item.dropdown?.selectedText ?? null;
+      const preference = chosenLabel
+        ? (match.preferences ?? []).find((pr) => pr.text === chosenLabel)
+        : undefined;
+      if (offersPreference && !preference?.preferenceId) {
+        netResultsRef.current.set(idx, {
+          success: false,
+          productName: match.productName,
+          reason: 'needs_preference',
+          candidates,
+        });
+        continue;
+      }
+      // Re-read after the find: the predicate proved these are present, but that
+      // narrowing does not survive out of it.
+      const productId = match.productId;
+      const skuId = match.skuId;
+      if (!productId || !skuId) {
+        netResultsRef.current.set(idx, {
+          success: false, productName: match.productName, reason: 'low_confidence', candidates,
+        });
+        continue;
+      }
+      toWrite.push({
+        idx,
+        productId,
+        skuId,
+        quantity: Math.max(1, Math.round(item.productQty || 1)),
+        name: match.productName,
+        isWeightItem: false,
+        purchasePreferenceId: preference?.preferenceId ?? null,
+        // The store's per-item cap. The write sets an ABSOLUTE quantity, so
+        // cart-held + asked can exceed it and the store refuses the whole write —
+        // which is what "Quantity limit reached." was on the first full device
+        // run, for an avocado earlier test runs had already stocked up on.
+        maxOrderQuantity: match.maxOrderQuantity ?? null,
+      });
+    }
+
+    // ── Finding 3: two entries for one product would UNDER-add ───────────────
+    //
+    // The write is absolute and the cart baseline is read once, so two writes for
+    // the same product become set(base+q1) then set(base+q2) — a final quantity
+    // of base + max(q1,q2), not base + q1 + q2. Reachable on a mixed run:
+    // consolidateIngredients deliberately does not merge ingredients that have no
+    // searchTerm across meals, and both entries then resolve to the same product.
+    //
+    // Coalesced here rather than in the script, because the caller is the only
+    // one that knows which item INDEXES each write speaks for — and every index
+    // still needs its own result.
+    const byProduct = new Map<string, typeof toWrite[number] & { forIdx: number[] }>();
+    for (const w of toWrite) {
+      const prior = byProduct.get(w.productId);
+      if (prior) {
+        prior.quantity += w.quantity;
+        prior.forIdx.push(w.idx);
+      } else {
+        byProduct.set(w.productId, { ...w, forIdx: [w.idx] });
+      }
+    }
+    const coalesced = [...byProduct.values()];
+    if (coalesced.length !== toWrite.length) {
+      console.log(`[Cart ${ts()}]`, 'network run: coalesced', toWrite.length, 'writes into', coalesced.length);
+    }
+    // One write speaks for several items; each of them gets its result.
+    netWriteFanoutRef.current = new Map(coalesced.map((c) => [c.idx, c.forIdx]));
+
+    if (toWrite.length === 0) {
+      console.log(`[Cart ${ts()}]`, 'network run: nothing matched exactly — straight to review');
+      netActiveRef.current = false;
+      netPhaseRef.current = 'idle';
+      finishParallelAdd(netResultsRef.current);
+      return;
+    }
+
+    const script = buildHebNetworkAddBatchScript(coalesced);
+    if (!script) { netFallBackToPool('add_script_unbuildable'); return; }
+    netPhaseRef.current = 'add';
+    setStep('adding');
+    setSearchingLabel(`Adding ${toWrite.length} ingredients…`);
+    console.log(`[Cart ${ts()}]`, 'network run: writing', toWrite.length, 'of', active.length);
+    // ONCE WRITING STARTS, FALLING BACK TO THE POOL IS FORBIDDEN.
+    //
+    // Every other phase can hand the run over safely because nothing has been
+    // written yet. This one cannot: the pool re-adds the FULL active list by
+    // clicking, and its click loop baselines off the card label — which by then
+    // reflects our own writes — so it targets label + qty and the user ends up
+    // with roughly double.
+    //
+    // The deadline was 45 s against a worst case of 62 s (an 8 s cart read plus
+    // six waves of 9 s), so a slow or throttled store could reach it while writes
+    // were still landing. It is longer now, and when it does fire it finalizes
+    // with whatever came back rather than starting a second adding pass. The cart
+    // read in the reconcile is what settles the truth either way.
+    netArmFinalize(75_000);
+    webviewRef.current?.injectJavaScript(script);
+  }, [finishParallelAdd, netArm, netArmFinalize, netFallBackToPool, setStep]);
+
+  /** Phase 2. One script, every term, no navigation. */
+  const netStartSearch = useCallback(() => {
+    const active = activeItemsRef.current;
+    const sess = netSessionRef.current;
+    if (!sess) { netFallBackToPool('no_session'); return; }
+    const terms = Array.from(new Set(active.map((i) => i.searchTerm ?? i.ingredientName).filter(Boolean)));
+    if (!terms.length) { netFallBackToPool('no_terms'); return; }
+    const script = buildHebNetworkSearchBatchScript(terms, sess);
+    if (!script) { netFallBackToPool('search_script_unbuildable'); return; }
+    netCandidatesRef.current = new Map();
+    netFailedTermsRef.current = new Set();
+    netPhaseRef.current = 'search';
+    setStep('searching');
+    setSearchingLabel(`Searching ${terms.length} ingredients…`);
+    console.log(`[Cart ${ts()}]`, 'network run: searching', terms.length, 'terms with no page load');
+    netArm(40_000, 'search_timeout');
+    webviewRef.current?.injectJavaScript(script);
+  }, [netArm, netFallBackToPool, setStep]);
+
+  /** Phase 1. Who is signed in, which store, pickup or delivery. */
+  const startNetworkRun = useCallback(() => {
+    netActiveRef.current = true;
+    netSessionRef.current = null;
+    netPhaseRef.current = 'session';
+    setStep('searching');
+    setSearchingLabel('Connecting…');
+    console.log(`[Cart ${ts()}]`, 'network run: reading the session');
+    // Tried now AND re-tried on the next store page load.
+    //
+    // Every request here is same-origin, so the script is useless unless the
+    // WebView is actually sitting on the store. It usually is by this point —
+    // the login check and the cart baseline both put it there — but "usually"
+    // produced a 20 s session timeout on the second device run, where this fired
+    // while the page was still mid-navigation and the injection went nowhere.
+    // Re-injecting is safe: the script only reads, and a duplicate answer is
+    // ignored once the phase has moved on.
+    netArm(25_000, 'session_timeout');
+    webviewRef.current?.injectJavaScript(buildHebSessionScript());
+  }, [netArm, setStep]);
+
   const startParallelAdd = useCallback(() => {
     const active = activeItemsRef.current;
     if (active.length === 0) return;
@@ -1424,6 +1758,7 @@ export default function WebViewCartSheet({
     setSearchingLabel(`Adding ${active.length} ingredients…`);
     addPool.start(active, finishParallelAdd);
   }, [addPool, finishParallelAdd, setStep]);
+  startParallelAddRef.current = startParallelAdd;
 
   const onAddWorkerMessage = useCallback((workerId: number, event: WebViewMessageEvent) => {
     try {
@@ -1545,6 +1880,7 @@ export default function WebViewCartSheet({
       // same ingredient from the next meal's offer, `manualUsedRef` re-probes
       // the cart on every later run, and `copiedList` says "Copied" before
       // anything has been copied.
+      setCapReached([]);
       setManualQueue([]);
       setManualIdx(0);
       setManualHandled([]);
@@ -2359,15 +2695,26 @@ export default function WebViewCartSheet({
     // for why these conditions no longer live inline. Flags are read off the ref
     // for the same reason `s` is resolved live above: this callback's deps do not
     // include the config.
+    // The network route needs BOTH switches: searching over the network and then
+    // clicking to add would be a run that loads no page for search and then
+    // loads one per item anyway, which is slower than either path alone.
+    const netCfg = getAutomationConfig().stores?.[lockedStoreIdRef.current ?? ''] ?? {};
+    const networkCapable = netCfg.networkSearch === true
+      && netCfg.networkAdd === true
+      && netCfg.cartSkuConfirm === true
+      && lockedStoreIdRef.current === 'heb';
     const strategy = chooseAddStrategy({
       canParallel,
       allChoose,
       presearchCommitArmed: presearchCommitArmedRef.current,
       features: { presearchAdd: FEATURE_PRESEARCH_ADD, parallelAdd: FEATURE_PARALLEL_ADD },
       flags: cfgFlagsRef.current,
+      networkCapable,
     });
     console.log(`[Cart ${ts()}]`, 'beginSearchFlow: strategy=', strategy);
-    if (strategy === 'presearch') {
+    if (strategy === 'network') {
+      startNetworkRun();
+    } else if (strategy === 'presearch') {
       // Parked pre-search workers are ready — commit their adds instead of the
       // fused pool. The before-snapshot already ran, so the reconcile is sound.
       startPresearchCommit();
@@ -2380,7 +2727,7 @@ export default function WebViewCartSheet({
     } else {
       navigateToSearchItem(0);
     }
-  }, [startParallelSearch, startParallelAdd, navigateToSearchItem, startPresearchCommit]);
+  }, [startParallelSearch, startParallelAdd, navigateToSearchItem, startPresearchCommit, startNetworkRun]);
 
   // Snapshot the cart BEFORE any adds, then start the search. For cart-page
   // stores (HEB, Albertsons family) navigate to the cart URL, count there, and
@@ -2495,6 +2842,13 @@ export default function WebViewCartSheet({
     // with its own blast radius across 20+ banners; MEAL-136 fixed the host.
     if (!s || !url.includes(s.domain)) {
       console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'skipped: not store domain');
+      return;
+    }
+    // A network run waiting on its session: the injection at run start can land
+    // while the page is mid-navigation and go nowhere. This is the retry.
+    if (netActiveRef.current && netPhaseRef.current === 'session') {
+      console.log(`[Cart ${ts()}]`, 'network run: re-reading the session on', url.slice(0, 60));
+      webviewRef.current?.injectJavaScript(buildHebSessionScript());
       return;
     }
     // Manual mode injects NOTHING (MEAL-197). Checked before every other branch
@@ -3140,7 +3494,18 @@ export default function WebViewCartSheet({
             const retryItems: ConsolidatedIngredient[] = routing.retry.map(
               (t) => ({ ...active[t.index], productQty: t.shortfall }),
             );
-            const reviewFailures: SearchResult[] = outcome.definiteFailures.map((f) => {
+            const reviewFailures: SearchResult[] = outcome.definiteFailures
+              // A cap already met is definitive AND has nothing to review.
+              //
+              // It reaches the user through its own done-screen banner, which
+              // exists precisely so they are not told to go add it by hand — the
+              // store would refuse them too. A review card would say exactly
+              // that, with no candidates to pick from (the network add reports
+              // none) and no explanatory line for the reason, so it would render
+              // as a bare "pick a substitute" for an item whose problem is that
+              // the cart is already full of it.
+              .filter((f) => f.reason !== 'quantity_limit_reached')
+              .map((f) => {
               const item = active[f.index];
               return {
                 term: item.searchTerm || item.ingredientName,
@@ -3512,6 +3877,92 @@ export default function WebViewCartSheet({
           return;
         }
 
+        // ── Network run (MEAL-202) ──────────────────────────────────────
+        //
+        // These only ever arrive while a network run is in flight. Guarded on
+        // netActiveRef so a late message from an abandoned run cannot revive it
+        // after the pool has taken over — which would leave two paths writing
+        // results for the same items.
+        if (msg.type === 'HEB_SESSION') {
+          if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
+          if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+          console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));
+          if (!msg.ok) { netFallBackToPool('session_' + (msg.why || 'failed')); return; }
+          if (!msg.loggedIn) {
+            // The gate did its job. Hand the user the login screen exactly as the
+            // page-based login check would have.
+            netActiveRef.current = false;
+            netPhaseRef.current = 'idle';
+            setStep('login');
+            return;
+          }
+          if (!msg.storeId || !msg.shoppingContext) { netFallBackToPool('session_no_store'); return; }
+          netSessionRef.current = { storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext) };
+          netStartSearch();
+          return;
+        }
+        if (msg.type === 'SEARCH_RESULT_FAILED' && msg.source === 'network') {
+          if (!netActiveRef.current) return;
+          console.log(`[Cart ${ts()}]`, 'network search failed for', msg.term, '—', msg.why);
+          if (typeof msg.term === 'string') netFailedTermsRef.current.add(msg.term);
+          return;
+        }
+        if (msg.type === 'SEARCH_BATCH_DONE') {
+          if (!netActiveRef.current || netPhaseRef.current !== 'search') return;
+          if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+          console.log(`[Cart ${ts()}]`, 'network search done:', netCandidatesRef.current.size, 'answered,',
+            netFailedTermsRef.current.size, 'failed');
+          netStartAdds();
+          return;
+        }
+        if (msg.type === 'NET_ADD_RESULT') {
+          if (!netActiveRef.current || netPhaseRef.current !== 'add') return;
+          const at = typeof msg.idx === 'number' ? msg.idx : -1;
+          if (at < 0) return;
+          console.log(`[Cart ${ts()}]`, 'network add', msg.name, msg.success ? 'ok' : ('failed: ' + msg.reason));
+          if (!msg.success && msg.reason === 'quantity_limit_reached') {
+            setCapReached((prev) => (prev.some((c) => c.name === msg.name)
+              ? prev
+              : [...prev, { name: String(msg.name ?? ''), detail: String(msg.detail ?? '') }]));
+          }
+          // Per-item telemetry, which the network path had none of.
+          //
+          // addFailureCode is only reached from the SEARCH_AND_ADD_RESULT /
+          // ADD_RESULT handlers and the pool recorder, so every failure on this
+          // rail was landing on the dashboard as nothing at all — the primary
+          // path, invisible.
+          if (msg.success) {
+            tel().record('confirm', 'ok', { detail: { via: 'network', name: msg.name } });
+          } else {
+            tel().record('confirm', 'error', {
+              detail: { via: 'network', name: msg.name, reason: msg.reason, note: msg.detail },
+              code: addFailureCode(msg.reason),
+            });
+          }
+          const speaksFor = netWriteFanoutRef.current.get(at) ?? [at];
+          for (const target of speaksFor) {
+            netResultsRef.current.set(target, {
+              success: !!msg.success,
+              productName: msg.name ?? null,
+              reason: msg.success ? null : (msg.reason ?? 'cart_not_incremented'),
+              candidates: [],
+            });
+          }
+          return;
+        }
+        if (msg.type === 'NET_ADD_DONE') {
+          if (!netActiveRef.current || netPhaseRef.current !== 'add') return;
+          if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+          netActiveRef.current = false;
+          netPhaseRef.current = 'idle';
+          console.log(`[Cart ${ts()}]`, 'network run: wrote', msg.wrote, 'of', msg.count);
+          // The same completion the add pool calls. Everything after this point —
+          // the cart reconcile, the review routing, the done screen — cannot tell
+          // a network run from a pooled one, which is the point.
+          finishParallelAdd(netResultsRef.current);
+          return;
+        }
+
         // Popup-based login (e.g. Albertsons): background poll detected login success.
         if (msg.type === 'LOGIN_COMPLETE') {
           loginCheckActiveRef.current = false;
@@ -3655,6 +4106,17 @@ export default function WebViewCartSheet({
           return;
         }
 
+        // A network SEARCH_RESULT is keyed by TERM and collected for the batch,
+        // not fed to the sequential handler below — that one assumes it is the
+        // answer to the ONE item the run is currently walking, and a batch posts
+        // twelve of them in no particular order.
+        if (msg.type === 'SEARCH_RESULT' && msg.source === 'network') {
+          if (!netActiveRef.current || netPhaseRef.current !== 'search') return;
+          if (typeof msg.term === 'string' && Array.isArray(msg.candidates)) {
+            netCandidatesRef.current.set(msg.term, msg.candidates as Candidate[]);
+          }
+          return;
+        }
         if (msg.type === 'SEARCH_RESULT') {
           if (searchTimeoutRef.current) {
             clearTimeout(searchTimeoutRef.current);
@@ -5149,6 +5611,25 @@ export default function WebViewCartSheet({
                   title={`${skippedUnits} item${skippedUnits !== 1 ? 's' : ''} you skipped`}
                   body={skippedNames.join(', ')}
                 />
+              )}
+
+              {/* MEAL-202: the store's per-item cap, already met by what the cart
+                  holds. Its own banner rather than a line in "could not add",
+                  because it is not a failure of the run and re-running changes
+                  nothing — the user's cart simply already has as many as H-E-B
+                  will sell them. Saying only "could not add" would send them to
+                  add it by hand, which the store would refuse too. */}
+              {capReached.length > 0 && (
+                <View style={styles.skippedBanner} testID="snapshot-cap-reached">
+                  <Text style={styles.skippedBannerTitle}>
+                    {capReached.length} item{capReached.length !== 1 ? 's' : ''} already at {storeName}'s limit
+                  </Text>
+                  <Text style={styles.skippedBannerBody} numberOfLines={4}>
+                    {capReached.map((c) => c.name).join(', ')}
+                    {' — '}your cart already holds as many as {storeName} allows per order, so we
+                    did not add more.
+                  </Text>
+                </View>
               )}
 
               {/* MEAL-119: count items whose cart line came back priced by weight.

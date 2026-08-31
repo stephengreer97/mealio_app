@@ -291,3 +291,48 @@ describe('every declared flag reaches a decision', () => {
     }
   });
 });
+
+// ── MEAL-202: the network route ───────────────────────────────────────────────
+//
+// It is checked before everything else and ignores every other condition,
+// because none of them are about it. `canParallel` asks whether the store has a
+// search URL and a worker script — both are about loading pages, and this route
+// loads none.
+describe('chooseAddStrategy: the network route', () => {
+  const base = {
+    canParallel: false,
+    allChoose: false,
+    presearchCommitArmed: false,
+    features: { presearchAdd: true, parallelAdd: true },
+    flags: { parallelAdd: true },
+  };
+
+  it('wins over every pooled route when the store can do it', () => {
+    expect(chooseAddStrategy({ ...base, networkCapable: true })).toBe('network');
+    // Even with the pre-search pool armed, which otherwise takes precedence.
+    expect(chooseAddStrategy({
+      ...base, networkCapable: true, canParallel: true, presearchCommitArmed: true,
+    })).toBe('network');
+  });
+
+  it('does not need canParallel, which is about loading pages', () => {
+    // A store with no search URL cannot run the pool at all and would fall to
+    // serial. It can still run the network route: there is no page to load.
+    expect(chooseAddStrategy({ ...base, canParallel: false, networkCapable: true })).toBe('network');
+  });
+
+  it('stays out of a choose-only run', () => {
+    // Nothing is added on a choose run, so there is nothing for the network add
+    // to do and the pooled search already does the right thing.
+    expect(chooseAddStrategy({ ...base, networkCapable: true, allChoose: true, canParallel: true }))
+      .toBe('parallelSearch');
+  });
+
+  it('changes nothing when it is off', () => {
+    // The shipping default. Every existing route must resolve exactly as before.
+    expect(chooseAddStrategy({ ...base, canParallel: true })).toBe('parallelAdd');
+    expect(chooseAddStrategy({ ...base, canParallel: true, presearchCommitArmed: true })).toBe('presearch');
+    expect(chooseAddStrategy({ ...base, canParallel: true, allChoose: true })).toBe('parallelSearch');
+    expect(chooseAddStrategy({ ...base })).toBe('serial');
+  });
+});
