@@ -203,13 +203,17 @@ flowchart TD
     S3 --> FIN(["finishParallelAdd()"])
 
     FIN --> REC(["the ordinary reconcile, review routing,<br/>done screen and telemetry &mdash; unchanged"])
+    REC -->|"a genuine shortfall"| TOP["<b>top-up</b> &mdash; re-write the shortfall<br/><b>still no page load</b>"]
+    TOP --> DONE2(["done &mdash; the after-probe audits it"])
+    REC -->|"a retry item the network<br/>never matched"| PAGE(["the page path, for the WHOLE top-up"])
 
     classDef net fill:#1e3a8a,stroke:#3b82f6,color:#fff
     classDef warn fill:#4c1d95,stroke:#a78bfa,color:#fff
     classDef good fill:#14532d,stroke:#22c55e,color:#fff
     class S1,S2,S3 net
     class REV1,REV2,REV3,REV4,REV5,NORES,CAP,CLAMP warn
-    class FIN,REC good
+    class FIN,REC,DONE2 good
+    class TOP net
 </pre>
 <p>Three request parameters do more than the speed does.
 <code>excludeSponsoredContent</code> means the sponsored and "perfect pairings" tiles are never
@@ -228,6 +232,12 @@ under-add dressed as a win.</p>
 by its LABEL; the network path states a <code>purchasePreferenceId</code>. Both come from the same
 user choice, so the id is looked up by the label that was chosen rather than asking again. Nothing
 chosen means the field is OMITTED rather than nulled, which is what the storefront itself does.</p>
+<p><b>The top-up stays on the rail too.</b> The run already matched these products, so a shortfall
+is a write rather than a search &mdash; re-searching would spend ~1.8 s per item rediscovering an
+id already in hand. It must NOT go back through <code>finishParallelAdd</code>: a top-up is
+already the reconcile's own correction, so reconciling it again would find a shortfall and top up
+the top-up. And it never splits one correction across two rails &mdash; if any retry item has no
+id to write, the whole top-up takes the page path.</p>
 <p><b>Once writing starts, falling back to the page path is forbidden.</b> Every earlier phase can
 hand the run over safely because nothing has been written. This one cannot: the pool re-adds the
 whole list by clicking, and its loop baselines off the card label &mdash; which by then reflects
