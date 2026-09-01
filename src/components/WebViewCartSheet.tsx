@@ -32,7 +32,7 @@ import { getStores } from '../lib/store-catalog';
 import { useStores } from '../lib/store-catalog/useStores';
 import { buildBlankPageRecoveryScript } from '../lib/webview-scripts/blank-page-recovery';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
-import { getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
+import { getNetworkRail, railConfigKey, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
 import { planSearchResume } from '../lib/webview-scripts/resume-search';
 import CartRunAnimation from './CartRunAnimation';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
@@ -2544,7 +2544,9 @@ export default function WebViewCartSheet({
     // there is no pool to size, no worker script to look for, and nothing to
     // fall back to when a store cannot run one. A store either has a rail or the
     // user drives.
-    const netCfg = getAutomationConfig().stores?.[lockedStoreIdRef.current ?? ''] ?? {};
+    // Through railConfigKey: the Albertsons family shares one config entry, so a
+    // banner id finds nothing and reads as a store with no rail.
+    const netCfg = getAutomationConfig().stores?.[railConfigKey(lockedStoreIdRef.current)] ?? {};
     // Capability, not a store name. A store qualifies when it HAS a rail and both
     // of its switches are on. H-E-B additionally requires cartSkuConfirm, because
     // that is what makes its write verifiable — Albertsons verifies from the

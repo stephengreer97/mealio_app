@@ -6,7 +6,7 @@
 // A store silently losing its rail here would not fail loudly; it would quietly
 // go back to the markup heuristic this work exists to stop trusting.
 
-import { getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../../src/lib/webview-scripts/network-rail';
+import { railConfigKey, getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../../src/lib/webview-scripts/network-rail';
 import { ALBERTSONS_FAMILY_IDS } from '../../src/lib/webview-scripts/albertsons';
 
 describe('network rail resolution', () => {
@@ -70,5 +70,37 @@ describe('network rail resolution', () => {
     expect(getNetworkRail('albertsons')!.addBatch([
       { idx: 0, productId: 'p', quantity: 1, name: 'x' },
     ])).not.toBeNull();
+  });
+});
+
+describe('railConfigKey', () => {
+  // The Albertsons family is fifteen banners on one platform, and its config —
+  // selectors, kill switch, networkSearch/networkAdd — is stored ONCE under
+  // 'albertsons'. albertsons.ts always resolved it that way; the cart engine did
+  // not, so it read stores['safeway'], found nothing, and decided Safeway had no
+  // rail. Every banner but the one literally named 'albertsons' fell through to
+  // the page path, and after the DOM removal would have fallen through to
+  // assisted — a silent downgrade for fourteen stores.
+  it('folds every Albertsons banner onto the family key', () => {
+    for (const id of ALBERTSONS_FAMILY_IDS) {
+      expect(railConfigKey(id)).toBe('albertsons');
+    }
+    // Including the one that already matched, so the rule has no special case.
+    expect(railConfigKey('albertsons')).toBe('albertsons');
+  });
+
+  it('leaves every other store alone', () => {
+    expect(railConfigKey('heb')).toBe('heb');
+    expect(railConfigKey('walmart')).toBe('walmart');
+  });
+
+  it('is total — a missing store id is not a crash', () => {
+    expect(railConfigKey(null)).toBe('');
+    expect(railConfigKey(undefined)).toBe('');
+  });
+
+  it('covers a banner that HAS a rail, which is what makes this load-bearing', () => {
+    // If a banner ever stopped resolving a rail, the key would not matter.
+    expect(getNetworkRail('safeway')).not.toBeNull();
   });
 });
