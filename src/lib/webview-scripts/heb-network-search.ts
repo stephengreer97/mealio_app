@@ -640,6 +640,12 @@ ${GQL_FN}
           continue;
         }
         var base = h ? h.qty : 0;
+        // ADD ON TOP OF WHAT IS THERE. Stephen confirmed this on 2026-09-01,
+        // after a run that started on the previous run's 19 items and ended at
+        // 38. That is the cost of it and he chose it knowingly: an item already
+        // in the cart is treated as the user's, so a meal needing 1 adds 1.
+        // Re-running the same meals therefore doubles them. Not a bug -- do not
+        // "fix" it into max(base, asked) without asking him again.
         var want = base + it.quantity;
 
         // The store's per-item cap, respected BEFORE asking.
