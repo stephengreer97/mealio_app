@@ -124,12 +124,12 @@ flowchart TD
 flowchart TD
     P0(["a store script is built"]) --> P1["<b>buildSelectorProbe()</b> prefix is<br/><b>PREPENDED</b> to the finished text"]
     P1 --> P2["in the page: install ONE hook on<br/><code>window.ReactNativeWebView.postMessage</code><br/>and register the selectors this<br/>script actually interpolates"]
-    P2 --> P3["script runs, posts its terminal result<br/><i>SEARCH_RESULT · ADD_RESULT · WORKER_RESULT</i>"]
+    P2 --> P3["script runs, posts its terminal result<br/><i>LOGIN_STATUS — the only script left</i>"]
     P3 --> P4["the hook forwards that message <b>untouched</b>,<br/>then samples every registered selector<br/>against the settled page"]
     P4 --> P5["posts one extra <b>SELECTOR_HEALTH</b> message"]
     P5 --> P6["<b>SelectorHealthTally</b> in RN accumulates<br/>across the run &rarr; one flat,<br/>sanitizer-safe string at the end"]
 
-    WHYPRE{{"<b>why PREPENDED and not appended.</b> The parallel-pool wrappers<br/>install postMessage overrides that re-tag a store's SEARCH_RESULT<br/>as WORKER_RESULT and <b>swallow everything they do not recognise.</b><br/>Text order decides the chain: running FIRST puts the probe's hook<br/>closest to the native bridge — under the wrapper's whitelist<br/>rather than into it. Appending would have every worker's<br/>samples eaten in silence."}}
+    WHYPRE{{"<b>why PREPENDED and not appended.</b> The parallel-pool wrappers<br/>re-tagged a store's SEARCH_RESULT and SWALLOWED anything they<br/>did not recognise, so a probe appended after one had its samples<br/>eaten in silence. Those wrappers were deleted with the pools on<br/>2026-09-01. The order is kept because the reason it was chosen —<br/>the probe's hook belongs closest to the native bridge — did not<br/>depend on them."}}
     P1 -.-> WHYPRE
 
     WHYFIN{{"<b>'prepended' is a property of the FINISHED worker</b>, and that<br/>distinction is the bug this shipped with. The pools were composed<br/>in WebViewCartSheet from scripts it had already been handed —<br/><code>wrapper(probe + body)</code>. Each half was individually correct and the<br/>result was the one arrangement that discards everything. Both pools<br/>reported nothing on the four stores where they ARE the add path,<br/>while the main WebView kept the row looking populated.<br/>Composition now lives at one seam: attachWorkerScripts runs<br/>before withSelectorProbes."}}
@@ -193,7 +193,7 @@ flowchart TD
     <tr><th>Switch</th><th>Scope</th></tr>
     <tr><td><code>stores.&lt;id&gt;.enabled: false</code></td><td>one store — <code>getStoreScripts</code> returns null and the store surfaces the normal "unavailable" UI</td></tr>
     <tr><td><code>stores.albertsons.enabled: false</code></td><td><b>all 15 Albertsons banners</b> — they share one config key</td></tr>
-    <tr><td><code>flags.parallelAdd</code> + <code>flags.presearchAdd</code></td><td>concurrency — both must be published together to mean "stop adding concurrently", because the pre-search branch is checked before the parallel-add switch</td></tr>
+    <tr><td><i>the flags section is EMPTY</i></td><td>all four flags were levers over the DOM worker pools and went with them (2026-09-01). A push naming one is refused with a warning rather than silently accepted — a switch wired to nothing reads like something an operator can pull in an incident. Per-store <code>networkSearch</code> / <code>networkAdd</code> / <code>cartSkuConfirm</code> are what turn a rail off without a release.</td></tr>
     <tr><td><code>telemetry.sampleRate</code></td><td>reporting cost, without a release</td></tr>
   </table>
   <p>Only <i>selectors</i> live in the platform table. URLs, kill switches and worker knobs stay
