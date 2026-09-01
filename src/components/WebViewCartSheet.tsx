@@ -157,6 +157,15 @@ interface PickedItem {
   qty: number;
   /** Sold-by-weight: the chosen weight (lb) to select at add time. */
   purchaseWeight?: number | null;
+  /** The store's own ids for the picked product, when the search that produced
+   *  it could see them — which on a rail store is always, because the rail's
+   *  candidates come from the store's own API. They are what lets the pick be
+   *  ADDED over the rail instead of clicked: PickedItem was name-only, built for
+   *  a DOM path that found the card by its title. */
+  productId?: string | null;
+  skuId?: string | null;
+  maxOrderQuantity?: number | null;
+  purchasePreferenceId?: string | null;
   /** The review-queue index this pick was made for (manual-review picks only).
    *  Lets the "Back" button remove the pick that belongs to the item being left
    *  rather than blindly popping the last one — "Skip" advances WITHOUT pushing,
@@ -976,8 +985,10 @@ export default function WebViewCartSheet({
   // network path falls back to, so it reads better after it). A ref breaks the
   // cycle without reordering two hundred lines.
   // beginSearchFlow is defined above startAssistedMode and reaches it through a
-  // ref, the same way it has always reached startParallelAdd.
+  // ref, the same way it used to reach startParallelAdd. onLoadEnd reaches the
+  // run restart the same way.
   const startAssistedModeRef = useRef<() => void>(() => {});
+  const snapshotBeforeAndBeginSearchRef = useRef<() => void>(() => {});
   // onLoadEnd is a []-dep callback, so it reaches the resume through a ref for
   // the same reason startParallelAdd does.
   const netResumeSearchAfterNavRef = useRef<() => void>(() => {});
@@ -2603,6 +2614,43 @@ export default function WebViewCartSheet({
       detail: { path: 'sequential', qty: item.qty, onSearchPage: onSearchPageRef.current },
     });
     addsAttemptedRef.current += 1;
+
+    // ADD IT OVER THE RAIL. The user picked a product; the rail knows its id.
+    //
+    // This was the last add in Mealio that worked by clicking: navigate to a
+    // results page, find the card by its TITLE, press its button. It was also
+    // the most fragile — the substitute add died on a timeout the first time
+    // anyone ever picked one on a device, because the in-page search it relied
+    // on hangs on H-E-B.
+    //
+    // A rail store has no reason to do any of that. The candidate the user chose
+    // came from the store's own API and carries its productId and skuId, so the
+    // pick can be written the same way the run's own adds are. Shaped as a
+    // top-up because that is exactly what it is: a correction the reconcile has
+    // already accounted for, which must not be reconciled a second time.
+    const railForPick = getNetworkRail(lockedStoreIdRef.current);
+    if (railForPick && item.productId && item.skuId) {
+      const script = railForPick.addBatch([{
+        idx,
+        productId: String(item.productId),
+        skuId: String(item.skuId),
+        quantity: Math.max(1, Math.round(item.qty || 1)),
+        name: item.productName,
+        purchasePreferenceId: item.purchasePreferenceId ?? null,
+        maxOrderQuantity: item.maxOrderQuantity ?? null,
+      }]);
+      if (script) {
+        console.log(`[Cart ${ts()}]`, 'review add over the network:', item.productName, 'x', item.qty);
+        netTopUpRef.current = new Map([[idx, item as unknown as ConsolidatedIngredient]]);
+        netResultsRef.current = new Map();
+        netWriteFanoutRef.current = new Map();
+        netActiveRef.current = true;
+        netPhaseRef.current = 'add';
+        netArmFinalize(45_000);
+        webviewRef.current?.injectJavaScript(script);
+        return;
+      }
+    }
     // Same routing as the search path, and for the same measured reason: this is
     // the SUBSTITUTE add — the user picked a product on the review screen and we
     // have to go get that exact one. It was reaching the results page through the
@@ -2610,35 +2658,19 @@ export default function WebViewCartSheet({
     // `addMs` timeout on 2026-08-29 the first time a substitute was ever picked
     // on a device.
     //
-    // That path was nearly unreachable until today: before the search fix the
-    // review screen had no candidates to offer, so nobody could choose one and
-    // nothing ever exercised the add behind it.
-    navigateToResultsOrSearchInPage(
-      item.searchTerm,
-      scriptsRef.current!.buildAddToCartScript(item.productName, item.preference, item.qty, item.purchaseWeight ?? null),
-    );
-    // Arm the per-item timeout. On fire: synthesize a failure ADD_RESULT,
-    // wipe any pending queue/nav-intent, and advance.
-    addTimeoutRef.current = setTimeout(() => {
-      addTimeoutRef.current = null;
-      // A bare add timeout → treat as a failed item and advance. Not a block
-      // signal (blocks are surfaced via HTTP error / /blocked / BLOCKED_OVERLAY).
-      consecutiveTimeoutsRef.current += 1;
-      // Funnel: a click that produced no confirmation signal at all. This is the
-      // failure the confirm-rate denominator is designed to expose.
-      tel().record('confirm', 'timeout', {
-        durationMs: ADD_TIMEOUT_MS, itemIndex: idx, detail: { attempt: 1, path: 'sequential' },
-        code: 'timeout',
-      });
-      console.log(`[Cart ${ts()}]`, 'ADD timeout for', item.productName, '— treating as failed and advancing');
-      addResultsRef.current.push({ name: item.productName, success: false, reason: 'timeout' });
-      loadQueueRef.current = [];
-      expectedNavUrlRef.current = '';
-      const nextIdx = idx + 1;
-      addingIdxRef.current = nextIdx;
-      navigateToAddItem(nextIdx, itemsToAdd);
-    }, ADD_TIMEOUT_MS);
-  }, []);
+    // NO RAIL, OR A CANDIDATE WITH NO IDS: hand it to the user.
+    //
+    // Below here used to be the click: navigate to a results page, find the card
+    // by title, press its button, and arm a ten-second timeout in case nothing
+    // came back. That is deleted. A pick we cannot write is one we cannot make
+    // any promise about, and the honest response is the same as everywhere else
+    // now — show the user the search and let them add it.
+    console.log(`[Cart ${ts()}]`, 'review add: no rail write for', item.productName, '— handing over');
+    addResultsRef.current.push({ name: item.productName, success: false, reason: 'no_rail_write' });
+    const remaining = itemsToAdd.slice(idx).map((p) => p.searchTerm).filter(Boolean);
+    if (remaining.length > 0) { startAssistedModeRef.current(); return; }
+    setStep('done');
+  }, [setStep]);
 
   // Kick off the search phase (parallel pool when every active item is a
   // choose-flow ingredient and the store opts in, else the sequential WebView
@@ -2790,6 +2822,7 @@ export default function WebViewCartSheet({
       beginSearchFlow();
     }
   }, [beginSearchFlow, loginPrewarm]);
+  snapshotBeforeAndBeginSearchRef.current = snapshotBeforeAndBeginSearch;
 
   // ── WebView events ───────────────────────────────────────────────────────
 
@@ -2858,12 +2891,13 @@ export default function WebViewCartSheet({
       // user taps "Try again".
       if (blockReasonRef.current) return;
       if (!onBlockedPage) {
-        const resumeIdx = robotChallengeResumeIdxRef.current >= 0 ? robotChallengeResumeIdxRef.current : 0;
+        // The challenge cleared. There is no sequential page walk to resume any
+        // more, so the run restarts from the top — the rail re-reads the session
+        // and the cart, which is what a run needs after being interrupted.
         robotChallengeResumeIdxRef.current = -1;
-        console.log(`[Cart ${ts()}]`, 'onLoadEnd robot challenge cleared — resuming at idx', resumeIdx);
-        setStep('searching');
+        console.log(`[Cart ${ts()}]`, 'onLoadEnd robot challenge cleared — restarting the run');
         lastLoadEndUrlRef.current = '';
-        navigateToSearchItem(resumeIdx);
+        snapshotBeforeAndBeginSearchRef.current();
       }
       return;
     }
@@ -3710,8 +3744,11 @@ export default function WebViewCartSheet({
                   writes.length, 'writable of', routing.retry.length);
               }
 
-              setStep('searching');
-              navigateToSearchItem(0);
+              // The top-up needed a page. There are no pages any more: an item
+              // the rail cannot re-write is one we cannot correct on the user's
+              // behalf, so we say so and hand them the searches.
+              console.log(`[Cart ${ts()}]`, 'network top-up: cannot write these — handing over');
+              startAssistedModeRef.current();
               return;
             }
             // No qty top-ups. If workers flagged definitive failures (OOS / no
@@ -4632,6 +4669,12 @@ export default function WebViewCartSheet({
             qty: totalQty,
             purchaseWeight: weightFromIdx(totalQty),
             reviewIndex: reviewIdx,
+            productId: candidate.productId ?? null,
+            skuId: candidate.skuId ?? null,
+            maxOrderQuantity: candidate.maxOrderQuantity ?? null,
+            purchasePreferenceId: needsPref && prefText
+              ? (candidate.preferences?.find((o) => o.text === prefText)?.preferenceId ?? null)
+              : null,
           };
           if (existingIdx >= 0) newPicked[existingIdx] = pick;
           else newPicked.push(pick);
