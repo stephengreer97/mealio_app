@@ -5076,7 +5076,10 @@ export default function WebViewCartSheet({
                 color={storeColor}
               />
             )}
-            <View style={netRunVisual ? styles.offscreen : (gridMode ? styles.gridWrap : styles.fullWrap)}>
+            <View
+              style={netRunVisual ? styles.hiddenLayer : (gridMode ? styles.gridWrap : styles.fullWrap)}
+              pointerEvents={netRunVisual ? 'none' : 'auto'}
+            >
               {/* Main WebView cell — always the first child so it never remounts.
                   Fills the region normally; becomes one tile in grid mode. Not
                   mounted during qty (the region only renders then to keep the
@@ -6236,9 +6239,16 @@ const styles = StyleSheet.create({
   fullWrap: { flex: 1 },
   fullCell: { flex: 1 },
   // Tile grid: main + live workers, 2-up wrapping, dropping as workers finish.
-  // Mounted, laid out, and nowhere the user can see it. Zero size would stop the
-  // page rendering at all, which the injected scripts depend on.
-  offscreen: { position: 'absolute', width: 1, height: 1, opacity: 0, left: -9999, top: -9999 },
+  // Hidden but FULL SIZE. It must keep its real dimensions: the after-run cart
+  // probe navigates this WebView to the cart page and counts what rendered, and
+  // that probe runs while the step is still 'adding' — i.e. while this is
+  // hidden. A 1x1 box would leave the cart page with nothing to lay out and the
+  // count would come back empty, which is precisely the done-screen breakdown
+  // this is meant to preserve. Invisible and untouchable, not small.
+  hiddenLayer: {
+    position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
+    opacity: 0, zIndex: -1,
+  },
   gridWrap: {
     flex: 1,
     flexDirection: 'row',
