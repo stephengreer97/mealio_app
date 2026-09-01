@@ -447,6 +447,17 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
     albertsons: {
       enabled: true,
       platform: 'albertsons',
+      // MEAL-204. The network rail is ON in the bundled default rather than
+      // waiting on a config push, because the flags gate a path that cannot be
+      // exercised at all until it is switched on, and a rail nobody can run is a
+      // rail nobody can find the bugs in.
+      //
+      // It stays a REMOTE-OVERRIDABLE flag, so switching it off is a config push
+      // rather than a release — which matters more here than for H-E-B, because
+      // MEAL-207 has this store's search operation degrading under load and the
+      // first honest response to that is to stop using it.
+      networkSearch: true,
+      networkAdd: true,
     },
   },
 };

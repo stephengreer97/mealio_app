@@ -29,7 +29,7 @@ flowchart TD
     end
 
     QTY -->|"tap Add Ingredients"| LOGINCHK
-    LOGINCHK["<b>login_check</b><br/>inject CHECK_LOGIN_SCRIPT"]
+    LOGINCHK["<b>login_check</b><br/>rail on: session probe over GraphQL<br/>rail off, or it cannot answer:<br/>inject CHECK_LOGIN_SCRIPT"]
     LOGINCHK --> ISLOGGED{"logged in?"}
     ISLOGGED -->|no| LOGIN["<b>login</b><br/>user signs in<br/>in the WebView"]
     LOGIN --> LOGINCHK

@@ -24,7 +24,7 @@ flowchart TD
 
     QTY["<b>qty</b><br/><i>setup</i> · 'Set quantities'"]
     QTY -->|"tap Add Ingredients"| LC
-    LC["<b>login_check</b><br/><i>running</i> · 'Checking login…'"]
+    LC["<b>login_check</b><br/><i>running</i> · 'Checking login…'<br/><i>a store with a network rail is<br/>asked over the network here</i>"]
     LC -->|"LOGIN_STATUS false"| LOGIN
     LC -->|"LOGIN_STATUS true"| SEARCHING
     LOGIN["<b>login</b><br/><i>attention</i> · 'Log in to &lt;store&gt;'"]
@@ -155,6 +155,7 @@ flowchart TD
     <tr><th>The store's <code>StoreScripts</code></th><th>The engine</th></tr>
     <tr><td>URLs, domain, <code>appScheme</code></td><td>the ten-step machine and every transition</td></tr>
     <tr><td><code>checkLoginScript</code>, <code>isLoginPageUrl</code>, <code>isLoginSuccessUrl</code>, <code>reinjectLoginCheckOnNav</code></td><td>the login loop, and when to re-inject</td></tr>
+    <tr><td><code>webview-scripts/network-rail.ts</code></td><td>which network protocol a store speaks, if any &mdash; H-E-B in GraphQL, the Albertsons family in REST. The engine asks for &ldquo;this store&rsquo;s rail&rdquo; and never names a store</td></tr>
     <tr><td><code>extractProductsScript</code>, <code>buildSearchScript</code>, <code>buildSearchAndAddScript</code>, <code>buildAddToCartScript</code></td><td>which one to inject, when, and into which WebView</td></tr>
     <tr><td><code>buildWorkerScript</code> / <code>buildPresearchWorkerScript</code> / <code>buildAddWorkerScript</code></td><td>the three pools, their queues and their timeouts</td></tr>
     <tr><td><code>workerCount</code>, <code>workerStaggerMs</code>, <code>forceSerialSearch</code>, <code>cacheBustNav</code>, <code>spaSearch</code></td><td><code>chooseAddStrategy</code>, and the re-injection guard</td></tr>
@@ -220,7 +221,15 @@ flowchart LR
   <h2>Where the other maps pick up</h2>
   <table class="src">
     <tr><th>Step</th><th>Detail lives in</th></tr>
-    <tr><td><code>login_check</code> / <code>login</code></td><td>each store's map — this is where they differ most</td></tr>
+    <tr><td><code>login_check</code> / <code>login</code></td><td>each store's map — this is where they differ most.
+      A store with a network rail is asked over the network in all THREE places that decide login:
+      the silent prewarm probe, this step, and the re-ask that fires on every page load while the
+      user sits on <code>login</code> (<code>reinjectLoginCheckOnNav</code>). The third is the one
+      that starts the run &mdash; its verdict calls the before-snapshot directly &mdash; so a wrong
+      "signed in" there begins an automation underneath a user who has not signed in yet, which is
+      exactly what was reported from the device. The DOM check is the fallback, reached when the session
+      probe cannot answer — nearly always a page that has not finished its bootstrap, which is
+      <b>not</b> a signed-out user and must never be reported as one</td></tr>
     <tr><td><code>searching</code> / <code>adding</code></td><td>each store's map, plus <a href="behavior-choose-products.html">Choose Products &amp; matching</a></td></tr>
     <tr><td>reconcile, after-probe, verdict</td><td><a href="behavior-cart-reconcile.html">Cart reconciliation</a></td></tr>
     <tr><td>every knob named above</td><td><a href="behavior-remote-config.html">Remote config &amp; catalog</a></td></tr>

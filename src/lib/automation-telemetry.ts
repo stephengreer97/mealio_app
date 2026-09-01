@@ -212,6 +212,27 @@ export type FailureOutcome = Exclude<StepOutcome, 'ok' | 'skipped'>;
  */
 export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   no_results: 'no_candidates',
+  // MEAL-204, the Albertsons network rail. Four reasons the H-E-B rail had no
+  // equivalent for, because they come from a REST envelope rather than GraphQL:
+  //
+  // quantity_mismatch — the write returned 200 and the cart came back holding a
+  //   DIFFERENT quantity than we set. Albertsons' qty is absolute, so this means
+  //   the store overrode us (a cap we did not know, a partial stock). Nothing is
+  //   wrong with the confirmation; the number is wrong, so it is a rejected match.
+  quantity_mismatch: 'match_rejected',
+  // no_search_key — the page's own config did not carry the search subscription
+  //   key, so no search could be attempted. Never the store's answer about
+  //   stock, so it must not read as "no candidates".
+  no_search_key: 'match_rejected',
+  // no_response — the search operation answered with nothing at all: no status,
+  //   no headers, no bytes, until the budget expired. MEAL-207 watched Albertsons
+  //   do exactly this to a client under load. Emphatically not "no results".
+  no_response: 'match_rejected',
+  // search_error — HTTP 200, and primaryProducts.appCode says 400 with no docs
+  //   array. The transport succeeded and the search did not. This is the single
+  //   most important one in this list: read as an empty result it tells a user
+  //   the store does not stock their groceries (MEAL-207).
+  search_error: 'match_rejected',
   low_confidence: 'match_rejected',
   out_of_stock: 'out_of_stock',
   needs_weight: 'match_rejected',

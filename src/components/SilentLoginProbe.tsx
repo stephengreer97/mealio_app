@@ -3,6 +3,7 @@ import { Platform, StyleSheet, View } from 'react-native';
 import WebView, { WebViewMessageEvent } from 'react-native-webview';
 import { getStoreScripts } from '../lib/webview-scripts';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
+import { getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
 import { WEBVIEW_FINGERPRINT_SHIM } from '../lib/webview-fingerprint-shim';
 import {
@@ -179,8 +180,26 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
       }
       // Re-inject on every load so a login/SSO redirect chain still gets checked
       // once it settles on the store page. Idempotent; posts once it has an answer.
-      console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — injecting check script');
-      webviewRef.current?.injectJavaScript(scripts.checkLoginScript);
+      // A store with a network rail is asked over the network, not read off the
+      // DOM. The rail's session probe is a positive fact about the session — a
+      // token the origin accepts, proven by an actual cart read — where the DOM
+      // check infers from markup that exists in both states. That inference is
+      // the weakest link in the whole flow, because the cart engine treats a
+      // prewarm 'loggedOut' as terminal and surfaces a login wall without ever
+      // asking again (WebViewCartSheet, `pre === 'loggedOut'`). Getting it wrong
+      // costs a signed-in user their entire run.
+      //
+      // The DOM check is still the fallback, and reachable: see onMessage, where
+      // a session probe that cannot answer hands the page back to it rather than
+      // guessing.
+      const rail = getNetworkRail(storeId);
+      if (rail) {
+        console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — asking over the network');
+        webviewRef.current?.injectJavaScript(rail.sessionScript());
+      } else {
+        console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — injecting check script');
+        webviewRef.current?.injectJavaScript(scripts.checkLoginScript);
+      }
     } else if (cartMethodRef.current === 'url' || cartMethodRef.current === 'click') {
       // Same skip as the login branch above, and two tickets converge on it.
       //
@@ -260,6 +279,24 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
           // Surface the store scripts' own diagnostics in the prewarm context
           // (the probe otherwise swallows them) so we can see why it decides.
           console.log('[Prewarm] probe', storeId, msg.type, JSON.stringify(msg));
+          return;
+        }
+        if (msg?.type && NETWORK_SESSION_MESSAGE_TYPES.includes(msg.type)) {
+          console.log('[Prewarm] probe', storeId, msg.type, JSON.stringify(msg).slice(0, 220));
+          if (!msg.ok) {
+            // The probe could not answer — most often the page had not finished
+            // its bootstrap, so the session globals were simply absent. That is
+            // NOT a signed-out user, and saying so here would wall one. Hand the
+            // page to the DOM check instead, which is what this store used before
+            // the rail existed.
+            console.log('[Prewarm] probe', storeId, 'network session inconclusive —', msg.why, '— falling back to the DOM check');
+            const fb = getStoreScripts(storeId);
+            if (fb?.checkLoginScript) webviewRef.current?.injectJavaScript(fb.checkLoginScript);
+            return;
+          }
+          reportLogin(!!msg.loggedIn);
+          if (msg.loggedIn) startCartCapture();
+          else finish({ isLoggedIn: false });
           return;
         }
         if (msg?.type === 'LOGIN_STATUS') {
