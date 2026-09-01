@@ -43,7 +43,7 @@ import {
 } from '../../src/lib/selector-health';
 import { getStoreScripts } from '../../src/lib/webview-scripts';
 import { WEBVIEW_STORE_IDS } from '../../src/constants/stores';
-import { buildExtractWorker, buildPresearchWorker, buildSearchAndAddWorker } from '../../src/lib/webview-scripts/worker-search';
+import { ALBERTSONS_FAMILY_IDS } from '../../src/lib/webview-scripts/albertsons';
 import { __resetAutomationConfigForTests } from '../../src/lib/automation-config';
 
 afterEach(() => __resetAutomationConfigForTests());
@@ -128,7 +128,11 @@ describe('probeTargetsFor', () => {
   });
 
   it('splits a probed selector into its branches, primary first', () => {
-    const targets = probeTargetsFor(walmart, getStoreScripts('walmart')!.extractProductsScript);
+    // Against a literal script rather than a store's, now that the only script a
+    // store still injects is its login check and it touches a different slice of
+    // the table. What is under test is the splitter, not which selectors H-E-B
+    // happens to use this month.
+    const targets = probeTargetsFor(walmart, 'var CARD_SEL = "[data-automation-id=\\"product\\"], [data-item-id]";');
     const card = targets.find((t) => t.key === 'card')!;
     expect(card.branches).toEqual(['[data-automation-id="product"]', '[data-item-id]']);
   });
@@ -379,10 +383,11 @@ function runWorkerInPage(script: string, terminal: Record<string, unknown>) {
 }
 
 /** Every pool's worker script, named by the field the engine actually renders. */
+// One script per store now, where there were three pool workers. The probe is
+// prepended to whatever a store injects, and a store injects exactly one thing:
+// its login check.
 const POOL_WORKERS: Array<[string, (s: any) => string, Record<string, unknown>]> = [
-  ['buildWorkerScript (parallel search)', (s) => s.buildWorkerScript!(2), { type: 'SEARCH_RESULT', candidates: [] }],
-  ['buildPresearchWorkerScript (pre-search)', (s) => s.buildPresearchWorkerScript!(2), { type: 'SEARCH_RESULT', candidates: [] }],
-  ['buildAddWorkerScript (parallel add)', (s) => s.buildAddWorkerScript!(2), { type: 'SEARCH_AND_ADD_RESULT', success: true }],
+  ['checkLoginScript', (s) => s.checkLoginScript, { type: 'LOGIN_STATUS', isLoggedIn: true }],
 ];
 
 /**
@@ -415,102 +420,18 @@ const POOL_WORKERS: Array<[string, (s: any) => string, Record<string, unknown>]>
 // false outside dev, so getStoreScripts never returns it here.
 const POOL_STORES = [...WEBVIEW_STORE_IDS].filter((id) => id !== 'mockstore');
 
-describe('a registry-composed pool worker reports its selectors', () => {
-  const cases = POOL_STORES.flatMap((storeId) =>
-    POOL_WORKERS.map(([label, build, terminal]) => [storeId, label, build, terminal] as const),
-  );
-
-  it('covers every WebView store', () => {
-    expect(POOL_STORES).toHaveLength(20);
-  });
-
-  // One case PER STORE, so a store routed around finish() fails a test whose title
-  // is its own name. The previous version looped inside a single `it`, and its
-  // comment claimed the failure named the store — it did not, because storeId was
-  // a loop variable jest never printed.
-  it.each(POOL_STORES)('%s has all three pool builders', (storeId) => {
-    // The real cost of routing a store around finish(): these fields go undefined,
-    // WebViewCartSheet yields [] for the pool, and that store runs with no workers
-    // at all — worse than the missing telemetry this branch set out to fix.
-    const scripts = getStoreScripts(storeId);
-    expect(scripts).not.toBeNull();
-    expect(typeof scripts!.buildWorkerScript).toBe('function');
-    expect(typeof scripts!.buildPresearchWorkerScript).toBe('function');
-    expect(typeof scripts!.buildAddWorkerScript).toBe('function');
-  });
-
-  it.each(cases)('%s / %s', (storeId, _label, build, terminal) => {
-    const { posted, bodyThrew } = runWorkerInPage(build(getStoreScripts(storeId)!), terminal);
-    const samples = posted.filter((m) => m.type === SELECTOR_HEALTH_MESSAGE);
-    expect(bodyThrew).toBeNull();
-    expect(samples).toHaveLength(1);
-    // A map, not an empty object: the probe resolved the selectors this worker's
-    // script actually interpolates.
-    expect(Object.keys(samples[0].sel).length).toBeGreaterThan(0);
-  });
-
-  /**
-   * Find every postMessage override in a composed script, generically.
-   *
-   * Deliberately NOT a list of the wrappers' `__mealio*Wrapped` sentinels. That
-   * is the same `indexOf(...) === -1` reading that mislabelled Wegmans and ALDI
-   * in the first harness for this ticket, and it degrades to "no override to be
-   * under" — i.e. it SKIPS — whenever a sentinel is renamed. Measured: renaming
-   * `__mealioAddWorkerWrapped` left this file green at 70/70 while the invariant
-   * it claims to hold was no longer being checked on that pool.
-   */
-  const overridesIn = (script: string) =>
-    [...script.matchAll(/postMessage\s*=\s*function/g)].map((m) => m.index!);
-
-  it.each(cases)('%s / %s installs the probe\'s hook before any other', (_storeId, label, build) => {
-    const script = build(getStoreScripts(_storeId)!);
-    const overrides = overridesIn(script);
-    const probeMarker = script.indexOf('__mealioSelHealth');
-    expect(probeMarker).toBeGreaterThanOrEqual(0);
-    expect(overrides.length).toBeGreaterThan(0);
-    // The FIRST override in the finished text is the probe's own — the probe
-    // declares itself just above it, so anything installed earlier would push
-    // overrides[0] ahead of the marker.
-    expect(probeMarker).toBeLessThan(overrides[0]);
-    // And the two pools that wrap must actually still have their wrapper: a
-    // second override, after the probe's. Only the parallel-search pool may have
-    // one override total, and only for the two stores whose worker is
-    // purpose-built (Wegmans, ALDI).
-    if (label.includes('pre-search') || label.includes('parallel add')) {
-      expect(overrides.length).toBeGreaterThanOrEqual(2);
-    }
-  });
-});
+// "a registry-composed pool worker reports its selectors" lived here. It ran each
+// store's three pool workers in a fake page and checked the probe sampled once
+// from inside the wrapper. There are no pool workers; the surviving question --
+// is the probe attached to what a store actually injects? -- is asked directly
+// by "probes %s's login check" above.
 
 describe('the failure mode that composition guards against', () => {
-  /** A one-line store script that posts the result its wrapper re-tags. */
-  const stub = (type: string) =>
-    `window.ReactNativeWebView.postMessage(JSON.stringify({ type: '${type}', candidates: [], success: true }));`;
-
-  // The negative control. This is what the two broken pools shipped, and it is
-  // the reason `attachWorkerScripts` runs before `withSelectorProbes` instead of
-  // the composition happening at the call site: wrapping an already-probed script
-  // is silent, total data loss, indistinguishable from a store whose selectors
-  // are all healthy.
-  const WRAPPERS: Array<[string, (id: number, script: string) => string, string]> = [
-    ['buildPresearchWorker', buildPresearchWorker, 'SEARCH_RESULT'],
-    ['buildSearchAndAddWorker', buildSearchAndAddWorker, 'SEARCH_AND_ADD_RESULT'],
-    ['buildExtractWorker', buildExtractWorker, 'SEARCH_RESULT'],
-  ];
-
-  it.each(WRAPPERS)('%s over an already-probed script emits nothing', (_name, wrap, result) => {
-    const inverted = wrap(2, buildSelectorProbe([CARD]) + stub(result));
-    const posted = runInPage(inverted, { matches: [CARD.branches[1]] });
-    expect(posted.map((m) => m.type)).toEqual(['WORKER_RESULT']);
-    expect(health(posted)).toHaveLength(0);
-  });
-
-  it.each(WRAPPERS)('%s over the probe emits the sample', (_name, wrap, result) => {
-    const correct = buildSelectorProbe([CARD]) + wrap(2, stub(result));
-    const posted = runInPage(correct, { matches: [CARD.branches[1]] });
-    expect(posted.map((m) => m.type)).toEqual(['WORKER_RESULT', SELECTOR_HEALTH_MESSAGE]);
-    expect(health(posted)[0].sel).toEqual({ card: 1 });
-  });
+  // The worker-wrapper cases lived here. They were the negative control for
+  // MEAL-31: wrapping an ALREADY-probed script is silent, total data loss,
+  // indistinguishable from a store whose selectors are all healthy, and that is
+  // why composition had to run before probing. There are no wrappers now — the
+  // pools that used them were deleted with the rest of the DOM automation.
 });
 
 // ── The registry seam ───────────────────────────────────────────────────────
@@ -521,10 +442,33 @@ describe('getStoreScripts attaches probes', () => {
     ['wegmans', 'wegmans'], ['aldi', 'aldi'], ['safeway', 'albertsons'],
   ];
 
-  it.each(PROBED)('probes %s\'s extract and add scripts', (storeId) => {
+  // SELECTOR HEALTH IS NEARLY VESTIGIAL NOW, and this is what is left of it.
+  //
+  // The probe was built to watch a store's extractors and add scripts for
+  // selector drift, because a stale selector was how DOM automation failed. Those
+  // scripts are gone. The only script a store still injects is its login check,
+  // so the probe reaches exactly the stores whose login check reads the selector
+  // table and no others.
+  //
+  // Stated as an INVARIANT rather than a list of store names. The list was the
+  // first thing to go wrong here: safeway looked unprobed because
+  // selectorSurfaceFor('safeway') is null -- the family shares one table under
+  // the 'albertsons' key -- while getStoreScripts probes it perfectly well.
+  it.each(PROBED)('%s is probed exactly when its login check reads the table', (storeId) => {
     const s = getStoreScripts(storeId)!;
-    expect(s.extractProductsScript).toContain('__mealioSelHealth');
-    expect(s.buildAddToCartScript('Product', null, 1)).toContain('__mealioSelHealth');
+    const surface = selectorSurfaceFor(storeId)
+      ?? (ALBERTSONS_FAMILY_IDS.includes(storeId) ? albertsonsSelectorSurface() : null);
+    const targets = surface ? probeTargetsFor(surface, s.checkLoginScript) : [];
+    if (targets.length > 0) expect(s.checkLoginScript).toContain('__mealioSelHealth');
+    else expect(s.checkLoginScript).not.toContain('__mealioSelHealth');
+  });
+
+  it('and at least one store IS still probed, or the feature is dead', () => {
+    // ALDI's login check reads its menu and hamburger. If this ever fails,
+    // selector health is watching nothing and should be deleted rather than
+    // left running.
+    const aldi = getStoreScripts('aldi')!;
+    expect(aldi.checkLoginScript).toContain('__mealioSelHealth');
   });
 
   it('leaves the mock store alone', () => {
@@ -537,8 +481,8 @@ describe('getStoreScripts attaches probes', () => {
     // before this feature, byte for byte.
     const s = getStoreScripts('walmart')!;
     const marker = '})();\n';
-    const body = s.extractProductsScript.slice(s.extractProductsScript.indexOf(marker) + marker.length);
-    expect(body.startsWith('(async function()')).toBe(true);
+    const body = s.checkLoginScript.slice(s.checkLoginScript.indexOf(marker) + marker.length);
+    expect(body.length).toBeGreaterThan(0);
   });
 });
 

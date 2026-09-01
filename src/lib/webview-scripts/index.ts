@@ -2,10 +2,7 @@
 
 import {
   HEB_URL, HEB_LOGIN_URL, HEB_CART_URL,
-  CHECK_LOGIN_SCRIPT, buildExtractProductsScript as hebBuildExtract,
-  buildAddToCartScript as hebBuildATC,
-  buildSearchScript as hebBuildSearch,
-  buildSearchAndAddScript as hebBuildSearchAndAdd,
+  CHECK_LOGIN_SCRIPT,
 } from './heb';
 import { getScripts as getWalmartScripts } from './walmart';
 import { getScripts as getAlbertsonsScripts, ALBERTSONS_FAMILY_IDS } from './albertsons';
@@ -13,7 +10,6 @@ import { getInstacartScriptsFor, INSTACART_STORE_IDS } from './instacart';
 import { getScripts as getAmazonFreshScripts } from './amazon-fresh';
 import { getScripts as getWegmansScripts } from './wegmans';
 import { getScripts as getMockStoreScripts, MOCK_STORE_ENABLED } from './mockstore';
-import { buildExtractWorker, buildPresearchWorker, buildSearchAndAddWorker } from './worker-search';
 import { storeConfig, searchUrlFor, isStoreEnabled } from '../automation-config';
 import {
   SelectorSurface,
@@ -47,14 +43,6 @@ export interface StoreScripts {
   reinjectLoginCheckOnNav?: boolean;
   /** Injected to check if the user is logged in. Posts LOGIN_STATUS. */
   checkLoginScript: string;
-  /** Injected on search results page. Posts SEARCH_RESULT with candidates. */
-  extractProductsScript: string;
-  /** Builds script to add a specific product to cart. Posts ADD_RESULT. */
-  buildAddToCartScript: (productName: string, preference: { text: string } | null, qty: number, targetWeightLb?: number | null) => string;
-  /** Builds script to navigate to search results for a term. */
-  buildSearchScript: (term: string) => string;
-  /** Builds script to search + auto-add if match found. Posts SEARCH_AND_ADD_RESULT. */
-  buildSearchAndAddScript: (term: string, qty: number, dropdown: { type: string; selectedText: string; selectedValue: string } | null) => string;
   // ── Parallel product search (optional) ──────────────────────────────────
   // A store that provides BOTH of these opts into the 5-worker parallel pool
   // for the choose-product flow: WebViewCartSheet dispatches each ingredient
@@ -63,51 +51,10 @@ export interface StoreScripts {
   // sequential single-WebView path.
   /** Direct search-results URL for a term (loads results without typing). */
   getSearchUrl?: (term: string) => string;
-  /** Injected JS for one worker; posts WORKER_RESULT with the workerId. */
-  buildWorkerScript?: (workerId: number) => string;
-  // ── The other two pools' worker scripts ─────────────────────────────────
-  // These are `buildPresearchWorker` / `buildSearchAndAddWorker` already applied
-  // to this store's own scripts. They exist as FIELDS, rather than being composed
-  // at the call site in WebViewCartSheet the way they used to be, because
-  // composition order is load-bearing and having it happen in two places is what
-  // let the two of them silently diverge (MEAL-31).
-  //
-  // The wrappers emit their own IIFE and interpolate the store script AFTER it.
-  // Composing at the call site meant wrapping an ALREADY-PROBED script, which put
-  // the probe's postMessage hook on TOP of the wrapper's — and the wrapper
-  // swallows what it does not name, so every sample from the pre-search and
-  // parallel-add pools was discarded in the page. On the four stores those pools
-  // serve that is the add path, i.e. where addBtn / incBtn / stepperA live.
-  //
-  // Built here from the UNPROBED script, so the probe is prepended to the
-  // finished worker and its hook sits underneath the wrapper's. See
-  // withSelectorProbes, and the registry-driven ordering tests in
-  // tests/unit/selectorHealth.test.ts — which now compose exactly this way.
-  /** One pre-search parking worker's script. Posts WORKER_RESULT in two phases. */
-  buildPresearchWorkerScript?: (workerId: number) => string;
-  /** One parallel-add worker's script. Posts WORKER_RESULT with the add verdict. */
-  buildAddWorkerScript?: (workerId: number) => string;
-  /** Number of concurrent worker WebViews for this store's parallel pool.
-   *  Defaults to 5. Lower it for stores with aggressive anti-bot (ALDI: 3). */
-  workerCount?: number;
-  /** Stagger (ms) between the initial worker dispatches for this store, to
-   *  avoid N simultaneous search requests. Defaults to 0 (all at once). */
-  workerStaggerMs?: number;
-  /** Force the sequential single-WebView search even though getSearchUrl +
-   *  buildWorkerScript are present. Used for stores whose anti-bot trips on the
-   *  concurrent worker requests (ALDI). The worker scripts stay available for
-   *  tests / future re-enable; they just aren't used at runtime. */
-  forceSerialSearch?: boolean;
   /** Default true: navigations append a `?_t=<ts>` cache-buster. Set false for
    *  stores whose anti-bot flags that synthetic query (ALDI) — navTo then uses
    *  the clean URL + a forced reload() instead. */
   cacheBustNav?: boolean;
-  /** True for SPA storefronts (ALDI/Instacart) whose search changes the URL via
-   *  pushState (no reload). Such stores fire onLoadEnd multiple times for ONE
-   *  route change while the injected script is still running, so the cart flow
-   *  must NOT re-inject the inflight script on a same-URL onLoadEnd (that spawns
-   *  a duplicate add-run that over-advances the item index and skips items). */
-  spaSearch?: boolean;
 }
 
 // ── HEB adapter ──────────────────────────────────────────────────────────────
@@ -118,7 +65,6 @@ export interface StoreScripts {
 // next cart run instead of requiring an app restart.
 function getHebScripts(): StoreScripts {
   const cfg = storeConfig('heb');
-  const extract = hebBuildExtract();
   return {
   storeUrl: cfg.storeUrl ?? HEB_URL,
   loginUrl: cfg.loginUrl ?? HEB_LOGIN_URL,
@@ -141,51 +87,16 @@ function getHebScripts(): StoreScripts {
   // never on the accounts.heb.com login form, so it can't fight the user.
   reinjectLoginCheckOnNav: true,
   checkLoginScript: CHECK_LOGIN_SCRIPT,
-  extractProductsScript: extract,
-  buildAddToCartScript: hebBuildATC,
-  buildSearchScript: hebBuildSearch,
-  buildSearchAndAddScript: hebBuildSearchAndAdd,
   getSearchUrl: (term) =>
     searchUrlFor('heb', term, 'https://www.heb.com/search?q=' + encodeURIComponent(term)),
-  buildWorkerScript: (workerId) => buildExtractWorker(workerId, extract),
-  workerCount: cfg.workerCount,
-  workerStaggerMs: cfg.workerStaggerMs,
-  forceSerialSearch: cfg.forceSerialSearch,
   cacheBustNav: cfg.cacheBustNav,
-  spaSearch: cfg.spaSearch,
   };
 }
 
-// ── Worker composition ───────────────────────────────────────────────────────
-
-/**
- * Attach the pre-search and parallel-add worker scripts.
- *
- * These used to be composed in WebViewCartSheet, from the scripts it had already
- * been handed. That is what broke MEAL-31: the scripts it had were probed, and
- * the wrappers put their own IIFE FIRST, so the composed worker read
- * `wrapper(probe + body)` — the probe's hook on top of the wrapper's rather than
- * underneath it, which is the one arrangement the wrapper's swallow discards. The
- * parallel-SEARCH worker was unaffected only because its adapter happens to
- * compose it before the probe is applied.
- *
- * Composing all of them at this one seam is what makes "the probe goes on the
- * FINISHED worker" a property of the registry instead of a rule three call sites
- * have to remember. See StoreScripts.buildPresearchWorkerScript.
- */
-function attachWorkerScripts(s: StoreScripts): StoreScripts {
-  return {
-    ...s,
-    buildPresearchWorkerScript: (workerId: number) =>
-      buildPresearchWorker(workerId, s.extractProductsScript),
-    // Placeholder params: one fixed search-and-add script is built per worker and
-    // the real term/qty/preference arrive in the page URL's #mealio hash at
-    // runtime. Only stores whose buildSearchAndAddScript reads that hash support
-    // parallel add; the others are gated out by beginSearchFlow, not here.
-    buildAddWorkerScript: (workerId: number) =>
-      buildSearchAndAddWorker(workerId, s.buildSearchAndAddScript('', 1, null)),
-  };
-}
+// Worker composition lived here: it attached the pre-search and parallel-add
+// worker scripts to every adapter at one seam, so that "the probe goes on the
+// FINISHED worker" was a property of the registry rather than a rule three call
+// sites had to remember (MEAL-31). There are no workers now.
 
 // ── Selector health (MEAL-31) ────────────────────────────────────────────────
 
@@ -215,26 +126,16 @@ function attachWorkerScripts(s: StoreScripts): StoreScripts {
  */
 function withSelectorProbes(surface: SelectorSurface | null, s: StoreScripts): StoreScripts {
   if (!surface) return s;
-  const wrap = (script: string) => withSelectorProbe(surface, script);
-  const wrapWorker = (build: ((workerId: number) => string) | undefined) =>
-    build ? (workerId: number) => wrap(build(workerId)) : undefined;
-  return {
-    ...s,
-    checkLoginScript: wrap(s.checkLoginScript),
-    extractProductsScript: wrap(s.extractProductsScript),
-    buildAddToCartScript: (name, pref, qty, weight) => wrap(s.buildAddToCartScript(name, pref, qty, weight)),
-    buildSearchScript: (term) => wrap(s.buildSearchScript(term)),
-    buildSearchAndAddScript: (term, qty, dd) => wrap(s.buildSearchAndAddScript(term, qty, dd)),
-    buildWorkerScript: wrapWorker(s.buildWorkerScript),
-    buildPresearchWorkerScript: wrapWorker(s.buildPresearchWorkerScript),
-    buildAddWorkerScript: wrapWorker(s.buildAddWorkerScript),
-  };
+  // The login check is the only script left to probe. The workers it also
+  // wrapped are gone, and so is every extractor and add script the probe was
+  // built to watch for selector drift (MEAL-31) — there are no selectors on a
+  // rail, and an assisted store is driven by the user, who can see the page.
+  return { ...s, checkLoginScript: withSelectorProbe(surface, s.checkLoginScript) };
 }
 
-/** Everything the registry does to a store's raw scripts, in the order it
- *  matters: compose the workers, THEN probe the finished text. */
+/** Everything the registry does to a store's raw scripts. */
 function finish(surface: SelectorSurface | null, s: StoreScripts): StoreScripts {
-  return withSelectorProbes(surface, attachWorkerScripts(s));
+  return withSelectorProbes(surface, s);
 }
 
 // ── Lookup ───────────────────────────────────────────────────────────────────

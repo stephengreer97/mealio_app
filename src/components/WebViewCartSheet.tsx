@@ -2391,179 +2391,15 @@ export default function WebViewCartSheet({
    * its match on whatever results page it lands on, which is exactly what it
    * already does inside a worker.
    */
-  const navigateToResultsOrSearchInPage = useCallback((term: string, script: string) => {
-    const s = scriptsRef.current!;
-    const resultsUrl = s.getSearchUrl?.(term);
-    // `forceSerialSearch` is what separates the two kinds of store, and it is
-    // the honest test rather than a store list.
-    //
-    // ALDI and Wegmans set it: the sequential single-WebView search IS their run,
-    // it is exercised on every item of every run, and the in-page search is the
-    // path they are known to work on. Nothing here has measured them, so nothing
-    // here changes them.
-    //
-    // H-E-B, Walmart, Amazon and Albertsons do not: for them the pool is the real
-    // path and this function is only the RETRY fallback — the path that runs a
-    // handful of times per run, on exactly the items that already went wrong once.
-    // On H-E-B the in-page search there simply hangs, measured 12 of 13 times
-    // across five runs, and the pool proves the same store answers a navigation
-    // to `getSearchUrl` in about 800 ms. So a store that merely falls back to
-    // this path gets the navigation the pool already trusts.
-    if (resultsUrl && !s.forceSerialSearch) {
-      // Cleared for the same reason the in-page branches clear it: the same
-      // ingredient can appear in two meals, and a repeat of an identical URL must
-      // still deliver onLoadEnd or the queued script never runs.
-      lastLoadEndUrlRef.current = '';
-      loadQueueRef.current = [script];
-      navTo(resultsUrl);
-      return;
-    }
-    if (onSearchPageRef.current) {
-      loadQueueRef.current = [script];
-      lastLoadEndUrlRef.current = '';
-      webviewRef.current?.injectJavaScript(s.buildSearchScript(term));
-      return;
-    }
-    loadQueueRef.current = [s.buildSearchScript(term), script];
-    navTo(s.storeUrl);
-  }, [navTo]);
+  // navigateToResultsOrSearchInPage and navigateToSearchItem lived here: the
+  // sequential page walk. One ingredient at a time, load a results page or run
+  // the storefront's own in-page search, then inject an extractor or a fused
+  // search-and-add and wait for a message. Every store had its own selectors for
+  // it and every one of them went stale eventually.
+  //
+  // Deleted 2026-09-01. Nothing injects a DOM search script any more, so the
+  // SEARCH_RESULT and SEARCH_AND_ADD_RESULT handlers it fed are unreachable too.
 
-  const navigateToSearchItem = useCallback((idx: number) => {
-    // Drive the progress ring: idx is the per-item position (0..N), advancing
-    // once per ingredient through the sequential search/add funnel.
-    setProcessedCount(idx);
-    // Clear any prior search timer — even on the all-done branch — so a late
-    // firing can't synthesize a phantom failure on the next session.
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-      searchTimeoutRef.current = null;
-    }
-    const active = activeItemsRef.current;
-    if (idx >= active.length) {
-      // Amazon Fresh: the whole run came up empty with the Fresh empty-state and
-      // nothing landed in the cart → no store/address selected. Prompt the user to
-      // choose one instead of a misleading "nothing added" / review screen.
-      const anyAdded = addResultsRef.current.some((r) => r.success);
-      if (lockedStoreIdRef.current === 'amazon' && freshStoreUnavailableRef.current && !anyAdded) {
-        handleStoreUnavailableRef.current();
-        return;
-      }
-      if (searchResultsRef.current.length === 0) {
-        console.log(`[Cart ${ts()}]`, 'navigateToSearchItem: all done, no review needed');
-        const autoPicked = autoPickedItemsRef.current;
-        if (autoPicked.length > 0) {
-          // Legacy path: unchosen items that happened to score 100 — add them now.
-          addingItemsRef.current = autoPicked;
-          addingIdxRef.current = 0;
-          addResultsRef.current = [];
-          setStep('adding');
-          navigateToAddItem(0, autoPicked);
-        } else {
-          // Combined path: all items were search+added inline; results are in addResultsRef.
-          const added = addResultsRef.current.filter((r) => r.success).length;
-          const names = addResultsRef.current.filter((r) => r.success).map((r) => r.name);
-          setTotalAdded(added);
-          setAddedNames(names);
-          // See compileFailedNames — it owns the count too.
-          compileFailedNames();
-          setStep('done');
-        }
-      } else {
-        // Skip the "items could not be added" summary for choose-product flow — go straight to review.
-        const allChoose = searchResultsRef.current.every(r => r.isChoose);
-        const resultSummary = searchResultsRef.current.map(r => ({ term: r.term, isChoose: r.isChoose, candidateCount: r.candidates.length, firstCandidatePrefs: r.candidates[0]?.preferences }));
-        console.log(`[Cart ${ts()}]`, 'navigateToSearchItem: all done → ', allChoose ? 'review (choose flow)' : 'searchResult', JSON.stringify(resultSummary));
-        if (allChoose) {
-          setStep('review');
-        } else {
-          setStep('searchResult');
-        }
-        setReviewIdx(0);
-      }
-      return;
-    }
-    const item = active[idx];
-    const term = item.searchTerm ?? item.ingredientName;
-    console.log(`[Cart ${ts()}]`, 'navigateToSearchItem idx=', idx, 'term=', term, 'hasSearchTerm=', !!item.searchTerm, 'onSearchPage=', onSearchPageRef.current);
-
-    if (item.searchTerm) {
-      // Combined path: search + add to cart in one step (no separate add phase).
-      setSearchingLabel(`Adding ${term}…`);
-      // Sold-by-weight item with a remembered weight: pass it as a 'weight'
-      // dropdown so the add selects the option closest to the saved lb amount
-      // (the store's increments can differ / change). Falls back to the normal
-      // preference dropdown for everything else.
-      const addDropdown = isWeightPriced(item)
-        ? { type: 'weight', selectedText: `${item.purchaseWeight} lb`, selectedValue: String(item.purchaseWeight) }
-        : (item.dropdown ?? null);
-      const script = scriptsRef.current!.buildSearchAndAddScript(term, item.productQty, addDropdown);
-      navigateToResultsOrSearchInPage(term, script);
-    } else {
-      // Choose-product path: extract candidates for user to pick from.
-      setSearchingLabel(`Searching for ${term}…`);
-      navigateToResultsOrSearchInPage(term, scriptsRef.current!.extractProductsScript);
-    }
-    // Arm a safety timeout. If neither SEARCH_RESULT nor SEARCH_AND_ADD_RESULT
-    // arrives within the window, mark this item as failed (where applicable)
-    // and advance. Without this a hung buildSearchScript spins forever.
-    searchTimeoutRef.current = setTimeout(() => {
-      searchTimeoutRef.current = null;
-      inflightScriptRef.current = null;
-      // A bare search timeout means this item's results never painted → treat it
-      // as a failed/unfound item and advance. It does NOT indicate a block: a
-      // real block shows an HTTP error, a /blocked page, or a blocking overlay,
-      // all detected separately (BLOCKED_OVERLAY), so we no longer trip
-      // surfaceBlocker on consecutive search timeouts.
-      consecutiveTimeoutsRef.current += 1;
-      // Funnel: 'timeout' is deliberately distinct from the 'empty' recorded on a
-      // SEARCH_RESULT with zero candidates. Empty means the store answered and
-      // had nothing; timeout means we never got an answer — different fixes.
-      // 'timeout' and not 'nav_failed': the WebView can't tell a navigation that
-      // never completed from a page that loaded and never answered, so the
-      // budget is the only thing we can honestly say was exceeded.
-      tel().record('search', 'timeout', {
-        durationMs: SEARCH_TIMEOUT_MS, itemIndex: searchIdxRef.current, code: 'timeout',
-      });
-      console.log(`[Cart ${ts()}]`, 'SEARCH timeout for', term, '— treating as failed and advancing');
-      if (item.searchTerm) {
-        // Auto-add flow: also push a SearchResult with empty candidates so
-        // the failed item appears in the review/searchResult screen — same
-        // shape as the SEARCH_AND_ADD_RESULT failure path.
-        const newResult: SearchResult = {
-          term: item.searchTerm,
-          candidates: [],
-          mealIngredients: item.mealIngredients,
-          unit: item.unit,
-          measure: item.measure,
-          reason: 'no_results',
-          isChoose: false,
-        };
-        searchResultsRef.current = [...searchResultsRef.current, newResult];
-        setSearchResults(searchResultsRef.current);
-        addResultsRef.current.push({ name: item.searchTerm, success: false, reason: 'timeout' });
-      } else {
-        // Choose-product flow: push an empty-candidates SearchResult so the
-        // review screen still renders an entry for this ingredient.
-        const newResult: SearchResult = {
-          term: item.ingredientName,
-          candidates: [],
-          mealIngredients: item.mealIngredients,
-          unit: item.unit,
-          measure: item.measure,
-          reason: 'no_results',
-          isChoose: true,
-        };
-        searchResultsRef.current = [...searchResultsRef.current, newResult];
-        setSearchResults(searchResultsRef.current);
-      }
-      // Clear any in-flight load state so the next nav can run cleanly.
-      loadQueueRef.current = [];
-      expectedNavUrlRef.current = '';
-      const nextIdx = idx + 1;
-      searchIdxRef.current = nextIdx;
-      navigateToSearchItem(nextIdx);
-    }, SEARCH_TIMEOUT_MS);
-  }, []);
 
   const navigateToAddItem = useCallback((idx: number, itemsToAdd: PickedItem[]) => {
     // Always clear any timer from the previous item — even on the "all done"
@@ -2971,13 +2807,13 @@ export default function WebViewCartSheet({
       // loaded page. The store's script uses a window-level guard to no-op
       // duplicate runs within the same JS context.
       const sameUrl = url === lastLoadEndUrlRef.current;
-      // SPA-search stores (ALDI/Instacart) fire onLoadEnd multiple times for ONE
-      // pushState route change WITHOUT reloading — the injected script is still
-      // running. Re-injecting there would spawn a second concurrent run of
-      // buildSearchAndAddScript, posting a duplicate result that over-advances
-      // searchIdxRef and skips items. Only re-inject for stores whose same-URL
-      // onLoadEnd really is a script-killing reload (e.g. Wegmans SSO bootstrap).
-      const reinjectInflight = !s.spaSearch;
+      // Always, now. This guard existed because SPA-search stores fire onLoadEnd
+      // several times for one pushState route change without reloading, and a
+      // re-inject there would spawn a second concurrent buildSearchAndAddScript
+      // and post a duplicate result. Nothing long-running is injected into a
+      // page any more -- the only queued scripts are cart reads for stores with
+      // no rail -- so the duplicate it protected against cannot happen.
+      const reinjectInflight = true;
       const allowRecheck =
         stepRef.current === 'login' ||
         stepRef.current === 'login_check' ||
@@ -4217,97 +4053,9 @@ export default function WebViewCartSheet({
           return;
         }
 
-        if (msg.type === 'SEARCH_AND_ADD_RESULT') {
-          // Real block: the store served an app-download / interstitial nudge over
-          // the page (no HTTP error). Surface it so the user can dismiss it.
-          if (msg.reason === 'blocked') {
-            console.log(`[Cart ${ts()}]`, 'BLOCKED_OVERLAY detected:', msg.blockedText);
-            surfaceBlocker('nudge');
-            return;
-          }
-          if (searchTimeoutRef.current) {
-            clearTimeout(searchTimeoutRef.current);
-            searchTimeoutRef.current = null;
-          }
-          // Store responded → progress. Clear the no-progress block counter.
-          consecutiveTimeoutsRef.current = 0;
-          if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
-          inflightScriptRef.current = null;
-          const idx = searchIdxRef.current;
-          const active = activeItemsRef.current;
-          const item = active[idx];
-          console.log(`[Cart ${ts()}]`, 'SEARCH_AND_ADD_RESULT idx=', idx, 'success=', msg.success, 'productName=', msg.productName, 'cart=', msg.confirm ? `${msg.confirm.state}/${msg.confirm.reason}` : null);
-          // Funnel: the fused search+add path dispatches inside the injected
-          // script, so there is no separate click moment to hook on the RN side.
-          // Emit both halves here to keep the confirm-rate denominator complete —
-          // a fused add that failed still counts as an attempt.
-          tel().record('add_click', 'ok', { itemIndex: idx, detail: { path: 'fused' } });
-          addsAttemptedRef.current += 1;
-          // MEAL-14: which RAIL decided, and what it decided, flattened —
-          // sanitizeDetail keeps scalars only. Without this the funnel cannot tell
-          // a cart-verified confirm from a badge guess, which is the whole point.
-          const cartDetail = confirmDetail(msg.confirm);
-          if (msg.success) {
-            tel().record('confirm', 'ok', { itemIndex: idx, detail: { attempt: 1, path: 'fused', ...cartDetail } });
-          } else {
-            const failReason = String(msg.reason ?? 'unknown');
-            tel().record('confirm', 'error', {
-              itemIndex: idx,
-              detail: { attempt: 1, path: 'fused', reason: failReason, ...cartDetail },
-              code: addFailureCode(failReason),
-            });
-          }
-          const nextIdx = idx + 1;
-          searchIdxRef.current = nextIdx;
-          if (item) {
-            if (msg.success) {
-              addResultsRef.current.push({ name: msg.productName || item.searchTerm!, success: true });
-            } else if (msg.reason === 'needs_weight') {
-              // Sold-by-weight item, no remembered weight: the combined add bailed
-              // with the weight options. Route it straight to the review picker
-              // (the candidate already carries weightOptions, so no extract enrich)
-              // — the weight stepper lets the user choose, then it's remembered.
-              const newResult: SearchResult = {
-                term: item.searchTerm!,
-                candidates: msg.candidates ?? [],
-                mealIngredients: item.mealIngredients,
-                unit: item.unit,
-                measure: item.measure,
-                reason: 'needs_weight',
-                isChoose: false,
-              };
-              searchResultsRef.current = [...searchResultsRef.current, newResult];
-              setSearchResults(searchResultsRef.current);
-              setTimeout(() => navigateToSearchItem(nextIdx), 400);
-              return;
-            } else {
-              const newResult: SearchResult = {
-                term: item.searchTerm!,
-                candidates: msg.candidates ?? [],
-                mealIngredients: item.mealIngredients,
-                unit: item.unit,
-                measure: item.measure,
-                reason: msg.reason ?? 'no_results',
-                isChoose: false,
-              };
-              searchResultsRef.current = [...searchResultsRef.current, newResult];
-              setSearchResults(searchResultsRef.current);
-              // Inject EXTRACT_PRODUCTS_SCRIPT to enrich candidates with preference data.
-              // Navigation resumes when the resulting SEARCH_RESULT is received.
-              prefFetchResultIdxRef.current = searchResultsRef.current.length - 1;
-              pendingNavIdxRef.current = nextIdx;
-              webviewRef.current?.injectJavaScript(scriptsRef.current!.extractProductsScript);
-              return;
-            }
-          }
-          // Buffer before navigating to the next ingredient — gives Wegmans's
-          // cart API enough time to fully commit this item before the page
-          // reloads. Without this, the page navigation can race-cancel the
-          // in-flight POST cart request, visually reverting qty to 0.
-          setTimeout(() => navigateToSearchItem(nextIdx), 400);
-          return;
-        }
-
+        // The SEARCH_AND_ADD_RESULT and sequential SEARCH_RESULT handlers lived
+        // here. Both answered DOM scripts -- the fused search-and-add, and the
+        // page extractor -- and nothing injects either any more.
         // A network SEARCH_RESULT is keyed by TERM and collected for the batch,
         // not fed to the sequential handler below — that one assumes it is the
         // answer to the ONE item the run is currently walking, and a batch posts
@@ -4319,138 +4067,6 @@ export default function WebViewCartSheet({
           }
           return;
         }
-        if (msg.type === 'SEARCH_RESULT') {
-          if (searchTimeoutRef.current) {
-            clearTimeout(searchTimeoutRef.current);
-            searchTimeoutRef.current = null;
-          }
-          // Funnel: a search that returns zero candidates is 'empty', not 'ok' —
-          // that distinction is what separates "the store has no match" from
-          // "our extractor's selectors broke", which look identical downstream.
-          {
-            const found = Array.isArray(msg.candidates) ? msg.candidates.length : 0;
-            // `source` says which extractor produced these ('next_data' | 'dom' on
-            // HEB, absent elsewhere) and `why` says what the JSON reader decided
-            // ('ok' when it answered, or the reason it handed over to the DOM).
-            // Recorded so the two can be compared in the funnel while MEAL-13's
-            // flag is rolling out.
-            const candidatesDetail = {
-              count: found,
-              storeUnavailable: !!msg.storeUnavailable,
-              source: msg.source ?? null,
-              why: takeExtractWhy(MAIN_SURFACE),
-            };
-            tel().record('search', 'ok', { itemIndex: searchIdxRef.current });
-            if (found > 0) {
-              tel().record('candidates', 'ok', { itemIndex: searchIdxRef.current, detail: candidatesDetail });
-            } else {
-              tel().record('candidates', 'empty', {
-                itemIndex: searchIdxRef.current, detail: candidatesDetail, code: 'no_candidates',
-              });
-            }
-          }
-          // Store responded → progress. Clear the no-progress block counter.
-          consecutiveTimeoutsRef.current = 0;
-          if (msg.storeUnavailable) freshStoreUnavailableRef.current = true;
-          inflightScriptRef.current = null;
-          // Preference-fetch pass: enrich a failed SEARCH_AND_ADD_RESULT's candidates with
-          // preference data from extractProductsScript, then resume navigation.
-          if (prefFetchResultIdxRef.current >= 0) {
-            const targetIdx = prefFetchResultIdxRef.current;
-            const nextNavIdx = pendingNavIdxRef.current;
-            prefFetchResultIdxRef.current = -1;
-            pendingNavIdxRef.current = -1;
-            const newCandidates: Candidate[] = msg.candidates ?? [];
-            if (newCandidates.length > 0) {
-              const updated = searchResultsRef.current.map((r, i) =>
-                i === targetIdx ? { ...r, candidates: newCandidates } : r,
-              );
-              searchResultsRef.current = updated;
-              setSearchResults(updated);
-            }
-            navigateToSearchItem(nextNavIdx);
-            return;
-          }
-
-          // Custom search during review — update suggestions without advancing the queue.
-          if (isCustomSearchRef.current) {
-            isCustomSearchRef.current = false;
-            if (customSearchTimeoutRef.current) { clearTimeout(customSearchTimeoutRef.current); customSearchTimeoutRef.current = null; }
-            setCustomSuggestions(msg.candidates ?? []);
-            setCustomSearching(false);
-            setSelectedSuggIdx(0);
-            setCustomText('');
-            return;
-          }
-
-          console.log(`[Cart ${ts()}]`, 'SEARCH_RESULT candidates:', (msg.candidates ?? []).map((c: any) => ({ name: c.productName, price: c.price })));
-          const active = activeItemsRef.current;
-          const idx = searchIdxRef.current;
-          const item = active[idx];
-          if (item) {
-            const candidates: Candidate[] = msg.candidates ?? [];
-            const isChooseFlow = !item.searchTerm; // no searchTerm set yet = choose-product flow
-            const scoreTarget = item.searchTerm ?? item.ingredientName;
-
-            if (!isChooseFlow) {
-              // Add-to-cart flow: auto-pick if exact in-stock match, else queue for review.
-              const scored = candidates.map(c => ({ c, score: scoreMatch(scoreTarget, c.productName) }));
-              const bestInStock = scored.filter(({ score, c }) => score === 100 && !c.outOfStock)[0];
-              const bestExactOos = !bestInStock && scored.find(({ score, c }) => score === 100 && c.outOfStock);
-
-              if (bestInStock) {
-                console.log(`[Cart ${ts()}]`, 'SEARCH_RESULT auto-pick:', scoreTarget, '→', bestInStock.c.productName);
-                autoPickedItemsRef.current.push({
-                  searchTerm: scoreTarget,
-                  productName: bestInStock.c.productName,
-                  preference: null,
-                  qty: item.productQty,
-                });
-              } else {
-                const reason: SearchResult['reason'] = bestExactOos
-                  ? 'out_of_stock'
-                  : candidates.length === 0
-                  ? 'no_results'
-                  : 'low_confidence';
-                const newResult: SearchResult = {
-                  term: scoreTarget,
-                  candidates,
-                  mealIngredients: item.mealIngredients,
-                  unit: item.unit,
-                  measure: item.measure,
-                  reason,
-                  isChoose: false,
-                };
-                searchResultsRef.current = [...searchResultsRef.current, newResult];
-                setSearchResults(searchResultsRef.current);
-              }
-            } else {
-              // Choose-product flow: always show candidates to user, never auto-pick.
-              // Ordered best-match-first rather than in the store's own order,
-              // which is the store's relevance ranking and carries its paid
-              // placement. Presentational only — this flow adds nothing to the
-              // cart, it saves the picked product as the ingredient's searchTerm
-              // for future runs, and those still have to clear the exact-match
-              // add gate. See src/lib/chooseRanking.ts.
-              const newResult: SearchResult = {
-                term: scoreTarget,
-                candidates: rankChoiceCandidates(scoreTarget, candidates),
-                mealIngredients: item.mealIngredients,
-                unit: item.unit,
-                measure: item.measure,
-                reason: candidates.length === 0 ? 'no_results' : 'low_confidence',
-                isChoose: true,
-              };
-              searchResultsRef.current = [...searchResultsRef.current, newResult];
-              setSearchResults(searchResultsRef.current);
-            }
-          }
-          const nextIdx = idx + 1;
-          searchIdxRef.current = nextIdx;
-          navigateToSearchItem(nextIdx);
-          return;
-        }
-
         if (msg.type === 'ADD_RESULT') {
           if (addTimeoutRef.current) {
             clearTimeout(addTimeoutRef.current);
@@ -4495,7 +4111,7 @@ export default function WebViewCartSheet({
         // ignore
       }
     },
-    [navigateToSearchItem, navigateToAddItem, ingestSelectorHealth],
+    [navigateToAddItem, ingestSelectorHealth],
   );
 
   // ── Review step helpers ──────────────────────────────────────────────────
@@ -4567,8 +4183,16 @@ export default function WebViewCartSheet({
       return;
     }
 
-    loadQueueRef.current = [scriptsRef.current!.extractProductsScript];
-    webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(trimmed));
+    // NO RAIL, NO SUGGESTIONS. This used to drive the store's own header search
+    // and scrape the results page. A store without a rail never reaches the
+    // review screen at all now -- its whole run is assisted -- so rather than
+    // keep a DOM scraper alive for a path nobody walks, say so immediately
+    // instead of making the user wait out the fifteen-second recovery timeout.
+    console.log(`[Cart ${ts()}]`, 'CUSTOM SEARCH: no rail for this store — no suggestions');
+    if (customSearchTimeoutRef.current) { clearTimeout(customSearchTimeoutRef.current); customSearchTimeoutRef.current = null; }
+    isCustomSearchRef.current = false;
+    setCustomSuggestions([]);
+    setCustomSearching(false);
   }, []);
 
   const handleReviewDecision = (action: 'add' | 'update' | 'skip' | 'choose') => {

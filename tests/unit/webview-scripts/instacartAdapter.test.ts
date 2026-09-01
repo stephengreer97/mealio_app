@@ -67,14 +67,11 @@ const SYNTHETIC: InstacartTenant = {
 /** All injectable scripts a tenant produces, keyed for readable failures. */
 function scriptsOf(t: InstacartTenant): Record<string, string> {
   const s = getInstacartScripts(t);
-  return {
-    checkLogin: s.checkLoginScript,
-    extract: s.extractProductsScript,
-    addToCart: s.buildAddToCartScript('Sour Cream 16 oz', null, 2),
-    search: s.buildSearchScript('sour cream'),
-    searchAndAdd: s.buildSearchAndAddScript('sour cream', 2, null),
-    worker: s.buildWorkerScript!(1),
-  };
+  // The extractor, the add click, the in-page search, the fused search-and-add
+  // and the pool worker were all here. ALDI runs assisted now — Mealio hands the
+  // user a search URL and they add it themselves — so the login check is the only
+  // script the adapter still injects.
+  return { checkLogin: s.checkLoginScript };
 }
 
 /** The window guard name the adapter derives for a tenant. Mirrors loginFlag()
@@ -126,9 +123,12 @@ describe('the tenant seam is complete', () => {
     expect(getInstacartSearchUrl(SYNTHETIC, 'sour cream')).toBe(
       'https://shop.example-co.test/store/example-co/s?k=sour%20cream',
     );
-    // The product-card selector is slug-derived, not a shared constant — this is
-    // what stops one banner's cards from being scraped on another's page.
-    expect(scriptsOf(SYNTHETIC).extract).toContain('a[href*=\\"/store/example-co/products/\\"]');
+    // The product-card selector used to be checked here: slug-derived, not a
+    // shared constant, which is what stopped one banner's cards from being
+    // scraped on another's page. Nothing scrapes cards now. The tenant seam that
+    // still matters is the one above — every URL and the domain follow the
+    // tenant — plus the login guard and search URL asserted elsewhere in this
+    // file.
   });
 
   it('isSearchUrl matches this tenant\'s store pages and not another\'s', () => {
