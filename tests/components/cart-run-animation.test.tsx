@@ -57,4 +57,27 @@ describe('CartRunAnimation', () => {
     expect(v.getByTestId('cart-run-count')).toHaveTextContent('9/4');
     expect(v.queryAllByTestId('pile-item').length).toBeLessThanOrEqual(8);
   });
+
+  it('draws its own groceries — no emoji', () => {
+    // Emoji are a different artwork on every OS and read as stickers on a paper
+    // bag. The produce is drawn so it matches the rest of the app and looks the
+    // same everywhere.
+    const v = render(<CartRunAnimation total={8} done={8} />);
+    const text = JSON.stringify(v.toJSON());
+    expect(text).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u);
+  });
+
+  it('puts the groceries between the two halves of the bag, not on top of it', () => {
+    // The layering IS the illusion: back panel, produce, front panel. If the
+    // produce renders after the front panel it floats in front of the bag,
+    // which is what it used to do.
+    const v = render(<CartRunAnimation total={8} done={4} />);
+    const tree = JSON.stringify(v.toJSON());
+    const firstItem = tree.indexOf('pile-item');
+    // The front panel carries the store's printed band; it must come later in
+    // the tree than the groceries.
+    const front = tree.lastIndexOf('paper');
+    expect(firstItem).toBeGreaterThan(-1);
+    expect(front).toBeGreaterThan(firstItem);
+  });
 });

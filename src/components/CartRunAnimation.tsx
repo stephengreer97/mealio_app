@@ -1,121 +1,96 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
-import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
+import Svg, { Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { Colors } from '../constants/colors';
+import Produce from './CartRunProduce';
 
 // What the user watches while the network rail works.
 //
-// The rail loads no pages, so there is nothing to look at and nothing for the
-// user to do. This is what fills that space: groceries dropping into a bag, one
-// per item that lands, and the bag filling up as the run goes.
+// The rail loads no pages, so there is nothing to look at and nothing to do.
+// This fills that space: a brown paper grocery bag, printed in the store's
+// colour, that visibly fills as items land — groceries drop in, pile up, and
+// start spilling over the rim once it is full enough.
 //
-// Progress is shown three ways on purpose, because the count alone is easy to
-// miss at a glance: the ring, the number, and the pile of food in the bag. The
-// pile is the one people actually read — a bag with eight things in it is
-// obviously further along than a bag with two, without reading anything.
+// THE LAYERING IS THE WHOLE TRICK. The bag is drawn in two pieces with the
+// groceries sandwiched between them: back panel, then produce, then the front
+// panel over the top. That is what makes an item read as being IN the bag
+// rather than stuck on it — the front panel hides its bottom half. An earlier
+// version drew the produce over a single bag shape and everything floated in
+// front of it.
 //
-// Every number here is real. The rail knows how many terms it asked for and how
-// many landed, so nothing is a spinner dressed up as progress.
+// Progress is shown three ways, because a number alone is easy to miss: the
+// count, how full the bag looks, and the drop that fires on each landing. Every
+// one of them is a real figure — the rail knows how many terms it asked for and
+// how many landed.
 
-/** The cast. Ordered so consecutive drops look different from each other. */
-const FOODS = ['🥕', '🍅', '🥬', '🧀', '🥖', '🥛', '🍎', '🧅', '🥑', '🌶️', '🥦', '🍋'];
-
-const BAG_BODY = 'M20 44 L100 44 L94 116 Q93 126 83 126 L37 126 Q27 126 26 116 Z';
-const BAG_FLAP = 'M20 44 L100 44 L100 56 L20 56 Z';
-const HANDLE_L = 'M42 44 L42 32 Q42 20 52 20';
-const HANDLE_R = 'M78 44 L78 32 Q78 20 68 20';
+/** Slots around the bag's mouth. Beyond this they stop reading as a quantity. */
+const SLOTS = 8;
+const STAGE = 190;
 
 interface Props {
-  /** Items the run intends to add. */
   total: number;
-  /** Items confirmed so far. */
   done: number;
-  /** What it is working on right now. */
   label?: string | null;
-  /** The store's brand colour, so the run looks like the store it runs on. */
   color?: string;
-  /** Headline. Defaults to "Filling your cart". */
   title?: string | null;
 }
 
 export default function CartRunAnimation({ total, done, label, color, title }: Props) {
   const accent = color || Colors.brand;
-  // total 0 means "working, denominator unknown" — the login check, or the beat
-  // before the session probe answers. "0 of 0" reads as broken, so the bag just
-  // bobs and nothing is counted.
+  // total 0 = working, denominator unknown (the login check, or before the
+  // session probe answers). "0/0" reads as broken, so nothing is counted.
   const indeterminate = total <= 0;
   const pct = indeterminate ? 0 : Math.max(0, Math.min(1, done / total));
-
-  // Up to eight things visibly poking out of the bag. More than that and they
-  // stop being distinguishable, and the pile stops reading as a quantity.
-  const SLOTS = 8;
-  const filled = indeterminate ? 0 : Math.round(pct * SLOTS);
+  const filled = indeterminate ? 0 : Math.max(0, Math.min(SLOTS, Math.round(pct * SLOTS)));
 
   const bob = useRef(new Animated.Value(0)).current;
   const squash = useRef(new Animated.Value(0)).current;
-  const [drop, setDrop] = useState<{ key: number; food: string } | null>(null);
+  const [drop, setDrop] = useState<{ key: number; index: number } | null>(null);
   const lastDone = useRef(done);
 
-  // Idle motion, so a run that is waiting on the network still looks alive. A
-  // still frame for eight seconds reads as a hang.
   useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(bob, { toValue: 1, duration: 1700, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-        Animated.timing(bob, { toValue: 0, duration: 1700, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(bob, { toValue: 1, duration: 1900, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(bob, { toValue: 0, duration: 1900, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
       ]),
     );
     loop.start();
     return () => loop.stop();
   }, [bob]);
 
-  // Each item that lands drops one piece of food into the bag, and the bag takes
-  // the hit. This is the only motion tied to real events; everything else is
-  // ambient.
+  // The only motion tied to a real event: one grocery falls per item confirmed,
+  // and the bag takes the hit as it lands.
   useEffect(() => {
     if (done <= lastDone.current) { lastDone.current = done; return; }
     lastDone.current = done;
-    setDrop({ key: done, food: FOODS[done % FOODS.length] });
+    setDrop({ key: done, index: done });
     squash.setValue(0);
     Animated.sequence([
-      Animated.delay(430),
-      Animated.timing(squash, { toValue: 1, duration: 110, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-      Animated.spring(squash, { toValue: 0, friction: 4, tension: 120, useNativeDriver: true }),
+      Animated.delay(420),
+      Animated.timing(squash, { toValue: 1, duration: 100, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.spring(squash, { toValue: 0, friction: 4.5, tension: 130, useNativeDriver: true }),
     ]).start();
   }, [done, squash]);
 
-  const bobY = bob.interpolate({ inputRange: [0, 1], outputRange: [0, -5] });
-  const bagScaleY = squash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.9] });
-  const bagScaleX = squash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.07] });
+  const bobY = bob.interpolate({ inputRange: [0, 1], outputRange: [0, -4] });
+  const sy = squash.interpolate({ inputRange: [0, 1], outputRange: [1, 0.92] });
+  const sx = squash.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] });
 
   return (
     <View style={styles.wrap} testID="cart-run-animation">
-      <View style={styles.stage}>
-        <Sparkles color={accent} />
+      <Animated.View style={[styles.stage, { transform: [{ translateY: bobY }, { scaleX: sx }, { scaleY: sy }] }]}>
+        <BagBack accent={accent} />
 
-        {/* The pile. Each slot pops in when progress reaches it. */}
-        <View style={styles.pile} pointerEvents="none">
+        {/* Sandwiched: above the back panel, below the front. */}
+        <View style={StyleSheet.absoluteFill} pointerEvents="none">
           {Array.from({ length: filled }).map((_, i) => (
-            <PileItem key={i} index={i} food={FOODS[i % FOODS.length]} />
+            <PileItem key={i} index={i} />
           ))}
+          {drop && <FallingItem key={drop.key} index={drop.index} />}
         </View>
 
-        {drop && <FallingFood key={drop.key} food={drop.food} />}
-
-        <Animated.View style={{ transform: [{ translateY: bobY }, { scaleX: bagScaleX }, { scaleY: bagScaleY }] }}>
-          <Svg width={150} height={150} viewBox="0 0 120 150">
-            <Defs>
-              <LinearGradient id="bag" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0" stopColor={accent} stopOpacity="0.95" />
-                <Stop offset="1" stopColor={accent} stopOpacity="0.72" />
-              </LinearGradient>
-            </Defs>
-            <Path d={HANDLE_L} stroke={accent} strokeWidth="5" fill="none" strokeLinecap="round" />
-            <Path d={HANDLE_R} stroke={accent} strokeWidth="5" fill="none" strokeLinecap="round" />
-            <Path d={BAG_BODY} fill="url(#bag)" />
-            <Path d={BAG_FLAP} fill={accent} opacity={0.85} />
-          </Svg>
-        </Animated.View>
+        <BagFront accent={accent} />
 
         {!indeterminate && (
           <View style={styles.badge} pointerEvents="none">
@@ -124,111 +99,137 @@ export default function CartRunAnimation({ total, done, label, color, title }: P
             </Text>
           </View>
         )}
-      </View>
+      </Animated.View>
 
       <Text style={styles.title}>{title || 'Filling your cart'}</Text>
-      {!!label && (
-        <Text style={styles.label} numberOfLines={1} testID="cart-run-label">{label}</Text>
-      )}
+      {!!label && <Text style={styles.label} numberOfLines={1} testID="cart-run-label">{label}</Text>}
     </View>
   );
 }
 
-/** One item in the pile, popping in the moment progress reaches its slot. */
-function PileItem({ index, food }: { index: number; food: string }) {
-  // Mounted only once its slot is reached, so the pile in the tree IS the
-  // progress — nothing invisible sitting there inflating the count.
+/** The back wall of the bag. Everything in the bag is drawn over this. */
+function BagBack({ accent }: { accent: string }) {
+  return (
+    <Svg width={STAGE} height={STAGE} viewBox="0 0 190 190" style={StyleSheet.absoluteFill}>
+      <Defs>
+        <LinearGradient id="paperBack" x1="0" y1="0" x2="1" y2="0">
+          <Stop offset="0" stopColor="#A87F52" />
+          <Stop offset="1" stopColor="#C09765" />
+        </LinearGradient>
+      </Defs>
+      {/* Slightly wider than the front, so the rim reads as an opening. */}
+      <Path d="M46 74 L144 74 L140 168 Q139 174 132 174 L58 174 Q51 174 50 168 Z" fill="url(#paperBack)" />
+      <Path d="M46 74 L144 74 L143 86 L47 86 Z" fill="#8F6B45" opacity={0.55} />
+    </Svg>
+  );
+}
+
+/**
+ * The front panel, drawn over the groceries — which is what puts them IN the
+ * bag. Carries the paper texture and the store's printing.
+ */
+function BagFront({ accent }: { accent: string }) {
+  return (
+    <Svg width={STAGE} height={STAGE} viewBox="0 0 190 190" style={StyleSheet.absoluteFill} pointerEvents="none">
+      <Defs>
+        <LinearGradient id="paper" x1="0" y1="0" x2="1" y2="0">
+          <Stop offset="0" stopColor="#C9A272" />
+          <Stop offset="0.5" stopColor="#DDB988" />
+          <Stop offset="1" stopColor="#BE9463" />
+        </LinearGradient>
+      </Defs>
+
+      <Path d="M52 92 L138 92 L134 168 Q133 174 126 174 L64 174 Q57 174 56 168 Z" fill="url(#paper)" />
+      {/* The rolled rim. */}
+      <Path d="M52 92 L138 92 L137 103 L53 103 Z" fill="#B58B5C" />
+      {/* Creases — two verticals and the classic side fold. */}
+      <Path d="M76 103 L74 174" stroke="#AD8455" strokeWidth="1.4" opacity={0.5} />
+      <Path d="M114 103 L116 174" stroke="#AD8455" strokeWidth="1.4" opacity={0.5} />
+      <Path d="M95 103 L95 174" stroke="#B78F60" strokeWidth="1" opacity={0.35} />
+
+      {/* The store's printing. Deliberately illegible — bars, not letters: a
+          real wordmark would be a brand we do not own, and a fake one reads as a
+          typo. The store's colour is what carries the association. */}
+      <Rect x="68" y="118" width="54" height="7" rx="3.5" fill={accent} opacity={0.85} />
+      <Rect x="68" y="130" width="34" height="5" rx="2.5" fill={accent} opacity={0.5} />
+      <Rect x="106" y="130" width="16" height="5" rx="2.5" fill={accent} opacity={0.3} />
+      <Rect x="68" y="141" width="44" height="4" rx="2" fill={accent} opacity={0.22} />
+      {/* A band low on the bag, so the colour reads even when the print is small. */}
+      <Rect x="56" y="158" width="78" height="6" rx="3" fill={accent} opacity={0.28} />
+    </Svg>
+  );
+}
+
+/**
+ * One grocery resting in the bag.
+ *
+ * Later slots sit higher and further out — that is the "spilling over" as it
+ * fills. The first few are tucked down behind the rim; the last ones lean out
+ * past the edge.
+ */
+function PileItem({ index }: { index: number }) {
   const a = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.spring(a, { toValue: 1, friction: 5, tension: 140, useNativeDriver: true }).start();
+    Animated.spring(a, { toValue: 1, friction: 5, tension: 150, useNativeDriver: true }).start();
   }, [a]);
-  // Staggered across the bag mouth, alternating heights so the pile has a
-  // silhouette rather than a straight line.
-  const x = 12 + (index % 4) * 24 + (index >= 4 ? 10 : 0);
-  const y = index >= 4 ? -10 : 0;
-  const scale = a.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
-  const ty = a.interpolate({ inputRange: [0, 1], outputRange: [10, 0] });
+
+  const row = index < 4 ? 0 : 1;
+  const col = index % 4;
+  // Row 0 nestles inside the rim. Row 1 rides above it and spreads wider, so a
+  // full bag looks overloaded rather than merely occupied.
+  const left = row === 0 ? 60 + col * 22 : 50 + col * 27;
+  const bottom = row === 0 ? 96 : 112;
+  const tilt = [-14, 8, -6, 15][col] + (row === 1 ? (col % 2 ? 10 : -10) : 0);
+
+  const scale = a.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] });
+  const ty = a.interpolate({ inputRange: [0, 1], outputRange: [14, 0] });
+
   return (
-    <Animated.Text
+    <Animated.View
       testID="pile-item"
       style={[
         styles.pileItem,
-        { left: x, bottom: 84 + y, opacity: a, transform: [{ scale }, { translateY: ty }] },
+        { left, bottom, opacity: a, transform: [{ translateY: ty }, { scale }, { rotate: `${tilt}deg` }] },
       ]}
     >
-      {food}
-    </Animated.Text>
+      <Produce index={index} size={row === 1 ? 24 : 27} />
+    </Animated.View>
   );
 }
 
-/** The piece of food for the item that just landed, falling into the bag. */
-function FallingFood({ food }: { food: string }) {
+/** The grocery for the item that just landed, dropping into the bag. */
+function FallingItem({ index }: { index: number }) {
   const t = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(t, { toValue: 1, duration: 560, easing: Easing.in(Easing.quad), useNativeDriver: true }).start();
+    Animated.timing(t, { toValue: 1, duration: 540, easing: Easing.in(Easing.quad), useNativeDriver: true }).start();
   }, [t]);
-  const translateY = t.interpolate({ inputRange: [0, 1], outputRange: [-70, 26] });
-  const rotate = t.interpolate({ inputRange: [0, 1], outputRange: ['-25deg', '18deg'] });
-  // Fades right at the end so it reads as going INTO the bag rather than behind it.
-  const opacity = t.interpolate({ inputRange: [0, 0.75, 1], outputRange: [1, 1, 0] });
+  const translateY = t.interpolate({ inputRange: [0, 1], outputRange: [-58, 30] });
+  const rotate = t.interpolate({ inputRange: [0, 1], outputRange: ['-30deg', '20deg'] });
+  // Gone by the time it reaches the rim, so it reads as dropping INTO the bag
+  // rather than sliding behind it.
+  const opacity = t.interpolate({ inputRange: [0, 0.72, 1], outputRange: [1, 1, 0] });
   return (
-    <Animated.Text
+    <Animated.View
       style={[styles.falling, { opacity, transform: [{ translateY }, { rotate }] }]}
       pointerEvents="none"
     >
-      {food}
-    </Animated.Text>
-  );
-}
-
-/** Ambient motes drifting up behind the bag. Purely decorative. */
-function Sparkles({ color }: { color: string }) {
-  const motes = useMemo(() => [0, 1, 2, 3].map((i) => ({ key: i, delay: i * 700, x: 18 + i * 32 })), []);
-  return (
-    <>
-      {motes.map((m) => (
-        <Mote key={m.key} delay={m.delay} x={m.x} color={color} />
-      ))}
-    </>
-  );
-}
-
-function Mote({ delay, x, color }: { delay: number; x: number; color: string }) {
-  const t = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.delay(delay),
-        Animated.timing(t, { toValue: 1, duration: 2800, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(t, { toValue: 0, duration: 0, useNativeDriver: true }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [t, delay]);
-  const translateY = t.interpolate({ inputRange: [0, 1], outputRange: [30, -60] });
-  const opacity = t.interpolate({ inputRange: [0, 0.2, 0.7, 1], outputRange: [0, 0.5, 0.25, 0] });
-  return (
-    <Animated.View
-      style={[styles.mote, { left: x, backgroundColor: color, opacity, transform: [{ translateY }] }]}
-    />
+      <Produce index={index} size={28} />
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
-  stage: { width: 170, height: 170, alignItems: 'center', justifyContent: 'center' },
-  pile: { position: 'absolute', left: 10, right: 10, top: 0, bottom: 0 },
-  pileItem: { position: 'absolute', fontSize: 20 },
-  falling: { position: 'absolute', fontSize: 24, zIndex: 3 },
-  mote: { position: 'absolute', bottom: 40, width: 6, height: 6, borderRadius: 3 },
+  stage: { width: STAGE, height: STAGE, alignItems: 'center', justifyContent: 'center' },
+  pileItem: { position: 'absolute' },
+  falling: { position: 'absolute', left: 81, top: 40 },
   badge: {
-    position: 'absolute', bottom: 6,
+    position: 'absolute', bottom: 4,
     backgroundColor: Colors.surface, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 4,
     borderWidth: 1, borderColor: Colors.border,
   },
   badgeText: { fontSize: 16, fontFamily: 'Inter_600SemiBold' },
   badgeOf: { fontSize: 13, color: Colors.text3, fontFamily: 'Inter_400Regular' },
-  title: { marginTop: 16, fontSize: 17, fontFamily: 'Inter_600SemiBold', color: Colors.text1 },
+  title: { marginTop: 14, fontSize: 17, fontFamily: 'Inter_600SemiBold', color: Colors.text1 },
   label: { marginTop: 6, fontSize: 13, color: Colors.text3, fontFamily: 'Inter_400Regular', textAlign: 'center' },
 });
