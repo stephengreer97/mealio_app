@@ -15,6 +15,7 @@
 import {
   buildHebNetworkAddBatchScript,
   buildHebNetworkSearchBatchScript,
+  buildHebCartReadScript,
   buildHebNetworkSearchScript,
   buildHebSessionScript,
 } from '../../src/lib/webview-scripts/heb-network-search';
@@ -612,6 +613,54 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
     // crediting this run with it.
     expect(done.cartBefore).toEqual([{ name: 'Eggs', qty: 2 }]);
     expect(done.cartAfter).toEqual([{ name: 'Eggs', qty: 2 }, { name: 'Sour Cream', qty: 1 }]);
+  });
+
+  itWithFixture('logged-in-home.html', 'reads the cart ON ITS OWN, answering as the cart page would', async (runner) => {
+    // The whole reason the sheet still loaded www.heb.com/cart three times a run:
+    // the rail could read the cart, but only as a side effect of writing to it.
+    // This is the same read, offered on its own, posting the same message the
+    // page posts so nothing downstream can tell which one answered.
+    await runner.inject([
+      '(function () {',
+      '  window.fetch = function () {',
+      '    var out = { data: { cartV2: { __typename: "Cart", id: "c1", items: [',
+      '      { id: "l1", quantity: 2, estimatedWeight: null,',
+      '        product: { id: "p1", fullDisplayName: "H-E-B Bakery Southwestern Flour Tortillas" },',
+      '        sku: { id: "s1", customerFriendlySize: "10 ct" } },',
+      '      { id: "l2", quantity: 3, estimatedWeight: null,',
+      '        product: { id: "p2", fullDisplayName: "Fresh Lime, Each" },',
+      '        sku: { id: "s2", customerFriendlySize: "Each" } }',
+      '    ] } } };',
+      '    return Promise.resolve({ ok: true, status: 200,',
+      '      text: function () { return Promise.resolve(JSON.stringify(out)); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+
+    await runner.inject(buildHebCartReadScript());
+    const msg = await runner.waitForMessage('CART_COUNT', 15_000);
+    // count is TOTAL QUANTITY, exactly as the page script sums it.
+    expect(msg.count).toBe(5);
+    expect(msg.items).toEqual([
+      { name: 'H-E-B Bakery Southwestern Flour Tortillas, 10 ct', qty: 2 },
+      { name: 'Fresh Lime, Each', qty: 3 },
+    ]);
+  });
+
+  itWithFixture('logged-in-home.html', 'a failed cart read is UNKNOWN, never zero', async (runner) => {
+    // A zero here would tell the reconcile the cart is empty and invite it to
+    // re-add everything the user already has. null means "ask something else".
+    await runner.inject([
+      '(function () {',
+      '  window.fetch = function () { return Promise.resolve({ ok: false, status: 500,',
+      '    text: function () { return Promise.resolve("nope"); } }); };',
+      '})(); true;',
+    ].join('\n'));
+
+    await runner.inject(buildHebCartReadScript());
+    const msg = await runner.waitForMessage('CART_COUNT', 15_000);
+    expect(msg.count).toBeNull();
+    expect(msg.reason).toBe('rail_read_failed');
   });
 
   itWithFixture('logged-in-home.html', 'cart rows carry the SIZE, or the done screen reshuffles', async (runner) => {

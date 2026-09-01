@@ -1530,6 +1530,33 @@ export default function WebViewCartSheet({
   // result-timeout so a cart page that never posts can't strand the flow.
   const triggerCartProbe = useCallback((phase: 'after' | 'reconcile') => {
     const sid = lockedStoreIdRef.current;
+    // ASK THE RAIL FIRST — it needs no page.
+    //
+    // A rail store was still navigating to its cart URL for every snapshot:
+    // thirteen cart-page loads in one measured run, on the rail that exists to
+    // load none. Worse than slow, it was two readers of one fact — the page
+    // reads the card title ("..., 10 ct"), the rail read fullDisplayName — and
+    // the done screen diffs them BY NAME, which is why every line once showed
+    // as newly added until the size was appended to the rail's rows.
+    //
+    // cartRead posts the same CART_COUNT the page posts, so everything
+    // downstream is untouched and there is no second shape to disagree with.
+    const railForCart = getNetworkRail(sid);
+    if (railForCart) {
+      if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
+      cartRowsTimeoutRef.current = setTimeout(() => { cartRowsTimeoutRef.current = null; setCartRowsTimedOut(true); }, CART_ROWS_TIMEOUT_MS);
+      if (cartProbeResultTimeoutRef.current) clearTimeout(cartProbeResultTimeoutRef.current);
+      cartProbeResultTimeoutRef.current = setTimeout(() => {
+        cartProbeResultTimeoutRef.current = null;
+        console.log(`[Cart ${ts()}]`, 'cart probe timeout — no CART_COUNT for', phase);
+        cartCountPendingRef.current = null;
+        if (phase === 'reconcile') parallelReconcileArmedRef.current = false;
+      }, cfgTimeouts.cartProbeResultMs);
+      cartCountPendingRef.current = phase;
+      console.log(`[Cart ${ts()}]`, 'cart probe over the network —', phase, 'no page load');
+      webviewRef.current?.injectJavaScript(railForCart.cartRead());
+      return;
+    }
     const cartPageScript = buildCartPageCountScript(sid);
     const cartPageUrl = getCartPageUrl(sid) ?? capturedCartUrlRef.current;
     const openCartScript = buildOpenCartScript(sid);
@@ -3039,6 +3066,25 @@ export default function WebViewCartSheet({
       cartItemsBeforeRef.current = prewarmed.items;
       if (prewarmed.url && !getCartPageUrl(probeStoreId)) capturedCartUrlRef.current = prewarmed.url;
       beginSearchFlow();
+      return;
+    }
+    // ASK THE RAIL FIRST — same reason as the after-probe: a rail store must
+    // never load a page to learn what is in its own cart.
+    const railForBefore = getNetworkRail(probeStoreId);
+    if (railForBefore) {
+      cartCountPendingRef.current = 'before';
+      cartProbeBeginSearchRef.current = true;
+      if (cartProbeTimeoutRef.current) clearTimeout(cartProbeTimeoutRef.current);
+      cartProbeTimeoutRef.current = setTimeout(() => {
+        cartProbeTimeoutRef.current = null;
+        if (!cartProbeBeginSearchRef.current) return;
+        console.log(`[Cart ${ts()}]`, 'network before-probe timed out — starting search without a baseline');
+        cartProbeBeginSearchRef.current = false;
+        cartCountPendingRef.current = null;
+        beginSearchFlow();
+      }, CART_PROBE_TIMEOUT_MS);
+      console.log(`[Cart ${ts()}]`, 'snapshotBefore: reading the cart over the network, no page load');
+      webviewRef.current?.injectJavaScript(railForBefore.cartRead());
       return;
     }
     const cartPageScript = buildCartPageCountScript(probeStoreId);
