@@ -13,9 +13,20 @@ import CartRunAnimation from '../../src/components/CartRunAnimation';
 describe('CartRunAnimation', () => {
   it('shows how many of how many, not a spinner', () => {
     const v = render(<CartRunAnimation total={10} done={3} label="Sour Cream" />);
-    expect(v.getByText('3')).toBeTruthy();
-    expect(v.getByText('of 10')).toBeTruthy();
+    expect(v.getByTestId('cart-run-count')).toHaveTextContent('3/10');
     expect(v.getByText('Sour Cream')).toBeTruthy();
+  });
+
+  it('fills the bag in proportion to progress, so the pile IS the progress', () => {
+    // The pile is what people read at a glance — a bag with eight things in it
+    // is obviously further along than one with two, without reading a number.
+    const none = render(<CartRunAnimation total={8} done={0} />);
+    const half = render(<CartRunAnimation total={8} done={4} />);
+    const full = render(<CartRunAnimation total={8} done={8} />);
+    const inBag = (v: ReturnType<typeof render>) => v.queryAllByTestId('pile-item').length;
+    expect(inBag(none)).toBe(0);
+    expect(inBag(half)).toBeGreaterThan(0);
+    expect(inBag(full)).toBeGreaterThan(inBag(half));
   });
 
   it('shows no count at all when there is no denominator yet', () => {
@@ -24,8 +35,8 @@ describe('CartRunAnimation', () => {
     // count is omitted entirely.
     const v = render(<CartRunAnimation total={0} done={0} />);
     expect(v.getByTestId('cart-run-animation')).toBeTruthy();
-    expect(v.queryByText('of 0')).toBeNull();
-    expect(v.queryByText('0')).toBeNull();
+    expect(v.queryByTestId('cart-run-count')).toBeNull();
+    expect(v.queryAllByTestId('pile-item')).toHaveLength(0);
   });
 
   it('takes a headline, so the login check does not claim to be filling a cart', () => {
@@ -41,8 +52,9 @@ describe('CartRunAnimation', () => {
 
   it('never reports more done than total, even if a late result arrives', () => {
     const v = render(<CartRunAnimation total={4} done={9} />);
-    // The ring clamps; the count is the caller's number, so the two cannot
-    // disagree in a way that draws a full ring next to "9 of 4".
-    expect(v.getByText('of 4')).toBeTruthy();
+    // The pile clamps at full; the count is the caller's number, so the two
+    // cannot disagree in a way that draws a half-empty bag next to "9/4".
+    expect(v.getByTestId('cart-run-count')).toHaveTextContent('9/4');
+    expect(v.queryAllByTestId('pile-item').length).toBeLessThanOrEqual(8);
   });
 });
