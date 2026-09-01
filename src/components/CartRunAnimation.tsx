@@ -30,11 +30,17 @@ interface Props {
   label?: string | null;
   /** The store's brand colour, so the run looks like the store it is running on. */
   color?: string;
+  /** Headline. Defaults to "Filling your cart". */
+  title?: string | null;
 }
 
-export default function CartRunAnimation({ total, done, label, color }: Props) {
+export default function CartRunAnimation({ total, done, label, color, title }: Props) {
   const accent = color || Colors.brand;
-  const pct = total > 0 ? Math.max(0, Math.min(1, done / total)) : 0;
+  // total 0 means "working, denominator unknown" — the login check, or the beat
+  // before the session probe answers. Showing "0 of 0" there reads as broken, so
+  // the ring sweeps instead of filling and the count is omitted.
+  const indeterminate = total <= 0;
+  const pct = indeterminate ? 0 : Math.max(0, Math.min(1, done / total));
 
   // Ring geometry. Kept out of render so the dash maths is read once.
   const R = 54;
@@ -74,7 +80,19 @@ export default function CartRunAnimation({ total, done, label, color }: Props) {
     return () => { bobLoop.stop(); pulseLoop.stop(); };
   }, [bob, pulse]);
 
-  const dashOffset = progress.interpolate({ inputRange: [0, 1], outputRange: [C, 0] });
+  const sweep = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!indeterminate) return;
+    const loop = Animated.loop(
+      Animated.timing(sweep, { toValue: 1, duration: 1400, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [indeterminate, sweep]);
+
+  const dashOffset = indeterminate
+    ? sweep.interpolate({ inputRange: [0, 0.5, 1], outputRange: [C * 0.95, C * 0.55, C * 0.95] })
+    : progress.interpolate({ inputRange: [0, 1], outputRange: [C, 0] });
   const bobY = bob.interpolate({ inputRange: [0, 1], outputRange: [0, -6] });
   const haloScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1.06] });
   const haloOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.25, 0.05] });
@@ -125,13 +143,15 @@ export default function CartRunAnimation({ total, done, label, color }: Props) {
           </Svg>
         </Animated.View>
 
-        <View style={styles.countWrap} pointerEvents="none">
-          <Text style={[styles.count, { color: accent }]}>{done}</Text>
-          <Text style={styles.of}>of {total}</Text>
-        </View>
+        {!indeterminate && (
+          <View style={styles.countWrap} pointerEvents="none">
+            <Text style={[styles.count, { color: accent }]}>{done}</Text>
+            <Text style={styles.of}>of {total}</Text>
+          </View>
+        )}
       </View>
 
-      <Text style={styles.title}>Filling your cart</Text>
+      <Text style={styles.title}>{title || 'Filling your cart'}</Text>
       {!!label && (
         <Text style={styles.label} numberOfLines={1} testID="cart-run-label">
           {label}

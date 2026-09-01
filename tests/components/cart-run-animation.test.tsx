@@ -18,12 +18,20 @@ describe('CartRunAnimation', () => {
     expect(v.getByText('Sour Cream')).toBeTruthy();
   });
 
-  it('survives a zero total without dividing by it', () => {
-    // The session probe can finish before any term is known, so this renders
-    // with total 0 for a beat on every run.
+  it('shows no count at all when there is no denominator yet', () => {
+    // The login check has nothing to count, and the session probe answers before
+    // any term is known. "0 of 0" reads as broken, so the ring sweeps and the
+    // count is omitted entirely.
     const v = render(<CartRunAnimation total={0} done={0} />);
     expect(v.getByTestId('cart-run-animation')).toBeTruthy();
-    expect(v.getByText('of 0')).toBeTruthy();
+    expect(v.queryByText('of 0')).toBeNull();
+    expect(v.queryByText('0')).toBeNull();
+  });
+
+  it('takes a headline, so the login check does not claim to be filling a cart', () => {
+    const v = render(<CartRunAnimation total={0} done={0} title="Checking your H-E-B account" />);
+    expect(v.getByText('Checking your H-E-B account')).toBeTruthy();
+    expect(v.queryByText('Filling your cart')).toBeNull();
   });
 
   it('does not show a label row when there is nothing to say', () => {

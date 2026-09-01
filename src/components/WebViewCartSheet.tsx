@@ -820,10 +820,19 @@ export default function WebViewCartSheet({
   const bumpNetProgress = useCallback((label?: string | null) => {
     setNetProgress((p) => (p ? { done: Math.min(p.done + 1, p.total), total: p.total, label: label ?? p.label } : p));
   }, []);
-  // True while a network run is doing its own work. Deliberately NOT true on the
-  // login step or a page fallback — those need the user to see and touch the
-  // page.
-  const netRunVisual = netProgress != null && (step === 'searching' || step === 'adding');
+  // True while the run is doing its own work and the user has nothing to do.
+  //
+  // login_check is included: the check is silent, the user cannot help, and the
+  // page behind it is the storefront doing nothing. The login STEP is excluded
+  // and must stay excluded — that is the one screen where the user has to see
+  // and touch the page.
+  //
+  // Scoped to stores with a network rail. A page-path store genuinely uses that
+  // WebView to search, so hiding it there would hide the work.
+  const netRunVisual =
+    !!getNetworkRail(lockedStoreIdRef.current)
+    && (step === 'login_check'
+        || ((step === 'searching' || step === 'adding') && netProgress != null));
   // Which protocol this store's rail speaks. Read from a ref rather than closed
   // over, for the same reason the rest of this file resolves the store that way:
   // the callbacks below froze at an early render.
@@ -5070,9 +5079,10 @@ export default function WebViewCartSheet({
                 space. Unmounting it would kill the run. */}
             {netRunVisual && (
               <CartRunAnimation
-                total={netProgress?.total ?? 0}
-                done={netProgress?.done ?? 0}
-                label={netProgress?.label ?? null}
+                total={step === 'login_check' ? 0 : (netProgress?.total ?? 0)}
+                done={step === 'login_check' ? 0 : (netProgress?.done ?? 0)}
+                label={step === 'login_check' ? null : (netProgress?.label ?? null)}
+                title={step === 'login_check' ? `Checking your ${storeName} account` : null}
                 color={storeColor}
               />
             )}
