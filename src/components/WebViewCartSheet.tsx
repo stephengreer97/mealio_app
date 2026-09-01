@@ -4807,6 +4807,27 @@ export default function WebViewCartSheet({
    * Returns null for a reason with no honest sentence, and the caller keeps the
    * general note for those rather than inventing one.
    */
+  /**
+   * Why this item did not make it into the cart, in the user's words.
+   *
+   * The run already knows — every add path records a reason on its result — but
+   * the done screen was printing bare names ("Could not add: Sour Cream, Eggs"),
+   * so a user was told two of ten failed and never told why. The reasons come
+   * from whichever path ran: the page/worker results, or the network rail's.
+   */
+  const failureReasonFor = useCallback((name: string): string | null => {
+    const want = String(name || '').toLowerCase();
+    // The reconcile's results carry `name`, the rail's carry `productName` —
+    // same fact, different key, so both are checked.
+    for (const r of addResultsRef.current) {
+      if (!r.success && String(r.name || '').toLowerCase() === want) return r.reason ?? null;
+    }
+    for (const r of netResultsRef.current.values()) {
+      if (!r.success && String(r.productName || '').toLowerCase() === want) return r.reason ?? null;
+    }
+    return null;
+  }, []);
+
   const unaddedReasonText = useCallback((reason: string | null | undefined, store: string): string | null => {
     switch (reason) {
       case 'out_of_stock':
@@ -5865,11 +5886,28 @@ export default function WebViewCartSheet({
                         consecutive sentences. Until then this is the only place
                         a failure is named, so it must stay. */}
                     {totalFailed > 0 && !verdictFromCart && (
-                      <Text style={[styles.doneSub, { color: '#b45309' }]}>
-                        {failedNames.length > 0
-                          ? `Could not add: ${failedNames.join(', ')}`
-                          : `${failedUnits} item${failedUnits !== 1 ? 's' : ''} could not be added.`}
-                      </Text>
+                      failedNames.length > 0 ? (
+                        // One line per item WITH its reason. A bare list of names
+                        // tells a user two of ten failed and leaves them to guess
+                        // whether the store was out of stock, could not match the
+                        // product, or hit a purchase limit — which are three
+                        // different things they would do three different things
+                        // about.
+                        <View style={{ marginTop: 2 }}>
+                          {failedNames.map((n) => {
+                            const why = unaddedReasonText(failureReasonFor(n), storeName);
+                            return (
+                              <Text key={n} style={[styles.doneSub, { color: '#b45309' }]} testID="done-failed-row">
+                                {why ? `${n} — ${why}` : `${n} — could not be added`}
+                              </Text>
+                            );
+                          })}
+                        </View>
+                      ) : (
+                        <Text style={[styles.doneSub, { color: '#b45309' }]}>
+                          {failedUnits} item{failedUnits !== 1 ? 's' : ''} could not be added.
+                        </Text>
+                      )
                     )}
                     {cartCheckBanner}
                   </>
