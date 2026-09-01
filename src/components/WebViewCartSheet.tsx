@@ -32,6 +32,7 @@ import { getStores } from '../lib/store-catalog';
 import { useStores } from '../lib/store-catalog/useStores';
 import { buildBlankPageRecoveryScript } from '../lib/webview-scripts/blank-page-recovery';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
+import { getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
 import { useLoginPrewarm } from '../context/LoginPrewarmContext';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
@@ -61,9 +62,6 @@ import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecover
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { scoreMatch } from '../lib/webview-scripts/_scoring';
 import {
-  buildHebNetworkAddBatchScript,
-  buildHebNetworkSearchBatchScript,
-  buildHebSessionScript,
 } from '../lib/webview-scripts/heb-network-search';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 
@@ -814,6 +812,10 @@ export default function WebViewCartSheet({
   // done screen and the telemetry are untouched and cannot disagree with a
   // pool-driven run.
   const netSessionRef = useRef<{ storeId: string; shoppingContext: string } | null>(null);
+  // Which protocol this store's rail speaks. Read from a ref rather than closed
+  // over, for the same reason the rest of this file resolves the store that way:
+  // the callbacks below froze at an early render.
+  const netRail = useCallback(() => getNetworkRail(lockedStoreIdRef.current), []);
   const netCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
   const netFailedTermsRef = useRef<Set<string>>(new Set());
   const netResultsRef = useRef<Map<number, AddResult>>(new Map());
@@ -1762,7 +1764,9 @@ export default function WebViewCartSheet({
       return;
     }
 
-    const script = buildHebNetworkAddBatchScript(coalesced);
+    const rail = netRail();
+    if (!rail) { netFallBackToPool('no_rail'); return; }
+    const script = rail.addBatch(coalesced);
     if (!script) { netFallBackToPool('add_script_unbuildable'); return; }
     netPhaseRef.current = 'add';
     setStep('adding');
@@ -1792,7 +1796,9 @@ export default function WebViewCartSheet({
     if (!sess) { netFallBackToPool('no_session'); return; }
     const terms = Array.from(new Set(active.map((i) => i.searchTerm ?? i.ingredientName).filter(Boolean)));
     if (!terms.length) { netFallBackToPool('no_terms'); return; }
-    const script = buildHebNetworkSearchBatchScript(terms, sess);
+    const rail = netRail();
+    if (!rail) { netFallBackToPool('no_rail'); return; }
+    const script = rail.searchBatch(terms, sess);
     if (!script) { netFallBackToPool('search_script_unbuildable'); return; }
     netCandidatesRef.current = new Map();
     netFailedTermsRef.current = new Set();
@@ -1824,8 +1830,10 @@ export default function WebViewCartSheet({
     // Re-injecting is safe: the script only reads, and a duplicate answer is
     // ignored once the phase has moved on.
     netArm(25_000, 'session_timeout');
-    webviewRef.current?.injectJavaScript(buildHebSessionScript());
-  }, [netArm, setStep]);
+    const rail = netRail();
+    if (!rail) { netFallBackToPool('no_rail'); return; }
+    webviewRef.current?.injectJavaScript(rail.sessionScript());
+  }, [netArm, setStep, netRail, netFallBackToPool]);
 
   const startParallelAdd = useCallback(() => {
     const active = activeItemsRef.current;
@@ -2484,7 +2492,13 @@ export default function WebViewCartSheet({
     // back to the live login check.
     setStep('login_check');
     setSearchingLabel('Checking login…');
-    loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
+    // A store with a network rail is asked over the network here too. Running the
+    // DOM check first and the rail's session probe a moment later asked the same
+    // question twice and let the weaker answer go first — and the DOM one is an
+    // inference from markup that exists in both states, where the rail's is a
+    // token the origin accepts, proven by a real cart read.
+    const loginRail = getNetworkRail(lockedStoreIdRef.current);
+    loadQueueRef.current = [loginRail ? loginRail.sessionScript() : scriptsRef.current!.checkLoginScript];
     navTo(scriptsRef.current!.storeUrl);
     armLoginCheckTimeout();
   };
@@ -2807,10 +2821,15 @@ export default function WebViewCartSheet({
     // clicking to add would be a run that loads no page for search and then
     // loads one per item anyway, which is slower than either path alone.
     const netCfg = getAutomationConfig().stores?.[lockedStoreIdRef.current ?? ''] ?? {};
-    const networkCapable = netCfg.networkSearch === true
+    // Capability, not a store name. A store qualifies when it HAS a rail and both
+    // of its switches are on. H-E-B additionally requires cartSkuConfirm, because
+    // that is what makes its write verifiable — Albertsons verifies from the
+    // write's own response, which returns the whole cart, so it has no
+    // equivalent switch to demand.
+    const networkCapable = !!getNetworkRail(lockedStoreIdRef.current)
+      && netCfg.networkSearch === true
       && netCfg.networkAdd === true
-      && netCfg.cartSkuConfirm === true
-      && lockedStoreIdRef.current === 'heb';
+      && (lockedStoreIdRef.current !== 'heb' || netCfg.cartSkuConfirm === true);
     const strategy = chooseAddStrategy({
       canParallel,
       allChoose,
@@ -2956,7 +2975,8 @@ export default function WebViewCartSheet({
     // while the page is mid-navigation and go nowhere. This is the retry.
     if (netActiveRef.current && netPhaseRef.current === 'session') {
       console.log(`[Cart ${ts()}]`, 'network run: re-reading the session on', url.slice(0, 60));
-      webviewRef.current?.injectJavaScript(buildHebSessionScript());
+      const railForSession = getNetworkRail(lockedStoreIdRef.current);
+      if (railForSession) webviewRef.current?.injectJavaScript(railForSession.sessionScript());
       return;
     }
     // Manual mode injects NOTHING (MEAL-197). Checked before every other branch
@@ -3137,9 +3157,12 @@ export default function WebViewCartSheet({
       webviewRef.current?.injectJavaScript(script);
     } else if (stepRef.current === 'login_check' && s.checkLoginScript) {
       // Queue was consumed by a redirect (e.g. /fresh → /alm/storefront).
-      // Re-inject the login check on the final page.
-      console.log(`[Cart ${ts()}]`, 'onLoadEnd login_check step — re-injecting after redirect');
-      webviewRef.current?.injectJavaScript(s.checkLoginScript);
+      // Re-inject the login check on the final page — the SAME check the step
+      // started with, or this quietly downgrades a rail store to the DOM answer
+      // on any redirect, which is most of them.
+      const reRail = getNetworkRail(lockedStoreIdRef.current);
+      console.log(`[Cart ${ts()}]`, 'onLoadEnd login_check step — re-injecting after redirect', reRail ? '(network)' : '(dom)');
+      webviewRef.current?.injectJavaScript(reRail ? reRail.sessionScript() : s.checkLoginScript);
     } else if ((stepRef.current === 'login_check' || stepRef.current === 'login') &&
                /\/login|\/sign-in|\/signin/i.test(url)) {
       // Login check clicked a profile icon and HEB navigated to a login page,
@@ -3158,8 +3181,15 @@ export default function WebViewCartSheet({
       // gated to isLoginSuccessUrl or stores that opt in via reinjectLoginCheckOnNav
       // (poll-based logins whose detection dies on the post-sign-in reload).
       if ((s.isLoginSuccessUrl && s.isLoginSuccessUrl(url)) || s.reinjectLoginCheckOnNav) {
-        console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — back on store, re-injecting login check');
-        webviewRef.current?.injectJavaScript(s.checkLoginScript);
+        // The THIRD place login is decided, and the one that actually fires for
+        // Albertsons: while the user is looking at the sign-in prompt, every page
+        // load re-asks. It has to use the rail as well, or the store gets the DOM
+        // verdict here no matter what the other two do — and this verdict starts
+        // the run, so it is the one that can begin an automation underneath a
+        // user who has not signed in yet.
+        const loginRail = getNetworkRail(lockedStoreIdRef.current);
+        console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — back on store, re-asking', loginRail ? '(network)' : '(dom)');
+        webviewRef.current?.injectJavaScript(loginRail ? loginRail.sessionScript() : s.checkLoginScript);
       } else {
         console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — not on store yet, skipping re-inject');
       }
@@ -3809,7 +3839,7 @@ export default function WebViewCartSheet({
                     maxOrderQuantity: m.maxOrderQuantity,
                   });
                 });
-                const script = writes.length > 0 ? buildHebNetworkAddBatchScript(writes) : null;
+                const script = writes.length > 0 ? (getNetworkRail(lockedStoreIdRef.current)?.addBatch(writes) ?? null) : null;
                 if (script && stillNeedsPage.size === 0) {
                   console.log(`[Cart ${ts()}]`, 'network top-up: re-writing', writes.length, 'without a page load');
                   netTopUpRef.current = new Map(routing.retry.map((t, n) => [t.index, retryItems[n]]));
@@ -4061,7 +4091,35 @@ export default function WebViewCartSheet({
         // netActiveRef so a late message from an abandoned run cannot revive it
         // after the pool has taken over — which would leave two paths writing
         // results for the same items.
-        if (msg.type === 'HEB_SESSION') {
+        if (NETWORK_SESSION_MESSAGE_TYPES.includes(msg.type)) {
+          // The same probe answers the login gate. When it arrives during
+          // login_check it IS the login check, so it is translated into the
+          // verdict that step expects rather than being routed through the run.
+          if (stepRef.current === 'login_check' || stepRef.current === 'login') {
+            const onLoginStep = stepRef.current === 'login';
+            console.log(`[Cart ${ts()}]`, 'login answered over the network:', JSON.stringify(msg).slice(0, 200));
+            if (!msg.ok) {
+              // Could not answer — usually the page had not finished its
+              // bootstrap. Not a signed-out user, and saying so would wall one,
+              // so the DOM check gets the page instead.
+              console.log(`[Cart ${ts()}]`, 'network session inconclusive —', msg.why, '— falling back to the DOM check');
+              webviewRef.current?.injectJavaScript(scriptsRef.current!.checkLoginScript);
+              return;
+            }
+            tel().record('login_check', 'ok', {
+              detail: { isLoggedIn: !!msg.loggedIn, source: 'network_session' },
+            });
+            loginCheckActiveRef.current = false;
+            if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
+            if (msg.loggedIn) snapshotBeforeAndBeginSearch();
+            else if (!onLoginStep) {
+              setStep('login');
+              lastLoadEndUrlRef.current = '';
+            }
+            // Already on the login step and still signed out: stay put. Saying it
+            // again would re-render the sheet under someone mid-sign-in.
+            return;
+          }
           if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
           if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
           console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));

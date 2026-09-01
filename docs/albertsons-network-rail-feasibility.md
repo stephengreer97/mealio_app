@@ -8,7 +8,8 @@ measurement in it was a *refusal*; probe 3 has now been run on a signed-in
 `www.safeway.com` session and the platform accepted an add-to-cart. The rail is
 **estimable**. It is not unblocked, on two counts: gap 4 (sustained load,
 **MEAL-115**) is untouched by that measurement and still gates it on its own, and
-**gap 6 — what `qty` means on a repeat add — is unmeasured (MEAL-194).** Gap 6
+**gap 6 — what `qty` means on a repeat add — is ANSWERED (MEAL-194, 2026-08-31):
+`qty` SETS the line, it does not add to it.** Gap 6
 does not decide whether the rail can be built; it decides whether the rail may
 retry or add the same item twice without silently producing a wrong cart.
 **Timebox:** 1 day (spike — findings, not shipped code).
@@ -971,6 +972,54 @@ than vetoes it.
    re-reads. Whoever picks up the Albertsons rail: settle MEAL-194 before you
    write the add path, not after. The same class of bug is already live on HEB
    (**MEAL-185**), so the wrong guess here is not hypothetical.
+
+   ### ✅ ANSWERED 2026-08-31. `qty` SETS the line. It does not add to it.
+
+   Measured against a signed-in Boise store (161) cart, reading every result off
+   a **reloaded** cart page, on item `188020009` that was already in the cart:
+
+   | Call | If it added | Observed |
+   | --- | --- | --- |
+   | `qty: 1`, line already at 1 | line 2 | **line 1** |
+   | `qty: 3` | line 4 | **line 3** |
+   | `qty: 3` again | line 6 | **line 3** |
+   | `qty: 2`, line at 3 | line 5 | **line 2** |
+
+   Three consequences, in the order they will bite:
+
+   1. **A repeat of the identical call is idempotent, so the rail MAY retry.**
+      `qty: 3` sent twice leaves 3. An ambiguous response — timeout, unread body,
+      aborted navigation — can be retried without double-adding. That is the one
+      cheerful finding here.
+   2. **A lower `qty` drives an existing line DOWN.** Sending 2 against a line of
+      3 left 2, and the cart total fell with it. So "add what this recipe needs"
+      is a *destructive write* against a cart that already holds the item — it
+      silently removes what the user put there. This is the exact shape of
+      MEAL-185 on HEB.
+   3. **Two ingredients resolving to one product cannot each write their own
+      quantity.** `set(base+q1)` then `set(base+q2)` lands `base + max(q1,q2)`,
+      not the sum. They have to be consolidated to a single write.
+
+   In other words the Albertsons add behaves like HEB's `addItemToCartV2`, and
+   **`docs/network-rail-playbook.md` section 4 applies unchanged** — read the
+   line's real quantity first, write `base + wanted`, consolidate duplicates
+   before writing, and never write a number you did not derive from a cart read.
+
+   Two details worth carrying into the add path, both measured in the same run:
+
+   - The endpoint takes **query parameters as well as a body**:
+     `?storeId=161&serviceType=Dug&zipCode=83713&cartCategoryList=1P,3P_MARKETPLACE,1P_Wine`.
+     MEAL-137 recorded only the body.
+   - Auth needs **two** headers and either alone is a `401`:
+     `Authorization: Bearer <SWY_SHOP_TOKEN>` *and*
+     `ocp-apim-subscription-key` (Azure API Management sits in front). Do not
+     hardcode the key — hook `XMLHttpRequest.setRequestHeader` for
+     `/cartservice/api/v2/cart/items`, let the site perform one ordinary add, and
+     reuse the header set it sent.
+
+   The response body to an add is a full `multiCartSummary` plus the cart, so the
+   **add already returns the state needed to verify itself** — which also closes
+   the response-shape residue named in gap 1.
 
 ---
 
