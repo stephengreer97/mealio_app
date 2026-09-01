@@ -614,6 +614,45 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
     expect(done.cartAfter).toEqual([{ name: 'Eggs', qty: 2 }, { name: 'Sour Cream', qty: 1 }]);
   });
 
+  itWithFixture('logged-in-home.html', 'cart rows carry the SIZE, or the done screen reshuffles', async (runner) => {
+    // These rows are diffed against the cart-page probe's rows BY NAME, and the
+    // probe reads the card, which says "..., 10 ct". Without the size nothing
+    // matched: the done screen opened with every line green, then redrew into
+    // green-and-grey the moment the probe answered. Stephen saw the list
+    // separate itself in front of him.
+    await runner.inject([
+      '(function () {',
+      '  window.fetch = function (url, opts) {',
+      '    var body = JSON.parse(opts.body); var out;',
+      '    if (body.operationName === "CartLines") {',
+      '      out = { data: { cartV2: { __typename: "Cart", id: "c1", items: [',
+      '        { id: "l1", quantity: 2, estimatedWeight: null,',
+      '          product: { id: "p1", fullDisplayName: "H-E-B Bakery Southwestern Flour Tortillas" },',
+      '          sku: { id: "s1", customerFriendlySize: "10 ct" } },',
+      '        { id: "l2", quantity: 1, estimatedWeight: null,',
+      '          product: { id: "p2", fullDisplayName: "Fresh Lime, Each" },',
+      '          sku: { id: "s2", customerFriendlySize: "Each" } }',
+      '      ] } } };',
+      '    } else {',
+      '      out = { data: { addItemToCartV2: { __typename: "Cart", id: "c1" } } };',
+      '    }',
+      '    return Promise.resolve({ ok: true, status: 200,',
+      '      text: function () { return Promise.resolve(JSON.stringify(out)); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+
+    await runner.inject(buildHebNetworkAddBatchScript([
+      { idx: 0, productId: 'p1', skuId: 's1', quantity: 1, name: 'x' },
+    ])!);
+
+    const done = await runner.waitForMessage('NET_ADD_DONE', 15_000);
+    // The size is appended...
+    expect(done.cartBefore).toContainEqual({ name: 'H-E-B Bakery Southwestern Flour Tortillas, 10 ct', qty: 2 });
+    // ...and NOT duplicated when the name already ends in it.
+    expect(done.cartBefore).toContainEqual({ name: 'Fresh Lime, Each', qty: 1 });
+  });
+
   itWithFixture('logged-in-home.html', 'marks a weight line by presence, as the page reader does', async (runner) => {
     await runner.inject([
       '(function () {',

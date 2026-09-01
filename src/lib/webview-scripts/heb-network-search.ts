@@ -544,7 +544,7 @@ ${GQL_FN}
 
   var CART = 'query CartLines { cartV2 { __typename'
     + ' ... on Cart { id items { id quantity estimatedWeight product { id fullDisplayName }'
-    + '   sku { id } } }'
+    + '   sku { id customerFriendlySize } } }'
     + ' ... on CartError { code title message } } }';
   var ADD = 'mutation cartItemV2($productId: String!, $skuId: String!, $quantity: Int,'
     + ' $purchasePreferenceId: String) {'
@@ -592,8 +592,18 @@ ${GQL_FN}
       var l = lines[i];
       var nm = l && l.product && l.product.fullDisplayName;
       if (!nm) continue;
+      nm = String(nm);
+      // THE SIZE GOES ON, because the page reader puts it on.
+      //
+      // These rows are diffed against the cart-page probe's rows by NAME, and
+      // the probe reads the card, which says "..., 10 ct". Without the size
+      // nothing matched, so every line looked new: the done screen opened with
+      // 17 all-green rows and then reshuffled into green-and-grey the moment
+      // the probe answered. Same product, two spellings, one of them ours.
+      var size = l.sku && l.sku.customerFriendlySize;
+      if (typeof size === 'string' && size && nm.indexOf(size) === -1) nm = nm + ', ' + size;
       var w = (l.estimatedWeight != null) ? Number(l.estimatedWeight) : null;
-      var row = { name: String(nm), qty: Number(l.quantity) || 0 };
+      var row = { name: nm, qty: Number(l.quantity) || 0 };
       // A weight line is reconciled by presence, not by count — same rule the
       // page reader follows, so both paths produce identical rows.
       if (w != null && !isNaN(w)) { row.isWeight = true; row.weight = w; }
