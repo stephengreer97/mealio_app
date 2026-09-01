@@ -817,14 +817,36 @@ export default function WebViewCartSheet({
   // What the animation shows. Only set during a network run, because it is the
   // only path that knows a real denominator up front — it asks for N terms and
   // writes M products, so the ring is a fraction rather than a spinner.
-  const [netProgress, setNetProgress] = useState<{ done: number; total: number; label: string | null } | null>(null);
+  const [netProgress, setNetProgress] = useState<{ done: number; total: number; label: string | null; phase: 'search' | 'add' } | null>(null);
+
+  // ONE PROGRESS VALUE FOR THE WHOLE RUN.
+  //
+  // The bag was fed done/total, and search and add each counted their own list
+  // from zero — so it filled to full on the last search, dropped to empty when
+  // the first write landed, and filled again. Two honest counters, one dishonest
+  // animation. The run is one thing to the user, so it gets one number: the
+  // search owns the first half, the writes own the second, and it only ever
+  // moves forward.
+  const netPctRef = useRef(0);
+  const [netPct, setNetPct] = useState<number | null>(null);
+  const advanceNetPct = useCallback((phase: 'search' | 'add', done: number, total: number) => {
+    const base = phase === 'search' ? 0 : 0.5;
+    const raw = total > 0 ? base + 0.5 * Math.min(1, done / total) : base;
+    if (raw > netPctRef.current) { netPctRef.current = raw; setNetPct(raw); }
+  }, []);
+  const resetNetPct = useCallback(() => { netPctRef.current = 0; setNetPct(null); }, []);
   // A run that is still going but has stopped counting looks broken. Stephen
   // watched one sit at 3/18 and had no way to tell it apart from a hang, so a
   // run that has not counted anything for a while says so out loud.
   const [netNote, setNetNote] = useState<string | null>(null);
   const bumpNetProgress = useCallback((label?: string | null) => {
     setNetNote(null);
-    setNetProgress((p) => (p ? { done: Math.min(p.done + 1, p.total), total: p.total, label: label ?? p.label } : p));
+    setNetProgress((p) => {
+      if (!p) return p;
+      const done = Math.min(p.done + 1, p.total);
+      advanceNetPct(p.phase, done, p.total);
+      return { ...p, done, label: label ?? p.label };
+    });
   }, []);
   // True while the run is doing its own work and the user has nothing to do.
   //
@@ -1619,7 +1641,7 @@ export default function WebViewCartSheet({
     // The fast path's count is meaningless now — the pool is going to redo the
     // whole set. Leaving "3/18" on screen would freeze there for the rest of the
     // run. Drop to the unnumbered bag and say what is happening.
-    setNetProgress({ done: 0, total: 0, label: 'Taking a slower route' });
+    setNetProgress({ done: 0, total: 0, label: 'Taking a slower route', phase: 'add' });
     setNetNote('Still working — this one is taking longer than usual');
     tel().record('search', 'error', { detail: { phase: 'network_fallback', why }, code: 'match_rejected' });
     startParallelAddRef.current();
@@ -1852,7 +1874,8 @@ export default function WebViewCartSheet({
     // second pass.
     if (!netTopUpRef.current) {
       const decided = Math.max(0, active.length - toWrite.length);
-      setNetProgress({ done: decided, total: active.length, label: 'Adding to your cart' });
+      setNetProgress({ done: decided, total: active.length, label: 'Adding to your cart', phase: 'add' });
+      advanceNetPct('add', decided, active.length);
       setSearchingLabel(`Adding ${active.length} ingredients…`);
     }
     console.log(`[Cart ${ts()}]`, 'network run: writing', toWrite.length, 'of', active.length);
@@ -1890,7 +1913,8 @@ export default function WebViewCartSheet({
     netSearchInjectsRef.current = 1;
     netPhaseRef.current = 'search';
     setStep('searching');
-    setNetProgress({ done: 0, total: terms.length, label: 'Looking up ingredients' });
+    setNetProgress({ done: 0, total: terms.length, label: 'Looking up ingredients', phase: 'search' });
+    advanceNetPct('search', 0, terms.length);
     setSearchingLabel(`Searching ${terms.length} ingredients…`);
     console.log(`[Cart ${ts()}]`, 'network run: searching', terms.length, 'terms with no page load');
     netArm(40_000, 'search_timeout');
@@ -2236,6 +2260,7 @@ export default function WebViewCartSheet({
       setCartResultRows(null);
       setNetProgress(null);
       setNetNote(null);
+      resetNetPct();
       setCartRowsTimedOut(false);
       if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
       setCartDeltaWarning(null);
@@ -5195,7 +5220,10 @@ export default function WebViewCartSheet({
                 </TouchableOpacity>
               </View>
             </View>
-          ) : (step === 'searching' || step === 'adding' || step === 'login_check') ? (
+          ) : (step === 'searching' || step === 'adding' || step === 'login_check') && !netRunVisual ? (
+            // On a network run the bag IS the status: it says what is happening
+            // and how far along it is, and this bar said the same thing twice in
+            // less detail. The pooled path has no animation, so it keeps it.
             <View style={styles.captionBar}>
               <Text style={styles.captionLabel} numberOfLines={1}>{searchingLabel || titleMap[step]}</Text>
               {(step === 'searching' || step === 'adding') && (
@@ -5224,12 +5252,10 @@ export default function WebViewCartSheet({
                 space. Unmounting it would kill the run. */}
             {netRunVisual && (
               <CartRunAnimation
-                total={step === 'login_check' ? 0 : (netProgress?.total ?? 0)}
-                done={step === 'login_check' ? 0 : (netProgress?.done ?? 0)}
+                progress={step === 'login_check' ? null : netPct}
                 label={step === 'login_check' ? null : (netProgress?.label ?? null)}
                 title={step === 'login_check' ? `Checking your ${storeName} account` : null}
                 note={netNote}
-                color={storeColor}
               />
             )}
             <View

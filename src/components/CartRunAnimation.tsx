@@ -27,22 +27,25 @@ const SCALE = DISPLAY_H / FH;
 const DISPLAY_W = Math.round(FW * SCALE);
 
 interface Props {
-  total: number;
-  done: number;
+  /**
+   * How far along the whole run is, 0..1 — or null while that is not knowable
+   * yet (the login check, before the session answers).
+   *
+   * ONE number for the ENTIRE run, not per phase. It used to take done/total,
+   * and the search and add passes each counted their own list from zero, so the
+   * bag filled, emptied and filled again in front of the user. The caller owns
+   * the split now and only ever moves this forward.
+   */
+  progress: number | null;
   label?: string | null;
-  color?: string;
   title?: string | null;
   /** A second, quieter line. Used to say "still working" when a run stalls. */
   note?: string | null;
 }
 
-export default function CartRunAnimation({ total, done, label, color, title, note }: Props) {
-  const accent = color || Colors.brand;
-  // total 0 = working, denominator unknown (the login check, or before the
-  // session probe answers). "0/0" reads as broken, so nothing is counted and the
-  // bag simply sits there empty.
-  const indeterminate = total <= 0;
-  const pct = indeterminate ? 0 : Math.max(0, Math.min(1, done / total));
+export default function CartRunAnimation({ progress, label, title, note }: Props) {
+  const indeterminate = progress == null;
+  const pct = indeterminate ? 0 : Math.max(0, Math.min(1, progress));
   const target = indeterminate ? 0 : Math.round(pct * LAST);
 
   // The bag fills THROUGH the intermediate frames rather than jumping. An item
@@ -92,14 +95,6 @@ export default function CartRunAnimation({ total, done, label, color, title, not
         </View>
       </Animated.View>
 
-      {!indeterminate && (
-        <View style={[styles.badge, { borderColor: accent }]} pointerEvents="none">
-          <Text testID="cart-run-count" style={[styles.badgeText, { color: accent }]}>
-            {done}<Text style={styles.badgeOf}>/{total}</Text>
-          </Text>
-        </View>
-      )}
-
       <Text style={styles.title}>{title || 'Filling your cart'}</Text>
       {!!label && <Text style={styles.label} numberOfLines={1} testID="cart-run-label">{label}</Text>}
       {!!note && <Text style={styles.note} testID="cart-run-note">{note}</Text>}
@@ -111,13 +106,6 @@ const styles = StyleSheet.create({
   wrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
   stage: { width: DISPLAY_W, height: DISPLAY_H, alignItems: 'center', justifyContent: 'center' },
   window: { width: DISPLAY_W, height: DISPLAY_H, overflow: 'hidden' },
-  badge: {
-    marginTop: 10,
-    backgroundColor: Colors.surfaceRaised, borderRadius: 14,
-    paddingHorizontal: 12, paddingVertical: 4, borderWidth: 1,
-  },
-  badgeText: { fontSize: 16, fontFamily: 'Inter_600SemiBold' },
-  badgeOf: { fontSize: 13, color: Colors.text3, fontFamily: 'Inter_400Regular' },
   title: { marginTop: 12, fontSize: 17, fontFamily: 'Inter_600SemiBold', color: Colors.text1 },
   note: { marginTop: 8, fontSize: 12, color: Colors.text3, opacity: 0.8, fontFamily: 'Inter_400Regular', textAlign: 'center' },
   label: { marginTop: 6, fontSize: 13, color: Colors.text3, fontFamily: 'Inter_400Regular', textAlign: 'center' },
