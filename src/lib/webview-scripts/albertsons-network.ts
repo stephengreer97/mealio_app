@@ -63,6 +63,17 @@ const ALB_PRELUDE = `
   // one of these; which one is not something the page tells us.
   function __albKeyCandidates() {
     var c = __albCfg(), out = [], seen = {};
+    // The cart lives under /abs/pub/erums/, and its key is erumsConfig's — NOT
+    // any of datapowerConfig's, all twelve of which answer 401. Measured on a
+    // signed-in device 2026-09-01: erumsConfig.store.apim.key is the only value
+    // in the whole config that the cart endpoint accepts.
+    try {
+      var er = c.all.erumsConfig || {};
+      var direct = (er.store && er.store.apim && er.store.apim.key) || null;
+      if (typeof direct === 'string' && !seen[direct]) { seen[direct] = 1; out.push(direct); }
+      var xa = (er.xapi && er.xapi.apim && er.xapi.apim.key) || null;
+      if (typeof xa === 'string' && !seen[xa]) { seen[xa] = 1; out.push(xa); }
+    } catch (e) {}
     var preferred = ['cncSubscriptionKey', 'apimSubscriptionKey', 'xapiSubscriptionKey'];
     for (var i = 0; i < preferred.length; i++) {
       var v = c.dp[preferred[i]];
@@ -188,15 +199,53 @@ ${ALB_PRELUDE}
     //                          so answer "do not know" and let the caller fall
     //                          back rather than guess in either direction
     var cart = await __albReadCart(12000);
-    // Only a refusal is a verdict about the user. Everything else — no key, a
-    // 5xx, a timeout — is us being unable to ask.
-    if (!cart.ok && cart.why !== 'auth') {
-      post({ ok: false, why: 'cart_unreadable', detail: cart.why || null });
+    // A FAILED CART READ IS NEVER PROOF THE USER IS SIGNED OUT.
+    //
+    // This was wrong in both directions before it was right. First the token
+    // alone decided, so a dead token read as signed in and an automation started
+    // under a signed-out user. Then the cart read decided, so OUR OWN inability
+    // to call the cart — wrong subscription key, wrong params, a 5xx — read as
+    // signed out and a signed-in user was sent to a login wall. That second one
+    // shipped and was caught on the device: window.AB.userInfo carried a live
+    // token and firstName "Stephen" while the probe reported loggedIn false.
+    //
+    // The rule that survives both: a cart read that SUCCEEDS proves the session
+    // works. A cart read that fails proves nothing about the user, only about
+    // us. So a present token plus a failed read is INCONCLUSIVE — hand it back
+    // and let the page check decide, rather than asserting something we cannot
+    // know from a request we could not make.
+    // When the cart cannot be read we fall back to what the page itself says
+    // about the user, rather than to the DOM login heuristic. On the device the
+    // heuristic ALSO got it wrong on the same page — it read "Account menu Sign
+    // in" while userInfo already carried a live token and firstName "Stephen",
+    // because it ran mid-bootstrap. Falling back to it just swaps one wrong
+    // answer for another.
+    //
+    // A token plus a name is a weaker signal than a cart read, and it is marked
+    // as such (verified:false) so telemetry can tell the two apart. It is the
+    // right way to be wrong: if the session is actually dead the run fails at
+    // the first write and the user is told, which is recoverable. Reporting a
+    // signed-in user as signed out blocks them from the app entirely, which is
+    // not.
+    if (!cart.ok) {
+      var named = typeof u.firstName === 'string' && u.firstName.length > 0;
+      if (!named) {
+        post({ ok: false, why: 'cart_unreadable', detail: cart.why || null, tokenPresent: true });
+        return;
+      }
+      post({
+        ok: true, loggedIn: true, verified: false, cartWhy: cart.why || null,
+        storeId: u.branchId ? String(u.branchId) : null,
+        zipCode: u.zipcode ? String(u.zipcode) : null,
+        uuid: u.UUID || null, shoppingContext: 'pickup',
+        hasSearchKey: !!__albSearchKey(), cartReadable: false,
+      });
       return;
     }
     post({
       ok: true,
-      loggedIn: !!cart.ok,
+      verified: true,
+      loggedIn: true,
       storeId: u.branchId ? String(u.branchId) : null,
       zipCode: u.zipcode ? String(u.zipcode) : null,
       uuid: u.UUID || null,

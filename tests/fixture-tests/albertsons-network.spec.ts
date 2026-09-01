@@ -365,7 +365,43 @@ describe('Albertsons session probe', () => {
     expect(msg.storeId).toBe('161');
   });
 
-  itWithFixture('search-results-tortillas.html', 'a stale token is NOT signed in — the cart read decides', async (runner) => {
+  itWithFixture('search-results-tortillas.html', 'a token we cannot verify is INCONCLUSIVE, never signed-out', async (runner) => {
+    // Caught on the device: the page carried a live token and firstName
+    // "Stephen" while the probe reported loggedIn false, because our own cart
+    // call was 401ing on the wrong subscription key. Our inability to call the
+    // cart says nothing about whether the user is signed in.
+    await runner.inject(CONTEXT);
+    await runner.inject(cartStub({}, { getStatus: 401 }));
+    await runner.inject(buildAlbertsonsSessionScript());
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    expect(msg.ok).toBe(false);
+    expect(msg.why).toBe('cart_unreadable');
+    expect(msg.tokenPresent).toBe(true);
+    // The one thing it must never say here.
+    expect(msg.loggedIn).toBeUndefined();
+  });
+
+  itWithFixture('search-results-tortillas.html', 'token + name + an unreadable cart = signed in, flagged UNVERIFIED', async (runner) => {
+    // The device case: userInfo had a live token and firstName "Stephen", the
+    // cart 401'd on the wrong key, and the DOM heuristic also said signed out
+    // because it ran mid-bootstrap. Blocking a signed-in user from the app is
+    // worse than starting a run that fails at the first write.
+    await runner.inject('(function(){ window.SWY = { CONFIGSERVICE: {'
+      + ' searchConfig: { apimProgramSubscriptionKey: "0123456789abcdef0123456789abcdef" },'
+      + ' datapowerConfig: { cncSubscriptionKey: "fedcba9876543210fedcba9876543210" } } };'
+      + ' window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok", firstName: "Stephen",'
+      + ' branchId: "161", zipcode: "83713", UUID: "u" } }; })(); true;');
+    await runner.inject(cartStub({}, { getStatus: 401 }));
+    await runner.inject(buildAlbertsonsSessionScript());
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    expect(msg.ok).toBe(true);
+    expect(msg.loggedIn).toBe(true);
+    // Marked so telemetry can separate a proven session from an assumed one.
+    expect(msg.verified).toBe(false);
+    expect(msg.cartReadable).toBe(false);
+  });
+
+  itWithFixture('search-results-tortillas.html', 'superseded: a stale token is NOT signed in — the cart read decides', async (runner) => {
     // The failure this pins: loggedIn was set from the token alone and the cart
     // result was reported beside it as cartReadable, which nothing consumed. A
     // dead token then read as signed in, the run started, and a signed-OUT user
@@ -374,8 +410,8 @@ describe('Albertsons session probe', () => {
     await runner.inject(cartStub({}, { getStatus: 401 }));
     await runner.inject(buildAlbertsonsSessionScript());
     const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
-    expect(msg.ok).toBe(true);
-    expect(msg.loggedIn).toBe(false);
+    expect(msg.ok).toBe(false);
+    expect(msg.loggedIn).toBeUndefined();
   });
 
   itWithFixture('search-results-tortillas.html', 'a cart that errors for a NON-auth reason says nothing about the user', async (runner) => {
