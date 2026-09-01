@@ -296,6 +296,23 @@ describe('HEB MEAL-202: many terms, one page, no navigation', () => {
     expect(results.map((r: any) => r.term).sort()).toEqual(['limes', 'sour cream', 'tortillas']);
   });
 
+  itWithFixture('logged-in-home.html', 'answers a ONE-term batch — that is a substitute search', async (runner) => {
+    // "Pick a Substitute" runs a search of its own. On a network store it has to
+    // be this same rail: the DOM search drives the store's header search box,
+    // which does not exist on the cart page a network run finishes on, so it
+    // found no input, returned silently, and the screen sat there until the
+    // 15s recovery timeout. Stephen typed "Onion" and nothing happened.
+    await runner.inject(stub(searchPayload([product({ productName: 'Fresh White Onion' })])));
+    await runner.inject(batch(['Onion']));
+    const done = await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+    expect(done.count).toBe(1);
+    const results = runner.messagesOfType('SEARCH_RESULT');
+    expect(results).toHaveLength(1);
+    expect(results[0].term).toBe('Onion');
+    // Candidates are the whole point — an empty answer is the same dead end.
+    expect(results[0].candidates.length).toBeGreaterThan(0);
+  });
+
   itWithFixture('logged-in-home.html', 'never loads a page — the WebView stays put', async (runner) => {
     // The whole point. If this ever starts navigating, the speed is gone and the
     // worker WebViews come back with it.

@@ -4314,6 +4314,21 @@ export default function WebViewCartSheet({
           netStartSearch();
           return;
         }
+        if ((msg.type === 'SEARCH_RESULT' || msg.type === 'SEARCH_RESULT_FAILED')
+            && msg.source === 'network' && isCustomSearchRef.current) {
+          // A substitute search is a network search too, and it is NOT part of
+          // the run's batch — the gate below would drop it, because by review
+          // time the run is over and netActiveRef is false.
+          isCustomSearchRef.current = false;
+          if (customSearchTimeoutRef.current) { clearTimeout(customSearchTimeoutRef.current); customSearchTimeoutRef.current = null; }
+          const subs: Candidate[] = msg.type === 'SEARCH_RESULT' ? (msg.candidates ?? []) : [];
+          console.log(`[Cart ${ts()}]`, 'CUSTOM SEARCH network result:', subs.length, 'candidates');
+          setCustomSuggestions(subs);
+          setCustomSearching(false);
+          setSelectedSuggIdx(0);
+          setCustomText('');
+          return;
+        }
         if ((msg.type === 'SEARCH_RESULT' || msg.type === 'SEARCH_RESULT_FAILED') && msg.source === 'network') {
           // Both outcomes are an answer, so both advance the ring — a term the
           // store had nothing for is progress, not a stall.
@@ -4778,19 +4793,44 @@ export default function WebViewCartSheet({
     isCustomSearchRef.current = true;
     setCustomSearching(true);
     setCustomSearchTerm(trimmed);
-    loadQueueRef.current = [scriptsRef.current!.extractProductsScript];
-    // Recovery timer: if no SEARCH_RESULT lands, surface "no results" (which
-    // re-enables the buttons via !customSearching) instead of hanging.
+
+    // ON A NETWORK STORE, A SUBSTITUTE SEARCH IS A NETWORK SEARCH.
+    //
+    // The DOM path below drives the store's own header search box, which only
+    // exists on a search page. A network run loads no pages, so it arrives at
+    // this screen parked on the cart, the script finds no input and returns
+    // silently, and the only thing that happens is the recovery timeout fifteen
+    // seconds later. Stephen typed "Onion" and watched exactly that.
+    //
+    // The rail can answer this directly — it is the same search the run itself
+    // used, for one term instead of eighteen.
+    const netRailForSub = getNetworkRail(lockedStoreIdRef.current);
+    const subSession = netSessionRef.current;
+    const subScript = netRailForSub && subSession
+      ? netRailForSub.searchBatch([trimmed], subSession)
+      : null;
+
     if (customSearchTimeoutRef.current) clearTimeout(customSearchTimeoutRef.current);
     customSearchTimeoutRef.current = setTimeout(() => {
       customSearchTimeoutRef.current = null;
       if (!isCustomSearchRef.current) return; // result already arrived
       console.log(`[Cart ${ts()}]`, 'CUSTOM SEARCH timeout for', trimmed, '— re-enabling review buttons');
       isCustomSearchRef.current = false;
-      loadQueueRef.current = []; // drop the stale queued extract so a later reload can't fire it
+      loadQueueRef.current = [];
       setCustomSuggestions([]);
       setCustomSearching(false);
     }, CUSTOM_SEARCH_TIMEOUT_MS);
+
+    if (subScript) {
+      // No page load is coming, so nothing must be left queued for one — a
+      // stale extract would otherwise fire on some later unrelated navigation.
+      loadQueueRef.current = [];
+      console.log(`[Cart ${ts()}]`, 'CUSTOM SEARCH over the network for', trimmed);
+      webviewRef.current?.injectJavaScript(subScript);
+      return;
+    }
+
+    loadQueueRef.current = [scriptsRef.current!.extractProductsScript];
     webviewRef.current?.injectJavaScript(scriptsRef.current!.buildSearchScript(trimmed));
   }, []);
 
