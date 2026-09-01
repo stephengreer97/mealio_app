@@ -129,6 +129,12 @@ const ALB_PRELUDE = `
         return { ok: false, why: 'threw', detail: String(e).slice(0, 80) };
       }
     }
+    // No candidates at all is a different fact from candidates that were
+    // refused. The first means we could not ask — the page carried no key, so
+    // the config shape moved or the bundle had not finished loading. The second
+    // means we asked and the token was rejected, which IS signed out. Collapsing
+    // them would report a signed-in user as signed out on any config change.
+    if (!keys.length) return { ok: false, why: 'no_key' };
     return { ok: false, why: 'auth', status: lastStatus };
   }
 `;
@@ -166,20 +172,39 @@ ${ALB_PRELUDE}
     if (!u) { post({ ok: false, why: 'not_hydrated' }); return; }
     if (!u.SWY_SHOP_TOKEN) { post({ ok: true, loggedIn: false }); return; }
     // "Present" and "usable" are not the same property — MEAL-137 measured this
-    // token at a 45-minute life. The cart read turns a present token into a
-    // proven one, and it is the same call the add path depends on.
+    // token at a 45-minute life, and a dead one still sits on the page global.
+    // So the cart read DECIDES; it does not merely accompany the answer.
+    //
+    // This was wrong once, and the way it failed is worth keeping: loggedIn was
+    // set from the token alone and the cart result was reported beside it as
+    // cartReadable, which nothing consumed. A stale token then read as signed in,
+    // the run started, and the user — who was signed out — watched the sign-in
+    // prompt get replaced by an automation loading the cart page.
+    //
+    // Three outcomes, and the middle one is the point:
+    //   cart reads          -> signed in, and the add path provably works
+    //   every key gets 401  -> the token is dead. That IS signed out
+    //   anything else       -> a timeout or a 5xx says nothing about the user,
+    //                          so answer "do not know" and let the caller fall
+    //                          back rather than guess in either direction
     var cart = await __albReadCart(12000);
+    // Only a refusal is a verdict about the user. Everything else — no key, a
+    // 5xx, a timeout — is us being unable to ask.
+    if (!cart.ok && cart.why !== 'auth') {
+      post({ ok: false, why: 'cart_unreadable', detail: cart.why || null });
+      return;
+    }
     post({
       ok: true,
-      loggedIn: true,
+      loggedIn: !!cart.ok,
       storeId: u.branchId ? String(u.branchId) : null,
       zipCode: u.zipcode ? String(u.zipcode) : null,
       uuid: u.UUID || null,
       // Pickup and delivery price and stock differently, same as H-E-B.
       shoppingContext: 'pickup',
       hasSearchKey: !!__albSearchKey(),
-      // A cart read that authenticates is the only proof the add path will work;
-      // the token alone is not, because the subscription key is a separate gate.
+      // Same fact as loggedIn now, kept because a device log that shows both is
+      // how the next person sees WHY the verdict was what it was.
       cartReadable: !!cart.ok,
       cartWhy: cart.ok ? null : (cart.why || null)
     });

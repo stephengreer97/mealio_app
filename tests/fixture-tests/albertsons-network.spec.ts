@@ -354,7 +354,8 @@ describe('Albertsons session probe', () => {
   });
 
   itWithFixture('search-results-tortillas.html', 'waits for a late bootstrap rather than racing it', async (runner) => {
-    await runner.inject('(function(){ delete window.AB; window.SWY = { CONFIGSERVICE: { searchConfig: { apimProgramSubscriptionKey: "k" } } };'
+    await runner.inject('(function(){ delete window.AB; window.SWY = { CONFIGSERVICE: { searchConfig: { apimProgramSubscriptionKey: "k" },'
+      + ' datapowerConfig: { cncSubscriptionKey: "fedcba9876543210fedcba9876543210" } } };'
       + ' setTimeout(function(){ window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok", branchId: "161", zipcode: "83713" } }; }, 1200); })(); true;');
     await runner.inject(cartStub({ '1': 1 }));
     await runner.inject(buildAlbertsonsSessionScript());
@@ -362,6 +363,32 @@ describe('Albertsons session probe', () => {
     expect(msg.ok).toBe(true);
     expect(msg.loggedIn).toBe(true);
     expect(msg.storeId).toBe('161');
+  });
+
+  itWithFixture('search-results-tortillas.html', 'a stale token is NOT signed in — the cart read decides', async (runner) => {
+    // The failure this pins: loggedIn was set from the token alone and the cart
+    // result was reported beside it as cartReadable, which nothing consumed. A
+    // dead token then read as signed in, the run started, and a signed-OUT user
+    // watched the sign-in prompt get replaced by an automation loading the cart.
+    await runner.inject(CONTEXT);
+    await runner.inject(cartStub({}, { getStatus: 401 }));
+    await runner.inject(buildAlbertsonsSessionScript());
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    expect(msg.ok).toBe(true);
+    expect(msg.loggedIn).toBe(false);
+  });
+
+  itWithFixture('search-results-tortillas.html', 'a cart that errors for a NON-auth reason says nothing about the user', async (runner) => {
+    // A 500 or a timeout is the store having a bad minute. Calling that "signed
+    // out" walls a signed-in user; calling it "signed in" starts a run that
+    // cannot work. Neither — hand it back.
+    await runner.inject(CONTEXT);
+    await runner.inject(cartStub({}, { getStatus: 500 }));
+    await runner.inject(buildAlbertsonsSessionScript());
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    expect(msg.ok).toBe(false);
+    expect(msg.why).toBe('cart_unreadable');
+    expect(msg.loggedIn).toBeUndefined();
   });
 
   itWithFixture('search-results-tortillas.html', 'reports the store and that the cart is actually reachable', async (runner) => {
