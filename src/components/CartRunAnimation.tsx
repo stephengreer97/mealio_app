@@ -32,9 +32,11 @@ interface Props {
   label?: string | null;
   color?: string;
   title?: string | null;
+  /** A second, quieter line. Used to say "still working" when a run stalls. */
+  note?: string | null;
 }
 
-export default function CartRunAnimation({ total, done, label, color, title }: Props) {
+export default function CartRunAnimation({ total, done, label, color, title, note }: Props) {
   const accent = color || Colors.brand;
   // total 0 = working, denominator unknown (the login check, or before the
   // session probe answers). "0/0" reads as broken, so nothing is counted and the
@@ -100,6 +102,7 @@ export default function CartRunAnimation({ total, done, label, color, title }: P
 
       <Text style={styles.title}>{title || 'Filling your cart'}</Text>
       {!!label && <Text style={styles.label} numberOfLines={1} testID="cart-run-label">{label}</Text>}
+      {!!note && <Text style={styles.note} testID="cart-run-note">{note}</Text>}
     </View>
   );
 }
@@ -116,5 +119,6 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 16, fontFamily: 'Inter_600SemiBold' },
   badgeOf: { fontSize: 13, color: Colors.text3, fontFamily: 'Inter_400Regular' },
   title: { marginTop: 12, fontSize: 17, fontFamily: 'Inter_600SemiBold', color: Colors.text1 },
+  note: { marginTop: 8, fontSize: 12, color: Colors.text3, opacity: 0.8, fontFamily: 'Inter_400Regular', textAlign: 'center' },
   label: { marginTop: 6, fontSize: 13, color: Colors.text3, fontFamily: 'Inter_400Regular', textAlign: 'center' },
 });

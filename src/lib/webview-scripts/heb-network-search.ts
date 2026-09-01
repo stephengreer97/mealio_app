@@ -459,6 +459,29 @@ ${CANDIDATE_HELPERS}
       }
     }
   };
+  // THE FIRST TERM GOES ALONE.
+  //
+  // On 2026-09-01 an 18-term run opened with three simultaneous searches and all
+  // three came back "TypeError: Failed to fetch" inside 450ms — no status, no
+  // body, blocked below HTTP — and the page reloaded twice straight after, which
+  // is what a challenge looks like. The session query a second earlier had gone
+  // through fine on its own, so what the store objected to was the burst, not
+  // the client.
+  //
+  // So the pool is not opened cold. One search runs by itself; only once it has
+  // come back does the rest fan out. It costs one request of latency on a run
+  // that used to finish eight terms in under a second, and it is the difference
+  // between a rail that works on the first burst and one that gets challenged
+  // into a page fallback.
+  if (TERMS.length > 0) {
+    try { await searchOne(TERMS[0]); }
+    catch (e) {
+      post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: TERMS[0],
+             why: 'threw', detail: String(e).slice(0, 120) });
+    }
+    next = 1;
+  }
+
   var lanes = [];
   for (var L = 0; L < ${concurrency}; L++) lanes.push(runner());
   await Promise.all(lanes);

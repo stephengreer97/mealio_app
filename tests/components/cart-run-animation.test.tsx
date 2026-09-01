@@ -87,4 +87,13 @@ describe('CartRunAnimation', () => {
     expect(SHEET.frames).toBe(25);
     expect(SHEET.cols * SHEET.rows).toBeGreaterThanOrEqual(SHEET.frames);
   });
+
+  it('shows a stall note when one is given, and nothing when it is not', () => {
+    const quiet = render(<CartRunAnimation total={18} done={3} />);
+    expect(quiet.queryByTestId('cart-run-note')).toBeNull();
+
+    const stalled = render(<CartRunAnimation total={18} done={3} note="Still working — this one is taking longer than usual" />);
+    expect(stalled.getByTestId('cart-run-note').props.children)
+      .toContain('taking longer than usual');
+  });
 });

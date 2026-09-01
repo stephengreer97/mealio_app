@@ -817,7 +817,12 @@ export default function WebViewCartSheet({
   // only path that knows a real denominator up front — it asks for N terms and
   // writes M products, so the ring is a fraction rather than a spinner.
   const [netProgress, setNetProgress] = useState<{ done: number; total: number; label: string | null } | null>(null);
+  // A run that is still going but has stopped counting looks broken. Stephen
+  // watched one sit at 3/18 and had no way to tell it apart from a hang, so a
+  // run that has not counted anything for a while says so out loud.
+  const [netNote, setNetNote] = useState<string | null>(null);
   const bumpNetProgress = useCallback((label?: string | null) => {
+    setNetNote(null);
     setNetProgress((p) => (p ? { done: Math.min(p.done + 1, p.total), total: p.total, label: label ?? p.label } : p));
   }, []);
   // True while the run is doing its own work and the user has nothing to do.
@@ -1585,6 +1590,16 @@ export default function WebViewCartSheet({
   // is not caution for its own sake — a half-network run would have to reconcile
   // two different notions of what was attempted, and the pool path already works.
 
+  // Nothing counted for 12s while a run is live => say "still working". The
+  // timer restarts on every count, so a healthy run never shows this.
+  const netCounted = netProgress?.done ?? -1;
+  const netRunning = step === 'login_check' || step === 'searching' || step === 'adding';
+  useEffect(() => {
+    if (!netRunning) { setNetNote(null); return; }
+    const t = setTimeout(() => setNetNote('Still working — this one is taking longer than usual'), 12_000);
+    return () => clearTimeout(t);
+  }, [netRunning, netCounted, step]);
+
   /** Give up on the network and run the item set the way it has always run. */
   const netFallBackToPool = useCallback((why: string) => {
     if (!netActiveRef.current) return;
@@ -1592,6 +1607,11 @@ export default function WebViewCartSheet({
     netPhaseRef.current = 'idle';
     if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
     console.log(`[Cart ${ts()}]`, 'network run: falling back to the pool —', why);
+    // The fast path's count is meaningless now — the pool is going to redo the
+    // whole set. Leaving "3/18" on screen would freeze there for the rest of the
+    // run. Drop to the unnumbered bag and say what is happening.
+    setNetProgress({ done: 0, total: 0, label: 'Taking a slower route' });
+    setNetNote('Still working — this one is taking longer than usual');
     tel().record('search', 'error', { detail: { phase: 'network_fallback', why }, code: 'match_rejected' });
     startParallelAddRef.current();
   }, []);
@@ -2129,6 +2149,7 @@ export default function WebViewCartSheet({
       cartReconciledRef.current = false;
       setCartResultRows(null);
       setNetProgress(null);
+      setNetNote(null);
       setCartRowsTimedOut(false);
       if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
       setCartDeltaWarning(null);
@@ -5105,6 +5126,7 @@ export default function WebViewCartSheet({
                 done={step === 'login_check' ? 0 : (netProgress?.done ?? 0)}
                 label={step === 'login_check' ? null : (netProgress?.label ?? null)}
                 title={step === 'login_check' ? `Checking your ${storeName} account` : null}
+                note={netNote}
                 color={storeColor}
               />
             )}

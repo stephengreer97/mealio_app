@@ -449,6 +449,19 @@ ${albSearchUrlExpr(pageSize)}
       }
     }
   }
+
+  // The first term goes alone, for the same reason H-E-B's does: a cold burst is
+  // what gets challenged. MEAL-207 already has this store's search degrading
+  // under load, so opening with one request rather than two is cheap insurance.
+  if (TERMS.length > 0) {
+    try { await one(TERMS[0]); }
+    catch (e) {
+      post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: TERMS[0],
+             why: 'threw', detail: String(e).slice(0, 80) });
+    }
+    next = 1;
+  }
+
   var pool = [];
   for (var c = 0; c < ${concurrency}; c++) pool.push(worker());
   await Promise.all(pool);
