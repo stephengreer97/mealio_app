@@ -77,6 +77,8 @@ const deliTurkey = (): Ingredient => ({
   purchaseWeight: 1.5,
   weightStep: 0.25,
   dropdown: { type: 'preference', selectedText: 'Thin sliced', selectedValue: 'thin' },
+  // The store's own identifier for the chosen product (MEAL-19).
+  storeProducts: { kroger: { upc: '0001111041700', name: 'Kroger Oven Roasted Turkey Breast' } },
 });
 
 const salt = (): Ingredient => ({
@@ -157,5 +159,25 @@ describe('the meal edit screen keeps what the shopper chose', () => {
     expect('purchaseWeight' in turkey).toBe(false);
     expect('weightStep' in turkey).toBe(false);
     expect('dropdown' in turkey).toBe(false);
+    expect('storeProducts' in turkey).toBe(false);
+  });
+
+  it('clears the store’s product id on the X alone, with no keystroke after it', async () => {
+    // The case the editor's rebuild cannot cover, because it never runs: press
+    // X and save. `fromFormIng` is what drops the product-bound fields, and it
+    // only runs on a keystroke, so the X has to clear this itself.
+    //
+    // It matters more here than for the other three. A left-behind weight
+    // biases the next add; a left-behind identifier RESOLVES, so the product
+    // the shopper just removed goes into the cart on the next run without
+    // anybody choosing it (MEAL-19).
+    const r = openEditor([salt(), deliTurkey()]);
+
+    fireEvent.press(r.getAllByText('x')[1]);
+
+    const saved = await savedIngredients(r);
+    const turkey = saved.find((i) => i.ingredientName === 'Turkey Breast')!;
+    expect(turkey.searchTerm).toBeNull();
+    expect('storeProducts' in turkey).toBe(false);
   });
 });

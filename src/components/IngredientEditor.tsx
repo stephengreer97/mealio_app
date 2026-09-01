@@ -164,16 +164,21 @@ function ownedFields(form: IngredientForm): OwnedFields {
 }
 
 /**
- * The three fields that belong to the CHOSEN PRODUCT rather than to the recipe
- * line, and so cannot outlive it.
+ * The fields that belong to the CHOSEN PRODUCT rather than to the recipe line,
+ * and so cannot outlive it.
  *
- * `saveChosenIngredient` writes all three in the same breath as `searchTerm`,
- * when a shopper picks a product. Editing an ingredient's name already clears
+ * `saveChosenIngredient` writes them in the same breath as `searchTerm`, when a
+ * shopper picks a product. Editing an ingredient's name already clears
  * `searchTerm` — the row goes back to being unchosen — and a remembered weight
  * or preference left behind would then be applied to whatever product is chosen
  * NEXT. Preserving them there would swap one over/under-add for another.
+ *
+ * `storeProducts` (MEAL-19) is the sharpest case, which is why it is here rather
+ * than treated as recipe data: it is the store's own identifier for the product,
+ * so a stale one does not merely bias a search — it resolves, and the old
+ * product goes in the cart without anybody choosing it.
  */
-const PRODUCT_BOUND_FIELDS = ['dropdown', 'purchaseWeight', 'weightStep'] as const;
+const PRODUCT_BOUND_FIELDS = ['dropdown', 'purchaseWeight', 'weightStep', 'storeProducts'] as const;
 
 function fromFormIng(form: IngredientForm): Ingredient {
   // No cast: `ownedFields` supplies every required key of `Ingredient`, so this

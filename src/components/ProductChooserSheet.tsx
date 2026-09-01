@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
 import { Meal } from '../types';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
+import { withStoreProduct, withoutStoreProducts } from '../lib/storeProducts';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
 
 type Step = 'searching' | 'picking' | 'saving' | 'done';
@@ -39,6 +40,14 @@ function displayNameOf(s: Suggestion): string {
   return isWeight
     ? formatWeightName(s.description, s.averageWeightPerUnit, s.size)
     : (s.size && !s.description.includes(s.size) ? `${s.description}, ${s.size}` : s.description);
+}
+
+// The UPC behind a selected row label. Selection is tracked by label because
+// that is what the list renders and what the user tapped; the identifier has to
+// be recovered from it to be remembered (MEAL-19).
+function upcForLabel(item: { suggestions: Suggestion[] } | undefined, label: string | null): string | null {
+  if (!label) return null;
+  return item?.suggestions.find((s) => displayNameOf(s) === label)?.upc ?? null;
 }
 
 // First in-stock suggestion's label, used to default-select like the other stores do.
@@ -64,7 +73,7 @@ export default function ProductChooserSheet({
   const [error, setError] = useState('');
   const [results, setResults] = useState<Array<{ ingredientName: string; suggestions: Suggestion[] }>>([]);
   const [pickIdx, setPickIdx] = useState(0);
-  const [selections, setSelections] = useState<Map<string, { description: string; qty: number }>>(new Map());
+  const [selections, setSelections] = useState<Map<string, { description: string; qty: number; upc: string | null }>>(new Map());
   const [productQty, setProductQty] = useState(0);
   const [selectedDescription, setSelectedDescription] = useState<string | null>(null);
   const [customText, setCustomText] = useState('');
@@ -164,7 +173,7 @@ export default function ProductChooserSheet({
   function handleBack() {
     const newSelections = new Map(selections);
     if (selectedDescription && current) {
-      newSelections.set(current.ingredientName, { description: selectedDescription, qty: productQty });
+      newSelections.set(current.ingredientName, { description: selectedDescription, qty: productQty, upc: upcForLabel(current, selectedDescription) });
     } else if (current) {
       newSelections.delete(current.ingredientName);
     }
@@ -179,7 +188,7 @@ export default function ProductChooserSheet({
   function handleNextBtn() {
     const newSelections = new Map(selections);
     if (selectedDescription && current) {
-      newSelections.set(current.ingredientName, { description: selectedDescription, qty: productQty });
+      newSelections.set(current.ingredientName, { description: selectedDescription, qty: productQty, upc: upcForLabel(current, selectedDescription) });
     }
     setSelections(newSelections);
     if (!isLast) {
@@ -193,11 +202,20 @@ export default function ProductChooserSheet({
     }
   }
 
-  async function doSave(selMap: Map<string, { description: string; qty: number }>) {
+  async function doSave(selMap: Map<string, { description: string; qty: number; upc: string | null }>) {
     setStep('saving');
     const updatedIngredients = meal.ingredients.map((ing) => {
       const chosen = selMap.get(ing.ingredientName);
-      return chosen !== undefined ? { ...ing, searchTerm: chosen.description, productQty: chosen.qty } : ing;
+      if (chosen === undefined) return ing;
+      const next = { ...ing, searchTerm: chosen.description, productQty: chosen.qty };
+      // The label is what the product is CALLED; the UPC is which product it is.
+      // Both are saved so the next cart run looks it up instead of searching the
+      // label back into a product (MEAL-19).
+      // Written together or not at all — a new name beside the previous
+      // product's identifier would add something nobody chose.
+      return chosen.upc
+        ? withStoreProduct(next, meal.storeId, { upc: chosen.upc, name: chosen.description })
+        : withoutStoreProducts(next);
     });
     const count = selMap.size;
     try {

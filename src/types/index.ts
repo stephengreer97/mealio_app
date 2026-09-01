@@ -45,6 +45,18 @@ export interface Ingredient {
   purchaseWeight?: number | null;
   // The dropdown's weight increment (lb) — the editor steps purchaseWeight by it.
   weightStep?: number | null;
+  /**
+   * The product the user actually chose, as the STORE identifies it, keyed by
+   * rail (MEAL-19). `searchTerm` is the display name of that product and is a
+   * description; this is the identity. Only the Kroger rail writes one today.
+   *
+   * **Optional, and absent rather than empty when there is none** — same rule
+   * as `prep` above and for the same reason: the ingredient array is PATCHed
+   * back whole with no migration, so a row nobody has chosen a product for must
+   * serialise the way it did before this field existed. See
+   * `src/lib/storeProducts.ts` for why it is keyed at all.
+   */
+  storeProducts?: Record<string, { upc: string; name: string }>;
 }
 
 export interface Meal {

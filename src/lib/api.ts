@@ -555,7 +555,10 @@ export const kroger = {
       timeoutMs: 60_000,
     }),
 
-  searchProducts: (ingredients: Array<{ ingredientName?: string; productName?: string; productQty?: number; qty?: number; quantity?: number }>, locationId?: string, storeId?: string, mealNames?: string[]) =>
+  // `upc` is the product the user already chose at this rail (MEAL-19). Sent
+  // when we have one; the server resolves it directly and searches only if that
+  // does not confidently land, so an older server simply ignores it.
+  searchProducts: (ingredients: Array<{ ingredientName?: string; productName?: string; productQty?: number; qty?: number; quantity?: number; upc?: string | null }>, locationId?: string, storeId?: string, mealNames?: string[]) =>
     request<{
       results: Array<{
         term: string;
