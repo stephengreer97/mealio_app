@@ -236,7 +236,13 @@ chosen means the field is OMITTED rather than nulled, which is what the storefro
 is a write rather than a search &mdash; re-searching would spend ~1.8 s per item rediscovering an
 id already in hand. It must NOT go back through <code>finishParallelAdd</code>: a top-up is
 already the reconcile's own correction, so reconciling it again would find a shortfall and top up
-the top-up. And it never splits one correction across two rails &mdash; if any retry item has no
+the top-up. <b>Skipping the reconcile is not the same as skipping its findings.</b> The reconcile
+splits what it finds two ways &mdash; quantities it can correct itself, which become the top-up,
+and items it cannot (<code>no_results</code>, ambiguous, declined), which it pushes into
+<code>searchResults</code> for the user. The top-up branch went straight to <code>done</code> and
+dropped that second half: a run ended with an unmatched onion and nothing on screen about it. It
+routes to <code>searchResult</code> (or <code>review</code>, when every item is a choose) exactly
+as the pooled path does. And it never splits one correction across two rails &mdash; if any retry item has no
 id to write, the whole top-up takes the page path.</p>
 <p><b>Once writing starts, falling back to the page path is forbidden.</b> Every earlier phase can
 hand the run over safely because nothing has been written. This one cannot: the pool re-adds the

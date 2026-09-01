@@ -2001,6 +2001,23 @@ export default function WebViewCartSheet({
     addResultsRef.current = [...addResultsRef.current, ...landed];
     setTotalAdded(addResultsRef.current.length);
     setAddedNames(addResultsRef.current.map((a) => a.name));
+
+    // A TOP-UP MUST STILL SHOW WHAT THE RECONCILE COULD NOT FIX.
+    //
+    // The reconcile splits its findings two ways: quantities it can correct
+    // itself (the top-up) and items it cannot (no results, ambiguous, declined),
+    // which it pushes into searchResults for the user to deal with. This branch
+    // went straight to 'done' and dropped the second half on the floor — run A
+    // ended on the done screen with a White Onion that had matched nothing and
+    // no mention of it anywhere. Route exactly as the pooled path does.
+    if (searchResultsRef.current.length > 0) {
+      const allChoose = searchResultsRef.current.every((r) => r.isChoose);
+      console.log(`[Cart ${ts()}]`, 'network top-up: finished with', searchResultsRef.current.length,
+        'still needing the user →', allChoose ? 'review' : 'searchResult');
+      setReviewIdx(0);
+      setStep(allChoose ? 'review' : 'searchResult');
+      return;
+    }
     setStep('done');
   }, [finishParallelAdd, setStep]);
   netFinalizeRef.current = netFinalize;
