@@ -1684,6 +1684,16 @@ export default function WebViewCartSheet({
     // were still landing. It is longer now, and when it does fire it finalizes
     // with whatever came back rather than starting a second adding pass. The cart
     // read in the reconcile is what settles the truth either way.
+    // COUNT THE ATTEMPTS. addsAttempted gates the done screen's after-probe
+    // (shouldProbeAfterRun), and the only place incrementing it was the review
+    // add — a page-path leftover. So a pure rail run reported ZERO adds
+    // attempted, the probe never ran, and everything that depends on it went
+    // with it: the cart-check verdict, the over-add safety net, and the
+    // correction that finds an item the run called failed sitting in the cart.
+    // It went unnoticed because a reconcile that finalizes suppresses the probe
+    // by design, and the runs measured so far either ended there or had a review
+    // add along the way to increment this by accident.
+    addsAttemptedRef.current += toWrite.length;
     netArmFinalize(75_000);
     webviewRef.current?.injectJavaScript(script);
   }, [finishParallelAdd, netArm, netArmFinalize, netHandOverToUser, setStep]);
@@ -3598,6 +3608,14 @@ export default function WebViewCartSheet({
                 const script = writes.length > 0 ? (getNetworkRail(lockedStoreIdRef.current)?.addBatch(writes) ?? null) : null;
                 if (script && stillNeedsPage.size === 0) {
                   console.log(`[Cart ${ts()}]`, 'network top-up: re-writing', writes.length, 'without a page load');
+                  // The cart is about to change again, so the verdict this
+                  // reconcile just reached is spent. Left set, the done step
+                  // skips its after-probe and nothing ever re-reads the cart —
+                  // which is how a failure the cart DISPROVES went unnoticed:
+                  // the run reported the item failed, the top-up was refused
+                  // too, and the read that would have found it sitting in the
+                  // cart never ran. Same reasoning as a review add.
+                  reconcileFinalizedRef.current = false;
                   netTopUpRef.current = new Map(routing.retry.map((t, n) => [t.index, retryItems[n]]));
                   netResultsRef.current = new Map();
                   netWriteFanoutRef.current = new Map();

@@ -93,6 +93,7 @@ jest.mock('../../src/lib/automation-config', () => {
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { enableRail, SESSION_OK } from './helpers/railRun';
 
 const chosen = (name: string) => ({
   ingredientName: name, searchTerm: name, productQty: 1, qty: 1, unit: 'qty', measure: null,
@@ -138,31 +139,48 @@ async function runToDoneScreen(cartRows: Array<{ name: string; qty: number }>) {
   // logAutomationStart is a round trip and no timer advance delivers it; the run
   // holds a null runId until the microtask queue is flushed.
   await act(async () => {});
-  post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+  enableRail();
+  post(SESSION_OK);
   // The before-snapshot. It has to succeed: with no baseline there is no
   // after-probe at all (shouldProbeAfterRun), and the test would prove nothing.
-  post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
+  post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+  post(SESSION_OK);
 
-  // Both items are searched before either is added. Exact matches, so each
-  // auto-picks and reaches the add rather than the review screen.
+  // Both items are searched before either is written. Exact matches, so each is
+  // written rather than routed to review.
   for (const productName of ['sour cream', 'tortillas']) {
     post({
-      type: 'SEARCH_RESULT',
-      candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2' }],
+      type: 'SEARCH_RESULT', source: 'network', term: productName,
+      candidates: [{
+        productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2',
+        productId: 'p' + productName, skuId: 's' + productName,
+      }],
     });
   }
+  post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
   // The sour cream lands. The tortillas report a failure — and are in the cart
-  // anyway, if the caller says so.
-  post({ type: 'ADD_RESULT', success: true });
-  post({ type: 'ADD_RESULT', success: false, reason: 'add button not found' });
-  act(() => { jest.advanceTimersByTime(30_000); });
+  // anyway, if the caller says so. That contradiction is the whole subject.
+  post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
+  post({ type: 'NET_ADD_RESULT', idx: 1, name: 'tortillas', success: false, productId: 'ptortillas', skuId: 'stortillas', reason: 'cart_not_incremented' });
+  post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+  act(() => { jest.advanceTimersByTime(5_000); });
+
+  // THE RECONCILE STILL BELIEVES THE RUN. Its cart read shows only the item that
+  // reported success, so the tortillas are short — it tops them up, and that is
+  // refused too. The run therefore reaches the done screen calling them failed,
+  // which is the state this whole file is about. The after-probe below is what
+  // disproves it.
+  post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
+  post({ type: 'NET_ADD_RESULT', idx: 1, name: 'tortillas', success: false, productId: 'ptortillas', skuId: 'stortillas', reason: 'cart_not_incremented' });
+  post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [{ name: 'sour cream', qty: 1 }], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+  act(() => { jest.advanceTimersByTime(5_000); });
 
   // The after-probe's reading of the real cart.
   post({
     type: 'CART_COUNT',
     count: cartRows.reduce((n, r) => n + r.qty, 0),
     items: cartRows,
-    url: 'https://heb.test/cart',
+    source: 'network',
   });
   act(() => { jest.advanceTimersByTime(2_000); });
   return view;
