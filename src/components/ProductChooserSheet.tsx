@@ -45,9 +45,18 @@ function displayNameOf(s: Suggestion): string {
 // The UPC behind a selected row label. Selection is tracked by label because
 // that is what the list renders and what the user tapped; the identifier has to
 // be recovered from it to be remembered (MEAL-19).
+//
+// An AMBIGUOUS label records nothing. Two suggestions can render the same string
+// — same description, same size, different SKU — and label selection cannot say
+// which one was tapped. Taking the first would permanently bind the ingredient
+// to a product the user may not have chosen, and the identifier is not a hint:
+// the next run resolves it and adds it as an exact match, with no review. No id
+// means the next run searches by name, which is what happened before this
+// existed. Wrong is worse than absent here.
 function upcForLabel(item: { suggestions: Suggestion[] } | undefined, label: string | null): string | null {
   if (!label) return null;
-  return item?.suggestions.find((s) => displayNameOf(s) === label)?.upc ?? null;
+  const matches = item?.suggestions.filter((s) => displayNameOf(s) === label) ?? [];
+  return matches.length === 1 ? matches[0].upc : null;
 }
 
 // First in-stock suggestion's label, used to default-select like the other stores do.

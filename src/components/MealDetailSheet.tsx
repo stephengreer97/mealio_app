@@ -437,7 +437,14 @@ export default function MealDetailSheet({
                             onChangeText={(val) =>
                               setIngredients((prev) =>
                                 prev.map((item, idx) =>
-                                  idx === origIdx ? { ...item, searchTerm: val || null } : item
+                                  // Typing a different product name here makes
+                                  // the row name a product nobody looked up, so
+                                  // the store's identifier for the OLD one has
+                                  // to go with it (MEAL-19) — otherwise the id
+                                  // resolves, the cart auto-adds the forgotten
+                                  // product as an exact match, and the review
+                                  // step that would have shown it never runs.
+                                  idx === origIdx ? withoutStoreProducts({ ...item, searchTerm: val || null }) : item
                                 )
                               )
                             }

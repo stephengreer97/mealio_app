@@ -130,10 +130,12 @@ flowchart TD
   <p><b>Keyed per store, and it dies with the choice.</b> Both rules exist for the same reason.
   <code>searchTerm</code> is one global field and a meal's store can change, so an H-E-B-chosen name
   already reaches Kroger's search — harmless, because the ladder recovers. An identifier does not
-  need recovering: it resolves. So it is never a bare <code>upc</code> field, and it is in
-  <code>PRODUCT_BOUND_FIELDS</code> with the remembered weight and the dropdown — renaming a row or
-  clearing its product drops the id too. A stale weight biases an add; a stale id adds the wrong
-  product outright.</p>
+  need recovering: it resolves, and a resolved id comes back <code>exact</code>, so the review step
+  that would have shown the mistake never runs. So it is never a bare <code>upc</code> field, and
+  the rule at every writer is <b>the name and the id move together or the id goes</b>: renaming the
+  ingredient, retyping or clearing the product-name box, the ✕, and choosing a product at a
+  different store all drop it. A stale weight biases an add; a stale id adds the wrong product
+  outright.</p>
 
   <h2>An invariant hiding in a type</h2>
   <p><code>ConsolidatedIngredient</code> here carries <b>no weight fields</b>, and that is

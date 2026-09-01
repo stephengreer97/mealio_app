@@ -14,6 +14,8 @@
 //     serialize (each reads the result of the prior one) while different meals
 //     still save in parallel.
 
+import { withoutStoreProducts } from './storeProducts';
+
 export interface ChosenProductUpdate {
   /** Qty to persist for this meal, if the choose UI supplied one. */
   qty?: number | null;
@@ -52,7 +54,13 @@ export function mergeChosenProduct(
     else if ('dropdown' in ing) updates.dropdown = null; // clear stale preference if none selected
     if (update.purchaseWeight != null) updates.purchaseWeight = update.purchaseWeight;
     if (update.weightStep != null) updates.weightStep = update.weightStep;
-    return { ...ing, ...updates };
+    // A choice made at THIS store renames the row, and `searchTerm` is one
+    // global field — so any other store's saved identifier now sits beside a
+    // name that describes a different product (MEAL-19). It would still
+    // resolve: move a meal to H-E-B, pick something else, move it back, and
+    // Kroger auto-adds the forgotten product while the meal displays the H-E-B
+    // one. Dropped for the same reason `dropdown` above is.
+    return withoutStoreProducts({ ...ing, ...updates });
   });
 }
 

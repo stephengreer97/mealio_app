@@ -203,4 +203,37 @@ describe('the meal editor’s product chooser records it too', () => {
       storeProducts: { kroger: { upc: SUGGESTION.upc, name: 'Kroger Sour Cream, 16 oz' } },
     });
   });
+
+  it('records nothing when two suggestions render the same label', async () => {
+    // Selection here is by LABEL, so two products with the same description and
+    // size are indistinguishable to it. Taking the first would bind the row to
+    // a SKU the user may not have tapped — and an identifier is not a hint: the
+    // next run resolves it and adds it as an exact match, with no review. No id
+    // means the next run searches by name, which is what happened before this
+    // existed.
+    const twin = { ...SUGGESTION, upc: '0009999999999' };
+    mockSearchProducts.mockResolvedValue({ results: [{ suggestions: [SUGGESTION, twin] }] });
+    const screen = render(
+      <ProductChooserSheet
+        visible
+        meal={{ id: 'm1', name: 'Tacos', storeId: 'kroger', ingredients: [ingredient({ searchTerm: null })] } as any}
+        locationId="loc1"
+        storeName="Kroger"
+        storeColor="#003087"
+        onClose={() => {}}
+        onMealUpdated={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getAllByText('Kroger Sour Cream, 16 oz').length).toBe(2));
+    fireEvent.press(screen.getByText('+'));
+    fireEvent.press(screen.getByText('Save'));
+
+    await waitFor(() => expect(mockUpdateMeal).toHaveBeenCalled());
+    const [, patch] = mockUpdateMeal.mock.calls[0] as any[];
+    // The name is still saved — that is what the user picked and it still
+    // searches. Only the ambiguous identifier is withheld.
+    expect(patch.ingredients[0].searchTerm).toBe('Kroger Sour Cream, 16 oz');
+    expect('storeProducts' in patch.ingredients[0]).toBe(false);
+  });
 });
