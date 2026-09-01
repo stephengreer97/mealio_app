@@ -7,15 +7,12 @@
  * This file is the RECORD of how the shipped sheet was made; the work itself is
  * in the .py next to it, because Pillow is what is installed on this box.
  *
- * The source (6y9HsPBq.png, 2560x4096, 5 cols x 8 rows of 512px frames) is NOT
- * in fill order. It sits empty for seven frames, blips full at 7 and 17, drops
- * back to empty at 19, then plateaus twice. Played 0 -> 39 the bag fills,
- * empties and refills. So the shipped sheet is a curated subsequence of the
- * distinct stages, in the order they read:
+ * The source (6y9HsPBq.png, 2560x4096, 5 cols x 8 rows of 512px frames) ships
+ * WHOLE and IN ORDER: PICKS is 0..39.
  *
- *   empty -> milk -> +orange -> +oranges -> +baguette -> settle -> +greens -> full
- *
- * PICKS below is that subsequence. Frames 19 and 20 are deliberately absent:
- * 19 loses the oranges and 20 loses them again, and a bag that un-fills mid-run
- * is the one thing this animation must never do.
+ * Earlier builds curated a subsequence, because the raw order is not a monotonic
+ * fill — it sits empty for seven frames, shows milk at 7, goes empty again until
+ * 17, dips at 19, then runs baguette (20-29) and greens (30-39). Stephen's call,
+ * 2026-09-01: use every frame, in sheet order, and do not reorder them. It is
+ * his artwork; playback follows it.
  */

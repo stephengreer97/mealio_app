@@ -96,11 +96,11 @@ describe('CartRunAnimation', () => {
   });
 
   it('the sheet metadata describes a grid that actually holds every frame', () => {
-    // bag-fill.webp is a CURATED subset of the source sheet, not the whole of
-    // it — see scripts/build-bag-sprite.js. The source is not in fill order (it
-    // goes empty, briefly full, empty again, then plateaus), so playing it
-    // straight through would fill the bag, empty it and refill it. If someone
-    // rebuilds it, these are the things the component assumes.
+    // bag-fill.webp is the WHOLE source sheet, in the sheet's own order —
+    // Stephen's instruction on 2026-09-01, reversing an earlier build of mine
+    // that curated a monotonic subsequence out of it. The sheet is the artwork
+    // and its order is the artwork's order. If someone rebuilds it, these are
+    // the things the component assumes.
     expect(SHEET.frames).toBeGreaterThan(1);
     expect(SHEET.cols * SHEET.rows).toBeGreaterThanOrEqual(SHEET.frames);
     // The component addresses frames by translating the image, so the declared
