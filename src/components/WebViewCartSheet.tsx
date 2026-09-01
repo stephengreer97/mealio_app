@@ -829,10 +829,15 @@ export default function WebViewCartSheet({
   //
   // Scoped to stores with a network rail. A page-path store genuinely uses that
   // WebView to search, so hiding it there would hide the work.
+  //
+  // Deliberately NOT gated on netProgress being set. It was, and that left the
+  // WebView on screen for the seconds between entering a step and the run
+  // producing its first number — the session probe, the before-cart snapshot,
+  // the beat before the first search answers. The step alone decides, so there
+  // is no window where the user sees a page they cannot use.
   const netRunVisual =
     !!getNetworkRail(lockedStoreIdRef.current)
-    && (step === 'login_check'
-        || ((step === 'searching' || step === 'adding') && netProgress != null));
+    && (step === 'login_check' || step === 'searching' || step === 'adding');
   // Which protocol this store's rail speaks. Read from a ref rather than closed
   // over, for the same reason the rest of this file resolves the store that way:
   // the callbacks below froze at an early render.
@@ -4234,6 +4239,23 @@ export default function WebViewCartSheet({
           netActiveRef.current = false;
           netPhaseRef.current = 'idle';
           console.log(`[Cart ${ts()}]`, 'network run: wrote', msg.wrote, 'of', msg.count);
+          // The done screen's breakdown, straight from the rail's own cart reads.
+          //
+          // It used to come from a page load: navigate this WebView to the cart
+          // page after the run and scrape the rows. That was the last DOM read
+          // left on a rail whose whole point is not loading pages, and it is why
+          // the breakdown could vanish — the navigation can time out, and then
+          // there is nothing to build from (MEAL-209).
+          //
+          // Set here rather than waiting for the probe so the screen is correct
+          // even when the probe never answers. The probe still runs for the
+          // reconcile, and if it answers it overwrites this with the same rows.
+          if (Array.isArray(msg.cartBefore) && Array.isArray(msg.cartAfter)) {
+            if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
+            const netRows = diffCartItems(msg.cartBefore as CartItem[], msg.cartAfter as CartItem[]);
+            console.log(`[Cart ${ts()}]`, 'network run: cart breakdown from the rail —', netRows.length, 'rows, no page load');
+            setCartResultRows(netRows);
+          }
           // A first pass hands its results to the reconcile, which is the same
           // completion the add pool calls — so nothing downstream can tell a
           // network run from a pooled one. A TOP-UP finishes the run instead:

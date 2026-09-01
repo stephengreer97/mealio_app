@@ -581,6 +581,27 @@ ${GQL_FN}
     return { qty: qty, lines: n, weight: weight };
   };
 
+  // The cart's own lines in the shape the done screen diffs (cart-count's
+  // CartItem). The rail has always read the cart here — it just threw the rows
+  // away and reported a count, which is why the breakdown had to come from a
+  // page load. Same read, nothing extra on the wire.
+  var rowsOf = function (lines) {
+    if (!lines) return null;
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      var nm = l && l.product && l.product.fullDisplayName;
+      if (!nm) continue;
+      var w = (l.estimatedWeight != null) ? Number(l.estimatedWeight) : null;
+      var row = { name: String(nm), qty: Number(l.quantity) || 0 };
+      // A weight line is reconciled by presence, not by count — same rule the
+      // page reader follows, so both paths produce identical rows.
+      if (w != null && !isNaN(w)) { row.isWeight = true; row.weight = w; }
+      out.push(row);
+    }
+    return out;
+  };
+
   var before = await readCart();
   if (before == null) {
     // No baseline means no way to know what to SET. Guessing would drop whatever
@@ -676,6 +697,10 @@ ${GQL_FN}
   // rather than only the store's per-write answer.
   var after = await readCart();
   post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: wrote,
-         cartLines: after ? after.length : null });
+         cartLines: after ? after.length : null,
+         // Before and after, so the done screen can show what THIS run added in
+         // green and what was already there in grey without loading the cart
+         // page to find out.
+         cartBefore: rowsOf(before), cartAfter: rowsOf(after) });
 })(); true;`;
 }

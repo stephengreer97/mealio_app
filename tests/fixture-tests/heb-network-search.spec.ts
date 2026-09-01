@@ -552,3 +552,70 @@ describe('HEB MEAL-202: the absolute quantity, and what it makes unsafe', () => 
     expect(w.writes[0].purchasePreferenceId).toBe('firm');
   });
 });
+
+describe('MEAL-209: the done screen breakdown comes off the rail, not a page load', () => {
+  const line = (name: string, quantity: number, over: Record<string, unknown> = {}) => ({
+    id: 'l' + name, quantity, estimatedWeight: null,
+    product: { id: 'p' + name, fullDisplayName: name }, sku: { id: 's' + name }, ...over,
+  });
+
+  itWithFixture('logged-in-home.html', 'reports the cart before and after, in the shape the diff expects', async (runner) => {
+    // Two reads already happened here — the rail just threw the rows away and
+    // posted a count, which is why the breakdown needed a cart page.
+    await runner.inject([
+      '(function () {',
+      '  var n = 0;',
+      '  window.fetch = function (url, init) {',
+      '    var body = JSON.parse((init && init.body) || "{}");',
+      '    var out;',
+      '    if (body.operationName === "CartLines") {',
+      '      n++;',
+      // Before: one item the user already had. After: that plus what we wrote.
+      '      var items = n === 1',
+      '        ? [' + JSON.stringify(line('Eggs', 2)) + ']',
+      '        : [' + JSON.stringify(line('Eggs', 2)) + ', ' + JSON.stringify(line('Sour Cream', 1)) + '];',
+      '      out = { data: { cartV2: { __typename: "Cart", id: "c1", items: items } } };',
+      '    } else {',
+      '      out = { data: { addItemToCartV2: { __typename: "Cart", id: "c1" } } };',
+      '    }',
+      '    return Promise.resolve({ ok: true, status: 200,',
+      '      text: function () { return Promise.resolve(JSON.stringify(out)); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+
+    await runner.inject(buildHebNetworkAddBatchScript([
+      { idx: 0, productId: 'pSour Cream', skuId: 'sSour Cream', quantity: 1, name: 'Sour Cream' },
+    ])!);
+
+    const done = await runner.waitForMessage('NET_ADD_DONE', 15_000);
+    expect(Array.isArray(done.cartBefore)).toBe(true);
+    expect(Array.isArray(done.cartAfter)).toBe(true);
+    // The user's own item is in BOTH, so the diff can render it grey rather than
+    // crediting this run with it.
+    expect(done.cartBefore).toEqual([{ name: 'Eggs', qty: 2 }]);
+    expect(done.cartAfter).toEqual([{ name: 'Eggs', qty: 2 }, { name: 'Sour Cream', qty: 1 }]);
+  });
+
+  itWithFixture('logged-in-home.html', 'marks a weight line by presence, as the page reader does', async (runner) => {
+    await runner.inject([
+      '(function () {',
+      '  window.fetch = function (url, init) {',
+      '    var body = JSON.parse((init && init.body) || "{}");',
+      '    var out = body.operationName === "CartLines"',
+      '      ? { data: { cartV2: { __typename: "Cart", id: "c1", items: [',
+      '          ' + JSON.stringify(line('Deli Turkey', 1, { estimatedWeight: 0.75 })),
+      '        ] } } }',
+      '      : { data: { addItemToCartV2: { __typename: "Cart", id: "c1" } } };',
+      '    return Promise.resolve({ ok: true, status: 200,',
+      '      text: function () { return Promise.resolve(JSON.stringify(out)); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+    await runner.inject(buildHebNetworkAddBatchScript([
+      { idx: 0, productId: 'x', skuId: 'y', quantity: 1, name: 'x' },
+    ])!);
+    const done = await runner.waitForMessage('NET_ADD_DONE', 15_000);
+    expect(done.cartAfter[0]).toEqual({ name: 'Deli Turkey', qty: 1, isWeight: true, weight: 0.75 });
+  });
+});
