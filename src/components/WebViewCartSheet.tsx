@@ -567,6 +567,10 @@ export default function WebViewCartSheet({
   const [selectedPreference, setSelectedPreference] = useState<string | null>(null);
   const [reviewMealQtys, setReviewMealQtys] = useState<Record<number, Record<string, number>>>({});
   const [pickedItems, setPickedItems] = useState<PickedItem[]>([]);
+  // Mirrored for the message handlers, which have []-deps and would otherwise
+  // read this run's initial empty array — the same reason skippedByIdxRef exists.
+  const pickedItemsRef = useRef<PickedItem[]>([]);
+  pickedItemsRef.current = pickedItems;
   // Draggable floating product-preview thumbnail (88x88, rests 12px from the
   // right). Tapping it opens the full-screen viewer (MEAL-64).
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -1829,9 +1833,18 @@ export default function WebViewCartSheet({
     // went straight to 'done' and dropped the second half on the floor — run A
     // ended on the done screen with a White Onion that had matched nothing and
     // no mention of it anywhere. Route exactly as the pooled path does.
-    if (searchResultsRef.current.length > 0) {
-      const allChoose = searchResultsRef.current.every((r) => r.isChoose);
-      console.log(`[Cart ${ts()}]`, 'network top-up: finished with', searchResultsRef.current.length,
+    // UNRESOLVED entries only. `searchResults` is the whole review QUEUE and it
+    // is not emptied as the user works through it — a picked item keeps its slot
+    // so Back can return to it. Testing the queue's length sent the run back to
+    // the gate it had just come from: the user picked a substitute, the rail
+    // wrote it, and they were handed the same "1 ingredient to review" screen for
+    // the ingredient they had just resolved.
+    const unresolved = searchResultsRef.current.filter((_, i) =>
+      !pickedItemsRef.current.some((p) => p.reviewIndex === i)
+      && !(i in skippedByIdxRef.current));
+    if (unresolved.length > 0) {
+      const allChoose = unresolved.every((r) => r.isChoose);
+      console.log(`[Cart ${ts()}]`, 'network top-up: finished with', unresolved.length,
         'still needing the user →', allChoose ? 'review' : 'searchResult');
       setReviewIdx(0);
       setStep(allChoose ? 'review' : 'searchResult');
