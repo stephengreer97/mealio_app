@@ -816,6 +816,21 @@ export default function WebViewCartSheet({
   // over, for the same reason the rest of this file resolves the store that way:
   // the callbacks below froze at an early render.
   const netRail = useCallback(() => getNetworkRail(lockedStoreIdRef.current), []);
+
+  /**
+   * The login check this store uses: the network rail's session probe when it has
+   * one, the DOM check otherwise.
+   *
+   * A helper rather than the choice written out at each site, because the choice
+   * WAS written out at each site and three of the five were missed — so
+   * Albertsons kept getting the DOM verdict from whichever entry point happened
+   * to run, no matter what the converted ones did. Every injection of a login
+   * check goes through here.
+   */
+  const loginCheckScript = useCallback(() => {
+    const rail = getNetworkRail(lockedStoreIdRef.current);
+    return rail ? rail.sessionScript() : scriptsRef.current!.checkLoginScript;
+  }, []);
   const netCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
   const netFailedTermsRef = useRef<Set<string>>(new Set());
   const netResultsRef = useRef<Map<number, AddResult>>(new Map());
@@ -2120,7 +2135,7 @@ export default function WebViewCartSheet({
         } else {
           setStep('login_check');
           setSearchingLabel('Checking login…');
-          loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
+          loadQueueRef.current = [loginCheckScript()];
           navTo(scriptsRef.current!.storeUrl);
           armLoginCheckTimeout();
         }
@@ -2497,8 +2512,7 @@ export default function WebViewCartSheet({
     // question twice and let the weaker answer go first — and the DOM one is an
     // inference from markup that exists in both states, where the rail's is a
     // token the origin accepts, proven by a real cart read.
-    const loginRail = getNetworkRail(lockedStoreIdRef.current);
-    loadQueueRef.current = [loginRail ? loginRail.sessionScript() : scriptsRef.current!.checkLoginScript];
+    loadQueueRef.current = [loginCheckScript()];
     navTo(scriptsRef.current!.storeUrl);
     armLoginCheckTimeout();
   };
@@ -3160,9 +3174,8 @@ export default function WebViewCartSheet({
       // Re-inject the login check on the final page — the SAME check the step
       // started with, or this quietly downgrades a rail store to the DOM answer
       // on any redirect, which is most of them.
-      const reRail = getNetworkRail(lockedStoreIdRef.current);
-      console.log(`[Cart ${ts()}]`, 'onLoadEnd login_check step — re-injecting after redirect', reRail ? '(network)' : '(dom)');
-      webviewRef.current?.injectJavaScript(reRail ? reRail.sessionScript() : s.checkLoginScript);
+      console.log(`[Cart ${ts()}]`, 'onLoadEnd login_check step — re-injecting after redirect');
+      webviewRef.current?.injectJavaScript(loginCheckScript());
     } else if ((stepRef.current === 'login_check' || stepRef.current === 'login') &&
                /\/login|\/sign-in|\/signin/i.test(url)) {
       // Login check clicked a profile icon and HEB navigated to a login page,
@@ -3187,9 +3200,8 @@ export default function WebViewCartSheet({
         // verdict here no matter what the other two do — and this verdict starts
         // the run, so it is the one that can begin an automation underneath a
         // user who has not signed in yet.
-        const loginRail = getNetworkRail(lockedStoreIdRef.current);
-        console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — back on store, re-asking', loginRail ? '(network)' : '(dom)');
-        webviewRef.current?.injectJavaScript(loginRail ? loginRail.sessionScript() : s.checkLoginScript);
+        console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — back on store, re-asking');
+        webviewRef.current?.injectJavaScript(loginCheckScript());
       } else {
         console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — not on store yet, skipping re-inject');
       }
@@ -3400,7 +3412,7 @@ export default function WebViewCartSheet({
     parallelPool.reset(); addPool.reset(); presearchPool.reset(); presearchStartedRef.current = false; presearchCommitArmedRef.current = false; mainColdActiveRef.current = false; mainColdInjectedRef.current = false;
     searchIdxRef.current = 0;
     onSearchPageRef.current = false;
-    loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
+    loadQueueRef.current = [loginCheckScript()];
     lastLoadEndUrlRef.current = '';
     expectedNavUrlRef.current = '';
     setStep('login_check');
@@ -3417,7 +3429,7 @@ export default function WebViewCartSheet({
   const recheckLogin = useCallback(() => {
     searchIdxRef.current = 0;
     onSearchPageRef.current = false;
-    loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
+    loadQueueRef.current = [loginCheckScript()];
     lastLoadEndUrlRef.current = '';
     expectedNavUrlRef.current = '';
     setStep('login_check');
