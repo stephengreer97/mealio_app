@@ -3181,8 +3181,15 @@ export default function WebViewCartSheet({
       // gated to isLoginSuccessUrl or stores that opt in via reinjectLoginCheckOnNav
       // (poll-based logins whose detection dies on the post-sign-in reload).
       if ((s.isLoginSuccessUrl && s.isLoginSuccessUrl(url)) || s.reinjectLoginCheckOnNav) {
-        console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — back on store, re-injecting login check');
-        webviewRef.current?.injectJavaScript(s.checkLoginScript);
+        // The THIRD place login is decided, and the one that actually fires for
+        // Albertsons: while the user is looking at the sign-in prompt, every page
+        // load re-asks. It has to use the rail as well, or the store gets the DOM
+        // verdict here no matter what the other two do — and this verdict starts
+        // the run, so it is the one that can begin an automation underneath a
+        // user who has not signed in yet.
+        const loginRail = getNetworkRail(lockedStoreIdRef.current);
+        console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — back on store, re-asking', loginRail ? '(network)' : '(dom)');
+        webviewRef.current?.injectJavaScript(loginRail ? loginRail.sessionScript() : s.checkLoginScript);
       } else {
         console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — not on store yet, skipping re-inject');
       }
@@ -4088,8 +4095,9 @@ export default function WebViewCartSheet({
           // The same probe answers the login gate. When it arrives during
           // login_check it IS the login check, so it is translated into the
           // verdict that step expects rather than being routed through the run.
-          if (stepRef.current === 'login_check') {
-            console.log(`[Cart ${ts()}]`, 'login_check answered over the network:', JSON.stringify(msg).slice(0, 200));
+          if (stepRef.current === 'login_check' || stepRef.current === 'login') {
+            const onLoginStep = stepRef.current === 'login';
+            console.log(`[Cart ${ts()}]`, 'login answered over the network:', JSON.stringify(msg).slice(0, 200));
             if (!msg.ok) {
               // Could not answer — usually the page had not finished its
               // bootstrap. Not a signed-out user, and saying so would wall one,
@@ -4104,10 +4112,12 @@ export default function WebViewCartSheet({
             loginCheckActiveRef.current = false;
             if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
             if (msg.loggedIn) snapshotBeforeAndBeginSearch();
-            else {
+            else if (!onLoginStep) {
               setStep('login');
               lastLoadEndUrlRef.current = '';
             }
+            // Already on the login step and still signed out: stay put. Saying it
+            // again would re-render the sheet under someone mid-sign-in.
             return;
           }
           if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
