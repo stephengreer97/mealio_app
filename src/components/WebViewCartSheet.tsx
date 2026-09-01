@@ -814,6 +814,16 @@ export default function WebViewCartSheet({
   // done screen and the telemetry are untouched and cannot disagree with a
   // pool-driven run.
   const netSessionRef = useRef<{ storeId: string; shoppingContext: string } | null>(null);
+  /**
+   * The cart as it stood before this run wrote anything, as the RAIL saw it.
+   *
+   * A fallback for when the page probe could not read the cart — which happens:
+   * the before-snapshot navigates to /cart and can land somewhere else, and then
+   * `cartItemsBeforeRef` is empty for the whole run. The rail reads the cart on
+   * every write anyway, so the FIRST write's `cartBefore` is that same baseline,
+   * and capturing it once costs nothing.
+   */
+  const netRunBaselineRef = useRef<CartItem[] | null>(null);
   // What the animation shows. Only set during a network run, because it is the
   // only path that knows a real denominator up front — it asks for N terms and
   // writes M products, so the ring is a fraction rather than a spinner.
@@ -1971,6 +1981,7 @@ export default function WebViewCartSheet({
     netRunRef.current = true;
     netMatchedRef.current = new Map();
     netSessionRef.current = null;
+    netRunBaselineRef.current = null;
     netPhaseRef.current = 'session';
     setStep('searching');
     setSearchingLabel('Connecting…');
@@ -4447,9 +4458,22 @@ export default function WebViewCartSheet({
             // the other 15 in grey as though they had been there all along. The
             // user had just watched us add them. The run's baseline is the only
             // honest "before" for a screen that says what THIS RUN did.
+            // The FIRST write's cartBefore, kept for the rest of the run.
+            //
+            // Falling back to `msg.cartBefore` was not enough. On a run whose
+            // page probe failed — `CART_COUNT phase=before count=null
+            // reason=not_cart_page`, because the cart URL landed on the
+            // homepage — cartItemsBeforeRef stays empty, so the TOP-UP's own
+            // before/after became the baseline and the done screen credited the
+            // run with the one item the top-up wrote. Measured: eleven items
+            // written, all eleven landed, and the screen said one. Stephen saw
+            // spinach and nothing else.
+            if (netRunBaselineRef.current == null) {
+              netRunBaselineRef.current = msg.cartBefore as CartItem[];
+            }
             const runBaseline = cartItemsBeforeRef.current.length
               ? cartItemsBeforeRef.current
-              : (msg.cartBefore as CartItem[]);
+              : netRunBaselineRef.current;
             const netRows = diffCartItems(runBaseline, msg.cartAfter as CartItem[]);
             console.log(`[Cart ${ts()}]`, 'network run: cart breakdown from the rail —', netRows.length,
               'rows,', netRows.filter((r) => r.added).length, 'added, no page load');
