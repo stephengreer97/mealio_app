@@ -138,6 +138,25 @@ function isSoldSingly(name: unknown): boolean {
   return SINGLE_UNIT_COUNTABLES.has(singular);
 }
 
+/**
+ * `{ storeProducts }` when there is at least one usable entry, `null` when there
+ * is not — so the caller can spread the result and leave the key ABSENT.
+ * An entry survives only with a non-empty string `upc`; `name` is display text
+ * and is allowed to be missing.
+ */
+function sanitizeStoreProducts(raw: any): { storeProducts: Record<string, { upc: string; name: string }> } | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const clean: Record<string, { upc: string; name: string }> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, any>)) {
+    if (!key || !value || typeof value !== 'object') continue;
+    const upc = (value as any).upc;
+    if (typeof upc !== 'string' || !upc.trim()) continue;
+    const name = (value as any).name;
+    clean[key] = { upc, name: typeof name === 'string' ? name : '' };
+  }
+  return Object.keys(clean).length ? { storeProducts: clean } : null;
+}
+
 export function normalizeIngredients(raw: any): Ingredient[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((item) => {
@@ -185,6 +204,13 @@ export function normalizeIngredients(raw: any): Ingredient[] {
         // card can't show it and the cart re-prompts for weight every run.
         ...(item.purchaseWeight != null ? { purchaseWeight: item.purchaseWeight } : {}),
         ...(item.weightStep != null ? { weightStep: item.weightStep } : {}),
+        // The chosen product's store identifier, per rail (MEAL-19). Spread for
+        // the same reason `prep` is: a row nobody has chosen a product for must
+        // come back out with no key at all, because what this returns is PATCHed
+        // straight back on the next save. Entries without a usable id are
+        // dropped rather than carried, so a half-written one cannot become a
+        // lookup that resolves to nothing on every run.
+        ...(sanitizeStoreProducts(item.storeProducts) ?? {}),
         ...(typeof item.prep === 'string' && item.prep.trim()
           // Trimmed because the value round-trips to storage. The server
           // canonicalises before it ever reaches us (collapsed whitespace,

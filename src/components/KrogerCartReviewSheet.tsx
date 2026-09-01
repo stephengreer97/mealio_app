@@ -21,6 +21,7 @@ import { useDraggablePreview } from '../lib/useDraggablePreview';
 import FloatingPreviewImage from './FloatingPreviewImage';
 import ProductImageViewer from './ProductImageViewer';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
+import { getStoreProduct, withStoreProduct, withoutStoreProducts } from '../lib/storeProducts';
 import { useStores } from '../lib/store-catalog/useStores';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -74,6 +75,13 @@ export interface ConsolidatedIngredient {
   unit: string;
   measure: string | null;
   searchTerm: string | null;
+  /**
+   * The UPC the user chose for this ingredient at this rail last time, or null
+   * (MEAL-19). `searchTerm` above describes the product; this identifies it, and
+   * the server resolves it directly instead of searching the description back
+   * into a product. Not a weight field — the invariant above is untouched.
+   */
+  upc: string | null;
   mealIds: string[];
   mealNames: string[];
   mealIngredients: MealIngredientQty[];
@@ -157,8 +165,17 @@ function normProductQty(ing: any): number {
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
-/** Exported for the no-weight-field invariant test — see ConsolidatedIngredient. */
-export function consolidateIngredients(meals: Array<Pick<Meal, 'id' | 'name' | 'ingredients'>>): ConsolidatedIngredient[] {
+/**
+ * Exported for the no-weight-field invariant test — see ConsolidatedIngredient.
+ *
+ * `storeId` names the banner this run is for, and only decides which rail's
+ * saved product identifier to carry (MEAL-19). Omitted, rows carry no UPC and
+ * every ingredient is searched by text exactly as before.
+ */
+export function consolidateIngredients(
+  meals: Array<Pick<Meal, 'id' | 'name' | 'ingredients'>>,
+  storeId?: string,
+): ConsolidatedIngredient[] {
   const map = new Map<string, ConsolidatedIngredient>();
   for (const meal of meals) {
     for (const ing of meal.ingredients as any[]) {
@@ -166,9 +183,15 @@ export function consolidateIngredients(meals: Array<Pick<Meal, 'id' | 'name' | '
       const key = (ing.searchTerm || name).toLowerCase().trim();
       if (!key) continue;
       const qty = normProductQty(ing);
+      const chosen = getStoreProduct(ing, storeId);
       if (map.has(key)) {
         const e = map.get(key)!;
         e.productQty += qty;
+        // Rows consolidate under the same key because they name the same
+        // product, so the first identifier one of them carries stands for all
+        // of them. First wins rather than last: a later meal cannot silently
+        // redirect an earlier meal's choice.
+        if (!e.upc && chosen) e.upc = chosen.upc;
         const existing = e.mealIngredients.find((m) => m.mealId === meal.id);
         if (existing) {
           existing.qty += qty;
@@ -184,6 +207,7 @@ export function consolidateIngredients(meals: Array<Pick<Meal, 'id' | 'name' | '
           unit: ing.unit ?? 'qty',
           measure: ing.measure ?? null,
           searchTerm: ing.searchTerm ?? null,
+          upc: chosen?.upc ?? null,
           mealIds: [meal.id],
           mealNames: [meal.name],
           mealIngredients: [{ mealId: meal.id, mealName: meal.name, qty, ...prepOf(ing) }],
@@ -252,7 +276,7 @@ export default function KrogerCartReviewSheet({
   // Re-initialize when sheet opens
   useEffect(() => {
     if (visible) {
-      const consolidated = consolidateIngredients(meals);
+      const consolidated = consolidateIngredients(meals, storeId);
       setItems(consolidated);
       setCheckedItems(consolidated.map(() => true));
       setStep('qty');
@@ -324,6 +348,7 @@ export default function KrogerCartReviewSheet({
         active.map((i) => ({
           productName: i.ingredientName,
           searchTerm: i.searchTerm,
+          upc: i.upc,
           unit: i.unit,
           measure: i.measure,
           quantity: i.productQty,
@@ -412,9 +437,18 @@ export default function KrogerCartReviewSheet({
           const mealQty = mealQtys[mealId] ?? currentReview.mealIngredients.find((mi) => mi.mealId === mealId)?.qty ?? 1;
           const updatedIngredients: Ingredient[] = meal.ingredients.map((ing) => {
             const iName = normIngName(ing);
-            return iName.toLowerCase().trim() === currentReview.term.toLowerCase().trim()
-              ? { ...ing, searchTerm: resolved.name, productQty: mealQty }
-              : ing;
+            if (iName.toLowerCase().trim() !== currentReview.term.toLowerCase().trim()) return ing;
+            const chosen: Ingredient = { ...ing, searchTerm: resolved.name, productQty: mealQty };
+            // Remember WHICH product, not just what it was called (MEAL-19).
+            // Only here, where the user pressed "Add & Update Meal Ingredient" —
+            // an auto-added exact match writes nothing, so no meal gains the
+            // field just by being run through the cart.
+            // Written together or not at all: a new display name beside the
+            // PREVIOUS product's identifier is the one combination that adds
+            // something nobody chose.
+            return resolved.upc
+              ? withStoreProduct(chosen, storeId, { upc: resolved.upc, name: resolved.name })
+              : withoutStoreProducts(chosen);
           });
           mealsApi
             .update(mealId, { ingredients: updatedIngredients })

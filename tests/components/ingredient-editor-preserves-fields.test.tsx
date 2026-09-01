@@ -58,6 +58,10 @@ const deliTurkey = (): Ingredient => ({
   purchaseWeight: 1.5,
   weightStep: 0.25,
   dropdown: { type: 'preference', selectedText: 'Thin sliced', selectedValue: 'thin' },
+  // The store's own identifier for that product (MEAL-19) — written in the same
+  // breath as `searchTerm`, and bound to the choice the same way the three
+  // above are.
+  storeProducts: { kroger: { upc: '0001111041700', name: 'Kroger Oven Roasted Turkey Breast' } },
 });
 
 const plainSalt = (): Ingredient => ({
@@ -186,6 +190,9 @@ describe('but the chosen product\'s fields do not outlive the chosen product', (
     expect('purchaseWeight' in emitted()[0]).toBe(false);
     expect('weightStep' in emitted()[0]).toBe(false);
     expect('dropdown' in emitted()[0]).toBe(false);
+    // The sharpest of the four: a stale weight biases an add, but a stale store
+    // identifier RESOLVES — the old product goes in the cart, unasked.
+    expect('storeProducts' in emitted()[0]).toBe(false);
   });
 
   it('leaves no null behind when it drops them', () => {
@@ -198,6 +205,7 @@ describe('but the chosen product\'s fields do not outlive the chosen product', (
     expect(json).not.toContain('purchaseWeight');
     expect(json).not.toContain('weightStep');
     expect(json).not.toContain('dropdown');
+    expect(json).not.toContain('storeProducts');
   });
 
   it('keeps the recipe amount, which is not a product choice', () => {
@@ -240,6 +248,7 @@ describe('when something else edits the same list', () => {
     expect(view.emitted()[0].searchTerm).toBeNull();
     expect('purchaseWeight' in view.emitted()[0]).toBe(false);
     expect('dropdown' in view.emitted()[0]).toBe(false);
+    expect('storeProducts' in view.emitted()[0]).toBe(false);
   });
 
   it('does not revert a weight the other writer stepped', () => {

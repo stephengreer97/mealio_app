@@ -64,6 +64,36 @@ describe('mergeChosenProduct', () => {
     const cleared = mergeChosenProduct(rows, 'Avocado', 'H-E-B Avocado');
     expect(cleared[0].dropdown).toBeNull();
   });
+  it('drops another store’s remembered product id (MEAL-19)', () => {
+    // A choice made HERE renames the row, and `searchTerm` is one global field —
+    // so a Kroger identifier left behind would sit beside a name describing the
+    // H-E-B product instead. It would still resolve: move the meal back to
+    // Kroger and the forgotten product auto-adds as an exact match while the
+    // meal displays the H-E-B one. Same reason `dropdown` is cleared above.
+    const [row] = mergeChosenProduct(
+      [{
+        ingredientName: 'Yogurt',
+        searchTerm: 'Kroger Plain Greek Yogurt',
+        storeProducts: { kroger: { upc: '0001111041700', name: 'Kroger Plain Greek Yogurt' } },
+      }],
+      'Yogurt',
+      'H-E-B Select Ingredients Greek Yogurt',
+    );
+
+    expect(row.searchTerm).toBe('H-E-B Select Ingredients Greek Yogurt');
+    expect('storeProducts' in row).toBe(false);
+    // Absent, not null — these rows are written straight back.
+    expect(JSON.stringify(row)).not.toContain('storeProducts');
+  });
+
+  it('leaves a row that never had one byte-identical', () => {
+    const [row] = mergeChosenProduct(
+      [{ ingredientName: 'Yogurt', searchTerm: null }],
+      'Yogurt',
+      'Fage Total 0%',
+    );
+    expect(row).toEqual({ ingredientName: 'Yogurt', searchTerm: 'Fage Total 0%' });
+  });
 });
 
 describe('createMealSaveQueue — concurrent same-meal saves do not clobber', () => {

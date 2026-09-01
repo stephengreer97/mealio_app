@@ -48,7 +48,7 @@ flowchart TD
 
     KSHEET --> QTY["<b>qty</b><br/>uncheck items, set quantities"]
     QTY --> FILTER{{"active = checked<br/>AND <b>not isZeroedOut</b>"}}
-    FILTER --> SEARCH["<b>searching</b><br/>POST /api/kroger/search-products<br/><i>60s timeout — the server fans<br/>out per ingredient</i>"]
+    FILTER --> SEARCH["<b>searching</b><br/>POST /api/kroger/search-products<br/>each row carries its saved<br/><code>storeProducts.kroger.upc</code><br/><i>60s timeout — the server fans<br/>out per ingredient</i>"]
 
     SEARCH --> RESULTS["one result per term:<br/><code>upc</code> · <code>description</code> ·<br/><code>exact</code> · <code>suggestions[]</code>"]
     RESULTS --> SPLIT{"any result<br/>with <code>exact = false</code>?"}
@@ -59,7 +59,7 @@ flowchart TD
         SR --> RC["show the reason:<br/><i>out_of_stock</i> · <i>no_results</i> ·<br/><i>low_confidence</i>"]
         RC --> RCH{"user decides"}
         RCH -->|"pick a suggestion &rarr; <b>Add</b>"| PICK["push {upc, totalQty}"]
-        RCH -->|"pick &rarr; <b>Update</b>"| UPD["push it AND write<br/><code>searchTerm</code> back onto<br/>every meal that used it<br/><i>so next run is exact</i>"]
+        RCH -->|"pick &rarr; <b>Update</b>"| UPD["push it AND write<br/><code>searchTerm</code> + <code>storeProducts.kroger</code><br/>back onto every meal that used it<br/><i>the name AND the id, so the next<br/>run looks it up instead of searching</i>"]
         RCH -->|"<b>Skip</b>"| SKIP["add nothing"]
         RCH -->|"type a custom term"| CUST["POST search-products for it<br/><b>always show suggestions</b>,<br/><i>never auto-add even on an<br/>exact score — the user typed<br/>it in order to choose</i>"]
         CUST --> RC
@@ -114,6 +114,29 @@ flowchart TD
   Update writes <code>searchTerm</code> (and the per-meal quantity) back onto every meal that used
   that ingredient, so the next run matches exactly and skips the review entirely.</p>
 
+  <h2>The chosen product is remembered by identifier, not by name (MEAL-19)</h2>
+  <p><code>searchTerm</code> is what a product is <i>called</i> — "Kroger Whole Milk, 1 gal". Storing
+  only that meant every later run searched the name back into a product, so Kroger's relevance
+  ranking re-decided a choice the user had already made. Update and the meal editor's product
+  chooser now write <code>storeProducts</code> alongside it: the UPC Kroger itself handed us, keyed
+  by <b>rail</b> rather than by banner, so a meal moved from Kroger to Ralphs keeps its choices. The
+  server resolves the whole run's ids in one <code>filter.productId</code> request before it
+  searches anything.</p>
+
+  <p><b>It is an accelerator, not a replacement.</b> An id this store will not fulfil, has out of
+  stock, or no longer knows falls through to exactly the text ladder that ran before it existed. A
+  stale id therefore costs a request, never a wrong product.</p>
+
+  <p><b>Keyed per store, and it dies with the choice.</b> Both rules exist for the same reason.
+  <code>searchTerm</code> is one global field and a meal's store can change, so an H-E-B-chosen name
+  already reaches Kroger's search — harmless, because the ladder recovers. An identifier does not
+  need recovering: it resolves, and a resolved id comes back <code>exact</code>, so the review step
+  that would have shown the mistake never runs. So it is never a bare <code>upc</code> field, and
+  the rule at every writer is <b>the name and the id move together or the id goes</b>: renaming the
+  ingredient, retyping or clearing the product-name box, the ✕, and choosing a product at a
+  different store all drop it. A stale weight biases an add; a stale id adds the wrong product
+  outright.</p>
+
   <h2>An invariant hiding in a type</h2>
   <p><code>ConsolidatedIngredient</code> here carries <b>no weight fields</b>, and that is
   load-bearing rather than incidental. <code>isZeroedOut</code>'s sold-by-weight exception keys off
@@ -137,7 +160,7 @@ flowchart TD
     <tr><td><code>POST /api/kroger/disconnect</code></td><td>drops the connection</td></tr>
     <tr><td><code>GET /api/kroger/locations?term=</code></td><td>ZIP &rarr; nearby stores, each with its banner storeId</td></tr>
     <tr><td><code>POST /api/kroger/set-location</code></td><td>pins a locationId to a banner</td></tr>
-    <tr><td><code>POST /api/kroger/search-products</code></td><td>ingredients &rarr; upc / exact / suggestions <i>(60&nbsp;s)</i></td></tr>
+    <tr><td><code>POST /api/kroger/search-products</code></td><td>ingredients (with any saved <code>upc</code>) &rarr; upc / exact / suggestions <i>(60&nbsp;s)</i></td></tr>
     <tr><td><code>POST /api/kroger/add-to-cart</code></td><td><code>{upc, quantity}[]</code> &rarr; the real cart <i>(60&nbsp;s)</i></td></tr>
   </table>
 </div>

@@ -26,6 +26,7 @@ import IngredientEditor from './IngredientEditor';
 import PhotoPicker from './PhotoPicker';
 import TagPicker from './TagPicker';
 import { useStores } from '../lib/store-catalog/useStores';
+import { withoutStoreProducts } from '../lib/storeProducts';
 
 interface MealDetailSheetProps {
   visible: boolean;
@@ -436,7 +437,14 @@ export default function MealDetailSheet({
                             onChangeText={(val) =>
                               setIngredients((prev) =>
                                 prev.map((item, idx) =>
-                                  idx === origIdx ? { ...item, searchTerm: val || null } : item
+                                  // Typing a different product name here makes
+                                  // the row name a product nobody looked up, so
+                                  // the store's identifier for the OLD one has
+                                  // to go with it (MEAL-19) — otherwise the id
+                                  // resolves, the cart auto-adds the forgotten
+                                  // product as an exact match, and the review
+                                  // step that would have shown it never runs.
+                                  idx === origIdx ? withoutStoreProducts({ ...item, searchTerm: val || null }) : item
                                 )
                               )
                             }
@@ -460,7 +468,12 @@ export default function MealDetailSheet({
                             onPress={() =>
                               setIngredients((prev) =>
                                 prev.map((item, idx) =>
-                                  idx === origIdx ? { ...item, searchTerm: null, productQty: 1 } : item
+                                  // Removing the chosen product removes the
+                                  // store's identifier for it too (MEAL-19) —
+                                  // an id that outlives the choice still
+                                  // resolves, and would put the old product in
+                                  // the cart unasked.
+                                  idx === origIdx ? withoutStoreProducts({ ...item, searchTerm: null, productQty: 1 }) : item
                                 )
                               )
                             }

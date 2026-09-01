@@ -150,6 +150,16 @@ flowchart TD
   serialise exactly like one written before the field existed. It is also kept structurally away
   from <code>ingredientName</code> and <code>searchTerm</code>, which are what the cart searches for:
   nothing that builds a store query reads it.</p>
+  <p><code>storeProducts</code> follows the same absent-not-null rule, and for a sharper reason
+  (MEAL-19). It records the store's own identifier for the product a shopper picked, keyed by rail —
+  <code>searchTerm</code> says what that product is <i>called</i>, this says which one it is, so a
+  repeat cart run looks it up instead of searching the name back into a product.
+  <code>normalizeIngredients</code> spreads it in only when there is a usable id, drops entries
+  without one, and leaves the key off entirely otherwise: these arrays are PATCHed back whole with
+  no migration, so a row nobody has chosen for must serialise the way it always did. It is bound to
+  the choice and dies with it — renaming a row or clearing its product removes the id along with the
+  remembered weight and the dropdown, because a stale weight biases an add while a stale identifier
+  resolves and adds the wrong product outright.</p>
   <p><code>normProductQty</code> clamps non-positive or invalid values to 1, because saved meal data
   can leak <code>qty: 0</code> from the chooser flow — which would otherwise disable the cart
   button entirely.</p>
