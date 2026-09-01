@@ -9,7 +9,7 @@ import SHEET_META from '../../assets/anim/bag-fill.json';
 // The rail loads no pages, so there is nothing to look at and nothing to do.
 // This fills that space with a Mealio bag that visibly fills up as items land.
 //
-// It is a SPRITE SHEET, not code-drawn art: 25 frames of a paper bag going from
+// It is a SPRITE SHEET, not code-drawn art: frames of a Mealio paper bag going from
 // empty to overflowing, supplied as a single WebP. Earlier passes drew the bag
 // by hand in SVG and it looked hand-drawn, because it was. Playing real frames
 // is the only way this looks like it came out of a studio.
@@ -85,7 +85,7 @@ export default function CartRunAnimation({ total, done, label, color, title, not
             }}
             contentFit="fill"
             // The whole sheet is one decode; caching it keeps the frame steps
-            // free rather than re-reading the file 25 times.
+            // free rather than re-reading the file once per frame.
             cachePolicy="memory-disk"
             transition={0}
           />

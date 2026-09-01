@@ -83,9 +83,18 @@ describe('CartRunAnimation', () => {
     expect(v.getByTestId('cart-run-count')).toHaveTextContent('99/4');
   });
 
-  it('drops the 15 frames Stephen rejected — the sheet is the trimmed 25', () => {
-    expect(SHEET.frames).toBe(25);
+  it('the sheet metadata describes a grid that actually holds every frame', () => {
+    // bag-fill.webp is a CURATED subset of the source sheet, not the whole of
+    // it — see scripts/build-bag-sprite.js. The source is not in fill order (it
+    // goes empty, briefly full, empty again, then plateaus), so playing it
+    // straight through would fill the bag, empty it and refill it. If someone
+    // rebuilds it, these are the things the component assumes.
+    expect(SHEET.frames).toBeGreaterThan(1);
     expect(SHEET.cols * SHEET.rows).toBeGreaterThanOrEqual(SHEET.frames);
+    // The component addresses frames by translating the image, so the declared
+    // sheet size must match the grid exactly or every frame lands off by a bit.
+    expect(SHEET.sheetWidth).toBe(SHEET.frameWidth * SHEET.cols);
+    expect(SHEET.sheetHeight).toBe(SHEET.frameHeight * SHEET.rows);
   });
 
   it('shows a stall note when one is given, and nothing when it is not', () => {
