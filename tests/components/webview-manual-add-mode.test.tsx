@@ -327,9 +327,11 @@ describe('the run that actually needs it', () => {
     // What H-E-B really offered for fresh mint. Not an exact match, so it cannot
     // auto-pick and the item lands on the review screen.
     post({
-      type: 'SEARCH_RESULT', source: 'network', term: 'sour cream',
+      type: 'SEARCH_RESULT', source: 'network', term: 'fresh mint',
       candidates: [{ productName: 'Tazo Organic Refresh Mint Herbal Tea Bags, 16 ct', imageUrl: null, outOfStock: false, preferences: null, price: '$4.61' }],
     });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     act(() => { fireEvent.press(view.getByText(/review 1 ingredient/i)); });
     act(() => { fireEvent.press(view.getByText(/skip this ingredient/i)); });
 
@@ -420,11 +422,23 @@ describe('state does not leak into the next run', () => {
       post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
       post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
       post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+    // A beat: finishParallelAdd arms the reconcile probe asynchronously, and a
+    // CART_COUNT that lands before it is armed reads as phase `null` and is
+    // dropped — the run then sits until its session deadline.
+    act(() => { jest.advanceTimersByTime(500); });
+      // A beat: finishParallelAdd arms the reconcile probe asynchronously, and a
+      // CART_COUNT that arrives before it is armed is read as phase `null` and
+      // dropped — the run then sits until its session deadline.
+      act(() => { jest.advanceTimersByTime(500); });
       post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
       // The reconcile tops up the shortfall over the rail; answer it, still short,
       // which is what leaves the item on the failed list.
       post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
       post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [{ name: 'sour cream', qty: 1 }], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+      // The done screen's after-probe. It runs now that the rail counts its
+      // writes; unanswered, the screen sits on the spinner and never renders the
+      // hand-over this file is about.
+      post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
       act(() => { jest.advanceTimersByTime(30_000); });
     };
 
@@ -469,7 +483,8 @@ describe('the hand-over survives what the store throws at it', () => {
     // Over the rail: one session probe answers the login check, another the
     // run's own read after the baseline.
     post(SESSION_OK);
-    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION_OK);
     for (const productName of ['sour cream', 'fresh mint']) {
       post({ type: 'SEARCH_RESULT', source: 'network', term: productName,
              candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null,
@@ -480,6 +495,10 @@ describe('the hand-over survives what the store throws at it', () => {
     post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
     post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
     post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+    // A beat: finishParallelAdd arms the reconcile probe asynchronously, and a
+    // CART_COUNT that lands before it is armed reads as phase `null` and is
+    // dropped — the run then sits until its session deadline.
+    act(() => { jest.advanceTimersByTime(500); });
     post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
       // The reconcile tops up the shortfall over the rail; answer it, still short,
       // which is what leaves the item on the failed list.
@@ -513,7 +532,8 @@ describe('the hand-over survives what the store throws at it', () => {
     // Over the rail: one session probe answers the login check, another the
     // run's own read after the baseline.
     post(SESSION_OK);
-    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION_OK);
     for (const productName of ['sour cream', 'fresh mint']) {
       post({ type: 'SEARCH_RESULT', source: 'network', term: productName,
              candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null,
@@ -524,11 +544,19 @@ describe('the hand-over survives what the store throws at it', () => {
     post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
     post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
     post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+    // A beat: finishParallelAdd arms the reconcile probe asynchronously, and a
+    // CART_COUNT that lands before it is armed reads as phase `null` and is
+    // dropped — the run then sits until its session deadline.
+    act(() => { jest.advanceTimersByTime(500); });
     post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
       // The reconcile tops up the shortfall over the rail; answer it, still short,
       // which is what leaves the item on the failed list.
       post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
       post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [{ name: 'sour cream', qty: 1 }], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+    // The done screen's after-probe. It runs now that the rail counts its
+    // writes, and the verdict sentence this case is about is built from it.
+    act(() => { jest.advanceTimersByTime(500); });
+    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
     act(() => { jest.advanceTimersByTime(30_000); });
     expect(view.queryAllByText(/we checked your/i).length).toBeGreaterThan(0);
 
@@ -561,7 +589,8 @@ describe('a probe still in flight when the user takes over', () => {
     // Over the rail: one session probe answers the login check, another the
     // run's own read after the baseline.
     post(SESSION_OK);
-    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION_OK);
     for (const productName of ['sour cream', 'fresh mint']) {
       post({ type: 'SEARCH_RESULT', source: 'network', term: productName,
              candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null,
@@ -572,10 +601,19 @@ describe('a probe still in flight when the user takes over', () => {
     post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
     post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
     post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+    // A beat: finishParallelAdd arms the reconcile probe asynchronously, and a
+    // CART_COUNT that lands before it is armed reads as phase `null` and is
+    // dropped — the run then sits until its session deadline.
+    act(() => { jest.advanceTimersByTime(500); });
+    // The RECONCILE is answered — the run has to reach the done screen for the
+    // offer to exist at all. It tops the shortfall up and is refused again.
+    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
+    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
+    post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [{ name: 'sour cream', qty: 1 }], cartAfter: [{ name: 'sour cream', qty: 1 }] });
     act(() => { jest.advanceTimersByTime(30_000); });
 
-    // No after CART_COUNT yet: the probe is in flight and the failed list is the
-    // run's own. The offer is already on screen.
+    // The AFTER probe is the one left in flight — that is the whole case. The
+    // failed list on screen is the run's own, and the offer is already up.
     act(() => { fireEvent.press(view.getByTestId('manual-start')); });
     expect(view.queryByTestId('manual-bar')).toBeTruthy();
 
