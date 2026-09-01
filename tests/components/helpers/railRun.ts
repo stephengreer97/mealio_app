@@ -1,4 +1,7 @@
 import { act } from '@testing-library/react-native';
+import {
+  __applyAutomationConfigForTests, __resetAutomationConfigForTests,
+} from '../../../src/lib/automation-config';
 
 /**
  * Drive a cart run over the NETWORK RAIL, the way every component test used to
@@ -23,11 +26,18 @@ export const RAIL_ON = {
 };
 
 export function enableRail(): void {
+  // Through the real merge, not a mock of it. A suite that mocks
+  // getAutomationConfig is asserting against its own answer; this sets the value
+  // and lets the module decide, so a shape the real push would reject fails here
+  // too. `globalThis.__stores` is still set for the handful of suites whose own
+  // mock reads it.
   (globalThis as any).__stores = RAIL_ON;
+  __applyAutomationConfigForTests({ stores: RAIL_ON });
 }
 
 export function disableRail(): void {
   (globalThis as any).__stores = undefined;
+  __resetAutomationConfigForTests();
 }
 
 type View = { queryAllByTestId: (id: string) => Array<{ props: any }> };
@@ -104,4 +114,30 @@ export function cartCount(count: number | null, items?: Array<{ name: string; qt
   return items
     ? { type: 'CART_COUNT', count, items, source: 'network' }
     : { type: 'CART_COUNT', count, source: 'network' };
+}
+
+/**
+ * Drive a run to the REVIEW gate over the rail.
+ *
+ * The candidates deliberately do not match the term exactly: an exact match is
+ * written straight to the cart, and anything less routes to review, which is
+ * what these suites are about. That routing used to happen inside the sequential
+ * SEARCH_RESULT handler; on the rail it happens when the add pass finds nothing
+ * it can write ("nothing matched exactly — straight to review").
+ *
+ * Timer-agnostic on purpose: some suites run fake timers and some do not, and
+ * every transition this touches is synchronous on the message.
+ */
+export function railRunToReview(
+  view: View,
+  term: string,
+  candidates: Array<Record<string, unknown>>,
+): void {
+  // Twice: the first answers the login check, the second the run's own session
+  // read. Whichever the prewarm makes unnecessary is simply ignored.
+  postToSheet(view, SESSION_OK);
+  postToSheet(view, cartCount(0, []));
+  postToSheet(view, SESSION_OK);
+  postToSheet(view, { type: 'SEARCH_RESULT', source: 'network', term, candidates });
+  postToSheet(view, searchDone(1));
 }

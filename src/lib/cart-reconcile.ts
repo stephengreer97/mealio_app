@@ -330,7 +330,24 @@ export interface WorkerReport {
  *  store's per-item maximum, so a retry cannot add anything — and on the network
  *  route a retry is worse than useless: it abandons a rail that answered in
  *  280 ms for one that loads a page, to be told the same thing 1.8 s later. */
-export type DefiniteFailureReason = 'out_of_stock' | 'no_results' | 'quantity_limit_reached';
+/**
+ * A failure no retry can fix, so the item goes to the user instead of being
+ * re-attempted against the cart.
+ *
+ * `low_confidence` and `needs_weight` joined the list when DOM automation was
+ * removed. They were not definitive before because a retry meant loading the
+ * results page again and clicking something else — a second chance that could
+ * genuinely go differently. On the rail it cannot: the same search returns the
+ * same candidates, so treating a near-miss as a shortfall just retried it into
+ * the same answer and then handed the run over, with candidates already in hand
+ * that nobody was shown.
+ *
+ * Both are exactly the case the review screen exists for: we found products, we
+ * are not confident enough to add one, so the user picks.
+ */
+export type DefiniteFailureReason =
+  | 'out_of_stock' | 'no_results' | 'quantity_limit_reached'
+  | 'low_confidence' | 'needs_weight';
 
 /**
  * One item the parallel pass attempted, paired with its worker's report.
@@ -438,8 +455,11 @@ export function reconcileParallelAdd(
   }[] = [];
   attempts.forEach((attempt, index) => {
     const r = attempt.report;
+    // Named one by one rather than tested against the union, so adding a member
+    // to DefiniteFailureReason is a decision someone makes here on purpose.
     if (r && !r.success && (r.reason === 'out_of_stock' || r.reason === 'no_results'
-        || r.reason === 'quantity_limit_reached')) {
+        || r.reason === 'quantity_limit_reached'
+        || r.reason === 'low_confidence' || r.reason === 'needs_weight')) {
       definiteFailures.push({ index, reason: r.reason });
       return;
     }

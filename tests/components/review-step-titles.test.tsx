@@ -63,6 +63,7 @@ jest.mock('../../src/context/LoginPrewarmContext', () => {
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { enableRail } from './helpers/railRun';
 
 /** Post to the MAIN WebView. HEB mounts worker views too, so a module-level
  *  capture of the last-rendered props would address a worker instead. */
@@ -103,17 +104,27 @@ describe('the review step is titled for what it is asking (MEAL-182)', () => {
     );
     mounted.push(view);
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-    post(view, { type: 'LOGIN_STATUS', isLoggedIn: true });
-    post(view, { type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' });
+    // Over the rail: the session probe answers the login check, then the cart is
+    // read by request rather than by loading /cart.
+    enableRail();
+    post(view, { type: 'HEB_SESSION', ok: true, loggedIn: true, storeId: '476', shoppingContext: 'CURBSIDE_DELIVERY' });
+    post(view, { type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(view, { type: 'HEB_SESSION', ok: true, loggedIn: true, storeId: '476', shoppingContext: 'CURBSIDE_DELIVERY' });
     return view;
   };
 
   it('asks for a substitute when the automation could not settle the match', () => {
     const view = runToReview();
     post(view, {
-      type: 'SEARCH_RESULT',
+      type: 'SEARCH_RESULT', source: 'network', term: 'sliced turkey',
       candidates: [{ productName: 'Some Other Brand Turkey', imageUrl: null, outOfStock: false, preferences: null, price: '$8' }],
     });
+    // The batch has to CLOSE, or the add pass never starts and nothing routes
+    // to review. On the page path the single result was the whole answer.
+    post(view, { type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+    // Nothing matched exactly, so the pass ends with no writes and reconciles
+    // against the cart before it can offer the review gate.
+    post(view, { type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     // The gate button, used here only to get INTO the step. MEAL-178 renamed it
     // from "Review 1 Item" to "Review 1 Ingredient": once "item" means a unit,
     // calling a review row an item contradicts every other count on the screen.
@@ -125,20 +136,22 @@ describe('the review step is titled for what it is asking (MEAL-182)', () => {
 
   it('asks for an AMOUNT on a sold-by-weight item — nothing failed, so nothing is being substituted', () => {
     const view = runToReview();
-    // What heb.ts posts when it matched the product exactly but has no remembered
-    // weight: the add bails with the weight options and routes straight to review.
+    // An EXACT match that is sold by weight. The rail will not write one: the
+    // user has to choose an amount, and an over-add on a weight item cannot be
+    // undone (MEAL-200). So it reports needs_weight with the options and routes
+    // to review — the same destination heb.ts's fused add used to reach by
+    // bailing out of the click.
     post(view, {
-      type: 'SEARCH_AND_ADD_RESULT',
-      success: false,
-      reason: 'needs_weight',
+      type: 'SEARCH_RESULT', source: 'network', term: 'sliced turkey',
       candidates: [{
-        productName: 'H-E-B Deli Oven Roasted Turkey Breast, lb',
+        productName: 'sliced turkey',
         imageUrl: null, outOfStock: false, preferences: null, price: '$9.98',
+        productId: 'p1', skuId: 's1',
         isWeightItem: true, weightOptions: [0.25, 0.5, 1],
       }],
     });
-    // The needs_weight route buffers 400ms before advancing the queue, so the
-    // review screen is not reachable until that fires.
+    post(view, { type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+    post(view, { type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     act(() => { jest.advanceTimersByTime(500); });
     // The gate button, used here only to get INTO the step. MEAL-178 renamed it
     // from "Review 1 Item" to "Review 1 Ingredient": once "item" means a unit,

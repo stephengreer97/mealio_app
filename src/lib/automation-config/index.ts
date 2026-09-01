@@ -297,6 +297,19 @@ export function searchUrlFor(storeId: string, term: string, fallback: string): s
   return template.replace('{term}', encodeURIComponent(term));
 }
 
+/**
+ * Merge an override tree over the bundled defaults. Test/dev only.
+ *
+ * The same path a server push takes, minus the fetch — it goes through `apply`,
+ * so a value this rejects is one the real merge would reject too. Added when the
+ * component suites moved onto the network rail: turning that rail on is a config
+ * question, and every suite had been reaching for its own jest.mock of
+ * getAutomationConfig, which mocks the answer rather than setting it.
+ */
+export function __applyAutomationConfigForTests(raw: unknown): void {
+  apply(currentVersion + 1, raw, 'server');
+}
+
 /** Reset to bundled defaults. Test/dev only. */
 export function __resetAutomationConfigForTests(): void {
   current = BUNDLED_AUTOMATION_CONFIG;
