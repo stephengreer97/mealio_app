@@ -96,6 +96,7 @@ jest.mock('../../src/lib/automation-config', () => {
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { enableRail, SESSION_OK } from './helpers/railRun';
 
 type Batch = { runId: string; steps: Array<Record<string, any>> };
 const batches = () => ((globalThis as any).__batches ?? []) as Batch[];
@@ -137,20 +138,44 @@ async function runOneItem({ addSucceeds }: { addSucceeds: boolean }) {
   // resolves — every call site fires into nothing before then. Flushing the
   // microtask queue here is what installs the real one.
   await act(async () => {});
-  post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-  post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
-  // An exact match, so the item auto-picks and reaches the add rather than the
-  // review screen.
+  enableRail();
+  post(SESSION_OK);
+  post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+  post(SESSION_OK);
+  // An exact match, so the rail WRITES it rather than routing to review.
   post({
-    type: 'SEARCH_RESULT',
-    candidates: [{ productName: 'Sour Cream', imageUrl: null, outOfStock: false, preferences: null, price: '$2' }],
+    type: 'SEARCH_RESULT', source: 'network', term: 'Sour Cream',
+    candidates: [{
+      productName: 'Sour Cream', imageUrl: null, outOfStock: false, preferences: null,
+      price: '$2', productId: 'p1', skuId: 's1',
+    }],
   });
-  post(addSucceeds
-    ? { type: 'ADD_RESULT', success: true }
-    : { type: 'ADD_RESULT', success: false, reason: 'add button not found' });
-  act(() => { jest.advanceTimersByTime(30_000); });
+  post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+  post({
+    type: 'NET_ADD_RESULT', idx: 0, name: 'Sour Cream', success: addSucceeds,
+    productId: 'p1', skuId: 's1',
+    // cart_not_incremented: the write went out and the cart did not move. That is
+    // the confirm_failed family — dispatched, no evidence it landed — which is
+    // what these cases rank. 'not_found' is a scoring miss and rides another code.
+    reason: addSucceeds ? null : 'cart_not_incremented',
+  });
+  post({
+    type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [],
+    cartAfter: addSucceeds ? [{ name: 'Sour Cream', qty: 1 }] : [],
+  });
   // The terminal row lands with the cart snapshot that closes the run.
-  post({ type: 'CART_COUNT', count: addSucceeds ? 1 : 0, items: [], url: 'https://heb.test/cart' });
+  post({ type: 'CART_COUNT', count: addSucceeds ? 1 : 0, items: [], source: 'network' });
+  if (!addSucceeds) {
+    // The reconcile tops the shortfall up over the rail. Answer it, still short:
+    // unanswered, the pass times out and reports write_unresolved instead, which
+    // is a different code and a different test.
+    post({
+      type: 'NET_ADD_RESULT', idx: 0, name: 'Sour Cream', success: false,
+      productId: 'p1', skuId: 's1', reason: 'cart_not_incremented',
+    });
+    post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [], cartAfter: [] });
+  }
+  act(() => { jest.advanceTimersByTime(30_000); });
   // The terminal rows land in a LATER batch than the per-item ones: the run
   // emits run_summary and reconcile after the closing cart snapshot, then calls
   // `void tel().flush()`. So this needs both — the timers to reach the terminal
@@ -231,7 +256,13 @@ describe('the run_summary row a failing run emits', () => {
     // is what `sanitizeDetail` silently discarded the first time this shipped.
     // One confirm failure on a one-item run reads exactly this way.
     const row = (await runOneItem({ addSucceeds: false }))[0];
-    expect(row.detail?.failureCodes).toBe('confirm_failed:1');
+    // THREE, not one, and every one of them is a real row. The rail writes,
+    // the cart says it did not move, the reconcile finds the shortfall and
+    // writes AGAIN — the write sets an absolute quantity, so a retry is safe —
+    // and it is refused a second time. Two attempts plus the reconcile's own
+    // verdict. On the DOM path this read as one because the retry loaded a page
+    // that never answered inside the test.
+    expect(row.detail?.failureCodes).toBe('confirm_failed:3');
   });
 });
 
@@ -267,24 +298,35 @@ describe('a run that fails more than one way', () => {
 
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
     await act(async () => {});
-    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    enableRail();
+    post(SESSION_OK);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION_OK);
     post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
 
     // Every item is searched before any is added, so all three answers come
     // first. Posting an ADD_RESULT before that ends the run one item in.
     for (const productName of ['Sour Cream', 'Tortillas', 'Cheese']) {
       post({
-        type: 'SEARCH_RESULT',
-        candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2' }],
+        type: 'SEARCH_RESULT', source: 'network', term: productName,
+        candidates: [{
+          productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2',
+          productId: 'p' + productName, skuId: 's' + productName,
+        }],
       });
     }
-    // Two answer with a failure; the third never answers and hits the 10s add
-    // timeout, which is a different code.
-    post({ type: 'ADD_RESULT', success: false, reason: 'add button not found' });
-    post({ type: 'ADD_RESULT', success: false, reason: 'add button not found' });
-    act(() => { jest.advanceTimersByTime(12_000); });
-    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
-    act(() => { jest.advanceTimersByTime(5_000); });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 3 });
+    // Two are refused; the THIRD never answers at all, so the add phase's own
+    // deadline finalizes it — a different code, which is the point of the case.
+    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'Sour Cream', success: false, productId: 'pSour Cream', skuId: 'sSour Cream', reason: 'cart_not_incremented' });
+    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'Tortillas', success: false, productId: 'pTortillas', skuId: 'sTortillas', reason: 'cart_not_incremented' });
+    act(() => { jest.advanceTimersByTime(80_000); });
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    // The reconcile tops all three up over the rail. Two are refused again; the
+    // third stays silent and the add phase's deadline finalizes the pass.
+    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'Sour Cream', success: false, productId: 'pSour Cream', skuId: 'sSour Cream', reason: 'cart_not_incremented' });
+    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'Tortillas', success: false, productId: 'pTortillas', skuId: 'sTortillas', reason: 'cart_not_incremented' });
+    act(() => { jest.advanceTimersByTime(80_000); });
     await act(async () => {});
     view.unmount();
     await act(async () => {});
@@ -292,12 +334,18 @@ describe('a run that fails more than one way', () => {
   };
 
   it('counts each code, and keeps them all', async () => {
-    // Both halves matter. A tally that hardcoded `:1` would read
-    // "confirm_failed:1,timeout:1"; one truncated to the primary would read
-    // "confirm_failed:2". Neither is this string.
+    // Both halves still matter. A tally that hardcoded `:1` would read
+    // "confirm_failed:1,timeout:1"; one truncated to the primary would drop the
+    // timeout entirely. Neither is this string.
+    //
+    // The numbers doubled when the run moved onto the rail, and every row is
+    // real: each item is attempted TWICE — the write, then the reconcile's
+    // top-up, because the write sets an absolute quantity and retrying it is
+    // safe — plus the reconcile's own verdict on top. Two refused items and one
+    // silent one, each seen twice, is 5 and 2.
     const summaries = await runThree();
     expect(summaries).toHaveLength(1);
-    expect(summaries[0].detail?.failureCodes).toBe('confirm_failed:2,timeout:1');
+    expect(summaries[0].detail?.failureCodes).toBe('confirm_failed:5,timeout:2');
   });
 
   it('ranks by severity rather than by how often a code happened', async () => {
