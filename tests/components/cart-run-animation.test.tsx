@@ -1,42 +1,37 @@
 // The screen that replaces the WebView during a network run.
 //
-// Two things matter and neither is decoration. The ring must be a REAL fraction
-// — the rail knows how many terms it asked for and how many landed, so a
-// spinner would be throwing that away. And the count must be legible at a
-// glance, because it is the only progress the user gets on a run that loads no
-// pages.
+// It plays a 25-frame sprite sheet of a Mealio bag filling up. The thing worth
+// testing is not that it animates — it is that the FRAME IS THE PROGRESS. A bag
+// that looks two-thirds full has to mean two-thirds done, or the screen is
+// lying more convincingly than a spinner would.
 
-import { render } from '@testing-library/react-native';
+import { render, act } from '@testing-library/react-native';
 import React from 'react';
 import CartRunAnimation from '../../src/components/CartRunAnimation';
+import SHEET from '../../assets/anim/bag-fill.json';
+
+// The frame steps on a timer, and each step schedules the next one from the
+// re-render it causes — so the clock has to be walked forward in beats, not
+// jumped. One big advance fires exactly one step.
+const settle = () => {
+  for (let i = 0; i < 40; i++) act(() => { jest.advanceTimersByTime(60); });
+};
 
 describe('CartRunAnimation', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
   it('shows how many of how many, not a spinner', () => {
     const v = render(<CartRunAnimation total={10} done={3} label="Sour Cream" />);
     expect(v.getByTestId('cart-run-count')).toHaveTextContent('3/10');
     expect(v.getByText('Sour Cream')).toBeTruthy();
   });
 
-  it('fills the bag in proportion to progress, so the pile IS the progress', () => {
-    // The pile is what people read at a glance — a bag with eight things in it
-    // is obviously further along than one with two, without reading a number.
-    const none = render(<CartRunAnimation total={8} done={0} />);
-    const half = render(<CartRunAnimation total={8} done={4} />);
-    const full = render(<CartRunAnimation total={8} done={8} />);
-    const inBag = (v: ReturnType<typeof render>) => v.queryAllByTestId('pile-item').length;
-    expect(inBag(none)).toBe(0);
-    expect(inBag(half)).toBeGreaterThan(0);
-    expect(inBag(full)).toBeGreaterThan(inBag(half));
-  });
-
   it('shows no count at all when there is no denominator yet', () => {
-    // The login check has nothing to count, and the session probe answers before
-    // any term is known. "0 of 0" reads as broken, so the ring sweeps and the
-    // count is omitted entirely.
+    // The login check has nothing to count. "0/0" reads as broken.
     const v = render(<CartRunAnimation total={0} done={0} />);
-    expect(v.getByTestId('cart-run-animation')).toBeTruthy();
     expect(v.queryByTestId('cart-run-count')).toBeNull();
-    expect(v.queryAllByTestId('pile-item')).toHaveLength(0);
+    expect(v.getByTestId('cart-run-animation')).toBeTruthy();
   });
 
   it('takes a headline, so the login check does not claim to be filling a cart', () => {
@@ -50,34 +45,46 @@ describe('CartRunAnimation', () => {
     expect(v.queryByTestId('cart-run-label')).toBeNull();
   });
 
-  it('never reports more done than total, even if a late result arrives', () => {
-    const v = render(<CartRunAnimation total={4} done={9} />);
-    // The pile clamps at full; the count is the caller's number, so the two
-    // cannot disagree in a way that draws a half-empty bag next to "9/4".
-    expect(v.getByTestId('cart-run-count')).toHaveTextContent('9/4');
-    expect(v.queryAllByTestId('pile-item').length).toBeLessThanOrEqual(8);
+  // Which frame is showing, derived from how far the sheet has been slid.
+  const DISPLAY_H = 232;
+  const DISPLAY_W = Math.round(SHEET.frameWidth * (DISPLAY_H / SHEET.frameHeight));
+  const frameOf = (v: ReturnType<typeof render>) => {
+    const img = v.getByTestId('bag-frame-window').children[0] as unknown as
+      { props: { style: Record<string, unknown> } };
+    const t = (img.props.style.transform ?? []) as Array<Record<string, number>>;
+    const col = Math.round(Math.abs(t.find((x) => 'translateX' in x)?.translateX ?? 0) / DISPLAY_W);
+    const row = Math.round(Math.abs(t.find((x) => 'translateY' in x)?.translateY ?? 0) / DISPLAY_H);
+    return row * SHEET.cols + col;
+  };
+
+  it('starts on the empty frame', () => {
+    const v = render(<CartRunAnimation total={10} done={0} />);
+    settle();
+    expect(frameOf(v)).toBe(0);
   });
 
-  it('draws its own groceries — no emoji', () => {
-    // Emoji are a different artwork on every OS and read as stickers on a paper
-    // bag. The produce is drawn so it matches the rest of the app and looks the
-    // same everywhere.
-    const v = render(<CartRunAnimation total={8} done={8} />);
-    const text = JSON.stringify(v.toJSON());
-    expect(text).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u);
+  it('a fuller bag means more done — the frame IS the progress', () => {
+    const empty = render(<CartRunAnimation total={10} done={0} />);
+    const part = render(<CartRunAnimation total={10} done={5} />);
+    const full = render(<CartRunAnimation total={10} done={10} />);
+    settle();
+    expect(frameOf(empty)).toBeLessThan(frameOf(part));
+    expect(frameOf(part)).toBeLessThan(frameOf(full));
+    // The extremes are the extremes, not merely ordered.
+    expect(frameOf(empty)).toBe(0);
+    expect(frameOf(full)).toBe(SHEET.frames - 1);
   });
 
-  it('puts the groceries between the two halves of the bag, not on top of it', () => {
-    // The layering IS the illusion: back panel, produce, front panel. If the
-    // produce renders after the front panel it floats in front of the bag,
-    // which is what it used to do.
-    const v = render(<CartRunAnimation total={8} done={4} />);
-    const tree = JSON.stringify(v.toJSON());
-    const firstItem = tree.indexOf('pile-item');
-    // The front panel carries the store's printed band; it must come later in
-    // the tree than the groceries.
-    const front = tree.lastIndexOf('paper');
-    expect(firstItem).toBeGreaterThan(-1);
-    expect(front).toBeGreaterThan(firstItem);
+  it('never runs past the last frame, even if more lands than was asked for', () => {
+    const v = render(<CartRunAnimation total={4} done={99} />);
+    settle();
+    // Clamped to the last frame; a bag cannot get fuller than full.
+    expect(frameOf(v)).toBe(SHEET.frames - 1);
+    expect(v.getByTestId('cart-run-count')).toHaveTextContent('99/4');
+  });
+
+  it('drops the 15 frames Stephen rejected — the sheet is the trimmed 25', () => {
+    expect(SHEET.frames).toBe(25);
+    expect(SHEET.cols * SHEET.rows).toBeGreaterThanOrEqual(SHEET.frames);
   });
 });
