@@ -136,6 +136,40 @@ describe('WebViewCartSheet — qty → start search', () => {
   });
 });
 
+describe('WebViewCartSheet — the pre-run header counts items, not lines', () => {
+  // Stephen: "the add to cart pre automation screen says 18 ingredients at the
+  // top. Since two of them have count of two, I actually want it to say 20
+  // items." The header counted rows in the list; the quantities on those rows
+  // are what actually goes in the cart.
+  const twoOfSome = {
+    id: 'm1',
+    name: 'Tacos',
+    ingredients: [
+      { ingredientName: 'Lime', searchTerm: 'lime', productQty: 2, qty: 2, unit: 'qty', measure: null },
+      { ingredientName: 'Roma Tomato', searchTerm: 'roma tomato', productQty: 2, qty: 2, unit: 'qty', measure: null },
+      { ingredientName: 'Avocado', searchTerm: 'avocado', productQty: 1, qty: 1, unit: 'qty', measure: null },
+    ],
+  };
+
+  it('sums the quantities rather than counting the rows', () => {
+    const { getByText } = render(
+      <WebViewCartSheet visible meals={[twoOfSome]} storeId="aldi" storeName="ALDI" onClose={() => {}} />,
+    );
+    // 3 rows, quantities 2 + 2 + 1 = 5.
+    expect(getByText(/5 items/)).toBeTruthy();
+  });
+
+  it('says "1 item", not "1 items"', () => {
+    const one = { id: 'm2', name: 'Snack', ingredients: [
+      { ingredientName: 'Lime', searchTerm: 'lime', productQty: 1, qty: 1, unit: 'qty', measure: null },
+    ] };
+    const { getByText } = render(
+      <WebViewCartSheet visible meals={[one]} storeId="aldi" storeName="ALDI" onClose={() => {}} />,
+    );
+    expect(getByText(/1 item(?!s)/)).toBeTruthy();
+  });
+});
+
 describe('WebViewCartSheet — login_check timeout', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());

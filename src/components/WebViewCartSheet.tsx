@@ -1840,8 +1840,21 @@ export default function WebViewCartSheet({
     if (!script) { netFallBackToPool('add_script_unbuildable'); return; }
     netPhaseRef.current = 'add';
     setStep('adding');
-    setNetProgress({ done: 0, total: toWrite.length, label: 'Adding to your cart' });
-    setSearchingLabel(`Adding ${toWrite.length} ingredients…`);
+    // THE DENOMINATOR NEVER SHRINKS, AND A TOP-UP NEVER RESTARTS IT.
+    //
+    // Two separate things were making the count run backwards. It counted
+    // `toWrite` (17) rather than the list the user asked for (18), so an item
+    // with no product silently shrank the total; and the top-up re-entered here
+    // and set total to 2, so the bag went 17/17 -> 0/2 -> 2/2 in front of the
+    // user. Now the total is the active list for the whole run, items that were
+    // never written start already counted (they are decided, just not added),
+    // and the top-up leaves the progress alone — it is a correction, not a
+    // second pass.
+    if (!netTopUpRef.current) {
+      const decided = Math.max(0, active.length - toWrite.length);
+      setNetProgress({ done: decided, total: active.length, label: 'Adding to your cart' });
+      setSearchingLabel(`Adding ${active.length} ingredients…`);
+    }
     console.log(`[Cart ${ts()}]`, 'network run: writing', toWrite.length, 'of', active.length);
     // ONCE WRITING STARTS, FALLING BACK TO THE POOL IS FORBIDDEN.
     //
@@ -4333,8 +4346,20 @@ export default function WebViewCartSheet({
           // reconcile, and if it answers it overwrites this with the same rows.
           if (Array.isArray(msg.cartBefore) && Array.isArray(msg.cartAfter)) {
             if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
-            const netRows = diffCartItems(msg.cartBefore as CartItem[], msg.cartAfter as CartItem[]);
-            console.log(`[Cart ${ts()}]`, 'network run: cart breakdown from the rail —', netRows.length, 'rows, no page load');
+            // Diff against the cart as it was when the RUN started, not as it
+            // was when this write started.
+            //
+            // A top-up's own before/after only differs by the items it topped
+            // up, so the done screen flagged 2 of 17 rows as added and showed
+            // the other 15 in grey as though they had been there all along. The
+            // user had just watched us add them. The run's baseline is the only
+            // honest "before" for a screen that says what THIS RUN did.
+            const runBaseline = cartItemsBeforeRef.current.length
+              ? cartItemsBeforeRef.current
+              : (msg.cartBefore as CartItem[]);
+            const netRows = diffCartItems(runBaseline, msg.cartAfter as CartItem[]);
+            console.log(`[Cart ${ts()}]`, 'network run: cart breakdown from the rail —', netRows.length,
+              'rows,', netRows.filter((r) => r.added).length, 'added, no page load');
             setCartResultRows(netRows);
           }
           // A first pass hands its results to the reconcile, which is the same
@@ -5354,7 +5379,13 @@ export default function WebViewCartSheet({
                   <Text style={{ fontSize: 12, color: Colors.text3 }}>{allChecked ? 'Uncheck all' : 'Check all'}</Text>
                 </TouchableOpacity>
                 <Text style={styles.subheading}>
-                  {meals.length} meal{meals.length !== 1 ? 's' : ''} · {items.length} ingredient{items.length !== 1 ? 's' : ''}
+                  {/* Items, not lines. Two of these ingredients had a quantity of
+                      2, so "18 ingredients" undercounted what was about to go in
+                      the cart by exactly the amount the user had asked for. */}
+                  {meals.length} meal{meals.length !== 1 ? 's' : ''} · {(() => {
+                    const n = items.reduce((sum, it) => sum + Math.max(0, Math.round(it.productQty || 0)), 0);
+                    return `${n} item${n !== 1 ? 's' : ''}`;
+                  })()}
                 </Text>
               </View>
               {items.map((it, i) => {
@@ -6189,7 +6220,19 @@ export default function WebViewCartSheet({
                       Your {storeName} cart
                     </Text>
                     <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.text2 }}>
-                      {(() => { const n = cartResultRows.reduce((s, r) => s + r.qty, 0); return `${n} item${n !== 1 ? 's' : ''}`; })()}
+                      {/* "19 items" next to "Your H-E-B cart" was read as "19 items
+                          added". It is the whole cart. Say both numbers, so the
+                          green rows and the total stop looking like the same
+                          claim. */}
+                      {(() => {
+                        const total = cartResultRows.reduce((s, r) => s + r.qty, 0);
+                        // diffCartItems emits added and pre-existing quantities as
+                        // SEPARATE rows, so qty on an added row is the added amount.
+                        const added = cartResultRows.reduce((s, r) => s + (r.added ? r.qty : 0), 0);
+                        return added > 0 && added !== total
+                          ? `${added} added · ${total} in cart`
+                          : `${total} item${total !== 1 ? 's' : ''}`;
+                      })()}
                     </Text>
                   </View>
                   {cartResultRows.length === 0 ? (
