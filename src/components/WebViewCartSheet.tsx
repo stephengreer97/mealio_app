@@ -4112,7 +4112,25 @@ export default function WebViewCartSheet({
             const findings = auditCartAfterRun({
               rows,
               reportedAdded: addResultsRef.current.filter((r) => r.success).map((r) => r.name),
-              active: activeItemsRef.current.map(toIntendedItem),
+              // THE REVISED INTENT, not the one the run started with.
+              //
+              // A review pick REPLACES what an ingredient means: the user asked
+              // for "H-E-B Texas Roots Fresh White Onion", the store had no such
+              // thing, and they chose "Fresh White Onion" instead. runIntendedRef
+              // already records that swap; recomputing from activeItemsRef here
+              // threw it away, so the audit went looking for a Texas Roots onion,
+              // did not find one, and had a spare Fresh White Onion in the cart
+              // that nothing claimed — reported as "your cart has 1 item Mealio
+              // did not add". It had just added it, on purpose, because the user
+              // asked it to.
+              //
+              // This bites hardest when two ingredients resolve to the SAME
+              // product, which is exactly the case here: one onion matched
+              // directly and the other got there by substitution, so the cart
+              // gained two and the audit expected one.
+              active: runIntendedRef.current.length > 0
+                ? runIntendedRef.current
+                : activeItemsRef.current.map(toIntendedItem),
               reconcileIntended: reconcileIntendedRef.current,
               countBefore: cartCountBeforeRef.current,
               countAfter: count,
