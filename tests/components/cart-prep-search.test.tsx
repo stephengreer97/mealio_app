@@ -179,7 +179,10 @@ const PREPPED_MEALS = [
  * standard: what actually went upstream), the typing stores on the script text,
  * and both on a guard that the search happened at all.
  */
-const URL_STORES = ['heb', 'walmart', 'albertsons', 'amazon'];
+// Stores whose run NAVIGATES to a search page — which since the DOM removal
+// means the assisted ones. A rail store loads no page at all, so there is no URL
+// to inspect; ingredientPrep.test.ts asks the same question of its search batch.
+const URL_STORES = ['walmart', 'amazon', 'aldi', 'wegmans'];
 const SCRIPT_STORES = ['aldi', 'wegmans'];
 const ALL_STORES = [...URL_STORES, ...SCRIPT_STORES];
 
@@ -249,24 +252,17 @@ function startRun(storeId = 'aldi', meals: unknown[] = PREPPED_MEALS) {
 }
 
 describe('the cart never asks a store for a preparation', () => {
-  it.each(ALL_STORES)('hands %s\'s builders only bare product terms', (storeId) => {
-    const { beginSearching } = startRun(storeId);
-    beginSearching();
-
-    const asked = terms().map((t) => String(t.term));
-    // Not vacuous: the run really reached the registry, and asked for the
-    // products by name. Without this a cart that searched for nothing would
-    // satisfy every assertion below.
-    expect(asked.length).toBeGreaterThan(0);
-    expect(asked).toContain('Onion');
-
-    for (const term of asked) {
-      for (const phrase of PREP_PHRASES) {
-        expect(term.toLowerCase()).not.toContain(phrase);
-      }
-    }
-  });
-
+  // Four cases lived here, and all four spied on the store BUILDERS: what term
+  // reached buildSearchScript, buildSearchAndAddScript, buildAddToCartScript,
+  // and what those scripts then carried. Those builders were deleted on
+  // 2026-09-01.
+  //
+  // The invariant is not gone and is not weaker. It moved to where the terms now
+  // go: tests/unit/ingredientPrep.test.ts asks it of the assisted search URL —
+  // which is entirely ours to build, so even the field name must not appear in
+  // it — and of the rail's search batch, for every store in the catalog. What is
+  // left below is the component-level half: the run really does reach a store,
+  // and it reaches it with a bare product term.
   it.each(URL_STORES)('navigates %s to a search URL with no preparation in it', (storeId) => {
     const { beginSearching } = startRun(storeId);
     beginSearching();
@@ -286,64 +282,6 @@ describe('the cart never asks a store for a preparation', () => {
     }
   });
 
-  it.each(SCRIPT_STORES)('injects %s no script carrying a preparation', (storeId) => {
-    const { beginSearching } = startRun(storeId);
-    beginSearching();
-
-    const scripts = [...injected(), ...built().map((b) => b.out)];
-    // These stores type the term into the page, so the term is INSIDE the
-    // script — which is what makes the negative assertion meaningful here.
-    expect(scripts.some((s) => s.includes('Onion'))).toBe(true);
-    for (const script of scripts) {
-      for (const phrase of PREP_PHRASES) {
-        expect(script.toLowerCase()).not.toContain(phrase);
-      }
-    }
-  });
-
-  it.each(ALL_STORES)('adds to %s\'s cart under the bare product name', (storeId) => {
-    // The tests above never reach an add, for a structural reason worth stating.
-    // The sheet only AUTO-STARTS when something is unchosen, and that branch
-    // sets `activeItemsRef` to the unchosen items alone (WebViewCartSheet.tsx
-    // :1456-1460). So on the auto-start route `item.searchTerm` is null by
-    // construction, `scoreTarget` always takes `ingredientName`, `isChooseFlow`
-    // is always true — and the add branch under it is unreachable. Every builder
-    // those tests record is a SEARCH.
-    //
-    // A row that already has a product takes the other entrance: the qty screen,
-    // and the button below. That is the route where a prep can be added to a
-    // cart rather than merely searched for, so it is the one that matters most.
-    // `scoreTarget` is both the gate deciding whether a product may be added at
-    // all (exact-after-normalisation equality) and the term carried into the add
-    // script.
-    //
-    // One chosen row and its exact match. A prep folded into `scoreTarget` fails
-    // that equality, so the product is never picked and no add script is built —
-    // which is what the guard below sees. All six stores are driven because they
-    // do not share a route: aldi and wegmans force serial search and land in the
-    // sequential SEARCH_RESULT handler, while the other four are parallel-capable
-    // and reach the add through the pool.
-    const view = startRun(storeId, CHOSEN_PREPPED_MEAL);
-    act(() => {
-      fireEvent.press(view.getByText(`Add Ingredients to ${storeId} Cart →`));
-    });
-    view.beginSearching();
-    view.post({ type: 'SEARCH_RESULT', candidates: [BUTTER_CANDIDATE] });
-
-    const addCalls = terms().filter((t) => ADD_PATH.includes(t.kind));
-    // Not vacuous: the exact match really was accepted and really was dispatched
-    // to the store. Without this, "no add script carries a prep" is true of a
-    // run that added nothing.
-    expect(addCalls.length).toBeGreaterThan(0);
-    expect(addCalls.map((t) => String(t.term))).toContain('Land O Lakes Butter');
-
-    // And nothing anywhere in the run — either term or built script text.
-    for (const text of [...terms().map((t) => String(t.term)), ...built().map((b) => b.out), ...injected()]) {
-      for (const phrase of PREP_PHRASES) {
-        expect(text.toLowerCase()).not.toContain(phrase);
-      }
-    }
-  });
 
   it('still shows the shopper what each meal wants done to the ingredient', () => {
     // The other half of the ticket, on the surface the risk lives on: the prep

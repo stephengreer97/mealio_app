@@ -1798,11 +1798,28 @@ export default function WebViewCartSheet({
       if (r.success) landed.push({ name: r.productName || '', success: true });
     });
     console.log(`[Cart ${ts()}]`, 'network top-up: finished —', landed.length, 'of', topUp.size, 'landed');
+    // AND WHAT DID NOT LAND. Only the successes used to be recorded, so a top-up
+    // that corrected nothing left its items in neither list: the reconcile had
+    // already routed them out of `confirmed` as short, and nothing put them back
+    // as failed. The done screen then offered no manual hand-over, because
+    // manualCandidates reads the failed names and there were none — for an item
+    // the run had just tried twice and not got.
+    const stillMissing: { name: string; success: false; reason: string }[] = [];
+    netResultsRef.current.forEach((r) => {
+      if (!r.success) {
+        stillMissing.push({
+          name: r.productName || '', success: false, reason: r.reason || 'top_up_failed',
+        });
+      }
+    });
     // ADDED to what the reconcile already confirmed, not replacing it: these are
     // the units it found short, and the pass that confirmed the rest still holds.
-    addResultsRef.current = [...addResultsRef.current, ...landed];
-    setTotalAdded(addResultsRef.current.length);
-    setAddedNames(addResultsRef.current.map((a) => a.name));
+    addResultsRef.current = [...addResultsRef.current, ...landed, ...stillMissing];
+    setTotalAdded(addResultsRef.current.filter((a) => a.success).length);
+    setAddedNames(addResultsRef.current.filter((a) => a.success).map((a) => a.name));
+    // compileFailedNames owns the failed list AND its count, and honours a skip.
+    // Without it the names above are recorded and never rendered.
+    compileFailedNames();
 
     // A TOP-UP MUST STILL SHOW WHAT THE RECONCILE COULD NOT FIX.
     //

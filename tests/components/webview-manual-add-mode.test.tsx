@@ -93,6 +93,7 @@ jest.mock('../../src/lib/automation-config', () => {
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { enableRail, SESSION_OK } from './helpers/railRun';
 
 const chosen = (name: string) => ({
   ingredientName: name, searchTerm: name, productQty: 1, qty: 1, unit: 'qty', measure: null,
@@ -123,29 +124,69 @@ async function runToDone(asked: string[], landed: string[]) {
 
   act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
   await act(async () => {});
-  post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+  enableRail();
+  // Over the rail: one session probe answers the login check, another the
+  // run's own read after the baseline.
+  post(SESSION_OK);
   // Without a baseline there is no after-probe, and the cart read that corrects
   // the failed list never happens.
-  post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
+  post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+  post(SESSION_OK);
 
+  // One answer per term, each an EXACT match so the rail writes it. `chosen()`
+  // makes the searchTerm the product name, so term and productName are the same
+  // string — anything less than exact would route to review instead.
   for (const productName of asked) {
     post({
-      type: 'SEARCH_RESULT',
-      candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2' }],
+      type: 'SEARCH_RESULT', source: 'network', term: productName,
+      candidates: [{
+        productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2',
+        productId: 'p' + productName, skuId: 's' + productName,
+      }],
     });
   }
-  for (const name of asked) {
-    post({ type: 'ADD_RESULT', success: landed.includes(name), reason: 'add button not found' });
-  }
-  act(() => { jest.advanceTimersByTime(30_000); });
-
+  post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: asked.length });
+  // Then the writes. `landed` is what the cart actually ends up holding; a write
+  // this reports as failed is what manual mode is offered for.
+  asked.forEach((name, idx) => {
+    post({
+      type: 'NET_ADD_RESULT', idx, name, success: landed.includes(name),
+      productId: 'p' + name, skuId: 's' + name,
+      reason: landed.includes(name) ? null : 'not_found',
+    });
+  });
+  post({
+    type: 'NET_ADD_DONE', wrote: asked.length, count: asked.length,
+    cartBefore: [], cartAfter: landed.map((name) => ({ name, qty: 1 })),
+  });
+  // Answered BEFORE the long advance. The reconcile probe gives up after
+  // cartProbeResultMs (14s); the old 30s jump was harmless on the page path
+  // because the probe was armed by a navigation that had not happened yet.
   post({
     type: 'CART_COUNT',
     count: landed.length,
     items: landed.map((name) => ({ name, qty: 1 })),
-    url: 'https://heb.test/cart',
+    source: 'network',
   });
-  act(() => { jest.advanceTimersByTime(2_000); });
+  // The reconcile finds the shortfall and tops it up over the rail — it still
+  // holds the match from the search, so it re-writes rather than re-searching.
+  // Answer that too, still short, which is what leaves the item on the failed
+  // list that manual mode is offered for.
+  const missing = asked.filter((n) => !landed.includes(n));
+  missing.forEach((name, i) => {
+    post({
+      type: 'NET_ADD_RESULT', idx: asked.indexOf(name), name, success: false,
+      productId: 'p' + name, skuId: 's' + name, reason: 'not_found',
+    });
+    if (i === missing.length - 1) {
+      post({
+        type: 'NET_ADD_DONE', wrote: missing.length, count: missing.length,
+        cartBefore: landed.map((n) => ({ name: n, qty: 1 })),
+        cartAfter: landed.map((n) => ({ name: n, qty: 1 })),
+      });
+    }
+  });
+  act(() => { jest.advanceTimersByTime(30_000); });
   return view;
 }
 
@@ -277,12 +318,16 @@ describe('the run that actually needs it', () => {
     });
 
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' });
+    enableRail();
+    // Over the rail: one session probe answers the login check, another the
+    // run's own read after the baseline.
+    post(SESSION_OK);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION_OK);
     // What H-E-B really offered for fresh mint. Not an exact match, so it cannot
     // auto-pick and the item lands on the review screen.
     post({
-      type: 'SEARCH_RESULT',
+      type: 'SEARCH_RESULT', source: 'network', term: 'sour cream',
       candidates: [{ productName: 'Tazo Organic Refresh Mint Herbal Tea Bags, 16 ct', imageUrl: null, outOfStock: false, preferences: null, price: '$4.61' }],
     });
     act(() => { fireEvent.press(view.getByText(/review 1 ingredient/i)); });
@@ -359,16 +404,28 @@ describe('state does not leak into the next run', () => {
     });
     const drive = () => {
       act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-      post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-      post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
+      enableRail();
+      // Over the rail: one session probe answers the login check, another the
+      // run's own read after the baseline.
+      post(SESSION_OK);
+      post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+      post(SESSION_OK);
       for (const productName of ['sour cream', 'fresh mint']) {
-        post({ type: 'SEARCH_RESULT', candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2' }] });
+        post({ type: 'SEARCH_RESULT', source: 'network', term: productName,
+             candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null,
+                            price: '$2', productId: 'p' + productName, skuId: 's' + productName }] });
       }
-      post({ type: 'ADD_RESULT', success: true });
-      post({ type: 'ADD_RESULT', success: false, reason: 'add button not found' });
+      post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+      // The rail writes both, reports one landing and one not.
+      post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
+      post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
+      post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+      post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
+      // The reconcile tops up the shortfall over the rail; answer it, still short,
+      // which is what leaves the item on the failed list.
+      post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
+      post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [{ name: 'sour cream', qty: 1 }], cartAfter: [{ name: 'sour cream', qty: 1 }] });
       act(() => { jest.advanceTimersByTime(30_000); });
-      post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], url: 'https://heb.test/cart' });
-      act(() => { jest.advanceTimersByTime(2_000); });
     };
 
     drive();
@@ -408,16 +465,27 @@ describe('the hand-over survives what the store throws at it', () => {
       });
     });
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    enableRail();
+    // Over the rail: one session probe answers the login check, another the
+    // run's own read after the baseline.
+    post(SESSION_OK);
     post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
     for (const productName of ['sour cream', 'fresh mint']) {
-      post({ type: 'SEARCH_RESULT', candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2' }] });
+      post({ type: 'SEARCH_RESULT', source: 'network', term: productName,
+             candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null,
+                            price: '$2', productId: 'p' + productName, skuId: 's' + productName }] });
     }
-    post({ type: 'ADD_RESULT', success: true });
-    post({ type: 'ADD_RESULT', success: false, reason: 'add button not found' });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+    // The rail writes both, reports one landing and one not.
+    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
+    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
+    post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
+      // The reconcile tops up the shortfall over the rail; answer it, still short,
+      // which is what leaves the item on the failed list.
+      post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
+      post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [{ name: 'sour cream', qty: 1 }], cartAfter: [{ name: 'sour cream', qty: 1 }] });
     act(() => { jest.advanceTimersByTime(30_000); });
-    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], url: 'https://heb.test/cart' });
-    act(() => { jest.advanceTimersByTime(2_000); });
 
     act(() => { fireEvent.press(view.getByTestId('manual-start')); });
     act(() => {
@@ -441,16 +509,27 @@ describe('the hand-over survives what the store throws at it', () => {
       });
     });
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    enableRail();
+    // Over the rail: one session probe answers the login check, another the
+    // run's own read after the baseline.
+    post(SESSION_OK);
     post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
     for (const productName of ['sour cream', 'fresh mint']) {
-      post({ type: 'SEARCH_RESULT', candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2' }] });
+      post({ type: 'SEARCH_RESULT', source: 'network', term: productName,
+             candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null,
+                            price: '$2', productId: 'p' + productName, skuId: 's' + productName }] });
     }
-    post({ type: 'ADD_RESULT', success: true });
-    post({ type: 'ADD_RESULT', success: false, reason: 'add button not found' });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+    // The rail writes both, reports one landing and one not.
+    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
+    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
+    post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
+      // The reconcile tops up the shortfall over the rail; answer it, still short,
+      // which is what leaves the item on the failed list.
+      post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
+      post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [{ name: 'sour cream', qty: 1 }], cartAfter: [{ name: 'sour cream', qty: 1 }] });
     act(() => { jest.advanceTimersByTime(30_000); });
-    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], url: 'https://heb.test/cart' });
-    act(() => { jest.advanceTimersByTime(2_000); });
     expect(view.queryAllByText(/we checked your/i).length).toBeGreaterThan(0);
 
     act(() => { fireEvent.press(view.getByTestId('manual-start')); });
@@ -478,13 +557,21 @@ describe('a probe still in flight when the user takes over', () => {
       });
     });
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+    enableRail();
+    // Over the rail: one session probe answers the login check, another the
+    // run's own read after the baseline.
+    post(SESSION_OK);
     post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
     for (const productName of ['sour cream', 'fresh mint']) {
-      post({ type: 'SEARCH_RESULT', candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null, price: '$2' }] });
+      post({ type: 'SEARCH_RESULT', source: 'network', term: productName,
+             candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null,
+                            price: '$2', productId: 'p' + productName, skuId: 's' + productName }] });
     }
-    post({ type: 'ADD_RESULT', success: true });
-    post({ type: 'ADD_RESULT', success: false, reason: 'add button not found' });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+    // The rail writes both, reports one landing and one not.
+    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
+    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
+    post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
     act(() => { jest.advanceTimersByTime(30_000); });
 
     // No after CART_COUNT yet: the probe is in flight and the failed list is the
