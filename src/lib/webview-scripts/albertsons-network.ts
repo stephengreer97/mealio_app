@@ -129,12 +129,18 @@ const ALB_PRELUDE = `
         var j = await r.json();
         A.cartKey = keys[i];
         var cart = (j.carts || [])[0] || {};
-        var lines = {}, list = cart.cartItemsList || [];
+        var lines = {}, rows = [], list = cart.cartItemsList || [];
         for (var n = 0; n < list.length; n++) {
           var it = list[n];
-          if (it && it.itemId != null) lines[String(it.itemId)] = Number(it.qty) || 0;
+          if (!it || it.itemId == null) continue;
+          lines[String(it.itemId)] = Number(it.qty) || 0;
+          // The same CartItem shape H-E-B's rail emits, so the done screen's
+          // breakdown works identically on both stores — which is the point:
+          // the user should not be able to tell which rail ran.
+          if (it.name) rows.push({ name: String(it.name), qty: Number(it.qty) || 0 });
         }
-        return { ok: true, lines: lines, totalQty: (j.multiCartSummary || {}).totalAvailableQuantity };
+        return { ok: true, lines: lines, rows: rows,
+                 totalQty: (j.multiCartSummary || {}).totalAvailableQuantity };
       } catch (e) {
         clearTimeout(to);
         return { ok: false, why: 'threw', detail: String(e).slice(0, 80) };
@@ -608,6 +614,13 @@ ${ALB_PRELUDE}
   var pool = [];
   for (var w = 0; w < ${concurrency}; w++) pool.push(worker());
   await Promise.all(pool);
-  post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: wrote });
+
+  // One read after the writes, so the done screen can show what THIS run added
+  // in green and what was already in the cart in grey — without loading the
+  // cart page to find out. Same contract as the H-E-B rail.
+  var afterCart = await __albReadCart(10000);
+  post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: wrote,
+         cartBefore: base.rows || null,
+         cartAfter: afterCart.ok ? (afterCart.rows || null) : null });
 })(); true;`;
 }

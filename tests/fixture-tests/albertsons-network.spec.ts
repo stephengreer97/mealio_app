@@ -97,7 +97,7 @@ function cartStub(initial: Record<string, number>, opts: { getStatus?: number; o
     '  window.__writes = [];',
     '  function cartBody() {',
     '    var list = [];',
-    '    for (var k in window.__lines) list.push({ itemId: k, qty: window.__lines[k] });',
+    '    for (var k in window.__lines) list.push({ itemId: k, qty: window.__lines[k], name: "Item " + k });',
     '    return { carts: [{ cartItemsList: list }], multiCartSummary: { totalAvailableQuantity: list.length } };',
     '  }',
     '  window.fetch = function (url, init) {',
@@ -317,6 +317,25 @@ describe('Albertsons add over the network — qty is ABSOLUTE', () => {
     expect(res.ok).toBe(false);
     expect(res.reason).toBe('quantity_mismatch');
     expect(String(res.detail)).toContain('asked 5');
+  });
+
+  itWithFixture('search-results-tortillas.html', 'reports the cart before and after, so the done screen matches H-E-B', async (runner) => {
+    // The user should not be able to tell which rail ran. H-E-B's add emits the
+    // cart before and after for the done-screen breakdown; this must too, or
+    // Albertsons silently loses the green/grey split.
+    await runner.inject(CONTEXT);
+    await runner.inject(cartStub({ '999': 2 }));
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript([
+      { idx: 0, productId: '184040105', quantity: 1, name: 'Avocado' },
+    ])!);
+    const done = await runner.waitForMessage('NET_ADD_DONE', 15_000);
+    expect(done.cartBefore).toEqual([{ name: 'Item 999', qty: 2 }]);
+    // The item the run wrote is present after and absent before, which is what
+    // makes it render green rather than grey.
+    expect(done.cartAfter).toEqual(expect.arrayContaining([
+      { name: 'Item 999', qty: 2 },
+      { name: 'Item 184040105', qty: 1 },
+    ]));
   });
 
   it('refuses to build with nothing writable', () => {
