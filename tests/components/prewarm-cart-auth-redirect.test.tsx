@@ -48,7 +48,14 @@ import SilentLoginProbe from '../../src/components/SilentLoginProbe';
 import { buildCartPageCountScript, getCartPageUrl } from '../../src/lib/webview-scripts/cart-count';
 
 /** Albertsons-family banner: the family that actually does the SSO bounce. */
-const STORE = 'acme';
+// STORE is WALMART, and it used to be 'acme' — an Albertsons banner.
+//
+// MEAL-136's guard is about the cart PAGE capture surviving an auth redirect,
+// and that only applies to a store which NAVIGATES to read its cart. The
+// Albertsons family has a rail as of 2026-09-01, so its prewarm asks for the
+// cart by request from the page it is already on and never makes that
+// navigation. Walmart has no rail and still does.
+const STORE = 'walmart';
 const CART_URL = getCartPageUrl(STORE)!;
 const SSO_URL = 'https://www.acmemarkets.com/bin/safeway/unified/sso/authorize?code=abc123';
 

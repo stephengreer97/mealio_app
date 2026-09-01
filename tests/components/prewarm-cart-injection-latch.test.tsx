@@ -47,9 +47,16 @@ import SilentLoginProbe from '../../src/components/SilentLoginProbe';
 // HEB: a URL-cart store, so startCartCapture takes the 'url' path and the count
 // script is injected from onLoadEnd — the branch under test. Its cart page is
 // /cart, which is what the MEAL-152 guard checks.
-const STORE = 'heb';
+// STORE is WALMART, and it used to be H-E-B.
+//
+// The behaviour under test -- the cart PAGE capture, its auth-redirect guard and
+// its injection latch -- only applies to a store that NAVIGATES to read its
+// cart. H-E-B stopped doing that on 2026-09-01: it has a rail, so the prewarm
+// asks for the cart by request from the page it is already on. Walmart has no
+// rail and still navigates, so it is where this guard still earns its keep.
+const STORE = 'walmart';
 const HOME_URL = 'https://www.heb.com/';
-const CART_URL = 'https://www.heb.com/cart?_t=1754500000000';
+const CART_URL = 'https://www.walmart.com/cart?_t=1754500000000';
 // Shape from auth-urls.ts (AUTH_REDIRECT_URL_PATTERN matches '/sso/').
 const INTERSTITIAL_URL = 'https://www.heb.com/bin/sso/authorize?code=test';
 

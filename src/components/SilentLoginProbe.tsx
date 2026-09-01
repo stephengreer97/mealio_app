@@ -127,6 +127,17 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
       console.log('[Prewarm] probe', storeId, 'cart pre-capture timed out — reporting logged-in without a baseline');
       finish({ isLoggedIn: true });
     });
+    // ASK THE RAIL FIRST. The probe is ALREADY on a signed-in store page — it
+    // just answered the login question from there — so the cart is one request
+    // away. Navigating to /cart to count was the second page load in a prewarm
+    // and the same one the cart run was making a moment later.
+    const rail = getNetworkRail(storeId);
+    if (rail) {
+      cartMethodRef.current = 'inline';   // "no navigation coming", which is what that branch means
+      console.log('[Prewarm] probe', storeId, 'cart capture: over the network, no page load');
+      webviewRef.current?.injectJavaScript(rail.cartRead());
+      return;
+    }
     if (inline) {
       // Self-contained open+count+close (ALDI side panel).
       cartMethodRef.current = 'inline';

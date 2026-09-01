@@ -362,6 +362,44 @@ function albSearchUrlExpr(pageSize: number): string {
  * firing several searches inside a second is the obvious suspect. Being slower
  * than we could be is the cheap side of that trade.
  */
+/**
+ * Read the cart, over the network, and answer as the cart PAGE would.
+ *
+ * __albReadCart already builds the rows; it was only ever called on the way to
+ * doing something else. Offering it alone is what lets the sheet stop navigating
+ * to the cart URL for its snapshots.
+ */
+export function buildAlbertsonsCartReadScript(): string {
+  return `(async function () {
+${ALB_PRELUDE}
+  var post = function (o) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
+  };
+  try {
+    var cart = await __albReadCart(12000);
+    if (!cart || !cart.ok) {
+      // UNKNOWN, never zero -- a zero would tell the reconcile the cart is empty
+      // and invite it to re-add everything already in it.
+      var RAIL_READ_CODE = {
+        no_key: 'rail_read_no_key', auth: 'rail_read_auth',
+        http: 'rail_read_http', threw: 'rail_read_threw',
+      };
+      var why = (cart && cart.why) || '';
+      post({ type: 'CART_COUNT', count: null, source: 'network',
+             reason: RAIL_READ_CODE[why] || 'rail_read_failed' });
+      return;
+    }
+    var rows = cart.rows || [];
+    var count = 0;
+    for (var i = 0; i < rows.length; i++) count += (rows[i].qty || 0);
+    post({ type: 'CART_COUNT', count: count, items: rows, source: 'network' });
+  } catch (e) {
+    post({ type: 'CART_COUNT', count: null, source: 'network', reason: 'rail_read_threw',
+           detail: String(e).slice(0, 80) });
+  }
+})(); true;`;
+}
+
 export function buildAlbertsonsNetworkSearchBatchScript(
   terms: string[],
   opts: { storeId: string; pageSize?: number; concurrency?: number },

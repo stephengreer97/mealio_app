@@ -1537,6 +1537,32 @@ export default function WebViewCartSheet({
   // result-timeout so a cart page that never posts can't strand the flow.
   const triggerCartProbe = useCallback((phase: 'after' | 'reconcile') => {
     const sid = lockedStoreIdRef.current;
+    // ASK THE RAIL FIRST — it needs no page.
+    //
+    // This navigation was the single largest fixed cost in a rail run: 2.0s
+    // flat, on every run, more than searching eighteen items. It is also what
+    // put the wrong breakdown on the done screen — it can land somewhere that
+    // is not the cart (`reason: not_cart_page`), and then the run has no
+    // baseline and credits itself with whatever the last write touched.
+    //
+    // cartRead posts the same CART_COUNT the page posts, so everything
+    // downstream is untouched.
+    const railForCart = getNetworkRail(sid);
+    if (railForCart) {
+      if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
+      cartRowsTimeoutRef.current = setTimeout(() => { cartRowsTimeoutRef.current = null; setCartRowsTimedOut(true); }, CART_ROWS_TIMEOUT_MS);
+      if (cartProbeResultTimeoutRef.current) clearTimeout(cartProbeResultTimeoutRef.current);
+      cartProbeResultTimeoutRef.current = setTimeout(() => {
+        cartProbeResultTimeoutRef.current = null;
+        console.log(`[Cart ${ts()}]`, 'cart probe timeout — no CART_COUNT for', phase);
+        cartCountPendingRef.current = null;
+        if (phase === 'reconcile') parallelReconcileArmedRef.current = false;
+      }, cfgTimeouts.cartProbeResultMs);
+      cartCountPendingRef.current = phase;
+      console.log(`[Cart ${ts()}]`, 'cart probe over the network —', phase, 'no page load');
+      webviewRef.current?.injectJavaScript(railForCart.cartRead());
+      return;
+    }
     const cartPageScript = buildCartPageCountScript(sid);
     const cartPageUrl = getCartPageUrl(sid) ?? capturedCartUrlRef.current;
     const openCartScript = buildOpenCartScript(sid);
@@ -3096,6 +3122,24 @@ export default function WebViewCartSheet({
       cartItemsBeforeRef.current = prewarmed.items;
       if (prewarmed.url && !getCartPageUrl(probeStoreId)) capturedCartUrlRef.current = prewarmed.url;
       beginSearchFlow();
+      return;
+    }
+    // ASK THE RAIL FIRST — same reason as the after-probe.
+    const railForBefore = getNetworkRail(probeStoreId);
+    if (railForBefore) {
+      cartCountPendingRef.current = 'before';
+      cartProbeBeginSearchRef.current = true;
+      if (cartProbeTimeoutRef.current) clearTimeout(cartProbeTimeoutRef.current);
+      cartProbeTimeoutRef.current = setTimeout(() => {
+        cartProbeTimeoutRef.current = null;
+        if (!cartProbeBeginSearchRef.current) return;
+        console.log(`[Cart ${ts()}]`, 'network before-probe timed out — starting search without a baseline');
+        cartProbeBeginSearchRef.current = false;
+        cartCountPendingRef.current = null;
+        beginSearchFlow();
+      }, CART_PROBE_TIMEOUT_MS);
+      console.log(`[Cart ${ts()}]`, 'snapshotBefore: reading the cart over the network, no page load');
+      webviewRef.current?.injectJavaScript(railForBefore.cartRead());
       return;
     }
     const cartPageScript = buildCartPageCountScript(probeStoreId);

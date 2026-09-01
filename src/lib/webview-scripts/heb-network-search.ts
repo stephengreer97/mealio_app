@@ -25,6 +25,19 @@
  * "the network could not tell me" is always the same: load the page and read it.
  */
 
+/**
+ * Shared cart read: the CartLines query, the call, and the rows it becomes.
+ *
+ * Lifted out of the add batch so the cart can be read ON ITS OWN. It was only
+ * ever reachable as a side effect of writing, which is why the sheet loaded
+ * www.heb.com/cart to take its before / reconcile / after snapshots instead --
+ * a page load measured at 2.0s, flat, on every run, and the single largest fixed
+ * cost in a rail run. It is also what made the cart breakdown wrong when that
+ * navigation landed on the homepage.
+ */
+const CART_READ_FN = `
+`;
+
 /** Shared transport. Same endpoint, headers and credentials as the cart rail. */
 const GQL_FN = `
   function __hebGql(op, query, variables, timeoutMs) {
@@ -485,6 +498,41 @@ ${CANDIDATE_HELPERS}
  * (MEAL-200). Those come back with a reason so the caller can route them to the
  * page path instead.
  */
+/**
+ * Read the cart, over the network, and answer as the cart PAGE would.
+ *
+ * Posts the same CART_COUNT the page posts -- same type, same {name, qty} rows,
+ * same count (summed quantities) -- so every handler downstream is untouched and
+ * cannot tell which read replied. That is the point: there is no second reader
+ * left to disagree with, which is what made the done screen's green/grey
+ * breakdown wrong when the two spelled a product differently.
+ */
+export function buildHebCartReadScript(): string {
+  return `(async function () {
+${GQL_FN}
+${CART_READ_FN}
+  var post = function (o) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
+  };
+  try {
+    var lines = await readCart();
+    if (!lines) {
+      // Null is UNKNOWN, never zero. A failed read reporting 0 would tell the
+      // reconcile the cart is empty and invite it to re-add everything.
+      post({ type: 'CART_COUNT', count: null, reason: 'rail_read_failed', source: 'network' });
+      return;
+    }
+    var rows = rowsOf(lines) || [];
+    var count = 0;
+    for (var i = 0; i < rows.length; i++) count += (rows[i].qty || 0);
+    post({ type: 'CART_COUNT', count: count, items: rows, source: 'network' });
+  } catch (e) {
+    post({ type: 'CART_COUNT', count: null, reason: 'rail_read_threw', source: 'network',
+           detail: String(e).slice(0, 120) });
+  }
+})(); true;`;
+}
+
 export function buildHebNetworkAddBatchScript(
   items: Array<{
     idx: number; productId: string; skuId: string; quantity: number; name: string;
@@ -504,6 +552,7 @@ export function buildHebNetworkAddBatchScript(
   const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 2, 3));
   return `(async function () {
 ${GQL_FN}
+${CART_READ_FN}
   var ITEMS = ${JSON.stringify(usable)};
   var post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}

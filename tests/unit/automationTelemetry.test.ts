@@ -334,6 +334,13 @@ describe('failure codes', () => {
       // a COUNT is unknown; it never describes an add, and addFailureCode never
       // sees it.
       'not_cart_page',
+      // The same job, from the rails' standalone cart read: why a COUNT is
+      // unknown when the sheet asked the network instead of loading the cart
+      // page. Both rails emit them, so these cannot be file-scoped — IGNORED_IN
+      // holds one file per reason. Every one is prefixed `rail_read_`, which is
+      // what keeps them from colliding with a real ADD_RESULT reason.
+      'rail_read_failed', 'rail_read_threw', 'rail_read_no_key',
+      'rail_read_auth', 'rail_read_http',
     ]);
 
     /**

@@ -7,11 +7,13 @@
 // lives, so adding the next store is one entry here rather than another branch
 // threaded through the sheet.
 import {
+  buildHebCartReadScript,
   buildHebNetworkAddBatchScript,
   buildHebNetworkSearchBatchScript,
   buildHebSessionScript,
 } from './heb-network-search';
 import {
+  buildAlbertsonsCartReadScript,
   buildAlbertsonsNetworkAddBatchScript,
   buildAlbertsonsNetworkSearchBatchScript,
   buildAlbertsonsSessionScript,
@@ -40,6 +42,15 @@ export interface NetworkRail {
   sessionMessageType: string;
   sessionScript(): string;
   searchBatch(terms: string[], sess: NetworkSession): string | null;
+  /**
+   * Read the cart and post a CART_COUNT identical to the cart PAGE's.
+   *
+   * A rail store must never load a page to learn what is in its own cart. The
+   * page probe it replaces measured 2.0s flat on every run -- more than
+   * searching eighteen items -- and it is what put the wrong breakdown on the
+   * done screen when the navigation landed somewhere that was not the cart.
+   */
+  cartRead(): string;
   addBatch(items: NetworkAddItem[], opts?: { concurrency?: number }): string | null;
 }
 
@@ -47,6 +58,7 @@ const HEB_RAIL: NetworkRail = {
   sessionMessageType: 'HEB_SESSION',
   sessionScript: buildHebSessionScript,
   searchBatch: (terms, sess) => buildHebNetworkSearchBatchScript(terms, sess),
+  cartRead: () => buildHebCartReadScript(),
   addBatch: (items, opts) =>
     buildHebNetworkAddBatchScript(
       // H-E-B addresses a cart line by sku, so an item without one is not
@@ -61,6 +73,7 @@ const ALBERTSONS_RAIL: NetworkRail = {
   sessionScript: buildAlbertsonsSessionScript,
   searchBatch: (terms, sess) =>
     buildAlbertsonsNetworkSearchBatchScript(terms, { storeId: sess.storeId }),
+  cartRead: () => buildAlbertsonsCartReadScript(),
   addBatch: (items, opts) => buildAlbertsonsNetworkAddBatchScript(items, opts),
 };
 
