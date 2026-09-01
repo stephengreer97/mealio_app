@@ -80,6 +80,7 @@ jest.mock('../../src/context/LoginPrewarmContext', () => {
 
 import ExpandableNotice from '../../src/components/ui/ExpandableNotice';
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { enableRail, SESSION_OK } from './helpers/railRun';
 
 describe('ExpandableNotice (MEAL-177)', () => {
   const NAMES = 'Sour Cream, Tortillas, Cheese, Salsa, Limes, Cilantro';
@@ -204,14 +205,20 @@ describe('the done screen uses it for skipped items (MEAL-177 wiring)', () => {
     });
 
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' });
+    enableRail();
+    // Twice: the session probe answers the login check, then the run's own
+    // session read after the baseline.
+    post(SESSION_OK);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION_OK);
     // A candidate that does NOT match the search term exactly, so the item cannot
     // auto-pick and lands on the review screen where skipping is possible.
     post({
-      type: 'SEARCH_RESULT',
+      type: 'SEARCH_RESULT', source: 'network', term: 'sour cream',
       candidates: [{ productName: 'Some Other Brand Cream', imageUrl: null, outOfStock: false, preferences: null, price: '$2' }],
     });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     // The run stops on the "Items Not Added" gate first — that screen is the
     // handoff into review, not the review itself.
     // "Ingredient", not "Item": MEAL-178 renamed this gate button, because once
