@@ -33,6 +33,7 @@ import { useStores } from '../lib/store-catalog/useStores';
 import { buildBlankPageRecoveryScript } from '../lib/webview-scripts/blank-page-recovery';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
 import { getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
+import CartRunAnimation from './CartRunAnimation';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
 import { useLoginPrewarm } from '../context/LoginPrewarmContext';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
@@ -812,6 +813,17 @@ export default function WebViewCartSheet({
   // done screen and the telemetry are untouched and cannot disagree with a
   // pool-driven run.
   const netSessionRef = useRef<{ storeId: string; shoppingContext: string } | null>(null);
+  // What the animation shows. Only set during a network run, because it is the
+  // only path that knows a real denominator up front — it asks for N terms and
+  // writes M products, so the ring is a fraction rather than a spinner.
+  const [netProgress, setNetProgress] = useState<{ done: number; total: number; label: string | null } | null>(null);
+  const bumpNetProgress = useCallback((label?: string | null) => {
+    setNetProgress((p) => (p ? { done: Math.min(p.done + 1, p.total), total: p.total, label: label ?? p.label } : p));
+  }, []);
+  // True while a network run is doing its own work. Deliberately NOT true on the
+  // login step or a page fallback — those need the user to see and touch the
+  // page.
+  const netRunVisual = netProgress != null && (step === 'searching' || step === 'adding');
   // Which protocol this store's rail speaks. Read from a ref rather than closed
   // over, for the same reason the rest of this file resolves the store that way:
   // the callbacks below froze at an early render.
@@ -1785,6 +1797,7 @@ export default function WebViewCartSheet({
     if (!script) { netFallBackToPool('add_script_unbuildable'); return; }
     netPhaseRef.current = 'add';
     setStep('adding');
+    setNetProgress({ done: 0, total: toWrite.length, label: 'Adding to your cart' });
     setSearchingLabel(`Adding ${toWrite.length} ingredients…`);
     console.log(`[Cart ${ts()}]`, 'network run: writing', toWrite.length, 'of', active.length);
     // ONCE WRITING STARTS, FALLING BACK TO THE POOL IS FORBIDDEN.
@@ -1819,6 +1832,7 @@ export default function WebViewCartSheet({
     netFailedTermsRef.current = new Set();
     netPhaseRef.current = 'search';
     setStep('searching');
+    setNetProgress({ done: 0, total: terms.length, label: 'Looking up ingredients' });
     setSearchingLabel(`Searching ${terms.length} ingredients…`);
     console.log(`[Cart ${ts()}]`, 'network run: searching', terms.length, 'terms with no page load');
     netArm(40_000, 'search_timeout');
@@ -2100,6 +2114,7 @@ export default function WebViewCartSheet({
       runKindRef.current = 'add';
       cartReconciledRef.current = false;
       setCartResultRows(null);
+      setNetProgress(null);
       setCartRowsTimedOut(false);
       if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
       setCartDeltaWarning(null);
@@ -4149,6 +4164,11 @@ export default function WebViewCartSheet({
           netStartSearch();
           return;
         }
+        if ((msg.type === 'SEARCH_RESULT' || msg.type === 'SEARCH_RESULT_FAILED') && msg.source === 'network') {
+          // Both outcomes are an answer, so both advance the ring — a term the
+          // store had nothing for is progress, not a stall.
+          bumpNetProgress(typeof msg.term === 'string' ? msg.term : null);
+        }
         if (msg.type === 'SEARCH_RESULT_FAILED' && msg.source === 'network') {
           if (!netActiveRef.current) return;
           console.log(`[Cart ${ts()}]`, 'network search failed for', msg.term, '—', msg.why);
@@ -4164,6 +4184,7 @@ export default function WebViewCartSheet({
           return;
         }
         if (msg.type === 'NET_ADD_RESULT') {
+          bumpNetProgress(typeof msg.name === 'string' ? msg.name : null);
           if (!netActiveRef.current || netPhaseRef.current !== 'add') return;
           const at = typeof msg.idx === 'number' ? msg.idx : -1;
           if (at < 0) return;
@@ -5042,7 +5063,20 @@ export default function WebViewCartSheet({
               setBrowserAreaSize((prev) => (prev.w === width && prev.h === height ? prev : { w: width, h: height }));
             }}
           >
-            <View style={gridMode ? styles.gridWrap : styles.fullWrap}>
+            {/* A network run loads no pages, so the WebView is a blank rectangle
+                doing nothing — and showing it invites the user to touch a page
+                the run does not need touched. It stays MOUNTED (the scripts run
+                inside it) and is moved off-screen; the animation takes the
+                space. Unmounting it would kill the run. */}
+            {netRunVisual && (
+              <CartRunAnimation
+                total={netProgress?.total ?? 0}
+                done={netProgress?.done ?? 0}
+                label={netProgress?.label ?? null}
+                color={storeColor}
+              />
+            )}
+            <View style={netRunVisual ? styles.offscreen : (gridMode ? styles.gridWrap : styles.fullWrap)}>
               {/* Main WebView cell — always the first child so it never remounts.
                   Fills the region normally; becomes one tile in grid mode. Not
                   mounted during qty (the region only renders then to keep the
@@ -6202,6 +6236,9 @@ const styles = StyleSheet.create({
   fullWrap: { flex: 1 },
   fullCell: { flex: 1 },
   // Tile grid: main + live workers, 2-up wrapping, dropping as workers finish.
+  // Mounted, laid out, and nowhere the user can see it. Zero size would stop the
+  // page rendering at all, which the injected scripts depend on.
+  offscreen: { position: 'absolute', width: 1, height: 1, opacity: 0, left: -9999, top: -9999 },
   gridWrap: {
     flex: 1,
     flexDirection: 'row',
