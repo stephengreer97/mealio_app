@@ -24,7 +24,7 @@ flowchart TD
 
     QTY["<b>qty</b><br/><i>setup</i> · 'Set quantities'"]
     QTY -->|"tap Add Ingredients"| LC
-    LC["<b>login_check</b><br/><i>running</i> · 'Checking login…'"]
+    LC["<b>login_check</b><br/><i>running</i> · 'Checking login…'<br/><i>a store with a network rail is<br/>asked over the network here</i>"]
     LC -->|"LOGIN_STATUS false"| LOGIN
     LC -->|"LOGIN_STATUS true"| SEARCHING
     LOGIN["<b>login</b><br/><i>attention</i> · 'Log in to &lt;store&gt;'"]
@@ -221,7 +221,11 @@ flowchart LR
   <h2>Where the other maps pick up</h2>
   <table class="src">
     <tr><th>Step</th><th>Detail lives in</th></tr>
-    <tr><td><code>login_check</code> / <code>login</code></td><td>each store's map — this is where they differ most</td></tr>
+    <tr><td><code>login_check</code> / <code>login</code></td><td>each store's map — this is where they differ most.
+      A store with a network rail is asked over the network in BOTH places that decide login: the
+      silent prewarm probe and this step. The DOM check is the fallback, reached when the session
+      probe cannot answer — nearly always a page that has not finished its bootstrap, which is
+      <b>not</b> a signed-out user and must never be reported as one</td></tr>
     <tr><td><code>searching</code> / <code>adding</code></td><td>each store's map, plus <a href="behavior-choose-products.html">Choose Products &amp; matching</a></td></tr>
     <tr><td>reconcile, after-probe, verdict</td><td><a href="behavior-cart-reconcile.html">Cart reconciliation</a></td></tr>
     <tr><td>every knob named above</td><td><a href="behavior-remote-config.html">Remote config &amp; catalog</a></td></tr>

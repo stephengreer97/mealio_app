@@ -90,7 +90,11 @@
   <table class="src">
     <tr><th>Store</th><th>Login detection</th><th>Add confirmation</th><th>Cart read (snapshots)</th></tr>
     <tr><td><b>H-E-B</b></td>
-        <td>inject <code>CHECK_LOGIN_SCRIPT</code>; a logged-out profile click redirects to
+        <td><b>network path (default when the rail is on):</b> the rail's session probe &mdash;
+            <code>myPreferredStore</code> over GraphQL. Used by the prewarm AND by
+            <code>login_check</code>, so the DOM answer below is now the FALLBACK, reached
+            only when the probe cannot answer.<br/>
+            <b>page path:</b> inject <code>CHECK_LOGIN_SCRIPT</code>; a logged-out profile click redirects to
             <code>accounts.heb.com</code>, matched by its own <code>isLoginPageUrl</code>;
             re-inject on nav</td>
         <td>header badge &rarr; optionally the store's own <b>cart query</b>
