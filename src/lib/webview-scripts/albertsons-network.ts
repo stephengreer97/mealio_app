@@ -450,9 +450,11 @@ ${albSearchUrlExpr(pageSize)}
     }
   }
 
-  // The first term goes alone, for the same reason H-E-B's does: a cold burst is
-  // what gets challenged. MEAL-207 already has this store's search degrading
-  // under load, so opening with one request rather than two is cheap insurance.
+  // The first term goes alone. MEAL-207 has this store's search degrading under
+  // load, so opening with one request rather than two is cheap insurance. This
+  // is Albertsons-specific: H-E-B had the same guard briefly on a misreading of
+  // a stuck run, and it was removed once the cause turned out to be the page
+  // navigating out from under the script.
   if (TERMS.length > 0) {
     try { await one(TERMS[0]); }
     catch (e) {

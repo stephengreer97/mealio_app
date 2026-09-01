@@ -370,6 +370,14 @@ describe('failure codes', () => {
       // would disarm this test for it silently.
       ['unparseable', 'heb.ts'],
       ['http', 'heb.ts'],
+      // resume-search.ts decides whether to re-ask the terms that died when the
+      // page navigated. Its `reason` is that decision's own outcome and never
+      // leaves the app — nothing posts it as an add result. Scoped to the file
+      // rather than ignored flatly, like every entry above: `resume` is a
+      // plausible thing for a future store script to emit for real.
+      ['resume', 'resume-search.ts'],
+      ['nothing_outstanding', 'resume-search.ts'],
+      ['too_many_injects', 'resume-search.ts'],
     ]);
 
     const found = new Map<string, string>();

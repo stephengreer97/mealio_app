@@ -52,11 +52,14 @@
         <td>the search route re-renders and fires <code>onLoadEnd</code> twice for one URL.
         With <code>networkSearch</code> + <code>networkAdd</code> on it loads no page at all and
         the worker columns stop applying &mdash; see the H-E-B map, diagram 3.
-        <b>The rail's pool is never opened cold:</b> the FIRST term is searched by itself and
-        the lanes fan out only once it has returned. An 18-term run that opened with three at
-        once had all three fail below HTTP inside 450&nbsp;ms and the page reload twice, while
-        the session query a second earlier had gone through alone &mdash; the burst was the
-        trigger, and every run that got away with it before was 8 terms</td></tr>
+        <b>The rail assumes one document, and does not get one.</b> The batch runs inside the
+        page it was injected into; if that page navigates mid-batch every in-flight fetch
+        rejects as <code>TypeError: Failed to fetch</code> and the loop stops dead. An 18-term
+        run died at 3/18 that way &mdash; three failures, then silence, no
+        <code>SEARCH_BATCH_DONE</code>. Three failures and SILENCE is the tell that separates it
+        from a bot defence, which would have refused all 18; the presearch workers were loading
+        pages fine that same second. <code>onLoadEnd</code> during the search phase now re-asks
+        the terms that never came back, capped at 3 documents</td></tr>
     <tr><td><b>Walmart</b></td><td>parallel</td><td>3 &times; 400 ms <i>(default)</i></td>
         <td>on</td><td><b>true</b> <i>(own default)</i></td>
         <td>SPA; without it a duplicate add double-adds, then the next nav race-cancels the POST</td></tr>
@@ -81,8 +84,9 @@
         <code>GET /abs/pub/xapi/pgmsearch/v1/search/products</code>, keyed by
         <code>searchConfig.apimProgramSubscriptionKey</code> &mdash; a DIFFERENT key from
         the cart's. Concurrency is 2 rather than 3 because MEAL-207 has this
-        operation degrading under burst, and &mdash; as on H-E-B &mdash; the first
-        term is searched ALONE before those 2 lanes open</td></tr>
+        operation degrading under burst, and the first term is searched
+        ALONE before those 2 lanes open. That guard is this store's alone &mdash; H-E-B carried
+        it briefly on a misreading of the 3/18 run and it was removed</td></tr>
     <tr><td><b>Kroger family</b></td><td colspan="5">n/a &mdash; the <b>server</b> fans out per
         ingredient (<code>POST /api/kroger/search-products</code>, 60 s)</td></tr>
     <tr><td><b>Mock Store</b></td><td>parallel</td><td>3 &times; 400 ms <i>(default)</i></td>

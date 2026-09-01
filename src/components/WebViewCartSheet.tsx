@@ -33,6 +33,7 @@ import { useStores } from '../lib/store-catalog/useStores';
 import { buildBlankPageRecoveryScript } from '../lib/webview-scripts/blank-page-recovery';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
 import { getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
+import { planSearchResume } from '../lib/webview-scripts/resume-search';
 import CartRunAnimation from './CartRunAnimation';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
 import { useLoginPrewarm } from '../context/LoginPrewarmContext';
@@ -863,6 +864,11 @@ export default function WebViewCartSheet({
     return rail ? rail.sessionScript() : scriptsRef.current!.checkLoginScript;
   }, []);
   const netCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
+  // The term list of the live search phase, kept so it can be re-asked if the
+  // page navigates out from under the script. netSearchInjectsRef caps that:
+  // a store that reload-loops must not be re-injected into forever.
+  const netSearchTermsRef = useRef<string[]>([]);
+  const netSearchInjectsRef = useRef(0);
   const netFailedTermsRef = useRef<Set<string>>(new Set());
   const netResultsRef = useRef<Map<number, AddResult>>(new Map());
   const netActiveRef = useRef(false);
@@ -947,6 +953,9 @@ export default function WebViewCartSheet({
   // network path falls back to, so it reads better after it). A ref breaks the
   // cycle without reordering two hundred lines.
   const startParallelAddRef = useRef<() => void>(() => {});
+  // onLoadEnd is a []-dep callback, so it reaches the resume through a ref for
+  // the same reason startParallelAdd does.
+  const netResumeSearchAfterNavRef = useRef<() => void>(() => {});
   // ── Manual add mode (MEAL-197 / MEAL-9 rung 3) ─────────────────────────────
   // The queue is search TERMS, not ingredients. Everything this mode needs is a
   // string to search for and a string to show the user, and `failedItems` is
@@ -1864,6 +1873,8 @@ export default function WebViewCartSheet({
     if (!script) { netFallBackToPool('search_script_unbuildable'); return; }
     netCandidatesRef.current = new Map();
     netFailedTermsRef.current = new Set();
+    netSearchTermsRef.current = terms;
+    netSearchInjectsRef.current = 1;
     netPhaseRef.current = 'search';
     setStep('searching');
     setNetProgress({ done: 0, total: terms.length, label: 'Looking up ingredients' });
@@ -1872,6 +1883,50 @@ export default function WebViewCartSheet({
     netArm(40_000, 'search_timeout');
     webviewRef.current?.injectJavaScript(script);
   }, [netArm, netFallBackToPool, setStep]);
+
+  /**
+   * Re-ask for the terms that never came back, because the page navigated.
+   *
+   * The rail says "no page load" and means it — but that is a promise about what
+   * the SCRIPT does, not about what the page does. On 2026-09-01 an 18-term run
+   * put three searches in flight and heb.com committed a navigation ~450ms
+   * later. Every in-flight fetch rejected as "TypeError: Failed to fetch" at
+   * once, and then nothing: the other 15 terms were never attempted and
+   * SEARCH_BATCH_DONE never arrived, because the document running the loop had
+   * been torn down. The run sat at 3/18 until the 40s deadline.
+   *
+   * Three failures and SILENCE is the tell, and it is what separates this from a
+   * bot defence — a store refusing us would have refused all 18. The presearch
+   * workers loaded pages fine in that same second.
+   *
+   * So a navigation during the search phase is not fatal any more. Whatever has
+   * already answered is kept, the rest are asked again in the new document.
+   */
+  const netResumeSearchAfterNav = useCallback(() => {
+    const plan = planSearchResume(
+      netSearchTermsRef.current,
+      netCandidatesRef.current,
+      netFailedTermsRef.current,
+      netSearchInjectsRef.current,
+    );
+    if (plan.reason === 'nothing_outstanding') return;
+    const sess = netSessionRef.current;
+    const rail = netRail();
+    if (!sess || !rail) return;
+    if (plan.reason === 'too_many_injects') {
+      console.log(`[Cart ${ts()}]`, 'network search: page navigated again, not re-asking');
+      return;
+    }
+    const outstanding = plan.terms;
+    const script = rail.searchBatch(outstanding, sess);
+    if (!script) return;
+    netSearchInjectsRef.current += 1;
+    console.log(`[Cart ${ts()}]`, 'network search: page navigated, re-asking', outstanding.length,
+      'of', netSearchTermsRef.current.length, 'terms');
+    // A fresh document deserves a fresh window; the old one was spent loading.
+    netArm(40_000, 'search_timeout');
+    webviewRef.current?.injectJavaScript(script);
+  }, [netArm, netRail]);
 
   /** Phase 1. Who is signed in, which store, pickup or delivery. */
   const startNetworkRun = useCallback(() => {
@@ -1908,6 +1963,7 @@ export default function WebViewCartSheet({
     addPool.start(active, finishParallelAdd);
   }, [addPool, finishParallelAdd, setStep]);
   startParallelAddRef.current = startParallelAdd;
+  netResumeSearchAfterNavRef.current = netResumeSearchAfterNav;
 
   /**
    * End a network write phase.
@@ -3255,6 +3311,10 @@ export default function WebViewCartSheet({
       } else {
         console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — not on store yet, skipping re-inject');
       }
+    } else if (netActiveRef.current && netPhaseRef.current === 'search') {
+      // The page moved while the search was running in it. Anything still
+      // unanswered died with the old document — ask again in the new one.
+      netResumeSearchAfterNavRef.current();
     } else if (cartCountPendingRef.current) {
       // A cart probe is mid-flight and the queue is already drained — this load
       // is a navigation the count script itself triggered (Amazon: cart icon →

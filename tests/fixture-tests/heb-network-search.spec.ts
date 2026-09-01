@@ -373,41 +373,6 @@ describe('HEB MEAL-202: many terms, one page, no navigation', () => {
     expect(peak.peak).toBeGreaterThan(1);
   });
 
-  itWithFixture('logged-in-home.html', 'sends the first term by itself before opening the pool', async (runner) => {
-    // 2026-09-01: an 18-term run opened with three simultaneous searches, all
-    // three came back "Failed to fetch" inside 450ms with no status, and the
-    // page reloaded twice — a challenge on the burst. The session query a second
-    // earlier had gone through on its own. So the first search runs alone and
-    // the pool only opens once it has come back.
-    await runner.inject([
-      '(function () {',
-      '  window.__inflight = 0; window.__peak = 0; window.__started = 0;',
-      '  window.__peakDuringFirst = null;',
-      '  window.fetch = function () {',
-      '    var first = (++window.__started) === 1;',
-      '    window.__inflight++;',
-      '    if (window.__inflight > window.__peak) window.__peak = window.__inflight;',
-      '    return new Promise(function (resolve) {',
-      '      setTimeout(function () {',
-      '        if (first) window.__peakDuringFirst = window.__peak;',
-      '        window.__inflight--;',
-      '        resolve({ ok: true, status: 200, text: function () {',
-      '          return Promise.resolve(JSON.stringify(' + JSON.stringify(searchPayload([product()])) + ')); } });',
-      '      }, 60);',
-      '    });',
-      '  };',
-      '})(); true;',
-    ].join('\n'));
-    await runner.inject(batch(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']));
-    await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
-    await runner.inject('(function(){ window.ReactNativeWebView.postMessage(JSON.stringify({ type: "FIRST", peak: window.__peakDuringFirst, started: window.__started })); })(); true;');
-    const seen = await runner.waitForMessage('FIRST', 10_000);
-    // Nothing else was in flight while the opening request was outstanding...
-    expect(seen.peak).toBe(1);
-    // ...and every term still got searched exactly once.
-    expect(seen.started).toBe(8);
-  });
-
   it('refuses a batch it cannot address', () => {
     expect(buildHebNetworkSearchBatchScript([], { storeId: '476', shoppingContext: 'CURBSIDE_DELIVERY' })).toBeNull();
     expect(buildHebNetworkSearchBatchScript(['x'], { storeId: 'abc', shoppingContext: 'CURBSIDE_DELIVERY' })).toBeNull();
