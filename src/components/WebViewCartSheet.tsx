@@ -2903,6 +2903,24 @@ export default function WebViewCartSheet({
       return;
     }
     const item = itemsToAdd[idx];
+    // THIS ADD POST-DATES THE RAIL'S BREAKDOWN, so that breakdown is now wrong.
+    //
+    // The rail reports the cart as it stood when the automated pass finished.
+    // Anything the user then adds from the review screen lands after that
+    // snapshot, so the done screen went on saying "19 added" while the cart held
+    // 20 — the substitute they had just picked was in neither the added list nor
+    // the unadded one. Dropping the rows puts the done screen back on the
+    // after-probe, which reads the cart as it actually is. Same reasoning as the
+    // reset before manual mode.
+    if (idx === 0) {
+      setCartResultRows(null);
+      setCartRowsTimedOut(false);
+      // ...and the after-probe has to be allowed to run, or dropping the rows
+      // just leaves a spinner. The done step skips it when the reconcile has
+      // already finalized, which it has by the time anyone reaches review. The
+      // cart has changed since that reconcile, so its verdict is spent.
+      reconcileFinalizedRef.current = false;
+    }
     console.log(`[Cart ${ts()}]`, 'navigateToAddItem idx=', idx, 'searchTerm=', item.searchTerm, 'product=', item.productName, 'qty=', item.qty, 'pref=', item.preference?.text ?? null, 'onSearchPage=', onSearchPageRef.current);
     setSearchingLabel(`Adding ${item.productName}…`);
     // Funnel: this row is the DENOMINATOR of confirmRate. It must be emitted at
