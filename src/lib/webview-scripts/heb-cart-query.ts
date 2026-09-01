@@ -1393,3 +1393,22 @@ export function buildHebCartQueryFn(): string {
   }
 `;
 }
+
+/**
+ * A cart verdict flattened into telemetry `detail` scalars (sanitizeDetail drops
+ * nested objects, so a nested confirm would vanish silently). Empty when no rail
+ * ran.
+ *
+ * Lived in lib/pool-add-funnel until 2026-09-01. Everything else in that module
+ * described the DOM worker pools and went with them; this took a
+ * HebAddConfirmation and always belonged beside the type it flattens.
+ */
+export function confirmDetail(confirm: HebAddConfirmation | null | undefined): Record<string, unknown> {
+  if (!confirm) return {};
+  return {
+    confirmVia: confirm.via,
+    confirmState: confirm.state,
+    confirmWhy: confirm.reason ?? undefined,
+    confirmSku: confirm.skuId ?? confirm.productId ?? undefined,
+  };
+}

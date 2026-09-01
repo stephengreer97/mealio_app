@@ -862,74 +862,12 @@ describe('recordPoolAddOutcome', () => {
 // through login_check, the qty screen and a mocked WebView's onMessage, which is
 // a harness this suite does not have. The scan is the cheap guard against the
 // wiring silently going away; it is not a substitute for that harness.
-describe('WebViewCartSheet wires both pools to the funnel', () => {
-  const src = fs.readFileSync(
-    path.join(__dirname, '../../src/components/WebViewCartSheet.tsx'), 'utf8',
-  );
+// The pool-to-funnel wiring test lived here. It asserted that
+// useParallelSearchPool and usePresearchAddPool were each handed an onSettled
+// that tagged its funnel rows with the right path. Both pools were deleted on
+// 2026-09-01 with the rest of the DOM automation, so there is no wiring left
+// to assert — the rail reports its own adds directly.
 
-  /** The option-object body of a hook call, from `<hook>({` to its closing `});`. */
-  function optionsBlock(hook: string): string {
-    const at = src.indexOf(hook);
-    expect(at).toBeGreaterThan(-1);          // the call itself must still exist
-    const open = src.indexOf('({', at);
-    expect(open).toBeGreaterThan(-1);
-    const close = src.indexOf('\n  });', open);
-    expect(close).toBeGreaterThan(open);
-    return src.slice(open, close);
-  }
-
-  /** The handler wired to a pool's onSettled, and the path literal it carries. */
-  function wiredHandler(hook: string): { name: string; body: string } {
-    const m = /onSettled:\s*(\w+)\s*,/.exec(optionsBlock(hook));
-    expect(m).not.toBeNull();
-    const name = m![1];
-    const at = src.indexOf(`const ${name} = useCallback(`);
-    expect(at).toBeGreaterThan(-1);
-    return { name, body: src.slice(at, src.indexOf('\n  );', at)) };
-  }
-
-  it('wires the parallel ADD pool to a handler that tags path parallel_add', () => {
-    // The SEARCH pool (parallelPool) deliberately has no onSettled — it adds
-    // nothing, and its `candidates` rows come from the message handler. So this
-    // finds the add pool's block by its result type.
-    //
-    // The path literal is pinned, not just the option: swapping the two handlers
-    // makes both pools report as one path, and every other test still passes
-    // because each handler works perfectly — for the wrong pool.
-    const { body } = wiredHandler('useParallelSearchPool<ConsolidatedIngredient, AddResult>');
-    expect(body).toContain("'parallel_add'");
-    expect(body).not.toContain("'presearch'");
-  });
-
-  it('wires the pre-search pool to a handler that tags path presearch', () => {
-    const { body } = wiredHandler('usePresearchAddPool<ConsolidatedIngredient, AddResult>');
-    expect(body).toContain("'presearch'");
-    expect(body).not.toContain("'parallel_add'");
-  });
-
-  it('corrects the pre-search cold slot with the component-only injection flag', () => {
-    // The pool reports addDispatched:true for the cold slot from the moment it is
-    // dispatched, so without this the uninjected cold item goes back into the
-    // confirm-rate denominator — the same defect as the park timeout, one path
-    // over. presearchAddDispatched is covered directly in poolAddFunnel.test.ts;
-    // what only the source can show is that the component still feeds it the ref.
-    const { body } = wiredHandler('usePresearchAddPool<ConsolidatedIngredient, AddResult>');
-    expect(body).toContain('presearchAddDispatched(');
-    expect(body).toContain('mainColdInjectedRef.current');
-    // And that it names the slot the correction applies TO. Point this at the wrong
-    // index and the cold slot never matches, the pool's optimistic `true` is used
-    // instead, and the defect above is silently back with every test still green.
-    // A regex, not toContain: 'slotId: COLD_SLOT_IDX' is a substring of
-    // 'slotId: COLD_SLOT_IDX + 1', so the plain form cannot see the mutation.
-    expect(body).toMatch(/slotId:\s*COLD_SLOT_IDX\s*[,}]/);
-  });
-
-  it('routes them through the extracted mapping rather than an inline one', () => {
-    // recordPoolAdd is what poolAddFunnel.test.ts covers directly. An inline
-    // re-implementation here would be untested again.
-    expect(src).toContain('recordPoolAdd(tel()');
-  });
-});
 
 describe('createNoopTelemetry', () => {
   it('accepts calls and records nothing', async () => {
