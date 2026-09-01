@@ -181,110 +181,11 @@ describe('SELECTOR_HEALTH on the cart bridge', () => {
 
 // ── The parallel pools' own bridges ─────────────────────────────────────────
 
-describe('SELECTOR_HEALTH from a pool worker', () => {
-  beforeEach(() => jest.useFakeTimers());
-  afterEach(() => jest.useRealTimers());
-
-  // Each pool's worker WebView has its OWN onMessage handler, and each swallows
-  // what it does not recognise, so a handler missing the branch loses every
-  // sample from that pool in silence, while the main WebView keeps the row
-  // looking populated.
-  //
-  // These cover the RN half only — that a sample arriving on a pool's bridge is
-  // folded into the tally. Whether the injected script ever posts one is the
-  // in-page composition question, and it is tested against the registry's real
-  // output in tests/unit/selectorHealth.test.ts. Both halves are needed: this
-  // file passed unchanged while two of the three pools emitted nothing at all.
-  type Ing = Omit<(typeof meal)['ingredients'][number], 'searchTerm'> & { searchTerm?: string };
-  const walmartSheet = (...ingredients: Ing[]) => (
-    <WebViewCartSheet
-      visible
-      meals={[{ id: 'm1', name: 'Tacos', ingredients }]}
-      storeId="walmart"
-      storeName="Walmart"
-      onClose={() => {}}
-    />
-  );
-  const chosen = (name: string): Ing => ({
-    ingredientName: name, searchTerm: name.toLowerCase(), productQty: 1, qty: 1, unit: 'qty', measure: null,
-  });
-
-  /** Render, sign in, and return the worker WebView the pool spun up. */
-  async function poolWorker(view: ReturnType<typeof render>) {
-    const webviews = () => view.getAllByTestId('mock-webview');
-    act(() => {
-      webviews()[0].props.onMessage({
-        nativeEvent: { data: JSON.stringify({ type: 'LOGIN_STATUS', isLoggedIn: true }) },
-      });
-    });
-    // The pool is dispatched off the store page load, and the sheet's own
-    // timers sit between the two. Nudge both until a worker tile exists rather
-    // than pinning an exact schedule this test has no stake in.
-    for (let i = 0; i < 4 && webviews().length < 2; i++) {
-      await act(async () => { jest.advanceTimersByTime(5_000); });
-      if (webviews().length > 1) break;
-      await act(async () => {
-        webviews()[0].props.onLoadEnd({ nativeEvent: { url: 'https://www.walmart.com/grocery' } });
-      });
-    }
-    expect(webviews().length).toBeGreaterThan(1);
-    return webviews()[1];
-  }
-
-  it('reaches the tally from a parallel SEARCH worker', async () => {
-    // An ingredient with no searchTerm auto-starts the choose flow, which is
-    // what puts the search pool on screen.
-    const view = render(walmartSheet({ ingredientName: 'Sour Cream', productQty: 1, qty: 1, unit: 'qty', measure: null }));
-    const worker = await poolWorker(view);
-    act(() => {
-      worker.props.onMessage({
-        nativeEvent: { data: JSON.stringify({ type: SELECTOR_HEALTH_MESSAGE, sel: { card: 1 } }) },
-      });
-    });
-    expect(ingested()).toEqual([{ card: 1 }]);
-  });
-
-  it('reaches the tally from a PRE-SEARCH parked worker', async () => {
-    // The one handler that had no coverage. The pool parks its workers on the qty
-    // screen — the browser region stays mounted for exactly that reason and the
-    // tiles sit offscreen, so RNTL finds them — but the effect that starts it
-    // requires the silent login pre-warm to have resolved 'loggedIn', which no
-    // test had ever set.
-    //
-    // Worth having rather than conceding: since the composition fix this pool
-    // emits samples for real, so a missing branch here is live data loss.
-    (globalThis as any).__prewarmStatus = 'loggedIn';
-    // Three items, because the first parked slot is the COLD one — the main
-    // WebView enlisted as an extra add surface — and a single-item run never
-    // reaches a tile worker at all.
-    const view = render(walmartSheet(chosen('Sour Cream'), chosen('Tortillas'), chosen('Cheese')));
-    await act(async () => { jest.advanceTimersByTime(5_000); });
-    // Still on the qty screen, and the parked tiles are already mounted.
-    expect(view.getByText(/add ingredients to/i)).toBeTruthy();
-    const webviews = view.getAllByTestId('mock-webview');
-    expect(webviews.length).toBeGreaterThan(1);
-    act(() => {
-      webviews[1].props.onMessage({
-        nativeEvent: { data: JSON.stringify({ type: SELECTOR_HEALTH_MESSAGE, sel: { cardLink: 0 } }) },
-      });
-    });
-    expect(ingested()).toEqual([{ cardLink: 0 }]);
-  });
-
-  it('reaches the tally from a parallel ADD worker', async () => {
-    const view = render(walmartSheet(chosen('Sour Cream')));
-    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-    const worker = await poolWorker(view);
-    act(() => {
-      worker.props.onMessage({
-        nativeEvent: { data: JSON.stringify({ type: SELECTOR_HEALTH_MESSAGE, sel: { addBtn: 0 } }) },
-      });
-    });
-    expect(ingested()).toEqual([{ addBtn: 0 }]);
-  });
-});
-
-// ── A whole run, from bridge message to uploaded row ────────────────────────
+// "SELECTOR_HEALTH from a pool worker" lived here: three cases proving a sample
+// posted from inside a parallel-search, pre-search or parallel-add worker
+// reached the run's tally through the pool's own postMessage wrapper. The pools
+// were deleted on 2026-09-01. The bridge cases above still cover the path a
+// sample takes from the one WebView that remains.
 
 describe('a finished run uploads its selector health', () => {
   beforeEach(() => jest.useFakeTimers());

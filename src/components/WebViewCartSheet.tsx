@@ -3966,6 +3966,28 @@ export default function WebViewCartSheet({
               productName: msg.name ?? null,
               reason: msg.success ? null : (msg.reason ?? 'cart_not_incremented'),
               candidates: [],
+              // A RAIL WRITE THAT SUCCEEDED IS A CONFIRMED LANDING, and the
+              // reconcile has to be told so.
+              //
+              // This was dropped, and MEAL-16 is what that costs. The guard there
+              // says an empty cart read which contradicts a confirmed landing is
+              // UNREAD, not empty — because `[]` is still an array, nothing
+              // downstream could tell the two apart, and reconcile re-added 18
+              // items on top of the 12 already in the cart. That guard weighs the
+              // read against `confirm`, so a rail result with no confirm was
+              // invisible to it.
+              //
+              // The rail does not guess: it verifies each write from that write's
+              // own response, which returns the cart. Saying so in the shape the
+              // reconcile already understands is what keeps the protection now
+              // that the rail is the only path there is.
+              confirm: msg.success
+                ? {
+                    state: 'landed', reason: 'network_write', via: 'network',
+                    skuId: typeof msg.skuId === 'string' ? msg.skuId : null,
+                    productId: typeof msg.productId === 'string' ? msg.productId : null,
+                  } satisfies HebAddConfirmation
+                : null,
             });
           }
           return;

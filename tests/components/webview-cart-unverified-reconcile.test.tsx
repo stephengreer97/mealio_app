@@ -115,12 +115,20 @@ jest.mock('../../src/lib/automation-config', () => {
     ...actual,
     getAutomationConfig: () => {
       const base = actual.getAutomationConfig();
-      return { ...base, flags: { ...base.flags, ...((globalThis as any).__flags ?? {}) } };
+      return {
+        ...base,
+        flags: { ...base.flags, ...((globalThis as any).__flags ?? {}) },
+        stores: { ...base.stores, ...((globalThis as any).__stores ?? {}) },
+      };
     },
   };
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import {
+  enableRail, postToSheet, SESSION_OK, cartCount, searchResult, searchDone,
+  candidate, addResult, addDone,
+} from './helpers/railRun';
 import { usage } from '../../src/lib/api';
 
 /** What the run reported to /api/usage/automation when it finished. */
@@ -174,45 +182,57 @@ beforeEach(() => {
 async function runToReconcile(
   answer: Record<string, unknown>,
   workerSucceeded = true,
-  // A rail verdict riding on the worker's report, exactly as heb-cart-query posts
+  // A rail verdict riding on the add's report, exactly as heb-cart-query posts
   // it. Present, it is what the walled-cart guard weighs the cart read against.
   confirm?: Record<string, unknown>,
 ) {
-  // ONE item on purpose. With two, the pool hands one to the cold slot (the main
-  // WebView enlisted as an extra add surface) and only a single worker WebView
-  // ever mounts, so the pool cannot settle without waiting out a 35s worker
-  // timeout — which lands the reconcile after the test has finished. One item is
-  // one worker, one report, and a pool that settles inside the test.
+  // Driven over the NETWORK RAIL. This used to run a parallel add pass through
+  // the worker pool and answer the reconcile probe from the cart PAGE; both are
+  // gone. The reconcile itself, and everything this file asserts about it, is
+  // reached identically — `finishParallelAdd` is still where a pass ends.
+  enableRail();
   const view = render(sheet(chosen('Sour Cream')));
   // Let logAutomationStart's promise settle. It is a `.then` on a mocked async
   // function, so no timer advance will ever deliver it — only yielding to the
   // microtask queue does, and a synchronous act() does not yield. Without this the
   // run holds a null runId, `if (runId)` skips logAutomationComplete entirely, and
-  // every assertion about what the run REPORTED reads an empty mock. It costs the
-  // banner cases nothing: they were passing on a run that uploaded nothing.
+  // every assertion about what the run REPORTED reads an empty mock.
   await act(async () => {});
-  const postTo = (i: number, payload: Record<string, unknown>) => act(() => {
-    view.queryAllByTestId('mock-webview')[i]?.props.onMessage({
-      nativeEvent: { data: JSON.stringify(payload) },
-    });
-  });
+  const post = (payload: Record<string, unknown>) => postToSheet(view, payload);
 
   act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
   act(() => { jest.advanceTimersByTime(2_000); });
-  postTo(0, { type: 'LOGIN_STATUS', isLoggedIn: true });
-  // The before-snapshot: a real cart page with a real (empty) reading. This has
+
+  // Posted TWICE, and not defensively: the session probe answers two different
+  // questions and the run asks them in this order. The first answers the login
+  // check (skipped entirely when the prewarm already knows), the second is the
+  // run's own session read, which beginSearchFlow makes after the baseline.
+  post(SESSION_OK);
+  act(() => { jest.advanceTimersByTime(500); });
+  // The before-snapshot, read over the rail rather than by loading /cart. It has
   // to succeed, or the run would be unverified for a different reason and the
   // test would prove nothing about the reconcile.
-  postTo(0, { type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' });
-  act(() => { jest.advanceTimersByTime(2_000); });
+  post(cartCount(0, []));
+  act(() => { jest.advanceTimersByTime(500); });
+  post(SESSION_OK);
+  act(() => { jest.advanceTimersByTime(500); });
 
-  // Every add worker reports back, which settles the pool and arms the reconcile.
-  postTo(1, workerSucceeded
-    ? { type: 'WORKER_RESULT', phase: 'add', success: true, productName: 'Sour Cream', ...(confirm ? { confirm } : {}) }
-    : { type: 'WORKER_RESULT', phase: 'add', success: false, reason: 'add button not found' });
+  // Search answers, then the write.
+  // Keyed by the term the run actually searched — `chosen()` lowercases it — and
+  // the candidate is named the same, because the add path takes an EXACT match
+  // only. A mismatch here routes to review instead of writing, which is a
+  // different test.
+  post(searchResult('sour cream', [candidate('sour cream')]));
+  post(searchDone(1));
+  act(() => { jest.advanceTimersByTime(500); });
+  post(addResult(0, 'sour cream', workerSucceeded,
+    workerSucceeded
+      ? (confirm ? { confirm } : {})
+      : { reason: 'add button not found', ...(confirm ? { confirm } : {}) }));
+  post(addDone(1, [], workerSucceeded ? [{ name: 'sour cream', qty: 1 }] : []));
   act(() => { jest.advanceTimersByTime(5_000); });
 
-  postTo(0, answer);
+  post(answer);
   act(() => { jest.advanceTimersByTime(2_000); });
   return view;
 }
@@ -354,9 +374,15 @@ describe('a cart read that contradicts the rail (MEAL-16)', () => {
     // Deliberately narrow. With no landed verdict there is no contradiction, so
     // an empty cart has to keep reading as an empty cart — otherwise every run
     // that genuinely added nothing would claim it could not check.
+    //
+    // Driven by a FAILED write, which is the only way to get "no landed verdict"
+    // now. It used to be a write that succeeded without a confirm: on the DOM
+    // path a worker could report success from a click it never verified. The rail
+    // cannot — it checks each write against that write's own response — so on the
+    // rail success and confirmation are the same fact.
     const view = await runToReconcile(
       { type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' },
-      true,
+      false,
     );
     expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeNull();
   });

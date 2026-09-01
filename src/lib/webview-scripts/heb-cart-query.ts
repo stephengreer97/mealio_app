@@ -322,8 +322,17 @@ export interface HebCartTarget {
  */
 export interface HebAddConfirmation {
   state: 'landed' | 'missing' | 'unknown';
-  /** 'cart_query' — this rail. 'dom' is what the fallback path reports. */
-  via: 'cart_query' | 'dom';
+  /** Where the verdict came from.
+   *
+   *  'cart_query' — this rail, read back from the cart after the add.
+   *  'network'    — the search-and-add rail, verified from the write's own
+   *                 response (which returns the cart). Added when DOM automation
+   *                 was removed and the rail became the only way anything is
+   *                 added: without it a rail write carried no verdict at all, and
+   *                 MEAL-16's guard against believing a contradictory empty cart
+   *                 read had nothing to weigh.
+   *  'dom'        — the fallback path. Nothing reports this any more. */
+  via: 'cart_query' | 'network' | 'dom';
   reason: string | null;
   skuId?: string | null;
   productId?: string | null;
