@@ -2492,7 +2492,13 @@ export default function WebViewCartSheet({
     // back to the live login check.
     setStep('login_check');
     setSearchingLabel('Checking login…');
-    loadQueueRef.current = [scriptsRef.current!.checkLoginScript];
+    // A store with a network rail is asked over the network here too. Running the
+    // DOM check first and the rail's session probe a moment later asked the same
+    // question twice and let the weaker answer go first — and the DOM one is an
+    // inference from markup that exists in both states, where the rail's is a
+    // token the origin accepts, proven by a real cart read.
+    const loginRail = getNetworkRail(lockedStoreIdRef.current);
+    loadQueueRef.current = [loginRail ? loginRail.sessionScript() : scriptsRef.current!.checkLoginScript];
     navTo(scriptsRef.current!.storeUrl);
     armLoginCheckTimeout();
   };
@@ -3151,9 +3157,12 @@ export default function WebViewCartSheet({
       webviewRef.current?.injectJavaScript(script);
     } else if (stepRef.current === 'login_check' && s.checkLoginScript) {
       // Queue was consumed by a redirect (e.g. /fresh → /alm/storefront).
-      // Re-inject the login check on the final page.
-      console.log(`[Cart ${ts()}]`, 'onLoadEnd login_check step — re-injecting after redirect');
-      webviewRef.current?.injectJavaScript(s.checkLoginScript);
+      // Re-inject the login check on the final page — the SAME check the step
+      // started with, or this quietly downgrades a rail store to the DOM answer
+      // on any redirect, which is most of them.
+      const reRail = getNetworkRail(lockedStoreIdRef.current);
+      console.log(`[Cart ${ts()}]`, 'onLoadEnd login_check step — re-injecting after redirect', reRail ? '(network)' : '(dom)');
+      webviewRef.current?.injectJavaScript(reRail ? reRail.sessionScript() : s.checkLoginScript);
     } else if ((stepRef.current === 'login_check' || stepRef.current === 'login') &&
                /\/login|\/sign-in|\/signin/i.test(url)) {
       // Login check clicked a profile icon and HEB navigated to a login page,
@@ -4076,6 +4085,31 @@ export default function WebViewCartSheet({
         // after the pool has taken over — which would leave two paths writing
         // results for the same items.
         if (NETWORK_SESSION_MESSAGE_TYPES.includes(msg.type)) {
+          // The same probe answers the login gate. When it arrives during
+          // login_check it IS the login check, so it is translated into the
+          // verdict that step expects rather than being routed through the run.
+          if (stepRef.current === 'login_check') {
+            console.log(`[Cart ${ts()}]`, 'login_check answered over the network:', JSON.stringify(msg).slice(0, 200));
+            if (!msg.ok) {
+              // Could not answer — usually the page had not finished its
+              // bootstrap. Not a signed-out user, and saying so would wall one,
+              // so the DOM check gets the page instead.
+              console.log(`[Cart ${ts()}]`, 'network session inconclusive —', msg.why, '— falling back to the DOM check');
+              webviewRef.current?.injectJavaScript(scriptsRef.current!.checkLoginScript);
+              return;
+            }
+            tel().record('login_check', 'ok', {
+              detail: { isLoggedIn: !!msg.loggedIn, source: 'network_session' },
+            });
+            loginCheckActiveRef.current = false;
+            if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
+            if (msg.loggedIn) snapshotBeforeAndBeginSearch();
+            else {
+              setStep('login');
+              lastLoadEndUrlRef.current = '';
+            }
+            return;
+          }
           if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
           if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
           console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));
