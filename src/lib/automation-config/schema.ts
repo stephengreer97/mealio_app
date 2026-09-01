@@ -222,12 +222,20 @@ export interface TimeoutConfig {
   consecutiveTimeoutBlock: number;
 }
 
-export interface FlagConfig {
-  parallelAdd: boolean;
-  presearchAdd: boolean;
-  parallelAddWorkers: number;
-  addCommitJitterMs: number;
-}
+/**
+ * Remote levers over automation behaviour.
+ *
+ * EMPTY since 2026-09-01. Every flag it held — parallelAdd, presearchAdd,
+ * parallelAddWorkers, addCommitJitterMs — was a lever over the DOM worker
+ * pools: whether to add concurrently, how many pages to hold open, how much to
+ * jitter the burst. The pools are gone, so the levers control nothing and a
+ * flag that controls nothing is worse than no flag: it reads like a safety
+ * switch someone can pull in an incident.
+ *
+ * The shape stays so a future lever has somewhere to live.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
+export interface FlagConfig {}
 
 export interface TelemetryConfig {
   enabled: boolean;
@@ -270,12 +278,7 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
     parallelWorkerMs: 20_000,
     consecutiveTimeoutBlock: 2,
   },
-  flags: {
-    parallelAdd: true,
-    presearchAdd: true,
-    parallelAddWorkers: 3,
-    addCommitJitterMs: 500,
-  },
+  flags: {},
   telemetry: {
     enabled: true,
     sampleRate: 1,
@@ -476,8 +479,6 @@ export const NUMERIC_BOUNDS: Record<string, { min: number; max: number }> = {
   'timeouts.cartRowsMs': { min: 1_000, max: 120_000 },
   'timeouts.parallelWorkerMs': { min: 1_000, max: 120_000 },
   'timeouts.consecutiveTimeoutBlock': { min: 1, max: 20 },
-  'flags.parallelAddWorkers': { min: 1, max: 10 },
-  'flags.addCommitJitterMs': { min: 0, max: 10_000 },
   'telemetry.sampleRate': { min: 0, max: 1 },
   'telemetry.batchSize': { min: 1, max: 200 },
   'telemetry.flushIntervalMs': { min: 1_000, max: 300_000 },

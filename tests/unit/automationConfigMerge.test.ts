@@ -56,18 +56,17 @@ describe('mergeAutomationConfig', () => {
 
   it('rejects a wrong-typed value and keeps the default', () => {
     const { config, warnings } = mergeAutomationConfig({
-      timeouts: { addMs: '25000' },
-      flags: { parallelAdd: 'yes' },
+      timeouts: { addMs: '25000', cartProbeMs: 'soon' },
     });
     expect(config.timeouts.addMs).toBe(BUNDLED_AUTOMATION_CONFIG.timeouts.addMs);
-    expect(config.flags.parallelAdd).toBe(BUNDLED_AUTOMATION_CONFIG.flags.parallelAdd);
+    expect(config.timeouts.cartProbeMs).toBe(BUNDLED_AUTOMATION_CONFIG.timeouts.cartProbeMs);
     expect(warnings.length).toBe(2);
   });
 
   it('rejects NaN and Infinity', () => {
-    const { config } = mergeAutomationConfig({ timeouts: { addMs: NaN }, flags: { addCommitJitterMs: Infinity } });
+    const { config } = mergeAutomationConfig({ timeouts: { addMs: NaN, cartProbeMs: Infinity } });
     expect(config.timeouts.addMs).toBe(BUNDLED_AUTOMATION_CONFIG.timeouts.addMs);
-    expect(config.flags.addCommitJitterMs).toBe(BUNDLED_AUTOMATION_CONFIG.flags.addCommitJitterMs);
+    expect(config.timeouts.cartProbeMs).toBe(BUNDLED_AUTOMATION_CONFIG.timeouts.cartProbeMs);
   });
 
   it('ignores unknown keys but still applies valid siblings', () => {

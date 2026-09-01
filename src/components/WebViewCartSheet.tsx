@@ -51,7 +51,7 @@ import { useParallelSearchPool, PoolSettled } from '../lib/useParallelSearchPool
 import { usePresearchAddPool, PresearchItem } from '../lib/usePresearchAddPool';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
 import { FEATURE_PARALLEL_ADD, PARALLEL_ADD_WORKERS, FEATURE_PRESEARCH_ADD, ADD_COMMIT_JITTER_MS } from '../constants/features';
-import { chooseAddStrategy, commitJitterMs, parallelAddWorkerCount, shouldStartPresearch } from '../lib/automation-config/decisions';
+import { chooseAddStrategy } from '../lib/automation-config/decisions';
 import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
@@ -814,6 +814,10 @@ export default function WebViewCartSheet({
   // done screen and the telemetry are untouched and cannot disagree with a
   // pool-driven run.
   const netSessionRef = useRef<{ storeId: string; shoppingContext: string } | null>(null);
+  // A choose run uses the rail to SEARCH and stops there — it wants candidates
+  // for the Choose Products screen, not adds. Before DOM automation was removed
+  // that job belonged to the parallel search pool.
+  const netChooseOnlyRef = useRef(false);
   // What the animation shows. Only set during a network run, because it is the
   // only path that knows a real denominator up front — it asks for N terms and
   // writes M products, so the ring is a fraction rather than a spinner.
@@ -975,6 +979,9 @@ export default function WebViewCartSheet({
   // network path falls back to, so it reads better after it). A ref breaks the
   // cycle without reordering two hundred lines.
   const startParallelAddRef = useRef<() => void>(() => {});
+  // beginSearchFlow is defined above startAssistedMode and reaches it through a
+  // ref, the same way it has always reached startParallelAdd.
+  const startAssistedModeRef = useRef<() => void>(() => {});
   // onLoadEnd is a []-dep callback, so it reaches the resume through a ref for
   // the same reason startParallelAdd does.
   const netResumeSearchAfterNavRef = useRef<() => void>(() => {});
@@ -1162,11 +1169,7 @@ export default function WebViewCartSheet({
   // Parallel-ADD worker count: honor the per-store workerCount (a heavy store
   // like Albertsons crashed the iOS WKWebView content process with 5 concurrent
   // add WebViews), falling back to the global pilot default.
-  const PARALLEL_ADD_WORKER_COUNT = parallelAddWorkerCount({
-    scriptWorkerCount: scripts?.workerCount,
-    flags: cfgFlags,
-    fallback: PARALLEL_ADD_WORKERS,
-  });
+  const PARALLEL_ADD_WORKER_COUNT = scripts?.workerCount ?? PARALLEL_ADD_WORKERS;
   // A store opts into the worker-pool choose-product path by exposing BOTH
   // getSearchUrl and buildWorkerScript on its StoreScripts. Null otherwise →
   // sequential single-WebView flow. (WAF note: HEB/Walmart/Albertsons run 5
@@ -1260,7 +1263,7 @@ export default function WebViewCartSheet({
     // so the documented way to spread a commit burst against a store that started
     // scoring it did nothing. Bundled default is 500, the value this constant
     // already held, so no build behaves differently until a push lands.
-    const jitter = commitJitterMs(cfgFlagsRef.current, ADD_COMMIT_JITTER_MS);
+    const jitter = ADD_COMMIT_JITTER_MS;
     console.log(`[Cart ${ts()}]`, 'presearch commit: worker', workerId, 'term=', term, 'in', jitter, 'ms');
     setTimeout(() => { presearchWorkerRefs.current[workerId]?.injectJavaScript(script); }, jitter);
   }, []);
@@ -1631,20 +1634,27 @@ export default function WebViewCartSheet({
     return () => clearTimeout(t);
   }, [netRunning, netCounted, step]);
 
-  /** Give up on the network and run the item set the way it has always run. */
-  const netFallBackToPool = useCallback((why: string) => {
+  /**
+   * Give up on the rail and hand the run to the user.
+   *
+   * This used to restart the item set through the DOM add pool. That pool is
+   * gone, and the honest replacement is not another automation — it is telling
+   * the user what we were trying to do and letting them do it. The searches are
+   * still ours; only the clicking moves.
+   */
+  const netHandOverToUser = useCallback((why: string) => {
     if (!netActiveRef.current) return;
     netActiveRef.current = false;
     netPhaseRef.current = 'idle';
     if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
-    console.log(`[Cart ${ts()}]`, 'network run: falling back to the pool —', why);
+    console.log(`[Cart ${ts()}]`, 'network run: handing over to the user —', why);
     // The fast path's count is meaningless now — the pool is going to redo the
     // whole set. Leaving "3/18" on screen would freeze there for the rest of the
     // run. Drop to the unnumbered bag and say what is happening.
     setNetProgress({ done: 0, total: 0, label: 'Taking a slower route', phase: 'add' });
     setNetNote('Still working — this one is taking longer than usual');
     tel().record('search', 'error', { detail: { phase: 'network_fallback', why }, code: 'match_rejected' });
-    startParallelAddRef.current();
+    startAssistedModeRef.current();
   }, []);
 
   /**
@@ -1680,9 +1690,9 @@ export default function WebViewCartSheet({
     if (netTimeoutRef.current) clearTimeout(netTimeoutRef.current);
     netTimeoutRef.current = setTimeout(() => {
       netTimeoutRef.current = null;
-      netFallBackToPool(why);
+      netHandOverToUser(why);
     }, ms);
-  }, [netFallBackToPool]);
+  }, [netHandOverToUser]);
 
   /**
    * Phase 3. Everything is matched; write it.
@@ -1695,7 +1705,7 @@ export default function WebViewCartSheet({
   const netStartAdds = useCallback(() => {
     const active = activeItemsRef.current;
     const sess = netSessionRef.current;
-    if (!sess) { netFallBackToPool('no_session_at_add'); return; }
+    if (!sess) { netHandOverToUser('no_session_at_add'); return; }
 
     const toWrite: Array<{
       idx: number; productId: string; skuId: string; quantity: number; name: string;
@@ -1857,9 +1867,9 @@ export default function WebViewCartSheet({
     }
 
     const rail = netRail();
-    if (!rail) { netFallBackToPool('no_rail'); return; }
+    if (!rail) { netHandOverToUser('no_rail'); return; }
     const script = rail.addBatch(coalesced);
-    if (!script) { netFallBackToPool('add_script_unbuildable'); return; }
+    if (!script) { netHandOverToUser('add_script_unbuildable'); return; }
     netPhaseRef.current = 'add';
     setStep('adding');
     // THE DENOMINATOR NEVER SHRINKS, AND A TOP-UP NEVER RESTARTS IT.
@@ -1894,19 +1904,19 @@ export default function WebViewCartSheet({
     // read in the reconcile is what settles the truth either way.
     netArmFinalize(75_000);
     webviewRef.current?.injectJavaScript(script);
-  }, [finishParallelAdd, netArm, netArmFinalize, netFallBackToPool, setStep]);
+  }, [finishParallelAdd, netArm, netArmFinalize, netHandOverToUser, setStep]);
 
   /** Phase 2. One script, every term, no navigation. */
   const netStartSearch = useCallback(() => {
     const active = activeItemsRef.current;
     const sess = netSessionRef.current;
-    if (!sess) { netFallBackToPool('no_session'); return; }
+    if (!sess) { netHandOverToUser('no_session'); return; }
     const terms = Array.from(new Set(active.map((i) => i.searchTerm ?? i.ingredientName).filter(Boolean)));
-    if (!terms.length) { netFallBackToPool('no_terms'); return; }
+    if (!terms.length) { netHandOverToUser('no_terms'); return; }
     const rail = netRail();
-    if (!rail) { netFallBackToPool('no_rail'); return; }
+    if (!rail) { netHandOverToUser('no_rail'); return; }
     const script = rail.searchBatch(terms, sess);
-    if (!script) { netFallBackToPool('search_script_unbuildable'); return; }
+    if (!script) { netHandOverToUser('search_script_unbuildable'); return; }
     netCandidatesRef.current = new Map();
     netFailedTermsRef.current = new Set();
     netSearchTermsRef.current = terms;
@@ -1919,7 +1929,7 @@ export default function WebViewCartSheet({
     console.log(`[Cart ${ts()}]`, 'network run: searching', terms.length, 'terms with no page load');
     netArm(40_000, 'search_timeout');
     webviewRef.current?.injectJavaScript(script);
-  }, [netArm, netFallBackToPool, setStep]);
+  }, [netArm, netHandOverToUser, setStep]);
 
   /**
    * Re-ask for the terms that never came back, because the page navigated.
@@ -1986,9 +1996,9 @@ export default function WebViewCartSheet({
     // ignored once the phase has moved on.
     netArm(25_000, 'session_timeout');
     const rail = netRail();
-    if (!rail) { netFallBackToPool('no_rail'); return; }
+    if (!rail) { netHandOverToUser('no_rail'); return; }
     webviewRef.current?.injectJavaScript(rail.sessionScript());
-  }, [netArm, setStep, netRail, netFallBackToPool]);
+  }, [netArm, setStep, netRail, netHandOverToUser]);
 
   const startParallelAdd = useCallback(() => {
     const active = activeItemsRef.current;
@@ -2595,40 +2605,11 @@ export default function WebViewCartSheet({
 
   // Kick off pre-search parking while the user is still on the qty screen: the
   // silent pre-warm says they're logged in, the store supports parallel workers,
-  // and every ingredient already has a chosen product (the regular add flow). A
-  // mixed/unchosen set goes through the choose flow instead, so we skip it there.
-  useEffect(() => {
-    // Remote kill switch for the whole pre-search path (MEAL-32). This is the
-    // only place presearchStartedRef is ever set, and every downstream gate —
-    // the commit arming in handleStartSearch, beginSearchFlow's branch, the
-    // tile rendering — is conditioned on it, so refusing here disables the path
-    // entirely. `flags.presearchAdd` defaults true (the bundled value), so this
-    // changes nothing until a push says otherwise.
-    //
-    // Why it matters for a WAF: pre-search holds N results pages open across the
-    // qty screen and then fires N adds within ~1s of the tap. That is a distinct
-    // request pattern from the fused search+add path, and this is the only way to
-    // drop back to the latter without a release.
-    const chosen: PresearchItem<ConsolidatedIngredient>[] = items
-      .map((item, idx) => ({ idx, item }))
-      .filter((e) => !!e.item.searchTerm);
-    if (!shouldStartPresearch({
-      features: { presearchAdd: FEATURE_PRESEARCH_ADD },
-      flags: cfgFlags,
-      step,
-      alreadyStarted: presearchStartedRef.current,
-      hasParallelCfg: !!parallelCfg,
-      loginStatus: loginPrewarm.getStatus(lockedStoreIdRef.current),
-      itemCount: items.length,
-      chosenCount: chosen.length,
-    })) return;
-    presearchStartedRef.current = true;
-    console.log(`[Cart ${ts()}]`, 'presearch: parking first', PARALLEL_ADD_WORKER_COUNT, 'of', chosen.length, 'chosen items');
-    presearchPool.start(chosen);
-    // loginPrewarm.statusVersion is in the deps so this re-runs the moment a slow
-    // store's login check resolves logged-in while the user is still on qty.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, items, parallelCfg, loginPrewarm.statusVersion]);
+  // The pre-search parking pool was started here. It held N results pages open
+  // across the qty screen so that N DOM adds could fire within a second of the
+  // tap. It is gone with the rest of the clicking (2026-09-01) and nothing
+  // arms it: `presearchStartedRef` is never set, so every downstream gate that
+  // reads it stays shut.
 
   const handleStartSearch = () => {
     const active = items.filter((it, i) => (checkedItems[i] ?? true) && !isZeroedOut(it));
@@ -2997,22 +2978,10 @@ export default function WebViewCartSheet({
     setStep('searching');
     const active = activeItemsRef.current;
     const allChoose = active.length > 0 && active.every((it) => !it.searchTerm);
-    // Resolve parallel-vs-serial from the LIVE locked store, NOT the captured
-    // `parallelCfg`. onMessage has []-deps and reaches here via a closure chain
-    // that froze `parallelCfg` at an early render (before this store was locked),
-    // so a serial store (forceSerialSearch) could wrongly run parallel. The ref
-    // is always current (same source the worker pool's getUrl uses).
-    const s = getStoreScripts(lockedStoreIdRef.current);
-    const canParallel = !!(s && s.getSearchUrl && s.buildWorkerScript && !s.forceSerialSearch);
-    console.log(`[Cart ${ts()}]`, 'beginSearchFlow: parallel=', canParallel, 'allChoose=', allChoose, 'activeLen=', active.length, 'store=', lockedStoreIdRef.current);
-    // The route itself is decided by `chooseAddStrategy`, which is a pure
-    // function tested by calling it — see `src/lib/automation-config/decisions.ts`
-    // for why these conditions no longer live inline. Flags are read off the ref
-    // for the same reason `s` is resolved live above: this callback's deps do not
-    // include the config.
-    // The network route needs BOTH switches: searching over the network and then
-    // clicking to add would be a run that loads no page for search and then
-    // loads one per item anyway, which is slower than either path alone.
+    // Two questions now, where there used to be six. DOM automation is gone, so
+    // there is no pool to size, no worker script to look for, and nothing to
+    // fall back to when a store cannot run one. A store either has a rail or the
+    // user drives.
     const netCfg = getAutomationConfig().stores?.[lockedStoreIdRef.current ?? ''] ?? {};
     // Capability, not a store name. A store qualifies when it HAS a rail and both
     // of its switches are on. H-E-B additionally requires cartSkuConfirm, because
@@ -3023,31 +2992,16 @@ export default function WebViewCartSheet({
       && netCfg.networkSearch === true
       && netCfg.networkAdd === true
       && (lockedStoreIdRef.current !== 'heb' || netCfg.cartSkuConfirm === true);
-    const strategy = chooseAddStrategy({
-      canParallel,
-      allChoose,
-      presearchCommitArmed: presearchCommitArmedRef.current,
-      features: { presearchAdd: FEATURE_PRESEARCH_ADD, parallelAdd: FEATURE_PARALLEL_ADD },
-      flags: cfgFlagsRef.current,
-      networkCapable,
-    });
-    console.log(`[Cart ${ts()}]`, 'beginSearchFlow: strategy=', strategy);
-    if (strategy === 'network') {
+    const strategy = chooseAddStrategy({ allChoose, networkCapable });
+    console.log(`[Cart ${ts()}]`, 'beginSearchFlow: allChoose=', allChoose, 'activeLen=', active.length,
+      'store=', lockedStoreIdRef.current, 'strategy=', strategy);
+    if (strategy === 'network' || strategy === 'networkChoose') {
+      netChooseOnlyRef.current = strategy === 'networkChoose';
       startNetworkRun();
-    } else if (strategy === 'presearch') {
-      // Parked pre-search workers are ready — commit their adds instead of the
-      // fused pool. The before-snapshot already ran, so the reconcile is sound.
-      startPresearchCommit();
-    } else if (strategy === 'parallelSearch') {
-      startParallelSearch();
-    } else if (strategy === 'parallelAdd') {
-      // Regular add flow through the parallel pool: each worker searches AND
-      // adds one product concurrently. Unconfirmed items fall to review.
-      startParallelAdd();
-    } else {
-      navigateToSearchItem(0);
+      return;
     }
-  }, [startParallelSearch, startParallelAdd, navigateToSearchItem, startPresearchCommit, startNetworkRun]);
+    startAssistedModeRef.current();
+  }, [startNetworkRun]);
 
   // Snapshot the cart BEFORE any adds, then start the search. For cart-page
   // stores (HEB, Albertsons family) navigate to the cart URL, count there, and
@@ -3575,6 +3529,31 @@ export default function WebViewCartSheet({
     setManualIdx(nextIdx);
     navTo(nextUrl);
   }, [manualQueue, manualIdx, manualSearchUrlFor, navTo, setStep]);
+
+  /**
+   * The whole run, handed to the user.
+   *
+   * Mealio searches each ingredient and shows the results; the user adds what
+   * they want and taps Next. This is what a store without a rail gets, and it is
+   * the same machinery the manual fallback has always used — the difference is
+   * only that it is now a first-class route rather than a rescue.
+   *
+   * It replaces four DOM routes (presearch, parallelSearch, parallelAdd,
+   * serial), all of which worked by clicking the storefront. They are gone: the
+   * selectors went stale, the clicks raced the page's own navigation, and an add
+   * could report success without landing. Searching and letting the user add
+   * cannot fail in any of those ways, because it never claims anything it has
+   * not seen.
+   */
+  const startAssistedMode = useCallback(() => {
+    const terms = activeItemsRef.current
+      .map((i) => i.searchTerm || i.ingredientName)
+      .filter((t): t is string => !!t);
+    if (terms.length === 0) { setStep('done'); return; }
+    console.log(`[Cart ${ts()}]`, 'assisted: handing', terms.length, 'searches to the user');
+    startManualMode(terms);
+  }, [startManualMode, setStep]);
+  startAssistedModeRef.current = startAssistedMode;
 
   // MEAL-9's floor. Deliberately not gated on a store adapter or a live session:
   // this is what the user gets when everything else has failed, so it must not be
@@ -4336,7 +4315,7 @@ export default function WebViewCartSheet({
           if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
           if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
           console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));
-          if (!msg.ok) { netFallBackToPool('session_' + (msg.why || 'failed')); return; }
+          if (!msg.ok) { netHandOverToUser('session_' + (msg.why || 'failed')); return; }
           if (!msg.loggedIn) {
             // The gate did its job. Hand the user the login screen exactly as the
             // page-based login check would have.
@@ -4345,7 +4324,7 @@ export default function WebViewCartSheet({
             setStep('login');
             return;
           }
-          if (!msg.storeId || !msg.shoppingContext) { netFallBackToPool('session_no_store'); return; }
+          if (!msg.storeId || !msg.shoppingContext) { netHandOverToUser('session_no_store'); return; }
           netSessionRef.current = { storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext) };
           netStartSearch();
           return;
@@ -4381,6 +4360,24 @@ export default function WebViewCartSheet({
           if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
           console.log(`[Cart ${ts()}]`, 'network search done:', netCandidatesRef.current.size, 'answered,',
             netFailedTermsRef.current.size, 'failed');
+          if (netChooseOnlyRef.current) {
+            // A CHOOSE run: the user picks the product, so the rail's job ended
+            // with the search. Hand the candidates to the same function the
+            // parallel search pool used to call, so the Choose Products screen
+            // is fed identically however the search was done — the pool is gone,
+            // the screen it filled is not.
+            netChooseOnlyRef.current = false;
+            netActiveRef.current = false;
+            netPhaseRef.current = 'idle';
+            const byIdx = new Map<number, Candidate[]>();
+            activeItemsRef.current.forEach((item, idx) => {
+              const term = item.searchTerm || item.ingredientName;
+              byIdx.set(idx, netCandidatesRef.current.get(term) ?? []);
+            });
+            console.log(`[Cart ${ts()}]`, 'network choose: handing', byIdx.size, 'results to the choose screen');
+            finishParallelSearch(byIdx);
+            return;
+          }
           netStartAdds();
           return;
         }
