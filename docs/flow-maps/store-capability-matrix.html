@@ -51,7 +51,12 @@
         <td>on</td><td><b>true</b></td>
         <td>the search route re-renders and fires <code>onLoadEnd</code> twice for one URL.
         With <code>networkSearch</code> + <code>networkAdd</code> on it loads no page at all and
-        the worker columns stop applying &mdash; see the H-E-B map, diagram 3</td></tr>
+        the worker columns stop applying &mdash; see the H-E-B map, diagram 3.
+        <b>The rail's pool is never opened cold:</b> the FIRST term is searched by itself and
+        the lanes fan out only once it has returned. An 18-term run that opened with three at
+        once had all three fail below HTTP inside 450&nbsp;ms and the page reload twice, while
+        the session query a second earlier had gone through alone &mdash; the burst was the
+        trigger, and every run that got away with it before was 8 terms</td></tr>
     <tr><td><b>Walmart</b></td><td>parallel</td><td>3 &times; 400 ms <i>(default)</i></td>
         <td>on</td><td><b>true</b> <i>(own default)</i></td>
         <td>SPA; without it a duplicate add double-adds, then the next nav race-cancels the POST</td></tr>
@@ -76,7 +81,8 @@
         <code>GET /abs/pub/xapi/pgmsearch/v1/search/products</code>, keyed by
         <code>searchConfig.apimProgramSubscriptionKey</code> &mdash; a DIFFERENT key from
         the cart's. Concurrency is 2 rather than 3 because MEAL-207 has this
-        operation degrading under burst</td></tr>
+        operation degrading under burst, and &mdash; as on H-E-B &mdash; the first
+        term is searched ALONE before those 2 lanes open</td></tr>
     <tr><td><b>Kroger family</b></td><td colspan="5">n/a &mdash; the <b>server</b> fans out per
         ingredient (<code>POST /api/kroger/search-products</code>, 60 s)</td></tr>
     <tr><td><b>Mock Store</b></td><td>parallel</td><td>3 &times; 400 ms <i>(default)</i></td>
