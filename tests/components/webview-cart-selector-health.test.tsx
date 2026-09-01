@@ -109,6 +109,7 @@ jest.mock('../../src/context/LoginPrewarmContext', () => {
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { enableRail, SESSION_OK } from './helpers/railRun';
 import { SELECTOR_HEALTH_MESSAGE } from '../../src/lib/selector-health';
 
 const ingested = () => ((globalThis as any).__ingested ?? []) as unknown[];
@@ -133,7 +134,7 @@ const meal = {
 /** Render, start the run, and return a way to post messages onto the bridge. */
 function startRun() {
   const view = render(
-    <WebViewCartSheet visible meals={[meal]} storeId="aldi" storeName="ALDI" onClose={() => {}} />,
+    <WebViewCartSheet visible meals={[meal]} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
   );
   act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
   const post = (payload: Record<string, unknown>) => {
@@ -163,10 +164,15 @@ describe('SELECTOR_HEALTH on the cart bridge', () => {
     // The sample arrives between a script's result and the next one. If the
     // branch were placed after the engine's own dispatch — or forgot to return —
     // this message would fall through into it.
+    // "Connecting…" is the rail's label for the state the DOM path called
+    // "Checking login". Whatever the wording, the claim is the same: the step
+    // machine is where it was before the sample arrived and is still there after.
     const { post, getByText } = startRun();
-    expect(getByText(/checking login/i)).toBeTruthy();
+    const before = getByText(/connecting|checking login/i);
+    expect(before).toBeTruthy();
     post({ type: SELECTOR_HEALTH_MESSAGE, sel: { card: 0 } });
-    expect(getByText(/checking login/i)).toBeTruthy();
+    expect(getByText(/connecting|checking login/i).props.children)
+      .toEqual(before.props.children);
   });
 
   it('lets the engine\'s own messages through untouched', () => {
@@ -192,7 +198,10 @@ describe('a finished run uploads its selector health', () => {
   afterEach(() => jest.useRealTimers());
 
   /**
-   * Drive one ALDI run to the done screen.
+   * Drive one run to the done screen. H-E-B, not ALDI: ALDI is assisted now
+   * and its run hands the user the store's page rather than reaching a done
+   * screen of ours. The samples this file follows ride the same bridge either
+   * way — that is the point of the probe's postMessage hook.
    *
    * The path is the shortest real one: login confirms, the results page loads,
    * the fused search-and-add reports, the item lands in review, and the user
@@ -200,7 +209,7 @@ describe('a finished run uploads its selector health', () => {
    * the injected probe would post them.
    */
   const sheet = (visible: boolean) => (
-    <WebViewCartSheet visible={visible} meals={[meal]} storeId="aldi" storeName="ALDI" onClose={() => {}} />
+    <WebViewCartSheet visible={visible} meals={[meal]} storeId="heb" storeName="H-E-B" onClose={() => {}} />
   );
 
   async function driveRun(
@@ -217,12 +226,21 @@ describe('a finished run uploads its selector health', () => {
 
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
     await settle();  // lets logAutomationStart resolve, which is what installs the recorder
-    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-    act(() => {
-      webview().props.onLoadEnd({ nativeEvent: { url: 'https://www.aldi.us/store/aldi/s?k=sour%20cream' } });
-    });
+    enableRail();
+    post(SESSION_OK);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION_OK);
+    // The samples ride the same bridge whatever produced them — that is the
+    // point of the probe's postMessage hook, and it is all this file is about.
     for (const sel of samples) post({ type: SELECTOR_HEALTH_MESSAGE, sel });
-    post({ type: 'SEARCH_AND_ADD_RESULT', success: true, productName: 'Sour Cream', candidates: [] });
+    // A candidate that does NOT match, so the item reaches review and can be
+    // skipped — which is how this run gets to 'done' with nothing added.
+    post({
+      type: 'SEARCH_RESULT', source: 'network', term: 'sour cream',
+      candidates: [{ productName: 'Some Other Cream', imageUrl: null, outOfStock: false, preferences: null, price: '$2' }],
+    });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     await settle();
     act(() => { fireEvent.press(view.getByText(/Review /)); });
     await settle();

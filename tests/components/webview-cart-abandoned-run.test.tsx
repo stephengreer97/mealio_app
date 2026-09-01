@@ -95,6 +95,7 @@ jest.mock('../../src/lib/api', () => {
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { enableRail, SESSION_OK } from './helpers/railRun';
 import type { StepRecord } from '../../src/lib/automation-telemetry';
 
 type PendingStart = { storeId: string; resolve: (id: string) => void };
@@ -247,15 +248,28 @@ describe('a cart run that never reaches the done screen', () => {
     // AFTER some items landed is exactly the population MEAL-5 exists to stop
     // under-reporting. A zero here would say the user got nothing when they got
     // something.
-    const r = render(sheet({ visible: true, storeId: 'aldi' }));
-    await landStartFor('aldi');
+    // A RAIL store, where this was ALDI. ALDI is assisted now: its run hands the
+    // user the store's search page, so nothing lands under Mealio's own report
+    // and the population this case is about — a run abandoned AFTER items landed
+    // — cannot be reached there at all.
+    const r = render(sheet({ visible: true, storeId: 'heb' }));
+    await landStartFor('heb');
     await act(async () => { fireEvent.press(r.getByText(/add ingredients to/i)); });
-    post({ type: 'LOGIN_STATUS', loggedIn: true });
+    enableRail();
+    post(SESSION_OK);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION_OK);
     await settle();
     post({
-      type: 'SEARCH_AND_ADD_RESULT', success: true, added: 1,
-      productName: 'Sour Cream', term: 'sour cream',
+      type: 'SEARCH_RESULT', source: 'network', term: 'sour cream',
+      candidates: [{
+        productName: 'sour cream', imageUrl: null, outOfStock: false, preferences: null,
+        price: '$2', productId: 'p1', skuId: 's1',
+      }],
     });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'p1', skuId: 's1', reason: null });
+    post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
     await settle();
 
     // Torn down before the done screen, with one item already in the cart.
@@ -289,20 +303,32 @@ describe('a cart run that reaches the done screen', () => {
   afterEach(() => jest.useRealTimers());
 
   /**
-   * Drive a one-item ALDI run all the way to the done screen: qty CTA, a
-   * logged-in answer, and the fused search-and-add result that finishes it. The
-   * last hop sits behind the add-commit jitter, hence the timer advance.
+   * Drive a one-item run all the way to the done screen: qty CTA, the session
+   * probe, the search, the write, and the cart read that closes it.
+   *
+   * H-E-B rather than ALDI, which is assisted now and never reports an add of
+   * its own.
    */
   async function runToDone() {
-    const r = render(sheet({ visible: true, storeId: 'aldi' }));
-    await landStartFor('aldi');
+    const r = render(sheet({ visible: true, storeId: 'heb' }));
+    await landStartFor('heb');
     await act(async () => { fireEvent.press(r.getByText(/add ingredients to/i)); });
-    post({ type: 'LOGIN_STATUS', loggedIn: true });
+    enableRail();
+    post(SESSION_OK);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION_OK);
     await settle();
     post({
-      type: 'SEARCH_AND_ADD_RESULT', success: true, added: 1,
-      productName: 'Sour Cream', term: 'sour cream',
+      type: 'SEARCH_RESULT', source: 'network', term: 'sour cream',
+      candidates: [{
+        productName: 'sour cream', imageUrl: null, outOfStock: false, preferences: null,
+        price: '$2', productId: 'p1', skuId: 's1',
+      }],
     });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'p1', skuId: 's1', reason: null });
+    post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
+    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
     await act(async () => { jest.advanceTimersByTime(30_000); await Promise.resolve(); });
     // The done screen, so a run that silently stalled cannot pass as finished.
     expect(r.queryByText(/added to your/i)).toBeTruthy();
