@@ -5029,16 +5029,32 @@ export default function WebViewCartSheet({
     // the per-item audit that would have caught the discrepancy needs cart rows.
     // Matched on searchTerm, which is exactly the `name` toIntendedItem built.
     const superseded = new Set(itemsToAdd.map((p) => p.searchTerm));
-    runIntendedRef.current = [
+    const revised = itemsToAdd.map((p) => ({
+      name: p.productName || p.searchTerm,
+      expectedQty: Math.max(1, p.qty || 1),
+      isWeight: p.purchaseWeight != null,
+    }));
+    const applyPicks = (prev: IntendedItem[]) => [
       // Items settled before review (added inline on the combined path) keep the
       // intent they ran with — no pick ever revised them.
-      ...runIntendedRef.current.filter((i) => !superseded.has(i.name)),
-      ...itemsToAdd.map((p) => ({
-        name: p.productName || p.searchTerm,
-        expectedQty: Math.max(1, p.qty || 1),
-        isWeight: p.purchaseWeight != null,
-      })),
+      ...prev.filter((i) => !superseded.has(i.name)),
+      ...revised,
     ];
+    runIntendedRef.current = applyPicks(runIntendedRef.current);
+    // AND THE RECONCILE'S SNAPSHOT, which is the one the cart audit actually
+    // reads: auditCartAfterRun takes `intendedAll = reconcileIntended.length > 0
+    // ? reconcileIntended : active`, so revising only `active` changes nothing on
+    // any run that reconciled — which is every network run.
+    //
+    // It is captured DURING the reconcile, before the user has picked anything,
+    // so it still called the ingredient by the name the store had no match for.
+    // The audit then hunted a "H-E-B Texas Roots Fresh White Onion" that was
+    // never going to be there and found a "Fresh White Onion" nothing claimed,
+    // and said both: "Could not add" the one, "Mealio did not add" the other.
+    // Same onion, chosen by the user thirty seconds earlier.
+    if (reconcileIntendedRef.current.length > 0) {
+      reconcileIntendedRef.current = applyPicks(reconcileIntendedRef.current);
+    }
     // Don't reset addResultsRef — may already contain results from the combined search+add phase.
     addingItemsRef.current = itemsToAdd;
     addingIdxRef.current = 0;

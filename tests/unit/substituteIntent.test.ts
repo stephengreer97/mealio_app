@@ -5,11 +5,12 @@ import { auditCartAfterRun, buildCartVerdict } from '../../src/lib/cart-reconcil
 // nothing for, so the user picked the plain "Fresh White Onion" as a substitute
 // on the review screen. The cart gained TWO of the same product, on purpose.
 //
-// A review pick REPLACES what an ingredient means, and runIntendedRef records
-// that. The after-probe audit used to recompute intent from the pre-review
-// ingredients instead, throwing the swap away — so it went looking for a Texas
-// Roots onion, did not find one, and had a spare Fresh White Onion that nothing
-// claimed. Stephen read the result next to a green row saying two were added:
+// A review pick REPLACES what an ingredient means. Both snapshots of the run's
+// intent have to learn that — runIntendedRef AND the reconcile's own, which is
+// the one the cart audit reads. Neither did, so the audit went looking for a
+// Texas Roots onion, did not find one, and had a spare Fresh White Onion that
+// nothing claimed. Stephen read the result next to a green row saying two were
+// added:
 //
 //   "Mealio did not add: Fresh White Onion, Avg 0.955 lb"
 //
@@ -22,12 +23,18 @@ const TEXAS_ROOTS = 'H-E-B Texas Roots Fresh White Onion, Avg. 0.955 lb';
 const row = (name: string, qty: number) => ({ name, qty, added: true });
 const intended = (name: string, expectedQty: number) => ({ name, expectedQty, isWeight: false });
 
-const audit = (active: ReturnType<typeof intended>[]) =>
+// reconcileIntended, NOT active. auditCartAfterRun uses
+//   intendedAll = reconcileIntended.length > 0 ? reconcileIntended : active
+// so on any run that reconciled — every network run — the reconcile's snapshot
+// is the one that decides, and `active` is never consulted. A first attempt at
+// this test passed reconcileIntended: [] and therefore proved nothing about the
+// path Stephen was actually on.
+const audit = (intendedAll: ReturnType<typeof intended>[]) =>
   auditCartAfterRun({
     rows: [row(ONION, 2)],
     reportedAdded: [ONION, ONION],
-    active,
-    reconcileIntended: [],
+    active: intendedAll,
+    reconcileIntended: intendedAll,
     countBefore: 0,
     countAfter: 2,
   }) as ReturnType<typeof auditCartAfterRun> & {
