@@ -222,8 +222,12 @@ flowchart LR
   <table class="src">
     <tr><th>Step</th><th>Detail lives in</th></tr>
     <tr><td><code>login_check</code> / <code>login</code></td><td>each store's map — this is where they differ most.
-      A store with a network rail is asked over the network in BOTH places that decide login: the
-      silent prewarm probe and this step. The DOM check is the fallback, reached when the session
+      A store with a network rail is asked over the network in all THREE places that decide login:
+      the silent prewarm probe, this step, and the re-ask that fires on every page load while the
+      user sits on <code>login</code> (<code>reinjectLoginCheckOnNav</code>). The third is the one
+      that starts the run &mdash; its verdict calls the before-snapshot directly &mdash; so a wrong
+      "signed in" there begins an automation underneath a user who has not signed in yet, which is
+      exactly what was reported from the device. The DOM check is the fallback, reached when the session
       probe cannot answer — nearly always a page that has not finished its bootstrap, which is
       <b>not</b> a signed-out user and must never be reported as one</td></tr>
     <tr><td><code>searching</code> / <code>adding</code></td><td>each store's map, plus <a href="behavior-choose-products.html">Choose Products &amp; matching</a></td></tr>
