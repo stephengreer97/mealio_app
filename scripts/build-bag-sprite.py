@@ -9,7 +9,16 @@ from PIL import Image
 SRC_SHA256 = "8670a737aa80fc049588c3e468c0ed45e03d2ca204356a746eeb273bf1e8c097"
 SRC = sys.argv[1] if len(sys.argv) > 1 else "/mnt/c/Users/Steve/OneDrive/Desktop/6y9HsPBq.png"
 SRC_COLS, SRC_ROWS = 5, 8
-PICKS = [0, 7, 17, 18, 21, 25, 29, 30, 31, 32, 35, 39]
+# Frame 18 is OUT, and it is the one Stephen spotted: it follows 17 with the same
+# orange but a shorter milk carton, so the bag visibly un-fills for one beat in
+# the middle of the run. 25, 29 and 35 are out as near-duplicates of their
+# neighbours — they added a frame of hold without adding a picture.
+#
+# Ordering here is by VISUAL STAGE, not by pixel count. Counting opaque pixels
+# above the rim ranks the baguette frames BELOW the orange ones, because a
+# baguette is thin and an orange is round, and sorting on that would drop the
+# whole baguette stage.
+PICKS = [0, 7, 17, 21, 30, 31, 32, 39]
 OUT_COLS, FRAME_H = 4, 320
 
 import hashlib

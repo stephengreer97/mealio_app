@@ -622,6 +622,8 @@ ${GQL_FN}
   }
 
   var wrote = 0;
+  // Every write the store ACCEPTED, with the quantity it should then hold.
+  var accepted = [];
   var next = 0;
   var runner = async function () {
     while (true) {
@@ -690,8 +692,13 @@ ${GQL_FN}
         } catch (e) {}
         // AddOnsCart wraps a cart — the item went in. Reading it as a failure
         // would send the caller on to add the same product a second way.
+        // ACCEPTED, NOT LANDED. The mutation selects '... on Cart { id }' and
+        // nothing else, so this says H-E-B took the write -- not that the item
+        // is in the cart. On 2026-09-01 a spinach write came back Cart, and the
+        // cart read a second later did not contain it. Verified below against
+        // the read we already take.
         var ok = arm === 'Cart' || arm === 'AddOnsCart';
-        if (ok) wrote++;
+        if (ok) { wrote++; accepted.push({ it: it, want: want }); }
         // The sent quantity rides along so a clamped add is visible as a SHORT
         // add rather than passing for a full one — the reconcile's own short-add
         // detection then reports it to the user.
@@ -712,6 +719,54 @@ ${GQL_FN}
   // One read after, so the caller has the cart's own account of what landed
   // rather than only the store's per-write answer.
   var after = await readCart();
+
+  // VERIFY EVERY ACCEPTED WRITE AGAINST THAT READ, AND RETRY WHAT IS MISSING.
+  //
+  // The per-write answer is the mutation's return TYPE. It cannot say whether
+  // the item is in the cart, and once it did not: eleven writes, all accepted,
+  // and the cart came back without the spinach. The reconcile caught it a
+  // second later and topped it up, which is what the reconcile is for -- but it
+  // is a slow backstop for something this read already knew.
+  //
+  // So: anything accepted but absent (or short) is written ONCE more and the
+  // cart re-read. The write sets an ABSOLUTE quantity, so a retry that races a
+  // late-applying first write cannot double it. If it is still missing after
+  // that, the item is reported failed and the reconcile does its job.
+  if (after) {
+    var missing = [];
+    for (var v = 0; v < accepted.length; v++) {
+      var h2 = held(after, accepted[v].it.productId);
+      if (!h2 || h2.qty < accepted[v].want) missing.push(accepted[v]);
+    }
+    if (missing.length > 0) {
+      post({ type: 'NET_ADD_UNLANDED', source: 'network', count: missing.length,
+             names: missing.map(function (m) { return m.it.name; }) });
+      for (var r2 = 0; r2 < missing.length; r2++) {
+        var m2 = missing[r2];
+        try {
+          var vars2 = { productId: String(m2.it.productId), skuId: String(m2.it.skuId),
+                        quantity: m2.want };
+          if (m2.it.purchasePreferenceId) vars2.purchasePreferenceId = String(m2.it.purchasePreferenceId);
+          await __hebGql('cartItemV2', ADD, vars2, 9000);
+        } catch (e) {}
+      }
+      after = await readCart();
+      // Re-report each one against the FINAL read, so the caller's per-item
+      // record matches the cart rather than the mutation.
+      for (var r3 = 0; r3 < missing.length; r3++) {
+        var m3 = missing[r3];
+        var h3 = held(after, m3.it.productId);
+        var landed = !!(h3 && h3.qty >= m3.want);
+        if (!landed) wrote--;
+        post({ type: 'NET_ADD_RESULT', idx: m3.it.idx, name: m3.it.name,
+               productId: m3.it.productId, skuId: m3.it.skuId,
+               asked: m3.it.quantity, sent: m3.want, base: m3.want - m3.it.quantity,
+               preferenceId: m3.it.purchasePreferenceId || null,
+               success: landed, reason: landed ? null : 'cart_not_incremented',
+               detail: landed ? 'landed on retry' : 'accepted but absent from the cart' });
+      }
+    }
+  }
   post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: wrote,
          cartLines: after ? after.length : null,
          // Before and after, so the done screen can show what THIS run added in

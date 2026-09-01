@@ -408,6 +408,22 @@ describe('HEB MEAL-202: the store\'s own limits', () => {
     '    if (body.operationName === "cartItemV2") {',
     '      window.__writes.push(body.variables);',
     '      var arm = ARMS[body.variables.productId] || "Cart";',
+    // The cart REFLECTS an accepted write, which a real one does. Without this
+    // the stub accepts every write and then reports a cart that never changed,
+    // and the rail's own verification -- accepted but absent, write it once more
+    // -- fires on every item. That is the verification working; the stub was
+    // the unfaithful half.
+    '      if (arm === "Cart" || arm === "AddOnsCart") {',
+    '        var pid = String(body.variables.productId);',
+    '        var found = null;',
+    '        for (var i = 0; i < LINES.length; i++) {',
+    '          if (String(LINES[i].product.id) === pid) { found = LINES[i]; break; }',
+    '        }',
+    '        if (found) found.quantity = body.variables.quantity;',
+    '        else LINES.push({ id: "i" + pid, quantity: body.variables.quantity,',
+    '          estimatedWeight: null, product: { id: pid, fullDisplayName: "X" },',
+    '          sku: { id: String(body.variables.skuId) } });',
+    '      }',
     '      return Promise.resolve({ ok: true, status: 200, text: function () {',
     '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: {',
     '          __typename: arm, id: "c1", message: "Quantity limit reached." } } })); } });',
@@ -516,6 +532,18 @@ describe('HEB MEAL-202: the absolute quantity, and what it makes unsafe', () => 
     '    var body = JSON.parse(init.body);',
     '    if (body.operationName === "cartItemV2") {',
     '      window.__writes.push(body.variables);',
+    // An accepted write CHANGES the cart, which a real one does. Without this
+    // the rail's own verification -- accepted but absent, so write it once more
+    // -- fires on every item, because the stub reports a cart that never moved.
+    '      var pid = String(body.variables.productId);',
+    '      var hit = null;',
+    '      for (var i = 0; i < window.__lines.length; i++) {',
+    '        if (String(window.__lines[i].product.id) === pid) { hit = window.__lines[i]; break; }',
+    '      }',
+    '      if (hit) hit.quantity = body.variables.quantity;',
+    '      else window.__lines.push({ id: "i" + pid, quantity: body.variables.quantity,',
+    '        estimatedWeight: null, product: { id: pid, fullDisplayName: "X" },',
+    '        sku: { id: String(body.variables.skuId) } });',
     '      return Promise.resolve({ ok: true, status: 200, text: function () {',
     '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: { __typename: "Cart", id: "c1" } } })); } });',
     '    }',
@@ -612,6 +640,93 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
     // crediting this run with it.
     expect(done.cartBefore).toEqual([{ name: 'Eggs', qty: 2 }]);
     expect(done.cartAfter).toEqual([{ name: 'Eggs', qty: 2 }, { name: 'Sour Cream', qty: 1 }]);
+  });
+
+  itWithFixture('logged-in-home.html', 'a write the store ACCEPTS but does not apply is caught and re-written', async (runner) => {
+    // Stephen's 17:34 run. Eleven writes, all accepted, and the cart came back
+    // without the spinach:
+    //
+    //   NET_ADD_RESULT  name: "Fresh Spinach, 1 Bundle"  sent: 1  success: true
+    //   ...and no Spinach line in the cart read a moment later.
+    //
+    // The mutation selects "... on Cart { id }" and nothing else, so its answer
+    // can only say H-E-B TOOK the write. The reconcile caught the miss a second
+    // later and topped it up, which is what it is for -- but the rail already
+    // reads the cart after the batch and could have caught it itself.
+    //
+    // This stub accepts the first write and drops it on the floor, then behaves
+    // on the second.
+    await runner.inject([
+      '(function () {',
+      '  window.__writes = 0; window.__lines = [];',
+      '  window.fetch = function (url, init) {',
+      '    var body = JSON.parse(init.body);',
+      '    if (body.operationName === "cartItemV2") {',
+      '      window.__writes++;',
+      '      // The FIRST write is accepted and never applied.',
+      '      if (window.__writes > 1) {',
+      '        window.__lines = [{ id: "l1", quantity: body.variables.quantity, estimatedWeight: null,',
+      '          product: { id: "319108", fullDisplayName: "Fresh Spinach" },',
+      '          sku: { id: "4090", customerFriendlySize: "1 Bundle" } }];',
+      '      }',
+      '      return Promise.resolve({ ok: true, status: 200, text: function () {',
+      '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: { __typename: "Cart", id: "c1" } } })); } });',
+      '    }',
+      '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+      '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart", id: "c1", items: window.__lines } } })); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+
+    await runner.inject(buildHebNetworkAddBatchScript([{
+      idx: 0, productId: '319108', skuId: '4090', quantity: 1, name: 'Fresh Spinach, 1 Bundle',
+    }])!);
+
+    // It says out loud that something it was told landed had not.
+    const unlanded = await runner.waitForMessage('NET_ADD_UNLANDED', 15_000);
+    expect(unlanded.count).toBe(1);
+    expect(unlanded.names).toEqual(['Fresh Spinach, 1 Bundle']);
+
+    const done = await runner.waitForMessage('NET_ADD_DONE', 15_000);
+    // Two writes: the accepted-and-lost one, and the retry.
+    expect(done.cartAfter).toContainEqual({ name: 'Fresh Spinach, 1 Bundle', qty: 1 });
+    // And the per-item record matches the CART, not the mutation.
+    const results = runner.messagesOfType('NET_ADD_RESULT');
+    expect(results[results.length - 1]).toMatchObject({
+      name: 'Fresh Spinach, 1 Bundle', success: true, detail: 'landed on retry',
+    });
+  });
+
+  itWithFixture('logged-in-home.html', 'a write that is still absent after the retry is reported FAILED', async (runner) => {
+    // The other half. Retrying once is the whole allowance: if the cart still
+    // does not have it, the run must say so rather than report the mutation's
+    // "Cart" as a landing. Reporting it landed is how an item ends up in neither
+    // the added list nor the failed one.
+    await runner.inject([
+      '(function () {',
+      '  window.fetch = function (url, init) {',
+      '    var body = JSON.parse(init.body);',
+      '    if (body.operationName === "cartItemV2") {',
+      '      return Promise.resolve({ ok: true, status: 200, text: function () {',
+      '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: { __typename: "Cart", id: "c1" } } })); } });',
+      '    }',
+      '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+      '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart", id: "c1", items: [] } } })); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+
+    await runner.inject(buildHebNetworkAddBatchScript([{
+      idx: 0, productId: '319108', skuId: '4090', quantity: 1, name: 'Fresh Spinach, 1 Bundle',
+    }])!);
+
+    const done = await runner.waitForMessage('NET_ADD_DONE', 15_000);
+    // `wrote` is corrected too, or the run reports adding something it did not.
+    expect(done.wrote).toBe(0);
+    const results = runner.messagesOfType('NET_ADD_RESULT');
+    expect(results[results.length - 1]).toMatchObject({
+      name: 'Fresh Spinach, 1 Bundle', success: false, reason: 'cart_not_incremented',
+    });
   });
 
   itWithFixture('logged-in-home.html', 'cart rows carry the SIZE, or the done screen reshuffles', async (runner) => {
