@@ -65,12 +65,13 @@ jest.mock('../../src/lib/api', () => ({
 
 // A prewarm that already knows the user is signed in — the gate the effect
 // checks, because a probe at a signed-out page answers nothing.
+(global as any).__prewarmStatus = 'loggedIn';
 jest.mock('../../src/context/LoginPrewarmContext', () => {
   const actual = jest.requireActual('../../src/context/LoginPrewarmContext');
   return {
     ...actual,
     useLoginPrewarm: () => ({
-      getStatus: () => 'loggedIn',
+      getStatus: () => (global as any).__prewarmStatus,
       statusVersion: 1,
       checkStore: () => {},
       takePrewarmedCart: () => null,
@@ -462,5 +463,50 @@ describe('a product already chosen is not searched again', () => {
     // ...and it still reaches the cart.
     const write = injected.find((s) => s.includes('cartItemV2'))!;
     expect(write).toContain('p-sour-cream');
+  });
+});
+
+describe('a prewarm that says signed out is checked, not obeyed', () => {
+  // Stephen, 2026-09-02: "tell me why I saw the you are not logged in webview in
+  // albertsons. I was logged in and eventually mealio noticed. I should not be
+  // shown this webview until the login check is done."
+  //
+  //     positive signal we are NOT logged in -> show the webview
+  //     positive signal we ARE logged in     -> continue with the add
+  //     no signal                            -> show the webview
+  //
+  // A prewarm verdict is not the first line. On the device its probe ran 378ms
+  // after a cold WebView loaded, got a 200 with no token and published
+  // loggedOut; the sheet's own probe eight seconds later got the token. The
+  // sign-in screen had already been shown on the prewarm's word.
+  afterEach(() => { (global as any).__prewarmStatus = 'loggedIn'; });
+
+  const sessionProbes = () => injected.filter((s) => s.includes('myPreferredStore')).length;
+
+  it('asks for itself instead of surfacing the sign-in screen', () => {
+    (global as any).__prewarmStatus = 'loggedOut';
+    const { view, load } = openSheet();
+    load();
+    const before = sessionProbes();
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    // The check is injected on the next page settle, as it always has been.
+    load();
+
+    // It ran its own check rather than believing the prewarm...
+    expect(sessionProbes()).toBe(before + 1);
+    // ...so the user is not looking at a sign-in page yet.
+    expect(view.queryByText(/sign in|log in/i)).toBeNull();
+  });
+
+  it('and a signed-in prewarm still skips the check', () => {
+    // The half that is safe to trust: being wrong here costs a run that fails at
+    // the first write and is surfaced by the reconcile. Being wrong the other
+    // way blocks a signed-in user from their own groceries.
+    const { view, load } = openSheet();
+    load();
+    const before = sessionProbes();
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    load();
+    expect(sessionProbes()).toBe(before);
   });
 });

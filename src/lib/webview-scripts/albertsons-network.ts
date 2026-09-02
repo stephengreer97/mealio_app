@@ -1083,7 +1083,30 @@ export function buildAlbertsonsNetworkAddBatchScript(
     (it) => it && it.productId && Number.isFinite(it.quantity) && it.quantity > 0,
   );
   if (!usable.length) return null;
-  // THREE AT A TIME. The serialisation was protecting nothing.
+  // BACK TO ONE AT A TIME. The serialisation WAS protecting something.
+  //
+  // I removed it on the reasoning below, which is sound about our arithmetic and
+  // wrong about the store's. Stephen's next run, twenty items:
+  //
+  //     network run: writing 18 of 20
+  //     network run: wrote  18 of 18      every write verified against its own
+  //                                       response and reported success
+  //     cart before 133 -> after 143      +10, not +18
+  //     reconcile: confirmed 6, retry 12
+  //
+  // Twelve items the store acknowledged and then did not keep. Retrying them
+  // three-up lost five more. That is a lost update: the cart is one document,
+  // and concurrent read-modify-writes against it overwrite each other however
+  // separate the LINES are. The response each write returns is a snapshot taken
+  // before its neighbours landed, which is exactly why every one of them looked
+  // fine.
+  //
+  // Costs about a second per item and is worth every one of them. Under-adding
+  // is the failure the cart's governing principles exist to prevent, and I
+  // shipped it for a 4x speed-up nobody asked for.
+  //
+  // What the original comment got right, kept because it is still true of OUR
+  // side and is not the reason:
   //
   // The stated reason was that each write's response carries the cart state the
   // next one's baseline depends on. It does not: `base` is read ONCE before the
@@ -1100,7 +1123,7 @@ export function buildAlbertsonsNetworkAddBatchScript(
   // Capped at three rather than opened up: they do share a cart, even if not a
   // line, and the write already verifies itself against the cart the response
   // returns. A store that dislikes concurrent cart writes will say so there.
-  const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 3, 4));
+  const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 1, 4));
   return `(async function () {
 ${ALB_PRELUDE}
   var ITEMS = ${JSON.stringify(usable)};

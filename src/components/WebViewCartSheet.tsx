@@ -2739,13 +2739,33 @@ export default function WebViewCartSheet({
     searchIdxRef.current = 0;
     const pre = loginPrewarm.getStatus(lockedStoreIdRef.current);
     if (pre === 'loggedOut') {
-      console.log(`[Cart ${ts()}]`, 'prewarm: known logged out — surfacing login directly');
-      surfaceLoginDirect();
-      return;
-    }
-    if (pre === 'loggedIn') {
-      // The silent pre-warm already confirmed login — skip the login_check
-      // round-trip and go straight to the before-cart snapshot + search/add.
+      // A SIGNED-OUT VERDICT IS CHECKED BEFORE IT IS ACTED ON.
+      //
+      // Stephen, 2026-09-02: "tell me why I saw the you are not logged in webview
+      // in albertsons. I was logged in and eventually mealio noticed."
+      //
+      // The prewarm had said loggedOut and this surfaced the sign-in screen on
+      // its word alone. Its probe ran 378ms after a cold WebView finished
+      // loading and got back a 200 with no token; the sheet's own probe, eight
+      // seconds later, got the token and said signed in.
+      //
+      // The rule, in his words:
+      //     positive signal we are NOT logged in -> show the webview
+      //     positive signal we ARE logged in     -> continue with the add
+      //     no signal                            -> show the webview
+      //
+      // A prewarm verdict is not the positive signal in the first line -- it is
+      // one probe's answer, taken early, from a WebView built for speed rather
+      // than for being right. So it no longer decides; it falls through to the
+      // sheet's own check, which measured 0.24s on this run and whose verdict
+      // does decide. A genuine signed-out user reaches the same screen a quarter
+      // of a second later.
+      console.log(`[Cart ${ts()}]`, 'prewarm: said logged out — checking for ourselves before surfacing login');
+    } else if (pre === 'loggedIn') {
+      // A POSITIVE signal, and the only one that skips the check. Being wrong
+      // here costs a run that starts and fails at the first write, which the
+      // reconcile surfaces; being wrong the other way blocks a signed-in user
+      // from their own groceries, which is why that direction is verified.
       console.log(`[Cart ${ts()}]`, 'prewarm: known logged in — skipping login check, going straight to snapshot');
       snapshotBeforeAndBeginSearch();
       return;
