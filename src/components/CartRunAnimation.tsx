@@ -95,7 +95,11 @@ export default function CartRunAnimation({ progress, label, title, note }: Props
         </View>
       </Animated.View>
 
-      <Text style={styles.title}>{title || 'Filling your cart'}</Text>
+      {/* No default. "Filling your cart" was shown for the whole run including
+          the half of it that is not filling anything -- searching, checking the
+          login, choosing products. A caller with something true to say passes
+          it; the rest of the time the bag says enough on its own. */}
+      {!!title && <Text style={styles.title}>{title}</Text>}
       {!!label && <Text style={styles.label} numberOfLines={1} testID="cart-run-label">{label}</Text>}
       {!!note && <Text style={styles.note} testID="cart-run-note">{note}</Text>}
     </View>

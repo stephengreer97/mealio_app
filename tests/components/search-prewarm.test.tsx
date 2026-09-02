@@ -510,3 +510,65 @@ describe('a prewarm that says signed out is checked, not obeyed', () => {
     expect(sessionProbes()).toBe(before);
   });
 });
+
+describe('a Choose Products run fills the bag with its search', () => {
+  // The two-phase split — search 0..0.5, add 0.5..1 — describes an ADD run,
+  // where the search really is the first half of the work. A choose run searches
+  // and then hands the results to the user: there is no add phase to fill the
+  // second half, so the bag stopped half full and sat there while the run was in
+  // fact finished.
+  const unchosen = {
+    id: 'm3', name: 'Tacos',
+    ingredients: [
+      { ingredientName: 'Sour Cream', searchTerm: null, productQty: 1, qty: 1, unit: 'qty', measure: null },
+      { ingredientName: 'Tortillas', searchTerm: null, productQty: 1, qty: 1, unit: 'qty', measure: null },
+    ],
+  };
+
+  it('reaches the end of the bag, not the middle', () => {
+    jest.useFakeTimers();
+    __applyAutomationConfigForTests({
+      stores: { heb: { networkSearch: true, networkAdd: true, cartSkuConfirm: true } },
+    });
+    const view = render(
+      <WebViewCartSheet visible meals={[unchosen] as never} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+    );
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    const load = () => act(() => {
+      const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/' } });
+    });
+
+    // Nothing is chosen, so the sheet goes straight to the choose flow.
+    load();
+    post(SESSION);
+    // The before-snapshot has to answer before the search phase starts.
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION);
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'Sour Cream', candidates: [candidate('Sour Cream')] });
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'Tortillas', candidates: [candidate('Tortillas')] });
+
+    // The bag walks THROUGH the frames rather than cutting, so let it arrive.
+    for (let i = 0; i < 40; i++) act(() => { jest.advanceTimersByTime(60); });
+    jest.useRealTimers();
+
+    // Both terms answered. On an add run that is halfway; here it is the whole
+    // job, and the animation has to say so. Read off the sprite frame the way
+    // the animation's own suite does — the LAST frame is a full bag.
+    const meta = require('../../assets/anim/bag-fill.json');
+    const win = view.getByTestId('bag-frame-window').children[0] as unknown as
+      { props: { style: Record<string, unknown> } };
+    const t = (win.props.style.transform ?? []) as Array<Record<string, number>>;
+    const dispH = 232;
+    const dispW = Math.round(meta.frameWidth * (dispH / meta.frameHeight));
+    const col = Math.round(Math.abs(t.find((x) => 'translateX' in x)?.translateX ?? 0) / dispW);
+    const row = Math.round(Math.abs(t.find((x) => 'translateY' in x)?.translateY ?? 0) / dispH);
+    const frame = row * meta.cols + col;
+    // Half full would be frame 2 or 3 of 6. A finished choose run is the last.
+    expect(frame).toBe(meta.frames - 1);
+  });
+});

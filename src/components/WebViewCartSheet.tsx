@@ -961,8 +961,17 @@ export default function WebViewCartSheet({
   const netPctRef = useRef(0);
   const [netPct, setNetPct] = useState<number | null>(null);
   const advanceNetPct = useCallback((phase: 'search' | 'add', done: number, total: number) => {
-    const base = phase === 'search' ? 0 : 0.5;
-    const raw = total > 0 ? base + 0.5 * Math.min(1, done / total) : base;
+    // A CHOOSE RUN IS ALL SEARCH, so its search fills the whole bag.
+    //
+    // The two-phase split — search 0..0.5, add 0.5..1 — describes an ADD run,
+    // where the search genuinely is the first half of the work. A choose run
+    // searches and then hands the results to the user: there is no add phase to
+    // fill the second half, so the bag stopped half full and sat there while the
+    // run was in fact finished.
+    const chooseOnly = netChooseOnlyRef.current;
+    const span = chooseOnly ? 1 : 0.5;
+    const base = (phase === 'search' || chooseOnly) ? 0 : 0.5;
+    const raw = total > 0 ? base + span * Math.min(1, done / total) : base;
     if (raw > netPctRef.current) { netPctRef.current = raw; setNetPct(raw); }
   }, []);
   const resetNetPct = useCallback(() => { netPctRef.current = 0; setNetPct(null); }, []);

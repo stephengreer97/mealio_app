@@ -118,3 +118,20 @@ describe('CartRunAnimation', () => {
       .toContain('taking longer than usual');
   });
 });
+
+describe('the title says nothing unless there is something to say', () => {
+  // "Filling your cart" was the default, so it showed for the whole run —
+  // including the parts that are not filling anything: checking the login,
+  // searching, and a Choose Products run that never adds at all.
+  it('renders no title when none is given', () => {
+    const { queryByText } = render(<CartRunAnimation progress={0.5} label={null} note={null} />);
+    expect(queryByText('Filling your cart')).toBeNull();
+  });
+
+  it('renders the one it is given', () => {
+    const { getByText } = render(
+      <CartRunAnimation progress={null} label={null} note={null} title="Checking your H-E-B account" />,
+    );
+    expect(getByText('Checking your H-E-B account')).toBeTruthy();
+  });
+});
