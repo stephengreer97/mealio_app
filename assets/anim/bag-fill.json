@@ -1,9 +1,9 @@
 {
-  "frames": 40,
-  "cols": 8,
-  "rows": 5,
-  "frameWidth": 228,
+  "frames": 6,
+  "cols": 6,
+  "rows": 1,
+  "frameWidth": 238,
   "frameHeight": 320,
-  "sheetWidth": 1824,
-  "sheetHeight": 1600
+  "sheetWidth": 1428,
+  "sheetHeight": 320
 }

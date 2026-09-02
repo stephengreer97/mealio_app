@@ -9,15 +9,17 @@ from PIL import Image
 SRC_SHA256 = "8670a737aa80fc049588c3e468c0ed45e03d2ca204356a746eeb273bf1e8c097"
 SRC = sys.argv[1] if len(sys.argv) > 1 else "/mnt/c/Users/Steve/OneDrive/Desktop/6y9HsPBq.png"
 SRC_COLS, SRC_ROWS = 5, 8
-# EVERY FRAME, IN SHEET ORDER. Stephen's instruction, 2026-09-01: "use every
-# frame in the spritesheet I gave you... Just go in the same order as the sprite
-# sheet. Don't try to reorder the frames yourself."
+# SIX FRAMES, CHOSEN BY STEPHEN, IN SHEET ORDER.
 #
-# Earlier builds curated a subsequence because the raw order is not monotonic --
-# the bag fills, empties and refills. That was my call and it is reversed. The
-# sheet is the artwork and its order is the artwork's order.
-PICKS = list(range(40))
-OUT_COLS, FRAME_H = 8, 320
+# 2026-09-01 he asked for every frame -- "Just go in the same order as the sprite
+# sheet. Don't try to reorder the frames yourself" -- after an earlier build of
+# mine curated a subsequence on my own judgement. 2026-09-02 he picked these six
+# himself. The order is still the sheet's; only the selection is his.
+#
+# Keeping the indexes as HE wrote them, so a future change is a conversation
+# about the same numbers rather than about a translation of them.
+PICKS = [5, 10, 15, 20, 25, 35]
+OUT_COLS, FRAME_H = 6, 320
 
 import hashlib
 actual = hashlib.sha256(open(SRC, "rb").read()).hexdigest()
