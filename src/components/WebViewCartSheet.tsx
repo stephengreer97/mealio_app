@@ -924,8 +924,9 @@ export default function WebViewCartSheet({
   const netPrewarmStartedRef = useRef(false);
   const netPrewarmCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
   const netPrewarmTermsRef = useRef<string[]>([]);
-  /** Set when the prewarm has finished (or given up), so the WebView it needed
-   *  is not kept mounted through the qty screen for nothing. */
+  /** Set when the prewarm has finished (or given up). Diagnostic only now — the
+   *  WebView stays mounted through the qty screen either way, because keeping
+   *  the page LOADED is worth more than the prewarm that needed it. */
   const netPrewarmDoneRef = useRef(false);
   /** The qty screen's items, for onLoadEnd — which has []-deps and would
    *  otherwise read this run's initial empty list. */
@@ -5399,11 +5400,25 @@ export default function WebViewCartSheet({
   // survive the login_check + snapshot window; the tiles themselves are kept
   // offscreen until the commit phase shows them live.
   const presearchGrid = FEATURE_PRESEARCH_ADD && presearchPool.workerUris.some((u) => !!u);
-  // The main WebView stays MOUNTED through the qty screen on a rail store, so
-  // the search prewarm has somewhere to run. It is hidden — the region only
-  // renders visibly from login_check onwards — and it is the same trick the
-  // pre-search pool used to keep its parked pages alive across this screen.
-  const prewarmNeedsWebView = !!getNetworkRail(lockedStoreId) && !netPrewarmDoneRef.current;
+  // THE MAIN WEBVIEW STAYS MOUNTED THROUGH THE QTY SCREEN ON A RAIL STORE.
+  //
+  // Two things need it, and the second one is worth more than the first.
+  //
+  // 1. The search prewarm has somewhere to run.
+  //
+  // 2. THE PAGE IS ALREADY LOADED WHEN THE RUN STARTS. It was not before, and
+  //    that is the whole of the slow login. The WebView mounted when the run
+  //    began, so the session probe was injected into a document that was still
+  //    navigating; the injection died with it, and the run waited for the next
+  //    onLoadEnd to ask again. Measured across 34 runs: 0.42s when the page was
+  //    ready, 2.68s when it was not, and nothing in between — two clean groups,
+  //    which is what "wait for the next page load" looks like rather than a slow
+  //    network.
+  //
+  // Not gated on the prewarm being unfinished, deliberately. Unmounting the
+  // moment it completes would send the page away again and put the run back to
+  // loading it from scratch — which is the cost this is here to remove.
+  const prewarmNeedsWebView = !!getNetworkRail(lockedStoreId);
   const presearchCommitVisible = step === 'adding' && presearchPool.isCommitting;
   // Parked worker tiles currently live (the cold slot is the main cell, not a tile).
   const presearchParkedTilesLive = FEATURE_PRESEARCH_ADD

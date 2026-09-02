@@ -185,3 +185,54 @@ describe('the search prewarm', () => {
     expect(searchBatches()).toBe(0);
   });
 });
+
+describe('the page is loaded before the run needs it', () => {
+  // The other half of what mounting the WebView through the qty screen buys, and
+  // the more valuable half.
+  //
+  // The session probe is two GraphQL calls, not a read of anything the page
+  // publishes — so it does not need the page to be "ready", it needs the page to
+  // still BE THERE. Before this, the WebView mounted when the run started, so
+  // the probe was injected into a document that was still navigating and died
+  // with it. The run then waited for the next onLoadEnd to ask again:
+  //
+  //   09:23:40.086  network run: reading the session
+  //   09:23:41.542  re-reading the session on https://www.heb.com/
+  //   09:23:42.516  re-reading the session on https://www.heb.com/
+  //   09:23:42.575  HEB_SESSION   (2.5s after the first ask)
+  //
+  // Measured across 34 runs: 0.42s when the page was ready, 2.68s when it was
+  // not, and nothing in between.
+  it('mounts the store WebView while the user is still on qty', () => {
+    const { view } = openSheet();
+    const main = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+    expect(main).toBeTruthy();
+    // ...and it is pointed at the store, not left blank.
+    expect(String((main as any).props.source?.uri || '')).toContain('heb.com');
+  });
+
+  it('keeps it mounted after the prewarm has finished', () => {
+    // Unmounting on completion would send the page away again and put the run
+    // back to loading it from scratch — the exact cost this removes.
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('sour cream')] });
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+
+    const main = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+    expect(main).toBeTruthy();
+  });
+
+  it('does NOT mount it on a store with no rail', () => {
+    // An assisted store's WebView is the user's. Loading it behind a screen they
+    // have not finished with buys nothing and starts a session they may not use.
+    __resetAutomationConfigForTests();
+    const view = render(
+      <WebViewCartSheet visible meals={[meal] as never} storeId="walmart" storeName="Walmart" onClose={() => {}} />,
+    );
+    const main = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+    expect(main).toBeFalsy();
+  });
+});
