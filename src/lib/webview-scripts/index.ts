@@ -85,6 +85,19 @@ function getHebScripts(): StoreScripts {
   const cfg = storeConfig('heb');
   return {
   storeUrl: cfg.storeUrl ?? HEB_URL,
+  // The same quiet page Albertsons uses, and for the same measured reason.
+  //
+  // Stephen, 2026-09-02: "HEB was extremely fast yesterday. Now its not
+  // working." Every term came back TypeError: Failed to fetch on a SAME-ORIGIN
+  // POST to /graphql, immediately followed by two "re-reading the session"
+  // lines -- the storefront homepage had navigated and taken the in-flight
+  // requests with it. Fast on the runs where it happened to have settled,
+  // broken on the ones where it had not.
+  //
+  // The rail needs the origin's cookies and nothing else: no DOM, no clicks,
+  // nothing on screen. robots.txt is the same origin, carries the same session,
+  // and has nothing that can redirect.
+  railUrl: `${HEB_URL}/robots.txt`,
   loginUrl: cfg.loginUrl ?? HEB_LOGIN_URL,
   cartUrl: cfg.cartUrl ?? HEB_CART_URL,
   domain: 'heb.com',
