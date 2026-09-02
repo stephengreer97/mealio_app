@@ -840,12 +840,16 @@ ${albSearchUrlExpr(pageSize, storeId)}
   // ladder is five requests per term against a service whose latency is the
   // complaint. What is left is the light service and the heavy one:
   //
-  //   plain  /abs/pub/xapi/search/products     products only
   //   site   /abs/pub/xapi/pgmsearch/v1/...    + offers, sponsored, personalised
+  //   plain  /abs/pub/xapi/search/products     products only
   //
-  // Same result shape, so the fallback costs nothing but a second request, and
-  // only on a term the light service refused.
-  var VARIANTS = ['plain', 'site'];
+  // THE PROVEN ONE GOES FIRST. The light service looked like the obvious win --
+  // it does less work -- so it was tried first for one morning. It answered 400
+  // OSSR0034-D to every single term, fifty of them in one run, and never once
+  // returned a product. The heavy service is the one that actually works on this
+  // account, so it leads; the light one stays as the fallback in case that ever
+  // reverses. Same result shape either way.
+  var VARIANTS = ['site', 'plain'];
   var winner = null;
 
   async function attempt(term, variant) {
@@ -918,13 +922,25 @@ ${albSearchUrlExpr(pageSize, storeId)}
     var first = winner || VARIANTS[0];
     var got = await attempt(term, first);
     got.variant = first;
-    if (!got.ok && got.why === 'search_error' && !winner) {
-      // Only a REJECTED shape is worth re-shaping. A timeout or a 5xx is the
-      // store having a bad minute and every variant would meet the same wall.
+    // A REFUSAL is worth re-asking elsewhere; a bad minute is not.
+    //
+    // This used to test only for the soft envelope -- 200 with appCode 400 --
+    // and an HTTP 400 skipped the fallback entirely. That is exactly how the
+    // light service failed: it answers a hard 400, so the run never reached the
+    // service that works and fifty terms in a row came back empty. A 4xx IS the
+    // service refusing us. A 5xx, a timeout or a dead connection is the store
+    // having a bad minute, and asking the other one to meet the same wall costs
+    // a second request per term for nothing.
+    var refused = got.why === 'search_error'
+      || (got.why === 'http' && got.status >= 400 && got.status < 500);
+    if (!got.ok && refused && !winner) {
       for (var vi = 0; vi < VARIANTS.length; vi++) {
         if (VARIANTS[vi] === first) continue;
         var alt = await attempt(term, VARIANTS[vi]);
         alt.variant = VARIANTS[vi];
+        // Report the fallback's own answer either way: when it works this names
+        // the shape to keep, and when it does not it is the only record that we
+        // asked at all.
         if (alt.ok) {
           winner = VARIANTS[vi];
           post({ type: 'SEARCH_SHAPE_OK', source: 'network', variant: winner,
@@ -932,6 +948,12 @@ ${albSearchUrlExpr(pageSize, storeId)}
           got = alt;
           break;
         }
+        // Keep the LAST answer, not the first: the fallback's status is the more
+        // informative one, and reporting the first made every failure in the log
+        // read as though only one service had been asked.
+        alt.firstVariant = first;
+        alt.firstStatus = got.status != null ? got.status : null;
+        got = alt;
       }
     }
     var url = got.url;
@@ -949,7 +971,9 @@ ${albSearchUrlExpr(pageSize, storeId)}
           try { var k = __albKeyFor(got.variant || ''); return k ? String(k).slice(-4) : null; }
           catch (e) { return null; }
         })(),
-        variant: winner || first, ms: got.ms != null ? got.ms : null,
+        variant: got.variant || first, ms: got.ms != null ? got.ms : null,
+        firstVariant: got.firstVariant != null ? got.firstVariant : null,
+        firstStatus: got.firstStatus != null ? got.firstStatus : null,
         vis: (function () { try { return document.visibilityState; } catch (e) { return null; } })(),
         worstTickMs: beat.worst,
         sentQuery: redact(url)

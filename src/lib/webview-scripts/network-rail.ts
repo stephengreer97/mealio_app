@@ -52,6 +52,22 @@ export interface NetworkRail {
    */
   cartRead(): string;
   addBatch(items: NetworkAddItem[], opts?: { concurrency?: number }): string | null;
+  /**
+   * Can this store WRITE the candidate the matcher picked?
+   *
+   * The stores address a cart line differently, and the difference is not a
+   * detail the shared matcher should carry. H-E-B needs a sku; Albertsons needs
+   * only the product id, and its search never returns a sku at all.
+   *
+   * MEASURED 2026-09-02: the matcher required BOTH, so every Albertsons run
+   * ended 'nothing matched exactly' -- with six terms answered, thirty
+   * candidates for one of them, and the right product sitting in the list. The
+   * rail could never have added anything, whatever the search did. H-E-B's own
+   * addBatch already filtered on sku and said in its comment that the filter was
+   * "the store's constraint, not a shared rule"; this is that sentence made
+   * true.
+   */
+  writable(candidate: { productId?: string | null; skuId?: string | null }): boolean;
 }
 
 const HEB_RAIL: NetworkRail = {
@@ -66,6 +82,7 @@ const HEB_RAIL: NetworkRail = {
       items.filter((i) => !!i.skuId).map((i) => ({ ...i, skuId: String(i.skuId) })),
       opts,
     ),
+  writable: (c) => !!c.productId && !!c.skuId,
 };
 
 const ALBERTSONS_RAIL: NetworkRail = {
@@ -75,6 +92,9 @@ const ALBERTSONS_RAIL: NetworkRail = {
     buildAlbertsonsNetworkSearchBatchScript(terms, { storeId: sess.storeId }),
   cartRead: () => buildAlbertsonsCartReadScript(),
   addBatch: (items, opts) => buildAlbertsonsNetworkAddBatchScript(items, opts),
+  // The cart is addressed by product id; the search returns no sku, and none is
+  // needed to write.
+  writable: (c) => !!c.productId,
 };
 
 /**

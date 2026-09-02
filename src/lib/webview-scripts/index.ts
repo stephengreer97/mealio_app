@@ -24,6 +24,24 @@ import {
 
 export interface StoreScripts {
   storeUrl: string;
+  /**
+   * A QUIET page on the same origin, for stores that have a network rail.
+   *
+   * The rail makes plain HTTPS calls. The only thing it needs from a WebView is
+   * the origin's cookies -- it reads no DOM, clicks nothing, and does not care
+   * what is on screen. Parking it on the full storefront homepage means those
+   * calls share a renderer with the site's own Angular + Next + advertising +
+   * bot-defence bundles.
+   *
+   * MEASURED 2026-09-02 from inside the injected script, on the homepage:
+   *   worstTickMs 47269   a 1-second interval firing 47 SECONDS late
+   *   vis 'visible'       screen on, app foreground, not display sleep
+   * while the requests themselves, when they got to run, took 288-758ms.
+   *
+   * So the rail is not slow; it is queued behind somebody else's page. This is
+   * the same origin -- same cookies, same session -- with none of that.
+   */
+  railUrl?: string;
   loginUrl: string;
   cartUrl: string;
   domain: string;

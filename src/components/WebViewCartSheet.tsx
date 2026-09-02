@@ -974,7 +974,7 @@ export default function WebViewCartSheet({
   /** What the network run matched, by item index. Kept so a top-up can re-write
    *  the shortfall without searching again — it already knows the product. */
   const netMatchedRef = useRef<Map<number, {
-    productId: string; skuId: string; name: string;
+    productId: string; skuId: string | null; name: string;
     purchasePreferenceId: string | null; maxOrderQuantity: number | null;
   }>>(new Map());
   /** This run went down the network route. The top-up reads it to decide whether
@@ -1799,7 +1799,7 @@ export default function WebViewCartSheet({
     if (!sess) { netFallBackToPool('no_session_at_add'); return; }
 
     const toWrite: Array<{
-      idx: number; productId: string; skuId: string; quantity: number; name: string;
+      idx: number; productId: string; skuId: string | null; quantity: number; name: string;
       isWeightItem?: boolean; purchasePreferenceId?: string | null; maxOrderQuantity?: number | null;
     }> = [];
     netResultsRef.current = new Map();
@@ -1826,7 +1826,13 @@ export default function WebViewCartSheet({
       // looser here would add a product the user did not ask for, which is the
       // one thing the cart rules never allow.
       const exact = candidates.filter((c) => scoreMatch(term, c.productName) === 100);
-      const match = exact.find((c) => !c.outOfStock && c.productId && c.skuId);
+      // WRITABILITY IS THE STORE'S RULE, NOT THIS FUNCTION'S. H-E-B addresses a
+      // cart line by sku; Albertsons addresses it by product id and its search
+      // returns no sku at all. Requiring both here meant no Albertsons candidate
+      // could ever match, however good the search was.
+      const rail = netRail();
+      const canWrite = (c: Candidate) => (rail ? rail.writable(c) : !!c.productId && !!c.skuId);
+      const match = exact.find((c) => !c.outOfStock && canWrite(c));
       if (!match) {
         // The reason has to distinguish three different situations, because the
         // reconcile routes on it and one of them must NOT be retried.
@@ -1893,8 +1899,8 @@ export default function WebViewCartSheet({
       // Re-read after the find: the predicate proved these are present, but that
       // narrowing does not survive out of it.
       const productId = match.productId;
-      const skuId = match.skuId;
-      if (!productId || !skuId) {
+      const skuId = match.skuId ?? null;
+      if (!productId) {
         netResultsRef.current.set(idx, {
           success: false, productName: match.productName, reason: 'low_confidence', candidates,
         });
@@ -2401,8 +2407,13 @@ export default function WebViewCartSheet({
       // 1's selector samples — and it is a RATE, so carrying a healthy run's
       // denominator into a broken one is exactly the way to hide the break.
       selectorHealthRef.current = new SelectorHealthTally();
-      console.log(`[Cart ${ts()}]`, 'initial webviewUri=', scriptsRef.current!.storeUrl);
-      setWebviewUri(scriptsRef.current!.storeUrl);
+      // A rail store lands on its QUIET page: the rail needs the origin's
+      // cookies and nothing else, and the storefront homepage was starving it.
+      // A run that falls back to the page pool navigates itself from here.
+      const landing = (getNetworkRail(lockedStoreIdRef.current)
+        && scriptsRef.current!.railUrl) || scriptsRef.current!.storeUrl;
+      console.log(`[Cart ${ts()}]`, 'initial webviewUri=', landing);
+      setWebviewUri(landing);
       loadQueueRef.current = [];
       lastLoadEndUrlRef.current = '';
       expectedNavUrlRef.current = '';
@@ -4264,7 +4275,7 @@ export default function WebViewCartSheet({
               // write, and those fall through to the page path below.
               if (netRunRef.current && netMatchedRef.current.size > 0) {
                 const writes: Array<{
-                  idx: number; productId: string; skuId: string; quantity: number; name: string;
+                  idx: number; productId: string; skuId: string | null; quantity: number; name: string;
                   purchasePreferenceId?: string | null; maxOrderQuantity?: number | null;
                 }> = [];
                 const stillNeedsPage = new Map<number, ConsolidatedIngredient>();
@@ -4666,7 +4677,8 @@ export default function WebViewCartSheet({
           console.log(`[Cart ${ts()}]`, 'network search failed for', String(msg.term).slice(0, 30), '—', msg.why,
             'status=', msg.status ?? null, 'ms=', msg.ms ?? null, 'vis=', msg.vis ?? null,
             'worstTick=', msg.worstTickMs ?? null, 'keyTail=', msg.keyTail ?? null,
-            'detail=', msg.detail ?? null);
+            'variant=', msg.variant ?? null, 'first=', msg.firstVariant ?? null,
+            'firstStatus=', msg.firstStatus ?? null, 'detail=', msg.detail ?? null);
           if (typeof msg.term === 'string') netFailedTermsRef.current.add(msg.term);
           return;
         }

@@ -72,3 +72,31 @@ describe('network rail resolution', () => {
     ])).not.toBeNull();
   });
 });
+
+describe('writability is the store\'s rule, not a shared one', () => {
+  // MEASURED 2026-09-02: the matcher required BOTH a productId and a skuId, so
+  // every Albertsons run ended "nothing matched exactly" -- with every term
+  // answered, thirty candidates for one of them, and the right product in the
+  // list. Albertsons addresses a cart line by product id and its search returns
+  // no sku at all, so the rail could never have added anything.
+  it('H-E-B needs a sku, because that is how it addresses a cart line', () => {
+    const heb = getNetworkRail('heb')!;
+    expect(heb.writable({ productId: 'p1', skuId: 's1' })).toBe(true);
+    expect(heb.writable({ productId: 'p1', skuId: null })).toBe(false);
+    expect(heb.writable({ productId: null, skuId: 's1' })).toBe(false);
+  });
+
+  it('Albertsons needs only the product id', () => {
+    const alb = getNetworkRail('albertsons')!;
+    expect(alb.writable({ productId: 'p1', skuId: null })).toBe(true);
+    expect(alb.writable({ productId: null, skuId: null })).toBe(false);
+  });
+
+  it('every rail answers the question', () => {
+    for (const id of ['heb', 'albertsons', 'safeway', 'vons']) {
+      const rail = getNetworkRail(id);
+      if (!rail) continue;
+      expect(typeof rail.writable).toBe('function');
+    }
+  });
+});

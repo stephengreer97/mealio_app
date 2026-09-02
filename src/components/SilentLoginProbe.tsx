@@ -81,7 +81,12 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
   // How many times this capture has injected the count script (MEAL-189).
   // Counted, not latched, and NOT keyed on the URL — see the note in onLoadEnd.
   const cartInjectionsRef = useRef(0);
-  const [uri, setUri] = useState(scripts ? scripts.storeUrl : 'about:blank');
+  // THE QUIET PAGE, for the same reason the run uses it: this probe asks the
+  // store's own endpoints and reads no DOM, so the storefront homepage is pure
+  // cost. Measured 2026-09-02: a 1-second interval fired 47 SECONDS late in a
+  // document sitting on the homepage, and 2.3 s late on the quiet one.
+  const probeUrl = scripts ? (scripts.railUrl || scripts.storeUrl) : 'about:blank';
+  const [uri, setUri] = useState(probeUrl);
 
   const beforeContent = Platform.OS === 'android' ? WEBVIEW_FINGERPRINT_SHIM : undefined;
 
@@ -161,7 +166,7 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
 
   useEffect(() => {
     if (!scripts) { finish('error'); return; }
-    console.log('[Prewarm] probe mounted for', storeId, '→ loading', scripts.storeUrl);
+    console.log('[Prewarm] probe mounted for', storeId, '→ loading', probeUrl);
     return () => {
       if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
     };

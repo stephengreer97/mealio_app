@@ -1768,6 +1768,9 @@ export function getScripts(storeId: string): StoreScripts {
 
   return {
     storeUrl: storeOrigin,
+    // Same origin, so the session cookies apply; served as a tiny text file, so
+    // the storefront's own bundles never run. See railUrl in StoreScripts.
+    railUrl: `${storeOrigin}/robots.txt`,
     loginUrl: storeOrigin,
     // MEAL-151: was `/shop/cart.html`, which 404s while `/erums/cart` returns 200
     // — spot-checked live on albertsons.com, safeway.com and vons.com. Not all
