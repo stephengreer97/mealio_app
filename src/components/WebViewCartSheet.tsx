@@ -299,6 +299,9 @@ export default function WebViewCartSheet({
   // is logged OUT of this store, we skip the login_check round-trip and surface
   // the login prompt immediately at add-to-cart time.
   const loginPrewarm = useLoginPrewarm();
+  // Mirrored for onLoadEnd, which has []-deps.
+  const loginPrewarmRef = useRef(loginPrewarm);
+  loginPrewarmRef.current = loginPrewarm;
 
   const [step, _setStep] = useState<Step>('qty');
   const stepRef = useRef<Step>('qty');
@@ -904,7 +907,29 @@ export default function WebViewCartSheet({
   const netFailedTermsRef = useRef<Set<string>>(new Set());
   const netResultsRef = useRef<Map<number, AddResult>>(new Map());
   const netActiveRef = useRef(false);
-  const netPhaseRef = useRef<'idle' | 'session' | 'search' | 'add'>('idle');
+  const netPhaseRef = useRef<'idle' | 'prewarm' | 'session' | 'search' | 'add'>('idle');
+  // ── Search prewarm ────────────────────────────────────────────────────────
+  //
+  // While the user is on the qty screen deciding quantities, the WebView is
+  // already sitting on a signed-in store page doing nothing. The searches the
+  // run is about to make do not depend on any of those decisions -- a quantity
+  // changes what we WRITE, never what we look up -- so they can happen now.
+  //
+  // It is the one phase that can move off the critical path. Measured across 34
+  // of Stephen's runs the search costs 97ms per term: 0.8s at eight items, 1.7s
+  // at eighteen. Done here it costs the run nothing.
+  //
+  // Search only. Nothing is written, so a user who backs out has changed nothing
+  // about their cart.
+  const netPrewarmStartedRef = useRef(false);
+  const netPrewarmCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
+  const netPrewarmTermsRef = useRef<string[]>([]);
+  /** Set when the prewarm has finished (or given up), so the WebView it needed
+   *  is not kept mounted through the qty screen for nothing. */
+  const netPrewarmDoneRef = useRef(false);
+  /** The qty screen's items, for onLoadEnd — which has []-deps and would
+   *  otherwise read this run's initial empty list. */
+  const qtyItemsRef = useRef<ConsolidatedIngredient[]>([]);
   const netTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** One write can speak for several items (same product, two ingredients).
    *  Maps the write's index to every item index it answers for. */
@@ -1728,6 +1753,9 @@ export default function WebViewCartSheet({
    * what a pool worker produces when it cannot match, so they land on the review
    * screen by the ordinary route.
    */
+  // netStartSearch is defined above and can now finish the search phase itself,
+  // when the prewarm already answered every term.
+  const netStartAddsRef = useRef<() => void>(() => {});
   const netStartAdds = useCallback(() => {
     const active = activeItemsRef.current;
     const sess = netSessionRef.current;
@@ -1931,6 +1959,7 @@ export default function WebViewCartSheet({
     netArmFinalize(75_000);
     webviewRef.current?.injectJavaScript(script);
   }, [finishParallelAdd, netArm, netArmFinalize, netFallBackToPool, setStep]);
+  netStartAddsRef.current = netStartAdds;
 
   /** Phase 2. One script, every term, no navigation. */
   const netStartSearch = useCallback(() => {
@@ -1941,10 +1970,34 @@ export default function WebViewCartSheet({
     if (!terms.length) { netFallBackToPool('no_terms'); return; }
     const rail = netRail();
     if (!rail) { netFallBackToPool('no_rail'); return; }
-    const script = rail.searchBatch(terms, sess);
-    if (!script) { netFallBackToPool('search_script_unbuildable'); return; }
+
+    // WHAT THE PREWARM ALREADY ANSWERED IS NOT ASKED AGAIN.
+    //
+    // Seeded rather than merged afterwards, so a term the prewarm has is never
+    // in the batch at all: asking twice would double this run's search volume
+    // against a store whose search is the part most likely to be shaped.
     netCandidatesRef.current = new Map();
+    let reused = 0;
+    for (const t of terms) {
+      const got = netPrewarmCandidatesRef.current.get(t);
+      if (got) { netCandidatesRef.current.set(t, got); reused += 1; }
+    }
+    const missing = terms.filter((t) => !netCandidatesRef.current.has(t));
     netFailedTermsRef.current = new Set();
+
+    if (missing.length === 0) {
+      // Everything was prewarmed. The run skips its search phase entirely.
+      console.log(`[Cart ${ts()}]`, 'network run: all', terms.length, 'terms already prewarmed — straight to writing');
+      netSearchTermsRef.current = terms;
+      netPhaseRef.current = 'search';
+      netStartAddsRef.current();
+      return;
+    }
+    if (reused > 0) {
+      console.log(`[Cart ${ts()}]`, 'network run: reusing', reused, 'prewarmed terms, searching', missing.length);
+    }
+    const script = rail.searchBatch(missing, sess);
+    if (!script) { netFallBackToPool('search_script_unbuildable'); return; }
     netSearchTermsRef.current = terms;
     netSearchInjectsRef.current = 1;
     netPhaseRef.current = 'search';
@@ -2190,6 +2243,14 @@ export default function WebViewCartSheet({
       setLockedStoreId(openStoreId);
       scriptsRef.current = openScripts;
       console.log(`[Cart ${ts()}]`, 'cart opened: locking store=', openStoreId);
+      // A new open is a new prewarm. Without this the flag stays set from the
+      // last one and the second run of a session searches on the critical path
+      // again -- and worse, a different meal's ingredients would be matched
+      // against whatever the previous open happened to look up.
+      netPrewarmStartedRef.current = false;
+      netPrewarmCandidatesRef.current = new Map();
+      netPrewarmTermsRef.current = [];
+      netPrewarmDoneRef.current = false;
       const consolidated = consolidateIngredients(meals);
       setItems(consolidated);
       setCheckedItems(consolidated.map(() => true));
@@ -2392,6 +2453,8 @@ export default function WebViewCartSheet({
   // A dropdown-weight item is active whenever it has a chosen weight; stepper
   // and normal items need productQty > 0. Same predicate the row's checkbox and
   // strikethrough read, so what the screen says matches what runs.
+  // For onLoadEnd's prewarm, which cannot read state.
+  qtyItemsRef.current = items;
   const activeCount = items.filter((it, i) => (checkedItems[i] ?? true) && !isZeroedOut(it)).length;
 
   // Cart snapshot AFTER the run. Fires when the before-snapshot succeeded and
@@ -3030,6 +3093,39 @@ export default function WebViewCartSheet({
     });
   }, [presearchPool, finishParallelAdd, setStep]);
 
+  /**
+   * Prewarm the searches while the user is on the qty screen.
+   *
+   * Fired from onLoadEnd, not from a step effect, and that is the whole trick:
+   * the session probe reads a bootstrap object the page publishes, so asking
+   * before the page has loaded gets nothing. It is also why the WebView is kept
+   * mounted through this screen at all.
+   *
+   * Gated on a KNOWN signed-in user. A probe at a signed-out page answers
+   * nothing and spends a request telling us what the prewarm already knew.
+   *
+   * Terms are read when it fires. Quantities can still change afterwards and it
+   * does not matter: a quantity changes what is WRITTEN, never what is looked
+   * up. An item added later simply is not prewarmed and the run searches it.
+   */
+  const maybeStartSearchPrewarm = useCallback(() => {
+    if (netPrewarmStartedRef.current || stepRef.current !== 'qty') return;
+    const rail = getNetworkRail(lockedStoreIdRef.current);
+    if (!rail) return;
+    if (loginPrewarmRef.current?.getStatus(lockedStoreIdRef.current) !== 'loggedIn') return;
+    const terms = Array.from(new Set(
+      qtyItemsRef.current.filter((it) => !isZeroedOut(it))
+        .map((it) => it.searchTerm || it.ingredientName)
+        .filter((t): t is string => !!t),
+    ));
+    if (terms.length === 0) return;
+    netPrewarmStartedRef.current = true;
+    netPhaseRef.current = 'prewarm';
+    netPrewarmTermsRef.current = terms;
+    console.log(`[Cart ${ts()}]`, 'search prewarm: asking the session for', terms.length, 'terms');
+    webviewRef.current?.injectJavaScript(rail.sessionScript());
+  }, []);
+
   const beginSearchFlow = useCallback(() => {
     setStep('searching');
     const active = activeItemsRef.current;
@@ -3387,6 +3483,10 @@ export default function WebViewCartSheet({
     }
     // Track whether we're on a search results page so subsequent items skip homepage reload.
     onSearchPageRef.current = s.isSearchUrl(url);
+    // The store page has loaded and the user is still choosing quantities: this
+    // is the only moment the search prewarm can run, and the only place it can
+    // know the page is ready to answer.
+    maybeStartSearchPrewarm();
     // A login page that finished loading with an empty document is terminal for
     // the user — they cannot sign in to a blank sheet, and no check script can
     // report the problem because they all throw on the first document.body read.
@@ -4388,6 +4488,31 @@ export default function WebViewCartSheet({
             // again would re-render the sheet under someone mid-sign-in.
             return;
           }
+          // THE PREWARM'S OWN SESSION. It is not a run — netActiveRef is false
+          // and must stay false — so it is answered before the run's gate below.
+          // ...and ONLY while the user is still on the qty screen. A prewarm
+          // that had not finished when they tapped would otherwise answer the
+          // RUN's session probe with its own branch and re-issue the whole
+          // batch — the run then searches every term a second time, which is
+          // the one thing this feature exists to avoid.
+          if (netPhaseRef.current === 'prewarm' && !netActiveRef.current
+              && stepRef.current === 'qty') {
+            if (!msg.ok || !msg.loggedIn || !msg.storeId || !msg.shoppingContext) {
+              console.log(`[Cart ${ts()}]`, 'search prewarm: no usable session — leaving it to the run');
+              netPhaseRef.current = 'idle';
+              netPrewarmDoneRef.current = true;
+              return;
+            }
+            const sess = { storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext) };
+            netSessionRef.current = sess;
+            const railP = getNetworkRail(lockedStoreIdRef.current);
+            const scriptP = railP?.searchBatch(netPrewarmTermsRef.current, sess) ?? null;
+            if (!scriptP) { netPhaseRef.current = 'idle'; netPrewarmDoneRef.current = true; return; }
+            console.log(`[Cart ${ts()}]`, 'search prewarm: searching', netPrewarmTermsRef.current.length,
+              'terms while the user is on the qty screen');
+            webviewRef.current?.injectJavaScript(scriptP);
+            return;
+          }
           if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
           if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
           console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));
@@ -4429,6 +4554,14 @@ export default function WebViewCartSheet({
           if (!netActiveRef.current) return;
           console.log(`[Cart ${ts()}]`, 'network search failed for', msg.term, '—', msg.why);
           if (typeof msg.term === 'string') netFailedTermsRef.current.add(msg.term);
+          return;
+        }
+        if (msg.type === 'SEARCH_BATCH_DONE'
+            && netPhaseRef.current === 'prewarm' && !netActiveRef.current) {
+          console.log(`[Cart ${ts()}]`, 'search prewarm: done —',
+            netPrewarmCandidatesRef.current.size, 'terms answered before the user tapped');
+          netPhaseRef.current = 'idle';
+          netPrewarmDoneRef.current = true;
           return;
         }
         if (msg.type === 'SEARCH_BATCH_DONE') {
@@ -4679,6 +4812,13 @@ export default function WebViewCartSheet({
         // not fed to the sequential handler below — that one assumes it is the
         // answer to the ONE item the run is currently walking, and a batch posts
         // twelve of them in no particular order.
+        if (msg.type === 'SEARCH_RESULT' && msg.source === 'network'
+            && netPhaseRef.current === 'prewarm' && !netActiveRef.current) {
+          if (typeof msg.term === 'string' && Array.isArray(msg.candidates)) {
+            netPrewarmCandidatesRef.current.set(msg.term, msg.candidates as Candidate[]);
+          }
+          return;
+        }
         if (msg.type === 'SEARCH_RESULT' && msg.source === 'network') {
           if (!netActiveRef.current || netPhaseRef.current !== 'search') return;
           if (typeof msg.term === 'string' && Array.isArray(msg.candidates)) {
@@ -5259,6 +5399,11 @@ export default function WebViewCartSheet({
   // survive the login_check + snapshot window; the tiles themselves are kept
   // offscreen until the commit phase shows them live.
   const presearchGrid = FEATURE_PRESEARCH_ADD && presearchPool.workerUris.some((u) => !!u);
+  // The main WebView stays MOUNTED through the qty screen on a rail store, so
+  // the search prewarm has somewhere to run. It is hidden — the region only
+  // renders visibly from login_check onwards — and it is the same trick the
+  // pre-search pool used to keep its parked pages alive across this screen.
+  const prewarmNeedsWebView = !!getNetworkRail(lockedStoreId) && !netPrewarmDoneRef.current;
   const presearchCommitVisible = step === 'adding' && presearchPool.isCommitting;
   // Parked worker tiles currently live (the cold slot is the main cell, not a tile).
   const presearchParkedTilesLive = FEATURE_PRESEARCH_ADD
@@ -5327,7 +5472,7 @@ export default function WebViewCartSheet({
             single main WebView fills the region. While the user is in a panel
             step (review / searchResult / done) the region is hidden but the
             WebView keeps running behind it for the after-snapshot. */}
-        {(step !== 'qty' || presearchGrid) && (
+        {(step !== 'qty' || presearchGrid || prewarmNeedsWebView) && (
         <View
           style={browserVisible ? styles.browserOuter : styles.webviewHidden}
           pointerEvents={browserVisible ? 'auto' : 'none'}
@@ -5426,7 +5571,7 @@ export default function WebViewCartSheet({
                   Fills the region normally; becomes one tile in grid mode. Not
                   mounted during qty (the region only renders then to keep the
                   parked pre-search tiles alive). */}
-              {step !== 'qty' && (
+              {(step !== 'qty' || prewarmNeedsWebView) && (
               <View style={gridMode ? [styles.tile, { width: tileW, height: tileH }] : styles.fullCell}>
                 {/* Same wrapper structure in both modes so the WebView element
                     (and its session) never remounts when it moves between the
