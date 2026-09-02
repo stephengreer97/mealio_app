@@ -818,6 +818,14 @@ export default function WebViewCartSheet({
   // pool-driven run.
   const netSessionRef = useRef<{ storeId: string; shoppingContext: string } | null>(null);
   /**
+   * When netSessionRef was answered, so the run can tell a session it can reuse
+   * from one that has had time to go stale. See startNetworkRun.
+   */
+  const netSessionAtRef = useRef(0);
+  /** True once THIS run has the session it needs. A second answer to the same
+   *  probe is then inert rather than a second start. */
+  const netSessionSettledRef = useRef(false);
+  /**
    * The cart as it stood before this run wrote anything, as the RAIL saw it.
    *
    * A fallback for when the page probe could not read the cart — which happens:
@@ -913,6 +921,11 @@ export default function WebViewCartSheet({
    *  done, short enough that a dead prewarm costs almost nothing. */
   const NET_PREWARM_WAIT_MS = 300;
   const NET_PREWARM_MAX_WAITS = 10;
+  /** How long a session answer stays good enough for the run to reuse instead of
+   *  re-asking. The login check and the run happen seconds apart, so anything on
+   *  this scale works; two minutes is short enough that a sheet left sitting
+   *  re-reads rather than trusting a store the user may since have changed. */
+  const NET_SESSION_REUSE_MS = 120_000;
   // ── Search prewarm ────────────────────────────────────────────────────────
   //
   // While the user is on the qty screen deciding quantities, the WebView is
@@ -2087,12 +2100,35 @@ export default function WebViewCartSheet({
     netActiveRef.current = true;
     netRunRef.current = true;
     netMatchedRef.current = new Map();
-    netSessionRef.current = null;
+    netSessionSettledRef.current = false;
     netRunBaselineRef.current = null;
     netPrewarmWaitsRef.current = 0;
     netPhaseRef.current = 'session';
     setStep('searching');
     setSearchingLabel('Connecting…');
+    // ALREADY ANSWERED? THEN DO NOT ASK AGAIN.
+    //
+    // The login check runs the SAME probe moments before this and keeps its
+    // answer. Re-asking is pure cost: it cannot tell us anything new — the sheet
+    // locks one store for the life of the run and the page has not moved — and
+    // it can fail, which the answer we are holding cannot. The freshness window
+    // is what keeps that honest: a sheet left open long enough for the user to
+    // change stores in another tab starts over.
+    const cached = netSessionRef.current;
+    if (cached && Date.now() - netSessionAtRef.current < NET_SESSION_REUSE_MS) {
+      console.log(`[Cart ${ts()}]`, 'network run: reusing the session from the login check —',
+        'store=', cached.storeId, 'context=', cached.shoppingContext);
+      // Settled BEFORE searching. netStartSearch can return without starting —
+      // it stands back for an in-flight prewarm — so the phase is still
+      // 'session' when it does, and a late duplicate probe answer would then be
+      // taken as the run's own and open a SECOND search chain for the same
+      // terms. The phase itself cannot carry this: moving it to 'search' would
+      // also route the prewarm's own results to the run.
+      netSessionSettledRef.current = true;
+      netStartSearch();
+      return;
+    }
+    netSessionRef.current = null;
     console.log(`[Cart ${ts()}]`, 'network run: reading the session');
     // Tried now AND re-tried on the next store page load.
     //
@@ -2107,7 +2143,7 @@ export default function WebViewCartSheet({
     const rail = netRail();
     if (!rail) { netFallBackToPool('no_rail'); return; }
     webviewRef.current?.injectJavaScript(rail.sessionScript());
-  }, [netArm, setStep, netRail, netFallBackToPool]);
+  }, [netArm, setStep, netRail, netFallBackToPool, netStartSearch]);
 
   const startParallelAdd = useCallback(() => {
     const active = activeItemsRef.current;
@@ -3893,7 +3929,7 @@ export default function WebViewCartSheet({
           // are the whole audit trail — log them or the script's named reason
           // reaches nobody, and a redirect stays indistinguishable from a
           // selector miss.
-          console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count, 'reason=', msg.reason ?? null, 'url=', msg.url);
+          console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count, 'reason=', msg.reason ?? null, 'status=', msg.status ?? null, 'detail=', msg.detail ?? null, 'url=', msg.url);
           if (Array.isArray(msg.items)) cartItemsLatestRef.current = msg.items as CartItem[];
           if (phase === 'before') {
             cartCountBeforeRef.current = count;
@@ -4508,6 +4544,21 @@ export default function WebViewCartSheet({
             });
             loginCheckActiveRef.current = false;
             if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
+            // KEEP THE ANSWER. This probe and the run's own session probe ask the
+            // page the identical question and get the identical reply — the store
+            // and the shopping context are right here in `msg`. Throwing it away
+            // and asking again seconds later is what stalled Stephen's run of
+            // 2026-09-01: the second ask landed on a store homepage still busy
+            // with its own bootstrap, took 26 s to answer a question needing no
+            // network at all, missed the 25 s deadline by 1.4 s, and dropped 20
+            // items into the page-driven pool — the "taking a slower route"
+            // screen he sat in front of for minutes.
+            if (msg.loggedIn && msg.storeId && msg.shoppingContext) {
+              netSessionRef.current = {
+                storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext),
+              };
+              netSessionAtRef.current = Date.now();
+            }
             if (msg.loggedIn) snapshotBeforeAndBeginSearch();
             else if (!onLoginStep) {
               setStep('login');
@@ -4534,6 +4585,7 @@ export default function WebViewCartSheet({
             }
             const sess = { storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext) };
             netSessionRef.current = sess;
+            netSessionAtRef.current = Date.now();
             const railP = getNetworkRail(lockedStoreIdRef.current);
             const scriptP = railP?.searchBatch(netPrewarmTermsRef.current, sess) ?? null;
             if (!scriptP) { netPhaseRef.current = 'idle'; netPrewarmDoneRef.current = true; return; }
@@ -4543,6 +4595,7 @@ export default function WebViewCartSheet({
             return;
           }
           if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
+          if (netSessionSettledRef.current) return;
           if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
           console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));
           if (!msg.ok) { netFallBackToPool('session_' + (msg.why || 'failed')); return; }
@@ -4556,6 +4609,10 @@ export default function WebViewCartSheet({
           }
           if (!msg.storeId || !msg.shoppingContext) { netFallBackToPool('session_no_store'); return; }
           netSessionRef.current = { storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext) };
+          netSessionAtRef.current = Date.now();
+          // Same reason as the reuse path: consumed once, so a duplicate answer
+          // cannot open a second search chain.
+          netSessionSettledRef.current = true;
           netStartSearch();
           return;
         }

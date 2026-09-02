@@ -16,6 +16,7 @@ import {
   buildAlbertsonsNetworkAddBatchScript,
   buildAlbertsonsNetworkSearchBatchScript,
   buildAlbertsonsSessionScript,
+  buildAlbertsonsCartReadScript,
 } from '../../src/lib/webview-scripts/albertsons-network';
 import { storeFixtures } from './_helpers';
 
@@ -532,5 +533,95 @@ describe('Albertsons session probe', () => {
     // A token alone is not proof the add path works — the subscription key is a
     // separate gate, so the probe reads the cart to find out.
     expect(msg.cartReadable).toBe(true);
+  });
+});
+
+describe('Albertsons cart read over the network', () => {
+  /** Cart stub that also records every URL it was called with. */
+  function recordingCartStub(lines: Record<string, number>, status = 200) {
+    return [
+      '(function () {',
+      '  window.__urls = [];',
+      '  window.fetch = function (url) {',
+      '    window.__urls.push(String(url));',
+      '    var list = [];',
+      '    var L = ' + JSON.stringify(lines) + ';',
+      '    for (var k in L) list.push({ itemId: k, qty: L[k], name: "Item " + k });',
+      '    return Promise.resolve({ status: ' + String(status) + ',',
+      '      json: function () { return Promise.resolve({ carts: [{ cartItemsList: list }] }); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n');
+  }
+
+  const CONFIG_ONLY = '(function(){ window.SWY = { CONFIGSERVICE: { erumsConfig: {'
+    + ' store: { apim: { key: "0123456789abcdef0123456789abcdef" } } } } }; })(); true;';
+
+  itWithFixture('search-results-tortillas.html',
+    'does NOT fire a request before the page has a user', async (runner) => {
+    // Stephen's run of 2026-09-01 came back rail_read_http and nothing was
+    // reconciled. The read is injected the moment the store page settles, which
+    // on Albertsons is BEFORE the Angular bootstrap fills window.AB.userInfo --
+    // so the URL was built from {} and went out as
+    // '?storeId=&serviceType=Dug&zipCode=', which the gateway rejects. That
+    // reads downstream as "your cart could not be read" when the truth is "we
+    // asked too early".
+    await runner.inject(CONFIG_ONLY);
+    await runner.inject('(function(){ window.AB = { userInfo: {} }; })(); true;');
+    await runner.inject(recordingCartStub({}));
+    await runner.inject(buildAlbertsonsCartReadScript());
+
+    const msg = await runner.waitForMessage('CART_COUNT', 20_000);
+    // Unknown, and named for what it was.
+    expect(msg.count).toBeNull();
+    expect(msg.reason).toBe('rail_read_not_hydrated');
+
+    const probe = await runner.inject(
+      '(function(){ window.ReactNativeWebView.postMessage(JSON.stringify('
+      + '{ type: "PROBE", urls: window.__urls })); })(); true;');
+    void probe;
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    // The point: no request at all, rather than a malformed one.
+    expect(seen.urls).toEqual([]);
+  });
+
+  itWithFixture('search-results-tortillas.html',
+    'waits for a late bootstrap and then reads the cart', async (runner) => {
+    await runner.inject(CONFIG_ONLY);
+    await runner.inject('(function(){ window.AB = { userInfo: {} };'
+      + ' setTimeout(function(){ window.AB.userInfo = { SWY_SHOP_TOKEN: "tok",'
+      + ' branchId: "161", zipcode: "83713" }; }, 900); })(); true;');
+    await runner.inject(recordingCartStub({ '1': 2, '2': 1 }));
+    await runner.inject(buildAlbertsonsCartReadScript());
+
+    const msg = await runner.waitForMessage('CART_COUNT', 20_000);
+    expect(msg.count).toBe(3);
+    expect(msg.source).toBe('network');
+
+    await runner.inject(
+      '(function(){ window.ReactNativeWebView.postMessage(JSON.stringify('
+      + '{ type: "PROBE", urls: window.__urls })); })(); true;');
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    // And the one request it did make carried the store it waited for.
+    expect(seen.urls.length).toBe(1);
+    expect(seen.urls[0]).toContain('storeId=161');
+    expect(seen.urls[0]).not.toContain('storeId=&');
+  });
+
+  itWithFixture('search-results-tortillas.html',
+    'carries the HTTP status so a failure is diagnosable', async (runner) => {
+    // 'rail_read_http' alone says a request failed and nothing about why. A 400
+    // is ours to fix and a 500 is the store's; without the status they are the
+    // same line in the log, which is how this one went unexplained for a day.
+    await runner.inject(CONFIG_ONLY);
+    await runner.inject('(function(){ window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok",'
+      + ' branchId: "161", zipcode: "83713" } }; })(); true;');
+    await runner.inject(recordingCartStub({}, 400));
+    await runner.inject(buildAlbertsonsCartReadScript());
+
+    const msg = await runner.waitForMessage('CART_COUNT', 20_000);
+    expect(msg.count).toBeNull();
+    expect(msg.reason).toBe('rail_read_http');
+    expect(msg.status).toBe(400);
   });
 });

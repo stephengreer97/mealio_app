@@ -291,3 +291,59 @@ describe('a prewarm still in flight when the user taps', () => {
     expect(searchBatches()).toBe(duringPrewarm + 1);
   });
 });
+
+describe('the run reuses the session the login check already got', () => {
+  // Stephen, 2026-09-01: "this time its not even saying I'm signed out. Its just
+  // stuck on the animation screen saying taking a slower route."
+  //
+  // The login check and the run's own session phase inject the IDENTICAL probe
+  // and get the identical reply. The run threw the first answer away and asked
+  // again — and on Albertsons the second ask landed on a store homepage still
+  // busy with its own bootstrap:
+  //
+  //   21:47:49.737  login answered over the network  (storeId 161, pickup)
+  //   21:47:59.767  network run: reading the session       <- asks again
+  //   21:48:24.781  falling back to the pool — session_timeout
+  //   21:48:26.177  ALB_SESSION                            <- 1.4s too late
+  //
+  // Twenty items then went to the page-driven pool, which is the screen he sat
+  // in front of. The second ask can tell us nothing new — one store is locked
+  // for the life of the sheet — and it can fail, which the answer already in
+  // hand cannot.
+  const sessionProbes = () => injected.filter((s) => s.includes('myPreferredStore')).length;
+
+  it('does not ask a second time once the login check has answered', () => {
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);   // the prewarm's
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('sour cream')] });
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);   // the login check's
+    const afterLogin = sessionProbes();
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+
+    // The run took the answer it had and went to work.
+    expect(sessionProbes()).toBe(afterLogin);
+    expect(injected.some((s) => s.includes('cartItemV2'))).toBe(true);
+  });
+
+  it('still runs when the login check answered without a usable store', () => {
+    // The reuse must not swallow the case it cannot serve: an answer that named
+    // no store is not a session, so the run asks for one rather than starting
+    // without it.
+    const { view, post, load } = openSheet();
+    load();
+    // Store-less from the start, so nothing is ever cached — not by the prewarm
+    // and not by the login check.
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: true });
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: true });   // no storeId
+    const afterLogin = sessionProbes();
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+
+    expect(sessionProbes()).toBe(afterLogin + 1);
+  });
+});

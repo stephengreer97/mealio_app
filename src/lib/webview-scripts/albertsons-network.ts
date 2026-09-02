@@ -110,9 +110,38 @@ const ALB_PRELUDE = `
     };
   }
 
+  // ASK ONLY ONCE THE PAGE CAN ANSWER.
+  //
+  // window.AB.userInfo is filled by the site's own bootstrap, so a script
+  // injected into a fresh document sees an EMPTY object rather than an absent
+  // one. Every request below is built out of it: the URL carries the store and
+  // the zip, the header carries the token. Built from {} that is
+  // '?storeId=&zipCode=' with a bare 'Bearer ' -- which the gateway answers
+  // with a 4xx, and which the caller then reads as "your cart could not be
+  // read" when the truth is "we asked too early".
+  //
+  // Measured 2026-09-01: the before-run cart read is injected immediately after
+  // the store page redirects, i.e. into exactly that empty window, and came
+  // back rail_read_http. The session probe already waited for the token before
+  // reading; nothing else did.
+  async function __albAwaitUser(budgetMs) {
+    var deadline = Date.now() + (budgetMs == null ? 3000 : budgetMs);
+    for (;;) {
+      var u = (window.AB && window.AB.userInfo) || null;
+      // The token AND the store: a URL missing the branch is as unanswerable as
+      // a header missing the bearer, and both arrive from the same bootstrap.
+      if (u && u.SWY_SHOP_TOKEN && u.branchId) return u;
+      if (Date.now() >= deadline) return null;
+      await new Promise(function (r) { setTimeout(r, 250); });
+    }
+  }
+
   // Reads the cart, and on the way resolves which subscription key the cart
   // accepts. Returns { ok, lines: { itemId: qty }, why }.
-  async function __albReadCart(budgetMs) {
+  async function __albReadCart(budgetMs, hydrateMs) {
+    // Free when the caller already waited (the session probe does); the whole
+    // budget only when we genuinely arrived before the page did.
+    if (!(await __albAwaitUser(hydrateMs))) return { ok: false, why: 'not_hydrated' };
     var keys = A.cartKey ? [A.cartKey] : __albKeyCandidates();
     var lastStatus = null;
     for (var i = 0; i < keys.length; i++) {
@@ -442,17 +471,32 @@ ${ALB_PRELUDE}
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
   try {
-    var cart = await __albReadCart(12000);
+    // THREE PLUS SIX, BECAUSE THE SHEET GIVES UP AT TEN.
+    //
+    // This read is the before-run and after-run snapshot, and the sheet stops
+    // waiting for it after cartProbeMs (10 s). A twelve-second budget here could
+    // never be spent -- the sheet had already moved on -- so the script's own
+    // deadline is set inside the caller's, leaving the failure REPORTED rather
+    // than merely abandoned.
+    var cart = await __albReadCart(6000, 3000);
     if (!cart || !cart.ok) {
       // UNKNOWN, never zero -- a zero would tell the reconcile the cart is empty
       // and invite it to re-add everything already in it.
       var RAIL_READ_CODE = {
         no_key: 'rail_read_no_key', auth: 'rail_read_auth',
         http: 'rail_read_http', threw: 'rail_read_threw',
+        not_hydrated: 'rail_read_not_hydrated',
       };
       var why = (cart && cart.why) || '';
+      // CARRY THE STATUS. 'rail_read_http' on its own says a request failed and
+      // nothing about why -- a 400 (we built the URL wrong) and a 500 (the store
+      // is having a bad day) are the same line in the log, and one of them is
+      // ours to fix. Status and detail are the store's own answer, never
+      // anything of the user's.
       post({ type: 'CART_COUNT', count: null, source: 'network',
-             reason: RAIL_READ_CODE[why] || 'rail_read_failed' });
+             reason: RAIL_READ_CODE[why] || 'rail_read_failed',
+             status: (cart && cart.status) || null,
+             detail: (cart && cart.detail) || null });
       return;
     }
     var rows = cart.rows || [];
