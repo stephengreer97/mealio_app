@@ -64,6 +64,13 @@ flowchart TD
     CAP -->|yes| SELECT["cards multi-select.<br/>a card with unchosen products<br/>carries 'Choose products once<br/>to add this to your cart'"]
 
     SELECT -->|"tap a store tab"| PREWARM["<code>loginPrewarm.checkStore(id)</code><br/><i>silently probes the store's login<br/>state so the run does not open<br/>on a login wall</i>"]
+    SELECT -->|"tick or untick a meal"| SEARCHPRE["<code>loginPrewarm.setSearchTerms(store, terms)</code><br/><i>looks the unchosen ingredients up<br/>before the sheet is even open, so<br/>the run has the answers waiting</i>"]
+    SEARCHPRE --> DEB{"selection still<br/>changing?"}
+    DEB -->|"yes — a tap<br/>within 1.2s"| DEB2["restart the clock.<br/><b>nothing goes to the store</b>"]
+    DEB2 --> DEB
+    DEB -->|"no"| FIRE["one batch, built from the<br/>selection AS IT STANDS"]
+    FIRE --> WHYPRE{{"this is why ticking twelve meals and unticking eleven<br/>looks up ONE meal. The batch is built at fire time, so a<br/>term that left the set is never sent; only a batch already<br/>in flight cannot be recalled, and its answers are cached,<br/>so reticking that meal is free.<br/><br/>setSearchTerms is authoritative for EVERY store, not just<br/>the one named — the selection screen has one store at a<br/>time, so switching tabs mid-clock must not fire a batch<br/>for the store you just left."}}
+    FIRE --> SEEDED["cached per term.<br/>WebViewCartSheet seeds from it<br/>and searches only what is missing"]
     SELECT --> FLOAT["floating button"]
     FLOAT --> CONS["<b>consolidateIngredients</b>"]
 
@@ -82,7 +89,7 @@ flowchart TD
     classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
     classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
     class MM,RUN state
-    class WHY,NOMERGE spec
+    class WHY,NOMERGE,WHYPRE spec
 </pre></div>
 
 <div class="wrap"><h3>Diagram 3 · packageQtyFor — how many packages to buy (MEAL-108)</h3><pre class="mermaid">
