@@ -476,6 +476,9 @@ const ALB_PRELUDE = `
           if (it.name) {
             rows.push({
               name: String(it.name), qty: Number(it.qty) || 0,
+              // The id the WRITE addresses this line by. Without it a baseline
+              // handed to the write is unusable — see CartItem.itemId.
+              itemId: String(it.itemId),
               // Null when the store did not say. See the write path above: an
               // unavailable line is IN the cart and blocks checkout, so a reader
               // that ignores this counts a line nobody can buy.
@@ -1077,7 +1080,7 @@ export function buildAlbertsonsNetworkAddBatchScript(
     isWeightItem?: boolean;
     maxOrderQuantity?: number | null;
   }>,
-  opts?: { concurrency?: number },
+  opts?: { concurrency?: number; knownLines?: Record<string, number> | null },
 ): string | null {
   const usable = items.filter(
     (it) => it && it.productId && Number.isFinite(it.quantity) && it.quantity > 0,
@@ -1139,7 +1142,15 @@ ${ALB_PRELUDE}
 
   // Baseline. Without it every write is a guess, and a guess against absolute
   // quantity semantics overwrites whatever the user already had.
-  var base = await __albReadCart(12000);
+  //
+  // Handed in when the sheet already read the cart -- which on a normal run it
+  // did, about a second ago. Reading it again here was a second request for the
+  // same answer, on the critical path. Still read for ourselves when nothing was
+  // passed, so this script stays runnable on its own.
+  var GIVEN = ${JSON.stringify(opts?.knownLines ?? null)};
+  var base = GIVEN
+    ? { ok: true, lines: GIVEN, rows: [] }
+    : await __albReadCart(12000);
   if (!base.ok) {
     for (var b = 0; b < ITEMS.length; b++) report(ITEMS[b], false, 'no_cart_baseline', base.why || null);
     post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0 });

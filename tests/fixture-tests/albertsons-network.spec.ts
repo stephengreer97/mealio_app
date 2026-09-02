@@ -340,12 +340,15 @@ describe('Albertsons add over the network — qty is ABSOLUTE', () => {
     // `available` is null when the store said nothing about it, which this stub
     // does not — an unavailable line is IN the cart and blocks checkout, so the
     // rows carry it.
-    expect(done.cartBefore).toEqual([{ name: 'Item 999', qty: 2, available: null }]);
+    // itemId is the id the WRITE addresses this line by — it is what lets a
+    // baseline be handed to the write instead of the write reading the cart a
+    // second time.
+    expect(done.cartBefore).toEqual([{ name: 'Item 999', qty: 2, available: null, itemId: '999' }]);
     // The item the run wrote is present after and absent before, which is what
     // makes it render green rather than grey.
     expect(done.cartAfter).toEqual(expect.arrayContaining([
-      { name: 'Item 999', qty: 2, available: null },
-      { name: 'Item 184040105', qty: 1, available: null },
+      { name: 'Item 999', qty: 2, available: null, itemId: '999' },
+      { name: 'Item 184040105', qty: 1, available: null, itemId: '184040105' },
     ]));
   });
 
@@ -1107,5 +1110,69 @@ describe('the whole basket goes in one request', () => {
     // One request, and the weight item is not in it.
     expect(seen.writes.length).toBe(1);
     expect(seen.writes[0].map((l: { itemId: string }) => l.itemId)).toEqual(['202']);
+  });
+});
+
+describe('the write can be handed a baseline instead of reading one', () => {
+  // qty is ABSOLUTE — the write SETS the line — so every quantity is
+  // held + wanted and the write needs to know what is held. It read the cart
+  // itself to find out, which on a normal run is the second read of the same
+  // cart about a second after the sheet's own.
+  //
+  // The danger is the reason the sheet guards this: a write addresses lines by
+  // ID. A baseline keyed by anything else looks up nothing, finds no held
+  // quantity, and SETS a line the user already had down to what this run asked
+  // for — the absolute-quantity under-add MEAL-194 exists to prevent.
+  const countingStub = [
+    '(function () {',
+    '  window.__reads = 0; window.__writes = [];',
+    '  var prior = window.fetch;',
+    '  window.fetch = function (url, init) {',
+    '    var u = String(url);',
+    '    if (u.indexOf("/userinfo") !== -1) return prior.apply(window, arguments);',
+    '    if (u.indexOf("/cart/customer/") !== -1) {',
+    '      window.__reads++;',
+    '      return Promise.resolve({ status: 200, json: function () { return Promise.resolve(',
+    '        { carts: [{ cartItemsList: [{ itemId: "500", qty: 3, name: "Held Item" }] }] }); } });',
+    '    }',
+    '    var sent = JSON.parse(init.body).cartItemsList;',
+    '    window.__writes.push(sent);',
+    '    return Promise.resolve({ status: 200, json: function () { return Promise.resolve(',
+    '      { carts: [{ cartItemsList: sent.map(function (l) {',
+    '        return { itemId: l.itemId, qty: l.qty, name: "Held Item" }; }) }] }); } });',
+    '  };',
+    '})(); true;',
+  ].join('\n');
+
+  const probe = '(function(){ window.ReactNativeWebView.postMessage(JSON.stringify('
+    + '{ type: "PROBE", reads: window.__reads, writes: window.__writes })); })(); true;';
+
+  itWithFixture('logged-in-home.html', 'given one, it does not read the cart to start', async (runner) => {
+    await runner.inject(albStub());
+    await runner.inject(countingStub);
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(
+      [{ idx: 0, productId: '500', quantity: 2, name: 'Held Item' }],
+      { knownLines: { '500': 3 } })!);
+    await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    await runner.inject(probe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    // One read left: the after-read that builds the done screen's breakdown.
+    expect(seen.reads).toBe(1);
+    // And the arithmetic is unchanged — held 3 plus wanted 2.
+    expect(seen.writes[0][0].qty).toBe(5);
+  });
+
+  itWithFixture('logged-in-home.html', 'given none, it still reads for itself', async (runner) => {
+    // The script stays runnable on its own, which is what every other test here
+    // exercises and what a caller with no baseline depends on.
+    await runner.inject(albStub());
+    await runner.inject(countingStub);
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(
+      [{ idx: 0, productId: '500', quantity: 2, name: 'Held Item' }])!);
+    await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    await runner.inject(probe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    expect(seen.reads).toBe(2);
+    expect(seen.writes[0][0].qty).toBe(5);
   });
 });

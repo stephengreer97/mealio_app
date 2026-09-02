@@ -424,6 +424,17 @@ function cartPathGuardJs(cartPath: string): string {
 export interface CartItem {
   name: string;
   qty: number;
+  /**
+   * The store's own id for this cart line, where the read can see one.
+   *
+   * Absent on every page-read row and on stores whose cart read is name-only,
+   * which is why nothing may REQUIRE it. It exists so a baseline can be handed
+   * to a write without a second cart request -- and a write addresses lines by
+   * id, so a baseline keyed by name would silently look up nothing, find no
+   * held quantity, and SET a line the user already had down to what this run
+   * asked for. See the guard in netStartAdds.
+   */
+  itemId?: string;
   /** Sold-by-weight line (HEB Deli / Fish Market / bulk). qty is 1 (present);
    *  weight carries the lb amount. Reconciled by presence, not discrete count. */
   isWeight?: boolean;

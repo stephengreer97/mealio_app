@@ -51,7 +51,21 @@ export interface NetworkRail {
    * done screen when the navigation landed somewhere that was not the cart.
    */
   cartRead(): string;
-  addBatch(items: NetworkAddItem[], opts?: { concurrency?: number }): string | null;
+  /**
+   * `opts.knownLines` is the cart the sheet has ALREADY read, as
+   * { itemId: qty }.
+   *
+   * The write needs a baseline because qty is absolute -- it SETS the line -- so
+   * every quantity is held + wanted. The script read the cart itself to get one,
+   * which is correct and self-contained and, on a normal run, the second read of
+   * the same cart about a second after the sheet's own. Handing it the one we
+   * have takes a round trip off the critical path; omitting it keeps the script
+   * standalone, which is what the fixture tests exercise.
+   */
+  addBatch(items: NetworkAddItem[], opts?: {
+    concurrency?: number;
+    knownLines?: Record<string, number> | null;
+  }): string | null;
   /**
    * Can this store WRITE the candidate the matcher picked?
    *

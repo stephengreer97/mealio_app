@@ -1158,7 +1158,7 @@ export default function WebViewCartSheet({
   // beginSearchFlow is defined above startAssistedMode and reaches it through a
   // ref, the same way it used to reach startParallelAdd. onLoadEnd reaches the
   // run restart the same way.
-  const startAssistedModeRef = useRef<() => void>(() => {});
+  const startAssistedModeRef = useRef<() => boolean>(() => true);
   const snapshotBeforeAndBeginSearchRef = useRef<() => void>(() => {});
   // onLoadEnd is a []-dep callback, so it reaches the resume through a ref for
   // the same reason startParallelAdd does.
@@ -1594,13 +1594,23 @@ export default function WebViewCartSheet({
     netPhaseRef.current = 'idle';
     if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
     console.log(`[Cart ${ts()}]`, 'network run: handing over to the user —', why);
-    // The fast path's count is meaningless now — the pool is going to redo the
-    // whole set. Leaving "3/18" on screen would freeze there for the rest of the
-    // run. Drop to the unnumbered bag and say what is happening.
-    setNetProgress({ done: 0, total: 0, label: 'Taking a slower route', phase: 'add' });
-    setNetNote('Still working — this one is taking longer than usual');
-    tel().record('search', 'error', { detail: { phase: 'network_fallback', why }, code: 'match_rejected' });
-    startAssistedModeRef.current();
+    // SAY WHAT IS ACTUALLY HAPPENING. "Taking a slower route" and "still
+    // working" were true when this fell back to the page-driven pool, which did
+    // go on to add the items. That pool is gone: the user is now being handed
+    // the store's own search page to add them by hand, and telling them Mealio
+    // is still working is a promise nothing is left to keep.
+    setNetProgress({ done: 0, total: 0, label: 'Opening the store for you', phase: 'add' });
+    setNetNote(null);
+    tel().record('search', 'error', { detail: { phase: 'network_handover', why }, code: 'match_rejected' });
+    // No search URL for this store means no manual mode -- startManualMode
+    // returns without changing the step, which would strand the user on a
+    // loading screen that has nothing behind it. The done screen's copyable list
+    // is the floor, and it has to be reached deliberately.
+    const handed = startAssistedModeRef.current();
+    if (handed === false) {
+      console.log(`[Cart ${ts()}]`, 'network run: no manual search page for this store — done screen with the list');
+      setStep('done');
+    }
   }, []);
 
   /**
@@ -1861,7 +1871,25 @@ export default function WebViewCartSheet({
 
     const rail = netRail();
     if (!rail) { netHandOverToUser('no_rail'); return; }
-    const script = rail.addBatch(coalesced);
+    // HAND IT THE CART WE ALREADY READ. The write needs a baseline because qty
+    // is absolute; the sheet took one moments ago in snapshotBefore. Without
+    // this the script read the same cart a second time, on the critical path.
+    // Null when we genuinely have none, and then it reads for itself.
+    // ONLY WHEN EVERY ROW CARRIES ITS ID. A write addresses lines by id, so a
+    // baseline keyed by anything else looks up nothing, finds no held quantity,
+    // and SETS a line the user already had down to what this run asked for --
+    // the absolute-quantity under-add MEAL-194 exists to prevent. A page-read
+    // baseline has names only, so it is not offered and the script reads for
+    // itself, exactly as before.
+    const known = runBaselineItems();
+    const usable = known && known.length > 0 && known.every((r) => !!r.itemId);
+    const knownLines = usable
+      ? Object.fromEntries(known!.map((r) => [String(r.itemId), r.qty]))
+      : null;
+    if (known && !usable) {
+      console.log(`[Cart ${ts()}]`, 'add: baseline has no line ids — letting the write read the cart itself');
+    }
+    const script = rail.addBatch(coalesced, { knownLines });
     if (!script) { netHandOverToUser('add_script_unbuildable'); return; }
     netPhaseRef.current = 'add';
     setStep('adding');
@@ -3518,12 +3546,14 @@ export default function WebViewCartSheet({
     return s?.getSearchUrl ? s.getSearchUrl(term) : null;
   }, []);
 
-  const startManualMode = useCallback((terms: string[]) => {
-    if (terms.length === 0) return;
+  const startManualMode = useCallback((terms: string[]): boolean => {
+    if (terms.length === 0) return false;
     const first = manualSearchUrlFor(terms[0]);
     // No search URL for this store means no manual mode; the done screen offers
     // the copyable list instead and never renders the button that lands here.
-    if (!first) return;
+    // Returned rather than swallowed, because a caller that is HANDING OVER has
+    // to know whether anything was taken -- see netHandOverToUser.
+    if (!first) return false;
     console.log(`[Cart ${ts()}]`, 'manual mode: start', terms.length, 'items', terms);
     manualUsedRef.current = true;
     manualHandledRef.current = terms;
@@ -3554,6 +3584,7 @@ export default function WebViewCartSheet({
     if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
     setStep('manual');
     navTo(first);
+    return true;
   }, [manualSearchUrlFor, navTo, setStep]);
 
   // Records that the user was walked past the item, not what came of it. Skip
@@ -3595,13 +3626,15 @@ export default function WebViewCartSheet({
    * cannot fail in any of those ways, because it never claims anything it has
    * not seen.
    */
-  const startAssistedMode = useCallback(() => {
+  /** True when the user was actually handed something; false when there was
+   *  nothing to hand them and the caller must route somewhere real. */
+  const startAssistedMode = useCallback((): boolean => {
     const terms = activeItemsRef.current
       .map((i) => i.searchTerm || i.ingredientName)
       .filter((t): t is string => !!t);
-    if (terms.length === 0) { setStep('done'); return; }
+    if (terms.length === 0) { setStep('done'); return true; }
     console.log(`[Cart ${ts()}]`, 'assisted: handing', terms.length, 'searches to the user');
-    startManualMode(terms);
+    return startManualMode(terms);
   }, [startManualMode, setStep]);
   startAssistedModeRef.current = startAssistedMode;
 

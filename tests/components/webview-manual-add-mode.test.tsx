@@ -626,3 +626,25 @@ describe('a probe still in flight when the user takes over', () => {
     expect(view.queryAllByText(/we checked your/i).length).toBe(0);
   });
 });
+
+describe('handing over when the rail cannot finish', () => {
+  // The page-driven pool used to catch a failed rail and go on to add the items,
+  // which is what "Taking a slower route / still working" described. That pool
+  // is gone. What happens now is the user is handed the store's own search page
+  // to add them by hand — so the copy has to say that, and the hand-over has to
+  // land somewhere real.
+
+  it('every rail store has a search page to hand over to', () => {
+    // startManualMode returns false without one, and a hand-over that returns
+    // false must route to the done screen rather than leaving the user on a
+    // loading screen with nothing behind it.
+    const { getStoreScripts } = require('../../src/lib/webview-scripts');
+    const { ALBERTSONS_FAMILY_IDS } = require('../../src/lib/webview-scripts/albertsons');
+    for (const id of ['heb', ...ALBERTSONS_FAMILY_IDS]) {
+      const url = getStoreScripts(id)?.getSearchUrl?.('ginger root');
+      expect(typeof url).toBe('string');
+      expect(url).toContain('ginger');
+    }
+  });
+
+});
