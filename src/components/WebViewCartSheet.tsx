@@ -2052,11 +2052,17 @@ export default function WebViewCartSheet({
     const usableStored = (i: Parameters<typeof netStoredProduct>[0]) => {
       const sp = netStoredProduct(i);
       if (!sp) return false;
-      if (rail.writable({ productId: sp.upc, skuId: sp.sku ?? null })) return true;
-      console.log(`[Cart ${ts()}]`, 'saved product is not writable at this store — searching for it instead');
-      return false;
+      return rail.writable({ productId: sp.upc, skuId: sp.sku ?? null });
     };
     const needSearch = active.filter((i) => !usableStored(i));
+    // ONE LINE, NOT ONE PER ROW PER TICK. netStartSearch re-runs on every
+    // prewarm-wait retry, so a per-row log printed 88 lines for 11 rows -- the
+    // kind of noise that pushed the whole rail phase out of the device log
+    // earlier today.
+    const unwritable = active.filter((i) => netStoredProduct(i) && !usableStored(i)).length;
+    if (unwritable > 0 && netSearchInjectsRef.current === 0) {
+      console.log(`[Cart ${ts()}]`, unwritable, 'saved product(s) this store cannot write — searching for those');
+    }
     const known = active.length - needSearch.length;
     if (known > 0) {
       console.log(`[Cart ${ts()}]`, 'network run:', known, 'of', active.length,

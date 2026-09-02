@@ -143,19 +143,42 @@ function isSoldSingly(name: unknown): boolean {
  * is not — so the caller can spread the result and leave the key ABSENT.
  * An entry survives only with a non-empty string `upc`; `name` is display text
  * and is allowed to be missing.
+ *
+ * `sku` SURVIVES TOO, and its absence here was silently undoing a feature.
+ *
+ * This rebuilds each entry field by field rather than copying it, which is right
+ * — it is the boundary that keeps a hostile or stale payload from becoming an
+ * ingredient. But it was written when `{ upc, name }` was the whole shape, and
+ * H-E-B addresses a cart line by SKU: the rail saved one, the server stored it,
+ * and this dropped it on the way back in. Measured 2026-09-02 — eleven rows
+ * backfilled with an id H-E-B cannot write, so every run searched them again and
+ * the saved-product path bought nothing at all.
+ *
+ * Anything added to StoreProduct has to be added here as well. That is the cost
+ * of a boundary that rebuilds, and it is worth paying; this comment is here so
+ * the next field is not lost the same way.
  */
-function sanitizeStoreProducts(raw: any): { storeProducts: Record<string, { upc: string; name: string }> } | null {
+function sanitizeStoreProducts(raw: any): { storeProducts: Record<string, StoreProductEntry> } | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const clean: Record<string, { upc: string; name: string }> = {};
+  const clean: Record<string, StoreProductEntry> = {};
   for (const [key, value] of Object.entries(raw as Record<string, any>)) {
     if (!key || !value || typeof value !== 'object') continue;
     const upc = (value as any).upc;
     if (typeof upc !== 'string' || !upc.trim()) continue;
     const name = (value as any).name;
-    clean[key] = { upc, name: typeof name === 'string' ? name : '' };
+    const sku = (value as any).sku;
+    clean[key] = {
+      upc,
+      name: typeof name === 'string' ? name : '',
+      // Absent rather than empty when the store has none — Albertsons never
+      // has one, and a row that never had it must serialise as it always did.
+      ...(typeof sku === 'string' && sku.trim() ? { sku } : {}),
+    };
   }
   return Object.keys(clean).length ? { storeProducts: clean } : null;
 }
+
+type StoreProductEntry = { upc: string; name: string; sku?: string };
 
 export function normalizeIngredients(raw: any): Ingredient[] {
   if (!Array.isArray(raw)) return [];

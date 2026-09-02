@@ -424,3 +424,49 @@ describe('normalizePresetIngredients', () => {
     expect(normalizePresetIngredients(['Lime'])[0].productQty).toBe(1);
   });
 });
+
+describe('a saved store product keeps everything the store needs', () => {
+  // The normaliser rebuilds each entry field by field rather than copying it,
+  // which is right — it is the boundary that stops a stale or hostile payload
+  // becoming an ingredient. But it was written when { upc, name } was the whole
+  // shape, and H-E-B addresses a cart line by SKU.
+  //
+  // MEASURED 2026-09-02: the rail saved a sku, the server stored it, and this
+  // dropped it on the way back in. Eleven rows came back with an id H-E-B cannot
+  // write, so every run searched them again and the whole saved-product feature
+  // bought nothing.
+  it('keeps the sku', () => {
+    const [ing] = normalizeIngredients([{
+      ingredientName: 'Spinach',
+      storeProducts: { heb: { upc: '319108', sku: '4090', name: 'Fresh Spinach' } },
+    }]) as any[];
+    expect(ing.storeProducts.heb).toEqual({ upc: '319108', sku: '4090', name: 'Fresh Spinach' });
+  });
+
+  it('leaves it ABSENT for a store that has none', () => {
+    // Albertsons addresses by product id and never has a sku. A row that never
+    // had the key has to serialise exactly as it always did — these objects are
+    // written straight back with no migration.
+    const [ing] = normalizeIngredients([{
+      ingredientName: 'Onion',
+      storeProducts: { albertsons: { upc: '184040105', name: 'Yellow Onion' } },
+    }]) as any[];
+    expect('sku' in ing.storeProducts.albertsons).toBe(false);
+  });
+
+  it('drops a junk sku rather than carrying it', () => {
+    const [ing] = normalizeIngredients([{
+      ingredientName: 'Milk',
+      storeProducts: { heb: { upc: 'u1', sku: '   ', name: 'Milk' } },
+    }]) as any[];
+    expect('sku' in ing.storeProducts.heb).toBe(false);
+    expect(ing.storeProducts.heb.upc).toBe('u1');
+  });
+
+  it('still refuses an entry with no upc', () => {
+    const [ing] = normalizeIngredients([{
+      ingredientName: 'Milk', storeProducts: { heb: { sku: '4090', name: 'Milk' } },
+    }]) as any[];
+    expect('storeProducts' in ing).toBe(false);
+  });
+});
