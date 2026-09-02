@@ -642,6 +642,32 @@ ${CART_READ_FN}
     + ' ... on AddItemToCartV2Error { message title code }'
     + ' ... on AddItemToCartV2TimeslotError { message title errorCode: code } } }';
 
+  // ONE REQUEST FOR EVERY WRITE, the GraphQL way.
+  //
+  // addItemToCartV2 takes a single productId/skuId -- there is no list parameter
+  // to fill, so H-E-B cannot be batched the way Albertsons was. GraphQL itself
+  // provides the equivalent: several ALIASED root fields in one document. The
+  // spec requires root mutation fields to execute SERIALLY, in order, which is
+  // exactly what a shared cart needs -- one round trip, and no two writes in
+  // flight against the same cart at once.
+  //
+  // Built rather than constant because the variable list depends on how many
+  // items there are.
+  function buildBatchDoc(n) {
+    var params = [], fields = [];
+    for (var i = 0; i < n; i++) {
+      params.push('$p' + i + ': String!, $s' + i + ': String!, $q' + i + ': Int, $r' + i + ': String');
+      fields.push(' a' + i + ': addItemToCartV2(productId: $p' + i + ', skuId: $s' + i
+        + ', quantity: $q' + i + ', purchasePreferenceId: $r' + i + ') {'
+        + ' __typename'
+        + ' ... on Cart { id }'
+        + ' ... on AddOnsCart { id cart { id } }'
+        + ' ... on AddItemToCartV2Error { message title code }'
+        + ' ... on AddItemToCartV2TimeslotError { message title errorCode: code } }');
+    }
+    return 'mutation cartItemsV2(' + params.join(', ') + ') {' + fields.join('') + ' }';
+  }
+
   // Summed across every line for the product, because one product can hold
   // several lines keyed by preference — and reported with the COUNT, because the
   // write sets ONE line and cannot address a product that holds more than one.
@@ -675,6 +701,8 @@ ${CART_READ_FN}
   var wrote = 0;
   // Every write the store ACCEPTED, with the quantity it should then hold.
   var accepted = [];
+  /** Items that passed every per-item check and are waiting for the one write. */
+  var planned = [];
   var next = 0;
   var runner = async function () {
     while (true) {
@@ -733,39 +761,89 @@ ${CART_READ_FN}
         // offers them is a different statement from an absent one, and the
         // store's own site omits the field rather than nulling it.
         if (it.purchasePreferenceId) vars.purchasePreferenceId = it.purchasePreferenceId;
-        var res = await __hebGql('cartItemV2', ADD, vars, 9000);
-        if (!res.ok) { report(it, false, res.why, res.detail || null); continue; }
-        var arm = null, msg = null;
-        try {
-          var a = res.data.addItemToCartV2;
-          arm = a && a.__typename;
-          msg = a && a.message ? String(a.message).slice(0, 160) : null;
-        } catch (e) {}
-        // AddOnsCart wraps a cart — the item went in. Reading it as a failure
-        // would send the caller on to add the same product a second way.
-        // ACCEPTED, NOT LANDED. The mutation selects '... on Cart { id }' and
-        // nothing else, so this says H-E-B took the write -- not that the item
-        // is in the cart. On 2026-09-01 a spinach write came back Cart, and the
-        // cart read a second later did not contain it. Verified below against
-        // the read we already take.
-        var ok = arm === 'Cart' || arm === 'AddOnsCart';
-        if (ok) { wrote++; accepted.push({ it: it, want: want }); }
-        // The sent quantity rides along so a clamped add is visible as a SHORT
-        // add rather than passing for a full one — the reconcile's own short-add
-        // detection then reports it to the user.
-        post({ type: 'NET_ADD_RESULT', idx: it.idx, name: it.name, productId: it.productId,
-               skuId: it.skuId, asked: it.quantity, sent: want, base: base,
-               preferenceId: it.purchasePreferenceId || null,
-               success: ok, reason: ok ? null : (arm ? 'error_arm' : 'unexpected_shape'),
-               detail: msg || null });
+        // PLANNED, NOT SENT. Every check above is per item and stays exactly
+        // where it is; only the request moves.
+        planned.push({ it: it, want: want, base: base, vars: vars });
       } catch (e) {
         report(it, false, 'threw', String(e).slice(0, 120));
       }
     }
   };
-  var lanes = [];
-  for (var L = 0; L < ${concurrency}; L++) lanes.push(runner());
-  await Promise.all(lanes);
+  /**
+   * Turn one mutation's answer into this item's verdict.
+   *
+   * Lifted out of the lane so the batched and per-item paths cannot drift: the
+   * arms they read, the wrote count and the message they post are the same code
+   * whichever request carried them.
+   */
+  function applyOne(p, data, why, detail) {
+    var it = p.it;
+    if (why) { report(it, false, why, detail || null); return; }
+    var arm = null, msg = null;
+    try {
+      var a = data.addItemToCartV2;
+      arm = a && a.__typename;
+      msg = a && a.message ? String(a.message).slice(0, 160) : null;
+    } catch (e) {}
+    // AddOnsCart wraps a cart -- the item went in. Reading it as a failure would
+    // send the caller on to add the same product a second way.
+    //
+    // ACCEPTED, NOT LANDED. The mutation selects '... on Cart { id }' and
+    // nothing else, so this says H-E-B took the write, not that the item is in
+    // the cart. On 2026-09-01 a spinach write came back Cart and the cart read a
+    // second later did not contain it. Verified below against the read we take
+    // anyway.
+    var ok = arm === 'Cart' || arm === 'AddOnsCart';
+    if (ok) { wrote++; accepted.push({ it: it, want: p.want }); }
+    // The sent quantity rides along so a clamped add is visible as a SHORT add
+    // rather than passing for a full one -- the reconcile's own short-add
+    // detection then reports it to the user.
+    post({ type: 'NET_ADD_RESULT', idx: it.idx, name: it.name, productId: it.productId,
+           skuId: it.skuId, asked: it.quantity, sent: p.want, base: p.base,
+           preferenceId: it.purchasePreferenceId || null,
+           success: ok, reason: ok ? null : (arm ? 'error_arm' : 'unexpected_shape'),
+           detail: msg || null });
+  }
+
+  // One lane. The per-item checks only read the cart snapshot we already hold,
+  // so there is nothing here to parallelise -- the request they used to make is
+  // now made once, below, for all of them.
+  await runner();
+
+  // ONE DOCUMENT, root mutation fields executed SERIALLY by the spec, so no two
+  // writes are ever in flight against the same cart. A document-level failure
+  // falls back to the per-item path rather than failing every write: a gateway
+  // that dislikes the shape must not be able to take a whole run with it.
+  if (planned.length > 0) {
+    var vmap = {};
+    for (var bi = 0; bi < planned.length; bi++) {
+      vmap['p' + bi] = planned[bi].vars.productId;
+      vmap['s' + bi] = planned[bi].vars.skuId;
+      vmap['q' + bi] = planned[bi].vars.quantity;
+      // Left UNDEFINED when there is none. An unprovided variable leaves the
+      // argument unprovided, which is the omission the single write relied on;
+      // sending null would state a preference of "none".
+      if (planned[bi].vars.purchasePreferenceId) {
+        vmap['r' + bi] = planned[bi].vars.purchasePreferenceId;
+      }
+    }
+    var bres = await __hebGql('cartItemsV2', buildBatchDoc(planned.length), vmap,
+      9000 + planned.length * 1500);
+    if (!bres.ok) {
+      post({ type: 'NET_ADD_BATCH_FELL_BACK', count: planned.length, why: bres.why || null });
+      for (var fb = 0; fb < planned.length; fb++) {
+        var pf = planned[fb];
+        var r1 = await __hebGql('cartItemV2', ADD, pf.vars, 9000);
+        applyOne(pf, r1.ok ? r1.data : null, r1.ok ? null : (r1.why || 'network'), r1.detail || null);
+      }
+    } else {
+      for (var bj = 0; bj < planned.length; bj++) {
+        var pj = planned[bj], node = null;
+        try { node = bres.data['a' + bj]; } catch (e) {}
+        applyOne(pj, node ? { addItemToCartV2: node } : null, node ? null : 'unexpected_shape', null);
+      }
+    }
+  }
 
   // One read after, so the caller has the cart's own account of what landed
   // rather than only the store's per-write answer.

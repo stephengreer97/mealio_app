@@ -406,28 +406,56 @@ describe('HEB MEAL-202: the store\'s own limits', () => {
     '  var LINES = ' + JSON.stringify(cartLines) + ';',
     '  window.fetch = function (url, init) {',
     '    var body = JSON.parse(init.body);',
-    '    if (body.operationName === "cartItemV2") {',
-    '      window.__writes.push(body.variables);',
-    '      var arm = ARMS[body.variables.productId] || "Cart";',
+    // ONE DOCUMENT, N ALIASED MUTATIONS. addItemToCartV2 takes a single product,
+    // so H-E-B is batched the GraphQL way: a0/a1/... root fields with $p0/$s0/$q0
+    // variables, executed serially by the spec. This unpacks that back into the
+    // per-write shape the assertions are written against, so what they check --
+    // the cap clamp, the omitted preference -- is unchanged.
+    '    function unpack(b) {',
+    '      var out = [];',
+    '      if (b.operationName === "cartItemV2") { out.push(b.variables); return out; }',
+    '      if (b.operationName !== "cartItemsV2") return out;',
+    '      for (var n = 0; ; n++) {',
+    '        if (!(("p" + n) in b.variables)) break;',
+    '        var v = { productId: b.variables["p" + n], skuId: b.variables["s" + n],',
+    '                  quantity: b.variables["q" + n] };',
+    '        if (("r" + n) in b.variables) v.purchasePreferenceId = b.variables["r" + n];',
+    '        out.push(v);',
+    '      }',
+    '      return out;',
+    '    }',
+    '    var sent = unpack(body);',
+    '    if (sent.length > 0) {',
+    '      var answers = {};',
+    '      for (var w = 0; w < sent.length; w++) {',
+    '      var vars = sent[w];',
+    '      window.__writes.push(vars);',
+    '      var arm = ARMS[vars.productId] || "Cart";',
     // The cart REFLECTS an accepted write, which a real one does. Without this
     // the stub accepts every write and then reports a cart that never changed,
     // and the rail's own verification -- accepted but absent, write it once more
     // -- fires on every item. That is the verification working; the stub was
     // the unfaithful half.
     '      if (arm === "Cart" || arm === "AddOnsCart") {',
-    '        var pid = String(body.variables.productId);',
+    '        var pid = String(vars.productId);',
     '        var found = null;',
     '        for (var i = 0; i < LINES.length; i++) {',
     '          if (String(LINES[i].product.id) === pid) { found = LINES[i]; break; }',
     '        }',
-    '        if (found) found.quantity = body.variables.quantity;',
-    '        else LINES.push({ id: "i" + pid, quantity: body.variables.quantity,',
+    '        if (found) found.quantity = vars.quantity;',
+    '        else LINES.push({ id: "i" + pid, quantity: vars.quantity,',
     '          estimatedWeight: null, product: { id: pid, fullDisplayName: "X" },',
-    '          sku: { id: String(body.variables.skuId) } });',
+    '          sku: { id: String(vars.skuId) } });',
+    '      }',
+    '      answers[body.operationName === "cartItemV2" ? "single" : ("a" + w)] =',
+    '        { __typename: arm, id: "c1", message: "Quantity limit reached." };',
+    '      }',
+    '      if (body.operationName === "cartItemV2") {',
+    '        return Promise.resolve({ ok: true, status: 200, text: function () {',
+    '          return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: answers.single } })); } });',
     '      }',
     '      return Promise.resolve({ ok: true, status: 200, text: function () {',
-    '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: {',
-    '          __typename: arm, id: "c1", message: "Quantity limit reached." } } })); } });',
+    '        return Promise.resolve(JSON.stringify({ data: answers })); } });',
     '    }',
     '    return Promise.resolve({ ok: true, status: 200, text: function () {',
     '      return Promise.resolve(JSON.stringify({ data: { cartV2: {',
@@ -531,22 +559,47 @@ describe('HEB MEAL-202: the absolute quantity, and what it makes unsafe', () => 
     '  window.__lines = ' + JSON.stringify(cartLines) + ';',
     '  window.fetch = function (url, init) {',
     '    var body = JSON.parse(init.body);',
-    '    if (body.operationName === "cartItemV2") {',
-    '      window.__writes.push(body.variables);',
+    // Batched the GraphQL way: N aliased root mutations in one document, so the
+    // stub unpacks them back into the per-write shape the assertions use.
+    '    function unpack(b) {',
+    '      var out = [];',
+    '      if (b.operationName === "cartItemV2") { out.push(b.variables); return out; }',
+    '      if (b.operationName !== "cartItemsV2") return out;',
+    '      for (var n = 0; ; n++) {',
+    '        if (!(("p" + n) in b.variables)) break;',
+    '        var v = { productId: b.variables["p" + n], skuId: b.variables["s" + n],',
+    '                  quantity: b.variables["q" + n] };',
+    '        if (("r" + n) in b.variables) v.purchasePreferenceId = b.variables["r" + n];',
+    '        out.push(v);',
+    '      }',
+    '      return out;',
+    '    }',
+    '    var sent = unpack(body);',
+    '    if (sent.length > 0) {',
+    '      var answers = {};',
+    '      for (var w = 0; w < sent.length; w++) {',
+    '      var vars = sent[w];',
+    '      window.__writes.push(vars);',
     // An accepted write CHANGES the cart, which a real one does. Without this
     // the rail's own verification -- accepted but absent, so write it once more
     // -- fires on every item, because the stub reports a cart that never moved.
-    '      var pid = String(body.variables.productId);',
+    '      var pid = String(vars.productId);',
     '      var hit = null;',
     '      for (var i = 0; i < window.__lines.length; i++) {',
     '        if (String(window.__lines[i].product.id) === pid) { hit = window.__lines[i]; break; }',
     '      }',
-    '      if (hit) hit.quantity = body.variables.quantity;',
-    '      else window.__lines.push({ id: "i" + pid, quantity: body.variables.quantity,',
+    '      if (hit) hit.quantity = vars.quantity;',
+    '      else window.__lines.push({ id: "i" + pid, quantity: vars.quantity,',
     '        estimatedWeight: null, product: { id: pid, fullDisplayName: "X" },',
-    '        sku: { id: String(body.variables.skuId) } });',
+    '        sku: { id: String(vars.skuId) } });',
+    '      answers["a" + w] = { __typename: "Cart", id: "c1" };',
+    '      }',
+    '      if (body.operationName === "cartItemV2") {',
+    '        return Promise.resolve({ ok: true, status: 200, text: function () {',
+    '          return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: answers.a0 } })); } });',
+    '      }',
     '      return Promise.resolve({ ok: true, status: 200, text: function () {',
-    '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: { __typename: "Cart", id: "c1" } } })); } });',
+    '        return Promise.resolve(JSON.stringify({ data: answers })); } });',
     '    }',
     '    return Promise.resolve({ ok: true, status: 200, text: function () {',
     '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart", id: "c1", items: window.__lines } } })); } });',
@@ -662,16 +715,22 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
       '  window.__writes = 0; window.__lines = [];',
       '  window.fetch = function (url, init) {',
       '    var body = JSON.parse(init.body);',
-      '    if (body.operationName === "cartItemV2") {',
+      // Either shape: the batch sends cartItemsV2 with $q0, the unlanded retry
+      // sends the single cartItemV2 with $quantity.
+      '    var qty = body.operationName === "cartItemsV2" ? body.variables.q0',
+      '            : (body.operationName === "cartItemV2" ? body.variables.quantity : null);',
+      '    if (qty != null) {',
       '      window.__writes++;',
       '      // The FIRST write is accepted and never applied.',
       '      if (window.__writes > 1) {',
-      '        window.__lines = [{ id: "l1", quantity: body.variables.quantity, estimatedWeight: null,',
+      '        window.__lines = [{ id: "l1", quantity: qty, estimatedWeight: null,',
       '          product: { id: "319108", fullDisplayName: "Fresh Spinach" },',
       '          sku: { id: "4090", customerFriendlySize: "1 Bundle" } }];',
       '      }',
       '      return Promise.resolve({ ok: true, status: 200, text: function () {',
-      '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: { __typename: "Cart", id: "c1" } } })); } });',
+      '        return Promise.resolve(JSON.stringify({ data: body.operationName === "cartItemsV2"',
+      '          ? { a0: { __typename: "Cart", id: "c1" } }',
+      '          : { addItemToCartV2: { __typename: "Cart", id: "c1" } } })); } });',
       '    }',
       '    return Promise.resolve({ ok: true, status: 200, text: function () {',
       '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart", id: "c1", items: window.__lines } } })); } });',
@@ -707,9 +766,12 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
       '(function () {',
       '  window.fetch = function (url, init) {',
       '    var body = JSON.parse(init.body);',
-      '    if (body.operationName === "cartItemV2") {',
+      // Both shapes accept and neither ever applies — the point of the case.
+      '    if (body.operationName === "cartItemV2" || body.operationName === "cartItemsV2") {',
       '      return Promise.resolve({ ok: true, status: 200, text: function () {',
-      '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: { __typename: "Cart", id: "c1" } } })); } });',
+      '        return Promise.resolve(JSON.stringify({ data: body.operationName === "cartItemsV2"',
+      '          ? { a0: { __typename: "Cart", id: "c1" } }',
+      '          : { addItemToCartV2: { __typename: "Cart", id: "c1" } } })); } });',
       '    }',
       '    return Promise.resolve({ ok: true, status: 200, text: function () {',
       '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart", id: "c1", items: [] } } })); } });',
@@ -847,5 +909,102 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
     ])!);
     const done = await runner.waitForMessage('NET_ADD_DONE', 15_000);
     expect(done.cartAfter[0]).toEqual({ name: 'Deli Turkey', qty: 1, isWeight: true, weight: 0.75 });
+  });
+});
+
+describe('H-E-B batches too, the GraphQL way', () => {
+  // addItemToCartV2 takes a single productId/skuId — there is no list parameter,
+  // so H-E-B cannot be batched the way Albertsons was. GraphQL provides the
+  // equivalent: several ALIASED root fields in one document. The spec requires
+  // root mutation fields to execute SERIALLY, in order, which is exactly what a
+  // shared cart needs — one round trip and never two writes in flight against
+  // the same cart.
+
+  /** Counts documents, and answers a0/a1/... or the single arm. */
+  const countingStub = (opts: { failBatch?: boolean } = {}) => [
+    '(function () {',
+    '  window.__docs = []; window.__lines = [];',
+    '  window.fetch = function (url, init) {',
+    '    var body = JSON.parse(init.body);',
+    '    if (body.operationName === "cartItemsV2") {',
+    '      window.__docs.push({ op: body.operationName, vars: body.variables });',
+    opts.failBatch
+      ? '      return Promise.resolve({ ok: false, status: 400, text: function () { return Promise.resolve("nope"); } });'
+      : [
+        '      var answers = {};',
+        '      for (var n = 0; ("p" + n) in body.variables; n++) {',
+        '        answers["a" + n] = { __typename: "Cart", id: "c1" };',
+        '        window.__lines.push({ id: "l" + n, quantity: body.variables["q" + n],',
+        '          estimatedWeight: null,',
+        '          product: { id: String(body.variables["p" + n]), fullDisplayName: "P" + n },',
+        '          sku: { id: String(body.variables["s" + n]) } });',
+        '      }',
+        '      return Promise.resolve({ ok: true, status: 200, text: function () {',
+        '        return Promise.resolve(JSON.stringify({ data: answers })); } });',
+      ].join('\n'),
+    '    }',
+    '    if (body.operationName === "cartItemV2") {',
+    '      window.__docs.push({ op: body.operationName, vars: body.variables });',
+    '      window.__lines.push({ id: "s" + window.__docs.length, quantity: body.variables.quantity,',
+    '        estimatedWeight: null,',
+    '        product: { id: String(body.variables.productId), fullDisplayName: "P" },',
+    '        sku: { id: String(body.variables.skuId) } });',
+    '      return Promise.resolve({ ok: true, status: 200, text: function () {',
+    '        return Promise.resolve(JSON.stringify({ data: { addItemToCartV2: { __typename: "Cart", id: "c1" } } })); } });',
+    '    }',
+    '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+    '      return Promise.resolve(JSON.stringify({ data: { cartV2: { __typename: "Cart", id: "c1", items: window.__lines } } })); } });',
+    '  };',
+    '})(); true;',
+  ].join('\n');
+
+  const docsProbe = '(function(){ window.ReactNativeWebView.postMessage(JSON.stringify('
+    + '{ type: "DOCS", docs: window.__docs })); })(); true;';
+
+  const four = [1, 2, 3, 4].map((n) => ({
+    idx: n - 1, productId: String(300 + n), skuId: String(400 + n),
+    quantity: n === 3 ? 2 : 1, name: 'Item ' + n,
+  }));
+
+  itWithFixture('logged-in-home.html', 'four items, one document', async (runner) => {
+    await runner.inject(countingStub());
+    await runner.inject(buildHebNetworkAddBatchScript(four)!);
+    const done = await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    expect(done.wrote).toBe(4);
+
+    await runner.inject(docsProbe);
+    const seen = await runner.waitForMessage('DOCS', 10_000);
+    const writes = seen.docs.filter((d: { op: string }) => d.op !== 'cartV2');
+    expect(writes.length).toBe(1);
+    expect(writes[0].op).toBe('cartItemsV2');
+    // Quantities stay per item and absolute.
+    expect(writes[0].vars.q2).toBe(2);
+    expect(writes[0].vars.p0).toBe('301');
+  });
+
+  itWithFixture('logged-in-home.html', 'every item still gets its own verdict', async (runner) => {
+    await runner.inject(countingStub());
+    await runner.inject(buildHebNetworkAddBatchScript(four)!);
+    await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    const results = runner.messagesOfType('NET_ADD_RESULT') as Array<Record<string, unknown>>;
+    expect(results.length).toBe(4);
+    expect(results.every((r) => r.success === true)).toBe(true);
+    expect(new Set(results.map((r) => r.idx)).size).toBe(4);
+  });
+
+  itWithFixture('logged-in-home.html', 'a document the gateway refuses falls back per item', async (runner) => {
+    // A gateway that dislikes the shape must not be able to take a whole run
+    // with it. This is the only reason the single-write path still exists.
+    await runner.inject(countingStub({ failBatch: true }));
+    await runner.inject(buildHebNetworkAddBatchScript(four)!);
+    const fell = await runner.waitForMessage('NET_ADD_BATCH_FELL_BACK', 25_000);
+    expect(fell.count).toBe(4);
+    const done = await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    expect(done.wrote).toBe(4);
+
+    await runner.inject(docsProbe);
+    const seen = await runner.waitForMessage('DOCS', 10_000);
+    const singles = seen.docs.filter((d: { op: string }) => d.op === 'cartItemV2');
+    expect(singles.length).toBe(4);
   });
 });
