@@ -1013,3 +1013,99 @@ describe('an out-of-stock item the store accepts anyway', () => {
     expect(res.ok).toBe(true);
   });
 });
+
+describe('the whole basket goes in one request', () => {
+  // cartItemsList is a LIST, and the store's own "Add all to cart" uses it that
+  // way: qscAddAllItems() passes getAllSelectedProducts() — an array of
+  // { itemId, qty } — straight through to the same POST /cart/items we had been
+  // calling once per item.
+  //
+  // Not only faster. Sending them separately is what made concurrent writes lose
+  // each other: the cart is one document, so N read-modify-writes overwrite each
+  // other. That cost Stephen seven items and forced the writes back to serial at
+  // about a second each. A batch is one transaction — the store does the merging.
+
+  /** Records every write body, and echoes a cart built from ALL of them. */
+  const batchStub = (over: Record<string, unknown> = {}) => [
+    '(function () {',
+    '  window.__writes = []; window.__lines = {};',
+    '  var prior = window.fetch;',
+    '  function body() {',
+    '    var list = [];',
+    '    for (var k in window.__lines) list.push(Object.assign(',
+    '      { itemId: k, qty: window.__lines[k], name: "Item " + k }, ' + JSON.stringify(over) + '));',
+    '    return { carts: [{ cartItemsList: list }] };',
+    '  }',
+    '  window.fetch = function (url, init) {',
+    '    var u = String(url);',
+    '    if (u.indexOf("/userinfo") !== -1) return prior.apply(window, arguments);',
+    '    if (u.indexOf("/cart/customer/") !== -1) {',
+    '      return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body()); } });',
+    '    }',
+    '    var sent = JSON.parse(init.body).cartItemsList;',
+    '    window.__writes.push(sent);',
+    '    for (var i = 0; i < sent.length; i++) window.__lines[sent[i].itemId] = sent[i].qty;',
+    '    return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body()); } });',
+    '  };',
+    '})(); true;',
+  ].join('\n');
+
+  const writesProbe = '(function(){ window.ReactNativeWebView.postMessage(JSON.stringify('
+    + '{ type: "PROBE", writes: window.__writes })); })(); true;';
+
+  const five = [1, 2, 3, 4, 5].map((n) => ({
+    idx: n - 1, productId: String(100 + n), quantity: n === 4 ? 2 : 1, name: 'Item ' + (100 + n),
+  }));
+
+  itWithFixture('logged-in-home.html', 'five items, one POST', async (runner) => {
+    await runner.inject(albStub());
+    await runner.inject(batchStub());
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(five)!);
+    const done = await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    expect(done.wrote).toBe(5);
+
+    await runner.inject(writesProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    expect(seen.writes.length).toBe(1);
+    expect(seen.writes[0].length).toBe(5);
+    // The quantities are still per product, and still absolute.
+    expect(seen.writes[0].find((l: { itemId: string }) => l.itemId === '104').qty).toBe(2);
+  });
+
+  itWithFixture('logged-in-home.html', 'every item still gets its own verdict', async (runner) => {
+    await runner.inject(albStub());
+    await runner.inject(batchStub());
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(five)!);
+    await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    const results = runner.messagesOfType('NET_ADD_RESULT') as Array<Record<string, unknown>>;
+    expect(results.length).toBe(5);
+    expect(results.every((r) => r.ok === true)).toBe(true);
+    // One verdict per item, not one for the batch.
+    expect(new Set(results.map((r) => r.idx)).size).toBe(5);
+  });
+
+  itWithFixture('logged-in-home.html', 'an unavailable line in the batch fails only itself', async (runner) => {
+    // The verification is still per item, so one out-of-stock product does not
+    // take the other four down with it.
+    await runner.inject(albStub());
+    await runner.inject(batchStub({ isAvailable: false }));
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(five)!);
+    const done = await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    expect(done.wrote).toBe(0);
+  });
+
+  itWithFixture('logged-in-home.html', 'a weight item is declined without joining the request', async (runner) => {
+    await runner.inject(albStub());
+    await runner.inject(batchStub());
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript([
+      { idx: 0, productId: '201', quantity: 1, name: 'Ginger Root', isWeightItem: true },
+      { idx: 1, productId: '202', quantity: 1, name: 'Tortillas' },
+    ])!);
+    await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    await runner.inject(writesProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    // One request, and the weight item is not in it.
+    expect(seen.writes.length).toBe(1);
+    expect(seen.writes[0].map((l: { itemId: string }) => l.itemId)).toEqual(['202']);
+  });
+});

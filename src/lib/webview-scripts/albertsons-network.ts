@@ -1162,17 +1162,19 @@ ${ALB_PRELUDE}
   }
 
   var wrote = 0;
-  async function writeOne(id) {
-    var g = byId[id];
-    var members = g.members;
-    var head = g.first;
+  /**
+   * Decide what a product's line should say, without sending anything.
+   *
+   * Split out from the write so ONE request can carry every item: the rules
+   * (weight decline, store cap, absolute quantity) are per product, the request
+   * is not.
+   */
+  function planOne(id) {
+    var g = byId[id], members = g.members, head = g.first;
 
     // A weight line takes a weight, not a count. Declining is the honest outcome.
     for (var m = 0; m < members.length; m++) {
-      if (members[m].isWeightItem) {
-        for (var n = 0; n < members.length; n++) report(members[n], false, 'weight_item_declined');
-        return;
-      }
+      if (members[m].isWeightItem) return { id: id, skip: 'weight_item_declined' };
     }
 
     var held = Number(base.lines[id] || 0);
@@ -1182,21 +1184,55 @@ ${ALB_PRELUDE}
       ? head.maxOrderQuantity : null;
     if (cap != null && want > cap) {
       if (held >= cap) {
-        for (var c1 = 0; c1 < members.length; c1++) {
-          report(members[c1], false, 'quantity_limit_reached', 'cart already holds ' + held + ' of ' + cap);
-        }
-        return;
+        return { id: id, skip: 'quantity_limit_reached',
+                 detail: 'cart already holds ' + held + ' of ' + cap };
       }
       want = cap;
     }
+    return { id: id, want: want, held: held };
+  }
 
+  /**
+   * ONE REQUEST FOR THE WHOLE BASKET.
+   *
+   * cartItemsList is a LIST, and the store's own "Add all to cart" uses it that
+   * way -- qscAddAllItems() passes getAllSelectedProducts(), an array of
+   * { itemId, qty }, straight through addOrUpdateProductQuantity to the same
+   * POST /cart/items we already call one item at a time.
+   *
+   * This is not only faster. Sending the items separately is what made
+   * concurrent writes lose each other -- the cart is one document, so N
+   * read-modify-writes against it overwrite each other, which cost Stephen seven
+   * items and forced the writes back to serial at about a second each. A batch
+   * is one transaction: the store does the merging, and the whole class of
+   * problem goes away rather than being tiptoed around.
+   *
+   * Verification is unchanged and still per item: the response carries the whole
+   * cart, so each line is checked for the quantity asked for and for
+   * isAvailable, exactly as before.
+   */
+  var planned = [], lines = [];
+  for (var pi = 0; pi < order.length; pi++) {
+    var pl = planOne(order[pi]);
+    if (pl.skip) {
+      var sk = byId[pl.id].members;
+      for (var s0 = 0; s0 < sk.length; s0++) report(sk[s0], false, pl.skip, pl.detail || null);
+      continue;
+    }
+    planned.push(pl);
+    lines.push({ itemId: pl.id, qty: pl.want });
+  }
+
+  if (planned.length > 0) {
     var body = JSON.stringify({
       preferenceList: [{ cartCategory: '1P_WINE' }],
-      cartItemsList: [{ itemId: id, qty: want }],
+      cartItemsList: lines,
       cartCategory: 'abs'
     });
     var ctl = new AbortController();
-    var to = setTimeout(function () { ctl.abort(); }, 15000);
+    // Scaled: one request carrying twenty items is not the same wait as one
+    // carrying one.
+    var to = setTimeout(function () { ctl.abort(); }, 15000 + planned.length * 1500);
     var r = null;
     try {
       r = await fetch(__albCartUrl(), {
@@ -1208,83 +1244,55 @@ ${ALB_PRELUDE}
       clearTimeout(to);
       // The write is idempotent, so an unanswered request is genuinely unknown
       // rather than known-bad. Reconcile decides, not this script.
-      for (var u1 = 0; u1 < members.length; u1++) report(members[u1], false, 'write_unresolved');
-      return;
+      for (var u0 = 0; u0 < planned.length; u0++) {
+        var um = byId[planned[u0].id].members;
+        for (var u1 = 0; u1 < um.length; u1++) report(um[u1], false, 'write_unresolved');
+      }
+      planned = [];
     }
-    if (r.status !== 200) {
-      for (var h1 = 0; h1 < members.length; h1++) report(members[h1], false, 'http', 'status ' + r.status);
-      return;
-    }
-
-    // Verify from the response the write itself returns — it carries the whole
-    // cart, so no extra round trip is needed to know what actually landed.
-    var after = null;
-    try { after = await r.json(); } catch (e) {}
-    // OUT OF STOCK STILL LANDS. The store accepts the write and flags the LINE.
-    // From its own cart component:
-    //   ngClass: item.isAvailable ? "" : "OOSItem"
-    //   disableCheckoutButton = ... || !carts[0].isAvailable
-    // So an unavailable item sits in the cart struck through, and its presence
-    // blocks checkout for the whole basket. A write that "succeeded" can
-    // therefore be a line the user cannot buy -- which is exactly what we would
-    // have started shipping the moment a stored product id let us skip the
-    // search that used to catch this first.
-    var got = null, avail = null;
-    try {
-      var list = ((after.carts || [])[0] || {}).cartItemsList || [];
-      for (var v = 0; v < list.length; v++) {
-        if (String(list[v].itemId) === id) {
-          got = Number(list[v].qty);
-          // Absent means the store said nothing, which is not the same as false.
-          avail = (list[v].isAvailable === undefined || list[v].isAvailable === null)
-            ? null : !!list[v].isAvailable;
-          break;
+    if (r && r.status !== 200) {
+      for (var h0 = 0; h0 < planned.length; h0++) {
+        var hm = byId[planned[h0].id].members;
+        for (var h1 = 0; h1 < hm.length; h1++) report(hm[h1], false, 'http', 'status ' + r.status);
+      }
+      planned = [];
+    } else if (r) {
+      var after = null;
+      try { after = await r.json(); } catch (e) {}
+      var byLine = {};
+      try {
+        var list = ((after.carts || [])[0] || {}).cartItemsList || [];
+        for (var v = 0; v < list.length; v++) byLine[String(list[v].itemId)] = list[v];
+      } catch (e) {}
+      for (var q = 0; q < planned.length; q++) {
+        var pq = planned[q], mem = byId[pq.id].members;
+        var row = byLine[pq.id];
+        if (!row) {
+          for (var e1 = 0; e1 < mem.length; e1++) report(mem[e1], false, 'unexpected_shape');
+          continue;
         }
-      }
-    } catch (e) {}
-    if (got == null) {
-      for (var s1 = 0; s1 < members.length; s1++) report(members[s1], false, 'unexpected_shape');
-      return;
-    }
-    if (avail === false) {
-      // In the cart, and unbuyable. Reported as the definitive failure it is so
-      // the run does not count it and the user is offered something else --
-      // never as a success, which is what the struck-through line would have
-      // become on the done screen.
-      for (var oo = 0; oo < members.length; oo++) {
-        report(members[oo], false, 'out_of_stock', 'the store added it but marked it unavailable');
-      }
-      return;
-    }
-    if (got !== want) {
-      for (var s2 = 0; s2 < members.length; s2++) {
-        report(members[s2], false, 'quantity_mismatch', 'asked ' + want + ', cart holds ' + got);
-      }
-      return;
-    }
-    base.lines[id] = got;
-    wrote++;
-    for (var ok1 = 0; ok1 < members.length; ok1++) report(members[ok1], true, null);
-  }
-
-  var next = 0;
-  async function worker() {
-    while (next < order.length) {
-      var k = next++;
-      try { await writeOne(order[k]); }
-      catch (e) {
-        var g = byId[order[k]];
-        for (var t = 0; t < g.members.length; t++) report(g.members[t], false, 'threw', String(e).slice(0, 80));
+        var avail = (row.isAvailable === undefined || row.isAvailable === null)
+          ? null : !!row.isAvailable;
+        if (avail === false) {
+          for (var e2 = 0; e2 < mem.length; e2++) {
+            report(mem[e2], false, 'out_of_stock', 'the store added it but marked it unavailable');
+          }
+          continue;
+        }
+        var got = Number(row.qty);
+        if (got !== pq.want) {
+          for (var e3 = 0; e3 < mem.length; e3++) {
+            report(mem[e3], false, 'quantity_mismatch', 'asked ' + pq.want + ', cart holds ' + got);
+          }
+          continue;
+        }
+        base.lines[pq.id] = got;
+        wrote++;
+        for (var e4 = 0; e4 < mem.length; e4++) report(mem[e4], true, null);
       }
     }
   }
-  var pool = [];
-  for (var w = 0; w < ${concurrency}; w++) pool.push(worker());
-  await Promise.all(pool);
 
-  // One read after the writes, so the done screen can show what THIS run added
-  // in green and what was already in the cart in grey — without loading the
-  // cart page to find out. Same contract as the H-E-B rail.
   var afterCart = await __albReadCart(10000);
   post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: wrote,
          cartBefore: base.rows || null,
