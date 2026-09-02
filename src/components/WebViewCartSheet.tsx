@@ -21,6 +21,7 @@ import FloatingPreviewImage from './FloatingPreviewImage';
 import ProductImageViewer from './ProductImageViewer';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { Colors } from '../constants/colors';
 import ExpandableNotice from './ui/ExpandableNotice';
 import { Meal } from '../types';
@@ -3953,7 +3954,7 @@ export default function WebViewCartSheet({
           // are the whole audit trail — log them or the script's named reason
           // reaches nobody, and a redirect stays indistinguishable from a
           // selector miss.
-          console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count, 'reason=', msg.reason ?? null, 'status=', msg.status ?? null, 'detail=', msg.detail ?? null, 'url=', msg.url);
+          console.log(`[Cart ${ts()}]`, 'CART_COUNT phase=', phase, 'count=', count, 'reason=', msg.reason ?? null, 'status=', msg.status ?? null, 'ms=', msg.ms ?? null, 'tries=', msg.tries ?? null, 'detail=', msg.detail ?? null, 'url=', msg.url);
           if (Array.isArray(msg.items)) cartItemsLatestRef.current = msg.items as CartItem[];
           if (phase === 'before') {
             cartCountBeforeRef.current = count;
@@ -4662,7 +4663,10 @@ export default function WebViewCartSheet({
         }
         if (msg.type === 'SEARCH_RESULT_FAILED' && msg.source === 'network') {
           if (!netActiveRef.current) return;
-          console.log(`[Cart ${ts()}]`, 'network search failed for', msg.term, '—', msg.why);
+          console.log(`[Cart ${ts()}]`, 'network search failed for', String(msg.term).slice(0, 30), '—', msg.why,
+            'status=', msg.status ?? null, 'ms=', msg.ms ?? null, 'vis=', msg.vis ?? null,
+            'worstTick=', msg.worstTickMs ?? null, 'keyTail=', msg.keyTail ?? null,
+            'detail=', msg.detail ?? null);
           if (typeof msg.term === 'string') netFailedTermsRef.current.add(msg.term);
           return;
         }
@@ -4941,6 +4945,11 @@ export default function WebViewCartSheet({
           return;
         }
         if (msg.type === 'SEARCH_RESULT' && msg.source === 'network') {
+          // The request's own clock, so a slow store and a starved JS thread
+          // stop looking the same in the log.
+          console.log(`[Cart ${ts()}]`, 'net search', msg.variant ?? null, String(msg.term).slice(0, 28),
+            'ms=', msg.ms ?? null, 'vis=', msg.vis ?? null, 'worstTick=', msg.worstTickMs ?? null,
+            'bytes=', msg.bytes ?? null, 'n=', (msg.candidates || []).length);
           if (!netActiveRef.current || netPhaseRef.current !== 'search') return;
           if (typeof msg.term === 'string' && Array.isArray(msg.candidates)) {
             netCandidatesRef.current.set(msg.term, msg.candidates as Candidate[]);
@@ -5512,6 +5521,36 @@ export default function WebViewCartSheet({
   // spinner). It's hidden — but the main WebView stays mounted — while the user
   // is in a panel step (qty is not mounted at all; review/searchResult/done keep
   // the WebView alive behind the panel for the cart snapshot).
+  /**
+   * HOLD THE SCREEN ON FOR THE WHOLE RUN.
+   *
+   * A cart run is the one time the user is watching and NOT touching: they tap
+   * "Add ingredients", then watch an animation for a minute or more. The Pixel's
+   * display timeout is 30 seconds. When the screen sleeps, Android suspends the
+   * WebView's renderer -- and everything the rail does lives in that renderer.
+   *
+   * MEASURED 2026-09-02, from inside the injected script:
+   *   worstTickMs: 59231     a 1-second interval that fired 59 SECONDS late
+   *   sinceInjectMs: 100060  the script alive for 100s to do ~3s of work
+   *   ms: 105968             a "request" that was really one 3s request
+   *                          spanning a frozen document
+   *   vis: 'visible'         the page had no idea it had been suspended
+   * against, on the same store minutes earlier with the screen awake:
+   *   search 288-758ms per term, cart read 529ms, session script 435ms.
+   *
+   * So the endpoints were never slow. The document was asleep. This is also why
+   * the run looked like it stalled and then delivered everything at once.
+   */
+  useEffect(() => {
+    if (!visible) return;
+    let held = true;
+    activateKeepAwakeAsync('mealio-cart-run').catch(() => { held = false; });
+    return () => {
+      if (!held) return;
+      try { deactivateKeepAwake('mealio-cart-run'); } catch { /* already gone */ }
+    };
+  }, [visible]);
+
   const browserVisible =
     step === 'login_check' || step === 'login' || step === 'searching' ||
     step === 'adding' || step === 'robot_challenge' || step === 'manual';

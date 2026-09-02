@@ -29,6 +29,16 @@
 // compiled into the app would fail closed for every user at once.
 
 export const ALB_SEARCH_PATH = '/abs/pub/xapi/pgmsearch/v1/search/products';
+/**
+ * The PLAIN product search, which is a different service from the one above.
+ *
+ * pgmsearch is the *program* search: it also resolves offers, sponsored
+ * carousels, merch banners and past-purchase personalisation, none of which we
+ * read. The site uses this lighter path for its own "more results" calls.
+ * Config: apimSearchProductsAPIPath, keyed by searchConfig.apimSubscriptionKey
+ * rather than apimProgramSubscriptionKey.
+ */
+export const ALB_PLAIN_SEARCH_PATH = '/abs/pub/xapi/search/products';
 export const ALB_CART_ITEMS_PATH = '/abs/pub/erums/cartservice/api/v2/cart/items';
 /**
  * READING the cart is a different call from writing to it.
@@ -238,6 +248,13 @@ const ALB_PRELUDE = `
     return c.sc.apimProgramSubscriptionKey || c.dp.xapiSubscriptionKey || null;
   }
 
+  /** The plain /search/products service takes a DIFFERENT subscription key. */
+  function __albPlainSearchKey() {
+    if (A.plainKey) return A.plainKey;
+    var c = __albCfg();
+    return c.sc.apimSubscriptionKey || null;
+  }
+
   // THE KEYS ARE IN THE PAGE'S HTML, NOT ONLY IN ITS RUNTIME.
   //
   // window.SWY.CONFIGSERVICE is built by an inline SWY.CONFIGSERVICE.init('{...}')
@@ -272,6 +289,11 @@ const ALB_PRELUDE = `
     if (kIdx >= 0) {
       var kM = html.slice(kIdx, kIdx + 160).match(/[0-9a-f]{32}/);
       if (kM) A.searchKey = kM[0];
+    }
+    var pIdx = html.indexOf('"apimSubscriptionKey"');
+    if (pIdx >= 0) {
+      var pM = html.slice(pIdx, pIdx + 160).match(/[0-9a-f]{32}/);
+      if (pM) A.plainKey = pM[0];
     }
     // The cart key is not at a field we can name -- that is why the rail PROBES
     // candidates. Same probe, sourced from the document: every 32-hex value,
@@ -419,12 +441,15 @@ const ALB_PRELUDE = `
     for (var i = 0; i < keys.length; i++) {
       var ctl = new AbortController();
       var to = setTimeout(function () { ctl.abort(); }, budgetMs || 12000);
+      var t0 = Date.now();
       try {
         var r = await fetch(__albCartReadUrl(), {
           method: 'POST', body: '{}',
           credentials: 'include', headers: __albCartHeaders(keys[i]), signal: ctl.signal
         });
         clearTimeout(to);
+        A.lastReadMs = Date.now() - t0;
+        A.lastReadTry = i + 1;
         lastStatus = r.status;
         if (r.status === 401 || r.status === 403) continue;
         if (r.status !== 200) {
@@ -478,6 +503,19 @@ ${ALB_PRELUDE}
     o.type = 'ALB_SESSION';
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
+  // IS THE DOCUMENT EVEN AWAKE? See the note in the search batch: a request that
+  // reports 90s while its own 15s abort timer never fired was not slow, it was
+  // FROZEN. This measures both -- what the page says about itself, and the real
+  // gap between ticks of a one-second interval.
+  var beat = { last: Date.now(), worst: 0, t0: Date.now() };
+  try {
+    setInterval(function () {
+      var now = Date.now(), gap = now - beat.last;
+      beat.last = now;
+      if (gap > beat.worst) beat.worst = gap;
+    }, 1000);
+  } catch (e) {}
+  var vis = function () { try { return document.visibilityState; } catch (e) { return null; } };
   try {
     // ONE REQUEST, AND ITS ANSWER DECIDES. See __albResolveUser for the evidence
     // this is built on -- the site's own bootstrap does exactly this and nothing
@@ -523,6 +561,7 @@ ${ALB_PRELUDE}
       uuid: u.UUID || null, shoppingContext: __albPreference().context,
       userType: u.userType || null,
       hasSearchKey: !!__albSearchKey(), cartReadable: null,
+      vis: vis(), worstTickMs: beat.worst, sinceInjectMs: Date.now() - beat.t0,
     });
     if (!storeId) {
       // Signed in with no store on the session. The run cannot search or write
@@ -548,7 +587,9 @@ ${ALB_PRELUDE}
       cartReadable: !!cart.ok,
       cartWhy: cart.ok ? null : (cart.why || null),
       cartStatus: (!cart.ok && cart.status) || null,
+      cartMs: A.lastReadMs || null,
       sharedStore: shared.storeId || null,
+      vis: vis(), worstTickMs: beat.worst, sinceInjectMs: Date.now() - beat.t0,
     });
   } catch (e) {
     post({ ok: false, why: 'threw', detail: String(e).slice(0, 120) });
@@ -663,7 +704,33 @@ function albSearchUrlExpr(pageSize: number, storeId: number): string {
   }
 
   function __albSearchUrl(term, variant) {
+    if (variant === 'plain') {
+      // The site's own lighter call: no offers, no sponsored carousel, no
+      // personalisation, and seven rows rather than thirty.
+      var u = __albUser();
+      var host = String((window.location && window.location.hostname) || 'www.albertsons.com');
+      var pp = new URLSearchParams();
+      pp.set('request-id', String(Math.floor(900 * Math.random() + 100))
+        + String(Date.now()) + String(Math.floor(900 * Math.random() + 100)));
+      pp.set('url', host);
+      pp.set('pageurl', host);
+      pp.set('pagename', 'search');
+      pp.set('rows', '10');
+      pp.set('start', '0');
+      pp.set('search-type', 'keyword');
+      pp.set('storeid', '${storeId}');
+      pp.set('featured', 'true');
+      pp.set('q', term);
+      pp.set('channel', __albPreference().channel);
+      pp.set('banner', __albBanner());
+      return '${ALB_PLAIN_SEARCH_PATH}?' + pp.toString();
+    }
     return '${ALB_SEARCH_PATH}?' + __albSearchParams(term, variant).toString();
+  }
+
+  /** Each service has its own subscription key; sending the wrong one is a 401. */
+  function __albKeyFor(variant) {
+    return variant === 'plain' ? (__albPlainSearchKey() || __albSearchKey()) : __albSearchKey();
   }
 `;
 }
@@ -716,13 +783,15 @@ ${ALB_PRELUDE}
       post({ type: 'CART_COUNT', count: null, source: 'network',
              reason: RAIL_READ_CODE[why] || 'rail_read_failed',
              status: (cart && cart.status) || null,
+             ms: A.lastReadMs || null, tries: A.lastReadTry || null,
              detail: (cart && cart.detail) || null });
       return;
     }
     var rows = cart.rows || [];
     var count = 0;
     for (var i = 0; i < rows.length; i++) count += (rows[i].qty || 0);
-    post({ type: 'CART_COUNT', count: count, items: rows, source: 'network' });
+    post({ type: 'CART_COUNT', count: count, items: rows, source: 'network',
+           ms: A.lastReadMs || null, tries: A.lastReadTry || null });
   } catch (e) {
     post({ type: 'CART_COUNT', count: null, source: 'network', reason: 'rail_read_threw',
            detail: String(e).slice(0, 80) });
@@ -762,46 +831,83 @@ ${albSearchUrlExpr(pageSize, storeId)}
   // still carries the shopper's identifiers rather than blanks.
   await __albResolveUser(8000);
 
-  // WHICH SHAPE DOES THE GATEWAY ACCEPT? ASK IT.
+  // TWO SHAPES, NOT FIVE.
   //
-  // 'Search encountered a problem. Please try again OSSR0033-R' names no
-  // parameter, and every guess costs a device run. So a term that fails is
-  // retried through a short ladder of shapes, each one differing from the last
-  // by a single thing the site does differently, and the shape that works is
-  // REPORTED and then reused for the rest of the batch. The first one is what
-  // we believe is right, so a healthy store pays nothing for this.
-  var VARIANTS = ['site', 'no_pp', 'no_channel', 'legacy'];
+  // The ladder started as a diagnostic -- 'Search encountered a problem, please
+  // try again OSSR0033-R' names no parameter, so a rejected term was retried
+  // through every shape that differed from the site's by one thing, and the one
+  // that worked was reported. That question is answered now, and a five-deep
+  // ladder is five requests per term against a service whose latency is the
+  // complaint. What is left is the light service and the heavy one:
+  //
+  //   plain  /abs/pub/xapi/search/products     products only
+  //   site   /abs/pub/xapi/pgmsearch/v1/...    + offers, sponsored, personalised
+  //
+  // Same result shape, so the fallback costs nothing but a second request, and
+  // only on a term the light service refused.
+  var VARIANTS = ['plain', 'site'];
   var winner = null;
 
   async function attempt(term, variant) {
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, 15000);
     var url = __albSearchUrl(term, variant);
+    // MEASURED, NOT GUESSED. Stephen: "search and cart read are still extremely
+    // slow... It is not acceptable to take several minutes." The device log
+    // could show WHEN an answer arrived but not where the time went -- a slow
+    // request and a starved JS thread look identical from outside. This is the
+    // request's own clock.
+    var t0 = Date.now();
     var r, txt;
     try {
       r = await fetch(url, {
         credentials: 'include', signal: ctl.signal,
-        headers: { 'Ocp-Apim-Subscription-Key': key, 'Accept': 'application/json' }
+        headers: { 'Ocp-Apim-Subscription-Key': __albKeyFor(variant), 'Accept': 'application/json' }
       });
       clearTimeout(to);
       txt = await r.text();
     } catch (e) {
       clearTimeout(to);
-      return { why: 'no_response', url: url };
+      return { why: 'no_response', url: url, ms: Date.now() - t0 };
     }
-    if (r.status !== 200) return { why: 'http', status: r.status, url: url };
+    var ms = Date.now() - t0;
+    if (r.status !== 200) {
+      // The gateway's own words. A 401 from us sending the wrong subscription
+      // key and a 401 from the edge deciding we are a bot read identically
+      // without this, and they need completely different fixes.
+      return { why: 'http', status: r.status, url: url, ms: ms,
+               detail: String(txt || '').slice(0, 160) };
+    }
     var j = null;
     try { j = JSON.parse(txt); } catch (e) {}
-    if (!j) return { why: 'unparseable', url: url };
+    if (!j) return { why: 'unparseable', url: url, ms: ms };
     var pp = j.primaryProducts || {};
     var resp = pp.response || null;
     if (!resp || !resp.docs) {
-      return { why: 'search_error', url: url,
+      return { why: 'search_error', url: url, ms: ms,
                appCode: pp.appCode != null ? String(pp.appCode).slice(0, 40) : null,
                detail: pp.appMsg != null ? String(pp.appMsg).slice(0, 90) : null };
     }
-    return { ok: true, json: j, url: url };
+    return { ok: true, json: j, url: url, ms: ms, bytes: txt.length };
   }
+
+  // IS THE PAGE EVEN AWAKE?
+  //
+  // A request that reports ms: 90415 while its own 15-second abort timer never
+  // fired is not a slow server -- a timer that late means the document was
+  // FROZEN, and Date.now() spans the freeze. Chromium throttles timers and can
+  // suspend a document it considers hidden, and this WebView is rendered behind
+  // the loading animation. document.visibilityState says so directly, and the
+  // heartbeat measures the damage: the gap between ticks of a 1s interval IS
+  // the throttle factor.
+  var beat = { last: Date.now(), worst: 0 };
+  try {
+    setInterval(function () {
+      var now = Date.now(), gap = now - beat.last;
+      beat.last = now;
+      if (gap > beat.worst) beat.worst = gap;
+    }, 1000);
+  } catch (e) {}
 
   function redact(url) {
     var q = String(url).split('?')[1];
@@ -811,12 +917,14 @@ ${albSearchUrlExpr(pageSize, storeId)}
   async function one(term) {
     var first = winner || VARIANTS[0];
     var got = await attempt(term, first);
+    got.variant = first;
     if (!got.ok && got.why === 'search_error' && !winner) {
       // Only a REJECTED shape is worth re-shaping. A timeout or a 5xx is the
       // store having a bad minute and every variant would meet the same wall.
       for (var vi = 0; vi < VARIANTS.length; vi++) {
         if (VARIANTS[vi] === first) continue;
         var alt = await attempt(term, VARIANTS[vi]);
+        alt.variant = VARIANTS[vi];
         if (alt.ok) {
           winner = VARIANTS[vi];
           post({ type: 'SEARCH_SHAPE_OK', source: 'network', variant: winner,
@@ -834,7 +942,16 @@ ${albSearchUrlExpr(pageSize, storeId)}
         status: got.status != null ? got.status : null,
         appCode: got.appCode != null ? got.appCode : null,
         detail: got.detail != null ? got.detail : null,
-        variant: winner || first,
+        keyTail: (function () {
+          // The LAST FOUR characters only, never the key. Enough to tell "we
+          // sent the program key" from "we sent the plain one" or from "we sent
+          // nothing", which is the whole question behind a 401.
+          try { var k = __albKeyFor(got.variant || ''); return k ? String(k).slice(-4) : null; }
+          catch (e) { return null; }
+        })(),
+        variant: winner || first, ms: got.ms != null ? got.ms : null,
+        vis: (function () { try { return document.visibilityState; } catch (e) { return null; } })(),
+        worstTickMs: beat.worst,
         sentQuery: redact(url)
       });
       return;
@@ -843,7 +960,7 @@ ${albSearchUrlExpr(pageSize, storeId)}
   }
 
   /** Map an accepted response onto the candidate shape every reader here emits. */
-  async function handle(term, j, url) {
+  async function handle(term, j, url, got) {
     var pp = j.primaryProducts || {};
     var resp = pp.response || null;
     var docs = resp && resp.docs;
@@ -853,7 +970,10 @@ ${albSearchUrlExpr(pageSize, storeId)}
     post({
       type: 'SEARCH_RESULT', source: 'network', term: term,
       candidates: __albCandidates(docs || []),
-      numFound: (resp && typeof resp.numFound === 'number') ? resp.numFound : null
+      numFound: (resp && typeof resp.numFound === 'number') ? resp.numFound : null,
+      ms: got ? got.ms : null, bytes: got ? got.bytes : null, variant: got ? got.variant : null,
+      vis: (function () { try { return document.visibilityState; } catch (e) { return null; } })(),
+      worstTickMs: beat.worst
     });
   }
 

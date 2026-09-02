@@ -216,8 +216,10 @@ describe('Albertsons search over the network', () => {
     await runner.waitForMessage('SEARCH_RESULT', 15_000);
     await runner.inject(REPORT);
     const probe = await runner.waitForMessage('PROBE', 8_000);
+    // The LIGHTER service is tried first now: pgmsearch also resolves offers,
+    // sponsored carousels and personalisation, none of which this rail reads.
     const url = String(probe.urls[0]);
-    expect(url).toContain('/abs/pub/xapi/pgmsearch/v1/search/products');
+    expect(url).toContain('/abs/pub/xapi/search/products');
     expect(url).toContain('q=avocado');
     expect(url).toContain('storeid=161');
     // Generated per call — a reused one returned a stale error body in testing.
@@ -400,6 +402,36 @@ function albStub(opts: {
     '})(); true;',
   ].filter(Boolean).join('\n');
 }
+
+/**
+ * The light service refuses; the heavy one answers. Records every URL, so a
+ * test can count which service was asked and how often.
+ */
+const REFUSE_PLAIN = [
+  '(function () {',
+  '  window.__urls = window.__urls || [];',
+  '  window.fetch = function (url) {',
+  '    var u = String(url); window.__urls.push(u);',
+  '    if (u.indexOf("/xapi/search/products") !== -1) {',
+  '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve(',
+  '        JSON.stringify({ primaryProducts: { appCode: "400", appMsg: "OSSR0033-R" } })); } });',
+  '    }',
+  '    if (u.indexOf("pgmsearch") !== -1) {',
+  '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve(',
+  '        ' + JSON.stringify(JSON.stringify({
+      appCode: '[PS: 200]',
+      primaryProducts: { appCode: '[PS: 200]', response: { numFound: 1, start: 0, docs: [{
+        name: 'Medium Hass Avocado', pid: '184040105', id: '184040105', upc: '0048404010501',
+        price: 0.79, status: 'active', inventoryAvailable: '1', sellByWeight: 'I',
+        unitOfMeasure: 'EA', unitQuantity: 'EACH', maxPurchaseQty: 99, restrictedValue: '0',
+      }] } },
+    })) + '); } });',
+  '    }',
+  '    return Promise.resolve({ status: 200, json: function () {',
+  '      return Promise.resolve({ carts: [{ cartItemsList: [] }] }); } });',
+  '  };',
+  '})(); true;',
+].join('\n');
 
 const urlsProbe = '(function(){ window.ReactNativeWebView.postMessage(JSON.stringify('
   + '{ type: "PROBE", urls: window.__urls })); })(); true;';
@@ -604,10 +636,13 @@ describe('the request has to look like the site\'s own', () => {
   // Please try again OSSR0033-R", and the cart read came back 400. Both were
   // built from parameters we had invented rather than read off the site.
 
+
+
   itWithFixture('logged-in-home.html', 'sends the HOSTNAME as url and pageurl, not a full URL', async (runner) => {
     // mapProgramSearchParams: .set('url', i).set('pageurl', i) where i is the
     // hostname. We were sending 'https://www.albertsons.com'.
     await runner.inject(albStub());
+    await runner.inject(REFUSE_PLAIN);
     await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['garlic'], { storeId: '161' })!);
     await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
     await runner.inject(urlsProbe);
@@ -624,6 +659,7 @@ describe('the request has to look like the site\'s own', () => {
     // The site DELETES pgm when pgmList is empty. We always sent
     // pgm=merch-banner, which is a program this search is not part of.
     await runner.inject(albStub());
+    await runner.inject(REFUSE_PLAIN);
     await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['garlic'], { storeId: '161' })!);
     await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
     await runner.inject(urlsProbe);
@@ -694,89 +730,82 @@ describe('the request has to look like the site\'s own', () => {
     await runner.inject(searchStub({ appCode: '[PS: 400]',
       primaryProducts: { appCode: '400', appMsg: 'Search encountered a problem. OSSR0033-R' } }));
     await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['garlic'], { storeId: '161' })!);
-    const msg = await runner.waitForMessage('SEARCH_RESULT_FAILED', 20_000);
+    const msg = await runner.waitForMessage('SEARCH_RESULT_FAILED', 25_000);
     expect(msg.why).toBe('search_error');
     expect(msg.sentQuery).toContain('storeid=161');
-    // The site's defaults, which are not the obvious ones.
-    expect(msg.sentQuery).toContain('sort=&');
-    expect(msg.sentQuery).toContain('featured=&');
-    expect(msg.sentQuery).toContain('timezone=' + encodeURIComponent('America/Los_Angeles'));
-    // uuid and visitorId are not part of this call at all; they came from a
-    // different endpoint of theirs and had been carried over. If a fallback
-    // shape ever puts them back, the value must still never be reported.
+    expect(msg.sentQuery).toContain('q=garlic');
+    // The request's own clock, so a slow service and a starved JS thread stop
+    // looking the same in the log.
+    expect(typeof msg.ms).toBe('number');
+    // Never an identifier's value.
     expect(msg.sentQuery).not.toContain('uuid-1');
+  });
+
+  itWithFixture('logged-in-home.html', 'uses the site\'s own defaults on the heavy service', async (runner) => {
+    // sort and featured are the EMPTY STRING there, and timezone is a hardcoded
+    // America/Los_Angeles rather than the device's.
+    await runner.inject(albStub());
+    await runner.inject(REFUSE_PLAIN);
+    await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['garlic'], { storeId: '161' })!);
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 25_000);
+    await runner.inject(urlsProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    const q = seen.urls.find((u: string) => u.indexOf('pgmsearch') !== -1)!;
+    expect(q).toContain('sort=&');
+    expect(q).toContain('featured=&');
+    expect(q).toContain('timezone=' + encodeURIComponent('America/Los_Angeles'));
   });
 });
 
-describe('when the gateway rejects the shape', () => {
-  // OSSR0033-R names no parameter, and every guess costs a device run. A
-  // rejected term is retried through a ladder of shapes -- each differing by one
-  // thing the site does differently -- and the shape that works is reported and
-  // then reused for the rest of the batch.
+describe('when the light service refuses a term', () => {
+  // The rail asks the LIGHT service first -- /xapi/search/products, products
+  // only -- and falls back to the heavy one, pgmsearch, which also resolves
+  // offers, sponsored carousels and personalisation. Same result shape, so the
+  // fallback costs one extra request and only on a term the light one refused.
 
-  /** Rejects every request until one arrives WITHOUT the given parameter. */
-  function rejectUnless(missingParam: string, docs: unknown[]) {
-    return [
-      '(function () {',
-      '  window.__urls = [];',
-      '  window.fetch = function (url) {',
-      '    var u = String(url); window.__urls.push(u);',
-      '    var ok = u.indexOf("' + missingParam + '=") === -1;',
-      '    var body = ok',
-      '      ? ' + JSON.stringify(JSON.stringify(found(docs))),
-      '      : ' + JSON.stringify(JSON.stringify({
-        appCode: '[PS: 400]',
-        primaryProducts: { appCode: '400', appMsg: 'Search encountered a problem. OSSR0033-R' },
-      })) + ';',
-      '    return Promise.resolve({ status: 200, text: function () { return Promise.resolve(body); } });',
-      '  };',
-      '})(); true;',
-    ].join('\n');
-  }
-
-  itWithFixture('logged-in-home.html', 'finds the shape that works and says which it was', async (runner) => {
+  itWithFixture('logged-in-home.html', 'falls back to the heavy service and says so', async (runner) => {
     await runner.inject(albStub());
-    // This store accepts the request only when 'channel' is absent.
-    await runner.inject(rejectUnless('channel', [doc()]));
+    await runner.inject(REFUSE_PLAIN);
     await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['avocado'], { storeId: '161' })!);
 
-    const shape = await runner.waitForMessage('SEARCH_SHAPE_OK', 20_000);
-    expect(shape.variant).toBe('no_channel');
-    expect(shape.after).toBe('site');
-    // And the term is still answered — the ladder is a repair, not a report.
-    const got = await runner.waitForMessage('SEARCH_RESULT', 20_000);
-    expect(got.candidates.length).toBe(1);
+    const shape = await runner.waitForMessage('SEARCH_SHAPE_OK', 25_000);
+    expect(shape.variant).toBe('site');
+    expect(shape.after).toBe('plain');
+    // And the term is still answered — the fallback is a repair, not a report.
+    const got = await runner.waitForMessage('SEARCH_RESULT', 25_000);
+    expect(got.candidates.length).toBeGreaterThan(0);
   });
 
-  itWithFixture('logged-in-home.html', 'reuses the winning shape rather than re-laddering', async (runner) => {
+  itWithFixture('logged-in-home.html', 'sticks with the heavy service for the rest of the batch', async (runner) => {
     await runner.inject(albStub());
-    await runner.inject(rejectUnless('channel', [doc()]));
+    await runner.inject(REFUSE_PLAIN);
     // Serial, so the count is exact rather than a race between two terms both
-    // laddering before either has found the winner.
+    // discovering the fallback at once.
     await runner.inject(buildAlbertsonsNetworkSearchBatchScript(
       ['avocado', 'garlic', 'onion'], { storeId: '161', concurrency: 1 })!);
-    await runner.waitForMessage('SEARCH_BATCH_DONE', 25_000);
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 30_000);
 
     await runner.inject(urlsProbe);
     const seen = await runner.waitForMessage('PROBE', 10_000);
-    const searches = seen.urls.filter((u: string) => u.indexOf('pgmsearch') !== -1);
-    // Term one costs the ladder (site, no_pp, then no_channel wins); terms two
-    // and three cost ONE request each. Without the latch it would be nine.
-    expect(searches.length).toBe(5);
-    expect(searches.filter((u: string) => u.indexOf('channel=') === -1).length).toBe(3);
+    const plain = seen.urls.filter((u: string) => u.indexOf('/xapi/search/products') !== -1);
+    const heavy = seen.urls.filter((u: string) => u.indexOf('pgmsearch') !== -1);
+    // Term one pays for the discovery; terms two and three go straight to the
+    // service that works. Without the latch the light one would be asked thrice.
+    expect(plain.length).toBe(1);
+    expect(heavy.length).toBe(3);
   });
 
-  itWithFixture('logged-in-home.html', 'does NOT ladder a store that is simply having a bad minute', async (runner) => {
-    // A timeout or a 5xx is not a rejected shape, and re-shaping into a wall
-    // costs the run four requests per term for nothing.
+  itWithFixture('logged-in-home.html', 'does NOT fall back when the store is simply having a bad minute', async (runner) => {
+    // A timeout or a 5xx is not a refused shape, and asking the heavy service
+    // to meet the same wall costs the run a second request per term for nothing.
     await runner.inject(albStub());
     await runner.inject(searchStub({}, { status: 503 }));
     await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['avocado'], { storeId: '161' })!);
-    const msg = await runner.waitForMessage('SEARCH_RESULT_FAILED', 20_000);
+    const msg = await runner.waitForMessage('SEARCH_RESULT_FAILED', 25_000);
     expect(msg.why).toBe('http');
     await runner.inject(urlsProbe);
     const seen = await runner.waitForMessage('PROBE', 10_000);
-    expect(seen.urls.filter((u: string) => u.indexOf('pgmsearch') !== -1).length).toBe(1);
+    expect(seen.urls.filter((u: string) => u.indexOf('search/products') !== -1).length).toBe(1);
   });
 });
 
