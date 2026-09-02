@@ -1718,7 +1718,13 @@ export default function WebViewCartSheet({
       // unavailable — the same checks a searched item gets, just after the
       // request rather than before it.
       const stored = netStoredProduct(item);
-      if (stored) {
+      const storedRail = netRail();
+      if (stored && storedRail
+          && !storedRail.writable({ productId: stored.upc, skuId: stored.sku ?? null })) {
+        // Same rule as netStartSearch: it was searched, so let the search's own
+        // candidate answer for it rather than writing an id this store cannot
+        // address.
+      } else if (stored) {
         netMatchedRef.current.set(idx, {
           productId: stored.upc, skuId: stored.sku ?? null,
           name: stored.name || item.ingredientName,
@@ -2033,7 +2039,24 @@ export default function WebViewCartSheet({
     // review the search path uses.
     const rail = netRail();
     if (!rail) { netHandOverToUser('no_rail'); return; }
-    const needSearch = active.filter((i) => !netStoredProduct(i));
+    // A SAVED ID IS ONLY A SHORTCUT IF THIS STORE CAN WRITE IT.
+    //
+    // H-E-B addresses a cart line by sku and refuses to build a write without
+    // one, so a stored entry carrying only a product id is not a shortcut, it is
+    // a dead end: the row skips the search, reaches the write batch, gets
+    // filtered out, and the whole run ends 'add_script_unbuildable' with nothing
+    // written. Measured exactly that on the device.
+    //
+    // So the rail is asked the same question here that it is asked about a fresh
+    // candidate, and a row it cannot write is searched like any other.
+    const usableStored = (i: Parameters<typeof netStoredProduct>[0]) => {
+      const sp = netStoredProduct(i);
+      if (!sp) return false;
+      if (rail.writable({ productId: sp.upc, skuId: sp.sku ?? null })) return true;
+      console.log(`[Cart ${ts()}]`, 'saved product is not writable at this store — searching for it instead');
+      return false;
+    };
+    const needSearch = active.filter((i) => !usableStored(i));
     const known = active.length - needSearch.length;
     if (known > 0) {
       console.log(`[Cart ${ts()}]`, 'network run:', known, 'of', active.length,

@@ -655,3 +655,56 @@ describe('a run records what it learned, so the next one need not search', () =>
     expect(identified).toHaveLength(0);
   });
 });
+
+describe('a saved id this store cannot write is not a shortcut', () => {
+  // Measured on the device: the backfill recorded ids, the next run correctly
+  // said "11 of 11 already chosen — writing those without searching", and then
+  // ended 'add_script_unbuildable' having written nothing.
+  //
+  // H-E-B addresses a cart line by SKU and refuses to build a write without one,
+  // so an entry carrying only a product id is not a shortcut, it is a dead end:
+  // the row skips the search, reaches the write batch, is filtered out, and the
+  // run has nothing left to do. The rail is asked the same question about a
+  // saved id that it is asked about a fresh candidate.
+  const skulessMeal = {
+    id: 'm4', name: 'Tacos',
+    ingredients: [
+      { ingredientName: 'Sour Cream', searchTerm: 'sour cream',
+        productQty: 1, qty: 1, unit: 'qty', measure: null,
+        // An id with no sku — unusable at H-E-B.
+        storeProducts: { heb: { upc: 'p-sour-cream', name: 'sour cream' } } },
+      { ingredientName: 'Tortillas', searchTerm: 'tortillas',
+        productQty: 1, qty: 1, unit: 'qty', measure: null },
+    ],
+  };
+
+  it('searches it instead of stranding the run', () => {
+    __applyAutomationConfigForTests({
+      stores: { heb: { networkSearch: true, networkAdd: true, cartSkuConfirm: true } },
+    });
+    const view = render(
+      <WebViewCartSheet visible meals={[skulessMeal] as never} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+    );
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    const load = () => act(() => {
+      const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/' } });
+    });
+
+    load();
+    post(SESSION);
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+
+    // The sku-less row is in the batch rather than skipped, so the run has
+    // something to do.
+    const batch = injected.filter((s) => s.includes('productSearchPageV2')).pop() ?? '';
+    expect(batch).toContain('sour cream');
+  });
+});
