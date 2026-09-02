@@ -66,6 +66,10 @@ jest.mock('../../src/lib/api', () => ({
 // A prewarm that already knows the user is signed in — the gate the effect
 // checks, because a probe at a signed-out page answers nothing.
 (global as any).__prewarmStatus = 'loggedIn';
+// What the SELECTION screen already looked up, before this sheet opened. Empty
+// on most tests here, which is the pre-2026-09-02 world; the block at the bottom
+// of this file fills it.
+(global as any).__earlyAnswers = new Map<string, unknown[]>();
 jest.mock('../../src/context/LoginPrewarmContext', () => {
   const actual = jest.requireActual('../../src/context/LoginPrewarmContext');
   return {
@@ -76,6 +80,13 @@ jest.mock('../../src/context/LoginPrewarmContext', () => {
       checkStore: () => {},
       takePrewarmedCart: () => null,
       noteSignedOut: () => {},
+      setSearchTerms: () => {},
+      getSearchResults: (_storeId: string, terms: string[]) => {
+        const have = (global as any).__earlyAnswers as Map<string, unknown[]>;
+        const out = new Map<string, unknown[]>();
+        for (const t of terms) { const got = have.get(t); if (got) out.set(t, got); }
+        return out;
+      },
     }),
   };
 });
@@ -83,7 +94,11 @@ jest.mock('../../src/context/LoginPrewarmContext', () => {
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 import { __applyAutomationConfigForTests, __resetAutomationConfigForTests } from '../../src/lib/automation-config';
 
-afterEach(() => { __resetAutomationConfigForTests(); injected.length = 0; });
+afterEach(() => {
+  __resetAutomationConfigForTests();
+  injected.length = 0;
+  ((global as any).__earlyAnswers as Map<string, unknown[]>).clear();
+});
 
 const meal = {
   id: 'm1', name: 'Tacos',
@@ -706,5 +721,68 @@ describe('a saved id this store cannot write is not a shortcut', () => {
     // something to do.
     const batch = injected.filter((s) => s.includes('productSearchPageV2')).pop() ?? '';
     expect(batch).toContain('sour cream');
+  });
+});
+
+describe('what the selection screen already looked up', () => {
+  // The prewarm now starts when meals are TICKED, one screen earlier, so by the
+  // time this sheet opens the answers are often already in hand. What matters is
+  // that the sheet then does not ask for them a second time — the same claim the
+  // top of this file makes about its own prewarm, one step further back.
+  const early = (term: string, ...names: string[]) => {
+    ((global as any).__earlyAnswers as Map<string, unknown[]>).set(term, names.map(candidate));
+  };
+
+  it('does not prewarm at all when the selection screen got everything', () => {
+    early('sour cream', 'sour cream');
+    early('tortillas', 'tortillas');
+    const { post, load } = openSheet();
+    load();
+    post(SESSION);
+    expect(searchBatches()).toBe(0);
+  });
+
+  it('goes straight to writing when the user taps', () => {
+    early('sour cream', 'sour cream');
+    early('tortillas', 'tortillas');
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION);
+
+    expect(searchBatches()).toBe(0);
+    expect(injected.some((s) => s.includes('cartItemV2'))).toBe(true);
+  });
+
+  it('prewarms only what the selection screen MISSED', () => {
+    early('sour cream', 'sour cream');
+    const { post, load } = openSheet();
+    load();
+    post(SESSION);
+    expect(searchBatches()).toBe(1);
+    const batch = injected.filter((s) => s.includes('productSearchPageV2')).pop()!;
+    expect(batch).toContain('tortillas');
+    expect(batch).not.toContain('sour cream');
+  });
+
+  it('is still used by a user who taps before the store page has loaded', () => {
+    // The sheet\'s own prewarm fires on the page\'s load and this user beat it,
+    // so nothing here has consulted the early answers yet. They must not be lost:
+    // this is the tap-fast case the early start exists for.
+    early('sour cream', 'sour cream');
+    early('tortillas', 'tortillas');
+    const { view, post } = openSheet();
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION);
+
+    expect(searchBatches()).toBe(0);
+    expect(injected.some((s) => s.includes('cartItemV2'))).toBe(true);
   });
 });

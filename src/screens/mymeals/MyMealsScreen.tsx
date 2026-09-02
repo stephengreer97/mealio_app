@@ -38,6 +38,7 @@ import { hasSeen, markSeen, FIRST_RUN_CHOOSE_PRODUCTS } from '../../lib/firstRun
 import { isChooseRun } from '../../lib/chooseRun';
 import { useCartJob } from '../../context/CartJobContext';
 import { useLoginPrewarm } from '../../context/LoginPrewarmContext';
+import { prewarmTermsForMeals } from '../../lib/prewarmTerms';
 import { FEATURE_BACKGROUND_CART } from '../../constants/features';
 import IngredientEditor from '../../components/IngredientEditor';
 import PhotoPicker from '../../components/PhotoPicker';
@@ -729,6 +730,27 @@ export default function MyMealsScreen() {
   const selectedMeals = storeMeals.filter((m) => selectedMealIds.has(m.id));
   const selectedStore_ = stores.find((s) => s.id === selectedStore);
 
+  // ── Look the selection up before the sheet is even open ───────────────────
+  //
+  // The cart sheet already prewarms its searches while the user is on the
+  // quantity screen. This starts the same work one screen earlier, at the
+  // moment meals are ticked, which on a measured 36-ingredient run was the
+  // difference between the answers being ready and the run standing still for
+  // 2.5s waiting for them.
+  //
+  // Only ever a READ. The provider decides what actually goes to the store: it
+  // waits for the selection to stop changing, skips terms already answered, and
+  // ignores a store it does not know to be signed in. What is passed here is
+  // simply "this is what is ticked now" — so unticking a meal takes its terms
+  // out of the set, and anything not yet sent is never sent.
+  useEffect(() => {
+    loginPrewarm.setSearchTerms?.(selectedStore, prewarmTermsForMeals(selectedMeals, selectedStore));
+    // selectedMeals is rebuilt every render, so the identities that actually
+    // change are the ones listed: which ids are ticked, which store, and the
+    // meals themselves (a save can change an ingredient's chosen product).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMealIds, selectedStore, allMeals, loginPrewarm]);
+
   function openMeal(meal: Meal) {
     setSelectedMeal(meal);
     setDetailVisible(true);
@@ -907,6 +929,12 @@ export default function MyMealsScreen() {
             style={[styles.floatingCart, { backgroundColor: selectedStore_?.color ?? Colors.brand }]}
             onPress={() => {
               const start = () => {
+                // THE SHEET IS TAKING OVER THE ASKING. Its own prewarm runs in
+                // its own WebView, and two of ours searching the same store at
+                // once is the burst shape Albertsons is measured to degrade
+                // under (MEAL-207). Whatever this screen already cached still
+                // gets used — the sheet reads it on the way in.
+                loginPrewarm.setSearchTerms?.(selectedStore, []);
                 if (FEATURE_BACKGROUND_CART) {
                   cartJob.startJob({
                     meals: selectedMeals,

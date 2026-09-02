@@ -78,6 +78,21 @@ jest.mock('../../src/components/SilentLoginProbe', () => {
   };
 });
 
+/**
+ * The search prewarm's hidden WebView, stubbed for the same reason as the login
+ * probe above: jsdom has no native WebView, and importing the real component
+ * pulls one in. Its behaviour under a sign-out is pinned in
+ * selection-search-prewarm.test.tsx; here it only has to not exist.
+ */
+jest.mock('../../src/components/SilentSearchProbe', () => {
+  const RealReact = jest.requireActual('react');
+  const RealView = jest.requireActual('react-native').View;
+  return {
+    __esModule: true,
+    default: (props: any) => RealReact.createElement(RealView, { testID: `search-probe-${props.storeId}` }),
+  };
+});
+
 jest.mock('../../src/lib/api', () => {
   const actual = jest.requireActual('../../src/lib/api');
   return {

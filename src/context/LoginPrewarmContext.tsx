@@ -10,6 +10,8 @@ import React, {
 import { useAuth } from './AuthContext';
 import { useSessionEnd } from './useSessionEnd';
 import SilentLoginProbe, { PrewarmedCart } from '../components/SilentLoginProbe';
+import SilentSearchProbe, { SearchCandidate } from '../components/SilentSearchProbe';
+import { getNetworkRail } from '../lib/webview-scripts/network-rail';
 import { getStoreScripts } from '../lib/webview-scripts';
 import { isWebViewStore } from '../constants/stores';
 
@@ -28,7 +30,29 @@ import { isWebViewStore } from '../constants/stores';
 // saved meals; switching store tabs checks that store too. The cart engine
 // reads getStatus() at add-to-cart time to decide whether to surface login
 // immediately (see WebViewCartSheet).
+//
+// It also prewarms SEARCHES, for rail stores, from the moment meals are ticked
+// — see setSearchTerms. Same idea one step further back: the cart sheet already
+// looks ingredients up while the user is on the quantity screen, and this gives
+// that head start several seconds more room.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How long the selection has to sit still before anything is looked up.
+ *
+ * This is the whole answer to "I ticked every meal, then unticked all but one".
+ * Every tap restarts the clock, so a burst of ticking and unticking fires
+ * nothing at all — the batch is built from the selection as it stands when the
+ * tapping STOPS, not from any state it passed through on the way.
+ *
+ * Long enough to absorb a hand moving down a list; short enough that a user who
+ * ticks one meal and goes straight for the button still gets a head start.
+ */
+const SEARCH_DEBOUNCE_MS = 1200;
+
+/** A login probe is mid-flight and this store's status is not settled yet. Ask
+ *  again shortly rather than starting a second hidden WebView beside it. */
+const SEARCH_RETRY_MS = 400;
 
 export type LoginPrewarmStatus =
   | 'unknown'   // never checked this session (or scheduled but not yet started)
@@ -53,6 +77,25 @@ interface LoginPrewarmValue {
    *  slow store's login check finally resolves logged-in, without waiting for the
    *  next render). */
   statusVersion: number;
+  /**
+   * What this store should be looking up right now, as a WHOLE SET.
+   *
+   * Called on every selection change, and it REPLACES rather than adds. That is
+   * what makes unticking a meal cost nothing: its terms leave the set, and a
+   * term that has not been sent yet is simply never sent. Only a batch already
+   * in flight cannot be recalled, and its answers are cached anyway — so
+   * reticking the meal it came from is free.
+   *
+   * Pass [] to stand everything down (nothing selected, or the cart sheet has
+   * taken over and is doing its own asking).
+   */
+  setSearchTerms: (storeId: string, terms: string[]) => void;
+  /**
+   * Answers already in hand for these terms. Not one-shot, unlike the cart
+   * baseline: a search result is not invalidated by us writing to a cart, so
+   * the same answer is good for the rest of the session.
+   */
+  getSearchResults: (storeId: string, terms: string[]) => Map<string, SearchCandidate[]>;
 }
 
 // Default is a working no-op so consumers rendered outside the provider (e.g.
@@ -62,6 +105,8 @@ const LoginPrewarmContext = createContext<LoginPrewarmValue>({
   getStatus: () => 'unknown',
   takePrewarmedCart: () => null,
   statusVersion: 0,
+  setSearchTerms: () => {},
+  getSearchResults: () => new Map(),
 });
 
 export function useLoginPrewarm(): LoginPrewarmValue {
@@ -93,6 +138,27 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   const currentRef = useRef<string | null>(null);
   // Bumped on every settle so consumers can react to a status change.
   const [statusVersion, setStatusVersion] = useState(0);
+
+  // ── Search prewarm state ──────────────────────────────────────────────────
+  //
+  // WANTED, DONE, and ASKED, kept apart on purpose:
+  //
+  //   wanted  — the current selection's terms. Replaced wholesale on every
+  //             change, which is how an unticked meal's terms disappear.
+  //   done    — answers we have. Survives everything short of a sign-out, so
+  //             reticking a meal never re-asks the store.
+  //   asked   — terms already sent. A term the store refused is not retried on
+  //             spec; the run will ask again when it actually needs it.
+  const searchWantedRef = useRef<Map<string, string[]>>(new Map());
+  const searchDoneRef = useRef<Map<string, Map<string, SearchCandidate[]>>>(new Map());
+  const searchAskedRef = useRef<Map<string, Set<string>>>(new Map());
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The batch on the wire, or null. One at a time, for the reason the login
+  // queue is one at a time: several store pages loading at once both overwhelms
+  // the native WebView init and looks more automated to store anti-bot.
+  const [searchBatch, setSearchBatch] = useState<{ storeId: string; terms: string[]; key: number } | null>(null);
+  const searchBatchRef = useRef<{ storeId: string; terms: string[]; key: number } | null>(null);
+  const searchKeyRef = useRef(0);
 
   const getStatus = useCallback(
     (storeId: string): LoginPrewarmStatus => statusRef.current.get(storeId) ?? 'unknown',
@@ -153,6 +219,121 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     [pump],
   );
 
+  // ── Search prewarm ────────────────────────────────────────────────────────
+
+  const getSearchResults = useCallback(
+    (storeId: string, terms: string[]): Map<string, SearchCandidate[]> => {
+      const have = searchDoneRef.current.get(storeId);
+      const out = new Map<string, SearchCandidate[]>();
+      if (!have) return out;
+      for (const t of terms) {
+        const got = have.get(t);
+        if (got) out.set(t, got);
+      }
+      return out;
+    },
+    [],
+  );
+
+  /**
+   * Start a batch for whatever is still wanted and not yet asked.
+   *
+   * The batch is built HERE, at fire time, from the wanted set as it stands —
+   * never from the set that was current when the user tapped. That one line is
+   * what drops an unticked meal's terms: they left `wanted`, so they are not in
+   * `todo`, so they are never sent.
+   */
+  const pumpSearch = useCallback(() => {
+    if (!userRef.current) return;
+    if (searchBatchRef.current) return;              // one batch at a time
+
+    let next: { storeId: string; terms: string[] } | null = null;
+    for (const [storeId, wanted] of searchWantedRef.current) {
+      if (!wanted.length) continue;
+      // Only a rail store can be asked over the network, and only a store we
+      // KNOW is signed in. A probe at a signed-out page answers nothing and
+      // spends a request saying so.
+      if (!getNetworkRail(storeId)) continue;
+      if ((statusRef.current.get(storeId) ?? 'unknown') !== 'loggedIn') continue;
+      const done = searchDoneRef.current.get(storeId);
+      const asked = searchAskedRef.current.get(storeId);
+      const todo = wanted.filter((t) => !done?.has(t) && !asked?.has(t));
+      if (!todo.length) continue;
+      next = { storeId, terms: todo };
+      break;
+    }
+    if (!next) return;
+
+    // A login probe is a hidden WebView too. Let it finish before starting
+    // another beside it, and come back — the status it is settling is the very
+    // thing the loop above reads. Asked AFTER the loop, so a tick that has
+    // nothing to look up does not leave a timer polling for one.
+    if (currentRef.current != null) {
+      setTimeout(() => pumpSearch(), SEARCH_RETRY_MS);
+      return;
+    }
+
+    const asked = searchAskedRef.current.get(next.storeId) ?? new Set<string>();
+    for (const t of next.terms) asked.add(t);
+    searchAskedRef.current.set(next.storeId, asked);
+    searchKeyRef.current += 1;
+    const batch = { ...next, key: searchKeyRef.current };
+    searchBatchRef.current = batch;
+    console.log('[Prewarm] search prewarm start', batch.storeId, '—', batch.terms.length, 'of',
+      (searchWantedRef.current.get(batch.storeId) ?? []).length,
+      'wanted terms (the rest are already answered or asked)');
+    setSearchBatch(batch);
+  }, []);
+
+  const setSearchTerms = useCallback(
+    (storeId: string, terms: string[]) => {
+      if (!storeId || !userRef.current) return;
+      const prev = searchWantedRef.current.get(storeId) ?? [];
+      const same = searchWantedRef.current.size === (terms.length ? 1 : 0)
+        && prev.length === terms.length
+        && prev.every((t, i) => t === terms[i]);
+      // AUTHORITATIVE FOR EVERY STORE, not just this one.
+      //
+      // The selection screen has exactly one store selected at a time, so a
+      // call naming Albertsons means H-E-B is no longer being shopped for.
+      // Leaving H-E-B's terms in place meant switching store tabs mid-debounce
+      // fired a batch for the store the user had just left — the same waste as
+      // unticking a meal, arriving by a different door.
+      searchWantedRef.current.clear();
+      if (terms.length) searchWantedRef.current.set(storeId, terms);
+      if (same) return;
+      // EVERY CHANGE RESTARTS THE CLOCK. Ticking twelve meals and unticking
+      // eleven is a dozen calls through here in a couple of seconds, and none of
+      // them reaches the store: only the selection that is still standing when
+      // the tapping stops gets looked up.
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+      if (!terms.length) { searchDebounceRef.current = null; return; }
+      searchDebounceRef.current = setTimeout(() => {
+        searchDebounceRef.current = null;
+        pumpSearch();
+      }, SEARCH_DEBOUNCE_MS);
+    },
+    [pumpSearch],
+  );
+
+  const handleSearchCandidates = useCallback(
+    (storeId: string, term: string, candidates: SearchCandidate[]) => {
+      let have = searchDoneRef.current.get(storeId);
+      if (!have) { have = new Map(); searchDoneRef.current.set(storeId, have); }
+      have.set(term, candidates);
+    },
+    [],
+  );
+
+  const handleSearchDone = useCallback((storeId: string) => {
+    searchBatchRef.current = null;
+    setSearchBatch(null);
+    const have = searchDoneRef.current.get(storeId);
+    console.log('[Prewarm] search prewarm settled', storeId, '—', have?.size ?? 0, 'terms cached for the run');
+    // More may have been ticked while that batch was out.
+    setTimeout(() => pumpSearch(), 0);
+  }, [pumpSearch]);
+
   const settle = useCallback(
     (storeId: string, status: LoginPrewarmStatus) => {
       console.log('[Prewarm] probe result', storeId, '→', status);
@@ -162,8 +343,12 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
       setCurrent(null);
       // Start the next queued probe (deferred so the current probe unmounts first).
       setTimeout(() => pump(), 0);
+      // A store that just resolved signed-in may have had terms waiting on
+      // exactly that answer — the user can tick meals well before a slow login
+      // check comes back. Without this they wait for the next selection change.
+      setTimeout(() => pumpSearch(), 0);
     },
-    [pump],
+    [pump, pumpSearch],
   );
 
   // Login determined early (before cart capture): publish the status now so the
@@ -245,11 +430,22 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     cartRef.current.clear();
     currentRef.current = null;
     setCurrent(null);
+    // The search prewarm goes with it, for the reason the cart baseline does:
+    // it was gathered under A's selection, and the terms are A's meals. The
+    // candidates are public catalogue data, but the SET of them says what A was
+    // shopping for, and clearing setSearchBatch(null) unmounts the probe so it
+    // cannot write `[Prewarm]` lines into a buffer that now belongs to B.
+    if (searchDebounceRef.current) { clearTimeout(searchDebounceRef.current); searchDebounceRef.current = null; }
+    searchWantedRef.current.clear();
+    searchDoneRef.current.clear();
+    searchAskedRef.current.clear();
+    searchBatchRef.current = null;
+    setSearchBatch(null);
   });
 
   const value = useMemo<LoginPrewarmValue>(
-    () => ({ checkStore, getStatus, takePrewarmedCart, statusVersion }),
-    [checkStore, getStatus, takePrewarmedCart, statusVersion],
+    () => ({ checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults }),
+    [checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults],
   );
 
   return (
@@ -262,6 +458,15 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
           onLogin={handleLogin}
           onResult={handleResult}
           onError={handleError}
+        />
+      )}
+      {searchBatch && (
+        <SilentSearchProbe
+          key={searchBatch.key}
+          storeId={searchBatch.storeId}
+          terms={searchBatch.terms}
+          onCandidates={handleSearchCandidates}
+          onDone={handleSearchDone}
         />
       )}
     </LoginPrewarmContext.Provider>

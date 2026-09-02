@@ -39,6 +39,7 @@ import { planSearchResume } from '../lib/webview-scripts/resume-search';
 import CartRunAnimation from './CartRunAnimation';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
 import { useLoginPrewarm } from '../context/LoginPrewarmContext';
+import { prewarmTermsFor } from '../lib/prewarmTerms';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
 import { WEBVIEW_FINGERPRINT_SHIM } from '../lib/webview-fingerprint-shim';
 import { usage } from '../lib/api';
@@ -2099,6 +2100,12 @@ export default function WebViewCartSheet({
     // Seeded rather than merged afterwards, so a term the prewarm has is never
     // in the batch at all: asking twice would double this run's search volume
     // against a store whose search is the part most likely to be shaped.
+    //
+    // The selection screen's answers are pulled in here too, and not only in
+    // maybeStartSearchPrewarm, because the sheet's own prewarm may never have
+    // run: it fires on the store page's load, and a user who taps straight
+    // through beats it. That user has the early answers all the same.
+    netSeedFromEarlyPrewarm(terms);
     netCandidatesRef.current = new Map();
     let reused = 0;
     for (const t of terms) {
@@ -3053,6 +3060,33 @@ export default function WebViewCartSheet({
   // startPresearchCommit committed the parked pre-search adds. Gone.
 
   /**
+   * TAKE WHAT THE SELECTION SCREEN ALREADY LOOKED UP.
+   *
+   * The prewarm now starts when meals are ticked, not when this sheet opens, so
+   * by the time we get here the answers are often already sitting in the
+   * provider. Copying them into the prewarm map is all it takes for the rest of
+   * this file to use them: the run seeds from that map and searches only what
+   * is missing (see netStartSearch).
+   *
+   * Called from BOTH the prewarm and the run, and idempotent, because the case
+   * that matters most is the one where the prewarm never got to fire — a user
+   * who taps Add before the store page has even finished loading. That user
+   * still gets the early answers.
+   */
+  const netSeedFromEarlyPrewarm = useCallback((terms: string[]): number => {
+    if (!terms.length) return 0;
+    const early = loginPrewarmRef.current?.getSearchResults?.(lockedStoreIdRef.current, terms);
+    if (!early || early.size === 0) return 0;
+    let seeded = 0;
+    for (const [term, candidates] of early) {
+      if (netPrewarmCandidatesRef.current.has(term)) continue;
+      netPrewarmCandidatesRef.current.set(term, candidates as unknown as Candidate[]);
+      seeded += 1;
+    }
+    return seeded;
+  }, []);
+
+  /**
    * Prewarm the searches while the user is on the qty screen.
    *
    * Fired from onLoadEnd, not from a step effect, and that is the whole trick:
@@ -3066,29 +3100,46 @@ export default function WebViewCartSheet({
    * Terms are read when it fires. Quantities can still change afterwards and it
    * does not matter: a quantity changes what is WRITTEN, never what is looked
    * up. An item added later simply is not prewarmed and the run searches it.
+   *
+   * It may now have nothing to do: the selection screen starts this same lookup
+   * when meals are ticked, so the answers can all be in hand already. That case
+   * still has to mark the prewarm STARTED and DONE, because netStartSearch
+   * stands back for a prewarm that is still answering and would otherwise wait
+   * for one that was never going to run.
    */
   const maybeStartSearchPrewarm = useCallback(() => {
     if (netPrewarmStartedRef.current || stepRef.current !== 'qty') return;
     const rail = getNetworkRail(lockedStoreIdRef.current);
     if (!rail) return;
     if (loginPrewarmRef.current?.getStatus(lockedStoreIdRef.current) !== 'loggedIn') return;
-    const terms = Array.from(new Set(
-      qtyItemsRef.current.filter((it) => !isZeroedOut(it))
-        // A row the user has already chosen for at this store has nothing to
-        // look up — the run writes its saved id straight to the cart. Searching
-        // it here would be work whose answer is thrown away, on the one phase
-        // that exists to save the run time.
-        .filter((it) => !netStoredProduct(it))
-        .map((it) => it.searchTerm || it.ingredientName)
-        .filter((t): t is string => !!t),
-    ));
+    // ONE DERIVATION, shared with the selection screen. Two copies of "which
+    // rows still need looking up" would drift, and the failure would be silent:
+    // the early pass searches one set, this searches another, and the head
+    // start quietly stops being a head start.
+    const terms = prewarmTermsFor(qtyItemsRef.current, lockedStoreIdRef.current);
     if (terms.length === 0) return;
+    const seeded = netSeedFromEarlyPrewarm(terms);
+    const missing = terms.filter((t) => !netPrewarmCandidatesRef.current.has(t));
+    if (seeded > 0) {
+      console.log(`[Cart ${ts()}]`, 'search prewarm:', seeded, 'of', terms.length,
+        'terms already answered before the sheet opened');
+    }
+    if (missing.length === 0) {
+      // Everything was looked up on the selection screen. There is nothing left
+      // to ask, and saying so HERE is what stops the run waiting: netStartSearch
+      // stands back for a prewarm that is still answering, and this one is not.
+      netPrewarmStartedRef.current = true;
+      netPrewarmDoneRef.current = true;
+      netPrewarmTermsRef.current = terms;
+      console.log(`[Cart ${ts()}]`, 'search prewarm: nothing left to look up — the selection screen got all', terms.length);
+      return;
+    }
     netPrewarmStartedRef.current = true;
     netPhaseRef.current = 'prewarm';
-    netPrewarmTermsRef.current = terms;
-    console.log(`[Cart ${ts()}]`, 'search prewarm: asking the session for', terms.length, 'terms');
+    netPrewarmTermsRef.current = missing;
+    console.log(`[Cart ${ts()}]`, 'search prewarm: asking the session for', missing.length, 'terms');
     webviewRef.current?.injectJavaScript(rail.sessionScript());
-  }, []);
+  }, [netSeedFromEarlyPrewarm]);
 
   const beginSearchFlow = useCallback(() => {
     setStep('searching');
