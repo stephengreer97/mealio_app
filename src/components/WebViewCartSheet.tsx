@@ -6913,7 +6913,12 @@ const styles = StyleSheet.create({
   title: { fontSize: 16, fontFamily: 'Inter_700Bold', color: Colors.text1 },
   close: { fontSize: 18, color: Colors.text3 },
 
-  webviewHidden: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0, pointerEvents: 'none' as const },
+  // DRAWN, for the same reason as hiddenLayer below: a full-size alpha-0 view is
+  // one Android stops drawing, and a WebView it stops drawing is a renderer
+  // Chromium throttles. This is the wrapper during qty -- which is exactly when
+  // the search prewarm is working -- so hiding it that way cost the prewarm a
+  // 28-second freeze and the run then WAITED on it.
+  webviewHidden: { position: 'absolute', top: 0, left: 0, width: 2, height: 2, opacity: 0.01, pointerEvents: 'none' as const },
   // A parked pre-search worker while it's not being shown live: kept at a real
   // 414×896 viewport (so the results page paints and can be added into) but
   // pushed far offscreen and out of flow so it neither shows nor disturbs the
@@ -6936,9 +6941,24 @@ const styles = StyleSheet.create({
   // hidden. A 1x1 box would leave the cart page with nothing to lay out and the
   // count would come back empty, which is precisely the done-screen breakdown
   // this is meant to preserve. Invisible and untouchable, not small.
+  // KEPT DRAWN, NOT HIDDEN. This is the layer holding the WebView while the run
+  // animation is on screen, and it used to be `opacity: 0, zIndex: -1` at full
+  // size -- fully transparent AND pushed behind its own parent. Android then
+  // stops drawing it, Chromium treats the page as hidden, and the renderer is
+  // throttled to a standstill.
+  //
+  // MEASURED 2026-09-02 from inside the injected script, screen on, app in
+  // front: a one-second setInterval fired 34 SECONDS late, while
+  // document.visibilityState still read 'visible' -- Android WebView only
+  // updates that on window visibility, never on being covered, which is why
+  // this hid for so long. The requests themselves were 288-758ms throughout.
+  //
+  // So the layer stays DRAWN: two pixels in the corner at 1% opacity, under the
+  // animation. Invisible to the user, alive to Chromium. The rail is on
+  // robots.txt doing pure fetches, so it has no use for a viewport.
   hiddenLayer: {
-    position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
-    opacity: 0, zIndex: -1,
+    position: 'absolute', left: 0, top: 0, width: 2, height: 2,
+    opacity: 0.01,
   },
   gridWrap: {
     flex: 1,
