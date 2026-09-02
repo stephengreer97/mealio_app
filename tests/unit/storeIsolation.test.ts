@@ -30,7 +30,7 @@ describe('every rail answers every question the engine asks', () => {
   // by accident — it fails here instead.
   const MEMBERS = [
     'sessionMessageType', 'sessionScript', 'searchBatch',
-    'cartRead', 'addBatch', 'writable',
+    'cartRead', 'addBatch', 'writable', 'needsPreference', 'budgets',
   ] as const;
 
   for (const id of RAIL_STORES) {
@@ -89,5 +89,59 @@ describe('the cart engine does not branch on store id', () => {
     // Amazon Fresh only. If this fails upward, move the difference onto the rail
     // (or the store's scripts) instead of raising the number.
     expect(branches.length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('how long to wait is a store fact', () => {
+  // These were three constants in the engine, each tuned on whichever store was
+  // in front of me and applied to both. Albertsons needs a generous search
+  // window because its first request into a fresh document can take 40 seconds;
+  // H-E-B answers in about one and was made to wait the same 45 plus 8 per term
+  // before it could give up.
+  const heb = getNetworkRail('heb')!;
+  const alb = getNetworkRail('albertsons')!;
+
+  it('every rail states all four budgets', () => {
+    for (const rail of [heb, alb]) {
+      expect(typeof rail.budgets.sessionMs).toBe('number');
+      expect(typeof rail.budgets.searchResumeMs).toBe('number');
+      expect(rail.budgets.searchMs(10)).toBeGreaterThan(0);
+      expect(rail.budgets.addMs(10)).toBeGreaterThan(0);
+    }
+  });
+
+  it('H-E-B waits less than Albertsons, because it answers faster', () => {
+    // The assertion that matters is that they DIFFER. If a future edit collapses
+    // them back to one number, one of these stores is being made to live with
+    // the other's measurements.
+    expect(heb.budgets.searchMs(20)).toBeLessThan(alb.budgets.searchMs(20));
+    expect(heb.budgets.sessionMs).toBeLessThan(alb.budgets.sessionMs);
+  });
+
+  it('a bigger batch gets longer, and every budget is capped', () => {
+    for (const rail of [heb, alb]) {
+      expect(rail.budgets.searchMs(20)).toBeGreaterThan(rail.budgets.searchMs(1));
+      expect(rail.budgets.addMs(20)).toBeGreaterThan(rail.budgets.addMs(1));
+      // A store that has stopped answering must still end the phase.
+      expect(rail.budgets.searchMs(10_000)).toBeLessThanOrEqual(180_000);
+      expect(rail.budgets.addMs(10_000)).toBeLessThanOrEqual(180_000);
+    }
+  });
+});
+
+describe('a variant the user must choose is the store\'s concept', () => {
+  it('H-E-B has preferences; Albertsons does not', () => {
+    const withPref = { preferences: [{ preferenceId: 'p1' }] };
+    expect(getNetworkRail('heb')!.needsPreference(withPref)).toBe(true);
+    // Not "no preferences in the data" — the platform has no such concept, and
+    // saying so is the point of asking rather than inferring from an empty array.
+    expect(getNetworkRail('albertsons')!.needsPreference(withPref)).toBe(false);
+  });
+
+  it('no preference list means nothing to choose, at either store', () => {
+    for (const id of ['heb', 'albertsons']) {
+      expect(getNetworkRail(id)!.needsPreference({ preferences: null })).toBe(false);
+      expect(getNetworkRail(id)!.needsPreference({})).toBe(false);
+    }
   });
 });

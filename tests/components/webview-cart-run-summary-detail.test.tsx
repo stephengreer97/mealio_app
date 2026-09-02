@@ -287,6 +287,11 @@ describe('a run that fails more than one way', () => {
   // truncated to its first entry, and by one with the severity ranking removed.
   // Three items failing two different ways separates all of them — one code with
   // a count of 2, one with 1, and a chosen code that is NOT the most frequent.
+  /** The store's own add-phase ceiling, so this test cannot drift from it. */
+  const addDeadlineMs = (items: number) =>
+    require('../../src/lib/webview-scripts/network-rail')
+      .getNetworkRail('heb').budgets.addMs(items);
+
   const runThree = async () => {
     (globalThis as any).__batches = [];
     const view = render(sheet(chosen('Sour Cream'), chosen('Tortillas'), chosen('Cheese')));
@@ -320,13 +325,18 @@ describe('a run that fails more than one way', () => {
     // deadline finalizes it — a different code, which is the point of the case.
     post({ type: 'NET_ADD_RESULT', idx: 0, name: 'Sour Cream', success: false, productId: 'pSour Cream', skuId: 'sSour Cream', reason: 'cart_not_incremented' });
     post({ type: 'NET_ADD_RESULT', idx: 1, name: 'Tortillas', success: false, productId: 'pTortillas', skuId: 'sTortillas', reason: 'cart_not_incremented' });
-    act(() => { jest.advanceTimersByTime(80_000); });
+    // Just past the add phase's own deadline, which is the STORE'S number now
+    // rather than one shared constant — a flat 80s here used to work only
+    // because every store waited 75. Overshooting it expires the reconcile's
+    // cart probe before the CART_COUNT below arrives.
+    act(() => { jest.advanceTimersByTime(addDeadlineMs(3) + 1_000); });
     post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     // The reconcile tops all three up over the rail. Two are refused again; the
     // third stays silent and the add phase's deadline finalizes the pass.
     post({ type: 'NET_ADD_RESULT', idx: 0, name: 'Sour Cream', success: false, productId: 'pSour Cream', skuId: 'sSour Cream', reason: 'cart_not_incremented' });
     post({ type: 'NET_ADD_RESULT', idx: 1, name: 'Tortillas', success: false, productId: 'pTortillas', skuId: 'sTortillas', reason: 'cart_not_incremented' });
-    act(() => { jest.advanceTimersByTime(80_000); });
+    // The reconcile pass has its own fixed deadline, not the rail's.
+    act(() => { jest.advanceTimersByTime(50_000); });
     await act(async () => {});
     view.unmount();
     await act(async () => {});

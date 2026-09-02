@@ -1748,7 +1748,11 @@ export default function WebViewCartSheet({
       //
       // Either way it goes to review, where the user picks on the page. Silence
       // is the one outcome not available.
-      const offersPreference = (match.preferences ?? []).some((pr) => pr.preferenceId);
+      // THE STORE DECIDES WHETHER A VARIANT MUST BE CHOSEN. Reading
+      // purchasePreferenceList here was H-E-B's data model in shared code:
+      // inert for Albertsons today, and the same shape of assumption that made
+      // the sku rule silently break it.
+      const offersPreference = rail ? rail.needsPreference(match) : false;
       const chosenLabel = item.dropdown?.selectedText ?? null;
       const preference = chosenLabel
         ? (match.preferences ?? []).find((pr) => pr.text === chosenLabel)
@@ -1880,7 +1884,7 @@ export default function WebViewCartSheet({
     // for nothing but a connection, and by the time they finish the review
     // screen usually has its candidates. The user never sees a second search.
     netStartFallbackSearchRef.current();
-    netArmFinalize(75_000);
+    netArmFinalize(rail.budgets.addMs(toWrite.length));
     webviewRef.current?.injectJavaScript(script);
   }, [finishParallelAdd, netArm, netArmFinalize, netHandOverToUser, setStep]);
   // Lost in the DOM-removal merge, which took the branch's dependency list and
@@ -2081,7 +2085,7 @@ export default function WebViewCartSheet({
     console.log(`[Cart ${ts()}]`, 'network search: page navigated, re-asking', outstanding.length,
       'of', netSearchTermsRef.current.length, 'terms');
     // A fresh document deserves a fresh window; the old one was spent loading.
-    netArm(40_000, 'search_timeout');
+    netArm(rail.budgets.searchResumeMs, 'search_timeout');
     webviewRef.current?.injectJavaScript(script);
   }, [netArm, netRail]);
 
@@ -2132,9 +2136,10 @@ export default function WebViewCartSheet({
     // while the page was still mid-navigation and the injection went nowhere.
     // Re-injecting is safe: the script only reads, and a duplicate answer is
     // ignored once the phase has moved on.
-    netArm(25_000, 'session_timeout');
     const rail = netRail();
     if (!rail) { netHandOverToUser('no_rail'); return; }
+    // The store's own ceiling, not a shared one. See NetworkRail.budgets.
+    netArm(rail.budgets.sessionMs, 'session_timeout');
     webviewRef.current?.injectJavaScript(rail.sessionScript());
   }, [netArm, setStep, netRail, netHandOverToUser, netStartSearch]);
 

@@ -68,6 +68,43 @@ export interface NetworkRail {
    * true.
    */
   writable(candidate: { productId?: string | null; skuId?: string | null }): boolean;
+  /**
+   * Does this candidate need the user to choose a variant before it can be
+   * written?
+   *
+   * H-E-B products carry a purchasePreferenceList -- "sliced or shaved?" -- and
+   * writing one without a choice makes the store apply its own default, adding a
+   * variant nobody asked for. Albertsons has no such concept and answers false
+   * whatever the data looks like.
+   *
+   * The engine used to read `candidate.preferences?.some(p => p.preferenceId)`
+   * itself. That is H-E-B's data model in shared code: inert for Albertsons
+   * today, and exactly the shape of assumption that made the sku rule break it.
+   */
+  needsPreference(candidate: { preferences?: Array<{ preferenceId?: string | null }> | null }): boolean;
+  /**
+   * HOW LONG TO WAIT, PER STORE, MEASURED PER STORE.
+   *
+   * These were constants in the engine, each tuned on whichever store was in
+   * front of me and applied to both. Albertsons needs a generous search window
+   * because its first request into a fresh document has been measured at 40-70s
+   * while later ones take 0.3s; H-E-B answers in about a second and was made to
+   * wait the same 45 plus 8 per term before it could give up. A budget is a
+   * store fact, so each store states its own.
+   *
+   * Every one is a CEILING, not a target: how long the run waits before deciding
+   * the store has stopped answering.
+   */
+  budgets: {
+    /** Session probe: injected, to answered. */
+    sessionMs: number;
+    /** One search batch, given the number of terms in it. */
+    searchMs(terms: number): number;
+    /** A search batch re-issued after the page moved under it. */
+    searchResumeMs: number;
+    /** One write batch, given the number of items in it. */
+    addMs(items: number): number;
+  };
 }
 
 const HEB_RAIL: NetworkRail = {
@@ -83,6 +120,16 @@ const HEB_RAIL: NetworkRail = {
       opts,
     ),
   writable: (c) => !!c.productId && !!c.skuId,
+  needsPreference: (c) => (c.preferences ?? []).some((p) => !!p.preferenceId),
+  // MEASURED on the device 2026-09-02: eleven terms, all prewarmed, tap to done
+  // in 6.9s; a search batch answers in about a second. Generous against that and
+  // still a fraction of what Albertsons needs.
+  budgets: {
+    sessionMs: 15_000,
+    searchMs: (terms) => Math.min(20_000 + terms * 2_000, 90_000),
+    searchResumeMs: 20_000,
+    addMs: (items) => Math.min(30_000 + items * 3_000, 120_000),
+  },
 };
 
 const ALBERTSONS_RAIL: NetworkRail = {
@@ -95,6 +142,21 @@ const ALBERTSONS_RAIL: NetworkRail = {
   // The cart is addressed by product id; the search returns no sku, and none is
   // needed to write.
   writable: (c) => !!c.productId,
+  // No preference concept on this platform. Answering false rather than leaving
+  // the engine to infer it from an empty array is the whole point of asking.
+  needsPreference: () => false,
+  // MEASURED 2026-09-02. The first request into a fresh document has been seen
+  // at 40-70s while later ones take 0.3s, so the search ceiling covers a slow
+  // start PLUS the terms. A flat 40s once expired on the same tick the first
+  // result arrived and threw away six good answers.
+  budgets: {
+    sessionMs: 25_000,
+    searchMs: (terms) => Math.min(45_000 + terms * 8_000, 180_000),
+    searchResumeMs: 40_000,
+    // Writes are serial here -- the store loses concurrent ones -- so this
+    // scales with the batch rather than sitting flat.
+    addMs: (items) => Math.min(45_000 + items * 4_000, 180_000),
+  },
 };
 
 /**
