@@ -372,6 +372,38 @@ describe('Albertsons session probe', () => {
     expect(msg.loggedIn).toBeUndefined();
   });
 
+  itWithFixture('logged-in-home.html', 'answers the login question BEFORE the cart read, not after it', async (runner) => {
+    // Stephen, 2026-09-01, second report: "Its saying I'm not logged in when I
+    // am. It also takes a very long time to determine that."
+    //
+    // The probe had grown to five seconds waiting for the token plus twelve
+    // waiting for the cart -- seventeen against the sheet's twenty-second login
+    // deadline, on a page that redirects and restarts the whole thing. It sat,
+    // then told a signed-in user they were signed out.
+    //
+    // The login answer no longer waits on the cart at all. The token is on the
+    // page and the user is named on it; that IS the fallback answer, so it is
+    // given immediately and the read only refines it.
+    //
+    // A cart read that hangs for the full budget is the case that matters, so
+    // this one never answers.
+    await runner.inject(
+      '(function(){ window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok", firstName: "Stephen",'
+      + ' branchId: "161", zipcode: "83713" } };'
+      + ' var realFetch = window.fetch;'
+      + ' window.fetch = function (u) {'
+      + '   if (String(u).indexOf("cartservice") !== -1) return new Promise(function(){});'
+      + '   return realFetch.apply(window, arguments); }; })(); true;');
+    await runner.inject(buildAlbertsonsSessionScript());
+
+    const started = Date.now();
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    // Fast, and it says signed in. Before this it waited out the cart budget.
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(msg).toMatchObject({ ok: true, loggedIn: true, verified: false, early: true });
+    expect(msg.storeId).toBe('161');
+  });
+
   itWithFixture('logged-in-home.html', 'waits for the TOKEN, not just for userInfo to exist', async (runner) => {
     // Stephen, 2026-09-01: "login detection is not working". The probe answered
     // ok:true loggedIn:false in 293ms -- far inside its own 5s budget -- while he
@@ -447,7 +479,15 @@ describe('Albertsons session probe', () => {
       + ' branchId: "161", zipcode: "83713", UUID: "u" } }; })(); true;');
     await runner.inject(cartStub({}, { getStatus: 401 }));
     await runner.inject(buildAlbertsonsSessionScript());
-    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    // TWO answers now. The first settles the login gate the moment the token is
+    // read -- so no budget of ours can make the sheet think a signed-in user is
+    // signed out by not answering in time -- and the second refines it with what
+    // the cart read found. This asserts the refined one, which is where the
+    // diagnosis lives.
+    const early = await runner.waitForMessage('ALB_SESSION', 20_000);
+    expect(early).toMatchObject({ ok: true, loggedIn: true, verified: false, early: true });
+    expect(early.cartReadable).toBeNull();
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000, (m) => !m.early);
     expect(msg.ok).toBe(true);
     expect(msg.loggedIn).toBe(true);
     // Marked so telemetry can separate a proven session from an assumed one.

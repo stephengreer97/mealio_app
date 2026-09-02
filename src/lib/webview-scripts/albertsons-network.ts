@@ -230,7 +230,43 @@ ${ALB_PRELUDE}
     //   anything else       -> a timeout or a 5xx says nothing about the user,
     //                          so answer "do not know" and let the caller fall
     //                          back rather than guess in either direction
-    var cart = await __albReadCart(12000);
+    // FOUR SECONDS, NOT TWELVE, AND THE BUDGET IS THE POINT.
+    //
+    // Here the cart read is a LIVENESS check on a token we already have, not a
+    // data fetch -- the run does its own read later with the full budget. And
+    // this probe answers the LOGIN question, which the sheet gives up on after
+    // twenty seconds.
+    //
+    // The arithmetic had stopped working: five seconds waiting for the token
+    // (added today) plus twelve waiting for the cart is seventeen, against a
+    // twenty-second deadline, with a page that redirects and restarts the whole
+    // thing. Stephen watched it sit and then tell him he was signed out while he
+    // was signed in. Nine seconds worst case leaves room for a restart.
+    //
+    // A read that has not answered in four seconds was not going to settle the
+    // question anyway: it comes back 'threw' or 'http', which is INCONCLUSIVE
+    // either way, and the token-plus-name fallback below is what answers.
+    // ANSWER THE LOGIN QUESTION FIRST, THEN GO AND CHECK.
+    //
+    // The token is on the page and the user is named on it. That is already the
+    // answer this probe falls back to when the cart cannot be read, so saying it
+    // NOW costs nothing and takes the cart read off the login path entirely --
+    // no budget of ours can make the sheet think a signed-in user is signed out
+    // by simply not answering in time.
+    //
+    // The verified answer follows. The caller takes whichever arrives while it
+    // is still asking; a second one landing later is ignored by the phase gate.
+    var namedEarly = typeof u.firstName === 'string' && u.firstName.length > 0;
+    if (namedEarly) {
+      post({
+        ok: true, loggedIn: true, verified: false, early: true,
+        storeId: u.branchId ? String(u.branchId) : null,
+        zipCode: u.zipcode ? String(u.zipcode) : null,
+        uuid: u.UUID || null, shoppingContext: 'pickup',
+        hasSearchKey: !!__albSearchKey(), cartReadable: null,
+      });
+    }
+    var cart = await __albReadCart(4000);
     // A FAILED CART READ IS NEVER PROOF THE USER IS SIGNED OUT.
     //
     // This was wrong in both directions before it was right. First the token
@@ -260,7 +296,11 @@ ${ALB_PRELUDE}
     // signed-in user as signed out blocks them from the app entirely, which is
     // not.
     if (!cart.ok) {
-      var named = typeof u.firstName === 'string' && u.firstName.length > 0;
+      var named = namedEarly;
+      // NOT a return. The early answer above already settled the login gate;
+      // this one refines it with what the read found, so the log still says
+      // WHY the cart was unreadable. The caller's phase gate ignores it if the
+      // run has moved on.
       if (!named) {
         post({ ok: false, why: 'cart_unreadable', detail: cart.why || null, tokenPresent: true });
         return;
