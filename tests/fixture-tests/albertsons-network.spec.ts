@@ -1176,3 +1176,92 @@ describe('the write can be handed a baseline instead of reading one', () => {
     expect(seen.writes[0][0].qty).toBe(5);
   });
 });
+
+describe('the store keys are fetched once, not once a run', () => {
+  // Moving the rail onto robots.txt stopped the storefront's own bundles
+  // starving our requests — but robots.txt has no SWY.CONFIGSERVICE.init, so the
+  // runtime never carries the keys there and the fallback fetched the ~400KB
+  // homepage on EVERY run to read two 32-character strings.
+  const KEYS_PAGE = [
+    '(function () {',
+    '  window.__pages = 0;',
+    // The fixture pages are served from an origin where localStorage is denied,
+    // which the script survives (every access is wrapped) by simply never
+    // caching. That is the wrong thing to assert, so the store is shimmed and
+    // the LOGIC is what gets tested.
+    '  var mem = {};',
+    '  Object.defineProperty(window, "localStorage", { configurable: true, value: {',
+    '    getItem: function (k) { return Object.prototype.hasOwnProperty.call(mem, k) ? mem[k] : null; },',
+    '    setItem: function (k, v) { mem[k] = String(v); },',
+    '    removeItem: function (k) { delete mem[k]; },',
+    '  } });',
+    '  delete window.SWY;',
+    '  window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok", branchId: "161", zipcode: "83713",',
+    '    customerId: "cust-1", UUID: "u" } };',
+    '  Object.defineProperty(document, "cookie", { configurable: true, get: function () {',
+    '    return "SWY_SHARED_SESSION_INFO=" + encodeURIComponent(JSON.stringify(',
+    '      { info: { SHOP: { storeId: "161", zipcode: "83713" }, COMMON: { userType: "R" } } })); } });',
+    '  window.fetch = function (url) {',
+    '    var u = String(url);',
+    '    if (u === "/" ) {',
+    '      window.__pages++;',
+    '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve(',
+    '        \'{"apimProgramSubscriptionKey":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\' +',
+    '        \' erumsConfig {"cart.apim.key":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}\'); } });',
+    '    }',
+    '    if (u.indexOf("/userinfo") !== -1) {',
+    '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve(',
+    '        JSON.stringify({ SWY_SHOP_TOKEN: "tok", customerId: "cust-1", UUID: "u" })); } });',
+    '    }',
+    '    return Promise.resolve({ status: 200, json: function () { return Promise.resolve(',
+    '      { carts: [{ cartItemsList: [] }] }); } });',
+    '  };',
+    '})(); true;',
+  ].join('\n');
+
+  const pagesProbe = '(function(){ window.ReactNativeWebView.postMessage(JSON.stringify('
+    + '{ type: "PROBE", pages: window.__pages,'
+    + '  cached: !!window.localStorage.getItem("__mealio_alb_keys_v1") })); })(); true;';
+
+  itWithFixture('logged-in-home.html', 'reads the page once and remembers', async (runner) => {
+    await runner.inject(KEYS_PAGE);
+    await runner.inject(buildAlbertsonsCartReadScript());
+    await runner.waitForMessage('CART_COUNT', 20_000);
+    await runner.inject(pagesProbe);
+    const one = await runner.waitForMessage('PROBE', 10_000);
+    expect(one.pages).toBe(1);
+    expect(one.cached).toBe(true);
+
+    // A second script in the same origin — a later run — asks nobody.
+    await runner.inject('(function(){ delete window.__mealioAlb; })(); true;');
+    await runner.inject(buildAlbertsonsCartReadScript());
+    await runner.waitForMessage('CART_COUNT', 20_000);
+    await runner.inject(pagesProbe);
+    const two = await runner.waitForMessage('PROBE', 10_000);
+    expect(two.pages).toBe(1);
+  });
+
+  itWithFixture('logged-in-home.html', 'forgets a key the store has stopped accepting', async (runner) => {
+    // A rotated key must not stick. We cannot tell a rotation from a signed-out
+    // user here, and both want the same thing: read the page again next time.
+    await runner.inject(KEYS_PAGE);
+    await runner.inject([
+      '(function () {',
+      '  window.localStorage.setItem("__mealio_alb_keys_v1", JSON.stringify(',
+      '    { at: Date.now(), search: "stale", candidates: ["stale"] }));',
+      '  var prior = window.fetch;',
+      '  window.fetch = function (url) {',
+      '    if (String(url).indexOf("/cart/customer/") !== -1) {',
+      '      return Promise.resolve({ status: 401, text: function () { return Promise.resolve("no"); } });',
+      '    }',
+      '    return prior.apply(window, arguments);',
+      '  };',
+      '})(); true;'].join('\n'));
+    await runner.inject(buildAlbertsonsCartReadScript());
+    const msg = await runner.waitForMessage('CART_COUNT', 20_000);
+    expect(msg.reason).toBe('rail_read_auth');
+    await runner.inject(pagesProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    expect(seen.cached).toBe(false);
+  });
+});

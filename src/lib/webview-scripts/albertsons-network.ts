@@ -268,10 +268,57 @@ const ALB_PRELUDE = `
   // the page the WebView is already sitting on, so it comes from the HTTP cache.
   // Nothing is hardcoded -- these rotate, and a copy compiled into the app would
   // fail closed for every user at once.
+  // THE ORIGIN'S OWN CACHE, so the homepage is fetched once and not once a run.
+  //
+  // Moving the rail onto robots.txt was right -- it stopped the storefront's
+  // bundles starving our requests -- but robots.txt has no
+  // SWY.CONFIGSERVICE.init, so the runtime NEVER carries the keys there and the
+  // fetch below ran on every single run. That is a ~400KB page downloaded to
+  // read two 32-character strings.
+  //
+  // localStorage on this origin survives navigation and app restarts and never
+  // leaves the browser, which is where store credentials belong. The stamp
+  // bounds how stale a cached key can be, and __albReadCart clears the cache
+  // when every candidate is refused, so a rotation self-heals on the next run
+  // instead of failing closed until someone notices.
+  var KEY_CACHE = '__mealio_alb_keys_v1';
+  var KEY_CACHE_MAX_AGE = 12 * 60 * 60 * 1000;   // twelve hours
+
+  function __albCachedKeys() {
+    try {
+      var raw = window.localStorage.getItem(KEY_CACHE);
+      if (!raw) return null;
+      var j = JSON.parse(raw);
+      if (!j || !j.at || Date.now() - j.at > KEY_CACHE_MAX_AGE) return null;
+      if (!j.search && !(j.candidates && j.candidates.length)) return null;
+      return j;
+    } catch (e) { return null; }
+  }
+
+  function __albCacheKeys(search, plain, candidates) {
+    try {
+      window.localStorage.setItem(KEY_CACHE, JSON.stringify({
+        at: Date.now(), search: search || null, plain: plain || null,
+        candidates: candidates || [],
+      }));
+    } catch (e) {}
+  }
+
+  function __albForgetKeys() {
+    try { window.localStorage.removeItem(KEY_CACHE); } catch (e) {}
+  }
+
   async function __albEnsureKeys(budgetMs) {
     if (A.searchKey || (A.keyCandidates && A.keyCandidates.length)) return;
     var fromPage = __albCfg().sc.apimProgramSubscriptionKey;
     if (fromPage) return;                       // the runtime has it; use it
+    var cached = __albCachedKeys();
+    if (cached) {
+      A.searchKey = cached.search || null;
+      A.plainKey = cached.plain || null;
+      A.keyCandidates = cached.candidates || [];
+      return;
+    }
     var ctl = new AbortController();
     var to = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, budgetMs || 8000);
     var html = '';
@@ -318,6 +365,7 @@ const ALB_PRELUDE = `
       if (!seen[all[k]]) { seen[all[k]] = 1; out.push(all[k]); }
     }
     A.keyCandidates = out;
+    __albCacheKeys(A.searchKey, A.plainKey, out);
   }
 
   // Every 32-hex value anywhere in the config, most-likely first. The cart key is
@@ -500,6 +548,12 @@ const ALB_PRELUDE = `
     // means we asked and the token was rejected, which IS signed out. Collapsing
     // them would report a signed-in user as signed out on any config change.
     if (!keys.length) return { ok: false, why: 'no_key' };
+    // EVERY candidate refused. Either the user is signed out or the keys have
+    // rotated, and we cannot tell which from here -- but a cached key that no
+    // longer works must not be handed to the next run, so it is dropped and the
+    // next run reads the page again.
+    __albForgetKeys();
+    A.cartKey = null;
     return { ok: false, why: 'auth', status: lastStatus };
   }
 `;
