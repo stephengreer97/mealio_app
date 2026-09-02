@@ -180,14 +180,40 @@ ${ALB_PRELUDE}
     //   userInfo never appeared    -> we do not know; hand the question back so
     //                                 the page path runs its own check rather
     //                                 than asserting anything about the user
-    var u = null;
+    // WAIT FOR THE TOKEN, NOT MERELY FOR THE OBJECT.
+    //
+    // This loop used to stop as soon as userInfo had ANY keys, and then read a
+    // missing token as "signed out". That is only sound if the bootstrap fills
+    // userInfo in one go. If it publishes the object first and the auth fields a
+    // moment later -- or fills non-auth fields first -- we break out early, see
+    // no token, and wall a signed-in user. Measured 2026-09-01: the probe
+    // answered in 293ms, far inside its own 5s budget, with ok:true
+    // loggedIn:false, while Stephen was signed in.
+    //
+    // So it keeps waiting while the object is there but the token is not, and
+    // only calls it signed out when the budget is spent. A genuinely signed-out
+    // user costs the full wait once; a signed-in one stops the moment the token
+    // lands.
+    var u = null, sawUser = false;
     for (var t = 0; t < 20; t++) {
       var cand = (window.AB && window.AB.userInfo) || null;
-      if (cand && Object.keys(cand).length) { u = cand; break; }
+      if (cand && Object.keys(cand).length) {
+        sawUser = true;
+        if (cand.SWY_SHOP_TOKEN) { u = cand; break; }
+        u = cand;
+      }
       await new Promise(function (r) { setTimeout(r, 250); });
     }
-    if (!u) { post({ ok: false, why: 'not_hydrated' }); return; }
-    if (!u.SWY_SHOP_TOKEN) { post({ ok: true, loggedIn: false }); return; }
+    if (!sawUser) { post({ ok: false, why: 'not_hydrated' }); return; }
+    if (!u || !u.SWY_SHOP_TOKEN) {
+      // Report WHICH keys were there, never their values. Without this the log
+      // cannot tell "the user is signed out" from "the token moved or arrives
+      // late", which is the whole question when this answer is wrong.
+      var keys = [];
+      try { keys = Object.keys(u || {}).slice(0, 25); } catch (e) {}
+      post({ ok: true, loggedIn: false, userInfoKeys: keys, waitedMs: 5000 });
+      return;
+    }
     // "Present" and "usable" are not the same property — MEAL-137 measured this
     // token at a 45-minute life, and a dead one still sits on the page global.
     // So the cart read DECIDES; it does not merely accompany the answer.

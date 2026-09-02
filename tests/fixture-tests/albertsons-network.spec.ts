@@ -372,6 +372,41 @@ describe('Albertsons session probe', () => {
     expect(msg.loggedIn).toBeUndefined();
   });
 
+  itWithFixture('logged-in-home.html', 'waits for the TOKEN, not just for userInfo to exist', async (runner) => {
+    // Stephen, 2026-09-01: "login detection is not working". The probe answered
+    // ok:true loggedIn:false in 293ms -- far inside its own 5s budget -- while he
+    // was signed in.
+    //
+    // The wait stopped as soon as userInfo had ANY keys and then read a missing
+    // token as signed out. That is only sound if the bootstrap fills the object
+    // in one go; if it publishes the object first and the auth fields a moment
+    // later, a signed-in user gets walled.
+    //
+    // Here the object appears immediately WITHOUT a token, and the token lands
+    // 900ms later. The old loop answered "signed out" at once.
+    await runner.inject(
+      '(function(){ window.AB = { userInfo: { branchId: "161", zipcode: "83713" } };'
+      + ' setTimeout(function(){ window.AB.userInfo.SWY_SHOP_TOKEN = "tok"; }, 900); })(); true;');
+    await runner.inject(buildAlbertsonsSessionScript());
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    expect(msg.loggedIn).not.toBe(false);
+  });
+
+  itWithFixture('logged-in-home.html', 'still says signed out when the token never comes, and names what it saw', async (runner) => {
+    // The other side: a genuinely signed-out user must still be reported as one,
+    // and the answer has to carry enough to tell that apart from "the token
+    // moved" next time this is wrong. Keys only -- never their values.
+    await runner.inject(
+      '(function(){ window.AB = { userInfo: { branchId: "161", zipcode: "83713" } }; })(); true;');
+    await runner.inject(buildAlbertsonsSessionScript());
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    expect(msg.ok).toBe(true);
+    expect(msg.loggedIn).toBe(false);
+    expect(msg.userInfoKeys).toEqual(['branchId', 'zipcode']);
+    expect(JSON.stringify(msg)).not.toContain('tok');
+  });
+
+
   itWithFixture('search-results-tortillas.html', 'waits for a late bootstrap rather than racing it', async (runner) => {
     await runner.inject('(function(){ delete window.AB; window.SWY = { CONFIGSERVICE: { searchConfig: { apimProgramSubscriptionKey: "k" },'
       + ' datapowerConfig: { cncSubscriptionKey: "fedcba9876543210fedcba9876543210" } } };'
