@@ -1196,80 +1196,10 @@ describe('MEAL-14 withdrawing a verdict a second signal contradicts', () => {
 // with this on by default would be shipping an unverified authenticated GraphQL
 // operation to every H-E-B user, which is what these two tests exist to prevent.
 
-describe('MEAL-14 flag gating', () => {
-  afterEach(() => __resetAutomationConfigForTests());
-
-  function hebAddScripts() {
-    const s = getStoreScripts('heb')!;
-    return {
-      add: s.buildAddToCartScript('H-E-B Regular Sour Cream, 16 oz', null, 1, null),
-      fused: s.buildSearchAndAddScript('sour cream', 1, null),
-    };
-  }
-
-  it('bakes the rail OFF by default', () => {
-    const { add, fused } = hebAddScripts();
-    expect(add).toContain('__HEB_CART_RAIL = false');
-    expect(fused).toContain('__HEB_CART_RAIL = false');
-    // The badge/DOM confirmation it falls back to is still there.
-    expect(fused).toContain('__waitForCartIncrease');
-    expect(add).toContain('__waitCardAdded');
-  });
-
-  it('turns on from a config push, and the rail reaches the script', async () => {
-    await loadAutomationConfig(async () => ({
-      version: 14,
-      config: { stores: { heb: { cartSkuConfirm: true } } },
-    }));
-    const { add, fused } = hebAddScripts();
-    expect(add).toContain('__HEB_CART_RAIL = true');
-    expect(fused).toContain('__HEB_CART_RAIL = true');
-    expect(fused).toContain('__hebCartConfirmAdd');
-    // …and the fallback is NOT removed by turning the rail on.
-    expect(fused).toContain('__waitForCartIncrease');
-  });
-
-  // MEAL-16. The confirmation is diagnostic only on the device — nothing renders
-  // it — so the debug postMessage is the ONLY way `detail` reaches a human, and
-  // the whole point of carrying it is to read it off Metro after a live run.
-  it('puts the message on the debug line, on every path that asks the cart', async () => {
-    await loadAutomationConfig(async () => ({
-      version: 15,
-      config: { stores: { heb: { cartSkuConfirm: true } } },
-    }));
-    const { add, fused } = hebAddScripts();
-    expect(fused).toContain(`step: 'cart_query_confirm'`);
-    expect(fused).toContain('detail: __cartConf.detail');
-    expect(add).toContain(`step: 'cart_query_confirm'`);
-    expect(add).toContain(`step: 'cart_query_crosscheck'`);
-    expect(add.match(/detail: __cartConf\.detail/g)).toHaveLength(2);
-    // MEAL-16's four: a field carried on the confirmation but left off the
-    // postMessage reaches nobody — the confirmation itself is never rendered.
-    for (const field of ['status', 'code', 'loc', 'block']) {
-      expect(fused).toContain(`__cartConf.${field}`);
-      expect(add.match(new RegExp(`__cartConf\\.${field}`, 'g'))!.length).toBeGreaterThanOrEqual(2);
-    }
-    // …and the one line that says what we actually put on the wire.
-    expect(fused).toContain(`step: 'cart_query_body'`);
-    expect(add).toContain(`step: 'cart_query_body'`);
-  });
-
-  it('parses as valid JS in both states', async () => {
-    for (const on of [false, true]) {
-      __resetAutomationConfigForTests();
-      if (on) {
-        await loadAutomationConfig(async () => ({
-          version: 14, config: { stores: { heb: { cartSkuConfirm: true } } },
-        }));
-      }
-      const { add, fused } = hebAddScripts();
-      // A botched interpolation is a syntax error that silently kills the whole
-      // injected script — the WebView reports nothing and the run just times out.
-      expect(() => new vm.Script(add)).not.toThrow();
-      expect(() => new vm.Script(fused)).not.toThrow();
-    }
-  });
-});
+// MEAL-14's flag gating was asserted here through the DOM add scripts -- the
+// click-to-add and the fused search-and-add both baked __HEB_CART_RAIL into
+// their text. Those scripts were deleted on 2026-09-01; the rail is no longer a
+// flag on a DOM script, it is the only way H-E-B adds anything.
 
 describe('MEAL-14 target identity from a result card', () => {
   const rail = makeRail();

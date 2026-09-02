@@ -42,129 +42,82 @@
   </table>
 
   <h2>2 &middot; How a run is shaped</h2>
+  <p><b>DOM automation was deleted on 2026-09-01.</b> Nothing clicks a storefront any more.
+  There were five routes through this table &mdash; a sequential page walk, a parallel search
+  pool, a fused search-and-add pool, a pre-search parking pool, and the network rail. Four of
+  them worked by driving hidden WebViews through the store and pressing its buttons, and they
+  were the source of most of what went wrong: selectors that went stale, clicks that raced the
+  page's own navigation, adds that reported success and never landed.</p>
+  <p>Three routes are left, and none of them clicks.</p>
   <table class="src">
-    <tr>
-      <th>Store</th><th>Search path</th><th>Workers &times; stagger</th>
-      <th><code>cacheBustNav</code></th><th><code>spaSearch</code></th><th>Why</th>
-    </tr>
-    <tr><td><b>H-E-B</b></td><td>parallel, or <b>network</b> <i>(off)</i></td><td>3 &times; 400 ms <i>(both default)</i></td>
-        <td>on</td><td><b>true</b></td>
-        <td>the search route re-renders and fires <code>onLoadEnd</code> twice for one URL.
-        With <code>networkSearch</code> + <code>networkAdd</code> on it loads no page at all and
-        the worker columns stop applying &mdash; see the H-E-B map, diagram 3.
-        <b>The rail assumes one document, and does not get one.</b> The batch runs inside the
-        page it was injected into; if that page navigates mid-batch every in-flight fetch
-        rejects as <code>TypeError: Failed to fetch</code> and the loop stops dead. An 18-term
-        run died at 3/18 that way &mdash; three failures, then silence, no
-        <code>SEARCH_BATCH_DONE</code>. Three failures and SILENCE is the tell that separates it
-        from a bot defence, which would have refused all 18; the presearch workers were loading
-        pages fine that same second. <code>onLoadEnd</code> during the search phase now re-asks
-        the terms that never came back, capped at 3 documents</td></tr>
-    <tr><td><b>Walmart</b></td><td>parallel</td><td>3 &times; 400 ms <i>(default)</i></td>
-        <td>on</td><td><b>true</b> <i>(own default)</i></td>
-        <td>SPA; without it a duplicate add double-adds, then the next nav race-cancels the POST</td></tr>
-    <tr><td><b>Wegmans</b></td><td><b>serial (forced)</b></td>
-        <td>2 &times; 400 ms &mdash; <i>built, never reached</i></td>
-        <td><b>off</b></td><td>&mdash;</td>
-        <td>the WAF 403s concurrent searches; even 2 staggered workers were blocked</td></tr>
-    <tr><td><b>Amazon Fresh</b></td><td>parallel</td><td>3 &times; 400 ms <i>(default)</i></td>
-        <td>on</td><td>&mdash;</td><td>&mdash;</td></tr>
-    <tr><td><b>ALDI</b></td><td><b>serial (forced)</b></td>
-        <td>3 &times; 400 ms &mdash; <i>built, never reached</i></td>
-        <td><b>off</b></td><td><b>true</b></td>
-        <td>5 parallel workers still 403'd with the cache-buster removed &mdash;
-        <b>concurrency itself is the trigger</b>; the <code>?_t=</code> query is a second one</td></tr>
-    <tr><td><b>Albertsons family</b></td>
-        <td>parallel, or <b>network</b> <i>(on by default)</i></td>
-        <td><b>3 &times; 400 ms</b> <i>(explicit)</i>; the network rail searches <b>2 at a time</b></td>
-        <td>on</td><td>&mdash;</td>
-        <td>5 concurrent WebViews crashed the iOS WKWebView content process on its shared
-        memory budget &mdash; a limit, not an anti-bot concession.
-        The network rail is REST, not GraphQL:
-        <code>GET /abs/pub/xapi/pgmsearch/v1/search/products</code>, keyed by
-        <code>searchConfig.apimProgramSubscriptionKey</code> &mdash; a DIFFERENT key from
-        the cart's. Concurrency is 2 rather than 3 because MEAL-207 has this
-        operation degrading under burst, and the first term is searched
-        ALONE before those 2 lanes open. That guard is this store's alone &mdash; H-E-B carried
-        it briefly on a misreading of the 3/18 run and it was removed</td></tr>
-    <tr><td><b>Kroger family</b></td><td colspan="5">n/a &mdash; the <b>server</b> fans out per
-        ingredient (<code>POST /api/kroger/search-products</code>, 60 s)</td></tr>
-    <tr><td><b>Mock Store</b></td><td>parallel</td><td>3 &times; 400 ms <i>(default)</i></td>
-        <td>on</td><td>&mdash;</td><td>every route is exercisable on purpose</td></tr>
+    <tr><th>Route</th><th>Who gets it</th><th>What it does</th></tr>
+    <tr><td><code>network</code></td><td>H-E-B, Albertsons family</td>
+        <td>Search and add by asking the store's own API from a signed-in WebView. No page loads
+        at all &mdash; including the cart reads, which the rail answers itself
+        (<code>NetworkRail.cartRead</code>). Verifiable: every write is checked against that
+        write's own response.</td></tr>
+    <tr><td><code>networkChoose</code></td><td>the same two, on a choose run</td>
+        <td>The same rail, SEARCH ONLY. A choose run needs candidates for the Choose Products
+        screen, not adds. It asks, it does not buy.</td></tr>
+    <tr><td><code>assisted</code></td><td>Walmart, ALDI, Amazon Fresh, Wegmans</td>
+        <td>Mealio searches each ingredient and hands the user the results page; the user adds
+        and taps Next. No automation, and nothing claimed that was not seen. It is what
+        &ldquo;manual mode&rdquo; already did, promoted from a rescue to a route.</td></tr>
+    <tr><td>&mdash;</td><td>Kroger family</td>
+        <td>Never reaches this decision: the SERVER fans out per ingredient.</td></tr>
   </table>
-  <p>A store opts into the worker pool by exposing <b>both</b> <code>getSearchUrl</code> and
-  <code>buildWorkerScript</code> and not setting <code>forceSerialSearch</code>. Omit either and it
-  falls back to the sequential single-WebView path with nothing else needing to know.</p>
+  <p><b>The four assisted stores had no other rail</b>, so removing DOM automation is what put
+  them there. MEAL-210&ndash;213 ask, one per store, whether each can have a real in-page rail
+  like the two that do &mdash; each citing what is already ruled out, so nobody re-runs MEAL-17
+  (Walmart affiliate URL, blocked), MEAL-18 (Amazon cart URL, dead) or MEAL-34 (Instacart
+  platform, not a path).</p>
+  <p><b>The rail assumes one document, and does not always get one.</b> Its batch runs inside
+  the page it was injected into; if that page navigates mid-batch every in-flight fetch rejects
+  as <code>TypeError: Failed to fetch</code> and the loop stops dead. An 18-term run died at 3/18
+  that way &mdash; three failures, then silence, no <code>SEARCH_BATCH_DONE</code>. Three
+  failures and SILENCE is the tell that separates it from a bot defence, which would have
+  refused all 18. <code>onLoadEnd</code> during the search phase re-asks the terms that never
+  came back, capped at three documents.</p>
+  <p><b>Albertsons is fifteen banners sharing one config entry</b>, stored under
+  <code>albertsons</code>. The cart engine used to look its rail flags up by the LOCKED STORE ID,
+  so Safeway read <code>stores['safeway']</code>, found nothing, and was treated as a store with
+  no rail &mdash; a silent downgrade for fourteen stores, invisible because every Albertsons run
+  measured had been on the banner literally named <code>albertsons</code>.
+  <code>railConfigKey()</code> is the one place that mapping lives now.</p>
 
   <h2>3 &middot; How each store is read</h2>
   <table class="src">
     <tr><th>Store</th><th>Login detection</th><th>Add confirmation</th><th>Cart read (snapshots)</th></tr>
-    <tr><td><b>H-E-B</b></td>
-        <td><b>network path (default when the rail is on):</b> the rail's session probe &mdash;
-            <code>myPreferredStore</code> over GraphQL. Used by the prewarm AND by
-            <code>login_check</code>, so the DOM answer below is now the FALLBACK, reached
-            only when the probe cannot answer.<br/>
-            <b>page path:</b> inject <code>CHECK_LOGIN_SCRIPT</code>; a logged-out profile click redirects to
-            <code>accounts.heb.com</code>, matched by its own <code>isLoginPageUrl</code>;
-            re-inject on nav</td>
-        <td>header badge &rarr; optionally the store's own <b>cart query</b>
-            (<code>cartSkuConfirm</code>, off) &rarr; optionally a <b>network add</b>
-            (<code>networkAdd</code>, off)</td>
-        <td>cart page, <b>path-guarded</b></td></tr>
-    <tr><td><b>Walmart</b></td>
-        <td>click the hamburger, read the drawer: "Sign in or create account" vs "Hi, &lt;name&gt;".
-            <b>Both or neither &rarr; logged out.</b></td>
-        <td>the cart header's <b>$ total</b> &mdash; server-authoritative. The per-card stepper is
-            optimistic and is read for diagnostics only</td>
-        <td>cart page, <b>path-guarded</b></td></tr>
-    <tr><td><b>Wegmans</b></td>
-        <td>greeting button: "Hello,&hellip;" vs "Sign In". MutationObserver, 8 s watchdog,
-            then a <code>sessionStorage</code> tiebreak, then <b>fail closed</b></td>
-        <td>the stepper appears, then one settled click per unit</td>
-        <td>cart page, <b>path-guarded</b></td></tr>
-    <tr><td><b>Amazon Fresh</b></td>
-        <td><code>#nav-logobar-greeting</code> carries <code>nav-greeting-recognized</code>
-            <b>and</b> <code>#nav-greeting-name</code> exists</td>
-        <td>header badge via <code>buildCartConfirmFn</code> &mdash; the only store that imports it.
-            An <b>unreadable</b> badge settles 2.5 s and reports success</td>
-        <td>cart page, <b>unguarded</b></td></tr>
-    <tr><td><b>ALDI</b></td>
-        <td>open the Main Menu; signed-out words checked <b>first and decisive</b>; signed-in words
-            only once the text has stabilised; <code>unknown</code> &rarr; not logged in.
-            3-minute background poll for SPA sign-ins</td>
-        <td>the qty bubble reads the requested count</td>
-        <td><b>side panel</b> &mdash; there is no cart page.
-            Registry-driven, not <code>storeId === 'aldi'</code></td></tr>
-    <tr><td><b>Albertsons family</b></td>
-        <td><b>page path:</b> bail on the SSO interstitial &rarr; passive read of the account span
-            (<b>settled</b> text only) &rarr; click the profile and look for "sign out" &rarr;
-            <code>sessionStorage</code> tiebreak.<br/>
-            <b>network path:</b> wait for the Angular bootstrap, then
-            <code>SWY_SHOP_TOKEN</code> + a real cart read &mdash; a token is only
-            <i>present</i>, the cart read is what proves it <i>usable</i> (it lives 45 min).
-            Absence before hydration is answered <code>not_hydrated</code>, never
-            "signed out" &mdash; MEAL-124's reason 1, which walls a signed-in user
-            if you get it wrong</td>
-        <td>qty bubble, then the increment control &mdash; or a <b>network add</b>
-            (<code>networkAdd</code>, <b>on</b>):
-            <code>POST /abs/pub/erums/cartservice/api/v2/cart/items</code>, which needs
-            <code>Authorization: Bearer</code> AND a subscription key, either alone being a 401.
-            <b><code>qty</code> SETS the line</b> (MEAL-194), so every write is
-            cart-held + wanted and duplicate products are coalesced into one write</td>
-        <td><code>/erums/cart</code>, <b>path-guarded</b>; the network add verifies from
-            the write's own response, which returns the whole cart</td></tr>
+    <tr><td><b>H-E-B</b><br/><b>Albertsons family</b></td>
+        <td><b>The rail's session probe, always.</b> H-E-B asks
+        <code>myPreferredStore</code> over GraphQL; Albertsons reads its Angular bootstrap and
+        the cart service. It answers all THREE places that decide login &mdash; the silent
+        prewarm, the <code>login_check</code> step, and the re-ask on every page load while the
+        user sits on <code>login</code>. The DOM check is the fallback, reached only when the
+        probe cannot answer, which is nearly always a page that has not finished its bootstrap
+        &mdash; NOT a signed-out user, and it must never be reported as one.</td>
+        <td><b>The write's own response.</b> It returns the cart, so a write that succeeded is a
+        confirmed landing and says so (<code>HebAddConfirmation.via = 'network'</code>) &mdash;
+        which is what lets the reconcile refuse a cart read that contradicts it.</td>
+        <td><b>The rail</b> (<code>cartRead</code>), for the before, reconcile and after
+        snapshots alike. No page load. It answers the same <code>CART_COUNT</code> the cart page
+        used to, so nothing downstream can tell which read replied.</td></tr>
+    <tr><td><b>Walmart</b><br/><b>ALDI</b><br/><b>Amazon Fresh</b><br/><b>Wegmans</b></td>
+        <td>The store's own login check, injected into the page the user is about to drive. This
+        is the last DOM script in Mealio, and it is a READ, not automation.</td>
+        <td>&mdash; <b>nothing to confirm.</b> Mealio does not add on these stores, so it makes
+        no claim about what landed. The user watched it happen.</td>
+        <td>cart page, <b>path-guarded</b> (<code>cart-count.ts</code>) &mdash; the breakdown on
+        the done screen. Still a read, still not automation.</td></tr>
     <tr><td><b>Kroger family</b></td>
-        <td><code>GET /api/kroger/status</code> &mdash; an OAuth connection, not a page</td>
-        <td>the REST response</td><td>n/a</td></tr>
-    <tr><td><b>Mock Store</b></td>
-        <td><code>body[data-logged-in]</code>, read synchronously</td>
-        <td><code>#mock-cart-count</code> ticks up</td>
-        <td><code>/cart</code>, unguarded</td></tr>
+        <td colspan="3">OAuth. The server holds the token and does the adding; none of this
+        column applies.</td></tr>
   </table>
-  <p>The <b>path guard</b> asserts the page really is the cart before anything is counted, and it is
-  derived from the <i>effective</i> (possibly remotely overridden) cart URL &mdash; so a config push
-  repoints the navigation and the guard together, or not at all. A null path makes the script refuse
-  to build rather than count the wrong page.</p>
+  <p><b>Selector health is nearly vestigial now.</b> The probe existed to watch extractors and
+  add scripts for drift, because a stale selector was how DOM automation failed. Those scripts
+  are gone, the only script a store still injects is its login check, and only ALDI's reads
+  anything from the selector table. One test asserts that &mdash; if even it stops being true,
+  the feature is watching nothing and should be deleted rather than left running.</p>
 
   <h2>4 &middot; Cart deep links</h2>
   <table class="src">
@@ -178,27 +131,33 @@
   </table>
 
   <h2>5 &middot; Defaults, and where they actually come from</h2>
+  <p><b>This table used to size the worker pools</b> &mdash; how many parallel search workers, how
+  many add workers, the dispatch stagger, the commit jitter, the add-worker timeout. All of it
+  existed to pace concurrent WebViews through a storefront without tripping its bot defence, and
+  all of it went with them.</p>
   <table class="src">
     <tr><th>Knob</th><th>Effective default</th><th>Set in</th></tr>
-    <tr><td>parallel <b>search</b> workers</td><td><b>3</b></td><td><code>scripts?.workerCount ?? 3</code> &mdash; WebViewCartSheet</td></tr>
-    <tr><td>parallel <b>add</b> workers</td><td><b>3</b></td><td><code>parallelAddWorkerCount()</code> &rarr; store, then <code>flags.parallelAddWorkers</code>, then <code>PARALLEL_ADD_WORKERS</code></td></tr>
-    <tr><td>dispatch stagger</td><td><b>400 ms</b></td><td><code>scripts?.workerStaggerMs ?? 400</code></td></tr>
-    <tr><td>add-commit jitter</td><td><b>500 ms</b> + up to one more</td><td><code>commitJitterMs()</code>, <code>flags.addCommitJitterMs</code></td></tr>
-    <tr><td>add-worker timeout</td><td><b>35 s</b></td><td>hard-coded &mdash; longer than search because the worker also runs the badge poll</td></tr>
-    <tr><td><code>cacheBustNav</code></td><td>on</td><td>per store; off only for ALDI and Wegmans</td></tr>
+    <tr><td>rail search concurrency</td><td><b>3</b> (H-E-B), <b>2</b> (Albertsons)</td>
+        <td>the rail's own batch script. Albertsons is lower because MEAL-207 has its search
+        degrading under load, and it opens with ONE request before the lanes fan out</td></tr>
+    <tr><td>rail add concurrency</td><td><b>2</b>, capped at 3</td>
+        <td><code>addBatch(items, { concurrency })</code></td></tr>
+    <tr><td>search deadline</td><td><b>40 s</b>, re-armed per document</td>
+        <td><code>netArm</code> &mdash; a navigation mid-batch buys a fresh window</td></tr>
+    <tr><td>write deadline</td><td><b>75 s</b> first pass, <b>45 s</b> top-up</td>
+        <td><code>netArmFinalize</code>. When it fires it finalizes with what came back rather
+        than starting a second pass</td></tr>
+    <tr><td><code>cacheBustNav</code></td><td>on</td><td>per store; off only for ALDI and Wegmans.
+        Still real: an assisted run navigates</td></tr>
   </table>
-  <p>Worker count and stagger are kept low <b>globally</b> for anti-bot reasons, and the stagger also
-  activates the pool's per-worker jitter &mdash; so the request pattern is not a fixed metronome.</p>
-
-  <h2>One place the comment and the code disagree</h2>
-  <p><code>StoreScripts.workerCount</code> in <code>webview-scripts/index.ts</code> is documented as
-  &ldquo;<i>Defaults to 5. Lower it for stores with aggressive anti-bot (ALDI: 3).</i>&rdquo;
-  The call site is <code>scripts?.workerCount ?? 3</code>, and the note beside it records the change
-  (&ldquo;3 workers (was 5)&rdquo;). <b>The effective default is 3</b>, and it has been for as long as
-  that call site has read <code>?? 3</code> &mdash; so the interface docblock now describes a value
-  no store gets. It is stale documentation rather than a behavioural bug: every store either sets
-  <code>workerCount</code> explicitly or wants the low default. Worth a one-line fix next time
-  someone is in that file.</p>
+  <p><b>The remote flags are gone too.</b> <code>FlagConfig</code> held four &mdash;
+  <code>parallelAdd</code>, <code>presearchAdd</code>, <code>parallelAddWorkers</code>,
+  <code>addCommitJitterMs</code> &mdash; and every one was a lever over the pools. A switch wired
+  to nothing is worse than no switch: it reads like something an operator can pull in an
+  incident. The section is empty and a push naming any of them is REFUSED with a warning.</p>
+  <p>What stayed remote is the part that still decides something: <code>networkSearch</code>,
+  <code>networkAdd</code> and <code>cartSkuConfirm</code> per store, which is how a rail is turned
+  off without a release.</p>
 
   <h2>What is deliberately <i>not</i> remote</h2>
   <p>Everything in tables 2&ndash;4 is remotely tunable. <b>Nothing in table 1 is.</b>

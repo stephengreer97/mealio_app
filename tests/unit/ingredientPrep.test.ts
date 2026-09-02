@@ -23,6 +23,7 @@ import {
 import { consolidateIngredients } from '../../src/lib/consolidateIngredients';
 import { mergeChosenProduct } from '../../src/lib/saveChosenIngredient';
 import { withPrep, ingredientAmount } from '../../src/lib/formatMeasurement';
+import { getNetworkRail } from '../../src/lib/webview-scripts/network-rail';
 import { getStoreScripts } from '../../src/lib/webview-scripts/index';
 
 /** The onion the recipe wants diced. Prep present, and irrelevant to the store. */
@@ -108,13 +109,22 @@ describe('preparation never reaches the store', () => {
     const injected: string[] = [];
     for (const item of consolidateIngredients(meals)) {
       const term = termOf(item);
+      // The DOM builders used to be checked here too. They are gone; a store is
+      // reached by its search URL (assisted) or by the rail's search batch, and
+      // both are covered below.
       if (scripts.getSearchUrl) urls.push(scripts.getSearchUrl(term));
-      injected.push(scripts.buildSearchScript(term));
-      injected.push(scripts.buildSearchAndAddScript(term, item.productQty, item.dropdown ?? null));
-      injected.push(scripts.buildAddToCartScript(term, null, item.productQty));
+      const rail = getNetworkRail(storeId);
+      const sess = { storeId: '476', shoppingContext: 'CURBSIDE_DELIVERY' };
+      const batch = rail?.searchBatch([term], sess);
+      if (batch) injected.push(batch);
     }
 
-    expect(injected.length).toBeGreaterThan(0);
+    // An assisted store has no rail, so there is nothing injected to check — the
+    // user is handed a search URL and adds it themselves. The URL check below is
+    // the whole test for those stores, and it is the one that matters: the URL is
+    // entirely ours to build.
+    expect(urls.length).toBeGreaterThan(0);
+    if (getNetworkRail(storeId)) expect(injected.length).toBeGreaterThan(0);
     // Raw AND percent-decoded: a term reaches a store URL-encoded, so
     // "finely%20diced" has to fail this too. Injected scripts are not URIs and
     // can carry a bare `%`, so the decode is best-effort there.

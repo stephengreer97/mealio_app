@@ -81,6 +81,7 @@ jest.mock('../../src/lib/automation-config', () => {
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { enableRail, SESSION_OK } from './helpers/railRun';
 
 const chosen = (name: string) => ({
   ingredientName: name, searchTerm: name, productQty: 1, qty: 1, unit: 'qty', measure: null,
@@ -107,9 +108,19 @@ async function runToGate(items: string[], candidatesFor: (t: string) => unknown[
     });
   });
   act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-  post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-  post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
-  for (const t of items) post({ type: 'SEARCH_RESULT', candidates: candidatesFor(t) });
+  // Over the rail. Twice: the session probe answers the login check, then the
+  // run's own session read after the baseline.
+  enableRail();
+  post(SESSION_OK);
+  post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+  post(SESSION_OK);
+  // One answer per term, then the batch closes and the pass reconciles — that is
+  // what puts the unmatched items on the gate.
+  for (const t of items) {
+    post({ type: 'SEARCH_RESULT', source: 'network', term: t, candidates: candidatesFor(t) });
+  }
+  post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: items.length });
+  post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
   return view;
 }
 

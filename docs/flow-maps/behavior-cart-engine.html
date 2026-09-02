@@ -157,37 +157,51 @@ flowchart TD
     <tr><td>URLs, domain, <code>appScheme</code></td><td>the ten-step machine and every transition</td></tr>
     <tr><td><code>checkLoginScript</code>, <code>isLoginPageUrl</code>, <code>isLoginSuccessUrl</code>, <code>reinjectLoginCheckOnNav</code></td><td>the login loop, and when to re-inject</td></tr>
     <tr><td><code>webview-scripts/network-rail.ts</code></td><td>which network protocol a store speaks, if any &mdash; H-E-B in GraphQL, the Albertsons family in REST. The engine asks for &ldquo;this store&rsquo;s rail&rdquo; and never names a store</td></tr>
-    <tr><td><code>extractProductsScript</code>, <code>buildSearchScript</code>, <code>buildSearchAndAddScript</code>, <code>buildAddToCartScript</code></td><td>which one to inject, when, and into which WebView</td></tr>
-    <tr><td><code>buildWorkerScript</code> / <code>buildPresearchWorkerScript</code> / <code>buildAddWorkerScript</code></td><td>the three pools, their queues and their timeouts</td></tr>
-    <tr><td><code>workerCount</code>, <code>workerStaggerMs</code>, <code>forceSerialSearch</code>, <code>cacheBustNav</code>, <code>spaSearch</code></td><td><code>chooseAddStrategy</code>, and the re-injection guard</td></tr>
+    <tr><td><code>getSearchUrl</code></td><td>the assisted route: which URL to hand the user, per ingredient</td></tr>
+    <tr><td><code>cacheBustNav</code></td><td>whether an assisted navigation carries a cache-buster</td></tr>
+    <tr><td><i>eleven fields that were here</i></td>
+        <td><code>extractProductsScript</code>, <code>buildSearchScript</code>,
+        <code>buildSearchAndAddScript</code>, <code>buildAddToCartScript</code>, the three worker
+        builders, <code>workerCount</code>, <code>workerStaggerMs</code>,
+        <code>forceSerialSearch</code> and <code>spaSearch</code> were all deleted on 2026-09-01.
+        Every one of them described how to click a storefront.</td></tr>
     <tr><td>—</td><td>the before/after snapshots, reconcile, audit, verdict, telemetry</td></tr>
   </table>
-  <p>A store that omits <code>getSearchUrl</code> + <code>buildWorkerScript</code> simply stays on
-  the sequential single-WebView path. Nothing else has to know.</p>
+  <p>A store that has no rail is ASSISTED: Mealio searches on the user's behalf and hands them
+  the page to add from. Nothing else has to know.</p>
 
-  <h2>The network route &mdash; a fifth strategy that loads no page at all (MEAL-202)</h2>
-  <p>Everything above is about <i>which WebView loads which page</i>. H-E-B has a
-  route where that question does not arise: it asks the store's own gateway
-  directly, from wherever the WebView already sits.</p>
+  <h2>The three routes</h2>
+  <p>There were five. Four of them clicked, and they are gone: the sequential page walk, the
+  parallel search pool, the fused search-and-add pool, and the pre-search parking pool. What is
+  left is honest about what it can do &mdash; a store either has a rail, in which case Mealio
+  adds and can prove it, or it does not, in which case Mealio searches and the USER adds.</p>
   <pre class="mermaid">
 flowchart LR
-    BSF["beginSearchFlow"] --> DEC{{"chooseAddStrategy"}}
-    DEC -->|"networkSearch + networkAdd<br/>+ cartSkuConfirm, and not a<br/>choose-only run"| NET
-    DEC -->|"otherwise"| POOL["presearch / parallelAdd /<br/>parallelSearch / serial<br/><i>every path above</i>"]
+    BSF["beginSearchFlow"] --> DEC{{"chooseAddStrategy<br/><i>two inputs, where it had six</i>"}}
+    DEC -->|"has a rail,<br/>and items to add"| NET["<b>network</b>"]
+    DEC -->|"has a rail,<br/>nothing chosen yet"| CHOOSE["<b>networkChoose</b><br/><i>search only</i>"]
+    DEC -->|"no rail"| ASSIST["<b>assisted</b><br/><i>the user adds</i>"]
 
-    NET["<b>network</b>"] --> S1["<b>1 · session</b><br/>myPreferredStore + SessionContext<br/><i>login gate, store id, pickup or delivery</i>"]
+    NET --> S1["<b>1 · session</b><br/><i>login gate, store id, pickup or delivery</i>"]
     S1 -->|"no user"| LOGIN(["login step"])
-    S1 --> S2["<b>2 · search</b><br/>every term, 3 at a time<br/><b>no navigation</b>"]
+    S1 --> S2["<b>2 · search</b><br/>every term, no navigation<br/><i>a nav mid-batch re-asks what died</i>"]
     S2 --> S3["<b>3 · add</b><br/>one write per matched item<br/>quantity = what the cart holds + asked"]
-    S3 --> FIN(["finishParallelAdd()<br/><i>the SAME completion the add pool calls</i>"])
+    S3 --> FIN(["finishParallelAdd()<br/><i>reconcile, verdict, done</i>"])
 
-    S1 -.->|"cannot answer"| POOL
+    CHOOSE --> C1["session, then search"]
+    C1 --> C2(["finishParallelSearch()<br/><i>the Choose Products screen</i>"])
+
+    ASSIST --> A1["one search URL per ingredient"]
+    A1 --> A2(["the user adds, taps Next"])
+
+    S1 -.->|"cannot answer"| ASSIST
     S2 -.->|"one term unanswered"| REV(["that item &rarr; review"])
-    S3 -.->|"no cart baseline"| POOL
+    S3 -.->|"no cart baseline"| ASSIST
 
     classDef net fill:#1e3a8a,stroke:#3b82f6,color:#fff
     classDef good fill:#14532d,stroke:#22c55e,color:#fff
-    class NET,S1,S2,S3 net
+    class NET,CHOOSE,S1,S2,S3,C1 net
+    class ASSIST,A1 good
     class FIN good
   </pre>
   <p><b>It funnels into <code>finishParallelAdd</code></b>, which is what the add pool

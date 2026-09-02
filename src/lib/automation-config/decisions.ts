@@ -47,19 +47,22 @@ import type { FlagConfig } from './schema';
 type Flags = Partial<FlagConfig>;
 
 /** Which route `beginSearchFlow` takes. */
-export type AddStrategy = 'network' | 'presearch' | 'parallelSearch' | 'parallelAdd' | 'serial';
+/**
+ * How a run adds to the cart. Three routes, and DOM clicking is not one of them.
+ *
+ *  • `network`       — ask the store's own API from a signed-in WebView.
+ *  • `networkChoose` — same rail, search only: the run needs candidates for the
+ *                      Choose Products screen, not adds.
+ *  • `assisted`      — Mealio searches on the user's behalf and hands them the
+ *                      page to add from. No automation at all.
+ *
+ * The Kroger family never reaches here: the server fans out per ingredient.
+ */
+export type AddStrategy = 'network' | 'networkChoose' | 'assisted';
 
 export interface AddStrategyInput {
-  /** The store has the scripts for a worker pool and does not force serial. */
-  canParallel: boolean;
   /** Every active item still needs a product chosen. */
   allChoose: boolean;
-  /** Pre-search workers are parked and their adds are ready to commit. */
-  presearchCommitArmed: boolean;
-  /** Build-time switches — what this binary contains. */
-  features: { presearchAdd: boolean; parallelAdd: boolean };
-  /** Remote config — what operations has turned on. */
-  flags: Pick<Flags, 'parallelAdd'>;
   /** The store can search AND add over the network, and both are switched on. */
   networkCapable?: boolean;
 }
@@ -75,99 +78,25 @@ export interface AddStrategyInput {
  * the other half, and it is read earlier, by `shouldStartPresearch`.
  */
 export function chooseAddStrategy(input: AddStrategyInput): AddStrategy {
-  const { canParallel, allChoose, presearchCommitArmed, features, flags } = input;
-  // The network route is checked FIRST and ignores every other condition,
-  // because none of them are about it. canParallel asks whether the store has a
-  // search URL and a worker script — both are about loading pages, and this
-  // route loads none. presearchCommitArmed is about parked pages that a network
-  // run never opened.
+  // DOM automation is gone (2026-09-01). It clicked through the storefront to
+  // search and add, and it was the source of most of what went wrong: stale
+  // selectors, races with the page's own navigation, adds that reported success
+  // and never landed. Every route that clicked has been deleted rather than
+  // fixed, and nothing falls back to one.
   //
-  // It does not apply to a choose-only run: those need no adds, so the pooled
-  // search already does the right thing and there is nothing to gain.
-  if (input.networkCapable && !allChoose) return 'network';
-  if (canParallel && !allChoose && features.presearchAdd && presearchCommitArmed) return 'presearch';
-  if (canParallel && allChoose) return 'parallelSearch';
-  if (canParallel && !allChoose && features.parallelAdd && !!flags.parallelAdd) return 'parallelAdd';
-  return 'serial';
+  // What is left is honest about what it can do. A store either has a rail, in
+  // which case Mealio adds to the cart itself and can prove it; or it does not,
+  // in which case Mealio does the searching and the user does the adding.
+  //
+  // A choose run stays on the rail too, for search only. It needs candidates,
+  // not adds, and letting it fall through to `assisted` would drop the Choose
+  // Products screen on exactly the stores best able to fill it.
+  if (input.networkCapable) return input.allChoose ? 'networkChoose' : 'network';
+  return 'assisted';
 }
 
-export interface PresearchStartInput {
-  features: { presearchAdd: boolean };
-  flags: Pick<Flags, 'presearchAdd'>;
-  /** The sheet's current step. Pre-search parks while the user is on `qty`. */
-  step: string;
-  /** This run has already armed the pool. */
-  alreadyStarted: boolean;
-  /** The parallel worker config resolved for the locked store. */
-  hasParallelCfg: boolean;
-  /** `loginPrewarm.getStatus(store)` — parking pages while logged out is wasted. */
-  loginStatus: string;
-  /** Consolidated items on the qty screen. */
-  itemCount: number;
-  /** How many of them already have a chosen product. */
-  chosenCount: number;
-}
+// shouldStartPresearch, commitJitterMs and parallelAddWorkerCount lived here.
+// All three sized, paced or armed the DOM worker pools, which were deleted on
+// 2026-09-01 along with every route that clicked a storefront. Nothing sizes a
+// pool any more: a run is a rail or it is the user.
 
-/**
- * Whether to park pre-search workers for this run.
- *
- * Every condition of the inline version, in order. The last one is the subtle
- * one: pre-search only runs when EVERY item is already chosen, because a run
- * with an unchosen item goes to the choose screen and the parked results pages
- * would be thrown away.
- *
- * Why a remote kill switch exists for it at all: pre-search holds N results
- * pages open across the qty screen and then fires N adds within ~1s of the tap.
- * That is a distinct request pattern from the fused search+add path, and this is
- * the only way to drop back to the latter without a release.
- */
-export function shouldStartPresearch(input: PresearchStartInput): boolean {
-  const { features, flags, step, alreadyStarted, hasParallelCfg, loginStatus, itemCount, chosenCount } = input;
-  if (!features.presearchAdd || !flags.presearchAdd) return false;
-  if (step !== 'qty' || alreadyStarted) return false;
-  if (!hasParallelCfg) return false;
-  if (loginStatus !== 'loggedIn') return false;
-  if (chosenCount === 0 || chosenCount !== itemCount) return false;
-  return true;
-}
-
-/**
- * How long to wait before injecting one parked worker's add.
- *
- * Spreads a commit burst against a store that has started scoring it. The value
- * is `base` to `2 × base` — never zero, so the burst is always spread, and never
- * constant, so it is not a pattern in itself.
- *
- * `random` is injected so a test can assert the range at the ends rather than
- * sampling and hoping. `flags.addCommitJitterMs` shipped in the config schema —
- * bounded 0..10_000, refused when malformed — but nothing read it, so the
- * documented way to spread a burst did nothing. That is the original MEAL-32
- * defect, and the reason this returns a number a test can check.
- */
-export function commitJitterMs(
-  flags: Pick<Flags, 'addCommitJitterMs'>,
-  fallbackMs: number,
-  random: () => number = Math.random,
-): number {
-  const base = flags.addCommitJitterMs ?? fallbackMs;
-  return base + Math.floor(random() * base);
-}
-
-/**
- * How many workers the parallel add pool runs.
- *
- * The store's own script wins, then the remote flag, then the bundled default.
- * The store comes first because a worker count is a property of that store's
- * page weight; the flag is the lever for turning the whole fleet down.
- *
- * This is the flag the fifth review caught with no behavioural guard at all —
- * its read could be replaced with an unused constant and every test still
- * passed. It has one now because the answer is a number a test can assert.
- */
-export function parallelAddWorkerCount(input: {
-  scriptWorkerCount?: number;
-  flags: Pick<Flags, 'parallelAddWorkers'>;
-  fallback: number;
-}): number {
-  return input.scriptWorkerCount ?? input.flags.parallelAddWorkers ?? input.fallback;
-}

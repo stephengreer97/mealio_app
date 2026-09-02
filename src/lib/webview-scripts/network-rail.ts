@@ -101,6 +101,26 @@ const ALBERTSONS_RAIL: NetworkRail = {
  * The rail for a store, or null when it has none and the page path is the only
  * way in. Null is the normal answer for most of the catalogue.
  */
+/**
+ * The automation-config key a store's rail settings live under.
+ *
+ * The Albertsons family is FIFTEEN banners sharing one platform, and its config
+ * — selectors, kill switch, and the networkSearch/networkAdd flags — is stored
+ * once under 'albertsons'. albertsons.ts has always resolved it that way
+ * (`storeConfig(SELECTOR_KEY)`); the cart engine did not, so it read
+ * `stores['safeway']`, found nothing, and decided Safeway had no rail. Every
+ * banner except the one literally named 'albertsons' fell through to the page
+ * path, and after the DOM removal would fall through to assisted.
+ *
+ * Exported so the answer lives in one place rather than being re-derived by
+ * whoever needs it next.
+ */
+export function railConfigKey(storeId: string | null | undefined): string {
+  if (!storeId) return '';
+  if ((ALBERTSONS_FAMILY_IDS as readonly string[]).includes(storeId)) return 'albertsons';
+  return storeId;
+}
+
 export function getNetworkRail(storeId: string | null | undefined): NetworkRail | null {
   if (!storeId) return null;
   if (storeId === 'heb') return HEB_RAIL;

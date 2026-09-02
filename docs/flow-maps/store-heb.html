@@ -35,39 +35,24 @@ flowchart TD
     LOGIN --> LOGINCHK
     ISLOGGED -->|yes| BEFORE
 
-    BEFORE["<b>before-snapshot</b><br/>navigate /cart, count<br/><code>CART_COUNT phase=before</code>"]
+    BEFORE["<b>before-snapshot</b><br/>rail.cartRead() — no page load<br/><code>CART_COUNT phase=before</code>"]
     BEFORE --> NOBASE{"baseline read?"}
     NOBASE -->|"no"| NOPROBE(["no after-probe later<br/><i>nothing can check the run</i>"])
     NOBASE -->|yes| ROUTE
 
     ROUTE{{"chooseAddStrategy"}}
-    ROUTE -->|"workers parked"| SP["<b>presearch</b><br/>commit parked adds ~1s"]
-    ROUTE -->|"all items need a product"| PS["<b>parallelSearch</b><br/>choose-run, adds nothing"]
-    ROUTE -->|"H-E-B's normal path"| PA["<b>parallelAdd</b><br/>pool of 4 WebViews"]
-    ROUTE -->|"fallback / retry"| SER["<b>serial</b><br/>one item at a time"]
+    ROUTE -->|"H-E-B's only path"| NETR["<b>network</b><br/>ask the store's own API"]
+    ROUTE -->|"all items need a product"| PS["<b>networkChoose</b><br/>same rail, search only"]
 
-    SP --> WORKER
-    PA --> WORKER
-    SER --> WORKER
+    NOTE{{"presearch, parallelAdd, parallelSearch and serial<br/>were the other four branches. All of them clicked<br/>through the storefront; all were deleted 2026-09-01.<br/>H-E-B has a rail, so it never falls back to one —<br/>a rail that cannot answer hands over to the USER."}}
 
-    subgraph PERITEM ["2 · Per item, inside a worker"]
-        WORKER["navigate<br/>heb.com/search?q=term"]
-        WORKER --> EXTRACT["extract cards<br/><code>[data-qe-id=productTitle]</code>"]
-        EXTRACT --> MATCH{"EXACT name match?"}
-        MATCH -->|no| TOREVIEW(["queue for review"])
-        MATCH -->|"yes, out of stock"| TOREVIEW
-        MATCH -->|yes| RAIL{{"network add eligible?<br/><i>see diagram 2</i>"}}
-        RAIL -->|yes| NETADD["ask the cart<br/><code>addItemToCartV2</code>"]
-        RAIL -->|no / declined| ADDBTN["click Add to cart"]
-        NETADD --> REPORTED
-        ADDBTN --> PREFS{"preference modal?<br/><i>deli slicing</i>"}
-        PREFS -->|yes| PICKPREF["pick preference"]
-        PREFS -->|no| QTYLOOP
-        PICKPREF --> QTYLOOP
-        QTYLOOP{"qty > 1?"}
-        QTYLOOP -->|yes| INC["click + until<br/>__qtyBase + QTY"]
-        QTYLOOP -->|no| REPORTED
-        INC --> REPORTED(["worker reports<br/>success / failure"])
+    subgraph PERITEM ["2 · Per item, over the rail"]
+        WORKER["search by request<br/><code>productSearchPageV2</code> — no page load"]
+        WORKER --> MATCH{"EXACT name match, in stock,<br/>with a productId and skuId?"}
+        MATCH -->|no| TOREVIEW(["queue for review<br/><i>low_confidence / no_results / out_of_stock<br/>are all DEFINITIVE — no retry can<br/>change what the same search returns</i>"])
+        MATCH -->|"sold by weight"| TOREVIEW
+        MATCH -->|yes| NETADD["write it<br/><code>addItemToCartV2</code><br/><i>quantity = held + asked, ABSOLUTE</i>"]
+        NETADD --> REPORTED(["verified from the write's OWN response,<br/>which returns the cart<br/><i>a success IS a confirmed landing</i>"])
     end
 
     REPORTED --> RECON

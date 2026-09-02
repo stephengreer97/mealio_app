@@ -77,6 +77,7 @@ jest.mock('../../src/lib/automation-config', () => {
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { enableRail, SESSION_OK } from './helpers/railRun';
 
 const chosen = (name: string) => ({
   ingredientName: name, searchTerm: name, productQty: 1, qty: 1, unit: 'qty', measure: null,
@@ -99,9 +100,15 @@ async function runToReview(candidates: unknown[]) {
     });
   });
   act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-  post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-  post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://heb.test/cart' });
-  post({ type: 'SEARCH_RESULT', candidates });
+  enableRail();
+  // Twice: the session probe answers the login check, then the run's own
+  // session read after the baseline.
+  post(SESSION_OK);
+  post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+  post(SESSION_OK);
+  post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates });
+  post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+  post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
   act(() => { fireEvent.press(view.getByText(/review 1 ingredient/i)); });
   return view;
 }

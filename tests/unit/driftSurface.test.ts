@@ -89,47 +89,11 @@ describe('store surface coverage', () => {
   });
 });
 
-describe('HEB JSON field surface', () => {
-  /**
-   * The `__NEXT_DATA__` section of heb.ts. Scoped to that block so an `item.` or
-   * `sku.` elsewhere in the file cannot be mistaken for a payload read.
-   */
-  function nextDataBlock(): string {
-    const src = fs.readFileSync(HEB_SRC, 'utf8');
-    const start = src.indexOf('const hebNextDataFn');
-    const end = src.indexOf('// ── Login check', start);
-    expect(start).toBeGreaterThan(0);
-    expect(end).toBeGreaterThan(start);
-    return src.slice(start, end);
-  }
-
-  it('censuses every item field the mapper reads', () => {
-    const block = nextDataBlock();
-    const read = new Set<string>();
-    for (const m of block.matchAll(/\b(?:it|item)\.([A-Za-z_][A-Za-z0-9_]*)/g)) read.add(m[1]);
-    // Exact equality both ways: a field added to the mapper must be censused, and a
-    // field the mapper stopped reading should stop being censused rather than
-    // sitting in the baseline as something nobody depends on.
-    expect([...read].sort()).toEqual([...ITEM_FIELDS].sort());
-  });
-
-  it('censuses every SKU field the mapper reads', () => {
-    const block = nextDataBlock();
-    const read = new Set<string>();
-    for (const m of block.matchAll(/\bsku\.([A-Za-z_][A-Za-z0-9_]*)/g)) read.add(m[1]);
-    expect([...read].sort()).toEqual([...SKU_FIELDS].sort());
-  });
-
-  it('keeps the term normalizer in step with __hebNorm', () => {
-    // next-data.ts transcribes __hebNorm because heb.ts's copy exists only as text
-    // inside an injectable script. If that text changes, the transcription is stale
-    // and the freshness gate here stops matching the one that ships.
-    const src = fs.readFileSync(HEB_SRC, 'utf8');
-    expect(src).toContain("replace(/[^a-z0-9 ]+/g, ' ')");
-    expect(src).toContain('toLowerCase()');
-    expect(src).toContain('[?&]q=([^&]*)');
-  });
-});
+// "HEB JSON field surface" lived here: a census that kept the __NEXT_DATA__
+// mapper inside buildExtractProductsScript in step with the fields it read, and
+// the term normalizer in step with __hebNorm. Both were part of the DOM
+// extractor, deleted 2026-09-01. H-E-B reads products from its own API now, and
+// heb-network-search.spec.ts covers that mapping against real payloads.
 
 describe('expectedTermFromUrl', () => {
   it('reads and normalizes the q parameter', () => {

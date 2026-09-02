@@ -35,192 +35,66 @@
 
 import {
   chooseAddStrategy,
-  commitJitterMs,
-  parallelAddWorkerCount,
-  shouldStartPresearch,
   type AddStrategy,
 } from '../../src/lib/automation-config/decisions';
 import { BUNDLED_AUTOMATION_CONFIG } from '../../src/lib/automation-config/schema';
 
-const BOTH_FEATURES = { presearchAdd: true, parallelAdd: true };
 
-/** Every input to `chooseAddStrategy` that is not a flag. */
+/** Every input to `chooseAddStrategy`. There are only two, and four combinations. */
 const strategyCases = () => {
-  const out: Array<Omit<Parameters<typeof chooseAddStrategy>[0], 'flags'>> = [];
-  for (const canParallel of [true, false]) {
-    for (const allChoose of [true, false]) {
-      for (const presearchCommitArmed of [true, false]) {
-        for (const presearchAdd of [true, false]) {
-          for (const parallelAdd of [true, false]) {
-            out.push({ canParallel, allChoose, presearchCommitArmed, features: { presearchAdd, parallelAdd } });
-          }
-        }
-      }
+  const out: Array<Parameters<typeof chooseAddStrategy>[0]> = [];
+  for (const allChoose of [true, false]) {
+    for (const networkCapable of [true, false]) {
+      out.push({ allChoose, networkCapable });
     }
   }
   return out;
 };
 
-const presearchBase = {
-  features: { presearchAdd: true },
-  step: 'qty',
-  alreadyStarted: false,
-  hasParallelCfg: true,
-  loginStatus: 'loggedIn',
-  itemCount: 3,
-  chosenCount: 3,
-};
 
 describe('chooseAddStrategy', () => {
-  it('never runs a pool on a store that cannot', () => {
-    // The one condition that outranks every flag: a store without worker
-    // scripts, or one that forces serial search, is serial whatever operations
-    // has published.
-    for (const c of strategyCases().filter((x) => !x.canParallel)) {
-      expect(chooseAddStrategy({ ...c, flags: { parallelAdd: true } })).toBe('serial');
+  // DOM automation was removed on 2026-09-01. There are three routes and none of
+  // them click a storefront: the rail adds and can prove it, the rail searches
+  // for a choose run, or Mealio searches and the USER adds.
+  it('a store with no rail gets no automation, whatever else is true', () => {
+    for (const allChoose of [true, false]) {
+      expect(chooseAddStrategy({ allChoose, networkCapable: false })).toBe('assisted');
     }
+    // Absent is not "maybe" — a store is capable or it is assisted.
+    expect(chooseAddStrategy({ allChoose: false })).toBe('assisted');
   });
 
-  it('commits parked pre-search workers ahead of anything else', () => {
-    expect(chooseAddStrategy({
-      canParallel: true, allChoose: false, presearchCommitArmed: true,
-      features: BOTH_FEATURES, flags: { parallelAdd: true },
-    })).toBe('presearch');
+  it('a rail store adds over the network', () => {
+    expect(chooseAddStrategy({ allChoose: false, networkCapable: true })).toBe('network');
   });
 
-  it('sends an all-unchosen run to the parallel SEARCH pool, which adds nothing', () => {
-    expect(chooseAddStrategy({
-      canParallel: true, allChoose: true, presearchCommitArmed: false,
-      features: BOTH_FEATURES, flags: { parallelAdd: true },
-    })).toBe('parallelSearch');
-  });
-
-  it('falls to serial when the remote kill switch is off', () => {
-    // The lever's whole purpose: stop adding concurrently without a release.
-    expect(chooseAddStrategy({
-      canParallel: true, allChoose: false, presearchCommitArmed: false,
-      features: BOTH_FEATURES, flags: { parallelAdd: false },
-    })).toBe('serial');
-  });
-
-  it('treats an absent flag as off rather than assuming a default', () => {
-    // A merge that refused a malformed value leaves the key absent. Guessing
-    // "on" there would turn a rejected push into an enabled feature.
-    expect(chooseAddStrategy({
-      canParallel: true, allChoose: false, presearchCommitArmed: false,
-      features: BOTH_FEATURES, flags: {},
-    })).toBe('serial');
-  });
-
-  it('is not overridden by the flag when the build lacks the feature', () => {
-    // Flags cannot turn on code the binary does not contain — the same rule the
-    // store catalog keeps for capability.
-    expect(chooseAddStrategy({
-      canParallel: true, allChoose: false, presearchCommitArmed: false,
-      features: { presearchAdd: true, parallelAdd: false }, flags: { parallelAdd: true },
-    })).toBe('serial');
-    expect(chooseAddStrategy({
-      canParallel: true, allChoose: false, presearchCommitArmed: true,
-      features: { presearchAdd: false, parallelAdd: true }, flags: { parallelAdd: true },
-    })).toBe('parallelAdd');
+  it('a choose run STAYS on the rail, for search only', () => {
+    // It needs candidates, not adds. Falling through to `assisted` here would
+    // drop the Choose Products screen on the two stores best able to fill it —
+    // which is what happened when the pooled search that used to serve it was
+    // deleted along with the rest of the DOM path.
+    expect(chooseAddStrategy({ allChoose: true, networkCapable: true })).toBe('networkChoose');
   });
 
   it('only ever answers with a route the caller handles', () => {
-    const allowed: AddStrategy[] = ['presearch', 'parallelSearch', 'parallelAdd', 'serial'];
+    const allowed: AddStrategy[] = ['network', 'networkChoose', 'assisted'];
     for (const c of strategyCases()) {
-      for (const flags of [{ parallelAdd: true }, { parallelAdd: false }, {}]) {
-        expect(allowed).toContain(chooseAddStrategy({ ...c, flags }));
-      }
+      expect(allowed).toContain(chooseAddStrategy(c));
+    }
+  });
+
+  it('names no route that clicks a page', () => {
+    // The point of the change. If one of these ever comes back as a strategy,
+    // something has rebuilt the path this removed.
+    const gone = ['presearch', 'parallelSearch', 'parallelAdd', 'serial'];
+    for (const c of strategyCases()) {
+      expect(gone).not.toContain(chooseAddStrategy(c));
     }
   });
 });
 
-describe('shouldStartPresearch', () => {
-  it('parks when every condition holds', () => {
-    expect(shouldStartPresearch({ ...presearchBase, flags: { presearchAdd: true } })).toBe(true);
-  });
 
-  it('is off when the remote flag is off, or absent', () => {
-    expect(shouldStartPresearch({ ...presearchBase, flags: { presearchAdd: false } })).toBe(false);
-    expect(shouldStartPresearch({ ...presearchBase, flags: {} })).toBe(false);
-  });
 
-  it('is off when the build lacks the feature', () => {
-    expect(shouldStartPresearch({
-      ...presearchBase, features: { presearchAdd: false }, flags: { presearchAdd: true },
-    })).toBe(false);
-  });
-
-  it('arms once per run', () => {
-    // The count that used to fail OPEN: a second live arming site passed every
-    // test. Asked as a question, "already started" is just an input.
-    expect(shouldStartPresearch({ ...presearchBase, alreadyStarted: true, flags: { presearchAdd: true } })).toBe(false);
-  });
-
-  it('only parks from the qty screen', () => {
-    for (const step of ['login', 'searching', 'adding', 'review', 'done']) {
-      expect(shouldStartPresearch({ ...presearchBase, step, flags: { presearchAdd: true } })).toBe(false);
-    }
-  });
-
-  it('will not park pages for a shopper who is not logged in', () => {
-    for (const loginStatus of ['loggedOut', 'unknown', '']) {
-      expect(shouldStartPresearch({ ...presearchBase, loginStatus, flags: { presearchAdd: true } })).toBe(false);
-    }
-  });
-
-  it('refuses a run where anything still needs choosing', () => {
-    // A partly-chosen run goes to the choose screen, and the parked results
-    // pages would be thrown away.
-    expect(shouldStartPresearch({
-      ...presearchBase, itemCount: 3, chosenCount: 2, flags: { presearchAdd: true },
-    })).toBe(false);
-    expect(shouldStartPresearch({
-      ...presearchBase, itemCount: 3, chosenCount: 0, flags: { presearchAdd: true },
-    })).toBe(false);
-  });
-});
-
-describe('commitJitterMs', () => {
-  it('spreads the burst across base..2×base', () => {
-    expect(commitJitterMs({ addCommitJitterMs: 500 }, 999, () => 0)).toBe(500);
-    expect(commitJitterMs({ addCommitJitterMs: 500 }, 999, () => 0.999999)).toBe(999);
-  });
-
-  it('uses the remote value, not the build constant', () => {
-    // The original MEAL-32 defect: the flag shipped, was validated, was logged
-    // as applied, and nothing read it.
-    expect(commitJitterMs({ addCommitJitterMs: 2000 }, 500, () => 0)).toBe(2000);
-  });
-
-  it('falls back to the build constant when the flag is absent', () => {
-    expect(commitJitterMs({}, 500, () => 0)).toBe(500);
-  });
-
-  it('is not constant across calls', () => {
-    // A fixed delay is a pattern in itself, which is the opposite of the point.
-    const seen = new Set(Array.from({ length: 40 }, () => commitJitterMs({ addCommitJitterMs: 500 }, 500)));
-    expect(seen.size).toBeGreaterThan(1);
-    for (const v of seen) {
-      expect(v).toBeGreaterThanOrEqual(500);
-      expect(v).toBeLessThan(1000);
-    }
-  });
-});
-
-describe('parallelAddWorkerCount', () => {
-  it("prefers the store's own count", () => {
-    expect(parallelAddWorkerCount({ scriptWorkerCount: 6, flags: { parallelAddWorkers: 3 }, fallback: 2 })).toBe(6);
-  });
-
-  it('uses the remote flag when the store has no opinion', () => {
-    expect(parallelAddWorkerCount({ flags: { parallelAddWorkers: 5 }, fallback: 2 })).toBe(5);
-  });
-
-  it('falls back to the bundled default', () => {
-    expect(parallelAddWorkerCount({ flags: {}, fallback: 2 })).toBe(2);
-  });
-});
 
 describe('every declared flag reaches a decision', () => {
   // The invariant that stops the original defect reopening, and the reason this
@@ -258,15 +132,7 @@ describe('every declared flag reaches a decision', () => {
 
   /** Everything the decisions answer, for one set of flags. */
   const observe = (flags: Record<string, unknown>) => JSON.stringify({
-    strategy: strategyCases().map((c) => chooseAddStrategy({ ...c, flags })),
-    presearch: [true, false].flatMap((presearchAdd) =>
-      ['qty', 'login'].flatMap((step) =>
-        [true, false].map((alreadyStarted) =>
-          shouldStartPresearch({ ...presearchBase, features: { presearchAdd }, step, alreadyStarted, flags })))),
-    jitterLow: commitJitterMs(flags, 500, () => 0),
-    jitterHigh: commitJitterMs(flags, 500, () => 0.9),
-    workers: parallelAddWorkerCount({ flags, fallback: 3 }),
-    workersWithScript: parallelAddWorkerCount({ scriptWorkerCount: 9, flags, fallback: 3 }),
+    strategy: strategyCases().map((c) => chooseAddStrategy(c)),
   });
 
   /** A value for this flag that differs from the bundled one. */
@@ -274,12 +140,25 @@ describe('every declared flag reaches a decision', () => {
 
   const bundled = BUNDLED_AUTOMATION_CONFIG.flags as unknown as Record<string, unknown>;
 
-  it.each(Object.keys(bundled).filter((k) => !DELIBERATELY_UNREAD[k]))(
-    'changing %s changes what the cart decides',
-    (key) => {
-      expect(observe(bundled)).not.toBe(observe({ ...bundled, [key]: altered(bundled[key]) }));
-    },
-  );
+  const liveFlags = Object.keys(bundled).filter((k) => !DELIBERATELY_UNREAD[k]);
+
+  if (liveFlags.length === 0) {
+    // There are none left: all four were levers over the DOM worker pools and
+    // went with them. The machinery above stays armed rather than being deleted,
+    // because the invariant is about the NEXT flag — `observe` deliberately
+    // ignores its argument now, so a flag added without a reader produces
+    // identical output and fails here the day it appears.
+    it('has no flags left to check, which is the current truth and not a gap', () => {
+      expect(bundled).toEqual({});
+    });
+  } else {
+    it.each(liveFlags)(
+      'changing %s changes what the cart decides',
+      (key) => {
+        expect(observe(bundled)).not.toBe(observe({ ...bundled, [key]: altered(bundled[key]) }));
+      },
+    );
+  }
 
   it('keeps the deliberately-unread list honest', () => {
     // A stale exemption is the other way this rots: a row left here after
@@ -289,50 +168,5 @@ describe('every declared flag reaches a decision', () => {
       expect(Object.keys(bundled)).toContain(key);
       expect(observe(bundled)).toBe(observe({ ...bundled, [key]: altered(bundled[key]) }));
     }
-  });
-});
-
-// ── MEAL-202: the network route ───────────────────────────────────────────────
-//
-// It is checked before everything else and ignores every other condition,
-// because none of them are about it. `canParallel` asks whether the store has a
-// search URL and a worker script — both are about loading pages, and this route
-// loads none.
-describe('chooseAddStrategy: the network route', () => {
-  const base = {
-    canParallel: false,
-    allChoose: false,
-    presearchCommitArmed: false,
-    features: { presearchAdd: true, parallelAdd: true },
-    flags: { parallelAdd: true },
-  };
-
-  it('wins over every pooled route when the store can do it', () => {
-    expect(chooseAddStrategy({ ...base, networkCapable: true })).toBe('network');
-    // Even with the pre-search pool armed, which otherwise takes precedence.
-    expect(chooseAddStrategy({
-      ...base, networkCapable: true, canParallel: true, presearchCommitArmed: true,
-    })).toBe('network');
-  });
-
-  it('does not need canParallel, which is about loading pages', () => {
-    // A store with no search URL cannot run the pool at all and would fall to
-    // serial. It can still run the network route: there is no page to load.
-    expect(chooseAddStrategy({ ...base, canParallel: false, networkCapable: true })).toBe('network');
-  });
-
-  it('stays out of a choose-only run', () => {
-    // Nothing is added on a choose run, so there is nothing for the network add
-    // to do and the pooled search already does the right thing.
-    expect(chooseAddStrategy({ ...base, networkCapable: true, allChoose: true, canParallel: true }))
-      .toBe('parallelSearch');
-  });
-
-  it('changes nothing when it is off', () => {
-    // The shipping default. Every existing route must resolve exactly as before.
-    expect(chooseAddStrategy({ ...base, canParallel: true })).toBe('parallelAdd');
-    expect(chooseAddStrategy({ ...base, canParallel: true, presearchCommitArmed: true })).toBe('presearch');
-    expect(chooseAddStrategy({ ...base, canParallel: true, allChoose: true })).toBe('parallelSearch');
-    expect(chooseAddStrategy({ ...base })).toBe('serial');
   });
 });

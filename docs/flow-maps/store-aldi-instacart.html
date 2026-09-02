@@ -7,6 +7,17 @@
   <span class="crumb">Stores &rsaquo; <b>ALDI</b> &middot; Instacart Storefront platform</span></div>
 <header>
   <h1>ALDI &mdash; and the Instacart Storefront platform</h1>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<h3>ALDI is ASSISTED (2026-09-01)</h3>
+<p>DOM automation was removed from Mealio. ALDI had no API or in-page rail behind it, so it no
+longer adds to the cart on the user's behalf: <b>Mealio searches each ingredient and hands the
+user the results page; they add what they want and tap Next.</b></p>
+<p>Everything below about extractors, add clicks, worker pools and selector drift is
+<b>HISTORY</b>. It is kept because it is the evidence for MEAL-211, which asks whether this store can
+have a real in-page rail like H-E-B and the Albertsons family &mdash; and because the login check
+and the search URL, which the assisted route still uses, are described here too.</p>
+</div>
+
   <div class="sub">Read off <code>webview-scripts/instacart.ts</code>,
   <code>automation-config/schema.ts</code> (<code>platforms.instacart</code>) and
   <code>webview-scripts/index.ts</code>. One adapter, parameterized by tenant. One tenant has

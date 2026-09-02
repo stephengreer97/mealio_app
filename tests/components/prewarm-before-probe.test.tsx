@@ -112,6 +112,7 @@ jest.mock('../../src/lib/automation-config', () => {
 
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { enableRail, SESSION_OK } from './helpers/railRun';
 
 const chosen = (name: string) => ({
   ingredientName: name, searchTerm: name, productQty: 1, qty: 1, unit: 'qty', measure: null,
@@ -160,7 +161,8 @@ async function runWithPrewarm(
 
   act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
   act(() => { jest.advanceTimersByTime(2_000); });
-  postTo(0, { type: 'LOGIN_STATUS', isLoggedIn: true });
+  enableRail();
+  postTo(0, SESSION_OK);
   if (beforeAnswer) {
     postTo(0, beforeAnswer);
     act(() => { jest.advanceTimersByTime(2_000); });
@@ -173,8 +175,24 @@ async function runWithPrewarm(
     act(() => { jest.advanceTimersByTime(11_000); });
   }
 
-  postTo(1, {
-    type: 'WORKER_RESULT', phase: 'add', success: true, productName: 'Sour Cream',
+  // The run's own session read, then the search and the write — all on the one
+  // WebView, because a rail run has no workers.
+  postTo(0, SESSION_OK);
+  postTo(0, {
+    type: 'SEARCH_RESULT', source: 'network', term: 'Sour Cream',
+    candidates: [{
+      productName: 'Sour Cream', imageUrl: null, outOfStock: false, preferences: null,
+      price: '$2', productId: 'p1', skuId: 's1',
+    }],
+  });
+  postTo(0, { type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+  postTo(0, {
+    type: 'NET_ADD_RESULT', idx: 0, name: 'Sour Cream', success: true,
+    productId: 'p1', skuId: 's1', reason: null,
+  });
+  postTo(0, {
+    type: 'NET_ADD_DONE', wrote: 1, count: 1,
+    cartBefore: [], cartAfter: [{ name: 'Sour Cream', qty: 1 }],
   });
   act(() => { jest.advanceTimersByTime(5_000); });
   // The after/reconcile probe. Answering it with rows is what lets the cart

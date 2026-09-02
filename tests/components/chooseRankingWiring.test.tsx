@@ -55,25 +55,11 @@ jest.mock('react-native-safe-area-context', () => {
   };
 });
 
-// The parallel worker pool, replaced so the test can drive the completion
-// callback directly. `start(items, onAllDone)` is where WebViewCartSheet hands
-// over `finishParallelSearch`; capturing it lets a test call that function with
-// a real result map instead of choreographing four worker WebViews.
-let capturedOnAllDone: ((resultsByIdx: Map<number, any>) => void) | null = null;
+// The pool mock lived here. It captured the pool's `onAllDone` so a test could
+// call finishParallelSearch with a real result map instead of choreographing
+// four worker WebViews. There is no pool; the rail's search batch feeds that same
+// function, and the run below drives it end to end.
 
-jest.mock('../../src/lib/useParallelSearchPool', () => ({
-  __esModule: true,
-  useParallelSearchPool: () => ({
-    workerUris: ['', '', '', ''],
-    workerItems: [],
-    isActive: false,
-    completed: 0,
-    total: 0,
-    start: (_items: any[], onAllDone: (r: Map<number, any>) => void) => { capturedOnAllDone = onAllDone; },
-    reportResult: jest.fn(),
-    reset: jest.fn(),
-  }),
-}));
 
 jest.mock('../../src/lib/api', () => ({
   kroger: { searchProducts: jest.fn(() => new Promise(() => {})) },
@@ -86,6 +72,7 @@ jest.mock('../../src/lib/api', () => ({
 }));
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import { enableRail, SESSION_OK } from './helpers/railRun';
 
 // No searchTerm → "unchosen", which is what puts the sheet in the CHOOSE flow.
 const unchosenMeal = {
@@ -120,13 +107,26 @@ describe('MEAL-28 — the choose screen shows the ranked order', () => {
       <WebViewCartSheet
         visible
         meals={[unchosenMeal]}
-        storeId="aldi"
-        storeName="ALDI"
+        storeId="heb"
+        storeName="H-E-B"
         onClose={() => {}}
       />,
     );
-    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-    post({ type: 'SEARCH_RESULT', candidates: storeOrder.map(candidate) });
+    // A RAIL store, where it used to be ALDI. The Choose Products screen is fed
+    // by a search, and after DOM automation was removed a store without a rail
+    // has no search of its own to feed it — an assisted run hands the user the
+    // store's search page and they pick there. So the screen still exists, on
+    // the stores that can fill it. What is under test is the RANKING, which is
+    // the same function whichever store asked.
+    enableRail();
+    post(SESSION_OK);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION_OK);
+    post({
+      type: 'SEARCH_RESULT', source: 'network', term: 'sour cream',
+      candidates: storeOrder.map(candidate),
+    });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
 
     // queryAllByText returns matches in tree order, which is render order. The
     // broad regex is narrowed to the known names so an incidental match (the
@@ -162,96 +162,8 @@ describe('MEAL-28 — the choose screen shows the ranked order', () => {
 // finishParallelSearch instead, and walmart and albertsons are where most of
 // the measured win comes from. Shipping the ranking on one path and measuring
 // it on the other is exactly the gap this covers.
-describe('MEAL-28 — the parallel choose path ranks too', () => {
-  const renderParallelChooseScreen = (storeOrder: string[]) => {
-    const utils = render(
-      <WebViewCartSheet
-        visible
-        meals={[unchosenMeal]}
-        storeId="walmart"
-        storeName="Walmart"
-        onClose={() => {}}
-      />,
-    );
-    // walmart has getSearchUrl + buildWorkerScript and is not forceSerialSearch,
-    // so beginSearchFlow routes an all-choose run to startParallelSearch, which
-    // hands finishParallelSearch to the pool. It has a cart URL, so the
-    // before-snapshot is gated in front of the search and CART_COUNT is what
-    // releases it.
-    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://www.walmart.com/cart' });
-    expect(capturedOnAllDone).toBeTruthy();
-    act(() => {
-      capturedOnAllDone!(new Map([[0, storeOrder.map(candidate)]]));
-    });
-
-    const known = new Set(storeOrder);
-    return utils
-      .queryAllByText(/Sour Cream/)
-      .map((node) => String(node.props.children))
-      .filter((text) => known.has(text));
-  };
-
-  beforeEach(() => { capturedOnAllDone = null; });
-
-  it('reaches the choose screen with all three candidates', () => {
-    expect(renderParallelChooseScreen([DIP, CHIPS, REAL])).toHaveLength(3);
-  });
-
-  it('puts the best match first', () => {
-    expect(renderParallelChooseScreen([DIP, CHIPS, REAL])[0]).toBe(REAL);
-    expect(renderParallelChooseScreen([CHIPS, REAL, DIP])[0]).toBe(REAL);
-  });
-
-  it('scores each item against its OWN name, not the first item\'s', () => {
-    // The one hazard this path has and the sequential path does not: the pool
-    // returns a Map keyed by item index, so a term read from the wrong index
-    // ranks item 1's candidates against item 0's ingredient. Every other test
-    // here uses a one-ingredient meal, where index 0 and index N are the same
-    // thing and the mistake is invisible — cold review mutated the term to
-    // `active[0].ingredientName` and all 1154 tests passed.
-    //
-    // Two ingredients whose right answers are each other's worst answers, so
-    // crossing them is unambiguous rather than a near-miss.
-    const CHEESE = 'Kraft Shredded Cheddar Cheese, 8 oz';
-    const CHEESE_DIP = 'Tostitos Salsa Con Queso Cheese Dip, 15 oz';
-    const twoItems = {
-      id: 'm1', name: 'Tacos',
-      ingredients: [
-        { ingredientName: 'sour cream', productQty: 1, qty: 1, unit: 'qty', measure: null },
-        { ingredientName: 'cheddar cheese', productQty: 1, qty: 1, unit: 'qty', measure: null },
-      ],
-    } as any;
-
-    const utils = render(
-      <WebViewCartSheet
-        visible
-        meals={[twoItems]}
-        storeId="walmart"
-        storeName="Walmart"
-        onClose={() => {}}
-      />,
-    );
-    post({ type: 'LOGIN_STATUS', isLoggedIn: true });
-    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://www.walmart.com/cart' });
-    expect(capturedOnAllDone).toBeTruthy();
-    act(() => {
-      capturedOnAllDone!(new Map([
-        [0, [DIP, REAL].map(candidate)],
-        [1, [CHEESE_DIP, CHEESE].map(candidate)],
-      ]));
-    });
-
-    // The choose screen is a queue — `searchResults[reviewIdx]` — so item 1 is not
-    // rendered until item 0 is resolved. Skip advances the index without a PATCH.
-    act(() => { fireEvent.press(utils.getAllByText('Skip this ingredient')[0]); });
-
-    // Item 1's list must be ranked against 'cheddar cheese'. Scored against
-    // 'sour cream' instead, the dip wins on the shared word and leads.
-    const cheeseRows = utils
-      .queryAllByText(/Cheese/)
-      .map((node) => String(node.props.children))
-      .filter((t) => t === CHEESE || t === CHEESE_DIP);
-    expect(cheeseRows[0]).toBe(CHEESE);
-  });
-});
+// "MEAL-28 — the parallel choose path ranks too" lived here. It existed because
+// there were TWO ways to reach the Choose screen — the sequential page walk and
+// the parallel search pool — and only one of them ranked. Both are gone. The
+// rail's search is the only path there is now, and the describe above is that
+// path, so this one was asserting the same function twice.

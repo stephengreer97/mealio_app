@@ -216,10 +216,14 @@ const RECONCILE_CASES: ReconcileCase[] = [
     // never reached the count pool. This one denies it a row.
     name: 'a weight-priced item with NO weight row to claim cannot fall back onto count units — the count sibling that owns them stays confirmed',
     attempts: [
-      // No remembered poundage, so the worker bailed to the weight picker and
-      // added nothing (heb.ts posts needs_weight, which is not a definitive
-      // failure). Its identity falls back to the search term.
-      attempt('beef brisket', 2, { success: false, reason: 'needs_weight' }, true),
+      // An unconfirmed weight-priced item. It used to be driven by needs_weight,
+      // which became a DEFINITE failure when DOM automation was removed: on the
+      // rail there is no retry that could go differently, so a weight item the
+      // user has to size goes straight to them. That takes it out of the pools
+      // entirely, which is not what this case is about — so it is a timeout
+      // instead, which is still an item that added nothing and was never
+      // confirmed. Its identity falls back to the search term.
+      attempt('beef brisket', 2, { success: false, reason: 'timeout' }, true),
       // An ordinary packaged brisket that DID land: the worker missed the confirm
       // signal (the false-negative case above) so it too is identified by its
       // search term, and its row is a loose match for both items.
