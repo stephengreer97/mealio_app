@@ -4645,7 +4645,20 @@ export default function WebViewCartSheet({
             // Next run skips the search for this row entirely.
             const done = activeItemsRef.current[at];
             const matched = netMatchedRef.current.get(at);
-            if (done && matched?.productId && !netStoredProduct(done)) {
+            // ALSO REPAIRS an entry this store cannot use.
+            //
+            // Firing only when NOTHING was stored left the rows that most needed
+            // fixing permanently broken: eleven H-E-B rows had been backfilled
+            // with an id and no sku (the normaliser was dropping it), so they
+            // carried a stored product, skipped the backfill for ever, and were
+            // searched on every run. A saved id this store cannot write is worth
+            // no more than none at all, and this run has just proved a better
+            // one.
+            const storedNow = netStoredProduct(done ?? {});
+            const railNow = netRail();
+            const storedUsable = !!storedNow && !!railNow
+              && railNow.writable({ productId: storedNow.upc, skuId: storedNow.sku ?? null });
+            if (done && matched?.productId && !storedUsable) {
               onIngredientIdentified?.(
                 done.ingredientName,
                 done.mealIds ?? [],

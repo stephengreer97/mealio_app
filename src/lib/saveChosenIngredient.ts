@@ -14,7 +14,7 @@
 //     serialize (each reads the result of the prior one) while different meals
 //     still save in parallel.
 
-import { withStoreProduct, withoutStoreProducts } from './storeProducts';
+import { storeProductKey, withStoreProduct, withoutStoreProducts } from './storeProducts';
 
 export interface ChosenProductUpdate {
   /** Qty to persist for this meal, if the choose UI supplied one. */
@@ -135,10 +135,28 @@ export function mergeStoreProductOnly(
   product: { upc: string; name: string; sku?: string },
 ): any[] {
   if (!product?.upc) return ingredients;
-  return ingredients.map((ing) => {
+  let changed = false;
+  const next = ingredients.map((ing) => {
     const name = ingName(ing);
     const term = ing.searchTerm ?? ing.search_term ?? name;
     if (name !== ingredientName && term !== ingredientName) return ing;
-    return withStoreProduct(ing, storeId, product);
+    const updated = withStoreProduct(ing, storeId, product);
+    // IDENTITY WHEN NOTHING MOVED, so the caller can skip the PATCH. map()
+    // always builds a new array, so comparing the array told it nothing and it
+    // would have written on every run to say the same thing.
+    //
+    // Field by field, not JSON.stringify: a stored entry keeps whatever key
+    // order the server sent, so stringifying compares the spelling of the object
+    // rather than its contents and never matches.
+    const key = storeProductKey(storeId);
+    const was = (ing.storeProducts ?? {})[key];
+    const now = (updated.storeProducts ?? {})[key];
+    if (was && now && was.upc === now.upc && was.name === now.name
+        && (was.sku ?? null) === (now.sku ?? null)) {
+      return ing;
+    }
+    changed = true;
+    return updated;
   });
+  return changed ? next : ingredients;
 }

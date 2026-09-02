@@ -249,3 +249,25 @@ describe('backfilling the id for a product already chosen', () => {
     expect('storeProducts' in rows[1]).toBe(false);
   });
 });
+
+describe('the backfill does not write to say nothing', () => {
+  const { mergeStoreProductOnly } = require('../../src/lib/saveChosenIngredient');
+  const sp = { upc: '319108', sku: '4090', name: 'Fresh Spinach' };
+
+  it('returns the SAME array when the row already has exactly this', () => {
+    // map() always builds a new array, so comparing arrays told the caller
+    // nothing and it PATCHed every run to say the same thing.
+    const rows = [{ ingredientName: 'Spinach', storeProducts: { heb: { ...sp } } }];
+    expect(mergeStoreProductOnly(rows, 'Spinach', 'heb', sp)).toBe(rows);
+  });
+
+  it('DOES write when the stored entry is missing the sku', () => {
+    // The repair case: eleven H-E-B rows carried an id and no sku, so they were
+    // unusable and — because something was stored — the backfill skipped them
+    // for ever.
+    const rows = [{ ingredientName: 'Spinach', storeProducts: { heb: { upc: '319108', name: 'Fresh Spinach' } } }];
+    const out = mergeStoreProductOnly(rows, 'Spinach', 'heb', sp);
+    expect(out).not.toBe(rows);
+    expect(out[0].storeProducts.heb.sku).toBe('4090');
+  });
+});
