@@ -104,6 +104,16 @@ export interface NetworkRail {
     searchResumeMs: number;
     /** One write batch, given the number of items in it. */
     addMs(items: number): number;
+    /**
+     * The before/after cart read.
+     *
+     * Shared at ten seconds, this was the last engine-wide budget and it was
+     * Albertsons' undoing: the read itself measured 6.6s, the probe expired
+     * first, the answer arrived eight seconds later and was discarded -- and the
+     * done screen then diffed a 176-line cart against nothing and warned about
+     * 170 items "Mealio did not intend to add".
+     */
+    cartProbeMs: number;
   };
 }
 
@@ -129,6 +139,8 @@ const HEB_RAIL: NetworkRail = {
     searchMs: (terms) => Math.min(20_000 + terms * 2_000, 90_000),
     searchResumeMs: 20_000,
     addMs: (items) => Math.min(30_000 + items * 3_000, 120_000),
+    // Measured at well under a second on this store.
+    cartProbeMs: 12_000,
   },
 };
 
@@ -156,6 +168,10 @@ const ALBERTSONS_RAIL: NetworkRail = {
     // Writes are serial here -- the store loses concurrent ones -- so this
     // scales with the batch rather than sitting flat.
     addMs: (items) => Math.min(45_000 + items * 4_000, 180_000),
+    // The read has been measured at 6.6s on a cold document and 0.5s on a warm
+    // one. Ten seconds expired between the two, which is the worst place for a
+    // deadline to sit.
+    cartProbeMs: 30_000,
   },
 };
 

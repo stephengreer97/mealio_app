@@ -683,6 +683,9 @@ export default function WebViewCartSheet({
   // that never loads/counts can't wedge the run.
   const cartProbeBeginSearchRef = useRef<boolean>(false);
   const cartProbeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The store's own cart-read ceiling where it has a rail, else the shared one. */
+  const cartProbeTimeoutMs = () =>
+    getNetworkRail(lockedStoreIdRef.current)?.budgets.cartProbeMs ?? cfgTimeouts.cartProbeMs;
   const CART_PROBE_TIMEOUT_MS = cfgTimeouts.cartProbeMs;
   // Safety net for the after/reconcile probe: if CART_COUNT never posts (a cart
   // page that loops or never hydrates), retry once then finalize so reconcile
@@ -915,6 +918,29 @@ export default function WebViewCartSheet({
    * and capturing it once costs nothing.
    */
   const netRunBaselineRef = useRef<CartItem[] | null>(null);
+  /**
+   * WHAT THE CART HELD BEFORE THIS RUN, or null when nobody managed to read it.
+   *
+   * Null is a real answer and the important one. An empty array is not the same
+   * thing: it says the cart WAS empty, and every consumer downstream then treats
+   * the user's existing groceries as items this run added.
+   *
+   * Stephen, 2026-09-02: "it is showing a warning that 170 items are in the cart
+   * that mealio did not intend to add. That is wrong. Those were already in the
+   * cart before the run." The before-probe had timed out at ten seconds; the
+   * read arrived eight seconds later and was discarded; the after-probe then
+   * diffed a 176-line cart against [] and called all of it new.
+   *
+   * Two sources, in order of directness:
+   *   the before-probe, when it answered
+   *   the write batch's own cartBefore -- the rail reads the cart immediately
+   *   before writing, so it is a true baseline that costs nothing extra
+   */
+  const runBaselineItems = useCallback((): CartItem[] | null => {
+    if (cartItemsBeforeRef.current.length > 0) return cartItemsBeforeRef.current;
+    if (cartCountBeforeRef.current === 0) return [];   // genuinely empty, and read
+    return netRunBaselineRef.current;
+  }, []);
   // A choose run uses the rail to SEARCH and stops there — it wants candidates
   // for the Choose Products screen, not adds. Before DOM automation was removed
   // that job belonged to the parallel search pool.
@@ -3069,7 +3095,7 @@ export default function WebViewCartSheet({
         cartProbeBeginSearchRef.current = false;
         cartCountPendingRef.current = null;
         beginSearchFlow();
-      }, CART_PROBE_TIMEOUT_MS);
+      }, cartProbeTimeoutMs());
       console.log(`[Cart ${ts()}]`, 'snapshotBefore: reading the cart over the network, no page load');
       webviewRef.current?.injectJavaScript(railForBefore.cartRead());
       return;
@@ -4117,10 +4143,23 @@ export default function WebViewCartSheet({
             // Per-line breakdown for the done screen (cart-page stores only):
             // added qty in green, pre-existing qty in grey.
             let rows: CartRow[] | null = null;
-            if (Array.isArray(msg.items)) {
+            const baseline = runBaselineItems();
+            if (Array.isArray(msg.items) && baseline) {
               if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
-              rows = diffCartItems(cartItemsBeforeRef.current, msg.items);
+              rows = diffCartItems(baseline, msg.items);
               setCartResultRows(rows);
+            } else if (Array.isArray(msg.items)) {
+              // NO BASELINE, SO NO BREAKDOWN AND NO OVER-ADD WARNING.
+              //
+              // Everything below reads `rows` to decide what this run added and
+              // what nobody asked for. Diffed against a cart we never read, the
+              // first answer is "all of it" and the second is "all of it" —
+              // which is how a user with 176 lines was told Mealio had added 170
+              // items it did not intend to. Saying nothing is the honest answer;
+              // the run's own account of what it wrote still stands.
+              if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
+              console.log(`[Cart ${ts()}]`, 'after-probe: no before-snapshot — no cart breakdown, no over-add check');
+              setCartResultRows(null);
             }
             const findings = auditCartAfterRun({
               rows,
@@ -4590,10 +4629,15 @@ export default function WebViewCartSheet({
             if (netRunBaselineRef.current == null) {
               netRunBaselineRef.current = msg.cartBefore as CartItem[];
             }
-            const runBaseline = cartItemsBeforeRef.current.length
-              ? cartItemsBeforeRef.current
-              : netRunBaselineRef.current;
-            const netRows = diffCartItems(runBaseline, msg.cartAfter as CartItem[]);
+            const runBaseline = runBaselineItems();
+            const netRows = runBaseline
+              ? diffCartItems(runBaseline, msg.cartAfter as CartItem[])
+              : null;
+            if (!netRows) {
+              console.log(`[Cart ${ts()}]`, 'network run: no before-snapshot — no cart breakdown');
+              setCartResultRows(null);
+              return;
+            }
             console.log(`[Cart ${ts()}]`, 'network run: cart breakdown from the rail —', netRows.length,
               'rows,', netRows.filter((r) => r.added).length, 'added, no page load');
             setCartResultRows(netRows);

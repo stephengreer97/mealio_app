@@ -107,6 +107,7 @@ describe('how long to wait is a store fact', () => {
       expect(typeof rail.budgets.searchResumeMs).toBe('number');
       expect(rail.budgets.searchMs(10)).toBeGreaterThan(0);
       expect(rail.budgets.addMs(10)).toBeGreaterThan(0);
+      expect(typeof rail.budgets.cartProbeMs).toBe('number');
     }
   });
 
@@ -142,6 +143,37 @@ describe('a variant the user must choose is the store\'s concept', () => {
     for (const id of ['heb', 'albertsons']) {
       expect(getNetworkRail(id)!.needsPreference({ preferences: null })).toBe(false);
       expect(getNetworkRail(id)!.needsPreference({})).toBe(false);
+    }
+  });
+});
+
+describe('a verdict is never built against a cart nobody read', () => {
+  // Stephen, 2026-09-02: "it is showing a warning that 170 items are in the cart
+  // that mealio did not intend to add. That is wrong. Those were already in the
+  // cart before the run."
+  //
+  //   13:16:18  snapshotBefore: reading the cart over the network
+  //   13:16:28  before-probe timed out — starting search without a baseline
+  //   13:16:36  CART_COUNT count=170  ms=6646        (discarded: phase null)
+  //
+  // The read took 6.6s against a shared 10s ceiling, missed it, and arrived
+  // eight seconds later with nowhere to go. The after-probe then diffed a
+  // 176-line cart against [] — so every pre-existing line showed green and
+  // nothing accounted for them, which is the over-add warning.
+  const heb = getNetworkRail('heb')!;
+  const alb = getNetworkRail('albertsons')!;
+
+  it('the cart probe has a per-store ceiling, and Albertsons gets the longer one', () => {
+    // The last engine-wide budget. Ten seconds sat exactly between this store's
+    // cold read (6.6s) and its warm one (0.5s) — the worst place for a deadline.
+    expect(alb.budgets.cartProbeMs).toBeGreaterThan(10_000);
+    expect(alb.budgets.cartProbeMs).toBeGreaterThan(heb.budgets.cartProbeMs);
+  });
+
+  it('every rail states one', () => {
+    for (const rail of [heb, alb]) {
+      expect(typeof rail.budgets.cartProbeMs).toBe('number');
+      expect(rail.budgets.cartProbeMs).toBeGreaterThan(0);
     }
   });
 });

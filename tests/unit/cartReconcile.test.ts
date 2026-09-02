@@ -1689,3 +1689,43 @@ describe('reconcileParallelAdd: quantity_limit_reached', () => {
     expect(outcome.definiteFailures).toEqual([{ index: 0, reason: 'quantity_limit_reached' }]);
   });
 });
+
+
+describe('the over-add warning needs a before-snapshot to mean anything', () => {
+  // Stephen, 2026-09-02: "it is showing a warning that 170 items are in the cart
+  // that mealio did not intend to add. That is wrong. Those were already in the
+  // cart before the run."
+  //
+  // The before-probe had timed out, so the engine diffed a 176-line cart against
+  // an empty array. Every pre-existing line then reads as newly added AND as
+  // unaccounted for -- one warning about the user's own groceries, and a screen
+  // full of green.
+  //
+  // `rows: null` is how the engine now says "nobody read the cart before this
+  // run". An unknown before is not an empty one.
+  it('finds no overage when the cart was never read', () => {
+    const out = auditCartAfterRun({
+      rows: null,
+      reportedAdded: ['Sour Cream'],
+      active: [intended('Sour Cream', 1)],
+      reconcileIntended: [],
+      countBefore: null,
+      countAfter: 176,
+    });
+    expect(out.over).toEqual([]);
+    expect(out.overUnits).toBe(0);
+  });
+
+  it('still finds real overage when the cart WAS read', () => {
+    // The other direction, so this cannot be satisfied by never warning at all.
+    const out = auditCartAfterRun({
+      rows: [row('Milk', 1), row('Impulse Candy Bar', 1)],
+      reportedAdded: ['Milk'],
+      active: [intended('Milk', 1)],
+      reconcileIntended: [],
+      countBefore: 0,
+      countAfter: 2,
+    });
+    expect(out.over.map((o) => o.name)).toContain('Impulse Candy Bar');
+  });
+});
