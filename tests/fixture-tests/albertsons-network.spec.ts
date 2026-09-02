@@ -337,12 +337,15 @@ describe('Albertsons add over the network — qty is ABSOLUTE', () => {
       { idx: 0, productId: '184040105', quantity: 1, name: 'Avocado' },
     ])!);
     const done = await runner.waitForMessage('NET_ADD_DONE', 15_000);
-    expect(done.cartBefore).toEqual([{ name: 'Item 999', qty: 2 }]);
+    // `available` is null when the store said nothing about it, which this stub
+    // does not — an unavailable line is IN the cart and blocks checkout, so the
+    // rows carry it.
+    expect(done.cartBefore).toEqual([{ name: 'Item 999', qty: 2, available: null }]);
     // The item the run wrote is present after and absent before, which is what
     // makes it render green rather than grey.
     expect(done.cartAfter).toEqual(expect.arrayContaining([
-      { name: 'Item 999', qty: 2 },
-      { name: 'Item 184040105', qty: 1 },
+      { name: 'Item 999', qty: 2, available: null },
+      { name: 'Item 184040105', qty: 1, available: null },
     ]));
   });
 
@@ -917,5 +920,96 @@ describe('what counts as sold by weight', () => {
     await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['Ginger Root'], { storeId: '161' })!);
     const msg = await runner.waitForMessage('SEARCH_RESULT', 20_000);
     expect(msg.candidates[0].isWeightItem).toBe(false);
+  });
+});
+
+describe('an out-of-stock item the store accepts anyway', () => {
+  // Stephen, 2026-09-02: "Do we know if an item is out of stock? I think it may
+  // still allow us to add to cart, but show an out of stock warning in the cart."
+  //
+  // He is right, and their own cart component says so:
+  //   ngClass: item.isAvailable ? "" : "OOSItem"
+  //   disableCheckoutButton = ... || !carts[0].isAvailable
+  // The line lands, struck through, and its presence blocks checkout for the
+  // whole basket.
+  //
+  // This matters most for the stored-product-id plan: skipping the search
+  // removes the check that used to catch this BEFORE the write, so the write's
+  // own response has to carry it.
+  function cartStubWithAvailability(available: boolean) {
+    return [
+      '(function () {',
+      '  window.__lines = {};',
+      '  function body() {',
+      '    var list = [];',
+      '    for (var k in window.__lines) list.push({ itemId: k, qty: window.__lines[k],',
+      '      name: "Mist Winter Pine - Each", isAvailable: ' + String(available) + ' });',
+      '    return { carts: [{ cartItemsList: list }] };',
+      '  }',
+      '  var prior = window.fetch;',
+      '  window.fetch = function (url, init) {',
+      '    if (String(url).indexOf("/userinfo") !== -1) return prior.apply(window, arguments);',
+      '    if (String(url).indexOf("/cart/customer/") !== -1) {',
+      '      return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body()); } });',
+      '    }',
+      '    var line = JSON.parse(init.body).cartItemsList[0];',
+      '    window.__lines[line.itemId] = line.qty;',
+      '    return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body()); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n');
+  }
+
+  itWithFixture('logged-in-home.html', 'is reported as a failure, never as an add', async (runner) => {
+    await runner.inject(albStub());
+    await runner.inject(cartStubWithAvailability(false));
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(
+      [{ idx: 0, productId: '184040105', quantity: 1, name: 'Mist Winter Pine - Each' }])!);
+
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 20_000);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe('out_of_stock');
+    const done = await runner.waitForMessage('NET_ADD_DONE', 20_000);
+    // The write happened — it is in the cart — but the run does not claim it.
+    expect(done.wrote).toBe(0);
+  });
+
+  itWithFixture('logged-in-home.html', 'an available line is still a success', async (runner) => {
+    await runner.inject(albStub());
+    await runner.inject(cartStubWithAvailability(true));
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(
+      [{ idx: 0, productId: '184040105', quantity: 1, name: 'Mist Winter Pine - Each' }])!);
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 20_000);
+    expect(res.ok).toBe(true);
+  });
+
+  itWithFixture('logged-in-home.html', 'silence is not a verdict — no flag means no claim', async (runner) => {
+    // A store that never sends the field must not have every line read as
+    // out of stock. Absent is null, and null is a success.
+    await runner.inject(albStub());
+    await runner.inject([
+      '(function () {',
+      '  window.__lines = {};',
+      '  function body() {',
+      '    var list = [];',
+      '    for (var k in window.__lines) list.push({ itemId: k, qty: window.__lines[k], name: "X" });',
+      '    return { carts: [{ cartItemsList: list }] };',
+      '  }',
+      '  var prior = window.fetch;',
+      '  window.fetch = function (url, init) {',
+      '    if (String(url).indexOf("/userinfo") !== -1) return prior.apply(window, arguments);',
+      '    if (String(url).indexOf("/cart/customer/") !== -1) {',
+      '      return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body()); } });',
+      '    }',
+      '    var line = JSON.parse(init.body).cartItemsList[0];',
+      '    window.__lines[line.itemId] = line.qty;',
+      '    return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body()); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(
+      [{ idx: 0, productId: '1', quantity: 1, name: 'X' }])!);
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 20_000);
+    expect(res.ok).toBe(true);
   });
 });

@@ -473,7 +473,16 @@ const ALB_PRELUDE = `
           // The same CartItem shape H-E-B's rail emits, so the done screen's
           // breakdown works identically on both stores — which is the point:
           // the user should not be able to tell which rail ran.
-          if (it.name) rows.push({ name: String(it.name), qty: Number(it.qty) || 0 });
+          if (it.name) {
+            rows.push({
+              name: String(it.name), qty: Number(it.qty) || 0,
+              // Null when the store did not say. See the write path above: an
+              // unavailable line is IN the cart and blocks checkout, so a reader
+              // that ignores this counts a line nobody can buy.
+              available: (it.isAvailable === undefined || it.isAvailable === null)
+                ? null : !!it.isAvailable,
+            });
+          }
         }
         return { ok: true, lines: lines, rows: rows,
                  totalQty: (j.multiCartSummary || {}).totalAvailableQuantity };
@@ -1188,15 +1197,40 @@ ${ALB_PRELUDE}
     // cart, so no extra round trip is needed to know what actually landed.
     var after = null;
     try { after = await r.json(); } catch (e) {}
-    var got = null;
+    // OUT OF STOCK STILL LANDS. The store accepts the write and flags the LINE.
+    // From its own cart component:
+    //   ngClass: item.isAvailable ? "" : "OOSItem"
+    //   disableCheckoutButton = ... || !carts[0].isAvailable
+    // So an unavailable item sits in the cart struck through, and its presence
+    // blocks checkout for the whole basket. A write that "succeeded" can
+    // therefore be a line the user cannot buy -- which is exactly what we would
+    // have started shipping the moment a stored product id let us skip the
+    // search that used to catch this first.
+    var got = null, avail = null;
     try {
       var list = ((after.carts || [])[0] || {}).cartItemsList || [];
       for (var v = 0; v < list.length; v++) {
-        if (String(list[v].itemId) === id) { got = Number(list[v].qty); break; }
+        if (String(list[v].itemId) === id) {
+          got = Number(list[v].qty);
+          // Absent means the store said nothing, which is not the same as false.
+          avail = (list[v].isAvailable === undefined || list[v].isAvailable === null)
+            ? null : !!list[v].isAvailable;
+          break;
+        }
       }
     } catch (e) {}
     if (got == null) {
       for (var s1 = 0; s1 < members.length; s1++) report(members[s1], false, 'unexpected_shape');
+      return;
+    }
+    if (avail === false) {
+      // In the cart, and unbuyable. Reported as the definitive failure it is so
+      // the run does not count it and the user is offered something else --
+      // never as a success, which is what the struck-through line would have
+      // become on the done screen.
+      for (var oo = 0; oo < members.length; oo++) {
+        report(members[oo], false, 'out_of_stock', 'the store added it but marked it unavailable');
+      }
       return;
     }
     if (got !== want) {
