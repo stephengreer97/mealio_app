@@ -218,6 +218,17 @@ export interface WebViewCartSheetProps {
   onStatusChange?: (status: CartJobStatus) => void;
   /** Layer mode only: user tapped the minimize control (collapse to bubble). */
   onMinimize?: () => void;
+  /**
+   * A product the user had ALREADY chosen, now identified by the store.
+   *
+   * Distinct from onIngredientChosen, which is a NEW choice: this changes
+   * nothing about the meal except recording which product the saved name means,
+   * so the next run writes it straight to the cart instead of searching. Fired
+   * once per ingredient, after the store has accepted the write -- the strongest
+   * evidence the id is real.
+   */
+  onIngredientIdentified?: (ingredientName: string, mealIds: string[],
+                            storeProduct: { upc: string; name: string; sku?: string }) => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -318,6 +329,7 @@ export default function WebViewCartSheet({
   collapsed = false,
   onStatusChange,
   onMinimize,
+  onIngredientIdentified,
 }: WebViewCartSheetProps) {
   // Lock the store to whatever it was when the sheet opened. The parent
   // (MyMealsScreen) can change `storeId` mid-flow — its loadMeals() auto-selects
@@ -4591,6 +4603,30 @@ export default function WebViewCartSheet({
           // rail was landing on the dashboard as nothing at all — the primary
           // path, invisible.
           if (msg.success) {
+            // BACKFILL THE IDENTITY. This row was searched because it had no
+            // saved store id -- the id is only written when a product is PICKED,
+            // and a meal that is already chosen never gets picked again. So
+            // every existing meal searched its saved product NAME on every run,
+            // and Choose Product once, add forever stayed half true.
+            //
+            // The run has just searched that name, matched it exactly, written
+            // it, and had the store ACCEPT it. That is the strongest evidence
+            // available for what the name means, and recording it is not a new
+            // decision -- it is the one the user already made, written down.
+            // Next run skips the search for this row entirely.
+            const done = activeItemsRef.current[at];
+            const matched = netMatchedRef.current.get(at);
+            if (done && matched?.productId && !netStoredProduct(done)) {
+              onIngredientIdentified?.(
+                done.ingredientName,
+                done.mealIds ?? [],
+                {
+                  upc: String(matched.productId),
+                  name: matched.name || done.ingredientName,
+                  ...(matched.skuId ? { sku: String(matched.skuId) } : {}),
+                },
+              );
+            }
             tel().record('confirm', 'ok', { detail: { via: 'network', name: msg.name } });
           } else {
             tel().record('confirm', 'error', {

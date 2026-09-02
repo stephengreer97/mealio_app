@@ -35,7 +35,7 @@ import { clearLastAutomationRun } from '../lib/lastAutomationRun';
 
 type CartJobParams = Pick<
   WebViewCartSheetProps,
-  'meals' | 'storeId' | 'storeName' | 'onIngredientChosen'
+  'meals' | 'storeId' | 'storeName' | 'onIngredientChosen' | 'onIngredientIdentified'
 > & {
   /** Called when the job sheet is dismissed, after the job is cleared. */
   onClose?: () => void;
@@ -227,6 +227,7 @@ export function CartJobProvider({ children }: { children: React.ReactNode }) {
           onMinimize={minimize}
           onStatusChange={handleStatus}
           onIngredientChosen={job.onIngredientChosen}
+          onIngredientIdentified={job.onIngredientIdentified}
         />
       )}
       {job && !expanded && status && (

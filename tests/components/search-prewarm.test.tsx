@@ -572,3 +572,86 @@ describe('a Choose Products run fills the bag with its search', () => {
     expect(frame).toBe(meta.frames - 1);
   });
 });
+
+describe('a run records what it learned, so the next one need not search', () => {
+  // The id is only written when a product is PICKED, and a meal that is already
+  // chosen is never picked again — so every existing meal searched its own saved
+  // product name on every run, for ever.
+  //
+  // A run that searched that name, matched it exactly, wrote it, and had the
+  // store ACCEPT it has proven what the name means. Recording that is not a new
+  // decision.
+  it('reports the id after the store accepts the write', () => {
+    const identified: Array<[string, string[], Record<string, unknown>]> = [];
+    __applyAutomationConfigForTests({
+      stores: { heb: { networkSearch: true, networkAdd: true, cartSkuConfirm: true } },
+    });
+    const view = render(
+      <WebViewCartSheet
+        visible meals={[meal] as never} storeId="heb" storeName="H-E-B" onClose={() => {}}
+        onIngredientIdentified={(name, mealIds, sp) => identified.push([name, mealIds, sp])}
+      />,
+    );
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    const load = () => act(() => {
+      const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/' } });
+    });
+
+    load();
+    post(SESSION);
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('sour cream')] });
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+
+    // Nothing recorded yet — the store has not accepted anything.
+    expect(identified).toHaveLength(0);
+
+    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true });
+    expect(identified).toHaveLength(1);
+    const [, , sp] = identified[0];
+    expect(sp.upc).toBe('psour cream');
+    // H-E-B addresses a cart line by sku, so the saved product carries one.
+    expect(sp.sku).toBe('ssour cream');
+  });
+
+  it('says nothing for a write the store refused', () => {
+    // A rejected write is not evidence about what the name means.
+    const identified: unknown[] = [];
+    __applyAutomationConfigForTests({
+      stores: { heb: { networkSearch: true, networkAdd: true, cartSkuConfirm: true } },
+    });
+    const view = render(
+      <WebViewCartSheet
+        visible meals={[meal] as never} storeId="heb" storeName="H-E-B" onClose={() => {}}
+        onIngredientIdentified={() => identified.push(1)}
+      />,
+    );
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    const load = () => act(() => {
+      const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/' } });
+    });
+    load();
+    post(SESSION);
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('sour cream')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: false, reason: 'error_arm' });
+    expect(identified).toHaveLength(0);
+  });
+});

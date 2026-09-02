@@ -22,7 +22,7 @@ import { Colors, Radius } from '../../constants/colors';
 import { Meal, Ingredient } from '../../types';
 import { meals as mealsApi, kroger as krogerApi } from '../../lib/api';
 import { getOffering, purchasePackage } from '../../lib/purchases';
-import { mergeChosenProduct, createMealSaveQueue } from '../../lib/saveChosenIngredient';
+import { mergeChosenProduct, mergeStoreProductOnly, createMealSaveQueue } from '../../lib/saveChosenIngredient';
 import { useAuth } from '../../context/AuthContext';
 import { useSessionEnd } from '../../context/useSessionEnd';
 import { isKrogerBrand, isWebViewStore } from '../../constants/stores';
@@ -488,6 +488,47 @@ export default function MyMealsScreen() {
     }
   }
 
+  /**
+   * Record the store's id for a product the user already chose.
+   *
+   * Not a choice -- the meal is unchanged and the row is not renamed. It is the
+   * backfill that makes Choose Product once, add forever literal for meals that
+   * were chosen before ids were saved: without it every existing meal searches
+   * its own saved product name on every run, for ever, because the id is only
+   * written when something is PICKED and a chosen meal is never picked again.
+   *
+   * Shares the per-meal save queue with handleIngredientChosen, so a backfill
+   * and a real choice on the same meal cannot clobber each other, and carries
+   * the same session epoch so a save queued by a user who has since gone is
+   * dropped rather than sent.
+   */
+  async function handleIngredientIdentified(
+    ingredientName: string, mealIds: string[],
+    storeProduct: { upc: string; name: string; sku?: string },
+  ) {
+    const epoch = saveEpochRef.current;
+    await Promise.all(mealIds.map((mealId) => enqueueMealSave(mealId, async () => {
+      if (saveEpochRef.current !== epoch) return;
+      const meal = allMealsRef.current.find((m) => m.id === mealId);
+      if (!meal) return;
+      const updated = mergeStoreProductOnly(
+        meal.ingredients as any[], ingredientName, meal.storeId, storeProduct);
+      // Nothing to write when the row already had it, which is the normal case
+      // from the second run onward. A PATCH per item per run would be a lot of
+      // traffic to say nothing.
+      if (updated === meal.ingredients) return;
+      try {
+        const saved = await mealsApi.update(mealId, { ingredients: updated } as any);
+        allMealsRef.current = allMealsRef.current.map((m) => (m.id === saved.id ? saved : m));
+        setAllMeals((prev) => prev.map((m) => (m.id === saved.id ? saved : m)));
+      } catch (err) {
+        if (saveEpochRef.current !== epoch) return;
+        // Losing a backfill costs one more search next run, nothing else.
+        console.warn(`[MyMeals] could not record the store id for "${ingredientName}" (meal ${mealId})`, err);
+      }
+    })));
+  }
+
   async function handleIngredientChosen(ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null, storeProduct?: { upc: string; name: string; sku?: string } | null) {
     // Whose choice this is. Captured HERE, when the product is picked, rather
     // than read inside the queued work: the point of the guard is to compare the
@@ -872,6 +913,7 @@ export default function MyMealsScreen() {
                     storeId: selectedStore,
                     storeName: stores.find((s) => s.id === selectedStore)?.name ?? 'Store',
                     onIngredientChosen: handleIngredientChosen,
+                    onIngredientIdentified: handleIngredientIdentified,
                     onClose: endWebViewRun,
                   });
                 } else {
@@ -938,6 +980,7 @@ export default function MyMealsScreen() {
           storeName={stores.find((s) => s.id === (cartStoreId || selectedStore))?.name ?? 'Store'}
           onClose={() => { setWebViewCartVisible(false); endWebViewRun(); }}
           onIngredientChosen={handleIngredientChosen}
+          onIngredientIdentified={handleIngredientIdentified}
         />
       )}
 

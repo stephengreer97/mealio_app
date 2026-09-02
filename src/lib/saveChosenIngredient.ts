@@ -108,3 +108,37 @@ export function createMealSaveQueue(): MealSaveQueue {
     return next;
   };
 }
+
+/**
+ * Record the store's id for a product the user ALREADY chose, changing nothing
+ * else.
+ *
+ * The identity is written when a product is PICKED -- on the Choose Products
+ * screen or at review -- which never happens again for a meal that is already
+ * chosen. So every existing meal kept searching its saved product NAME on every
+ * run, and "Choose Product once, add forever" stayed half true: the choice was
+ * remembered, the identity was re-derived.
+ *
+ * This is the backfill. A run that searched the saved name, matched it exactly,
+ * wrote it, and had the store accept it has just proven which product that name
+ * means. Recording that is not a new decision -- it is the one the user already
+ * made, written down properly.
+ *
+ * Deliberately NOT mergeChosenProduct: that renames the row and drops every
+ * other chain's id, both correct when someone picks something new and both
+ * wrong here. Nothing about the meal changed.
+ */
+export function mergeStoreProductOnly(
+  ingredients: any[],
+  ingredientName: string,
+  storeId: string | null | undefined,
+  product: { upc: string; name: string; sku?: string },
+): any[] {
+  if (!product?.upc) return ingredients;
+  return ingredients.map((ing) => {
+    const name = ingName(ing);
+    const term = ing.searchTerm ?? ing.search_term ?? name;
+    if (name !== ingredientName && term !== ingredientName) return ing;
+    return withStoreProduct(ing, storeId, product);
+  });
+}

@@ -196,3 +196,56 @@ describe('choose once, add forever — the id is saved with the choice', () => {
     expect(storeProductKey('heb')).not.toBe(storeProductKey('albertsons'));
   });
 });
+
+describe('backfilling the id for a product already chosen', () => {
+  // The id is only written when a product is PICKED — Choose Products, or a
+  // review pick — and a meal that is already chosen is never picked again. So
+  // every existing meal searched its own saved product NAME on every run, for
+  // ever, and "Choose Product once, add forever" stayed half true: the choice
+  // was remembered, the identity was re-derived.
+  const { mergeStoreProductOnly } = require('../../src/lib/saveChosenIngredient');
+
+  it('records the id and changes nothing else', () => {
+    const before = [{
+      ingredientName: 'Spinach', searchTerm: 'Fresh Spinach, 1 Bundle',
+      productQty: 2, dropdown: { type: 'preference', selectedText: 'Ripe', selectedValue: 'r' },
+    }];
+    const [row] = mergeStoreProductOnly(
+      before, 'Fresh Spinach, 1 Bundle', 'heb',
+      { upc: '319108', sku: '4090', name: 'Fresh Spinach, 1 Bundle' });
+    expect(row.storeProducts.heb).toEqual(
+      { upc: '319108', sku: '4090', name: 'Fresh Spinach, 1 Bundle' });
+    // Nothing about the meal changed — this is not a new choice.
+    expect(row.searchTerm).toBe('Fresh Spinach, 1 Bundle');
+    expect(row.productQty).toBe(2);
+    expect(row.dropdown).toEqual(before[0].dropdown);
+  });
+
+  it('keeps other chains, unlike picking something new', () => {
+    // mergeChosenProduct drops them because a NEW pick renames the row and any
+    // other store's id would then sit beside a name describing a different
+    // product. Nothing is renamed here, so nothing is stale.
+    const [row] = mergeStoreProductOnly(
+      [{ ingredientName: 'Milk', searchTerm: 'Whole Milk',
+         storeProducts: { kroger: { upc: 'k1', name: 'Kroger Whole Milk' } } }],
+      'Whole Milk', 'heb', { upc: 'h1', name: 'H-E-B Whole Milk' });
+    expect(row.storeProducts.kroger.upc).toBe('k1');
+    expect(row.storeProducts.heb.upc).toBe('h1');
+  });
+
+  it('matches on the saved product name as well as the ingredient name', () => {
+    // The run knows the row by its ingredientName; the row may be keyed by
+    // either, exactly as mergeChosenProduct tolerates.
+    const [row] = mergeStoreProductOnly(
+      [{ ingredientName: 'Spinach', searchTerm: 'Fresh Spinach, 1 Bundle' }],
+      'Spinach', 'heb', { upc: '319108', name: 'Fresh Spinach, 1 Bundle' });
+    expect(row.storeProducts.heb.upc).toBe('319108');
+  });
+
+  it('leaves rows it does not name completely alone', () => {
+    const rows = mergeStoreProductOnly(
+      [{ ingredientName: 'Milk' }, { ingredientName: 'Eggs' }],
+      'Milk', 'heb', { upc: 'h1', name: 'Milk' });
+    expect('storeProducts' in rows[1]).toBe(false);
+  });
+});
