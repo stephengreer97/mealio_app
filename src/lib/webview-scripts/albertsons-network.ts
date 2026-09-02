@@ -1155,10 +1155,25 @@ ${ALB_PRELUDE}
   var post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
-  var report = function (it, ok, reason, detail) {
+  // The field is success, NOT ok. The engine reads NET_ADD_RESULT.success and
+  // this script had been posting it under its own name since the rail shipped.
+  //
+  // So every Albertsons item was recorded as FAILED however well it went. The
+  // batch's own wrote count and the cart diff were right, which is what let it
+  // survive: the done screen looked correct while the reconcile, reading the
+  // per-item results, saw nothing confirmed and re-wrote the whole basket on
+  // every single run. Stephen's 12:07 run has "wrote 18 of 18" one line above
+  // "reconcile: confirmed 6, retry 12".
+  //
+  // asked rides along for the same reason H-E-B sends it: a clamped write is a
+  // SHORT add, not a full one, and the reconcile can only see that if the
+  // quantity we asked for is in the message.
+  // (No backticks in here. This whole block is inside a template literal.)
+  var report = function (it, ok, reason, detail, asked) {
     post({
       type: 'NET_ADD_RESULT', idx: it.idx, name: it.name, productId: it.productId,
-      ok: !!ok, reason: reason || null, detail: detail || null
+      skuId: it.skuId || null, asked: asked != null ? asked : it.quantity,
+      success: !!ok, reason: reason || null, detail: detail || null
     });
   };
 
@@ -1321,7 +1336,7 @@ ${ALB_PRELUDE}
         }
         base.lines[pq.id] = got;
         wrote++;
-        for (var e4 = 0; e4 < mem.length; e4++) report(mem[e4], true, null);
+        for (var e4 = 0; e4 < mem.length; e4++) report(mem[e4], true, null, null, pq.want);
       }
     }
   }

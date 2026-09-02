@@ -274,7 +274,7 @@ describe('Albertsons add over the network — qty is ABSOLUTE', () => {
     await runner.inject(cartStub({}));
     await runner.inject(buildAlbertsonsNetworkAddBatchScript([item({ isWeightItem: true })])!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 15_000);
-    expect(res.ok).toBe(false);
+    expect(res.success).toBe(false);
     expect(res.reason).toBe('weight_item_declined');
     await runner.inject(REPORT);
     const probe = await runner.waitForMessage('PROBE', 8_000);
@@ -309,7 +309,7 @@ describe('Albertsons add over the network — qty is ABSOLUTE', () => {
     await runner.inject(cartStub({}, { getStatus: 401 }));
     await runner.inject(buildAlbertsonsNetworkAddBatchScript([item()])!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 15_000);
-    expect(res.ok).toBe(false);
+    expect(res.success).toBe(false);
     expect(res.reason).toBe('no_cart_baseline');
     await runner.inject(REPORT);
     const probe = await runner.waitForMessage('PROBE', 8_000);
@@ -322,7 +322,7 @@ describe('Albertsons add over the network — qty is ABSOLUTE', () => {
     await runner.inject(cartStub({ '184040105': 1 }, { override: 2 }));
     await runner.inject(buildAlbertsonsNetworkAddBatchScript([item({ quantity: 4 })])!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 15_000);
-    expect(res.ok).toBe(false);
+    expect(res.success).toBe(false);
     expect(res.reason).toBe('quantity_mismatch');
     expect(String(res.detail)).toContain('asked 5');
   });
@@ -970,7 +970,7 @@ describe('an out-of-stock item the store accepts anyway', () => {
       [{ idx: 0, productId: '184040105', quantity: 1, name: 'Mist Winter Pine - Each' }])!);
 
     const res = await runner.waitForMessage('NET_ADD_RESULT', 20_000);
-    expect(res.ok).toBe(false);
+    expect(res.success).toBe(false);
     expect(res.reason).toBe('out_of_stock');
     const done = await runner.waitForMessage('NET_ADD_DONE', 20_000);
     // The write happened — it is in the cart — but the run does not claim it.
@@ -983,7 +983,7 @@ describe('an out-of-stock item the store accepts anyway', () => {
     await runner.inject(buildAlbertsonsNetworkAddBatchScript(
       [{ idx: 0, productId: '184040105', quantity: 1, name: 'Mist Winter Pine - Each' }])!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 20_000);
-    expect(res.ok).toBe(true);
+    expect(res.success).toBe(true);
   });
 
   itWithFixture('logged-in-home.html', 'silence is not a verdict — no flag means no claim', async (runner) => {
@@ -1013,7 +1013,7 @@ describe('an out-of-stock item the store accepts anyway', () => {
     await runner.inject(buildAlbertsonsNetworkAddBatchScript(
       [{ idx: 0, productId: '1', quantity: 1, name: 'X' }])!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 20_000);
-    expect(res.ok).toBe(true);
+    expect(res.success).toBe(true);
   });
 });
 
@@ -1082,7 +1082,7 @@ describe('the whole basket goes in one request', () => {
     await runner.waitForMessage('NET_ADD_DONE', 25_000);
     const results = runner.messagesOfType('NET_ADD_RESULT') as Array<Record<string, unknown>>;
     expect(results.length).toBe(5);
-    expect(results.every((r) => r.ok === true)).toBe(true);
+    expect(results.every((r) => r.success === true)).toBe(true);
     // One verdict per item, not one for the batch.
     expect(new Set(results.map((r) => r.idx)).size).toBe(5);
   });

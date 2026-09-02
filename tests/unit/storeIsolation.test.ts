@@ -207,3 +207,42 @@ describe('the first request of a batch is allowed to be slow', () => {
     }
   });
 });
+
+describe('every rail speaks the same message contract', () => {
+  // The engine reads NET_ADD_RESULT.success. The Albertsons script had been
+  // posting the same fact under its own name — `ok` — since the rail shipped, so
+  // every Albertsons item was recorded as FAILED however well it went.
+  //
+  // It survived because the batch's own `wrote` count and the cart diff were
+  // both right: the done screen looked correct while the reconcile, reading the
+  // per-item results, saw nothing confirmed and re-wrote the whole basket on
+  // every run. Stephen's 12:07 log has "wrote 18 of 18" one line above
+  // "reconcile: confirmed 6, retry 12".
+  //
+  // This is the same class as the sku rule and the shared landing page: not a
+  // store-id branch, just one store quietly meaning something different by the
+  // same thing.
+  const REQUIRED = ['idx', 'name', 'success', 'reason'];
+
+  it('the add script of every rail reports per item with the engine\'s field names', () => {
+    for (const id of ['heb', 'albertsons']) {
+      const script = getNetworkRail(id)!.addBatch(
+        [{ idx: 0, productId: 'p1', skuId: 's1', quantity: 1, name: 'X' }]);
+      expect(script).toBeTruthy();
+      // The report helper builds the message; every required key must appear as
+      // a literal in it, and the old name must not.
+      for (const key of REQUIRED) expect(script!).toContain(`${key}:`);
+      expect(script!).toContain("type: 'NET_ADD_RESULT'");
+    }
+  });
+
+  it('no rail posts the result under `ok`', () => {
+    for (const id of ['heb', 'albertsons']) {
+      const script = getNetworkRail(id)!.addBatch(
+        [{ idx: 0, productId: 'p1', skuId: 's1', quantity: 1, name: 'X' }])!;
+      // `ok: !!ok` was the Albertsons shape. Anything reintroducing it means the
+      // engine will read undefined and call a successful add a failure.
+      expect(script).not.toMatch(/\bok:\s*!!/);
+    }
+  });
+});
