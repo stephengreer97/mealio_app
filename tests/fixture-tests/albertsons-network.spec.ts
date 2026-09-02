@@ -194,7 +194,9 @@ describe('Albertsons search over the network', () => {
       // A 14 OZ tub is sold BY ITEM. Reading unitOfMeasure as a weight flag
       // would decline most of the store.
       doc({ pid: '1', name: 'Guacamole Mild - 14 OZ', unitOfMeasure: 'OZ', unitQuantity: 'OUNCE', sellByWeight: 'I' }),
-      doc({ pid: '2', name: 'Bananas', sellByWeight: 'W' }),
+      // Loose bananas: 'W' AND displayType '3' is the site's own test for a
+      // line it prices by the pound.
+      doc({ pid: '2', name: 'Bananas', sellByWeight: 'W', displayType: '3' }),
     ])));
     await runner.inject(searchScript(['avocado']));
     const msg = await runner.waitForMessage('SEARCH_RESULT', 15_000);
@@ -863,5 +865,57 @@ describe('the cart subscription key', () => {
     const seen = await runner.waitForMessage('PROBE', 10_000);
     // First try, not the twelfth: the named field is tried before the sweep.
     expect(seen.urls.filter((u: string) => u.indexOf('cartservice') !== -1).length).toBe(1);
+  });
+});
+
+describe('what counts as sold by weight', () => {
+  // Stephen, 2026-09-02: "I searched for ginger root and it sent that to
+  // reconcile. Searching for ginger root again, I see an exact match. Same goes
+  // for yellow sweet onion... reconcile is saying onion and ginger are weight
+  // items. They are not."
+  //
+  // Both were the same bug: an exact match, scored 100, declined as needing a
+  // weight. The rule was "anything that is not 'I' is sold by weight", inferred
+  // from one result set in which every doc happened to read 'I'.
+  //
+  // The site's own test needs BOTH fields:
+  //   "W" === sellByWeight && "3" === displayType
+  const weighed = (over: Record<string, unknown>) =>
+    found([doc({ name: 'Ginger Root', ...over })]);
+
+  itWithFixture('logged-in-home.html', 'a plain produce item is NOT sold by weight', async (runner) => {
+    // What ginger root and yellow sweet onion actually look like: not 'I', and
+    // no weight display. The old rule declined every one of them.
+    await runner.inject(albStub());
+    await runner.inject(searchStub(weighed({ sellByWeight: 'N', displayType: '0' })));
+    await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['Ginger Root'], { storeId: '161' })!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 20_000);
+    expect(msg.candidates[0].isWeightItem).toBe(false);
+  });
+
+  itWithFixture('logged-in-home.html', "'W' alone is not enough — the site wants displayType 3 too", async (runner) => {
+    await runner.inject(albStub());
+    await runner.inject(searchStub(weighed({ sellByWeight: 'W', displayType: '0' })));
+    await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['Ginger Root'], { storeId: '161' })!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 20_000);
+    expect(msg.candidates[0].isWeightItem).toBe(false);
+  });
+
+  itWithFixture('logged-in-home.html', 'a real weight item IS still declined', async (runner) => {
+    // The other direction matters as much: writing a count to a line the store
+    // prices by the pound is the one thing that cannot be undone (MEAL-200).
+    await runner.inject(albStub());
+    await runner.inject(searchStub(weighed({ sellByWeight: 'W', displayType: '3' })));
+    await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['Ginger Root'], { storeId: '161' })!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 20_000);
+    expect(msg.candidates[0].isWeightItem).toBe(true);
+  });
+
+  itWithFixture('logged-in-home.html', 'sold-by-item stays sold-by-item', async (runner) => {
+    await runner.inject(albStub());
+    await runner.inject(searchStub(weighed({ sellByWeight: 'I', displayType: '3' })));
+    await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['Ginger Root'], { storeId: '161' })!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 20_000);
+    expect(msg.candidates[0].isWeightItem).toBe(false);
   });
 });

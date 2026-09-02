@@ -605,16 +605,26 @@ const ALB_CANDIDATE_HELPERS = `
     return '$' + p.toFixed(2);
   }
 
-  // sellByWeight is the signal, NOT unitOfMeasure. A 14 OZ tub of guacamole has
-  // unitOfMeasure 'OZ' and is still sold as an item — reading the package unit as
-  // a weight flag would decline most of the store. Across a real result set every
-  // doc read 'I' (sold by item), so anything else is treated as sold by weight:
-  // declining an item we cannot price is recoverable, silently writing a quantity
-  // to a weight line is not.
+  // THE SITE'S OWN TEST, VERBATIM. From its quick-add basket builder:
+  //
+  //   "W" === product.sellByWeight && "3" === product.displayType
+  //     -> { itemId, qty: 1, selectedWeight: Number(minWeight).toFixed(2) }
+  //   otherwise
+  //     -> { itemId, qty: 1 }
+  //
+  // BOTH fields, and only then. This used to read "anything that is not 'I' is
+  // sold by weight" -- inferred from one result set in which every doc happened
+  // to read 'I' -- and that is much too wide. Stephen, 2026-09-02: "I searched
+  // for ginger root and it sent that to reconcile... reconcile is saying onion
+  // and ginger are weight items. They are not." They matched exactly, scored
+  // 100, and were then declined as needing a weight nobody had to choose.
+  //
+  // unitOfMeasure is still not the signal: a 14 OZ tub of guacamole reads 'OZ'
+  // and is sold as an item.
   function __albIsWeight(d) {
     var s = d.sellByWeight;
-    if (typeof s !== 'string' || !s) return false;
-    return s.toUpperCase() !== 'I';
+    if (typeof s !== 'string' || s.toUpperCase() !== 'W') return false;
+    return String(d.displayType) === '3';
   }
 
   function __albCandidates(docs) {
@@ -807,8 +817,15 @@ export function buildAlbertsonsNetworkSearchBatchScript(
   // "abc" | 0 would search store zero and return a plausible-looking empty result.
   if (!Number.isInteger(storeId) || storeId <= 0) return null;
   if (!terms.length) return null;
-  const pageSize = opts.pageSize && opts.pageSize > 0 ? Math.min(opts.pageSize, 60) : 30;
-  const concurrency = Math.max(1, Math.min(opts.concurrency ?? 2, 3));
+  // TWELVE ROWS, NOT THIRTY. The matcher keeps an exact name match and discards
+  // the rest, so the other eighteen are payload the store builds, sends and we
+  // parse for nothing. Measured result sets put the exact match in the first few.
+  const pageSize = opts.pageSize && opts.pageSize > 0 ? Math.min(opts.pageSize, 60) : 12;
+  // Three at a time rather than two. The old cap was set while the rail was
+  // fighting a frozen renderer, when everything looked like the store shaping
+  // us; with the freeze gone the requests are 288-758ms and the store is not
+  // the bottleneck.
+  const concurrency = Math.max(1, Math.min(opts.concurrency ?? 3, 4));
   return `(async function () {
 ${ALB_PRELUDE}
 ${ALB_CANDIDATE_HELPERS}
