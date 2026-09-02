@@ -823,7 +823,8 @@ ${ALB_PRELUDE}
 
 export function buildAlbertsonsNetworkSearchBatchScript(
   terms: string[],
-  opts: { storeId: string; pageSize?: number; concurrency?: number },
+  opts: { storeId: string; pageSize?: number; concurrency?: number;
+          requestMs?: number; firstRequestMs?: number },
 ): string | null {
   const storeId = Number(opts.storeId);
   // "abc" | 0 would search store zero and return a plausible-looking empty result.
@@ -883,7 +884,12 @@ ${albSearchUrlExpr(pageSize, storeId)}
 
   async function attempt(term, variant) {
     var ctl = new AbortController();
-    var to = setTimeout(function () { ctl.abort(); }, 15000);
+    // The FIRST request of a batch gets the longer budget: measured cold at the
+    // full 15s while the document was provably healthy, and sub-second after.
+    // Aborting a slow answer turns it into no answer.
+    var to = setTimeout(function () { ctl.abort(); },
+      A.searchedOnce ? ${opts.requestMs ?? 15000} : ${opts.firstRequestMs ?? 15000});
+    A.searchedOnce = true;
     var url = __albSearchUrl(term, variant);
     // MEASURED, NOT GUESSED. Stephen: "search and cart read are still extremely
     // slow... It is not acceptable to take several minutes." The device log
@@ -891,6 +897,7 @@ ${albSearchUrlExpr(pageSize, storeId)}
     // request and a starved JS thread look identical from outside. This is the
     // request's own clock.
     var t0 = Date.now();
+    beat.doing = 'search:' + String(term).slice(0, 18);
     var r, txt;
     try {
       r = await fetch(url, {
@@ -899,8 +906,10 @@ ${albSearchUrlExpr(pageSize, storeId)}
       });
       clearTimeout(to);
       txt = await r.text();
+      beat.doing = 'idle';
     } catch (e) {
       clearTimeout(to);
+      beat.doing = 'idle';
       return { why: 'no_response', url: url, ms: Date.now() - t0 };
     }
     var ms = Date.now() - t0;
@@ -933,12 +942,25 @@ ${albSearchUrlExpr(pageSize, storeId)}
   // the loading animation. document.visibilityState says so directly, and the
   // heartbeat measures the damage: the gap between ticks of a 1s interval IS
   // the throttle factor.
-  var beat = { last: Date.now(), worst: 0 };
+  // WHEN does the document stop, not just how long for.
+  //
+  // The heartbeat has been reporting 15-34 second gaps for two days with the
+  // screen on and the app in front, and knowing the SIZE has not once suggested
+  // a cause. What is missing is the moment: a stall that begins the instant a
+  // request goes out is the network stack; one that begins while nothing of ours
+  // is in flight is the page or the platform. The gap is reported with the
+  // wall-clock time it started and what this script believed it was doing.
+  var beat = { last: Date.now(), worst: 0, worstAt: null, worstDoing: null, doing: 'idle' };
   try {
     setInterval(function () {
       var now = Date.now(), gap = now - beat.last;
+      if (gap > beat.worst) {
+        beat.worst = gap;
+        // The tick BEFORE the gap is when it began.
+        beat.worstAt = new Date(beat.last).toISOString().slice(11, 23);
+        beat.worstDoing = beat.doing;
+      }
       beat.last = now;
-      if (gap > beat.worst) beat.worst = gap;
     }, 1000);
   } catch (e) {}
 
@@ -1004,7 +1026,7 @@ ${albSearchUrlExpr(pageSize, storeId)}
         firstVariant: got.firstVariant != null ? got.firstVariant : null,
         firstStatus: got.firstStatus != null ? got.firstStatus : null,
         vis: (function () { try { return document.visibilityState; } catch (e) { return null; } })(),
-        worstTickMs: beat.worst,
+        worstTickMs: beat.worst, worstTickAt: beat.worstAt, worstTickDoing: beat.worstDoing,
         sentQuery: redact(url)
       });
       return;
@@ -1026,7 +1048,7 @@ ${albSearchUrlExpr(pageSize, storeId)}
       numFound: (resp && typeof resp.numFound === 'number') ? resp.numFound : null,
       ms: got ? got.ms : null, bytes: got ? got.bytes : null, variant: got ? got.variant : null,
       vis: (function () { try { return document.visibilityState; } catch (e) { return null; } })(),
-      worstTickMs: beat.worst
+      worstTickMs: beat.worst, worstTickAt: beat.worstAt, worstTickDoing: beat.worstDoing
     });
   }
 

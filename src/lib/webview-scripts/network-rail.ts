@@ -128,6 +128,18 @@ export interface NetworkRail {
      * 170 items "Mealio did not intend to add".
      */
     cartProbeMs: number;
+    /**
+     * ONE search request, and the FIRST one separately.
+     *
+     * A flat 15s here was killing requests this store had not finished. Measured
+     * 2026-09-02 with a healthy document -- the heartbeat showing a 1.002s gap
+     * for a 1s interval, so nothing was frozen -- the first request into a fresh
+     * page ran the entire 15s budget and was aborted, while later ones answered
+     * in 0.3s. That is a real cold start, not a stall, and aborting it turns a
+     * slow answer into no answer.
+     */
+    searchRequestMs: number;
+    searchFirstRequestMs: number;
   };
 }
 
@@ -155,6 +167,8 @@ const HEB_RAIL: NetworkRail = {
     addMs: (items) => Math.min(30_000 + items * 3_000, 120_000),
     // Measured at well under a second on this store.
     cartProbeMs: 12_000,
+    searchRequestMs: 15_000,
+    searchFirstRequestMs: 15_000,
   },
 };
 
@@ -162,7 +176,11 @@ const ALBERTSONS_RAIL: NetworkRail = {
   sessionMessageType: 'ALB_SESSION',
   sessionScript: buildAlbertsonsSessionScript,
   searchBatch: (terms, sess) =>
-    buildAlbertsonsNetworkSearchBatchScript(terms, { storeId: sess.storeId }),
+    buildAlbertsonsNetworkSearchBatchScript(terms, {
+      storeId: sess.storeId,
+      requestMs: ALBERTSONS_RAIL.budgets.searchRequestMs,
+      firstRequestMs: ALBERTSONS_RAIL.budgets.searchFirstRequestMs,
+    }),
   cartRead: () => buildAlbertsonsCartReadScript(),
   addBatch: (items, opts) => buildAlbertsonsNetworkAddBatchScript(items, opts),
   // The cart is addressed by product id; the search returns no sku, and none is
@@ -186,6 +204,12 @@ const ALBERTSONS_RAIL: NetworkRail = {
     // one. Ten seconds expired between the two, which is the worst place for a
     // deadline to sit.
     cartProbeMs: 30_000,
+    searchRequestMs: 15_000,
+    // The cold one gets room. Measured 2026-09-02 with the heartbeat showing a
+    // 1.002s gap for a 1s interval -- so the document was provably NOT frozen --
+    // the first request ran the whole 15s budget and was aborted, while every
+    // one after it answered in 0.3s. Aborting a slow answer makes it no answer.
+    searchFirstRequestMs: 40_000,
   },
 };
 

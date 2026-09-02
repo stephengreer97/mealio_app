@@ -4752,6 +4752,7 @@ export default function WebViewCartSheet({
           // stop looking the same in the log.
           console.log(`[Cart ${ts()}]`, 'net search', msg.variant ?? null, String(msg.term).slice(0, 28),
             'ms=', msg.ms ?? null, 'vis=', msg.vis ?? null, 'worstTick=', msg.worstTickMs ?? null,
+            'stalledAt=', msg.worstTickAt ?? null, 'whileDoing=', msg.worstTickDoing ?? null,
             'bytes=', msg.bytes ?? null, 'n=', (msg.candidates || []).length);
           // THE FALLBACK BATCH ARRIVES DURING THE ADD PHASE, by design — it is
           // fired alongside the writes so the user never waits for it. The phase

@@ -108,6 +108,8 @@ describe('how long to wait is a store fact', () => {
       expect(rail.budgets.searchMs(10)).toBeGreaterThan(0);
       expect(rail.budgets.addMs(10)).toBeGreaterThan(0);
       expect(typeof rail.budgets.cartProbeMs).toBe('number');
+      expect(typeof rail.budgets.searchRequestMs).toBe('number');
+      expect(typeof rail.budgets.searchFirstRequestMs).toBe('number');
     }
   });
 
@@ -174,6 +176,34 @@ describe('a verdict is never built against a cart nobody read', () => {
     for (const rail of [heb, alb]) {
       expect(typeof rail.budgets.cartProbeMs).toBe('number');
       expect(rail.budgets.cartProbeMs).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('the first request of a batch is allowed to be slow', () => {
+  // MEASURED 2026-09-02, and the measurement is the point: the heartbeat showed
+  // a 1.002s gap for a one-second interval, so the document was provably NOT
+  // frozen -- and the first search request still ran the whole 15s abort budget
+  // and was killed, while every one after it answered in 0.3s.
+  //
+  // That is a cold start, not a stall, and aborting a slow answer turns it into
+  // no answer at all.
+  it('Albertsons gives its cold request more room than its warm ones', () => {
+    const alb = getNetworkRail('albertsons')!;
+    expect(alb.budgets.searchFirstRequestMs).toBeGreaterThan(alb.budgets.searchRequestMs);
+  });
+
+  it('H-E-B has no cold-start problem and says so by not asking for one', () => {
+    const heb = getNetworkRail('heb')!;
+    expect(heb.budgets.searchFirstRequestMs).toBe(heb.budgets.searchRequestMs);
+  });
+
+  it('a per-request budget always fits inside its batch budget', () => {
+    // Otherwise the phase deadline fires while a single request is still
+    // legitimately running, and the run gives up on work that was going to land.
+    for (const id of ['heb', 'albertsons']) {
+      const b = getNetworkRail(id)!.budgets;
+      expect(b.searchFirstRequestMs).toBeLessThan(b.searchMs(1));
     }
   });
 });
