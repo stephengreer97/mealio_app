@@ -405,3 +405,62 @@ describe('a chosen product that no longer exists', () => {
     expect(fallbackBatches()).toBe(beforeCart);
   });
 });
+
+describe('a product already chosen is not searched again', () => {
+  // Choose Product once, add to cart forever. Until now the only thing kept was
+  // the product's DISPLAY NAME, so every run re-derived the product by searching
+  // that string — the store's relevance ranking got a vote on a decision the
+  // user had already made.
+  const chosenMeal = {
+    id: 'm2', name: 'Tacos',
+    ingredients: [
+      { ingredientName: 'Sour Cream', searchTerm: 'Daisy Sour Cream Light - 16 Oz',
+        productQty: 1, qty: 1, unit: 'qty', measure: null,
+        // H-E-B addresses a cart line by SKU, so a saved product for it carries
+        // one. Albertsons entries have no sku and do not need one.
+        storeProducts: { heb: { upc: 'p-sour-cream', sku: 's-sour-cream',
+                                name: 'Daisy Sour Cream Light - 16 Oz' } } },
+      { ingredientName: 'Tortillas', searchTerm: 'tortillas',
+        productQty: 1, qty: 1, unit: 'qty', measure: null },
+    ],
+  };
+
+  function openChosen() {
+    __applyAutomationConfigForTests({
+      stores: { heb: { networkSearch: true, networkAdd: true, cartSkuConfirm: true } },
+    });
+    const view = render(
+      <WebViewCartSheet visible meals={[chosenMeal] as never} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+    );
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    const load = (url = 'https://www.heb.com/') => act(() => {
+      const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url } });
+    });
+    return { view, post, load };
+  }
+
+  it('searches only the row that has no saved id', () => {
+    const { view, post, load } = openChosen();
+    load();
+    post(SESSION);
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+
+    // The already-chosen row never appears in a search — its identifier IS the
+    // choice, so there is nothing to look up.
+    const searches = injected.filter((s) => s.includes('productSearchPageV2'));
+    expect(searches.some((s) => s.includes('Daisy Sour Cream Light'))).toBe(false);
+    // ...and it still reaches the cart.
+    const write = injected.find((s) => s.includes('cartItemV2'))!;
+    expect(write).toContain('p-sour-cream');
+  });
+});

@@ -14,7 +14,7 @@
 //     serialize (each reads the result of the prior one) while different meals
 //     still save in parallel.
 
-import { withoutStoreProducts } from './storeProducts';
+import { withStoreProduct, withoutStoreProducts } from './storeProducts';
 
 export interface ChosenProductUpdate {
   /** Qty to persist for this meal, if the choose UI supplied one. */
@@ -25,6 +25,22 @@ export interface ChosenProductUpdate {
   purchaseWeight?: number | null;
   /** The weight dropdown's increment (lb), for the meal editor's stepper. */
   weightStep?: number | null;
+  /**
+   * THE STORE'S OWN ID FOR THE PRODUCT THE USER PICKED, and the store it is for.
+   *
+   * Choose Product once, add to cart forever -- that is the tenet. Until now the
+   * only thing kept was `searchTerm`, the product's DISPLAY NAME, so every later
+   * run re-derived the product by searching that string and letting the store's
+   * relevance ranking vote again. The choice was made once and re-made on every
+   * run.
+   *
+   * With this, the choice IS the identifier. `searchTerm` stays for display and
+   * as the fallback when the id no longer resolves.
+   */
+  storeProduct?: { upc: string; name: string; sku?: string } | null;
+  /** Which store the id belongs to. An id is meaningless at another chain, and
+   *  `storeProducts` is keyed by rail for exactly that reason. */
+  storeId?: string | null;
 }
 
 /** Name an ingredient row goes by, tolerating the three key variants the DB
@@ -60,7 +76,13 @@ export function mergeChosenProduct(
     // resolve: move a meal to H-E-B, pick something else, move it back, and
     // Kroger auto-adds the forgotten product while the meal displays the H-E-B
     // one. Dropped for the same reason `dropdown` above is.
-    return withoutStoreProducts({ ...ing, ...updates });
+    const cleared = withoutStoreProducts({ ...ing, ...updates });
+    // ...and THIS store's id is then written back, because it is the one the
+    // user just chose. Order matters: clearing first is what stops a stale id
+    // from another chain surviving beside the new name.
+    return update.storeProduct && update.storeProduct.upc
+      ? withStoreProduct(cleared, update.storeId, update.storeProduct)
+      : cleared;
   });
 }
 

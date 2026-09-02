@@ -132,3 +132,20 @@ describe('railConfigKey', () => {
     expect(getNetworkRail('safeway')).not.toBeNull();
   });
 });
+
+describe('a saved product must be writable at the store that saved it', () => {
+  // The two stores address a cart line differently, and a saved product that
+  // omitted what its own store needs would be unusable — the row would skip the
+  // search and then fail the write, every run, silently.
+  it('H-E-B needs the sku it saved', () => {
+    const heb = getNetworkRail('heb')!;
+    expect(heb.writable({ productId: 'p1', skuId: 's1' })).toBe(true);
+    // What a saved product WITHOUT a sku would look like at H-E-B.
+    expect(heb.writable({ productId: 'p1', skuId: null })).toBe(false);
+  });
+
+  it('Albertsons needs only the product id, and never has a sku to save', () => {
+    const alb = getNetworkRail('albertsons')!;
+    expect(alb.writable({ productId: 'p1', skuId: null })).toBe(true);
+  });
+});

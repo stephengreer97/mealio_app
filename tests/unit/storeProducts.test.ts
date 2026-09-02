@@ -147,3 +147,52 @@ describe('normalizeIngredients carries the choice, and only when there is one', 
     expect(ing.storeProducts).toEqual({ kroger: MILK });
   });
 });
+
+describe('choose once, add forever — the id is saved with the choice', () => {
+  // Until now the only thing kept was searchTerm, the product's DISPLAY NAME,
+  // so every later run re-derived the product by searching that string and
+  // letting the store's relevance ranking vote again. The choice was made once
+  // and re-made on every run.
+  const { mergeChosenProduct } = require('../../src/lib/saveChosenIngredient');
+
+  it('records the store id beside the name', () => {
+    const out = mergeChosenProduct(
+      [{ ingredientName: 'Sour Cream', searchTerm: null }],
+      'Sour Cream', 'Daisy Sour Cream Light - 16 Oz',
+      { storeProduct: { upc: '184040105', name: 'Daisy Sour Cream Light - 16 Oz' }, storeId: 'albertsons' },
+    );
+    expect(out[0].searchTerm).toBe('Daisy Sour Cream Light - 16 Oz');
+    expect(out[0].storeProducts.albertsons.upc).toBe('184040105');
+  });
+
+  it('drops another chain\'s id rather than leaving it beside a new name', () => {
+    // searchTerm is one global field. A choice made at Albertsons renames the
+    // row, so a surviving H-E-B id would resolve to a product the meal no
+    // longer describes and add it without asking (MEAL-19).
+    const out = mergeChosenProduct(
+      [{ ingredientName: 'Milk', searchTerm: 'H-E-B Whole Milk',
+         storeProducts: { heb: { upc: 'heb-1', name: 'H-E-B Whole Milk' } } }],
+      'Milk', 'Lucerne Whole Milk',
+      { storeProduct: { upc: 'alb-1', name: 'Lucerne Whole Milk' }, storeId: 'albertsons' },
+    );
+    expect(out[0].storeProducts.heb).toBeUndefined();
+    expect(out[0].storeProducts.albertsons.upc).toBe('alb-1');
+  });
+
+  it('a row nobody chose for still serialises with no key at all', () => {
+    // These objects are PATCHed back whole with no migration, so an untouched
+    // row has to look exactly as it did before this field existed.
+    const out = mergeChosenProduct(
+      [{ ingredientName: 'Milk', searchTerm: null }],
+      'Milk', 'Some Milk', {},
+    );
+    expect('storeProducts' in out[0]).toBe(false);
+  });
+
+  it('every Albertsons banner shares one key, H-E-B has its own', () => {
+    // One Albertsons id is valid at Safeway and Vons — same catalogue. An H-E-B
+    // id at Albertsons would add a real product nobody picked.
+    expect(storeProductKey('safeway')).toBe(storeProductKey('vons'));
+    expect(storeProductKey('heb')).not.toBe(storeProductKey('albertsons'));
+  });
+});

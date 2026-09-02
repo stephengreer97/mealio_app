@@ -38,6 +38,9 @@ export interface ConsolidatedIngredient {
    * the cart searches for; nothing that builds a store query reads this array.
    */
   mealIngredients: Array<{ mealId: string; mealName: string; qty: number; measure: string | null; unit: string; prep?: string }>;
+  /** Per-rail identifiers for the product the user chose. Absent on a row nobody
+   *  has chosen for, which is the normal case for a new meal. */
+  storeProducts?: Record<string, { upc: string; name: string; sku?: string }> | null;
 }
 
 export function normIngName(ing: any): string {
@@ -116,6 +119,10 @@ export function consolidateIngredients(
           dropdown: ing.dropdown ?? null,
           purchaseWeight: ing.purchaseWeight ?? null,
           weightStep: ing.weightStep ?? null,
+          // The store's own ids for this row, kept whole and keyed by rail. The
+          // run reads its own store's entry; carrying the map rather than one
+          // id means consolidation does not need to know which store is running.
+          storeProducts: ing.storeProducts ?? null,
           mealIds: [meal.id],
           mealNames: [meal.name],
           mealIngredients: [{ mealId: meal.id, mealName: meal.name, qty, measure: ing.measure ?? null, unit: ing.unit ?? 'qty', ...prepOf(ing) }],

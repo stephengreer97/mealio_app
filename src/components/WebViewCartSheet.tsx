@@ -23,6 +23,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { Colors } from '../constants/colors';
+import { getStoreProduct } from '../lib/storeProducts';
 import ExpandableNotice from './ui/ExpandableNotice';
 import { Meal } from '../types';
 // Two entry points on purpose: useStores() where the value is rendered, and
@@ -199,7 +200,12 @@ export interface WebViewCartSheetProps {
   storeId: string;
   storeName: string;
   onClose: () => void;
-  onIngredientChosen?: (ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null) => void;
+  /** `storeProduct` is the STORE'S OWN ID for what was picked, when the search
+   *  that produced it could see one — which on a rail store is always. Saving it
+   *  is what makes Choose Product once, add forever literal: the next run writes
+   *  that id straight to the cart instead of searching the name and letting the
+   *  store's ranking pick again. */
+  onIngredientChosen?: (ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null, storeProduct?: { upc: string; name: string; sku?: string } | null) => void;
   /** 'modal' (default) renders the original native pageSheet — unchanged
    *  behavior. 'layer' renders a provider-controlled root overlay that can be
    *  slid offscreen (collapsed) while keeping the WebView mounted, so the cart
@@ -215,6 +221,37 @@ export interface WebViewCartSheetProps {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * The store's own id for a candidate, in the shape `storeProducts` keeps.
+ *
+ * Null when the search that produced the candidate could not see one -- a
+ * page-read candidate has a name and nothing else. Returning null then is the
+ * point: a row must not gain a key it cannot use, and `getStoreProduct` treats
+ * a missing entry as "search for it", which is what today already does.
+ */
+/**
+ * The product this row was chosen for at the store now running, or null.
+ *
+ * Null is the normal answer for a meal nobody has chosen for yet, and it means
+ * exactly what it has always meant: search for it.
+ */
+function storedProductFor(item: { storeProducts?: Record<string, { upc: string; name: string; sku?: string }> | null },
+                          storeId: string | null): { upc: string; name: string; sku?: string } | null {
+  return getStoreProduct(item, storeId);
+}
+
+function railStoreProduct(c: { productId?: string | null; skuId?: string | null; productName?: string })
+  : { upc: string; name: string; sku?: string } | null {
+  if (!c || !c.productId) return null;
+  return {
+    upc: String(c.productId),
+    name: c.productName ?? '',
+    // H-E-B addresses a cart line by sku and refuses to build a write without
+    // one, so a saved product that omitted it would be unusable there.
+    ...(c.skuId ? { sku: String(c.skuId) } : {}),
+  };
+}
 
 function ts(): string {
   const d = new Date();
@@ -855,6 +892,11 @@ export default function WebViewCartSheet({
    * and the user never sees a second loading screen -- by the time the adds are
    * done the candidates are usually already here.
    */
+  const netStoredProduct = useCallback(
+    (item: { storeProducts?: Record<string, { upc: string; name: string; sku?: string }> | null }) =>
+      storedProductFor(item, lockedStoreIdRef.current),
+    [],
+  );
   const netFallbackWantedRef = useRef<Map<number, string>>(new Map());
   const netFallbackCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
   const netFallbackPendingRef = useRef(false);
@@ -1611,6 +1653,32 @@ export default function WebViewCartSheet({
         });
         continue;
       }
+      // A ROW WE ALREADY HAVE THE ID FOR SKIPS THE MATCHER ENTIRELY.
+      //
+      // There is nothing to match: the identifier IS the choice. It goes
+      // straight into the write batch, and the write's own verification against
+      // the returned cart is what catches a retired id or a line the store marks
+      // unavailable — the same checks a searched item gets, just after the
+      // request rather than before it.
+      const stored = netStoredProduct(item);
+      if (stored) {
+        netMatchedRef.current.set(idx, {
+          productId: stored.upc, skuId: stored.sku ?? null,
+          name: stored.name || item.ingredientName,
+          purchasePreferenceId: null, maxOrderQuantity: null,
+        });
+        toWrite.push({
+          idx,
+          productId: stored.upc,
+          skuId: stored.sku ?? null,
+          quantity: Math.max(1, Math.round(item.productQty || 1)),
+          name: stored.name || item.ingredientName,
+          isWeightItem: false,
+          purchasePreferenceId: null,
+          maxOrderQuantity: null,
+        });
+        continue;
+      }
       const candidates = netCandidatesRef.current.get(term) ?? [];
       // The SAME rule the page path uses: an exact name, in stock. Anything
       // looser here would add a product the user did not ask for, which is the
@@ -1870,10 +1938,36 @@ export default function WebViewCartSheet({
     const active = activeItemsRef.current;
     const sess = netSessionRef.current;
     if (!sess) { netHandOverToUser('no_session'); return; }
-    const terms = Array.from(new Set(active.map((i) => i.searchTerm ?? i.ingredientName).filter(Boolean)));
-    if (!terms.length) { netHandOverToUser('no_terms'); return; }
+    // CHOOSE PRODUCT ONCE, ADD FOREVER -- so a row that already carries the
+    // store's own id is not searched at all.
+    //
+    // Everything below this line exists to turn a NAME back into a product, and
+    // for a row the user has already chosen for, that work re-decides a decision
+    // they made: the store's relevance ranking gets a vote on every run, and
+    // "the same product" degrades to "a name that scores 100 against the one we
+    // wrote down". With the id there is nothing to re-decide and nothing to
+    // search -- the run goes straight to writing.
+    //
+    // The id is not trusted blindly. The write verifies itself against the cart
+    // it returns, so a retired id, a rejected write or a line the store marks
+    // unavailable all come back as failures, and those fall through to the same
+    // review the search path uses.
     const rail = netRail();
     if (!rail) { netHandOverToUser('no_rail'); return; }
+    const needSearch = active.filter((i) => !netStoredProduct(i));
+    const known = active.length - needSearch.length;
+    if (known > 0) {
+      console.log(`[Cart ${ts()}]`, 'network run:', known, 'of', active.length,
+        'already chosen — writing those without searching');
+    }
+    const terms = Array.from(new Set(needSearch.map((i) => i.searchTerm ?? i.ingredientName).filter(Boolean)));
+    if (!terms.length) {
+      // Every row was already chosen. Nothing to look up at all.
+      netSearchTermsRef.current = [];
+      netPhaseRef.current = 'search';
+      netStartAddsRef.current();
+      return;
+    }
 
     // WAIT FOR AN IN-FLIGHT PREWARM BEFORE OPENING A SECOND BURST.
     //
@@ -2851,6 +2945,11 @@ export default function WebViewCartSheet({
     if (loginPrewarmRef.current?.getStatus(lockedStoreIdRef.current) !== 'loggedIn') return;
     const terms = Array.from(new Set(
       qtyItemsRef.current.filter((it) => !isZeroedOut(it))
+        // A row the user has already chosen for at this store has nothing to
+        // look up — the run writes its saved id straight to the cart. Searching
+        // it here would be work whose answer is thrown away, on the one phase
+        // that exists to save the run time.
+        .filter((it) => !netStoredProduct(it))
         .map((it) => it.searchTerm || it.ingredientName)
         .filter((t): t is string => !!t),
     ));
@@ -4356,6 +4455,24 @@ export default function WebViewCartSheet({
           const at = typeof msg.idx === 'number' ? msg.idx : -1;
           if (at < 0) return;
           console.log(`[Cart ${ts()}]`, 'network add', msg.name, msg.success ? 'ok' : ('failed: ' + msg.reason));
+          // A STORED ID THAT DID NOT WORK NEEDS SOMETHING TO OFFER INSTEAD.
+          //
+          // A row written from a saved product id never went through the search,
+          // so when its write is refused -- the id retired, the line marked
+          // unavailable -- there are no candidates for the review screen. The
+          // ingredient-name search that a no-results row gets up front is fired
+          // for it HERE instead, on the failure, because that is the first
+          // moment we know it is needed. It costs a request only for the items
+          // that actually failed.
+          if (!msg.success && at >= 0) {
+            const failed = activeItemsRef.current[at];
+            const wasStored = !!(failed && netStoredProduct(failed));
+            if (wasStored && failed.ingredientName
+                && !netFallbackWantedRef.current.has(at)) {
+              netFallbackWantedRef.current.set(at, failed.ingredientName);
+              netStartFallbackSearchRef.current();
+            }
+          }
           if (!msg.success && msg.reason === 'quantity_limit_reached') {
             setCapReached((prev) => (prev.some((c) => c.name === msg.name)
               ? prev
@@ -4760,6 +4877,7 @@ export default function WebViewCartSheet({
             dropdown,
             weightFromIdx(chooseQty),
             weightStep,
+            railStoreProduct(candidate),
           );
         } else {
           // Add-to-cart / review-unmatched flow: queue item for cart, optionally save searchTerm.
@@ -4803,6 +4921,7 @@ export default function WebViewCartSheet({
               reviewDropdown,
               chosenWeight,
               weightStep,
+              railStoreProduct(candidate),
             );
           }
         }

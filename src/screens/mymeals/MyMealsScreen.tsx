@@ -488,7 +488,7 @@ export default function MyMealsScreen() {
     }
   }
 
-  async function handleIngredientChosen(ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null) {
+  async function handleIngredientChosen(ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null, storeProduct?: { upc: string; name: string; sku?: string } | null) {
     // Whose choice this is. Captured HERE, when the product is picked, rather
     // than read inside the queued work: the point of the guard is to compare the
     // session that queued a save against the one running when it comes up.
@@ -515,7 +515,12 @@ export default function MyMealsScreen() {
             meal.ingredients as any[],
             ingredientName,
             productName,
-            { qty: mealQtys?.[mealId], dropdown, purchaseWeight, weightStep },
+            // storeProduct is the store's own id for what was picked. Saved
+            // beside the name so the NEXT run writes it straight to the cart
+            // instead of searching the name again — Choose Product once, add
+            // forever, made literal. Keyed to the meal's own store.
+            { qty: mealQtys?.[mealId], dropdown, purchaseWeight, weightStep,
+              storeProduct, storeId: meal.storeId },
           );
           try {
             const updated = await mealsApi.update(mealId, { ingredients: updatedIngredients } as any);

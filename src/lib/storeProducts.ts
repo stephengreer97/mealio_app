@@ -27,12 +27,25 @@
 //     the same rule `prep` follows in normalizeIngredients.
 
 import { isKrogerBrand } from '../constants/stores';
+import { ALBERTSONS_FAMILY_IDS } from './webview-scripts/albertsons';
 
 /** A product the user picked, as the store identifies it. `name` is kept beside
  *  the id for display and for debugging a stale id — it is never searched. */
 export interface StoreProduct {
   upc: string;
   name: string;
+  /**
+   * The store's SKU, where the store addresses a cart line by one.
+   *
+   * H-E-B does: its add mutation takes a sku id, and its rail refuses to build a
+   * write without one. Albertsons does not -- it addresses by product id and its
+   * search returns no sku at all. So this is optional in the same way the whole
+   * entry is: absent means the store never had one, not that it was lost.
+   *
+   * Kroger's entries predate it and carry none, which is correct -- Kroger
+   * writes by UPC.
+   */
+  sku?: string;
 }
 
 /**
@@ -45,7 +58,18 @@ export interface StoreProduct {
  */
 export function storeProductKey(storeId: string | null | undefined): string {
   if (!storeId) return '';
-  return isKrogerBrand(storeId) ? 'kroger' : storeId;
+  if (isKrogerBrand(storeId)) return 'kroger';
+  // The Albertsons family is fifteen banners on one platform and one product
+  // catalogue, exactly like Kroger's — a product id from albertsons.com is the
+  // same product at safeway.com and vons.com. Folding them means a meal moved
+  // between banners keeps its choices; leaving them apart silently threw the
+  // choice away and searched the name again.
+  //
+  // Availability still varies by location, and that is checked when the product
+  // is looked up or written, not here. Same rule the rail's own config key
+  // follows (railConfigKey).
+  if ((ALBERTSONS_FAMILY_IDS as readonly string[]).includes(storeId)) return 'albertsons';
+  return storeId;
 }
 
 /** The product chosen for this store on this ingredient, or null. Tolerates the
@@ -55,7 +79,11 @@ export function getStoreProduct(ing: any, storeId: string | null | undefined): S
   if (!key) return null;
   const entry = ing?.storeProducts?.[key];
   if (!entry || typeof entry.upc !== 'string' || !entry.upc.trim()) return null;
-  return { upc: entry.upc, name: typeof entry.name === 'string' ? entry.name : '' };
+  return {
+    upc: entry.upc,
+    name: typeof entry.name === 'string' ? entry.name : '',
+    ...(typeof entry.sku === 'string' && entry.sku ? { sku: entry.sku } : {}),
+  };
 }
 
 /**
@@ -74,7 +102,16 @@ export function withStoreProduct<T extends Record<string, any>>(
   if (!key || !product.upc) return ing;
   return {
     ...ing,
-    storeProducts: { ...(ing.storeProducts ?? {}), [key]: { upc: product.upc, name: product.name } },
+    storeProducts: {
+      ...(ing.storeProducts ?? {}),
+      // The sku key is written only when there is one, so a store that has none
+      // serialises exactly as it did before this field existed.
+      [key]: {
+        upc: product.upc,
+        name: product.name,
+        ...(product.sku ? { sku: product.sku } : {}),
+      },
+    },
   };
 }
 
