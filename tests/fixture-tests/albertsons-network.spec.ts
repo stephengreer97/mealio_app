@@ -350,189 +350,168 @@ describe('Albertsons add over the network — qty is ABSOLUTE', () => {
   });
 });
 
+/**
+ * The page context the probe now needs: a server-set session cookie for the
+ * store, and one cookie-authenticated endpoint for the customer. Neither
+ * involves the site's bootstrap, which is the whole point.
+ */
+function albStub(opts: {
+  shared?: Record<string, unknown> | null;
+  userInfoStatus?: number;
+  userInfoBody?: unknown;
+  userInfoHang?: boolean;
+  userInfoReject?: boolean;
+  cartStatus?: number;
+  page?: Record<string, unknown> | null;
+} = {}) {
+  const shared = opts.shared === undefined
+    ? { info: { SHOP: { storeId: '161', zipcode: '83713' }, COMMON: { userType: 'R' } } }
+    : opts.shared;
+  const body = opts.userInfoBody === undefined
+    ? { SWY_SHOP_TOKEN: 'tok', customerId: 'c1', firstName: 'Stephen', UUID: 'uuid-1' }
+    : opts.userInfoBody;
+  return [
+    '(function () {',
+    '  window.__urls = [];',
+    shared
+      ? '  Object.defineProperty(document, "cookie", { configurable: true, get: function () {'
+        + ' return "SWY_SHARED_SESSION_INFO=" + encodeURIComponent(' + JSON.stringify(JSON.stringify(shared)) + '); } });'
+      : '  Object.defineProperty(document, "cookie", { configurable: true, get: function () { return ""; } });',
+    opts.page
+      ? '  window.AB = { userInfo: ' + JSON.stringify(opts.page) + ' };'
+      : '  delete window.AB;',
+    '  window.SWY = { CONFIGSERVICE: { searchConfig: { apimProgramSubscriptionKey: "0123456789abcdef0123456789abcdef" },',
+    '    erumsConfig: { store: { apim: { key: "fedcba9876543210fedcba9876543210" } } } } };',
+    '  window.fetch = function (url) {',
+    '    var u = String(url); window.__urls.push(u);',
+    '    if (u.indexOf("/bin/safeway/unified/userinfo") !== -1) {',
+    opts.userInfoHang ? '      return new Promise(function () {});' : '',
+    opts.userInfoReject ? '      return Promise.reject(new Error("offline"));' : '',
+    '      return Promise.resolve({ status: ' + String(opts.userInfoStatus ?? 200) + ',',
+    '        text: function () { return Promise.resolve(' + JSON.stringify(JSON.stringify(body)) + '); } });',
+    '    }',
+    '    return Promise.resolve({ status: ' + String(opts.cartStatus ?? 200) + ',',
+    '      json: function () { return Promise.resolve({ carts: [{ cartItemsList: ['
+      + ' { itemId: "1", qty: 2, name: "Item 1" } ] }] }); } });',
+    '  };',
+    '})(); true;',
+  ].filter(Boolean).join('\n');
+}
+
+const urlsProbe = '(function(){ window.ReactNativeWebView.postMessage(JSON.stringify('
+  + '{ type: "PROBE", urls: window.__urls })); })(); true;';
+
 describe('Albertsons session probe', () => {
-  itWithFixture('search-results-tortillas.html', 'reports logged out when the page HAS hydrated and there is no token', async (runner) => {
-    await runner.inject('(function(){ window.AB = { userInfo: { branchId: "161" } }; window.SWY = { CONFIGSERVICE: {} }; })(); true;');
-    await runner.inject(buildAlbertsonsSessionScript());
-    const msg = await runner.waitForMessage('ALB_SESSION', 15_000);
-    expect(msg.ok).toBe(true);
-    expect(msg.loggedIn).toBe(false);
-  });
+  // Every earlier version of this probe read the PAGE, and every one of them
+  // told Stephen he was signed out while he was signed in -- from both
+  // directions, three times, over two days. window.AB.userInfo is not something
+  // the page KNOWS: it is the parsed body of one cookie-authenticated GET the
+  // site makes on boot. Waiting for it put our answer behind the site's whole
+  // bootstrap and behind Chromium's timer throttling in a WebView the user is
+  // not looking at -- 142 seconds on the 22:10 run. So the probe asks the
+  // server, exactly as H-E-B's does, and its answer decides.
 
-  itWithFixture('search-results-tortillas.html', 'does NOT claim signed-out before the page has hydrated', async (runner) => {
-    // MEAL-124: window.AB.userInfo is populated by the Angular bootstrap, so
-    // before hydration it is absent rather than empty. Calling that "signed out"
-    // walls a signed-in user every time we inject early. The probe must hand the
-    // question back instead of answering it.
-    await runner.inject('(function(){ delete window.AB; window.SWY = { CONFIGSERVICE: {} }; })(); true;');
+  itWithFixture('logged-in-home.html', 'answers from the endpoint with NO page bootstrap at all', async (runner) => {
+    // window.AB never appears. Before this that was unanswerable.
+    await runner.inject(albStub());
     await runner.inject(buildAlbertsonsSessionScript());
-    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
-    expect(msg.ok).toBe(false);
-    expect(msg.why).toBe('not_hydrated');
-    // Emphatically not an assertion about the user.
-    expect(msg.loggedIn).toBeUndefined();
-  });
-
-  itWithFixture('logged-in-home.html', 'answers the login question BEFORE the cart read, not after it', async (runner) => {
-    // Stephen, 2026-09-01, second report: "Its saying I'm not logged in when I
-    // am. It also takes a very long time to determine that."
-    //
-    // The probe had grown to five seconds waiting for the token plus twelve
-    // waiting for the cart -- seventeen against the sheet's twenty-second login
-    // deadline, on a page that redirects and restarts the whole thing. It sat,
-    // then told a signed-in user they were signed out.
-    //
-    // The login answer no longer waits on the cart at all. The token is on the
-    // page and the user is named on it; that IS the fallback answer, so it is
-    // given immediately and the read only refines it.
-    //
-    // A cart read that hangs for the full budget is the case that matters, so
-    // this one never answers.
-    await runner.inject(
-      '(function(){ window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok", firstName: "Stephen",'
-      + ' branchId: "161", zipcode: "83713" } };'
-      + ' var realFetch = window.fetch;'
-      + ' window.fetch = function (u) {'
-      + '   if (String(u).indexOf("cartservice") !== -1) return new Promise(function(){});'
-      + '   return realFetch.apply(window, arguments); }; })(); true;');
-    await runner.inject(buildAlbertsonsSessionScript());
-
     const started = Date.now();
     const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
-    // Fast, and it says signed in. Before this it waited out the cart budget.
     expect(Date.now() - started).toBeLessThan(3_000);
-    expect(msg).toMatchObject({ ok: true, loggedIn: true, verified: false, early: true });
+    expect(msg).toMatchObject({ ok: true, loggedIn: true, source: 'userinfo' });
+    // Customer from the endpoint, store from the cookie. Neither carries both.
     expect(msg.storeId).toBe('161');
+    expect(msg.zipCode).toBe('83713');
+    expect(msg.uuid).toBe('uuid-1');
   });
 
-  itWithFixture('logged-in-home.html', 'waits for the TOKEN, not just for userInfo to exist', async (runner) => {
-    // Stephen, 2026-09-01: "login detection is not working". The probe answered
-    // ok:true loggedIn:false in 293ms -- far inside its own 5s budget -- while he
-    // was signed in.
-    //
-    // The wait stopped as soon as userInfo had ANY keys and then read a missing
-    // token as signed out. That is only sound if the bootstrap fills the object
-    // in one go; if it publishes the object first and the auth fields a moment
-    // later, a signed-in user gets walled.
-    //
-    // Here the object appears immediately WITHOUT a token, and the token lands
-    // 900ms later. The old loop answered "signed out" at once.
-    await runner.inject(
-      '(function(){ window.AB = { userInfo: { branchId: "161", zipcode: "83713" } };'
-      + ' setTimeout(function(){ window.AB.userInfo.SWY_SHOP_TOKEN = "tok"; }, 900); })(); true;');
+  itWithFixture('logged-in-home.html', 'a 200 with no token IS signed out, definitively', async (runner) => {
+    // The site's own reading: processUserInfoFlow sees no SWY_SHOP_TOKEN and
+    // tears the session down. So this is not a guess and not an absence.
+    await runner.inject(albStub({ userInfoBody: {} }));
     await runner.inject(buildAlbertsonsSessionScript());
     const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
-    expect(msg.loggedIn).not.toBe(false);
+    expect(msg).toMatchObject({ ok: true, loggedIn: false, source: 'userinfo' });
   });
 
-  itWithFixture('logged-in-home.html', 'still says signed out when the token never comes, and names what it saw', async (runner) => {
-    // The other side: a genuinely signed-out user must still be reported as one,
-    // and the answer has to carry enough to tell that apart from "the token
-    // moved" next time this is wrong. Keys only -- never their values.
-    await runner.inject(
-      '(function(){ window.AB = { userInfo: { branchId: "161", zipcode: "83713" } }; })(); true;');
+  itWithFixture('logged-in-home.html', 'a 403 is signed out — the site reads it the same way', async (runner) => {
+    await runner.inject(albStub({ userInfoStatus: 403 }));
     await runner.inject(buildAlbertsonsSessionScript());
     const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
-    expect(msg.ok).toBe(true);
-    expect(msg.loggedIn).toBe(false);
-    expect(msg.userInfoKeys).toEqual(['branchId', 'zipcode']);
-    expect(JSON.stringify(msg)).not.toContain('tok');
+    expect(msg).toMatchObject({ ok: true, loggedIn: false, status: 403 });
   });
 
-
-  itWithFixture('search-results-tortillas.html', 'waits for a late bootstrap rather than racing it', async (runner) => {
-    await runner.inject('(function(){ delete window.AB; window.SWY = { CONFIGSERVICE: { searchConfig: { apimProgramSubscriptionKey: "k" },'
-      + ' datapowerConfig: { cncSubscriptionKey: "fedcba9876543210fedcba9876543210" } } };'
-      + ' setTimeout(function(){ window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok", branchId: "161", zipcode: "83713" } }; }, 1200); })(); true;');
-    await runner.inject(cartStub({ '1': 1 }));
-    await runner.inject(buildAlbertsonsSessionScript());
-    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
-    expect(msg.ok).toBe(true);
-    expect(msg.loggedIn).toBe(true);
-    expect(msg.storeId).toBe('161');
-  });
-
-  itWithFixture('search-results-tortillas.html', 'a token we cannot verify is INCONCLUSIVE, never signed-out', async (runner) => {
-    // Caught on the device: the page carried a live token and firstName
-    // "Stephen" while the probe reported loggedIn false, because our own cart
-    // call was 401ing on the wrong subscription key. Our inability to call the
-    // cart says nothing about whether the user is signed in.
-    await runner.inject(CONTEXT);
-    await runner.inject(cartStub({}, { getStatus: 401 }));
+  itWithFixture('logged-in-home.html', 'a 500 says nothing about the user — handed back, not guessed', async (runner) => {
+    // The rule that survived being wrong in both directions: our inability to
+    // make a request is a fact about us. Answering it either way is what walled
+    // a signed-in user once and started a run under a signed-out one before that.
+    await runner.inject(albStub({ userInfoStatus: 500 }));
     await runner.inject(buildAlbertsonsSessionScript());
     const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
     expect(msg.ok).toBe(false);
-    expect(msg.why).toBe('cart_unreadable');
-    expect(msg.tokenPresent).toBe(true);
-    // The one thing it must never say here.
+    expect(msg.why).toBe('http');
+    expect(msg.status).toBe(500);
     expect(msg.loggedIn).toBeUndefined();
   });
 
-  itWithFixture('search-results-tortillas.html', 'token + name + an unreadable cart = signed in, flagged UNVERIFIED', async (runner) => {
-    // The device case: userInfo had a live token and firstName "Stephen", the
-    // cart 401'd on the wrong key, and the DOM heuristic also said signed out
-    // because it ran mid-bootstrap. Blocking a signed-in user from the app is
-    // worse than starting a run that fails at the first write.
-    await runner.inject('(function(){ window.SWY = { CONFIGSERVICE: {'
-      + ' searchConfig: { apimProgramSubscriptionKey: "0123456789abcdef0123456789abcdef" },'
-      + ' datapowerConfig: { cncSubscriptionKey: "fedcba9876543210fedcba9876543210" } } };'
-      + ' window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok", firstName: "Stephen",'
-      + ' branchId: "161", zipcode: "83713", UUID: "u" } }; })(); true;');
-    await runner.inject(cartStub({}, { getStatus: 401 }));
+  itWithFixture('logged-in-home.html', 'a network error is inconclusive too', async (runner) => {
+    await runner.inject(albStub({ userInfoReject: true }));
     await runner.inject(buildAlbertsonsSessionScript());
-    // TWO answers now. The first settles the login gate the moment the token is
-    // read -- so no budget of ours can make the sheet think a signed-in user is
-    // signed out by not answering in time -- and the second refines it with what
-    // the cart read found. This asserts the refined one, which is where the
-    // diagnosis lives.
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    expect(msg.ok).toBe(false);
+    expect(msg.loggedIn).toBeUndefined();
+  });
+
+  itWithFixture('logged-in-home.html', 'uses the page when it IS booted, without asking again', async (runner) => {
+    await runner.inject(albStub({
+      page: { SWY_SHOP_TOKEN: 'tok', branchId: '161', zipcode: '83713', UUID: 'uuid-1' },
+    }));
+    await runner.inject(buildAlbertsonsSessionScript());
+    const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
+    expect(msg).toMatchObject({ ok: true, loggedIn: true, storeId: '161' });
+    await runner.inject(urlsProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    // The request is the fallback, not the routine.
+    expect(seen.urls.some((u: string) => u.indexOf('/bin/safeway/unified/userinfo') !== -1)).toBe(false);
+  });
+
+  itWithFixture('logged-in-home.html', 'the cart read refines the answer, it never downgrades it', async (runner) => {
+    // Two answers. The first settles the login gate the moment the endpoint has
+    // spoken; the second says whether the token actually works. A cart that
+    // fails proves nothing about the user, only about us.
+    await runner.inject(albStub({ cartStatus: 401 }));
+    await runner.inject(buildAlbertsonsSessionScript());
     const early = await runner.waitForMessage('ALB_SESSION', 20_000);
-    expect(early).toMatchObject({ ok: true, loggedIn: true, verified: false, early: true });
+    expect(early).toMatchObject({ ok: true, loggedIn: true, early: true });
     expect(early.cartReadable).toBeNull();
-    const msg = await runner.waitForMessage('ALB_SESSION', 20_000, (m) => !m.early);
-    expect(msg.ok).toBe(true);
-    expect(msg.loggedIn).toBe(true);
-    // Marked so telemetry can separate a proven session from an assumed one.
-    expect(msg.verified).toBe(false);
-    expect(msg.cartReadable).toBe(false);
+    const refined = await runner.waitForMessage('ALB_SESSION', 20_000, (m) => !m.early);
+    expect(refined).toMatchObject({ ok: true, loggedIn: true, verified: false, cartReadable: false });
   });
 
-  itWithFixture('search-results-tortillas.html', 'superseded: a stale token is NOT signed in — the cart read decides', async (runner) => {
-    // The failure this pins: loggedIn was set from the token alone and the cart
-    // result was reported beside it as cartReadable, which nothing consumed. A
-    // dead token then read as signed in, the run started, and a signed-OUT user
-    // watched the sign-in prompt get replaced by an automation loading the cart.
-    await runner.inject(CONTEXT);
-    await runner.inject(cartStub({}, { getStatus: 401 }));
+  itWithFixture('logged-in-home.html', 'marks the session VERIFIED when the cart actually reads', async (runner) => {
+    await runner.inject(albStub());
+    await runner.inject(buildAlbertsonsSessionScript());
+    await runner.waitForMessage('ALB_SESSION', 20_000);
+    const refined = await runner.waitForMessage('ALB_SESSION', 20_000, (m) => !m.early);
+    expect(refined).toMatchObject({ ok: true, loggedIn: true, verified: true, cartReadable: true });
+    expect(refined.hasSearchKey).toBe(true);
+  });
+
+  itWithFixture('logged-in-home.html', 'signed in with no store still answers the login gate', async (runner) => {
+    // The cookie had no SHOP section. The run cannot search without a store, but
+    // that is not a reason to tell a signed-in user they are signed out.
+    await runner.inject(albStub({ shared: { info: { COMMON: { userType: 'R' } } } }));
     await runner.inject(buildAlbertsonsSessionScript());
     const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
-    expect(msg.ok).toBe(false);
-    expect(msg.loggedIn).toBeUndefined();
+    expect(msg).toMatchObject({ ok: true, loggedIn: true });
+    expect(msg.storeId).toBeNull();
   });
 
-  itWithFixture('search-results-tortillas.html', 'a cart that errors for a NON-auth reason says nothing about the user', async (runner) => {
-    // A 500 or a timeout is the store having a bad minute. Calling that "signed
-    // out" walls a signed-in user; calling it "signed in" starts a run that
-    // cannot work. Neither — hand it back.
-    await runner.inject(CONTEXT);
-    await runner.inject(cartStub({}, { getStatus: 500 }));
+  itWithFixture('logged-in-home.html', 'never reports a token or any credential value', async (runner) => {
+    await runner.inject(albStub());
     await runner.inject(buildAlbertsonsSessionScript());
     const msg = await runner.waitForMessage('ALB_SESSION', 20_000);
-    expect(msg.ok).toBe(false);
-    expect(msg.why).toBe('cart_unreadable');
-    expect(msg.loggedIn).toBeUndefined();
-  });
-
-  itWithFixture('search-results-tortillas.html', 'reports the store and that the cart is actually reachable', async (runner) => {
-    await runner.inject(CONTEXT);
-    await runner.inject(cartStub({ '1': 1 }));
-    await runner.inject(buildAlbertsonsSessionScript());
-    const msg = await runner.waitForMessage('ALB_SESSION', 15_000);
-    expect(msg.loggedIn).toBe(true);
-    expect(msg.storeId).toBe('161');
-    expect(msg.hasSearchKey).toBe(true);
-    // A token alone is not proof the add path works — the subscription key is a
-    // separate gate, so the probe reads the cart to find out.
-    expect(msg.cartReadable).toBe(true);
+    expect(JSON.stringify(msg)).not.toContain('tok');
   });
 });
 
@@ -557,55 +536,44 @@ describe('Albertsons cart read over the network', () => {
   const CONFIG_ONLY = '(function(){ window.SWY = { CONFIGSERVICE: { erumsConfig: {'
     + ' store: { apim: { key: "0123456789abcdef0123456789abcdef" } } } } }; })(); true;';
 
-  itWithFixture('search-results-tortillas.html',
-    'does NOT fire a request before the page has a user', async (runner) => {
+  itWithFixture('logged-in-home.html',
+    'fires no cart request until it has a store and a token', async (runner) => {
     // Stephen's run of 2026-09-01 came back rail_read_http and nothing was
     // reconciled. The read is injected the moment the store page settles, which
-    // on Albertsons is BEFORE the Angular bootstrap fills window.AB.userInfo --
-    // so the URL was built from {} and went out as
-    // '?storeId=&serviceType=Dug&zipCode=', which the gateway rejects. That
-    // reads downstream as "your cart could not be read" when the truth is "we
-    // asked too early".
-    await runner.inject(CONFIG_ONLY);
-    await runner.inject('(function(){ window.AB = { userInfo: {} }; })(); true;');
-    await runner.inject(recordingCartStub({}));
+    // is BEFORE the site's bootstrap fills window.AB.userInfo -- so the URL was
+    // built from {} and went out as '?storeId=&serviceType=Dug&zipCode=' under a
+    // bare 'Bearer '. The gateway rejects that, and it reaches the log as "your
+    // cart could not be read" when the truth is "we asked without a session".
+    await runner.inject(albStub({ userInfoBody: {} }));   // signed out
     await runner.inject(buildAlbertsonsCartReadScript());
 
     const msg = await runner.waitForMessage('CART_COUNT', 20_000);
-    // Unknown, and named for what it was.
+    // Unknown, never zero -- a zero would invite the reconcile to re-add
+    // everything already in the cart.
     expect(msg.count).toBeNull();
     expect(msg.reason).toBe('rail_read_not_hydrated');
 
-    const probe = await runner.inject(
-      '(function(){ window.ReactNativeWebView.postMessage(JSON.stringify('
-      + '{ type: "PROBE", urls: window.__urls })); })(); true;');
-    void probe;
+    await runner.inject(urlsProbe);
     const seen = await runner.waitForMessage('PROBE', 10_000);
-    // The point: no request at all, rather than a malformed one.
-    expect(seen.urls).toEqual([]);
+    expect(seen.urls.some((u: string) => u.indexOf('cartservice') !== -1)).toBe(false);
   });
 
-  itWithFixture('search-results-tortillas.html',
-    'waits for a late bootstrap and then reads the cart', async (runner) => {
-    await runner.inject(CONFIG_ONLY);
-    await runner.inject('(function(){ window.AB = { userInfo: {} };'
-      + ' setTimeout(function(){ window.AB.userInfo = { SWY_SHOP_TOKEN: "tok",'
-      + ' branchId: "161", zipcode: "83713" }; }, 900); })(); true;');
-    await runner.inject(recordingCartStub({ '1': 2, '2': 1 }));
+  itWithFixture('logged-in-home.html',
+    'resolves the session itself rather than waiting for the page', async (runner) => {
+    // window.AB never appears at all. The read gets its token from the endpoint
+    // and its store from the cookie, and goes.
+    await runner.inject(albStub());
     await runner.inject(buildAlbertsonsCartReadScript());
 
     const msg = await runner.waitForMessage('CART_COUNT', 20_000);
-    expect(msg.count).toBe(3);
+    expect(msg.count).toBe(2);
     expect(msg.source).toBe('network');
 
-    await runner.inject(
-      '(function(){ window.ReactNativeWebView.postMessage(JSON.stringify('
-      + '{ type: "PROBE", urls: window.__urls })); })(); true;');
+    await runner.inject(urlsProbe);
     const seen = await runner.waitForMessage('PROBE', 10_000);
-    // And the one request it did make carried the store it waited for.
-    expect(seen.urls.length).toBe(1);
-    expect(seen.urls[0]).toContain('storeId=161');
-    expect(seen.urls[0]).not.toContain('storeId=&');
+    const cartUrl = seen.urls.find((u: string) => u.indexOf('cartservice') !== -1);
+    expect(cartUrl).toContain('storeId=161');
+    expect(cartUrl).not.toContain('storeId=&');
   });
 
   itWithFixture('search-results-tortillas.html',

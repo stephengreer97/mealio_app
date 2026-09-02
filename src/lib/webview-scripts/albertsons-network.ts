@@ -50,8 +50,153 @@ const ALB_PRELUDE = `
     return { dp: C.datapowerConfig || {}, sc: C.searchConfig || {}, all: C };
   }
 
+  // ASK THE SERVER, DO NOT WAIT FOR THE PAGE.
+  //
+  // MEASURED 2026-09-01 from the site's own bundles. window.AB.userInfo is not
+  // something the page knows -- it is the parsed body of ONE cookie-authenticated
+  // GET the page makes on boot:
+  //
+  //   AB.userInfoPath = '/bin/safeway/unified/userinfo?rand=<n>&banner=<banner>'
+  //   $.get(AB.userInfoPath).done(AB.COMMON.processUserInfoFlow)
+  //   processUserInfoFlow(a): !JSON.parse(a).SWY_SHOP_TOKEN -> expired session
+  //                           otherwise -> mapUserInfo(JSON.parse(a))
+  //   on 403                -> processUserInfoFlow('{}')
+  //
+  // and the store and zip come from a cookie the SERVER set, which is readable
+  // the instant the document exists:
+  //
+  //   prepareSharedInfo(): JSON.parse(unescape(cookie SWY_SHARED_SESSION_INFO))
+  //   mapSharedInfo(a):    branchId = a.info.SHOP.storeId
+  //                        zipcode  = a.info.SHOP.zipcode
+  //                        userType = a.info.COMMON.userType   ('C' or 'R')
+  //
+  // So every fact we need is one request and one cookie. Waiting for the page's
+  // bootstrap to publish them was the whole problem: polling window.AB with
+  // setTimeout put the answer behind the site's Angular + Next + ad bundles AND
+  // behind Chromium's timer throttling in a WebView the user is not looking at.
+  // Stephen's 22:10 run took 142 SECONDS to answer a question with no network in
+  // it, while H-E-B -- which only ever fetches -- answered in 1.1 s from a hidden
+  // WebView on the same device in the same minute.
+  //
+  // This is H-E-B's shape: one request, and its answer decides.
+  function __albCookie(name) {
+    try {
+      var all = String(document.cookie || '').split(';');
+      for (var i = 0; i < all.length; i++) {
+        // NO REGEX HERE. This block is the body of a template literal, so a
+        // backslash in it is eaten before the script is ever injected: a
+        // whitespace class became a literal 's', which matches no leading space,
+        // so only the FIRST cookie in the header could ever be found. trim() has
+        // nothing to escape. (Same trap as backticks in these scripts.)
+        var c = all[i];
+        var eq = c.indexOf('=');
+        if (eq <= 0) continue;
+        if (c.slice(0, eq).trim() !== name) continue;
+        return c.slice(eq + 1);
+      }
+    } catch (e) {}
+    return '';
+  }
+
+  /** The server-set session cookie: store, zip and customer type. Synchronous. */
+  function __albShared() {
+    var raw = __albCookie('SWY_SHARED_SESSION_INFO');
+    if (!raw) return {};
+    var txt = raw;
+    try { txt = decodeURIComponent(raw); } catch (e) {
+      try { txt = unescape(raw); } catch (e2) { txt = raw; }
+    }
+    var j = null;
+    try { j = JSON.parse(txt); } catch (e) { return {}; }
+    var info = (j && j.info) || {};
+    var shop = info.SHOP || {}, common = info.COMMON || {};
+    return {
+      storeId: shop.storeId != null ? String(shop.storeId) : '',
+      zipcode: shop.zipcode != null ? String(shop.zipcode) : '',
+      // 'C' or 'R' is the site's own test for a signed-in customer.
+      userType: common.userType != null ? String(common.userType) : '',
+      preference: common.preference != null ? String(common.preference) : '',
+    };
+  }
+
+  function __albBanner() {
+    try {
+      var c = (window.SWY && window.SWY.CONFIGSERVICE) || null;
+      if (c && typeof c.getResolvedBanner === 'function') {
+        var b = c.getResolvedBanner();
+        if (typeof b === 'string' && b) return b;
+      }
+    } catch (e) {}
+    // The host IS the banner -- www.albertsons.com -> albertsons, www.safeway.com
+    // -> safeway. The site's own analytics derives it exactly this way, and it
+    // needs no part of the bootstrap, which is the point.
+    var h = String((window.location && window.location.hostname) || '').split('.');
+    return h.length > 1 ? h[h.length - 2] : 'albertsons';
+  }
+
+  async function __albFetchUserInfo(budgetMs) {
+    var ctl = new AbortController();
+    // A backstop, not the mechanism. Timers are the thing that gets throttled in
+    // a backgrounded WebView, so nothing here DEPENDS on this firing on time --
+    // the fetch settles on its own.
+    var to = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, budgetMs || 8000);
+    try {
+      var url = '/bin/safeway/unified/userinfo?rand=' + Math.floor(1e6 * Math.random())
+        + '&banner=' + encodeURIComponent(__albBanner());
+      var r = await fetch(url, {
+        credentials: 'include',
+        headers: { 'accept': 'text/plain, application/json, */*' },
+        signal: ctl.signal,
+      });
+      clearTimeout(to);
+      // The site treats 403 here as signed out -- it calls processUserInfoFlow('{}').
+      if (r.status === 401 || r.status === 403) return { state: 'out', status: r.status };
+      if (r.status !== 200) return { state: 'unknown', why: 'http', status: r.status };
+      var txt = await r.text();
+      var j = null;
+      try { j = JSON.parse(txt); } catch (e) { return { state: 'unknown', why: 'unparseable', status: r.status }; }
+      // A 200 with no token IS the expired-session answer: the site responds to
+      // it by tearing the user's session down.
+      if (!j || !j.SWY_SHOP_TOKEN) return { state: 'out', status: r.status };
+      return { state: 'in', user: j, status: r.status };
+    } catch (e) {
+      clearTimeout(to);
+      var abort = !!(e && e.name === 'AbortError');
+      return { state: 'unknown', why: abort ? 'timeout' : 'network', detail: String(e).slice(0, 120) };
+    }
+  }
+
+  /**
+   * The session, however we can get it. Parks the result on A.user so every
+   * script injected after this one reads it without asking again.
+   *
+   * Returns { state: 'in' | 'out' | 'unknown', ... }.
+   */
+  async function __albResolveUser(budgetMs) {
+    if (A.user && A.user.SWY_SHOP_TOKEN && A.user.branchId) return { state: 'in', user: A.user, cached: true };
+    // Free when the page HAS finished booting -- most injections after the first.
+    var page = (window.AB && window.AB.userInfo) || null;
+    if (page && page.SWY_SHOP_TOKEN && page.branchId) { A.user = page; return { state: 'in', user: page, fromPage: true }; }
+    var shared = __albShared();
+    var got = await __albFetchUserInfo(budgetMs);
+    if (got.state !== 'in') return got;
+    var u = got.user || {};
+    A.user = {
+      SWY_SHOP_TOKEN: u.SWY_SHOP_TOKEN,
+      customerId: u.customerId != null ? u.customerId : null,
+      firstName: typeof u.firstName === 'string' ? u.firstName : '',
+      UUID: u.UUID != null ? u.UUID : null,
+      // The endpoint carries the customer; the cookie carries the store. Neither
+      // knows both, which is why the page merges them and so do we.
+      branchId: shared.storeId || (page && page.branchId) || '',
+      zipcode: shared.zipcode || (page && page.zipcode) || '',
+      userType: shared.userType || (u.userType != null ? String(u.userType) : ''),
+    };
+    return { state: 'in', user: A.user, fetched: true, hasStore: !!A.user.branchId };
+  }
+
   function __albUser() {
-    return (window.AB && window.AB.userInfo) || {};
+    return A.user || (window.AB && window.AB.userInfo) || {};
   }
 
   function __albSearchKey() {
@@ -124,16 +269,17 @@ const ALB_PRELUDE = `
   // the store page redirects, i.e. into exactly that empty window, and came
   // back rail_read_http. The session probe already waited for the token before
   // reading; nothing else did.
+  // NO POLLING. The previous version waited for window.AB.userInfo in 250 ms
+  // ticks, which is exactly the wrong instrument: setTimeout is what Chromium
+  // throttles in a WebView nobody is looking at, so the wait outlived its own
+  // budget by two minutes on the device. __albResolveUser asks the server
+  // instead, and asks it once.
   async function __albAwaitUser(budgetMs) {
-    var deadline = Date.now() + (budgetMs == null ? 3000 : budgetMs);
-    for (;;) {
-      var u = (window.AB && window.AB.userInfo) || null;
-      // The token AND the store: a URL missing the branch is as unanswerable as
-      // a header missing the bearer, and both arrive from the same bootstrap.
-      if (u && u.SWY_SHOP_TOKEN && u.branchId) return u;
-      if (Date.now() >= deadline) return null;
-      await new Promise(function (r) { setTimeout(r, 250); });
-    }
+    var got = await __albResolveUser(budgetMs == null ? 8000 : budgetMs);
+    if (got.state !== 'in') return null;
+    var u = got.user || {};
+    // The token alone cannot build the URL: it carries the store and the zip.
+    return (u.SWY_SHOP_TOKEN && u.branchId) ? u : null;
   }
 
   // Reads the cart, and on the way resolves which subscription key the cart
@@ -197,166 +343,71 @@ ${ALB_PRELUDE}
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
   try {
-    // MEAL-124's reason 1, which applies to this probe too: window.AB.userInfo is
-    // populated by the AEM/Angular bootstrap, so before hydration the property is
-    // ABSENT rather than empty. Reading that as "signed out" walls a signed-in
-    // user every time we inject early — the exact bug that kept the token out of
-    // the page login check.
+    // ONE REQUEST, AND ITS ANSWER DECIDES. See __albResolveUser for the evidence
+    // this is built on -- the site's own bootstrap does exactly this and nothing
+    // more, so there is nothing to wait for that we cannot ask for ourselves.
     //
-    // So absence and emptiness are answered differently. Wait a bounded time for
-    // the bootstrap, then:
-    //   userInfo present, no token -> genuinely signed out, say so
-    //   userInfo never appeared    -> we do not know; hand the question back so
-    //                                 the page path runs its own check rather
-    //                                 than asserting anything about the user
-    // WAIT FOR THE TOKEN, NOT MERELY FOR THE OBJECT.
-    //
-    // This loop used to stop as soon as userInfo had ANY keys, and then read a
-    // missing token as "signed out". That is only sound if the bootstrap fills
-    // userInfo in one go. If it publishes the object first and the auth fields a
-    // moment later -- or fills non-auth fields first -- we break out early, see
-    // no token, and wall a signed-in user. Measured 2026-09-01: the probe
-    // answered in 293ms, far inside its own 5s budget, with ok:true
-    // loggedIn:false, while Stephen was signed in.
-    //
-    // So it keeps waiting while the object is there but the token is not, and
-    // only calls it signed out when the budget is spent. A genuinely signed-out
-    // user costs the full wait once; a signed-in one stops the moment the token
-    // lands.
-    var u = null, sawUser = false;
-    for (var t = 0; t < 20; t++) {
-      var cand = (window.AB && window.AB.userInfo) || null;
-      if (cand && Object.keys(cand).length) {
-        sawUser = true;
-        if (cand.SWY_SHOP_TOKEN) { u = cand; break; }
-        u = cand;
-      }
-      await new Promise(function (r) { setTimeout(r, 250); });
-    }
-    if (!sawUser) { post({ ok: false, why: 'not_hydrated' }); return; }
-    if (!u || !u.SWY_SHOP_TOKEN) {
-      // Report WHICH keys were there, never their values. Without this the log
-      // cannot tell "the user is signed out" from "the token moved or arrives
-      // late", which is the whole question when this answer is wrong.
-      var keys = [];
-      try { keys = Object.keys(u || {}).slice(0, 25); } catch (e) {}
-      post({ ok: true, loggedIn: false, userInfoKeys: keys, waitedMs: 5000 });
+    // The three previous versions of this probe all failed the same way, from
+    // both directions, because they all read the PAGE:
+    //   - stopped as soon as window.AB.userInfo had any keys -> a signed-in user
+    //     reported signed out in 293 ms
+    //   - waited for the token, then read the cart to confirm -> 17 s against a
+    //     20 s deadline, so a signed-in user was reported signed out slowly
+    //   - answered early from token + firstName -> and then Stephen's account
+    //     turned out not to carry firstName at that moment, so the early answer
+    //     never fired and the whole thing hung on an unreadable cart for 142 s
+    // Reading the page was the mistake each time. This asks the server.
+    var shared = __albShared();
+    var got = await __albResolveUser(8000);
+
+    if (got.state === 'out') {
+      // DEFINITIVE. Not a guess from a DOM label and not the absence of
+      // something: the endpoint that hands the site its session handed us a
+      // signed-out answer, which is the same fact the site acts on.
+      post({ ok: true, loggedIn: false, source: 'userinfo', status: got.status || null });
       return;
     }
-    // "Present" and "usable" are not the same property — MEAL-137 measured this
-    // token at a 45-minute life, and a dead one still sits on the page global.
-    // So the cart read DECIDES; it does not merely accompany the answer.
-    //
-    // This was wrong once, and the way it failed is worth keeping: loggedIn was
-    // set from the token alone and the cart result was reported beside it as
-    // cartReadable, which nothing consumed. A stale token then read as signed in,
-    // the run started, and the user — who was signed out — watched the sign-in
-    // prompt get replaced by an automation loading the cart page.
-    //
-    // Three outcomes, and the middle one is the point:
-    //   cart reads          -> signed in, and the add path provably works
-    //   every key gets 401  -> the token is dead. That IS signed out
-    //   anything else       -> a timeout or a 5xx says nothing about the user,
-    //                          so answer "do not know" and let the caller fall
-    //                          back rather than guess in either direction
-    // FOUR SECONDS, NOT TWELVE, AND THE BUDGET IS THE POINT.
-    //
-    // Here the cart read is a LIVENESS check on a token we already have, not a
-    // data fetch -- the run does its own read later with the full budget. And
-    // this probe answers the LOGIN question, which the sheet gives up on after
-    // twenty seconds.
-    //
-    // The arithmetic had stopped working: five seconds waiting for the token
-    // (added today) plus twelve waiting for the cart is seventeen, against a
-    // twenty-second deadline, with a page that redirects and restarts the whole
-    // thing. Stephen watched it sit and then tell him he was signed out while he
-    // was signed in. Nine seconds worst case leaves room for a restart.
-    //
-    // A read that has not answered in four seconds was not going to settle the
-    // question anyway: it comes back 'threw' or 'http', which is INCONCLUSIVE
-    // either way, and the token-plus-name fallback below is what answers.
-    // ANSWER THE LOGIN QUESTION FIRST, THEN GO AND CHECK.
-    //
-    // The token is on the page and the user is named on it. That is already the
-    // answer this probe falls back to when the cart cannot be read, so saying it
-    // NOW costs nothing and takes the cart read off the login path entirely --
-    // no budget of ours can make the sheet think a signed-in user is signed out
-    // by simply not answering in time.
-    //
-    // The verified answer follows. The caller takes whichever arrives while it
-    // is still asking; a second one landing later is ignored by the phase gate.
-    var namedEarly = typeof u.firstName === 'string' && u.firstName.length > 0;
-    if (namedEarly) {
-      post({
-        ok: true, loggedIn: true, verified: false, early: true,
-        storeId: u.branchId ? String(u.branchId) : null,
-        zipCode: u.zipcode ? String(u.zipcode) : null,
-        uuid: u.UUID || null, shoppingContext: 'pickup',
-        hasSearchKey: !!__albSearchKey(), cartReadable: null,
-      });
-    }
-    var cart = await __albReadCart(4000);
-    // A FAILED CART READ IS NEVER PROOF THE USER IS SIGNED OUT.
-    //
-    // This was wrong in both directions before it was right. First the token
-    // alone decided, so a dead token read as signed in and an automation started
-    // under a signed-out user. Then the cart read decided, so OUR OWN inability
-    // to call the cart — wrong subscription key, wrong params, a 5xx — read as
-    // signed out and a signed-in user was sent to a login wall. That second one
-    // shipped and was caught on the device: window.AB.userInfo carried a live
-    // token and firstName "Stephen" while the probe reported loggedIn false.
-    //
-    // The rule that survives both: a cart read that SUCCEEDS proves the session
-    // works. A cart read that fails proves nothing about the user, only about
-    // us. So a present token plus a failed read is INCONCLUSIVE — hand it back
-    // and let the page check decide, rather than asserting something we cannot
-    // know from a request we could not make.
-    // When the cart cannot be read we fall back to what the page itself says
-    // about the user, rather than to the DOM login heuristic. On the device the
-    // heuristic ALSO got it wrong on the same page — it read "Account menu Sign
-    // in" while userInfo already carried a live token and firstName "Stephen",
-    // because it ran mid-bootstrap. Falling back to it just swaps one wrong
-    // answer for another.
-    //
-    // A token plus a name is a weaker signal than a cart read, and it is marked
-    // as such (verified:false) so telemetry can tell the two apart. It is the
-    // right way to be wrong: if the session is actually dead the run fails at
-    // the first write and the user is told, which is recoverable. Reporting a
-    // signed-in user as signed out blocks them from the app entirely, which is
-    // not.
-    if (!cart.ok) {
-      var named = namedEarly;
-      // NOT a return. The early answer above already settled the login gate;
-      // this one refines it with what the read found, so the log still says
-      // WHY the cart was unreadable. The caller's phase gate ignores it if the
-      // run has moved on.
-      if (!named) {
-        post({ ok: false, why: 'cart_unreadable', detail: cart.why || null, tokenPresent: true });
-        return;
-      }
-      post({
-        ok: true, loggedIn: true, verified: false, cartWhy: cart.why || null,
-        storeId: u.branchId ? String(u.branchId) : null,
-        zipCode: u.zipcode ? String(u.zipcode) : null,
-        uuid: u.UUID || null, shoppingContext: 'pickup',
-        hasSearchKey: !!__albSearchKey(), cartReadable: false,
-      });
+    if (got.state !== 'in') {
+      // A 5xx, a timeout, a network error. That says something about the
+      // request, nothing about the user, so it is handed back rather than
+      // guessed in either direction -- the caller runs the page check instead.
+      post({ ok: false, why: got.why || 'unknown', status: got.status || null,
+             detail: got.detail || null });
       return;
     }
+
+    var u = got.user || {};
+    var storeId = u.branchId ? String(u.branchId) : null;
+    // ANSWER THE LOGIN QUESTION IMMEDIATELY. The cart read only ever refined it,
+    // and no budget of ours should be able to make the sheet think a signed-in
+    // user is signed out by not answering in time.
     post({
-      ok: true,
-      verified: true,
-      loggedIn: true,
-      storeId: u.branchId ? String(u.branchId) : null,
-      zipCode: u.zipcode ? String(u.zipcode) : null,
-      uuid: u.UUID || null,
-      // Pickup and delivery price and stock differently, same as H-E-B.
-      shoppingContext: 'pickup',
+      ok: true, loggedIn: true, verified: false, early: true, source: 'userinfo',
+      storeId: storeId, zipCode: u.zipcode ? String(u.zipcode) : null,
+      uuid: u.UUID || null, shoppingContext: 'pickup',
+      userType: u.userType || null,
+      hasSearchKey: !!__albSearchKey(), cartReadable: null,
+    });
+    if (!storeId) {
+      // Signed in with no store on the session. The run cannot search or write
+      // without one, and the answer above has already settled the login gate.
+      return;
+    }
+
+    // The refinement: does the token actually work? A read that succeeds proves
+    // the add path; one that fails proves nothing about the user, only about us,
+    // so it never downgrades the answer above -- it only labels it.
+    var cart = await __albReadCart(6000);
+    post({
+      ok: true, loggedIn: true, verified: !!cart.ok, source: 'userinfo',
+      storeId: storeId, zipCode: u.zipcode ? String(u.zipcode) : null,
+      uuid: u.UUID || null, shoppingContext: 'pickup',
+      userType: u.userType || null,
       hasSearchKey: !!__albSearchKey(),
-      // Same fact as loggedIn now, kept because a device log that shows both is
-      // how the next person sees WHY the verdict was what it was.
       cartReadable: !!cart.ok,
-      cartWhy: cart.ok ? null : (cart.why || null)
+      cartWhy: cart.ok ? null : (cart.why || null),
+      cartStatus: (!cart.ok && cart.status) || null,
+      sharedStore: shared.storeId || null,
     });
   } catch (e) {
     post({ ok: false, why: 'threw', detail: String(e).slice(0, 120) });
