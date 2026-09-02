@@ -349,3 +349,59 @@ describe('the run reuses the session the login check already got', () => {
     expect(sessionProbes()).toBe(afterLogin + 1);
   });
 });
+
+describe('a chosen product that no longer exists', () => {
+  // Stephen, 2026-09-02: "if we don't find a match and go to reconcile, then the
+  // reconcile page shows the search results from the product search. I am
+  // considering changing that so that it searches for the ingredient name when
+  // there is not a product match."
+  //
+  // Only when there is NOTHING. A product search that returned near-variants —
+  // the 24oz of the thing you picked, the store brand — is offering better
+  // options than a fresh ingredient search would, and it keeps them.
+  //
+  // The second search goes out WITH the writes, so it costs the run nothing and
+  // the user never sees a second loading screen.
+  // The fallback searches the INGREDIENT name ('Sour Cream'), not the product
+  // name the first pass used ('sour cream') — which is the whole point.
+  const fallbackBatches = () => injected.filter(
+    (s) => s.includes('productSearchPageV2') && s.includes('Sour Cream'),
+  ).length;
+
+  it('searches the ingredient name when the chosen product returns nothing', () => {
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+    // The chosen product is gone: no candidates at all.
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [] });
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    const beforeCart = fallbackBatches();
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+
+    // A second batch went out for the ingredient name, alongside the writes —
+    // not after them, and not behind another animation.
+    expect(fallbackBatches()).toBe(beforeCart + 1);
+    expect(injected.some((s) => s.includes('cartItemV2'))).toBe(true);
+  });
+
+  it('does NOT re-search when the store returned near-variants', () => {
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+    // Results, just nothing scoring an exact match. These are the better offer.
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('Sour Cream 24 oz')] });
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    const beforeCart = fallbackBatches();
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+
+    expect(fallbackBatches()).toBe(beforeCart);
+  });
+});

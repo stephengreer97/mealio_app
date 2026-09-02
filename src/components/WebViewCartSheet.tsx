@@ -149,6 +149,11 @@ interface AddResult {
   /** MEAL-14: the cart's own verdict for this item, when the store has a cart
    *  query we can read. Null = no verdict, NOT a negative one. */
   confirm?: HebAddConfirmation | null;
+  /** 'ingredient' when these candidates came from the SECOND search — the one
+   *  by ingredient name, run because the chosen product returned nothing. Kept
+   *  so the review screen and telemetry can tell "here is what we found for
+   *  sour cream" from "here is what we found for the sour cream you picked". */
+  searchedBy?: 'product' | 'ingredient';
 }
 
 interface PickedItem {
@@ -833,6 +838,28 @@ export default function WebViewCartSheet({
    * from one that has had time to go stale. See startNetworkRun.
    */
   const netSessionAtRef = useRef(0);
+  /**
+   * THE SECOND SEARCH, FOR ITEMS THE FIRST ONE FOUND NOTHING FOR.
+   *
+   * The rail searches the PRODUCT the user chose -- that is the whole point of
+   * Choose Product once, add forever. When that product is delisted the search
+   * returns nothing, and the review screen then asks the user to choose from an
+   * empty list.
+   *
+   * So a term that comes back with NO results is searched again by INGREDIENT
+   * name, and the review screen shows those instead. Only that case: a search
+   * that returned near-variants (a different size, a store brand) is showing
+   * better options than a fresh ingredient search would, and it keeps them.
+   *
+   * It goes out at the same moment as the writes, so it costs the run nothing
+   * and the user never sees a second loading screen -- by the time the adds are
+   * done the candidates are usually already here.
+   */
+  const netFallbackWantedRef = useRef<Map<number, string>>(new Map());
+  const netFallbackCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
+  const netFallbackPendingRef = useRef(false);
+  const netStartFallbackSearchRef = useRef<() => void>(() => {});
+  const netApplyFallbackCandidatesRef = useRef<() => void>(() => {});
   /** True once THIS run has the session it needs. A second answer to the same
    *  probe is then inert rather than a second start. */
   const netSessionSettledRef = useRef(false);
@@ -1607,6 +1634,14 @@ export default function WebViewCartSheet({
         // and LOADED A PAGE to be told the same thing 1.8 s later — measured
         // doing exactly that on a device run.
         const outOfStockExact = exact.length > 0 && exact.every((c) => c.outOfStock);
+        // Nothing at all came back for the chosen product. Ask again by
+        // ingredient name so the review screen has something to offer. Skipped
+        // when the two are the same string -- that search has already happened
+        // and returned nothing.
+        if (candidates.length === 0 && item.ingredientName
+            && item.ingredientName !== term) {
+          netFallbackWantedRef.current.set(idx, item.ingredientName);
+        }
         netResultsRef.current.set(idx, {
           success: false,
           productName: outOfStockExact ? exact[0].productName : null,
@@ -1772,6 +1807,11 @@ export default function WebViewCartSheet({
     // by design, and the runs measured so far either ended there or had a review
     // add along the way to increment this by accident.
     addsAttemptedRef.current += toWrite.length;
+    // AT THE SAME MOMENT AS THE WRITES, not after them. These items are not in
+    // the batch -- nothing matched to write -- so this competes with the adds
+    // for nothing but a connection, and by the time they finish the review
+    // screen usually has its candidates. The user never sees a second search.
+    netStartFallbackSearchRef.current();
     netArmFinalize(75_000);
     webviewRef.current?.injectJavaScript(script);
   }, [finishParallelAdd, netArm, netArmFinalize, netHandOverToUser, setStep]);
@@ -1780,6 +1820,50 @@ export default function WebViewCartSheet({
   // initialised with, so a run whose terms were all prewarmed reached "straight
   // to writing" and then silently wrote nothing.
   netStartAddsRef.current = netStartAdds;
+
+  /**
+   * Search by INGREDIENT name for the items whose chosen product returned
+   * nothing. Same rail, same batch script, so every store with a rail gets this
+   * and any future one gets it for free.
+   */
+  const netStartFallbackSearch = useCallback(() => {
+    const wanted = [...netFallbackWantedRef.current.values()];
+    if (wanted.length === 0) return;
+    const sess = netSessionRef.current;
+    const rail = netRail();
+    if (!sess || !rail) return;
+    const terms = [...new Set(wanted)];
+    const script = rail.searchBatch(terms, sess);
+    if (!script) return;
+    netFallbackPendingRef.current = true;
+    console.log(`[Cart ${ts()}]`, 'network run: nothing found for', terms.length,
+      'chosen products — searching the ingredient name instead');
+    webviewRef.current?.injectJavaScript(script);
+  }, [netRail]);
+  netStartFallbackSearchRef.current = netStartFallbackSearch;
+
+  /**
+   * Swap the fallback's candidates in before anything renders the review list.
+   *
+   * Only for the items that had NONE. An item with near-variants keeps them:
+   * "the 24 oz of the thing you picked" beats twelve unrelated sour creams.
+   */
+  const netApplyFallbackCandidates = useCallback(() => {
+    if (netFallbackWantedRef.current.size === 0) return;
+    let swapped = 0;
+    netFallbackWantedRef.current.forEach((name, idx) => {
+      const got = netFallbackCandidatesRef.current.get(name);
+      if (!got || got.length === 0) return;
+      const entry = netResultsRef.current.get(idx);
+      if (!entry || entry.success) return;
+      netResultsRef.current.set(idx, { ...entry, candidates: got, searchedBy: 'ingredient' });
+      swapped += 1;
+    });
+    if (swapped > 0) {
+      console.log(`[Cart ${ts()}]`, 'network run: review shows ingredient-name results for', swapped, 'item(s)');
+    }
+  }, []);
+  netApplyFallbackCandidatesRef.current = netApplyFallbackCandidates;
 
   /** Phase 2. One script, every term, no navigation. */
   const netStartSearch = useCallback(() => {
@@ -1913,6 +1997,9 @@ export default function WebViewCartSheet({
     netRunRef.current = true;
     netMatchedRef.current = new Map();
     netSessionSettledRef.current = false;
+    netFallbackWantedRef.current = new Map();
+    netFallbackCandidatesRef.current = new Map();
+    netFallbackPendingRef.current = false;
     netRunBaselineRef.current = null;
     netPrewarmWaitsRef.current = 0;
     netPhaseRef.current = 'session';
@@ -1969,6 +2056,9 @@ export default function WebViewCartSheet({
    * screen is what audits the result.
    */
   const netFinalize = useCallback(() => {
+    // Before anything reads the results: an item whose chosen product returned
+    // nothing shows the ingredient-name search instead of an empty list.
+    netApplyFallbackCandidatesRef.current();
     const topUp = netTopUpRef.current;
     netTopUpRef.current = null;
     if (!topUp) { finishParallelAdd(netResultsRef.current); return; }
@@ -4444,6 +4534,15 @@ export default function WebViewCartSheet({
           console.log(`[Cart ${ts()}]`, 'net search', msg.variant ?? null, String(msg.term).slice(0, 28),
             'ms=', msg.ms ?? null, 'vis=', msg.vis ?? null, 'worstTick=', msg.worstTickMs ?? null,
             'bytes=', msg.bytes ?? null, 'n=', (msg.candidates || []).length);
+          // THE FALLBACK BATCH ARRIVES DURING THE ADD PHASE, by design — it is
+          // fired alongside the writes so the user never waits for it. The phase
+          // gate below would drop it on the floor, so it is answered first.
+          if (typeof msg.term === 'string' && Array.isArray(msg.candidates)
+              && netFallbackPendingRef.current
+              && [...netFallbackWantedRef.current.values()].includes(msg.term)) {
+            netFallbackCandidatesRef.current.set(msg.term, msg.candidates as Candidate[]);
+            return;
+          }
           if (!netActiveRef.current || netPhaseRef.current !== 'search') return;
           if (typeof msg.term === 'string' && Array.isArray(msg.candidates)) {
             netCandidatesRef.current.set(msg.term, msg.candidates as Candidate[]);
