@@ -159,8 +159,11 @@ describe('the search prewarm', () => {
     const { view, post, load } = openSheet();
     load();
     post(SESSION);
-    // Only one of the two came back before the user tapped.
+    // One term answered, then the batch ENDS — the store had nothing for the
+    // other, or it failed. Either way the prewarm is finished and the run is
+    // free to go; an unfinished one is the next case.
     post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('sour cream')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
     const beforeTap = searchBatches();
 
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
@@ -234,5 +237,57 @@ describe('the page is loaded before the run needs it', () => {
     );
     const main = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
     expect(main).toBeFalsy();
+  });
+});
+
+describe('a prewarm still in flight when the user taps', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
+
+  it('waits for it rather than opening a second burst', () => {
+    // Measured on a 19-item run: the user tapped 0.2s after the prewarm's batch
+    // went out, so TWO batches were in the same page at once — the burst shape a
+    // store is most likely to challenge, and pure waste, since the answers were
+    // already on their way.
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+    const duringPrewarm = searchBatches();
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION);
+
+    // Nothing new went out: the run is standing back.
+    expect(searchBatches()).toBe(duringPrewarm);
+
+    // The prewarm finishes, having answered one of the two.
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('sour cream')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+    act(() => { jest.advanceTimersByTime(500); });
+
+    // NOW it searches, and only for what it is missing.
+    expect(searchBatches()).toBe(duringPrewarm + 1);
+    const last = injected.filter((x) => x.includes('productSearchPageV2')).pop()!;
+    expect(last).toContain('tortillas');
+    expect(last).not.toContain('sour cream');
+  });
+
+  it('does not wait for ever on a prewarm that never answers', () => {
+    // Bounded, or a dead prewarm holds the run open. ~3s, then it proceeds and
+    // searches everything itself.
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+    const duringPrewarm = searchBatches();
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION);
+    act(() => { jest.advanceTimersByTime(10_000); });
+
+    expect(searchBatches()).toBe(duringPrewarm + 1);
   });
 });

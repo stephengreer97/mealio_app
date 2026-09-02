@@ -908,6 +908,11 @@ export default function WebViewCartSheet({
   const netResultsRef = useRef<Map<number, AddResult>>(new Map());
   const netActiveRef = useRef(false);
   const netPhaseRef = useRef<'idle' | 'prewarm' | 'session' | 'search' | 'add'>('idle');
+  /** How long the run stands back for an in-flight prewarm, and how many times.
+   *  Together they cap the wait at ~3s — long enough for a batch that is nearly
+   *  done, short enough that a dead prewarm costs almost nothing. */
+  const NET_PREWARM_WAIT_MS = 300;
+  const NET_PREWARM_MAX_WAITS = 10;
   // ── Search prewarm ────────────────────────────────────────────────────────
   //
   // While the user is on the qty screen deciding quantities, the WebView is
@@ -924,6 +929,10 @@ export default function WebViewCartSheet({
   const netPrewarmStartedRef = useRef(false);
   const netPrewarmCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
   const netPrewarmTermsRef = useRef<string[]>([]);
+  /** How many times the run has stood back for an in-flight prewarm. Bounded so
+   *  a prewarm that never answers cannot hold the run for ever. */
+  const netPrewarmWaitsRef = useRef(0);
+  const netStartSearchRef = useRef<() => void>(() => {});
   /** Set when the prewarm has finished (or given up). Diagnostic only now — the
    *  WebView stays mounted through the qty screen either way, because keeping
    *  the page LOADED is worth more than the prewarm that needed it. */
@@ -1972,6 +1981,23 @@ export default function WebViewCartSheet({
     const rail = netRail();
     if (!rail) { netFallBackToPool('no_rail'); return; }
 
+    // WAIT FOR AN IN-FLIGHT PREWARM BEFORE OPENING A SECOND BURST.
+    //
+    // The user can tap while the prewarm's batch is still out — measured at
+    // 0.2s after it went. Starting the run's own search then puts TWO batches
+    // in the same page at once, which is both the burst shape a store is most
+    // likely to challenge and pure waste, since the answers are already coming.
+    //
+    // Bounded: the prewarm's own deadline is the backstop, and if it has not
+    // finished by then the run proceeds and searches what it is missing.
+    if (netPrewarmStartedRef.current && !netPrewarmDoneRef.current
+        && netPrewarmWaitsRef.current < NET_PREWARM_MAX_WAITS) {
+      netPrewarmWaitsRef.current += 1;
+      console.log(`[Cart ${ts()}]`, 'network run: prewarm still answering — waiting for it rather than searching twice');
+      setTimeout(() => netStartSearchRef.current(), NET_PREWARM_WAIT_MS);
+      return;
+    }
+
     // WHAT THE PREWARM ALREADY ANSWERED IS NOT ASKED AGAIN.
     //
     // Seeded rather than merged afterwards, so a term the prewarm has is never
@@ -2010,6 +2036,7 @@ export default function WebViewCartSheet({
     netArm(40_000, 'search_timeout');
     webviewRef.current?.injectJavaScript(script);
   }, [netArm, netFallBackToPool, setStep]);
+  netStartSearchRef.current = netStartSearch;
 
   /**
    * Re-ask for the terms that never came back, because the page navigated.
@@ -2062,6 +2089,7 @@ export default function WebViewCartSheet({
     netMatchedRef.current = new Map();
     netSessionRef.current = null;
     netRunBaselineRef.current = null;
+    netPrewarmWaitsRef.current = 0;
     netPhaseRef.current = 'session';
     setStep('searching');
     setSearchingLabel('Connecting…');
@@ -4558,7 +4586,8 @@ export default function WebViewCartSheet({
           return;
         }
         if (msg.type === 'SEARCH_BATCH_DONE'
-            && netPhaseRef.current === 'prewarm' && !netActiveRef.current) {
+            && netPrewarmStartedRef.current && !netPrewarmDoneRef.current
+            && netPhaseRef.current !== 'search') {
           console.log(`[Cart ${ts()}]`, 'search prewarm: done —',
             netPrewarmCandidatesRef.current.size, 'terms answered before the user tapped');
           netPhaseRef.current = 'idle';
@@ -4813,8 +4842,18 @@ export default function WebViewCartSheet({
         // not fed to the sequential handler below — that one assumes it is the
         // answer to the ONE item the run is currently walking, and a batch posts
         // twelve of them in no particular order.
+        // A PREWARM ANSWER IS KEPT WHATEVER THE PHASE SAYS.
+        //
+        // It used to be gated on phase === 'prewarm', and there is a gap: the
+        // user taps, the run sets the phase to 'session', and every prewarm
+        // answer still in flight lands in neither store. Measured on a 19-item
+        // run — the user tapped 0.2s after the prewarm's batch went out, six
+        // answers fell in the gap, and the run re-searched all nineteen terms
+        // instead of the thirteen it was missing. The prewarm cost a burst and
+        // saved nothing.
         if (msg.type === 'SEARCH_RESULT' && msg.source === 'network'
-            && netPhaseRef.current === 'prewarm' && !netActiveRef.current) {
+            && netPrewarmStartedRef.current && !netPrewarmDoneRef.current
+            && netPhaseRef.current !== 'search') {
           if (typeof msg.term === 'string' && Array.isArray(msg.candidates)) {
             netPrewarmCandidatesRef.current.set(msg.term, msg.candidates as Candidate[]);
           }
