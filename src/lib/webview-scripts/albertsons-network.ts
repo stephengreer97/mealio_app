@@ -997,7 +997,7 @@ ${albSearchUrlExpr(pageSize, storeId)}
       });
       return;
     }
-    await handle(term, j, url);
+    await handle(term, j, url, got);
   }
 
   /** Map an accepted response onto the candidate shape every reader here emits. */
@@ -1074,9 +1074,24 @@ export function buildAlbertsonsNetworkAddBatchScript(
     (it) => it && it.productId && Number.isFinite(it.quantity) && it.quantity > 0,
   );
   if (!usable.length) return null;
-  // Writes are serialised by default. They mutate one shared cart, and the
-  // response of each carries the cart state the next one's baseline depends on.
-  const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 1, 2));
+  // THREE AT A TIME. The serialisation was protecting nothing.
+  //
+  // The stated reason was that each write's response carries the cart state the
+  // next one's baseline depends on. It does not: `base` is read ONCE before the
+  // loop, every write computes want = base.lines[<its own product>] + wanted,
+  // and coalescing has already merged the two ingredients that resolve to one
+  // product. Two writes never touch the same line, so nothing one returns is
+  // input to another.
+  //
+  // MEASURED 2026-09-02, eighteen items on the device: 17.4s, arriving one every
+  // 0.5-2.0s in a neat queue. That was the largest real cost left in a run --
+  // larger than search once search's freeze is discounted -- and all of it was
+  // waiting for a turn nothing required.
+  //
+  // Capped at three rather than opened up: they do share a cart, even if not a
+  // line, and the write already verifies itself against the cart the response
+  // returns. A store that dislikes concurrent cart writes will say so there.
+  const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 3, 4));
   return `(async function () {
 ${ALB_PRELUDE}
   var ITEMS = ${JSON.stringify(usable)};
