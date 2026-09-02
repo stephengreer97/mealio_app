@@ -119,6 +119,23 @@ const ALB_PRELUDE = `
     };
   }
 
+  // PICKUP OR DELIVERY IS NOT OURS TO ASSUME.
+  //
+  // The site derives both the cart's serviceType and the search's channel from
+  // info.COMMON.preference in the session cookie:
+  //   serviceType = 'dug' === preference.toLowerCase() ? 'Dug' : 'Delivery'
+  // We hardcoded 'Dug' and 'pickup'. A delivery shopper therefore got every cart
+  // request built for a cart that is not theirs -- and the cart endpoint answered
+  // 400 all evening.
+  function __albPreference() {
+    var pref = String(__albShared().preference || '').toLowerCase();
+    if (pref === 'delivery') return { serviceType: 'Delivery', channel: 'delivery', context: 'delivery' };
+    if (pref === 'instore') return { serviceType: 'Dug', channel: 'instore', context: 'instore' };
+    // 'dug', empty, or anything unrecognised: pickup is the safe default and is
+    // what the site falls back to as well.
+    return { serviceType: 'Dug', channel: 'pickup', context: 'pickup' };
+  }
+
   function __albBanner() {
     try {
       var c = (window.SWY && window.SWY.CONFIGSERVICE) || null;
@@ -239,7 +256,7 @@ const ALB_PRELUDE = `
     var u = __albUser();
     return '${ALB_CART_ITEMS_PATH}'
       + '?storeId=' + encodeURIComponent(u.branchId || '')
-      + '&serviceType=Dug'
+      + '&serviceType=' + encodeURIComponent(__albPreference().serviceType)
       + '&zipCode=' + encodeURIComponent(u.zipcode || '')
       + '&cartCategoryList=1P,3P_MARKETPLACE,1P_Wine';
   }
@@ -251,6 +268,9 @@ const ALB_PRELUDE = `
       'ocp-apim-subscription-key': key,
       'Content-Type': 'application/json',
       'Accept': 'application/json, text/plain, */*',
+      // The site's own HTTP interceptor sets this on EVERY erums/cartservice
+      // request. We were the only client not sending it.
+      'x-swy-client-id': 'web-portal',
       'Sort-Order': 'date'
     };
   }
@@ -300,7 +320,13 @@ const ALB_PRELUDE = `
         clearTimeout(to);
         lastStatus = r.status;
         if (r.status === 401 || r.status === 403) continue;
-        if (r.status !== 200) return { ok: false, why: 'http', status: r.status };
+        if (r.status !== 200) {
+          // The gateway names its own complaint in the body. Without it a 400 is
+          // just "a request failed", which is where this sat for a day.
+          var errText = '';
+          try { errText = (await r.text()).slice(0, 200); } catch (e2) { errText = ''; }
+          return { ok: false, why: 'http', status: r.status, detail: errText || null };
+        }
         var j = await r.json();
         A.cartKey = keys[i];
         var cart = (j.carts || [])[0] || {};
@@ -384,7 +410,7 @@ ${ALB_PRELUDE}
     post({
       ok: true, loggedIn: true, verified: false, early: true, source: 'userinfo',
       storeId: storeId, zipCode: u.zipcode ? String(u.zipcode) : null,
-      uuid: u.UUID || null, shoppingContext: 'pickup',
+      uuid: u.UUID || null, shoppingContext: __albPreference().context,
       userType: u.userType || null,
       hasSearchKey: !!__albSearchKey(), cartReadable: null,
     });
@@ -401,7 +427,7 @@ ${ALB_PRELUDE}
     post({
       ok: true, loggedIn: true, verified: !!cart.ok, source: 'userinfo',
       storeId: storeId, zipCode: u.zipcode ? String(u.zipcode) : null,
-      uuid: u.UUID || null, shoppingContext: 'pickup',
+      uuid: u.UUID || null, shoppingContext: __albPreference().context,
       userType: u.userType || null,
       hasSearchKey: !!__albSearchKey(),
       cartReadable: !!cart.ok,
@@ -467,29 +493,47 @@ const ALB_CANDIDATE_HELPERS = `
   }
 `;
 
-function albSearchUrlExpr(pageSize: number): string {
+function albSearchUrlExpr(pageSize: number, storeId: number): string {
   return `
+  // BUILT FROM THE SITE'S OWN mapProgramSearchParams, PARAMETER BY PARAMETER.
+  //
+  // Every term came back 200-with-appCode-400, "Search encountered a problem.
+  // Please try again OSSR0033-R", the first time this rail actually ran on the
+  // device. Four of these were ours to get wrong:
+  //   url/pageurl  the site sends the bare HOSTNAME, we sent a full https:// URL
+  //   pgm          the site DELETES it when it has no program list; we always
+  //                sent 'merch-banner'
+  //   channel      derived from the shopper's preference, not hardcoded pickup
+  //   banner       the resolved banner -- hardcoding 'albertsons' is also wrong
+  //                for every other banner on this rail (safeway, vons, ...)
+  //   visitorId    the absVisitorId COOKIE, not the account UUID
   function __albSearchUrl(term) {
     var u = __albUser();
+    var host = String((window.location && window.location.hostname) || 'www.albertsons.com');
+    var tz = 'America/Denver';
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || tz; } catch (e) {}
     var p = new URLSearchParams({
       q: term,
-      storeid: String(u.branchId || ''),
+      // THE SESSION'S STORE, NOT THE PAGE'S. The caller already validated this
+      // as a positive integer and refused to build otherwise; reading it back
+      // off window.AB meant a search injected before the page had booted went
+      // out as 'storeid=', which searches nothing and explains nothing.
+      storeid: '${storeId}',
       rows: '${pageSize}',
       start: '0',
-      banner: 'albertsons',
-      channel: 'pickup',
+      banner: __albBanner(),
+      channel: __albPreference().channel,
       dvid: 'web-4.1search',
       featured: 'true',
       includeOffer: 'true',
       pagename: 'search',
-      pageurl: 'https://www.albertsons.com',
-      pgm: 'merch-banner',
+      pageurl: host,
       pp: 'true',
       'search-type': 'keyword',
-      timezone: 'America/Denver',
-      url: 'https://www.albertsons.com',
+      timezone: tz,
+      url: host,
       uuid: String(u.UUID || ''),
-      visitorId: String(u.UUID || '')
+      visitorId: String(__albCookie('absVisitorId') || u.UUID || '')
     });
     // request-id is per call. Reusing one returned a stale error body in testing,
     // so it is generated fresh rather than carried.
@@ -574,7 +618,7 @@ export function buildAlbertsonsNetworkSearchBatchScript(
   return `(async function () {
 ${ALB_PRELUDE}
 ${ALB_CANDIDATE_HELPERS}
-${albSearchUrlExpr(pageSize)}
+${albSearchUrlExpr(pageSize, storeId)}
   var TERMS = ${JSON.stringify(terms)};
   var post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
@@ -587,13 +631,18 @@ ${albSearchUrlExpr(pageSize)}
     post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length });
     return;
   }
+  // Free once anything has resolved the session, which the login probe already
+  // has by this point in a run. Here so a batch injected into a fresh document
+  // still carries the shopper's identifiers rather than blanks.
+  await __albResolveUser(8000);
 
   async function one(term) {
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, 15000);
     var r, txt;
+    var url = __albSearchUrl(term);
     try {
-      r = await fetch(__albSearchUrl(term), {
+      r = await fetch(url, {
         credentials: 'include', signal: ctl.signal,
         headers: { 'Ocp-Apim-Subscription-Key': key, 'Accept': 'application/json' }
       });
@@ -625,7 +674,16 @@ ${albSearchUrlExpr(pageSize)}
       post({
         type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'search_error',
         appCode: pp.appCode != null ? String(pp.appCode).slice(0, 40) : null,
-        detail: pp.appMsg != null ? String(pp.appMsg).slice(0, 90) : null
+        detail: pp.appMsg != null ? String(pp.appMsg).slice(0, 90) : null,
+        // THE QUERY WE SENT, so the next failure names itself. 'Search
+        // encountered a problem' says nothing about WHICH parameter the gateway
+        // objected to, and comparing our request against the site's is the only
+        // way anyone has found one of these. Identifiers are stripped: they are
+        // the user's, and they are never the answer.
+        sentQuery: String(url).split('?')[1]
+          ? String(url).split('?')[1]
+              .replace(/(uuid|visitorId|search-uid)=[^&]*/g, '$1=<redacted>').slice(0, 300)
+          : null
       });
       return;
     }

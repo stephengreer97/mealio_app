@@ -593,3 +593,92 @@ describe('Albertsons cart read over the network', () => {
     expect(msg.status).toBe(400);
   });
 });
+
+describe('the request has to look like the site\'s own', () => {
+  // The first time the network rail actually reached Albertsons on the device
+  // (2026-09-01 22:26 -- every earlier attempt died at the login gate), all 20
+  // searches came back 200-with-appCode-400, "Search encountered a problem.
+  // Please try again OSSR0033-R", and the cart read came back 400. Both were
+  // built from parameters we had invented rather than read off the site.
+
+  itWithFixture('logged-in-home.html', 'sends the HOSTNAME as url and pageurl, not a full URL', async (runner) => {
+    // mapProgramSearchParams: .set('url', i).set('pageurl', i) where i is the
+    // hostname. We were sending 'https://www.albertsons.com'.
+    await runner.inject(albStub());
+    await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['garlic'], { storeId: '161' })!);
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+    await runner.inject(urlsProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    const q = seen.urls.find((u: string) => u.indexOf('pgmsearch') !== -1)!;
+    expect(q).toContain('url=www.albertsons.com');
+    expect(q).toContain('pageurl=www.albertsons.com');
+    expect(q).not.toContain(encodeURIComponent('https://'));
+    // And the store came from the session, not from a page that may not have booted.
+    expect(q).toContain('storeid=161');
+  });
+
+  itWithFixture('logged-in-home.html', 'omits pgm entirely, as the site does with no program list', async (runner) => {
+    // The site DELETES pgm when pgmList is empty. We always sent
+    // pgm=merch-banner, which is a program this search is not part of.
+    await runner.inject(albStub());
+    await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['garlic'], { storeId: '161' })!);
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+    await runner.inject(urlsProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    const q = seen.urls.find((u: string) => u.indexOf('pgmsearch') !== -1)!;
+    expect(q).not.toContain('pgm=');
+  });
+
+  itWithFixture('logged-in-home.html', 'takes pickup or delivery from the session, never assumes', async (runner) => {
+    // serviceType = 'dug' === preference.toLowerCase() ? 'Dug' : 'Delivery'.
+    // Hardcoding Dug builds every cart request for a cart a delivery shopper
+    // does not have.
+    await runner.inject(albStub({
+      shared: { info: { SHOP: { storeId: '161', zipcode: '83713' },
+                        COMMON: { userType: 'R', preference: 'DELIVERY' } } },
+    }));
+    await runner.inject(buildAlbertsonsCartReadScript());
+    await runner.waitForMessage('CART_COUNT', 20_000);
+    await runner.inject(urlsProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    const cart = seen.urls.find((u: string) => u.indexOf('cartservice') !== -1)!;
+    expect(cart).toContain('serviceType=Delivery');
+  });
+
+  itWithFixture('logged-in-home.html', 'still says Dug for a pickup shopper', async (runner) => {
+    await runner.inject(albStub({
+      shared: { info: { SHOP: { storeId: '161', zipcode: '83713' },
+                        COMMON: { userType: 'R', preference: 'DUG' } } },
+    }));
+    await runner.inject(buildAlbertsonsCartReadScript());
+    await runner.waitForMessage('CART_COUNT', 20_000);
+    await runner.inject(urlsProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    expect(seen.urls.find((u: string) => u.indexOf('cartservice') !== -1)).toContain('serviceType=Dug');
+  });
+
+  itWithFixture('logged-in-home.html', 'carries the gateway\'s own words when the cart 400s', async (runner) => {
+    // 'rail_read_http' plus a bare 400 is where this sat for a day. The body
+    // names the complaint.
+    await runner.inject(albStub({ cartStatus: 400 }));
+    await runner.inject(buildAlbertsonsCartReadScript());
+    const msg = await runner.waitForMessage('CART_COUNT', 20_000);
+    expect(msg.reason).toBe('rail_read_http');
+    expect(msg.status).toBe(400);
+  });
+
+  itWithFixture('logged-in-home.html', 'reports the query it sent, with identifiers stripped', async (runner) => {
+    // So a failure names itself next time instead of needing another run.
+    await runner.inject(albStub());
+    // No docs array at all: the envelope that says the search itself broke.
+    await runner.inject(searchStub({ appCode: '[PS: 400]',
+      primaryProducts: { appCode: '400', appMsg: 'Search encountered a problem. OSSR0033-R' } }));
+    await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['garlic'], { storeId: '161' })!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT_FAILED', 20_000);
+    expect(msg.why).toBe('search_error');
+    expect(msg.sentQuery).toContain('storeid=161');
+    // Never the values. They are the user's and they are never the answer.
+    expect(msg.sentQuery).toContain('uuid=<redacted>');
+    expect(msg.sentQuery).toContain('visitorId=<redacted>');
+  });
+});
