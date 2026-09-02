@@ -916,11 +916,24 @@ export default function WebViewCartSheet({
   const netResultsRef = useRef<Map<number, AddResult>>(new Map());
   const netActiveRef = useRef(false);
   const netPhaseRef = useRef<'idle' | 'prewarm' | 'session' | 'search' | 'add'>('idle');
-  /** How long the run stands back for an in-flight prewarm, and how many times.
-   *  Together they cap the wait at ~3s — long enough for a batch that is nearly
-   *  done, short enough that a dead prewarm costs almost nothing. */
+  /** How long the run stands back for an in-flight prewarm, and how many times. */
   const NET_PREWARM_WAIT_MS = 300;
-  const NET_PREWARM_MAX_WAITS = 10;
+  /**
+   * THREE SECONDS WAS NOT A WAIT, IT WAS A RACE.
+   *
+   * The prewarm and the run search the IDENTICAL terms. Standing back costs
+   * time; not standing back costs a second batch of the same size against a
+   * store whose search degrades under burst (MEAL-207). Measured on Albertsons,
+   * six terms, 2026-09-01: the run gave up after 3s, both batches then ran
+   * together for 100 seconds, and the first answer took 68 of them. The prewarm
+   * alone had been answering fine.
+   *
+   * So the ceiling scales with the batch, because a bigger batch is both slower
+   * to finish AND worse to duplicate. A prewarm that dies still releases the run
+   * immediately — netPrewarmDoneRef is set on its failure paths too, so this
+   * ceiling is only reached by one that is genuinely still working.
+   */
+  const netPrewarmMaxWaits = (terms: number) => Math.min(300, Math.max(60, terms * 15));
   /** How long a session answer stays good enough for the run to reuse instead of
    *  re-asking. The login check and the run happen seconds apart, so anything on
    *  this scale works; two minutes is short enough that a sheet left sitting
@@ -2004,7 +2017,7 @@ export default function WebViewCartSheet({
     // Bounded: the prewarm's own deadline is the backstop, and if it has not
     // finished by then the run proceeds and searches what it is missing.
     if (netPrewarmStartedRef.current && !netPrewarmDoneRef.current
-        && netPrewarmWaitsRef.current < NET_PREWARM_MAX_WAITS) {
+        && netPrewarmWaitsRef.current < netPrewarmMaxWaits(terms.length)) {
       netPrewarmWaitsRef.current += 1;
       console.log(`[Cart ${ts()}]`, 'network run: prewarm still answering — waiting for it rather than searching twice');
       setTimeout(() => netStartSearchRef.current(), NET_PREWARM_WAIT_MS);
@@ -2046,7 +2059,18 @@ export default function WebViewCartSheet({
     advanceNetPct('search', 0, terms.length);
     setSearchingLabel(`Searching ${terms.length} ingredients…`);
     console.log(`[Cart ${ts()}]`, 'network run: searching', terms.length, 'terms with no page load');
-    netArm(40_000, 'search_timeout');
+    // A FLAT 40 SECONDS THREW AWAY A SEARCH THAT WAS WORKING.
+    //
+    // Measured on Albertsons, six terms, 2026-09-01: the FIRST result took 40.0s
+    // and the remaining five took 1.6s each. The cost is a cold connection on
+    // the first request, not the search — but the flat window expired on the
+    // same tick the first result arrived, so the run dropped to the page-driven
+    // pool holding six good answers. That trade is backwards: the pool costs
+    // minutes, and waiting costs seconds.
+    //
+    // So the window covers a slow start PLUS the terms, and is capped so a store
+    // that has genuinely stopped answering still ends the phase.
+    netArm(Math.min(45_000 + terms.length * 8_000, 180_000), 'search_timeout');
     webviewRef.current?.injectJavaScript(script);
   }, [netArm, netFallBackToPool, setStep]);
   netStartSearchRef.current = netStartSearch;

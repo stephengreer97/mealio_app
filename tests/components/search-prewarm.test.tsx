@@ -275,8 +275,9 @@ describe('a prewarm still in flight when the user taps', () => {
   });
 
   it('does not wait for ever on a prewarm that never answers', () => {
-    // Bounded, or a dead prewarm holds the run open. ~3s, then it proceeds and
-    // searches everything itself.
+    // Bounded, or a prewarm that never speaks holds the run open for good. The
+    // ceiling scales with the batch now — standing back is cheaper than
+    // duplicating it — so this waits out the whole ceiling, not three seconds.
     const { view, post, load } = openSheet();
     load();
     post(SESSION);
@@ -286,7 +287,8 @@ describe('a prewarm still in flight when the user taps', () => {
     post(SESSION);
     post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     post(SESSION);
-    act(() => { jest.advanceTimersByTime(10_000); });
+    // Two terms: 60 ticks of 300ms, the floor.
+    act(() => { jest.advanceTimersByTime(30_000); });
 
     expect(searchBatches()).toBe(duringPrewarm + 1);
   });

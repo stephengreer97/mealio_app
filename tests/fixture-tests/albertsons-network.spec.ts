@@ -61,7 +61,7 @@ const CONTEXT = [
   '    searchConfig: { apimProgramSubscriptionKey: "0123456789abcdef0123456789abcdef" },',
   '    datapowerConfig: { cncSubscriptionKey: "fedcba9876543210fedcba9876543210" } } };',
   '  window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok", branchId: "161",',
-  '    zipcode: "83713", UUID: "uuid-1" } };',
+  '    zipcode: "83713", UUID: "uuid-1", customerId: "cust-1" } };',
   '})(); true;',
 ].join('\n');
 
@@ -102,9 +102,12 @@ function cartStub(initial: Record<string, number>, opts: { getStatus?: number; o
     '    return { carts: [{ cartItemsList: list }], multiCartSummary: { totalAvailableQuantity: list.length } };',
     '  }',
     '  window.fetch = function (url, init) {',
-    '    var method = (init && init.method) || "GET";',
-    '    if (method === "GET") {',
+    // READ and WRITE are both POSTs now and differ by PATH: the read is
+    // /cart/customer/{id}?type=full, the write is /cart/items. Routing on the
+    // method — which this stub used to do — makes a read look like a write.
+    '    if (String(url).indexOf("/cart/customer/") !== -1) {',
     '      return Promise.resolve({ status: ' + String(opts.getStatus ?? 200) + ',',
+    '        text: function () { return Promise.resolve("nope"); },',
     '        json: function () { return Promise.resolve(cartBody()); } });',
     '    }',
     '    var body = JSON.parse(init.body);',
@@ -583,7 +586,7 @@ describe('Albertsons cart read over the network', () => {
     // same line in the log, which is how this one went unexplained for a day.
     await runner.inject(CONFIG_ONLY);
     await runner.inject('(function(){ window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok",'
-      + ' branchId: "161", zipcode: "83713" } }; })(); true;');
+      + ' branchId: "161", zipcode: "83713", customerId: "cust-1" } }; })(); true;');
     await runner.inject(recordingCartStub({}, 400));
     await runner.inject(buildAlbertsonsCartReadScript());
 
@@ -631,18 +634,19 @@ describe('the request has to look like the site\'s own', () => {
 
   itWithFixture('logged-in-home.html', 'takes pickup or delivery from the session, never assumes', async (runner) => {
     // serviceType = 'dug' === preference.toLowerCase() ? 'Dug' : 'Delivery'.
-    // Hardcoding Dug builds every cart request for a cart a delivery shopper
-    // does not have.
+    // Hardcoding Dug builds every cart WRITE for a cart a delivery shopper does
+    // not have. (The read is keyed by customer and carries no serviceType.)
     await runner.inject(albStub({
       shared: { info: { SHOP: { storeId: '161', zipcode: '83713' },
                         COMMON: { userType: 'R', preference: 'DELIVERY' } } },
     }));
-    await runner.inject(buildAlbertsonsCartReadScript());
-    await runner.waitForMessage('CART_COUNT', 20_000);
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(
+      [{ idx: 0, productId: '1', quantity: 1, name: 'Item 1' }])!);
+    await runner.waitForMessage('NET_ADD_DONE', 25_000);
     await runner.inject(urlsProbe);
     const seen = await runner.waitForMessage('PROBE', 10_000);
-    const cart = seen.urls.find((u: string) => u.indexOf('cartservice') !== -1)!;
-    expect(cart).toContain('serviceType=Delivery');
+    const write = seen.urls.find((u: string) => u.indexOf('/cart/items') !== -1)!;
+    expect(write).toContain('serviceType=Delivery');
   });
 
   itWithFixture('logged-in-home.html', 'still says Dug for a pickup shopper', async (runner) => {
@@ -650,11 +654,27 @@ describe('the request has to look like the site\'s own', () => {
       shared: { info: { SHOP: { storeId: '161', zipcode: '83713' },
                         COMMON: { userType: 'R', preference: 'DUG' } } },
     }));
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(
+      [{ idx: 0, productId: '1', quantity: 1, name: 'Item 1' }])!);
+    await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    await runner.inject(urlsProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    expect(seen.urls.find((u: string) => u.indexOf('/cart/items') !== -1)).toContain('serviceType=Dug');
+  });
+
+  itWithFixture('logged-in-home.html', 'READS from /cart/customer, never GETs /cart/items', async (runner) => {
+    // The service routes GET /cart/items as /cart/{id} and says so:
+    //   "Failed to convert 'id' with value: 'items'"
+    // /cart/items is the WRITE endpoint. The read is POST /cart/customer/{id}.
+    await runner.inject(albStub());
     await runner.inject(buildAlbertsonsCartReadScript());
     await runner.waitForMessage('CART_COUNT', 20_000);
     await runner.inject(urlsProbe);
     const seen = await runner.waitForMessage('PROBE', 10_000);
-    expect(seen.urls.find((u: string) => u.indexOf('cartservice') !== -1)).toContain('serviceType=Dug');
+    const read = seen.urls.find((u: string) => u.indexOf('cartservice') !== -1)!;
+    expect(read).toContain('/cart/customer/');
+    expect(read).toContain('type=full');
+    expect(read).not.toContain('/cart/items');
   });
 
   itWithFixture('logged-in-home.html', 'carries the gateway\'s own words when the cart 400s', async (runner) => {
@@ -677,8 +697,128 @@ describe('the request has to look like the site\'s own', () => {
     const msg = await runner.waitForMessage('SEARCH_RESULT_FAILED', 20_000);
     expect(msg.why).toBe('search_error');
     expect(msg.sentQuery).toContain('storeid=161');
-    // Never the values. They are the user's and they are never the answer.
-    expect(msg.sentQuery).toContain('uuid=<redacted>');
-    expect(msg.sentQuery).toContain('visitorId=<redacted>');
+    // The site's defaults, which are not the obvious ones.
+    expect(msg.sentQuery).toContain('sort=&');
+    expect(msg.sentQuery).toContain('featured=&');
+    expect(msg.sentQuery).toContain('timezone=' + encodeURIComponent('America/Los_Angeles'));
+    // uuid and visitorId are not part of this call at all; they came from a
+    // different endpoint of theirs and had been carried over. If a fallback
+    // shape ever puts them back, the value must still never be reported.
+    expect(msg.sentQuery).not.toContain('uuid-1');
+  });
+});
+
+describe('when the gateway rejects the shape', () => {
+  // OSSR0033-R names no parameter, and every guess costs a device run. A
+  // rejected term is retried through a ladder of shapes -- each differing by one
+  // thing the site does differently -- and the shape that works is reported and
+  // then reused for the rest of the batch.
+
+  /** Rejects every request until one arrives WITHOUT the given parameter. */
+  function rejectUnless(missingParam: string, docs: unknown[]) {
+    return [
+      '(function () {',
+      '  window.__urls = [];',
+      '  window.fetch = function (url) {',
+      '    var u = String(url); window.__urls.push(u);',
+      '    var ok = u.indexOf("' + missingParam + '=") === -1;',
+      '    var body = ok',
+      '      ? ' + JSON.stringify(JSON.stringify(found(docs))),
+      '      : ' + JSON.stringify(JSON.stringify({
+        appCode: '[PS: 400]',
+        primaryProducts: { appCode: '400', appMsg: 'Search encountered a problem. OSSR0033-R' },
+      })) + ';',
+      '    return Promise.resolve({ status: 200, text: function () { return Promise.resolve(body); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n');
+  }
+
+  itWithFixture('logged-in-home.html', 'finds the shape that works and says which it was', async (runner) => {
+    await runner.inject(albStub());
+    // This store accepts the request only when 'channel' is absent.
+    await runner.inject(rejectUnless('channel', [doc()]));
+    await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['avocado'], { storeId: '161' })!);
+
+    const shape = await runner.waitForMessage('SEARCH_SHAPE_OK', 20_000);
+    expect(shape.variant).toBe('no_channel');
+    expect(shape.after).toBe('site');
+    // And the term is still answered — the ladder is a repair, not a report.
+    const got = await runner.waitForMessage('SEARCH_RESULT', 20_000);
+    expect(got.candidates.length).toBe(1);
+  });
+
+  itWithFixture('logged-in-home.html', 'reuses the winning shape rather than re-laddering', async (runner) => {
+    await runner.inject(albStub());
+    await runner.inject(rejectUnless('channel', [doc()]));
+    // Serial, so the count is exact rather than a race between two terms both
+    // laddering before either has found the winner.
+    await runner.inject(buildAlbertsonsNetworkSearchBatchScript(
+      ['avocado', 'garlic', 'onion'], { storeId: '161', concurrency: 1 })!);
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 25_000);
+
+    await runner.inject(urlsProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    const searches = seen.urls.filter((u: string) => u.indexOf('pgmsearch') !== -1);
+    // Term one costs the ladder (site, no_pp, then no_channel wins); terms two
+    // and three cost ONE request each. Without the latch it would be nine.
+    expect(searches.length).toBe(5);
+    expect(searches.filter((u: string) => u.indexOf('channel=') === -1).length).toBe(3);
+  });
+
+  itWithFixture('logged-in-home.html', 'does NOT ladder a store that is simply having a bad minute', async (runner) => {
+    // A timeout or a 5xx is not a rejected shape, and re-shaping into a wall
+    // costs the run four requests per term for nothing.
+    await runner.inject(albStub());
+    await runner.inject(searchStub({}, { status: 503 }));
+    await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['avocado'], { storeId: '161' })!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT_FAILED', 20_000);
+    expect(msg.why).toBe('http');
+    await runner.inject(urlsProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    expect(seen.urls.filter((u: string) => u.indexOf('pgmsearch') !== -1).length).toBe(1);
+  });
+});
+
+describe('the cart subscription key', () => {
+  itWithFixture('logged-in-home.html', 'reads the DOTTED erums field names', async (runner) => {
+    // The site publishes this with SWY.CONFIGSERVICE.initErumsConfig('{...}'),
+    // and inside it the keys have dots in their NAMES:
+    //   "cart.apim.key", "store.apim.key", "apim.key", "xapi.apim.key"
+    // The rail read them as nested objects (er.store.apim.key), which is
+    // undefined every time -- so it swept every 32-hex value in the config in
+    // arbitrary order instead, and the cart answered 401 all evening.
+    const RIGHT = 'c645e9387c654aa8ae253045f648bfac';
+    await runner.inject([
+      '(function () {',
+      '  window.__urls = [];',
+      '  window.AB = { userInfo: { SWY_SHOP_TOKEN: "tok", branchId: "161", zipcode: "83713",',
+      '    customerId: "cust-1" } };',
+      '  window.SWY = { CONFIGSERVICE: {',
+      '    searchConfig: { apimProgramSubscriptionKey: "0123456789abcdef0123456789abcdef" },',
+      // Decoys first in enumeration order, exactly as the real config has them.
+      '    datapowerConfig: { cncSubscriptionKey: "1111111111111111ffffffffffffffff",',
+      '                       xapiSubscriptionKey: "2222222222222222ffffffffffffffff" },',
+      '    erumsConfig: { "slot.service.endpoint": "/x",',
+      '                   "cart.apim.key": "' + RIGHT + '" } } };',
+      '  window.fetch = function (url, init) {',
+      '    var u = String(url); window.__urls.push(u);',
+      '    var key = ((init && init.headers) || {})["ocp-apim-subscription-key"];',
+      '    if (key !== "' + RIGHT + '") return Promise.resolve({ status: 401,',
+      '      text: function () { return Promise.resolve("no"); } });',
+      '    return Promise.resolve({ status: 200, json: function () {',
+      '      return Promise.resolve({ carts: [{ cartItemsList: [{ itemId: "1", qty: 3, name: "Item 1" }] }] }); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+    await runner.inject(buildAlbertsonsCartReadScript());
+
+    const msg = await runner.waitForMessage('CART_COUNT', 20_000);
+    expect(msg.count).toBe(3);
+
+    await runner.inject(urlsProbe);
+    const seen = await runner.waitForMessage('PROBE', 10_000);
+    // First try, not the twelfth: the named field is tried before the sweep.
+    expect(seen.urls.filter((u: string) => u.indexOf('cartservice') !== -1).length).toBe(1);
   });
 });

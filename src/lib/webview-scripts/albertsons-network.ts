@@ -30,6 +30,22 @@
 
 export const ALB_SEARCH_PATH = '/abs/pub/xapi/pgmsearch/v1/search/products';
 export const ALB_CART_ITEMS_PATH = '/abs/pub/erums/cartservice/api/v2/cart/items';
+/**
+ * READING the cart is a different call from writing to it.
+ *
+ * GET /cart/items is not a read endpoint -- the service routes it as
+ * /cart/{id} and answers, in its own words:
+ *
+ *   {"title":"Bad Request","status":400,
+ *    "detail":"Failed to convert 'id' with value: 'items'",
+ *    "instance":"/osms-cartservice/api/v2/cart/items"}
+ *
+ * /cart/items is the WRITE endpoint (the site POSTs to it, and so do we). The
+ * read is POST /cart/customer/{customerId}?type=full, which is what the site's
+ * own cart service calls on load. customerId comes from the userinfo endpoint
+ * the login probe already reads.
+ */
+export const ALB_CART_CUSTOMER_PATH = '/abs/pub/erums/cartservice/api/v2/cart/customer/';
 
 /**
  * Shared preamble: resolves session facts and API keys once and parks them on
@@ -217,24 +233,101 @@ const ALB_PRELUDE = `
   }
 
   function __albSearchKey() {
+    if (A.searchKey) return A.searchKey;
     var c = __albCfg();
     return c.sc.apimProgramSubscriptionKey || c.dp.xapiSubscriptionKey || null;
+  }
+
+  // THE KEYS ARE IN THE PAGE'S HTML, NOT ONLY IN ITS RUNTIME.
+  //
+  // window.SWY.CONFIGSERVICE is built by an inline SWY.CONFIGSERVICE.init('{...}')
+  // in every store page, so a script injected before that runs sees no keys at
+  // all -- 'no_search_key' for every term and 'rail_read_no_key' for the cart,
+  // which is exactly what a run that skipped the login check hit on the device
+  // at 22:49. Same shape as the login bug: we were waiting for the page to
+  // finish telling itself something the server had already sent.
+  //
+  // So when the runtime has not got there yet, read the document instead. It is
+  // the page the WebView is already sitting on, so it comes from the HTTP cache.
+  // Nothing is hardcoded -- these rotate, and a copy compiled into the app would
+  // fail closed for every user at once.
+  async function __albEnsureKeys(budgetMs) {
+    if (A.searchKey || (A.keyCandidates && A.keyCandidates.length)) return;
+    var fromPage = __albCfg().sc.apimProgramSubscriptionKey;
+    if (fromPage) return;                       // the runtime has it; use it
+    var ctl = new AbortController();
+    var to = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, budgetMs || 8000);
+    var html = '';
+    try {
+      var r = await fetch('/', { credentials: 'include', signal: ctl.signal });
+      clearTimeout(to);
+      if (r.status !== 200) return;
+      html = await r.text();
+    } catch (e) { clearTimeout(to); return; }
+    // Found by INDEX then a class with nothing to escape. A backslash written
+    // here is eaten by the template literal before the script is injected, so
+    // \\s would have shipped as a literal 's' and matched nothing -- which is how
+    // this file has already broken twice today.
+    var kIdx = html.indexOf('"apimProgramSubscriptionKey"');
+    if (kIdx >= 0) {
+      var kM = html.slice(kIdx, kIdx + 160).match(/[0-9a-f]{32}/);
+      if (kM) A.searchKey = kM[0];
+    }
+    // The cart key is not at a field we can name -- that is why the rail PROBES
+    // candidates. Same probe, sourced from the document: every 32-hex value,
+    // with the ones sitting near erumsConfig first, because that is the service
+    // the cart lives under.
+    var all = html.match(/[0-9a-f]{32}/g) || [];
+    var near = [];
+    // Named first, exactly as the runtime path does: the erums block in the page
+    // is a JSON string whose keys have dots in them.
+    var named = ['"cart.apim.key"', '"store.apim.key"', '"apim.key"', '"xapi.apim.key"'];
+    for (var nn = 0; nn < named.length; nn++) {
+      var at = html.indexOf(named[nn]);
+      if (at < 0) continue;
+      var hit = html.slice(at, at + 120).match(/[0-9a-f]{32}/);
+      if (hit) near.push(hit[0]);
+    }
+    var e = html.indexOf('erumsConfig');
+    if (e >= 0) near = near.concat(html.slice(e, e + 4000).match(/[0-9a-f]{32}/g) || []);
+    var out = [], seen = {};
+    for (var i = 0; i < near.length; i++) { if (!seen[near[i]]) { seen[near[i]] = 1; out.push(near[i]); } }
+    for (var k = 0; k < all.length && out.length < 12; k++) {
+      if (!seen[all[k]]) { seen[all[k]] = 1; out.push(all[k]); }
+    }
+    A.keyCandidates = out;
   }
 
   // Every 32-hex value anywhere in the config, most-likely first. The cart key is
   // one of these; which one is not something the page tells us.
   function __albKeyCandidates() {
+    if (A.keyCandidates && A.keyCandidates.length) return A.keyCandidates;
     var c = __albCfg(), out = [], seen = {};
     // The cart lives under /abs/pub/erums/, and its key is erumsConfig's — NOT
     // any of datapowerConfig's, all twelve of which answer 401. Measured on a
     // signed-in device 2026-09-01: erumsConfig.store.apim.key is the only value
     // in the whole config that the cart endpoint accepts.
+    // THE FIELD NAMES ARE DOTTED STRINGS, NOT NESTED OBJECTS.
+    //
+    // The site builds this with SWY.CONFIGSERVICE.initErumsConfig('{...}') and
+    // the JSON inside reads:
+    //   "cart.apim.key":"...", "store.apim.key":"...", "apim.key":"...",
+    //   "xapi.apim.key":"...", "cart.service.endpoint":"/abs/pub/erums/cartservice/api/v1"
+    // so erumsConfig['cart.apim.key'] is ONE property with a dot in its name.
+    // Reading it as er.store.apim.key -- which is what this did -- resolves to
+    // undefined every time, and the cart fell back to sweeping every 32-hex
+    // value in the config in arbitrary order.
     try {
       var er = c.all.erumsConfig || {};
+      var named = ['cart.apim.key', 'store.apim.key', 'apim.key', 'xapi.apim.key'];
+      for (var n = 0; n < named.length; n++) {
+        var v0 = er[named[n]];
+        if (typeof v0 === 'string' && !seen[v0]) { seen[v0] = 1; out.push(v0); }
+      }
+      // The old nested reading, kept in case a banner really does publish it
+      // that way. Costs nothing when it is undefined.
       var direct = (er.store && er.store.apim && er.store.apim.key) || null;
       if (typeof direct === 'string' && !seen[direct]) { seen[direct] = 1; out.push(direct); }
-      var xa = (er.xapi && er.xapi.apim && er.xapi.apim.key) || null;
-      if (typeof xa === 'string' && !seen[xa]) { seen[xa] = 1; out.push(xa); }
     } catch (e) {}
     var preferred = ['cncSubscriptionKey', 'apimSubscriptionKey', 'xapiSubscriptionKey'];
     for (var i = 0; i < preferred.length; i++) {
@@ -252,6 +345,7 @@ const ALB_PRELUDE = `
     return out;
   }
 
+  /** The WRITE endpoint. Unchanged: this one is a POST and it is correct. */
   function __albCartUrl() {
     var u = __albUser();
     return '${ALB_CART_ITEMS_PATH}'
@@ -259,6 +353,17 @@ const ALB_PRELUDE = `
       + '&serviceType=' + encodeURIComponent(__albPreference().serviceType)
       + '&zipCode=' + encodeURIComponent(u.zipcode || '')
       + '&cartCategoryList=1P,3P_MARKETPLACE,1P_Wine';
+  }
+
+  /** The READ endpoint. POST, keyed by customer, and NOT /cart/items. */
+  function __albCartReadUrl() {
+    var u = __albUser();
+    return '${ALB_CART_CUSTOMER_PATH}' + encodeURIComponent(u.customerId || '')
+      + '?type=full'
+      + '&storeId=' + encodeURIComponent(u.branchId || '')
+      + '&zipCode=' + encodeURIComponent(u.zipcode || '')
+      + '&expressChk=true'
+      + '&cartCategoryList=1P,3P_MARKETPLACE,1P_Wine,1P_B2B';
   }
 
   function __albCartHeaders(key) {
@@ -308,13 +413,15 @@ const ALB_PRELUDE = `
     // Free when the caller already waited (the session probe does); the whole
     // budget only when we genuinely arrived before the page did.
     if (!(await __albAwaitUser(hydrateMs))) return { ok: false, why: 'not_hydrated' };
+    await __albEnsureKeys(6000);
     var keys = A.cartKey ? [A.cartKey] : __albKeyCandidates();
     var lastStatus = null;
     for (var i = 0; i < keys.length; i++) {
       var ctl = new AbortController();
       var to = setTimeout(function () { ctl.abort(); }, budgetMs || 12000);
       try {
-        var r = await fetch(__albCartUrl(), {
+        var r = await fetch(__albCartReadUrl(), {
+          method: 'POST', body: '{}',
           credentials: 'include', headers: __albCartHeaders(keys[i]), signal: ctl.signal
         });
         clearTimeout(to);
@@ -329,8 +436,11 @@ const ALB_PRELUDE = `
         }
         var j = await r.json();
         A.cartKey = keys[i];
-        var cart = (j.carts || [])[0] || {};
-        var lines = {}, rows = [], list = cart.cartItemsList || [];
+        var cart = (j.carts || [])[0] || j || {};
+        // The write endpoint answers with cartItemsList; the customer read has
+        // been seen to use cartItems. Accept either rather than reporting an
+        // empty cart, which would invite the reconcile to re-add everything.
+        var lines = {}, rows = [], list = cart.cartItemsList || cart.cartItems || j.cartItems || [];
         for (var n = 0; n < list.length; n++) {
           var it = list[n];
           if (!it || it.itemId == null) continue;
@@ -419,6 +529,11 @@ ${ALB_PRELUDE}
       // without one, and the answer above has already settled the login gate.
       return;
     }
+    // AFTER the login answer, never before it. Resolving the API keys can cost
+    // a document fetch, and on the device that pushed the whole probe past the
+    // sheet's 25 s session deadline -- so the run fell back to the slow route
+    // while holding a perfectly good session.
+    await __albEnsureKeys(6000);
 
     // The refinement: does the token actually work? A read that succeeds proves
     // the add path; one that fails proves nothing about the user, only about us,
@@ -498,47 +613,57 @@ function albSearchUrlExpr(pageSize: number, storeId: number): string {
   // BUILT FROM THE SITE'S OWN mapProgramSearchParams, PARAMETER BY PARAMETER.
   //
   // Every term came back 200-with-appCode-400, "Search encountered a problem.
-  // Please try again OSSR0033-R", the first time this rail actually ran on the
-  // device. Four of these were ours to get wrong:
-  //   url/pageurl  the site sends the bare HOSTNAME, we sent a full https:// URL
-  //   pgm          the site DELETES it when it has no program list; we always
-  //                sent 'merch-banner'
-  //   channel      derived from the shopper's preference, not hardcoded pickup
-  //   banner       the resolved banner -- hardcoding 'albertsons' is also wrong
-  //                for every other banner on this rail (safeway, vons, ...)
-  //   visitorId    the absVisitorId COOKIE, not the account UUID
-  function __albSearchUrl(term) {
+  // Please try again OSSR0033-R", the first time this rail ran on the device.
+  // The site's list, in its order, is:
+  //
+  //   request-id url pageurl pagename rows start search-type storeid featured
+  //   q sort timezone dvid channel [category-id] [pp] [pgm] includeOffer banner
+  //
+  // and its defaults are not the obvious ones -- sort and featured are the
+  // EMPTY STRING, and timezone is a hardcoded 'America/Los_Angeles', not the
+  // device's. uuid and visitorId are not part of this call at all; they came
+  // from a different endpoint of theirs and we had carried them over.
+  var __ALB_TZ = 'America/Los_Angeles';
+
+  function __albSearchParams(term, variant) {
     var u = __albUser();
     var host = String((window.location && window.location.hostname) || 'www.albertsons.com');
-    var tz = 'America/Denver';
-    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || tz; } catch (e) {}
-    var p = new URLSearchParams({
-      q: term,
-      // THE SESSION'S STORE, NOT THE PAGE'S. The caller already validated this
-      // as a positive integer and refused to build otherwise; reading it back
-      // off window.AB meant a search injected before the page had booted went
-      // out as 'storeid=', which searches nothing and explains nothing.
-      storeid: '${storeId}',
-      rows: '${pageSize}',
-      start: '0',
-      banner: __albBanner(),
-      channel: __albPreference().channel,
-      dvid: 'web-4.1search',
-      featured: 'true',
-      includeOffer: 'true',
-      pagename: 'search',
-      pageurl: host,
-      pp: 'true',
-      'search-type': 'keyword',
-      timezone: tz,
-      url: host,
-      uuid: String(u.UUID || ''),
-      visitorId: String(__albCookie('absVisitorId') || u.UUID || '')
-    });
-    // request-id is per call. Reusing one returned a stale error body in testing,
-    // so it is generated fresh rather than carried.
-    p.set('request-id', String(Math.floor(Math.random() * 1000)) + String(Date.now()));
-    return '${ALB_SEARCH_PATH}?' + p.toString();
+    var p = new URLSearchParams();
+    p.set('request-id', String(Math.floor(900 * Math.random() + 100))
+      + String(Date.now()) + String(Math.floor(900 * Math.random() + 100)));
+    p.set('url', host);
+    p.set('pageurl', host);
+    p.set('pagename', 'search');
+    p.set('rows', '${pageSize}');
+    p.set('start', '0');
+    p.set('search-type', 'keyword');
+    // THE SESSION'S STORE, NOT THE PAGE'S. The caller already validated this as
+    // a positive integer and refused to build otherwise; reading it back off
+    // window.AB meant a batch injected before the page had booted went out as
+    // 'storeid=', which searches nothing and explains nothing.
+    p.set('storeid', '${storeId}');
+    p.set('featured', variant === 'legacy' ? 'true' : '');
+    p.set('q', term);
+    if (variant !== 'legacy') p.set('sort', '');
+    p.set('timezone', variant === 'legacy' ? __albDeviceTz() : __ALB_TZ);
+    p.set('dvid', 'web-4.1search');
+    if (variant !== 'no_channel') p.set('channel', __albPreference().channel);
+    if (variant !== 'no_pp') p.set('pp', 'true');
+    p.set('includeOffer', 'true');
+    p.set('banner', __albBanner());
+    if (variant === 'legacy') {
+      p.set('uuid', String(u.UUID || ''));
+      p.set('visitorId', String(__albCookie('absVisitorId') || u.UUID || ''));
+    }
+    return p;
+  }
+
+  function __albDeviceTz() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || __ALB_TZ; } catch (e) { return __ALB_TZ; }
+  }
+
+  function __albSearchUrl(term, variant) {
+    return '${ALB_SEARCH_PATH}?' + __albSearchParams(term, variant).toString();
   }
 `;
 }
@@ -623,6 +748,7 @@ ${albSearchUrlExpr(pageSize, storeId)}
   var post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
+  await __albEnsureKeys(6000);
   var key = __albSearchKey();
   if (!key) {
     for (var q = 0; q < TERMS.length; q++) {
@@ -636,11 +762,22 @@ ${albSearchUrlExpr(pageSize, storeId)}
   // still carries the shopper's identifiers rather than blanks.
   await __albResolveUser(8000);
 
-  async function one(term) {
+  // WHICH SHAPE DOES THE GATEWAY ACCEPT? ASK IT.
+  //
+  // 'Search encountered a problem. Please try again OSSR0033-R' names no
+  // parameter, and every guess costs a device run. So a term that fails is
+  // retried through a short ladder of shapes, each one differing from the last
+  // by a single thing the site does differently, and the shape that works is
+  // REPORTED and then reused for the rest of the batch. The first one is what
+  // we believe is right, so a healthy store pays nothing for this.
+  var VARIANTS = ['site', 'no_pp', 'no_channel', 'legacy'];
+  var winner = null;
+
+  async function attempt(term, variant) {
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, 15000);
+    var url = __albSearchUrl(term, variant);
     var r, txt;
-    var url = __albSearchUrl(term);
     try {
       r = await fetch(url, {
         credentials: 'include', signal: ctl.signal,
@@ -650,48 +787,73 @@ ${albSearchUrlExpr(pageSize, storeId)}
       txt = await r.text();
     } catch (e) {
       clearTimeout(to);
-      // The operation stops answering entirely when the client is being shaped —
-      // no status, no headers. That is not "no results".
-      post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'no_response' });
-      return;
+      return { why: 'no_response', url: url };
     }
-    if (r.status !== 200) {
-      post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'http', status: r.status });
-      return;
-    }
+    if (r.status !== 200) return { why: 'http', status: r.status, url: url };
     var j = null;
     try { j = JSON.parse(txt); } catch (e) {}
-    if (!j) { post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'unparseable' }); return; }
-
+    if (!j) return { why: 'unparseable', url: url };
     var pp = j.primaryProducts || {};
     var resp = pp.response || null;
-    var docs = resp && resp.docs;
-    // THE TRAP: 200 with primaryProducts.appCode 400 and no docs array at all.
-    // Reported as a failure so the caller can fall back or tell the truth,
-    // because calling it an empty result is how a user is told the store does
-    // not stock their groceries when the search simply broke.
-    if (!docs) {
+    if (!resp || !resp.docs) {
+      return { why: 'search_error', url: url,
+               appCode: pp.appCode != null ? String(pp.appCode).slice(0, 40) : null,
+               detail: pp.appMsg != null ? String(pp.appMsg).slice(0, 90) : null };
+    }
+    return { ok: true, json: j, url: url };
+  }
+
+  function redact(url) {
+    var q = String(url).split('?')[1];
+    return q ? q.replace(/(uuid|visitorId|search-uid)=[^&]*/g, '$1=<redacted>').slice(0, 400) : null;
+  }
+
+  async function one(term) {
+    var first = winner || VARIANTS[0];
+    var got = await attempt(term, first);
+    if (!got.ok && got.why === 'search_error' && !winner) {
+      // Only a REJECTED shape is worth re-shaping. A timeout or a 5xx is the
+      // store having a bad minute and every variant would meet the same wall.
+      for (var vi = 0; vi < VARIANTS.length; vi++) {
+        if (VARIANTS[vi] === first) continue;
+        var alt = await attempt(term, VARIANTS[vi]);
+        if (alt.ok) {
+          winner = VARIANTS[vi];
+          post({ type: 'SEARCH_SHAPE_OK', source: 'network', variant: winner,
+                 after: first, sentQuery: redact(alt.url) });
+          got = alt;
+          break;
+        }
+      }
+    }
+    var url = got.url;
+    var j = got.json || null;
+    if (!got.ok) {
       post({
-        type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'search_error',
-        appCode: pp.appCode != null ? String(pp.appCode).slice(0, 40) : null,
-        detail: pp.appMsg != null ? String(pp.appMsg).slice(0, 90) : null,
-        // THE QUERY WE SENT, so the next failure names itself. 'Search
-        // encountered a problem' says nothing about WHICH parameter the gateway
-        // objected to, and comparing our request against the site's is the only
-        // way anyone has found one of these. Identifiers are stripped: they are
-        // the user's, and they are never the answer.
-        sentQuery: String(url).split('?')[1]
-          ? String(url).split('?')[1]
-              .replace(/(uuid|visitorId|search-uid)=[^&]*/g, '$1=<redacted>').slice(0, 300)
-          : null
+        type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: got.why,
+        status: got.status != null ? got.status : null,
+        appCode: got.appCode != null ? got.appCode : null,
+        detail: got.detail != null ? got.detail : null,
+        variant: winner || first,
+        sentQuery: redact(url)
       });
       return;
     }
-    // A real empty result — docs present and genuinely zero-length — IS a result.
+    await handle(term, j, url);
+  }
+
+  /** Map an accepted response onto the candidate shape every reader here emits. */
+  async function handle(term, j, url) {
+    var pp = j.primaryProducts || {};
+    var resp = pp.response || null;
+    var docs = resp && resp.docs;
+    // A real empty result -- docs present and genuinely zero-length -- IS a
+    // result. The 200-with-appCode-400-and-no-docs case never reaches here; it
+    // is a rejection, and attempt() has already re-shaped and reported it.
     post({
       type: 'SEARCH_RESULT', source: 'network', term: term,
-      candidates: __albCandidates(docs),
-      numFound: (typeof resp.numFound === 'number') ? resp.numFound : null
+      candidates: __albCandidates(docs || []),
+      numFound: (resp && typeof resp.numFound === 'number') ? resp.numFound : null
     });
   }
 
