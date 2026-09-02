@@ -15,6 +15,7 @@
 import {
   buildHebNetworkAddBatchScript,
   buildHebNetworkSearchBatchScript,
+  buildHebCartReadScript,
   buildHebNetworkSearchScript,
   buildHebSessionScript,
 } from '../../src/lib/webview-scripts/heb-network-search';
@@ -727,6 +728,64 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
     expect(results[results.length - 1]).toMatchObject({
       name: 'Fresh Spinach, 1 Bundle', success: false, reason: 'cart_not_incremented',
     });
+  });
+
+  itWithFixture('logged-in-home.html', 'reads the cart ON ITS OWN, answering as the cart page would', async (runner) => {
+    // THE TEST THAT SHOULD HAVE COME WITH THE CODE.
+    //
+    // cartRead was written on a branch WITH this test, then ported to main
+    // without it. The port extracted the wrong lines, so CART_READ_FN shipped
+    // EMPTY and every rail cart read threw:
+    //
+    //   CART_COUNT  count: null  reason: rail_read_threw
+    //   detail: "ReferenceError: readCart is not defined"
+    //
+    // The suite stayed green the whole time, because the add batch still had its
+    // own copy of readCart inline and nothing exercised the standalone one.
+    // Stephen saw "Couldn't verify your H-E-B cart".
+    await runner.inject([
+      '(function () {',
+      '  window.fetch = function () {',
+      '    var out = { data: { cartV2: { __typename: "Cart", id: "c1", items: [',
+      '      { id: "l1", quantity: 2, estimatedWeight: null,',
+      '        product: { id: "p1", fullDisplayName: "H-E-B Bakery Southwestern Flour Tortillas" },',
+      '        sku: { id: "s1", customerFriendlySize: "10 ct" } },',
+      '      { id: "l2", quantity: 3, estimatedWeight: null,',
+      '        product: { id: "p2", fullDisplayName: "Fresh Lime, Each" },',
+      '        sku: { id: "s2", customerFriendlySize: "Each" } }',
+      '    ] } } };',
+      '    return Promise.resolve({ ok: true, status: 200,',
+      '      text: function () { return Promise.resolve(JSON.stringify(out)); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+
+    await runner.inject(buildHebCartReadScript());
+    const msg = await runner.waitForMessage('CART_COUNT', 15_000);
+    // Not merely "it answered" — it answered with the CART. A throw also posts a
+    // CART_COUNT, which is exactly how this got past the last check.
+    expect(msg.reason).toBeUndefined();
+    expect(msg.count).toBe(5);            // total quantity, as the page sums it
+    expect(msg.items).toEqual([
+      { name: 'H-E-B Bakery Southwestern Flour Tortillas, 10 ct', qty: 2 },
+      { name: 'Fresh Lime, Each', qty: 3 },
+    ]);
+  });
+
+  itWithFixture('logged-in-home.html', 'a failed cart read is UNKNOWN, never zero', async (runner) => {
+    // A zero would tell the reconcile the cart is empty and invite it to re-add
+    // everything the user already has.
+    await runner.inject([
+      '(function () {',
+      '  window.fetch = function () { return Promise.resolve({ ok: false, status: 500,',
+      '    text: function () { return Promise.resolve("nope"); } }); };',
+      '})(); true;',
+    ].join('\n'));
+
+    await runner.inject(buildHebCartReadScript());
+    const msg = await runner.waitForMessage('CART_COUNT', 15_000);
+    expect(msg.count).toBeNull();
+    expect(msg.reason).toBe('rail_read_failed');
   });
 
   itWithFixture('logged-in-home.html', 'cart rows carry the SIZE, or the done screen reshuffles', async (runner) => {

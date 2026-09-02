@@ -36,6 +36,47 @@
  * navigation landed on the homepage.
  */
 const CART_READ_FN = `
+  var CART = 'query CartLines { cartV2 { __typename'
+    + ' ... on Cart { id items { id quantity estimatedWeight product { id fullDisplayName }'
+    + '   sku { id customerFriendlySize } } }'
+    + ' ... on CartError { code title message } } }';
+
+  var readCart = async function () {
+    var r = await __hebGql('CartLines', CART, {}, 8000);
+    if (!r.ok) return null;
+    try {
+      var c = r.data.cartV2;
+      if (!c || c.__typename !== 'Cart') return null;
+      return c.items || [];
+    } catch (e) { return null; }
+  };
+
+  var rowsOf = function (lines) {
+    if (!lines) return null;
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      var nm = l && l.product && l.product.fullDisplayName;
+      if (!nm) continue;
+      nm = String(nm);
+      // THE SIZE GOES ON, because the page reader puts it on.
+      //
+      // These rows are diffed against the cart-page probe's rows by NAME, and
+      // the probe reads the card, which says "..., 10 ct". Without the size
+      // nothing matched, so every line looked new: the done screen opened with
+      // 17 all-green rows and then reshuffled into green-and-grey the moment
+      // the probe answered. Same product, two spellings, one of them ours.
+      var size = l.sku && l.sku.customerFriendlySize;
+      if (typeof size === 'string' && size && nm.indexOf(size) === -1) nm = nm + ', ' + size;
+      var w = (l.estimatedWeight != null) ? Number(l.estimatedWeight) : null;
+      var row = { name: nm, qty: Number(l.quantity) || 0 };
+      // A weight line is reconciled by presence, not by count — same rule the
+      // page reader follows, so both paths produce identical rows.
+      if (w != null && !isNaN(w)) { row.isWeight = true; row.weight = w; }
+      out.push(row);
+    }
+    return out;
+  };
 `;
 
 /** Shared transport. Same endpoint, headers and credentials as the cart rail. */
@@ -591,10 +632,6 @@ ${CART_READ_FN}
   ];
   void reasonCatalog;
 
-  var CART = 'query CartLines { cartV2 { __typename'
-    + ' ... on Cart { id items { id quantity estimatedWeight product { id fullDisplayName }'
-    + '   sku { id customerFriendlySize } } }'
-    + ' ... on CartError { code title message } } }';
   var ADD = 'mutation cartItemV2($productId: String!, $skuId: String!, $quantity: Int,'
     + ' $purchasePreferenceId: String) {'
     + ' addItemToCartV2(productId: $productId, skuId: $skuId, quantity: $quantity,'
@@ -605,15 +642,6 @@ ${CART_READ_FN}
     + ' ... on AddItemToCartV2Error { message title code }'
     + ' ... on AddItemToCartV2TimeslotError { message title errorCode: code } } }';
 
-  var readCart = async function () {
-    var r = await __hebGql('CartLines', CART, {}, 8000);
-    if (!r.ok) return null;
-    try {
-      var c = r.data.cartV2;
-      if (!c || c.__typename !== 'Cart') return null;
-      return c.items || [];
-    } catch (e) { return null; }
-  };
   // Summed across every line for the product, because one product can hold
   // several lines keyed by preference — and reported with the COUNT, because the
   // write sets ONE line and cannot address a product that holds more than one.
@@ -634,32 +662,6 @@ ${CART_READ_FN}
   // CartItem). The rail has always read the cart here — it just threw the rows
   // away and reported a count, which is why the breakdown had to come from a
   // page load. Same read, nothing extra on the wire.
-  var rowsOf = function (lines) {
-    if (!lines) return null;
-    var out = [];
-    for (var i = 0; i < lines.length; i++) {
-      var l = lines[i];
-      var nm = l && l.product && l.product.fullDisplayName;
-      if (!nm) continue;
-      nm = String(nm);
-      // THE SIZE GOES ON, because the page reader puts it on.
-      //
-      // These rows are diffed against the cart-page probe's rows by NAME, and
-      // the probe reads the card, which says "..., 10 ct". Without the size
-      // nothing matched, so every line looked new: the done screen opened with
-      // 17 all-green rows and then reshuffled into green-and-grey the moment
-      // the probe answered. Same product, two spellings, one of them ours.
-      var size = l.sku && l.sku.customerFriendlySize;
-      if (typeof size === 'string' && size && nm.indexOf(size) === -1) nm = nm + ', ' + size;
-      var w = (l.estimatedWeight != null) ? Number(l.estimatedWeight) : null;
-      var row = { name: nm, qty: Number(l.quantity) || 0 };
-      // A weight line is reconciled by presence, not by count — same rule the
-      // page reader follows, so both paths produce identical rows.
-      if (w != null && !isNaN(w)) { row.isWeight = true; row.weight = w; }
-      out.push(row);
-    }
-    return out;
-  };
 
   var before = await readCart();
   if (before == null) {
