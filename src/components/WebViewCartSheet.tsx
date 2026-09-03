@@ -20,7 +20,6 @@ import WebView, { WebViewMessageEvent, WebViewNavigation } from 'react-native-we
 import FloatingPreviewImage from './FloatingPreviewImage';
 import ProductImageViewer from './ProductImageViewer';
 import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { Colors } from '../constants/colors';
 import { getStoreProduct } from '../lib/storeProducts';
@@ -1069,15 +1068,31 @@ export default function WebViewCartSheet({
    * degrading under burst -- and half of them would be answering a question the
    * previous one had not finished asking.
    *
-   * So: one second, never overlapping, and slowing to five after the first
-   * thirty. Thirty seconds covers actually signing in; past that the sheet is
-   * sitting open and nobody is typing. The page-load re-check still fires as it
-   * always did, so the ordinary case -- tap Sign in, the store navigates -- is
-   * still answered the instant the new page lands, not on a tick.
+   * So the timer is the BACKSTOP, not the plan. The page moving is what detects
+   * a sign-in: every load and redirect on this screen already asked (see
+   * onLoadEnd), and an SPA step that never fires a load now asks too
+   * (onNavigationStateChange). A 2FA login is a sequence of navigations, so each
+   * step of it asks.
+   *
+   * What the timer is left covering is the case the button really existed for: a
+   * check that answered wrongly, or never answered at all. It runs at one second
+   * while the page has moved in the last 45s and five when it has not -- so the
+   * slow rate is only ever reached by a sheet nobody is using, and any movement
+   * puts it back to one.
    */
   const LOGIN_POLL_FAST_MS = 1_000;
   const LOGIN_POLL_SLOW_MS = 5_000;
-  const LOGIN_POLL_FAST_TICKS = 30;
+  /**
+   * How long after the page last moved the backstop stays quick.
+   *
+   * Not "how long the screen has been up". A 2FA login is minutes of a user
+   * waiting for a code, and a tick count would have slowed to five seconds
+   * before they had even typed it. Entering the code is a navigation, which puts
+   * this back to one second — so the slow rate is only ever reached by a sheet
+   * nobody is doing anything with, and the moment anything happens it is quick
+   * again.
+   */
+  const LOGIN_ACTIVE_WINDOW_MS = 45_000;
   /** How long one check may go unanswered before another is allowed out. Long
    *  enough for the slowest rail session budget, so a slow store is waited for
    *  rather than asked again on top. */
@@ -1170,7 +1185,25 @@ export default function WebViewCartSheet({
   const loginPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loginPollBusyRef = useRef(false);
   const loginPollFreeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const loginPollTicksRef = useRef(0);
+  /**
+   * When the login page last MOVED — a load, a redirect, an SPA step.
+   *
+   * The backstop's rate is keyed on this rather than on a tick count. Stephen,
+   * 2026-09-02: "I'm not sure I like the 5 second rule. That is too long and it
+   * definately takes longer than 30 seconds to login with 2FA." Quite right: a
+   * count of ticks measures how long the SCREEN has been up, which on a 2FA
+   * login is mostly the user waiting for a text message. Every step of that
+   * login is a navigation, so activity is what should decide, and a login that
+   * takes three minutes stays as responsive at the end as at the start.
+   */
+  const loginActivityAtRef = useRef(0);
+  /** The last URL the login step saw, so an SPA step is not counted twice. */
+  const loginNavUrlRef = useRef('');
+  /** The poll's current tick, so activity can pull the next one forward rather
+   *  than waiting out a slow interval that was scheduled before it. */
+  const loginPollTickRef = useRef<() => void>(() => {});
+  /** noteLoginActivity, reachable from callbacks defined above it. */
+  const noteLoginActivityRef = useRef<() => void>(() => {});
   /** The qty screen's items, for onLoadEnd — which has []-deps and would
    *  otherwise read this run's initial empty list. */
   const qtyItemsRef = useRef<ConsolidatedIngredient[]>([]);
@@ -1273,7 +1306,6 @@ export default function WebViewCartSheet({
   // "Add the 2 remaining items myself" for the two items the user had just
   // handled — including one they had successfully added by hand.
   const [manualHandled, setManualHandled] = useState<string[]>([]);
-  const [copiedList, setCopiedList] = useState(false);
   // A manual pass is its own reason to re-read the cart, even on a run that
   // attempted no adds of its own (every item bounced at review, say). Without
   // this the user could add five things by hand and land back on a done screen
@@ -2486,9 +2518,8 @@ export default function WebViewCartSheet({
       // Manual-mode state is per-run like everything else here (MEAL-197). Under
       // the shipping !FEATURE_BACKGROUND_CART mount this component survives
       // between runs, so a `manualHandled` left behind silently withholds the
-      // same ingredient from the next meal's offer, `manualUsedRef` re-probes
-      // the cart on every later run, and `copiedList` says "Copied" before
-      // anything has been copied.
+      // same ingredient from the next meal's offer, and `manualUsedRef`
+      // re-probes the cart on every later run.
       setCapReached([]);
       netRunRef.current = false;
       netTopUpRef.current = null;
@@ -2496,7 +2527,6 @@ export default function WebViewCartSheet({
       setManualQueue([]);
       setManualIdx(0);
       setManualHandled([]);
-      setCopiedList(false);
       manualUsedRef.current = false;
       manualHandledRef.current = [];
       manualCartSnapshotRef.current = [];
@@ -3616,7 +3646,22 @@ export default function WebViewCartSheet({
       // email → password → MFA), re-injection could disrupt the flow, so it's
       // gated to isLoginSuccessUrl or stores that opt in via reinjectLoginCheckOnNav
       // (poll-based logins whose detection dies on the post-sign-in reload).
+      //
+      // Stephen, 2026-09-02: "After a login, the user is redirected. Can we not
+      // detect that redirect and then poll the login when that happens?" This IS
+      // that redirect, and it already asks: every store in the catalogue passes
+      // this gate, H-E-B and the Albertsons family through
+      // reinjectLoginCheckOnNav. Checked, rather than assumed -- a first version
+      // of this change added `netRail() ||` here to "ungate" it and was a no-op,
+      // with a comment claiming otherwise.
+      //
+      // So a 2FA flow is already asked at every step, because every step is a
+      // page load. What was missing, and is what the removed button covered, is
+      // the sign-in that finishes WITHOUT one (onNavigationStateChange) and the
+      // check that answered wrongly or not at all (the timer).
       if ((s.isLoginSuccessUrl && s.isLoginSuccessUrl(url)) || s.reinjectLoginCheckOnNav) {
+        // The page moved, so the user is still working. Keep the backstop quick.
+        noteLoginActivityRef.current();
         // The THIRD place login is decided, and the one that actually fires for
         // Albertsons: while the user is looking at the sign-in prompt, every page
         // load re-asks. It has to use the rail as well, or the store gets the DOM
@@ -3650,13 +3695,34 @@ export default function WebViewCartSheet({
   }, []);
 
   const onNavigationStateChange = useCallback(
-    (_navState: WebViewNavigation) => {
+    (navState: WebViewNavigation) => {
       // Login success is detected exclusively via LOGIN_STATUS messages from the
       // injected check script — never from URL changes. Multi-step logins (e.g.
       // Amazon email → password → MFA) bounce through intermediate URLs that
       // can look like "success" but aren't.
+      //
+      // What a URL change IS good for is knowing the page MOVED. That is not a
+      // verdict, it is a reason to go and ask for one — so this only marks
+      // activity and pokes the check, and the check still decides. It catches
+      // the sign-in step that re-renders without a full load, which onLoadEnd
+      // never sees.
+      if (stepRef.current !== 'login' || navState.loading) return;
+      const url = navState.url || '';
+      if (!url || url === loginNavUrlRef.current) return;
+      loginNavUrlRef.current = url;
+      noteLoginActivityRef.current();
+      if (!netRail()) return;   // see the onLoadEnd gate: DOM checks stay gated
+      if (loginPollBusyRef.current) return;
+      loginPollBusyRef.current = true;
+      console.log(`[Cart ${ts()}]`, 'login step — page moved, asking again');
+      webviewRef.current?.injectJavaScript(loginCheckScript());
+      if (loginPollFreeRef.current) clearTimeout(loginPollFreeRef.current);
+      loginPollFreeRef.current = setTimeout(() => {
+        loginPollFreeRef.current = null;
+        loginPollBusyRef.current = false;
+      }, LOGIN_POLL_ANSWER_MS);
     },
-    [],
+    [netRail, loginCheckScript],
   );
 
   // Single entry point for every "Mealio can't drive the store" condition —
@@ -3773,9 +3839,6 @@ export default function WebViewCartSheet({
     setManualIdx(0);
     setManualHandled([]);
     manualHandledRef.current = [];
-    // The clipboard holds the pre-manual list; a pass that shrinks the failed
-    // list makes "Copied" a claim about a list that no longer exists.
-    setCopiedList(false);
     // Drop the previous cart read AND the verdict built from it. The done screen
     // re-probes on the way back in, and all four of these are about to be stale:
     // leaving the banner up while discarding the rows would land the user on a
@@ -3852,26 +3915,6 @@ export default function WebViewCartSheet({
   // MEAL-9's floor. Deliberately not gated on a store adapter or a live session:
   // this is what the user gets when everything else has failed, so it must not be
   // able to fail itself.
-  /**
-   * The floor: everything Mealio did not put in the cart, as a list you can
-   * paste anywhere. No store adapter, no session, no network.
-   *
-   * FAILED AND SKIPPED, and the skipped half became load-bearing when the
-   * "add them myself" button was removed (2026-09-02). That button covered both,
-   * and a Skip on the review screen has never meant "I don't want this" -- an
-   * ingredient nobody wanted was unchecked on the qty screen and never entered
-   * the run at all. Reaching review means the user asked for it and none of the
-   * offered products were it. Copying only the failures left that user with a
-   * done screen naming an ingredient and no way to take it with them.
-   */
-  const copyFailedList = useCallback(async () => {
-    const names = [...failedNamesRef.current, ...Object.values(skippedByIdxRef.current)]
-      .filter((n): n is string => !!n)
-      .filter((n, i, a) => a.indexOf(n) === i);
-    if (names.length === 0) return;
-    await Clipboard.setStringAsync(names.join('\n'));
-    setCopiedList(true);
-  }, []);
 
   const retryAfterBlock = useCallback(() => {
     setBlockReason(null);
@@ -3891,6 +3934,23 @@ export default function WebViewCartSheet({
   }, [setStep, armLoginCheckTimeout]);
 
   /**
+   * The login page moved: a load, a redirect, an SPA step.
+   *
+   * Two things follow, and the second is the one that is easy to miss. The
+   * window resets, so the backstop is quick again — but a slow tick scheduled
+   * BEFORE this is still pending, and leaving it there means "quick again" does
+   * not arrive for another five seconds. So the next tick is pulled forward too.
+   */
+  const noteLoginActivity = useCallback(() => {
+    loginActivityAtRef.current = Date.now();
+    if (!loginPollRef.current) return;
+    clearTimeout(loginPollRef.current);
+    loginPollRef.current = setTimeout(() => loginPollTickRef.current(), LOGIN_POLL_FAST_MS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  noteLoginActivityRef.current = noteLoginActivity;
+
+  /**
    * Ask the store, on a timer, whether they have signed in yet.
    *
    * Only while the login screen is up, only one question at a time, and it stops
@@ -3902,7 +3962,9 @@ export default function WebViewCartSheet({
       if (loginPollFreeRef.current) { clearTimeout(loginPollFreeRef.current); loginPollFreeRef.current = null; }
       loginPollBusyRef.current = false;
     };
-    if (step !== 'login') { stop(); loginPollTicksRef.current = 0; return; }
+    if (step !== 'login') { stop(); loginNavUrlRef.current = ''; return; }
+    // Arriving on this screen IS the page having moved.
+    loginActivityAtRef.current = Date.now();
     let alive = true;
     const tick = () => {
       if (!alive || stepRef.current !== 'login') return;
@@ -3911,7 +3973,6 @@ export default function WebViewCartSheet({
       // burst shape that makes this one stop answering at all.
       if (!loginPollBusyRef.current) {
         loginPollBusyRef.current = true;
-        loginPollTicksRef.current += 1;
         webviewRef.current?.injectJavaScript(loginCheckScript());
         // An answer clears this (see onMessage); this is for the one that never
         // comes, so a single dropped request cannot stop the poll for good.
@@ -3920,9 +3981,10 @@ export default function WebViewCartSheet({
           loginPollBusyRef.current = false;
         }, LOGIN_POLL_ANSWER_MS);
       }
-      loginPollRef.current = setTimeout(tick,
-        loginPollTicksRef.current < LOGIN_POLL_FAST_TICKS ? LOGIN_POLL_FAST_MS : LOGIN_POLL_SLOW_MS);
+      const movedRecently = Date.now() - loginActivityAtRef.current < LOGIN_ACTIVE_WINDOW_MS;
+      loginPollRef.current = setTimeout(tick, movedRecently ? LOGIN_POLL_FAST_MS : LOGIN_POLL_SLOW_MS);
     };
+    loginPollTickRef.current = tick;
     loginPollRef.current = setTimeout(tick, LOGIN_POLL_FAST_MS);
     return () => { alive = false; stop(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6783,17 +6845,10 @@ export default function WebViewCartSheet({
                     Anything Mealio could not add now reaches the review screen
                     with alternatives to pick from, which is the answer to the
                     same question one step earlier and without leaving the app.
-                    The copy-the-list link below stays -- it is the floor, and it
-                    asks nothing of the store. */}
-                {/* MEAL-9 rung 4, the floor. Works with no store adapter, no
-                    session and no network: the user still leaves with the list. */}
-                {(failedNames.length > 0 || skippedNames.length > 0) && (
-                  <TouchableOpacity onPress={copyFailedList} style={styles.linkBtn} testID="manual-copy">
-                    <Text style={[styles.linkBtnText, { color: storeColor }]}>
-                      {copiedList ? 'Copied' : 'Copy the list instead'}
-                    </Text>
-                  </TouchableOpacity>
-                )}
+                    "Copy the list instead" went with it on the same call: the
+                    done screen already NAMES what was not added, so a link that
+                    copies the same names to a clipboard was a second way to say
+                    one thing. */}
                 <TouchableOpacity onPress={onClose} style={[styles.secondaryBtn, { borderColor: storeColor }]}>
                   <Text style={[styles.secondaryBtnText, { color: storeColor }]}>Done</Text>
                 </TouchableOpacity>
@@ -6950,8 +7005,6 @@ const styles = StyleSheet.create({
   },
   manualBtnRow: { flexDirection: 'row', gap: 8, alignSelf: 'stretch' },
   manualBtn: { flex: 1, alignItems: 'center' },
-  linkBtn: { paddingVertical: 10, alignItems: 'center' },
-  linkBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
   retryBtn: {
     alignSelf: 'flex-start',
     marginHorizontal: 16,

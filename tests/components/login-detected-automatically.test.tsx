@@ -187,23 +187,103 @@ describe('asking the store on a timer instead', () => {
     expect(checks()).toBe(after);
   });
 
-  it('slows down once nobody is plausibly still typing', () => {
-    // Thirty seconds covers actually signing in. Past that the sheet is sitting
-    // open and a request a second is just noise the store has to serve.
+  it('slows down only when the page has stopped moving', () => {
+    // NOT after a fixed number of ticks. Stephen: "it definately takes longer
+    // than 30 seconds to login with 2FA" — and most of that is a user waiting
+    // for a text, which a tick count reads as "nobody is here".
     const { post } = atTheLoginScreen();
-    const start = checks();
-    for (let i = 0; i < 30; i++) {
+    // Nothing happens for a minute: no loads, no redirects.
+    for (let i = 0; i < 60; i++) {
       act(() => { jest.advanceTimersByTime(1_100); });
       post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
     }
-    const fast = checks() - start;
-    expect(fast).toBe(30);
-
-    // Now a second buys nothing more.
     const before = checks();
     act(() => { jest.advanceTimersByTime(1_100); });
-    expect(checks()).toBe(before);
+    expect(checks()).toBe(before);            // a second no longer buys one
     act(() => { jest.advanceTimersByTime(4_500); });
+    expect(checks()).toBe(before + 1);        // five does
+  });
+
+  it('goes quick again the moment the page moves', () => {
+    // Entering the 2FA code is a navigation. A login three minutes in is as
+    // responsive as one three seconds in.
+    const { view, post } = atTheLoginScreen();
+    for (let i = 0; i < 60; i++) {
+      act(() => { jest.advanceTimersByTime(1_100); });
+      post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    }
+    act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onNavigationStateChange({
+        url: 'https://www.heb.com/my-account', loading: false,
+      });
+    });
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    const before = checks();
+    act(() => { jest.advanceTimersByTime(1_100); });
     expect(checks()).toBe(before + 1);
+  });
+});
+
+describe('the redirect after signing in', () => {
+  // Stephen, 2026-09-02: "After a login, the user is redirected. Can we not
+  // detect that redirect and then poll the login when that happens?"
+  //
+  // It already did, and that is worth a test rather than a shrug: the re-check
+  // is gated on isLoginSuccessUrl / reinjectLoginCheckOnNav, and every store in
+  // the catalogue passes it — H-E-B and the Albertsons family through
+  // reinjectLoginCheckOnNav. Nothing here was untested because it was missing;
+  // it was untested because nobody had asked.
+  //
+  // (A first attempt "ungated" it for rail stores and was a no-op. The mutant
+  // that removed the ungate passed every test, which is how it was caught.)
+  //
+  // What genuinely was missing is the second case below: a sign-in that finishes
+  // without a page load at all.
+  it('asks the moment the page finishes loading', () => {
+    const { view } = atTheLoginScreen();
+    const load = (url: string) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onLoadEnd({ nativeEvent: { url } });
+    });
+    // The FIRST load drains the queue the login step left behind, so it never
+    // reaches the gated branch at all. It is the loads AFTER it — which is what
+    // a redirect chain and a 2FA flow are made of — that do.
+    load('https://www.heb.com/');
+    const before = checks();
+    load('https://www.heb.com/my-account');
+    expect(checks()).toBe(before + 1);
+  });
+
+  it('asks on a step that re-renders without a load', () => {
+    // The sign-in that finishes in place. onLoadEnd never fires for it.
+    const { view } = atTheLoginScreen();
+    const before = checks();
+    act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onNavigationStateChange({
+        url: 'https://www.heb.com/my-account', loading: false,
+      });
+    });
+    expect(checks()).toBe(before + 1);
+  });
+
+  it('does not ask twice for the same URL', () => {
+    const { view } = atTheLoginScreen();
+    const nav = (url: string) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onNavigationStateChange({ url, loading: false });
+    });
+    const before = checks();
+    nav('https://www.heb.com/my-account');
+    nav('https://www.heb.com/my-account');
+    expect(checks()).toBe(before + 1);
+  });
+
+  it('ignores a navigation that has not finished', () => {
+    const { view } = atTheLoginScreen();
+    const before = checks();
+    act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onNavigationStateChange({
+        url: 'https://www.heb.com/my-account', loading: true,
+      });
+    });
+    expect(checks()).toBe(before);
   });
 });

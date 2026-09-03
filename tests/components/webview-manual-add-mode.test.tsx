@@ -256,11 +256,14 @@ describe('the done screen never offers to hand over the store', () => {
     expect(view.queryByTestId('manual-start')).toBeNull();
   });
 
-  it('but the list can still be copied — that rung stays', async () => {
-    // The floor: it works with no store adapter, no session and no network, and
-    // the user still leaves knowing what to buy.
+  it('and neither does it offer to copy the list', async () => {
+    // Removed on the same call. The done screen already NAMES what was not
+    // added, so a link that copies those same names to a clipboard was a second
+    // way of saying one thing.
     const view = await runToDone(['sour cream', 'tortillas'], ['sour cream']);
-    expect(view.queryByTestId('manual-copy')).toBeTruthy();
+    expect(view.queryByTestId('manual-copy')).toBeNull();
+    // ...but the screen still says WHICH item, which is the part that mattered.
+    expect(view.queryByText(/tortillas/i)).toBeTruthy();
   });
 });
 
@@ -380,8 +383,9 @@ describe('the run that actually needs it', () => {
     // declined the alternatives, not been denied them.
     expect(view.queryByText(/1 item you skipped/i)).toBeTruthy();
     expect(view.queryByTestId('manual-start')).toBeNull();
-    // ...and they still leave with the list.
-    expect(view.queryByTestId('manual-copy')).toBeTruthy();
+    expect(view.queryByTestId('manual-copy')).toBeNull();
+    // ...and the screen still names it, which is what the user needs from it.
+    expect(view.queryByText(/fresh mint/i)).toBeTruthy();
   });
 });
 
