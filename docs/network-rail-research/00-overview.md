@@ -12,18 +12,20 @@ everyone's, and treating an inference as a measurement is the same mistake.
 
 **ALDI is fully mapped and ready to implement** — every operation measured
 against a live session, and its add takes an array, so bulk add is one call.
-**Wegmans is the fastest** — its search needs no session at all and answers in
-26ms, and its login state is readable from localStorage with zero network — but
-its cart write is still unmeasured. **Walmart works and is the most defended**;
+**Wegmans has the fastest search of any store we have touched** — Algolia, no
+session at all, 13ms — but its cart API needs a bearer that MSAL keeps
+encrypted, so the cart half costs a heavy page load per token. A search-only
+Wegmans rail is a real option and is written up. **Walmart works and is the most defended**;
 probing it has a cost. **Amazon Fresh has no JSON API worth the name** and is
 the one store here where a rail may not be the right answer.
 
-Build order: **ALDI first** (it is done bar the writing), **Wegmans second**
-(one probe away), Walmart third, Amazon not at all.
+Build order: **ALDI first** — it is done bar the writing, and it lights up every
+banner in `INSTACART_TENANTS` rather than one store. **Wegmans second**, search
+first and the cart only if Stephen wants it. Walmart third. Amazon not at all.
 
 | | Login detection | Search | Cart read | Bulk add | Verdict |
 |---|---|---|---|---|---|
-| **Wegmans** | localStorage, **0 network** | Algolia, **no auth**, 26ms | REST + bearer | likely | **build first** |
+| **Wegmans** | localStorage, **0 network** | Algolia, **no auth**, 13ms | bearer only — **token is encrypted** | likely | search rail yes, cart needs a decision |
 | **ALDI** | `ActiveCarts`, 176ms | `AsyncItemSearch`, 556ms | `CartItems`, 306ms | **YES — one call** | **fully mapped** |
 | **Walmart** | cookie | GraphQL, hash-locked | GraphQL | likely | build third, carefully |
 | **Amazon Fresh** | cookie | none found | AJAX fragment | unlikely | **do not build yet** |

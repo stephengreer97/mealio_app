@@ -35,31 +35,43 @@ const signedIn = Array.isArray(keys) && keys.length > 0;
 
 MEASURED on the device: `count: 1`, an account key of the shape
 `msal.<id>_1a_wegmanssignupsigninwithphoneverification.<id>myaccount.wegmans.com<id>`.
+That entry is plaintext.
 
 **This is the best login signal of any store we have.** It is instant, it cannot
 be rate-limited, and it cannot be confused by markup.
 
-### The refinement, and the two-answer lesson
+### ⚠ BUT THE TOKEN ITSELF IS NOT READABLE — MEASURED, and it changes the design
 
-localStorage says *an account exists*. It does not say *the token still works*.
-Take the Albertsons lesson (`sessionUsable`) and treat them as two facts:
+An earlier draft of this file said the bearer could be lifted from localStorage.
+**That is wrong**, and it is recorded here rather than quietly fixed because it
+would have sent an implementation down a dead end.
 
-- **`early`** — an account key exists → answer the LOGIN gate immediately.
-- **`verified`** — an access token exists whose `expiresOn` is in the future →
-  the run may start.
-
-If the token is expired, MSAL will renew it silently on the site's next call,
-but a rail sitting on `robots.txt` runs none of the site's code, so **an expired
-token will not renew itself.** Treat expired as "hand the user the login screen"
-until someone proves otherwise. That is the single biggest open risk here.
-
-### Confirming over the network (optional, ~200-400ms)
+MSAL is running with its **encrypted cache** enabled — there is a
+`msal.cache.encryption` cookie, and the credential entries named by
+`msal.<n>.token.keys.<clientId>` have the fields:
 
 ```
-GET https://api.digitaldevelopment.wegmans.cloud/commerce/account/customer
-Authorization: Bearer <secret from the msal accesstoken entry>
+{ id, nonce, data, lastUpdatedAt }        ← not { secret, expiresOn, target }
 ```
-MEASURED: 200.
+
+`data` is ciphertext. So the account list tells us *someone is signed in*, and
+nothing tells us *what their token is*.
+
+### And the commerce API will not take the cookie — MEASURED
+
+Three probes from `https://www.wegmans.com/robots.txt`:
+
+| call | result |
+|---|---|
+| same-origin `/api/stores` (control) | **200**, 441ms |
+| `api.digitaldevelopment.wegmans.cloud/commerce/cart/carts/` | `TypeError: Failed to fetch` |
+| the same, `mode: 'no-cors'` | **status 0, type `opaque`** |
+
+The opaque response is the tell: the request LEAVES and is answered, and CORS
+blocks us reading it. The API is bearer-authenticated and its CORS policy is
+written for the site's own authenticated calls, not for ours.
+
+**Conclusion: the cart cannot be read or written from the quiet page.**
 
 ---
 
@@ -156,64 +168,68 @@ do that. It also means search cannot be broken by an expired token.
 
 ---
 
-## 3. Cart read — MEASURED
+## 3. Cart read and write — REACHABLE, but not from the quiet page
+
+These endpoints exist and answered 200 while the SITE called them, observed on
+the signed-in session:
 
 ```
-GET https://api.digitaldevelopment.wegmans.cloud/commerce/cart/carts/
-Authorization: Bearer <token>
-```
-MEASURED: 200. The trailing slash is as the site sends it.
-
-Neighbouring endpoints observed on the same bearer, all 200:
-
-```
-/commerce/account/customer          who the user is
-/commerce/account/addresses
-/commerce/order/orders/activeorders
-/commerce/saved-list/savedlists
-/commerce/my-items
-/commerce/digital-coupons/offers
-/commerce/browse/products/
-/commerce/instacart/fulfillment/service_options/pickup   POST
-    body: {"cart_total_cents":0,"items_count":0,"location_code":140}
+GET  /commerce/cart/carts/                     the cart
+GET  /commerce/account/customer                who the user is
+GET  /commerce/account/addresses
+GET  /commerce/order/orders/activeorders
+GET  /commerce/saved-list/savedlists
+GET  /commerce/my-items
+GET  /commerce/browse/products/
+POST /commerce/instacart/fulfillment/service_options/pickup
+       {"cart_total_cents":0,"items_count":0,"location_code":140}
 ```
 
-That last one is the Instacart Connect seam, and `location_code` is the store.
+All on `https://api.digitaldevelopment.wegmans.cloud`, all with
+`Authorization: Bearer …`. The write is not in that list because nothing was
+added; by the shape of the rest it is
+`POST /commerce/cart/carts/{cartId}/items`.
 
----
+### Getting a token — three options, and only one is sane
 
-## 4. Cart write — INFERRED, not executed
+1. **Capture it from the site.** Load a real Wegmans shop page once, with
+   `window.fetch` patched to record the `Authorization` header the site's own
+   MSAL puts on its first commerce call. Cache the token with its expiry; run
+   everything else from the quiet page. **Cost: one heavy page load per token
+   lifetime** (typically an hour). This is the only option worth building.
+2. **Ask MSAL.** `acquireTokenSilent()` on the site's own instance — but the
+   instance is not on `window`, so this needs the app's internals and breaks on
+   any refactor of theirs.
+3. **Decrypt the cache.** Reimplementing someone's crypto to lift their token is
+   not a thing to do. Recorded so nobody proposes it as clever.
 
-Not captured, because capturing it means adding to a real basket. By the shape
-of every other endpoint on this API it is:
+Option 1 has a real precedent here: it is what
+`page-globals-are-someone-elses-fetch` says to do, one step further — find the
+request that carries the value and capture it once, rather than polling for it.
 
-```
-POST   https://api.digitaldevelopment.wegmans.cloud/commerce/cart/carts/{cartId}/items
-PATCH  …/commerce/cart/carts/{cartId}/items/{itemId}
-```
+### ⚠ Or do not build the cart at all — the SEARCH-ONLY rail
 
-**The probe to run** (one minute, with Stephen awake, on a cheap item):
+Worth considering seriously, because the numbers say so. Search is the slow part
+of a run for anything not already chosen, and **Wegmans search needs no session
+at all** (see above: 13ms, no cookies, no token). A Wegmans rail could:
 
-```js
-// In the app's WebView on www.wegmans.com/robots.txt, with the bearer read
-// from localStorage as above.
-const cart = await (await fetch(BASE + '/commerce/cart/carts/', { headers: H })).json();
-console.log(JSON.stringify(cart).slice(0, 1500));   // learn the cart + item shape
-```
+- **search over the rail** — fast, sessionless, cannot be broken by an expired
+  token, works even for a signed-out user;
+- **leave cart read and add on the assisted path**, where the user adds and
+  Mealio claims nothing it has not seen.
 
-Read the cart FIRST with one item added by hand through the UI. The response
-shape names the write: an item object's fields are what the write takes, and
-whether it holds an array tells you whether bulk is one call or many.
+That is a smaller feature that ships sooner and carries none of the token risk.
+Whether the full rail is worth the heavy page load is a call for Stephen, and it
+is the main decision this research surfaces for Wegmans.
 
-### Is bulk add possible? — INFERRED, leaning yes
+## 4. Bulk add — INFERRED, unmeasurable until the token question is settled
 
-The API is REST with a `/items` collection, which conventionally accepts an
-array. Instacart Connect's own fulfilment API takes line-item arrays. **Assume
-one call, verify before relying on it**, and remember the H-E-B lesson: a batched
-call can still execute serially on the server, so measure the wall clock rather
-than the request count.
-
----
+The API is REST with an `/items` collection, which conventionally takes an
+array, and Wegmans fulfils on Instacart Connect — whose cart mutation, MEASURED
+on ALDI, is `UpdateCartItemsMutation($cartItemUpdates: [CartsCartItemUpdate!]!)`,
+a list. So bulk is likely. **Measure the wall clock, not the request count**:
+H-E-B's batched add is one request that the server runs serially, 34 items in
+8.2 seconds.
 
 ## 5. Quiet page
 

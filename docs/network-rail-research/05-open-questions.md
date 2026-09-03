@@ -75,16 +75,19 @@ same product), so a saved Wegmans product cannot be reused across stores the way
 a Kroger or Albertsons one can. That needs a decision before the add path is
 built.
 
-## 7. Wegmans: what happens when the MSAL token expires
+## 7. Wegmans: is the cart worth a heavy page load? — A DECISION, NOT A PROBE
 
-**Question:** MSAL renews silently, but only when the site's own code runs. A
-rail on `robots.txt` runs none of it. Does an expired token mean "sign in
-again", or can the rail refresh it itself using the refresh token in
-localStorage?
+MEASURED: the MSAL cache is encrypted (`{id, nonce, data}`, plus a
+`msal.cache.encryption` cookie), and the commerce API refuses the cookie session
+(opaque CORS response — the request is answered, we are not allowed to read it).
+So the bearer can only be had by loading a real Wegmans page and capturing the
+header the site's own code sends.
 
-This decides whether Wegmans needs a login screen every hour or once. **It is the
-biggest single risk in the whole Wegmans design** and there is no cheap probe —
-it needs a token observed across its own expiry.
+That is one heavy page load per token lifetime. **Is the cart worth it, given
+the search — the slow part — needs no session at all?** A search-only Wegmans
+rail ships sooner, carries no token risk, and works for signed-out users too.
+
+This is Stephen's call and it is the main thing this research needs from him.
 
 ## 8. All four: is bulk add real?
 
