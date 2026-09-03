@@ -22,26 +22,34 @@ Then add ONE item through the Wegmans UI on the phone while the watcher runs.
 The request it makes IS the answer — method, path, body, and whether the body
 holds one item or a list.
 
-## 2. ALDI/Instacart: where the operation→hash map lives — BLOCKS everything
+## 2. ~~ALDI: where the hash map lives~~ — ANSWERED
 
-**Question:** the storefront must ship the map somewhere. Where?
+In the storefront's own JavaScript: 1,552 operation→hash pairs across 80 files /
+6.2MB, shape `"OperationName":"<64 hex>"`. Harvest with
+`tools/rail-recon/probes/harvest-hashes.js`. See `02-aldi.md`.
 
-**Probe:** the harvest script in this research run scanned Walmart, not ALDI.
-Run it against ALDI's storefront:
+## 3. ~~ALDI: the search and add operations~~ — ANSWERED
 
-```js
-// tools/rail-recon/probe.ts https://www.aldi.us/store/aldi/storefront harvest.js
-// Scan every loaded .js for  "<OperationName>":"<64 hex>"  and for sha256Hash:"…"
-```
+All five measured. `AsyncItemSearch`, `ItemDetailsRetailerProduct`,
+`ActiveCarts`, `CartItems`, `UpdateCartItemsMutation`. Bulk add confirmed by
+signature: `[CartsCartItemUpdate!]!` where `CartsCartItemUpdate` is
+`{ itemId: ID!, quantity: Float! }`.
 
-If that finds nothing, the map is fetched at runtime — in which case
-`tools/rail-recon/watch.ts` with a match on `.js` will name the file.
+## 3b. ALDI: what is `zoneId`, and is `quantity` absolute? — BLOCKS the add
 
-## 3. ALDI: the search and add operation names
+Two small gaps left on an otherwise complete store.
 
-Unlocked by (2). Until then, unknown. The search page renders client-side, so
-driving an actual search on the phone with `watch.ts` running would also answer
-it — the headless navigation did not trigger the query.
+**`zoneId`** is required by `ItemDetailsRetailerProduct($ids, $zoneId)` and was
+not observed. It is probably the fulfilment zone for the user's shop. Find it by
+running `tools/rail-recon/watch.ts` while opening an ALDI product page on the
+phone — the site makes this exact call and its variables will contain it.
+
+**Is `quantity` absolute or additive?** H-E-B and Albertsons are both absolute
+(`held + wanted`), and the operation being named *Update* rather than *Add*
+supports that. But getting it backwards is the silent under-add MEAL-194 exists
+to prevent, so it must be MEASURED, not assumed: add one item by hand, read the
+cart, then send the same itemId with quantity 2 and see whether the cart holds
+2 or 3.
 
 ## 4. Walmart: whether the quiet page helps or hurts — DESIGN-CHANGING
 

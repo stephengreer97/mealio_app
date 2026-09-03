@@ -10,17 +10,21 @@ everyone's, and treating an inference as a measurement is the same mistake.
 
 ## The one-paragraph answer
 
-**Wegmans is the easy one and should be built first** — its search needs no
-session at all and answers in 26ms, and its login state is readable from
-localStorage with zero network. **ALDI and Walmart are both possible but both
-are locked to allow-listed query hashes**, which is a maintenance burden the
-other two do not have. **Amazon Fresh has no JSON API worth the name** and is
-the only one of the four where a rail may not be the right answer.
+**ALDI is fully mapped and ready to implement** — every operation measured
+against a live session, and its add takes an array, so bulk add is one call.
+**Wegmans is the fastest** — its search needs no session at all and answers in
+26ms, and its login state is readable from localStorage with zero network — but
+its cart write is still unmeasured. **Walmart works and is the most defended**;
+probing it has a cost. **Amazon Fresh has no JSON API worth the name** and is
+the one store here where a rail may not be the right answer.
+
+Build order: **ALDI first** (it is done bar the writing), **Wegmans second**
+(one probe away), Walmart third, Amazon not at all.
 
 | | Login detection | Search | Cart read | Bulk add | Verdict |
 |---|---|---|---|---|---|
 | **Wegmans** | localStorage, **0 network** | Algolia, **no auth**, 26ms | REST + bearer | likely | **build first** |
-| **ALDI** | cookie + `x-client-user-id` | GraphQL, hash-locked | GraphQL | likely | build second |
+| **ALDI** | `ActiveCarts`, 176ms | `AsyncItemSearch`, 556ms | `CartItems`, 306ms | **YES — one call** | **fully mapped** |
 | **Walmart** | cookie | GraphQL, hash-locked | GraphQL | likely | build third, carefully |
 | **Amazon Fresh** | cookie | none found | AJAX fragment | unlikely | **do not build yet** |
 
