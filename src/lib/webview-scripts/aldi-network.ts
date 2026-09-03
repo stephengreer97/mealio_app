@@ -26,6 +26,10 @@ import { INSTACART_TENANTS } from './instacart';
 /** Where the harvested operation map is cached, and for how long. */
 const OPS_CACHE_KEY = '__mealio_ic_ops_v1';
 const OPS_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+/** Where the discovered shop id is cached. Same lifetime as the hashes. */
+const SHOP_CACHE_KEY = '__mealio_ic_shop_v1';
+/** The fulfilment zone, discovered from the ids a search returns. */
+const ZONE_CACHE_KEY = '__mealio_ic_zone_v1';
 
 /**
  * The operations this rail needs, with the hashes observed on 2026-09-02.
@@ -38,11 +42,19 @@ export const ALDI_SEED_OPS: Record<string, string> = {
   // No arguments at all, and it returns the cart id -- session probe and cart
   // identity in one call. MEASURED 176ms.
   ActiveCarts: '839c3658a57f86c543ba367a16d0eaa648f167a1eaf20f6d80aa14165f1ee10d',
-  // ($query, $shopId, $postalCode, $searchSource) -> item IDS only. MEASURED 556ms.
+  // ($query, $shopId, $zoneId, $postalCode) -> items WITH names, sizes, brands
+  // and product ids. One call, MEASURED 1.3s for 20 items.
+  Search: '6d77b6fd5b62f6d88999f5a022af16fafcb00de911da6b942990f61a478ed8c1',
+  // ($query, $shopId, $postalCode, $searchSource) -> item IDS only. MEASURED
+  // 117ms. Kept because it needs no zoneId, and the ids it returns CONTAIN the
+  // zone -- which is how the zone is discovered in the first place.
   AsyncItemSearch: '19889f981af1f9c5c70543f3d7555bf0d435e026fc96329984fc3414e3b56d8e',
-  // ($ids: [ID!]!, $zoneId: ID!) -- an ARRAY, so one call hydrates every id from
-  // every term at once.
-  ItemDetailsRetailerProduct: '5ac2d820f689a151c7dbaccefbbcb4b59d1c84db56a667a6b90d0137d5e72cca',
+  // ItemDetailsRetailerProduct WAS here, to hydrate the ids AsyncItemSearch
+  // returns. It is gone: MEASURED on the device, it answers
+  // {"retailerProducts":[]} for ids the search had just handed back, under
+  // every combination of full/bare ids and zone/shop as zoneId. It addresses a
+  // different id space. `Search` above returns the names directly, which is one
+  // call rather than two anyway.
   // ($id, $shopId, $postalCode) -> the cart lines. MEASURED 306ms.
   CartItems: '60fa63eb1afba0204993af2a7ea12e057f0ae2677e71753fc05d5a9c5b4adb6c',
   // ($cartItemUpdates: [CartsCartItemUpdate!]!) where the input is
@@ -189,8 +201,22 @@ const IC_PRELUDE = `
       // cache so the next call harvests again, exactly as __albForgetKeys does
       // when every Albertsons cart key 401s.
       if (code === 'PERSISTED_QUERY_NOT_FOUND') IC.forgetOps();
-      return { ok: false, why: 'gql_error', op: name, ms: ms, code: code,
-               detail: String(first.message || '').slice(0, 160) };
+      // ERRORS AND DATA ARE NOT EXCLUSIVE. GraphQL returns both: a resolver that
+      // fails puts an entry in errors and null at that path, and everything
+      // else still arrives.
+      //
+      // MEASURED on the device: Search answers with twenty "Not Found" errors,
+      // one per item, ALL of them on the price field -- and twenty complete
+      // items alongside them. Treating that as a failure threw away a working
+      // search over a field the matcher does not read. Only a response with no
+      // data at all is a failure.
+      if (!j.data) {
+        return { ok: false, why: 'gql_error', op: name, ms: ms, code: code,
+                 detail: String(first.message || '').slice(0, 160) };
+      }
+      return { ok: true, data: j.data, ms: ms, bytes: txt.length,
+               partialErrors: j.errors.length,
+               partialFirst: String(first.message || '').slice(0, 80) };
     }
     return { ok: true, data: j.data, ms: ms, bytes: txt.length };
   };
@@ -200,35 +226,82 @@ const IC_PRELUDE = `
   // shopId is not in the cart response, so it is looked for in the places the
   // storefront keeps it, in order, and which one answered is REPORTED. A store
   // fact discovered by guessing is one nobody can debug later.
-  IC.findShopId = function () {
+  IC.cachedShop = function () {
+    try {
+      var raw = localStorage.getItem('${SHOP_CACHE_KEY}');
+      if (!raw) return null;
+      var j = JSON.parse(raw);
+      if (!j || !j.v || !j.at) return null;
+      if (Date.now() - j.at > ${OPS_CACHE_MAX_AGE_MS}) return null;
+      return j;
+    } catch (e) { return null; }
+  };
+
+  // Pull the first run of digits after a marker.
+  IC.digitsAfter = function (hay, needle, max) {
+    var at = hay.indexOf(needle);
+    if (at < 0) return null;
+    var from = at + needle.length;
+    var v = '';
+    for (var i = from; i < from + (max || 8); i++) {
+      var ch = hay.charAt(i);
+      if (ch < '0' || ch > '9') break;
+      v += ch;
+    }
+    return v || null;
+  };
+
+  // FETCH THE STOREFRONT AS TEXT. Not load it -- fetch it.
+  //
+  // MEASURED 2026-09-03: the shop id is nowhere a page can be asked for it from
+  // robots.txt. Not a cookie, not localStorage, not sessionStorage, and no
+  // operation returns it -- ContinueShoppingUserCarts and AssociatedCarts both
+  // answer with an empty cart list, and everything else that mentions a shop
+  // takes one as an argument.
+  //
+  // It IS in the storefront's server payload, URL-ENCODED, which is why looking
+  // for the plain string found nothing. A same-origin GET brings that back as
+  // text in about 3 seconds without loading a page, rendering anything, or
+  // running a line of the store's own JavaScript -- and it is cached for twelve
+  // hours, so it is once a day rather than once a run.
+  IC.fetchShopId = async function (slug, budgetMs) {
+    var ctl = new AbortController();
+    var to = setTimeout(function () { ctl.abort(); }, budgetMs || 20000);
+    var t0 = Date.now();
+    var html = '';
+    try {
+      var r = await fetch('/store/' + slug + '/storefront', { credentials: 'include', signal: ctl.signal });
+      clearTimeout(to);
+      html = await r.text();
+    } catch (e) { clearTimeout(to); return { v: null, why: 'no_response', ms: Date.now() - t0 }; }
+    // Two independent markers, because one of them will change before both do.
+    var v = IC.digitsAfter(html, '%5C%22shopId%5C%22%3A%5C%22', 8)
+         || IC.digitsAfter(html, '%22shops%22%3A%5B%7B%22id%22%3A%22', 8)
+         || IC.digitsAfter(html, '%22shopId%22%3A%22', 8)
+         || IC.digitsAfter(html, '"shopId":"', 8);
+    return { v: v, ms: Date.now() - t0, bytes: html.length };
+  };
+
+  IC.findShopId = async function (slug, budgetMs) {
     var tries = [];
-    try {
-      var m = location.pathname.split('/');
-      for (var i = 0; i < m.length; i++) if (/^[0-9]{3,7}$/.test(m[i])) tries.push({ from: 'path', v: m[i] });
-    } catch (e) {}
-    try {
-      var ls = localStorage.getItem('shopId') || localStorage.getItem('shop_id');
-      if (ls) tries.push({ from: 'localStorage', v: String(ls) });
-    } catch (e) {}
-    try {
-      var ck = document.cookie.split(';');
-      for (var c = 0; c < ck.length; c++) {
-        var pair = ck[c].split('=');
-        var key = (pair[0] || '').trim();
-        if (key === 'shop_id' || key === 'shopId' || key === 'current_shop_id') {
-          tries.push({ from: 'cookie:' + key, v: (pair[1] || '').trim() });
-        }
-      }
-    } catch (e) {}
+    var cached = IC.cachedShop();
+    if (cached) { tries.push({ from: 'cache', v: String(cached.v) }); return tries; }
+    // The page, when we happen to be on one that has it.
     try {
       var s = document.documentElement.innerHTML;
-      var at = s.indexOf('"shopId":"');
-      if (at > 0) {
-        var v = s.substr(at + 10, 12);
-        var end = v.indexOf('"');
-        if (end > 0) tries.push({ from: 'html', v: v.slice(0, end) });
-      }
+      var here = IC.digitsAfter(s, '%5C%22shopId%5C%22%3A%5C%22', 8) || IC.digitsAfter(s, '"shopId":"', 8);
+      if (here) tries.push({ from: 'page', v: here });
     } catch (e) {}
+    if (!tries.length) {
+      var got = await IC.fetchShopId(slug, budgetMs);
+      if (got.v) tries.push({ from: 'storefront-fetch', v: got.v, ms: got.ms, bytes: got.bytes });
+      else tries.push({ from: 'storefront-fetch', v: null, why: got.why || 'not_found', ms: got.ms });
+    }
+    var first = null;
+    for (var i = 0; i < tries.length; i++) if (tries[i].v) { first = tries[i].v; break; }
+    if (first) {
+      try { localStorage.setItem('${SHOP_CACHE_KEY}', JSON.stringify({ v: first, at: Date.now() })); } catch (e) {}
+    }
     return tries;
   };
 `;
@@ -258,14 +331,23 @@ ${IC_PRELUDE}
       if (String(rt.slug || '') === '${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}') { mine = list[i]; break; }
     }
     if (!mine && list.length) mine = list[0];
-    var shopTries = IC.findShopId();
+    var shopTries = await IC.findShopId('${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}', 20000);
     // THE SHOP ID IS NOT THE RETAILER ID, and confusing them searches the wrong
     // catalogue. The retailer is ALDI-the-chain (12). The shop is the branch the
     // user is shopping (8583 on this device), and it is what every search and
     // cart operation takes. ActiveCarts gives us the first and not the second,
     // so it is looked for -- and when it is not found, storeId is NULL and the
     // rail refuses to build a search rather than send the wrong number.
-    var shopId = shopTries.length ? String(shopTries[0].v) : null;
+    // The first try that actually FOUND something. findShopId records its
+    // attempts whether or not they worked, so taking tries[0] blindly and
+    // String()-ing it turns a miss into the four-character string "null" --
+    // which is truthy, sails past the no-shop guard in searchBatch, and gets
+    // sent to the store as the shop to search. Caught by the fixture test that
+    // asserts a bare document reports NO shop.
+    var shopId = null;
+    for (var si = 0; si < shopTries.length; si++) {
+      if (shopTries[si] && shopTries[si].v) { shopId = String(shopTries[si].v); break; }
+    }
     post({
       ok: true,
       loggedIn: !!mine,
@@ -309,139 +391,112 @@ export function buildAldiNetworkSearchBatchScript(
   // Every operation on this platform takes the shop the user is actually
   // shopping, and it is not the retailer id ActiveCarts hands back -- ALDI the
   // chain is 12, the branch is 8583. Sending the wrong one searches a catalogue
-  // the user cannot buy from, which is the over-add rule's problem wearing a
-  // different hat: every candidate would be a product that is not there.
-  //
-  // Returning null hands the run to the assisted path, which is honest. Finding
-  // the shop id is the one thing left to close on this store; the session probe
-  // reports where it looked (`shopTries`) so a device run says which source
-  // works rather than leaving the next person to guess again.
+  // the user cannot buy from, which is the over-add rule wearing a different
+  // hat: every candidate would be a product that is not there.
   if (!opts.shopId) return null;
   const seed = JSON.stringify(ALDI_SEED_OPS);
   return `(async function () {
 ${IC_PRELUDE}
   var TERMS = ${JSON.stringify(terms)};
-  var SHOP = ${JSON.stringify(opts.shopId ?? null)};
+  var SHOP = ${JSON.stringify(opts.shopId)};
   var REQ_MS = ${opts.requestMs ?? 15000};
   var post = IC.post;
 
-  // Pull every {id, name, price, image, available} out of a response whose exact
-  // shape has not been measured yet.
+  // ONE CALL PER TERM. The first design here used AsyncItemSearch for ids and
+  // then a bulk hydration for the names, which looked better -- N + 1 requests
+  // rather than N. It did not work: MEASURED on the device,
+  // ItemDetailsRetailerProduct answers with an empty list for ids the search had
+  // just returned, under every combination of full and bare ids and of zone and
+  // shop as the zoneId. It addresses a different id space.
   //
-  // A tolerant walk, deliberately: the hydration operation's schema is the one
-  // thing in this file nobody has seen, and a parser written to a guessed shape
-  // returns nothing at all when the guess is wrong -- silently. This finds any
-  // node carrying an id we asked for, reports how many it found, and the first
-  // device run turns it into something exact.
-  var collect = function (root, want) {
-    var byId = {};
-    var seen = 0;
-    var walk = function (n, depth) {
-      if (!n || depth > 12 || seen > 20000) return;
-      seen++;
-      if (Array.isArray(n)) { for (var i = 0; i < n.length; i++) walk(n[i], depth + 1); return; }
-      if (typeof n !== 'object') return;
-      var id = n.id != null ? String(n.id) : null;
-      if (id && want[id]) {
-        var name = n.name || n.displayName || n.title || null;
-        if (!name && n.viewSection) name = n.viewSection.titleString || n.viewSection.nameString || null;
-        if (name) {
-          var price = null;
-          try {
-            var vs = n.viewSection || {};
-            price = vs.priceString || vs.pricingString || (n.pricing && n.pricing.priceString) || null;
-          } catch (e) {}
-          var img = null;
-          try { img = (n.viewSection && n.viewSection.itemImage && n.viewSection.itemImage.url) || (n.image && n.image.url) || null; } catch (e) {}
-          var avail = true;
-          try { if (n.availability && n.availability.available === false) avail = false; } catch (e) {}
-          if (!byId[id]) byId[id] = { id: id, name: String(name), price: price, img: img, available: avail };
-        }
-      }
-      for (var k in n) { if (Object.prototype.hasOwnProperty.call(n, k)) walk(n[k], depth + 1); }
+  // Search returns the names itself, so this is N requests and no hydration.
+  var toCandidate = function (it) {
+    var vs = it.viewSection || {};
+    var img = null;
+    try { img = (vs.itemImage && (vs.itemImage.url || vs.itemImage.templateUrl)) || null; } catch (e) {}
+    var price = null;
+    try { price = vs.priceString || (it.price && it.price.viewSection && it.price.viewSection.priceString) || null; } catch (e) {}
+    var name = it.name || vs.titleString || null;
+    if (name && it.size) name = name + ', ' + it.size;
+    return {
+      productName: String(name || ''),
+      imageUrl: img,
+      // The search does not report stock, so nothing here may claim it is out.
+      // The write is what finds out, and it verifies against the cart.
+      outOfStock: false,
+      preferences: null,
+      // MEASURED: price resolves to "Not Found" on every item, under the real
+      // postcode and the placeholder alike, and with the zone or the shop as
+      // zoneId. Cosmetic -- the matcher scores on the name and the write uses
+      // the id -- so it is left null rather than faked.
+      price: price,
+      productId: it.id != null ? String(it.id) : null,
+      skuId: null,
+      isWeightItem: false,
+      maxOrderQuantity: null,
     };
-    walk(root, 0);
-    return byId;
   };
 
   try {
     await IC.ensureOps(${seed}, 15000);
 
-    // 1. every term, one at a time. Serial on purpose: two batches at once is
-    //    the burst shape that makes a store stop answering, and this store has
-    //    not been load-tested by anyone here.
-    var perTerm = {};
-    var allIds = [];
-    var failed = 0;
-    for (var t = 0; t < TERMS.length; t++) {
-      var term = TERMS[t];
-      var r = await IC.gql('AsyncItemSearch', {
-        query: term, shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}', searchSource: 'search',
-      }, REQ_MS);
-      if (!r.ok) {
-        failed++;
-        post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: r.why,
-               status: r.status || null, ms: r.ms || null, code: r.code || null, detail: r.detail || null });
-        continue;
+    // THE ZONE, discovered rather than guessed. Search needs a zoneId and
+    // nothing hands one over -- but AsyncItemSearch does NOT need one, and the
+    // ids it returns carry it (items_23898-18647633). So one cheap call
+    // (MEASURED 117ms) buys the zone, and it is cached for twelve hours with
+    // the shop id.
+    var zone = null;
+    var cachedZone = null;
+    try {
+      var rawZ = localStorage.getItem('${ZONE_CACHE_KEY}');
+      if (rawZ) {
+        var jz = JSON.parse(rawZ);
+        if (jz && jz.v && Date.now() - jz.at < ${OPS_CACHE_MAX_AGE_MS}) cachedZone = String(jz.v);
       }
-      var ids = [];
-      try { ids = r.data.itemSearch.itemResultList.itemIds || []; } catch (e) { ids = []; }
-      perTerm[term] = ids;
-      for (var i = 0; i < ids.length; i++) if (allIds.indexOf(ids[i]) < 0) allIds.push(ids[i]);
+    } catch (e) {}
+    zone = cachedZone;
+    if (!zone) {
+      var probe = await IC.gql('AsyncItemSearch', {
+        query: TERMS[0], shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}', searchSource: 'search',
+      }, REQ_MS);
+      var pids = [];
+      try { pids = probe.data.itemSearch.itemResultList.itemIds || []; } catch (e) {}
+      if (pids.length) {
+        var f = String(pids[0]);
+        var us = f.indexOf('_');
+        var dash = f.indexOf('-');
+        if (us >= 0 && dash > us) zone = f.slice(us + 1, dash);
+      }
+      if (zone) { try { localStorage.setItem('${ZONE_CACHE_KEY}', JSON.stringify({ v: zone, at: Date.now() })); } catch (e) {} }
     }
-
-    if (!allIds.length) {
-      for (var e0 = 0; e0 < TERMS.length; e0++) {
-        if (perTerm[TERMS[e0]]) post({ type: 'SEARCH_RESULT', source: 'network', term: TERMS[e0], candidates: [] });
+    post({ type: 'IC_SEARCH_SHAPE', source: 'network', zone: zone, zoneFrom: cachedZone ? 'cache' : 'probe' });
+    if (!zone) {
+      for (var z = 0; z < TERMS.length; z++) {
+        post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: TERMS[z], why: 'no_zone' });
       }
       post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length });
       return;
     }
 
-    // 2. zoneId, read back out of the ids the search just gave us.
-    var zone = null;
-    try {
-      var first = String(allIds[0]);
-      var us = first.indexOf('_');
-      var dash = first.indexOf('-');
-      if (us >= 0 && dash > us) zone = first.slice(us + 1, dash);
-    } catch (e) {}
-
-    // 3. one hydration for every id from every term.
-    var det = await IC.gql('ItemDetailsRetailerProduct', { ids: allIds, zoneId: zone }, REQ_MS);
-    var want = {};
-    for (var w = 0; w < allIds.length; w++) want[allIds[w]] = true;
-    var byId = det.ok ? collect(det.data, want) : {};
-    var hydrated = 0;
-    for (var h in byId) if (Object.prototype.hasOwnProperty.call(byId, h)) hydrated++;
-
-    post({ type: 'IC_SEARCH_SHAPE', source: 'network', zone: zone, ids: allIds.length,
-           hydrated: hydrated, detOk: !!det.ok, detWhy: det.why || null, detMs: det.ms || null,
-           sample: det.ok ? JSON.stringify(det.data).slice(0, 400) : null });
-
-    // 4. one SEARCH_RESULT per term, in the shape every other rail posts.
-    for (var q = 0; q < TERMS.length; q++) {
-      var tm = TERMS[q];
-      var list = perTerm[tm];
-      if (!list) continue;
-      var cands = [];
-      for (var c = 0; c < list.length && c < 30; c++) {
-        var got = byId[list[c]];
-        if (!got) continue;
-        cands.push({
-          productName: got.name,
-          imageUrl: got.img || null,
-          outOfStock: !got.available,
-          preferences: null,
-          price: got.price || null,
-          productId: got.id,
-          skuId: null,
-          isWeightItem: false,
-          maxOrderQuantity: null,
-        });
+    for (var t = 0; t < TERMS.length; t++) {
+      var term = TERMS[t];
+      var r = await IC.gql('Search', {
+        query: term, shopId: SHOP, zoneId: zone, postalCode: '${PLACEHOLDER_POSTAL}',
+      }, REQ_MS);
+      if (!r.ok) {
+        post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: r.why,
+               status: r.status || null, ms: r.ms || null, code: r.code || null, detail: r.detail || null });
+        continue;
       }
-      post({ type: 'SEARCH_RESULT', source: 'network', term: tm, candidates: cands,
-             ms: det.ms || null, n: cands.length });
+      var items = [];
+      try { items = r.data.searchResults.primaryItemResultList.items || []; } catch (e) { items = []; }
+      var cands = [];
+      for (var i = 0; i < items.length && i < 30; i++) {
+        var c = toCandidate(items[i]);
+        if (c.productName && c.productId) cands.push(c);
+      }
+      post({ type: 'SEARCH_RESULT', source: 'network', term: term, candidates: cands,
+             ms: r.ms, n: cands.length });
     }
     post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length });
   } catch (e) {
@@ -457,13 +512,31 @@ ${IC_PRELUDE}
  * the lines. A rail store must never load a page to learn what is in its own
  * cart.
  */
-export function buildAldiCartReadScript(opts: { shopId?: string | null } = {}): string {
+export function buildAldiCartReadScript(
+  opts: { shopId?: string | null; storeId?: string } = {},
+): string {
+  const storeId = opts.storeId ?? 'aldi';
   const seed = JSON.stringify(ALDI_SEED_OPS);
   return `(async function () {
 ${IC_PRELUDE}
   var SHOP = ${JSON.stringify(opts.shopId ?? null)};
   try {
     await IC.ensureOps(${seed}, 15000);
+    // cartRead() takes no session -- the rail interface does not hand it one --
+    // so it finds the shop the same way the session probe does. After a session
+    // has run this is a cache hit and costs nothing; cold, it is the one
+    // storefront fetch. MEASURED before this: the read failed outright with
+    // "Variable $shopId of type ID! was provided invalid value", because null
+    // was passed straight through.
+    if (!SHOP) {
+      var tries = await IC.findShopId('${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}', 20000);
+      for (var ti = 0; ti < tries.length; ti++) if (tries[ti] && tries[ti].v) { SHOP = String(tries[ti].v); break; }
+    }
+    if (!SHOP) {
+      IC.post({ type: 'CART_COUNT', count: null, source: 'network', reason: 'rail_read_failed',
+                why: 'no_shop' });
+      return;
+    }
     var carts = await IC.gql('ActiveCarts', {}, 12000);
     if (!carts.ok) {
       IC.post({ type: 'CART_COUNT', count: null, source: 'network', reason: 'rail_read_failed',

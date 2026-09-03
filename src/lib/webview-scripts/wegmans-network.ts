@@ -33,6 +33,9 @@ const COMMERCE_BASE = 'https://api.digitaldevelopment.wegmans.cloud';
 
 /** Where a captured bearer is cached, and how long it is trusted without proof. */
 const TOKEN_CACHE_KEY = '__mealio_weg_tok_v1';
+/** The user's store number, once something has managed to learn it. */
+const STORE_CACHE_KEY = '__mealio_weg_store_v1';
+const STORE_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Shared by every injected script: the bridge, the account read, the store
@@ -73,27 +76,72 @@ const WEG_PRELUDE = `
   // catalogue at once (32,223 hits vs 282). So this is not optional, and where
   // it was found is REPORTED -- a store fact discovered by guessing is one
   // nobody can debug later.
-  WG.findStoreNumber = async function (budgetMs) {
+  WG.cachedStore = function () {
+    try {
+      var raw = localStorage.getItem('${STORE_CACHE_KEY}');
+      if (!raw) return null;
+      var j = JSON.parse(raw);
+      if (!j || !j.v || !j.at) return null;
+      if (Date.now() - j.at > ${STORE_CACHE_MAX_AGE_MS}) return null;
+      return String(j.v);
+    } catch (e) { return null; }
+  };
+
+  // Pull a store number out of whatever the customer endpoint calls it. The
+  // exact field has NOT been seen -- reading it needs the bearer, and the
+  // bearer needs a page load -- so several plausible names are tried and the
+  // one that answered is reported.
+  WG.storeFromCustomer = function (data) {
+    if (!data || typeof data !== 'object') return null;
+    var keys = ['storeNumber', 'preferredStoreNumber', 'defaultStoreNumber',
+                'shoppingStoreNumber', 'storeId', 'preferredStore'];
+    var found = null;
+    var walk = function (n, depth) {
+      if (found || !n || depth > 5) return;
+      if (Array.isArray(n)) { for (var i = 0; i < n.length; i++) walk(n[i], depth + 1); return; }
+      if (typeof n !== 'object') return;
+      for (var k = 0; k < keys.length; k++) {
+        var v = n[keys[k]];
+        if (v == null) continue;
+        if (typeof v === 'object') { walk(v, depth + 1); continue; }
+        var sv = String(v);
+        if (/^[0-9]{1,4}$/.test(sv)) { found = sv; return; }
+      }
+      for (var kk in n) { if (Object.prototype.hasOwnProperty.call(n, kk)) walk(n[kk], depth + 1); }
+    };
+    walk(data, 0);
+    return found;
+  };
+
+  // WHICH STORE, and why this is not optional.
+  //
+  // The search index is per store: the SAME Daisy sour cream is 626485 at store
+  // 50 and 608294 at store 140, and an unfiltered query returns every store's
+  // catalogue at once (32,223 hits against 282). An unfiltered search therefore
+  // offers real products under real names carrying ids that are NOT valid where
+  // this user shops -- and saving one as their choice would add the wrong
+  // product on the next run. That is the failure the cart rules exist to
+  // prevent, so the rail refuses to search rather than risk it.
+  //
+  // MEASURED 2026-09-03, and this is the awkward part: the store number is
+  // nowhere a page can be asked for it. Not a cookie, not localStorage, not the
+  // server-rendered HTML of / or /shop, and /api/stores/preferred,
+  // /api/user/store, /api/stores/mine and /api/customer/store are all 404. It
+  // arrives with the customer profile, which is behind the bearer.
+  //
+  // So Wegmans SEARCH depends on having had a token once, even though the
+  // search endpoint itself needs no session at all. Cached for a day, so it is
+  // one page load rather than one a run.
+  WG.findStoreNumber = async function (tok, budgetMs) {
     var tries = [];
-    try {
-      for (var i = 0; i < localStorage.length; i++) {
-        var k = localStorage.key(i);
-        if (!/store/i.test(k)) continue;
-        var v = localStorage.getItem(k) || '';
-        var m = v.match(/[0-9]{1,4}/);
-        if (m && v.length < 400) tries.push({ from: 'ls:' + k.slice(0, 40), v: m[0] });
-      }
-    } catch (e) {}
-    try {
-      var ck = document.cookie.split(';');
-      for (var c = 0; c < ck.length; c++) {
-        var pair = ck[c].split('=');
-        var key = (pair[0] || '').trim();
-        if (!/store/i.test(key)) continue;
-        var val = (pair[1] || '').trim();
-        if (/^[0-9]{1,4}$/.test(val)) tries.push({ from: 'cookie:' + key, v: val });
-      }
-    } catch (e) {}
+    var cached = WG.cachedStore();
+    if (cached) { tries.push({ from: 'cache', v: cached }); return tries; }
+    if (!tok) { tries.push({ from: 'customer', v: null, why: 'no_token' }); return tries; }
+    var r = await WG.commerce('/commerce/account/customer', tok, { method: 'GET' }, budgetMs || 10000);
+    if (!r.ok) { tries.push({ from: 'customer', v: null, why: r.why }); return tries; }
+    var n = WG.storeFromCustomer(r.data);
+    tries.push({ from: 'customer', v: n, ms: r.ms });
+    if (n) { try { localStorage.setItem('${STORE_CACHE_KEY}', JSON.stringify({ v: n, at: Date.now() })); } catch (e) {} }
     return tries;
   };
 
@@ -203,8 +251,10 @@ ${WEG_PRELUDE}
   try {
     WG.watchForToken();
     var accounts = WG.accountCount();
-    var stores = await WG.findStoreNumber(3000);
-    var storeNumber = stores.length ? stores[0].v : null;
+    var tok0 = WG.cachedToken();
+    var stores = await WG.findStoreNumber(tok0, 10000);
+    var storeNumber = null;
+    for (var sx = 0; sx < stores.length; sx++) if (stores[sx] && stores[sx].v) { storeNumber = String(stores[sx].v); break; }
 
     if (!accounts) {
       // DEFINITIVE, and cheap: MSAL keeps this list whether or not the
@@ -224,7 +274,7 @@ ${WEG_PRELUDE}
     // Now the part the cart needs. The token is not in localStorage in any
     // readable form, so this is a cache lookup and nothing more; the capture
     // above is what fills it, on a page where the site's own code runs.
-    var tok = WG.cachedToken();
+    var tok = tok0;
     var verified = false;
     var why = 'no_token';
     if (tok) {
@@ -266,10 +316,14 @@ export function buildWegmansNetworkSearchBatchScript(
   opts: { storeNumber?: string | null; requestMs?: number; hitsPerPage?: number } = {},
 ): string | null {
   if (!terms.length) return null;
+  // NO STORE, NO SEARCH -- see WG.findStoreNumber for why. An unfiltered query
+  // returns every store's catalogue, and its ids are not valid where this user
+  // shops, so a product chosen from one would add the wrong thing next run.
+  if (!opts.storeNumber) return null;
   return `(async function () {
 ${WEG_PRELUDE}
   var TERMS = ${JSON.stringify(terms)};
-  var STORE = ${JSON.stringify(opts.storeNumber ?? null)};
+  var STORE = ${JSON.stringify(opts.storeNumber)};
   var REQ_MS = ${opts.requestMs ?? 12000};
   var HITS = ${opts.hitsPerPage ?? 24};
   var post = WG.post;

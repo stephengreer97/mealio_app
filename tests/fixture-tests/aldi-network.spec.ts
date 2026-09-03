@@ -45,13 +45,10 @@ function gqlStub(opts: {
 } = {}) {
   const cart = opts.cart ?? {};
   const ids = opts.searchIds ?? ['items_23898-1', 'items_23898-2'];
-  const details = opts.details ?? {
-    products: ids.map((id, n) => ({
-      id, name: 'Product ' + (n + 1),
-      viewSection: { priceString: '$2.49', itemImage: { url: 'https://img/' + id } },
-      availability: { available: true },
-    })),
-  };
+  const details = opts.details ?? ids.map((id, n) => ({
+    id, name: 'Product ' + (n + 1), size: '16 oz',
+    viewSection: { priceString: '$2.49', itemImage: { url: 'https://img/' + id } },
+  }));
   return [
     '(function () {',
     '  window.__lines = ' + JSON.stringify(cart) + ';',
@@ -67,8 +64,14 @@ function gqlStub(opts: {
     '  }',
     '  window.fetch = function (url, init) {',
     '    var u = String(url);',
+    '    if (u.indexOf("/store/") >= 0 && u.indexOf("storefront") > 0) {',
+    // The storefront, fetched as TEXT for the shop id. The value is in the
+    // URL-ENCODED server payload, which is why the plain string is not there.
+    '      return Promise.resolve({ status: 200, text: function () {',
+    '        return Promise.resolve("junk%5C%22shopId%5C%22%3A%5C%228583%5C%22junk"); } });',
+    '    }',
     '    if (u.indexOf("/graphql") < 0) {',
-    // Anything that is not the API is a bundle fetch from the harvest.
+    // Anything else is a bundle fetch from the harvest.
     '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve("no hashes here"); } });',
     '    }',
     '    var body = JSON.parse(init.body);',
@@ -85,8 +88,8 @@ function gqlStub(opts: {
     '      data = { userCart: { id: "16636288909", cartItemCollection: { cartItems: cartLines() } } };',
     '    } else if (body.operationName === "AsyncItemSearch") {',
     '      data = { itemSearch: { itemResultList: { itemIds: ' + JSON.stringify(ids) + ' } } };',
-    '    } else if (body.operationName === "ItemDetailsRetailerProduct") {',
-    '      data = ' + JSON.stringify(details) + ';',
+    '    } else if (body.operationName === "Search") {',
+    '      data = { searchResults: { primaryItemResultList: { items: ' + JSON.stringify(details) + ' } } };',
     '    } else if (body.operationName === "UpdateCartItemsMutation") {',
     '      var ups = body.variables.cartItemUpdates || [];',
     '      for (var i = 0; i < ups.length; i++) {',
@@ -126,7 +129,11 @@ describe('the session probe', () => {
     // is the honest answer, because sending the retailer id here would search a
     // catalogue the user cannot buy from. The retailer is reported separately.
     expect(msg.retailerId).toBe('12');
-    expect(msg.storeId).toBeNull();
+    // The SHOP, fetched out of the storefront's URL-encoded payload — it is
+    // nowhere a page on robots.txt can be asked for it, and no operation
+    // returns it.
+    expect(msg.storeId).toBe('8583');
+    expect(msg.shopFrom).toBe('storefront-fetch');
   }, AT_ALDI);
 
   itWithFixture('storefront.html', 'a store that cannot answer is NOT a signed-out user', async (runner) => {
@@ -147,7 +154,9 @@ describe('search', () => {
     const msg = await runner.waitForMessage('SEARCH_RESULT', 20_000) as Record<string, unknown>;
     const cands = msg.candidates as Array<Record<string, unknown>>;
     expect(cands.length).toBe(2);
-    expect(cands[0].productName).toBe('Product 1');
+    // The size is folded into the name: "Sour Cream" and "Sour Cream, 24 oz"
+    // are different products to a shopper, and the matcher only sees this string.
+    expect(cands[0].productName).toBe('Product 1, 16 oz');
     expect(cands[0].productId).toBe('items_23898-1');
     // No sku on this platform at all, and the rail's `writable` is written for
     // that — requiring one would break this store the way it broke Albertsons.
@@ -156,26 +165,31 @@ describe('search', () => {
     expect(cands[0].preferences).toBeNull();
   }, AT_ALDI);
 
-  itWithFixture('storefront.html', 'hydrates every term in ONE call, not one per term', async (runner) => {
-    // The search returns ids only. Hydrating per term would be N extra requests
-    // against a store nobody has load-tested.
+  itWithFixture('storefront.html', 'one Search per term, and the zone probed ONCE', async (runner) => {
+    // The first design was AsyncItemSearch for ids plus one bulk hydration —
+    // N + 1 requests, which looked better. It did not work: MEASURED on the
+    // device, the hydration answers with an empty list for ids the search had
+    // just returned, under every combination of full and bare ids and of zone
+    // and shop as the zoneId. Search carries the names itself.
     await runner.inject(gqlStub());
     await runner.inject(buildAldiNetworkSearchBatchScript(['sour cream', 'tortillas', 'limes'], { shopId: '8583' })!);
     await runner.waitForMessage('SEARCH_BATCH_DONE', 25_000);
     const calls = await runner.page.evaluate('window.__calls') as Array<{ op: string }>;
-    expect(calls.filter((c) => c.op === 'AsyncItemSearch').length).toBe(3);
-    expect(calls.filter((c) => c.op === 'ItemDetailsRetailerProduct').length).toBe(1);
+    expect(calls.filter((c) => c.op === 'Search').length).toBe(3);
+    // Once for three terms, and cached for twelve hours after that.
+    expect(calls.filter((c) => c.op === 'AsyncItemSearch').length).toBe(1);
   }, AT_ALDI);
 
-  itWithFixture('storefront.html', 'reads zoneId back out of the ids the search returned', async (runner) => {
-    // Nobody ever observed zoneId being sent, so rather than hard-code a number
-    // no one can explain, it comes out of the item ids themselves.
+  itWithFixture('storefront.html', 'reads zoneId back out of the ids a probe returned', async (runner) => {
+    // Search needs a zoneId and nothing hands one over. AsyncItemSearch does NOT
+    // need one and the ids it returns CARRY it, so one cheap call buys the zone
+    // rather than a hard-coded number nobody could explain.
     await runner.inject(gqlStub({ searchIds: ['items_44100-9', 'items_44100-10'] }));
     await runner.inject(buildAldiNetworkSearchBatchScript(['sour cream'], { shopId: '8583' })!);
     await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
     const calls = await runner.page.evaluate('window.__calls') as Array<{ op: string; vars: Record<string, unknown> }>;
-    const det = calls.find((c) => c.op === 'ItemDetailsRetailerProduct')!;
-    expect(det.vars.zoneId).toBe('44100');
+    const search = calls.find((c) => c.op === 'Search')!;
+    expect(search.vars.zoneId).toBe('44100');
   }, AT_ALDI);
 
   itWithFixture('storefront.html', 'a term the store refused does not take the batch with it', async (runner) => {

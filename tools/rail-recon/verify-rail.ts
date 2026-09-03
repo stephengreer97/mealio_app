@@ -21,19 +21,40 @@ import { getStoreScripts } from '../../src/lib/webview-scripts';
 
 const TERM = process.env.RAIL_TERM || 'sour cream';
 
-async function collect(page: Page, script: string, want: string[], ms = 30000) {
-  const seen: Record<string, unknown>[] = [];
+/**
+ * Every message the page has posted, ever.
+ *
+ * ONE array and ONE binding, because exposeFunction can only bind a name once
+ * per page: a second call is refused and the closure keeps pointing at whatever
+ * array the FIRST call made. The first version of this file created a fresh
+ * array per step, so the session step worked and every step after it sat there
+ * watching an array nothing could reach — a 40-second timeout that looked like
+ * the store being slow and was entirely self-inflicted.
+ */
+const ALL: Record<string, unknown>[] = [];
+let bound = false;
+
+async function bind(page: Page) {
+  if (bound) return;
+  bound = true;
   await page.exposeFunction('__railMsg', (raw: string) => {
-    try { seen.push(JSON.parse(raw)); } catch { /* non-JSON */ }
-  }).catch(() => { /* already exposed */ });
-  await page.evaluate(`window.ReactNativeWebView = { postMessage: (m) => window.__railMsg(m) };`);
+    try { ALL.push(JSON.parse(raw)); } catch { /* non-JSON */ }
+  });
+}
+
+async function collect(page: Page, script: string, want: string[], ms = 30000) {
+  await bind(page);
+  // Re-asserted every step: a navigation replaces the document and takes the
+  // shim with it, while the exposed binding survives.
+  await page.evaluate('window.ReactNativeWebView = { postMessage: function (m) { window.__railMsg(m); } };');
+  const from = ALL.length;
   await page.evaluate(script);
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    if (want.some((w) => seen.some((m) => m.type === w))) break;
+    if (want.some((w) => ALL.slice(from).some((m) => m.type === w))) break;
     await page.waitForTimeout(250);
   }
-  return seen;
+  return ALL.slice(from);
 }
 
 async function main() {
@@ -102,7 +123,7 @@ async function main() {
   const cart = await collect(page, rail.cartRead(), ['CART_COUNT'], 40000);
   const count = cart.find((m) => m.type === 'CART_COUNT');
   console.log(`\nCART READ — ${Date.now() - t1}ms wall`);
-  console.log('  ', JSON.stringify(count).slice(0, 500));
+  console.log('  ', count ? JSON.stringify(count).slice(0, 500) : 'NOTHING POSTED');
 
   console.log('\nThe add is NOT run here — it writes to a real basket.');
   console.log('To measure whether quantity is absolute: add one item by hand, run this,');

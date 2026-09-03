@@ -64,6 +64,7 @@ function hit(over: Record<string, unknown> = {}) {
 function netStub(opts: {
   hits?: unknown[]; algoliaStatus?: number;
   cart?: Array<Record<string, unknown>>; cartStatus?: number; writeStatus?: number;
+  customer?: unknown;
 } = {}) {
   return [
     '(function () {',
@@ -77,6 +78,10 @@ function netStub(opts: {
     '      window.__algolia.push(JSON.parse(init.body));',
     '      return Promise.resolve({ status: ' + String(opts.algoliaStatus ?? 200) + ',',
     '        text: function () { return Promise.resolve(JSON.stringify({ hits: HITS, nbHits: HITS.length, processingTimeMS: 13 })); } });',
+    '    }',
+    '    if (u.indexOf("/commerce/account/customer") > 0) {',
+    '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve(',
+    '        ' + JSON.stringify(JSON.stringify(opts.customer ?? { id: 'c1' })) + '); } });',
     '    }',
     '    if (u.indexOf("wegmans.cloud") > 0) {',
     '      var m = (init && init.method) || "GET";',
@@ -152,11 +157,10 @@ describe('the session probe', () => {
     await runner.inject(cachedToken());
     await runner.inject(netStub());
     await runner.inject(buildWegmansSessionScript());
-    const refined = await runner.waitForMessage('WEGMANS_SESSION', 15_000,
-      (m) => (m as Record<string, unknown>).verified === true) as Record<string, unknown>;
+    const refined = await runner.waitForMessage('WEGMANS_SESSION', 20_000,
+      (m) => (m as Record<string, unknown>).cartCapable !== undefined) as Record<string, unknown>;
+    expect(refined.verified).toBe(true);
     expect(refined.cartCapable).toBe(true);
-    const calls = await runner.page.evaluate('window.__commerce') as Array<{ url: string }>;
-    expect(calls.some((c) => c.url.includes('/commerce/account/customer'))).toBe(true);
   }, AT_WEGMANS);
 
   itWithFixture('shop.html', 'an expired cached token is not offered to a write', async (runner) => {
@@ -215,6 +219,44 @@ describe('search', () => {
     await runner.inject(buildWegmansNetworkSearchBatchScript(['sour cream'], { storeNumber: '140' })!);
     const msg = await runner.waitForMessage('SEARCH_RESULT', 15_000) as Record<string, unknown>;
     expect((msg.candidates as Array<Record<string, unknown>>)[0].outOfStock).toBe(true);
+  }, AT_WEGMANS);
+});
+
+describe('which store', () => {
+  it('refuses to search without one, rather than offering another store\'s products', () => {
+    // The SAME Daisy sour cream is 626485 at store 50 and 608294 at store 140,
+    // and unfiltered "sour cream" returns 32,223 hits — every store at once. An
+    // unfiltered search offers real products under real names carrying ids that
+    // are not valid where this user shops, and saving one as their choice would
+    // add the wrong product next run.
+    expect(buildWegmansNetworkSearchBatchScript(['sour cream'], { storeNumber: null })).toBeNull();
+    expect(buildWegmansNetworkSearchBatchScript(['sour cream'], {})).toBeNull();
+    expect(buildWegmansNetworkSearchBatchScript(['sour cream'], { storeNumber: '140' })).toBeTruthy();
+  });
+
+  itWithFixture('shop.html', 'says it could not find one, and why', async (runner) => {
+    // MEASURED 2026-09-03: the store number is nowhere a page can be asked for
+    // it — not a cookie, not localStorage, not the server HTML of / or /shop,
+    // and four plausible /api paths are all 404. It comes with the customer
+    // profile, behind the bearer. So a session with no token has no store, and
+    // the probe says so rather than guessing.
+    await runner.inject(msal(1));
+    await runner.inject(netStub());
+    await runner.inject(buildWegmansSessionScript());
+    const msg = await runner.waitForMessage('WEGMANS_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.storeId).toBeNull();
+    const tries = msg.storeTries as Array<Record<string, unknown>>;
+    expect(tries[0].why).toBe('no_token');
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'finds it from the customer profile once there is a token', async (runner) => {
+    await runner.inject(msal(1));
+    await runner.inject(cachedToken());
+    await runner.inject(netStub({ customer: { profile: { preferredStoreNumber: 140 } } }));
+    await runner.inject(buildWegmansSessionScript());
+    const msg = await runner.waitForMessage('WEGMANS_SESSION', 15_000,
+      (m) => (m as Record<string, unknown>).early === true) as Record<string, unknown>;
+    expect(msg.storeId).toBe('140');
   }, AT_WEGMANS);
 });
 
