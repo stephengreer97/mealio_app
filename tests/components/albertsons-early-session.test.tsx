@@ -78,12 +78,16 @@ jest.mock('../../src/lib/api', () => ({
 // Signed in, and the selection screen already answered every search — which is
 // the state that exposed this. The sheet's prewarm then has nothing to do, so
 // nothing absorbs the early session answer before the run sees it.
+// 'loggedIn' skips the sheet's own login_check and goes straight to the run;
+// 'unknown' is how a user with no prewarm answer reaches login_check, which is
+// the branch the measured failure came through.
+(global as any).__prewarmStatus = 'loggedIn';
 jest.mock('../../src/context/LoginPrewarmContext', () => {
   const actual = jest.requireActual('../../src/context/LoginPrewarmContext');
   return {
     ...actual,
     useLoginPrewarm: () => ({
-      getStatus: () => 'loggedIn',
+      getStatus: () => (global as any).__prewarmStatus,
       statusVersion: 1,
       checkStore: () => {},
       takePrewarmedCart: () => null,
@@ -96,7 +100,11 @@ jest.mock('../../src/context/LoginPrewarmContext', () => {
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 import { __applyAutomationConfigForTests, __resetAutomationConfigForTests } from '../../src/lib/automation-config';
 
-afterEach(() => { __resetAutomationConfigForTests(); injected.length = 0; });
+afterEach(() => {
+  __resetAutomationConfigForTests();
+  injected.length = 0;
+  (global as any).__prewarmStatus = 'loggedIn';
+});
 
 // Every row already chosen for Albertsons, so the run writes without searching —
 // the exact shape of the measured failure.
@@ -210,6 +218,62 @@ describe('the run and the early session answer', () => {
     post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
     // The caption over the store's own login page — what the signed-out user
     // actually gets, rather than a ref nobody can see.
+    expect(view.queryByText(/log in to your Albertsons account/i)).toBeTruthy();
+  });
+});
+
+describe('the login check and the early session answer', () => {
+  // THE THIRD PLACE THE SAME ASSUMPTION LIVED, and the one that produced the
+  // measured failure. This branch does two jobs: it answers the login gate and
+  // then starts the run. Starting on the early answer wrote nothing at all —
+  // every add came back `status 401`, because the subscription key the write
+  // reads is a page global set by the cart read the REFINED answer performs, and
+  // a run using the prewarmed cart baseline never does a read of its own to set
+  // it.
+  //
+  //   [Cart 18:59:04.629] snapshotBefore: using PREWARMED baseline count= 68
+  //   [Cart 18:59:05.386] NET_ADD_RESULT {"detail":"status 401","success":false…}
+  //   [Cart 18:59:06.351] network run: wrote 0 of 29
+  const openOnLoginCheck = () => {
+    // No prewarm answer, so the sheet runs its OWN login check — which is the
+    // branch that both answers the login gate and starts the run.
+    (global as any).__prewarmStatus = 'unknown';
+    __applyAutomationConfigForTests({ stores: { albertsons: { networkSearch: true, networkAdd: true } } });
+    const view = render(
+      <WebViewCartSheet visible meals={[meal] as never} storeId="albertsons" storeName="Albertsons" onClose={() => {}} />,
+    );
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({ nativeEvent: { data: JSON.stringify(payload) } });
+    });
+    const load = () => act(() => {
+      const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.albertsons.com/robots.txt' } });
+    });
+    load();
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    return { view, post };
+  };
+
+  it('does not start the run on the early answer', () => {
+    const { post } = openOnLoginCheck();
+    post(EARLY);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    expect(writes()).toBe(0);
+  });
+
+  it('starts it on the refined one', () => {
+    const { post } = openOnLoginCheck();
+    post(EARLY);
+    post(REFINED);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    expect(writes()).toBe(1);
+  });
+
+  it('a signed-out early answer still goes straight to the login screen', () => {
+    // The whole reason the early answer exists: no budget of ours may make a
+    // signed-out user wait to be told to sign in.
+    const { view, post } = openOnLoginCheck();
+    post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
     expect(view.queryByText(/log in to your Albertsons account/i)).toBeTruthy();
   });
 });

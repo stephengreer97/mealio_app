@@ -311,13 +311,40 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
             return;
           }
           reportLogin(!!msg.loggedIn);
-          if (msg.loggedIn) startCartCapture();
-          else finish({ isLoggedIn: false });
+          if (!msg.loggedIn) { finish({ isLoggedIn: false }); return; }
+          // ONE CART READ, whatever the store says.
+          //
+          // Albertsons answers this probe TWICE -- an early reply the instant
+          // /userinfo returns, then a refined one about 1.3s later once its API
+          // keys are resolved. reportLogin latches, so the login answer was
+          // right; startCartCapture did not, so the probe fired the cart read
+          // twice. Two requests into the one store measured to degrade under
+          // exactly that, and a re-armed deadline on top:
+          //
+          //   probe albertsons cart capture: over the network, no page load
+          //   probe albertsons ALB_SESSION {"verified":true,...}
+          //   probe albertsons cart capture: over the network, no page load
+          //
+          // phaseRef is the latch it already had; it just was not read.
+          if (phaseRef.current !== 'login') return;
+          startCartCapture();
           return;
         }
         if (msg?.type === 'LOGIN_STATUS') {
           console.log('[Prewarm] probe', storeId, 'LOGIN_STATUS', msg.isLoggedIn);
           reportLogin(!!msg.isLoggedIn);
+          // DELIBERATELY NOT LATCHED, unlike the rail branch above.
+          //
+          // The DOM check is re-injected on every page load, so a second
+          // LOGIN_STATUS:true can arrive after a capture has already burned its
+          // whole injection budget on a redirect chain without ever getting an
+          // answer. Starting again is that capture's only recovery, and
+          // startCartCapture resets the counter to give it a fresh five
+          // (prewarm-cart-injection-latch.test.tsx pins it).
+          //
+          // The rail's duplicate is a different animal: not a retry after
+          // silence, but the same store answering the same question twice in
+          // 1.3s, and a second read there is pure cost.
           if (msg.isLoggedIn) startCartCapture();
           else finish({ isLoggedIn: false });
         } else if (msg?.type === 'CART_COUNT' && phaseRef.current === 'cart') {

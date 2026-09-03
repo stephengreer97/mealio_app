@@ -1111,6 +1111,26 @@ export default function WebViewCartSheet({
    * `no_response` and the user was handed the store to finish by hand.
    */
   const netPrewarmInjectedRef = useRef(false);
+  /**
+   * THE PREWARM'S OWN DEADLINE, separate from the run's.
+   *
+   * netStartSearch stands back for a prewarm that is still answering, and the
+   * note on netPrewarmMaxWaits used to claim "a prewarm that dies still releases
+   * the run immediately -- netPrewarmDoneRef is set on its failure paths too".
+   * That was true of the failures the prewarm is TOLD about and false of the two
+   * that matter: a session probe that never answers, and a search batch whose
+   * SEARCH_BATCH_DONE never arrives because the store went quiet or the document
+   * was torn down. Neither posts anything, so nothing set the flag and the run
+   * sat out the whole wait ceiling.
+   *
+   * MEASURED 2026-09-02, Albertsons, 31 items: the run waited 19.6s -- 60 waits
+   * of 300ms, the floor of the ceiling -- and then searched anyway. On a batch
+   * big enough that ceiling is 300 waits, which is 90 seconds of standing still.
+   *
+   * The run's own netTimeoutRef cannot do this job: firing it hands the user
+   * over, and a prewarm giving up is not a run failing.
+   */
+  const netPrewarmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** The qty screen's items, for onLoadEnd — which has []-deps and would
    *  otherwise read this run's initial empty list. */
   const qtyItemsRef = useRef<ConsolidatedIngredient[]>([]);
@@ -2403,6 +2423,9 @@ export default function WebViewCartSheet({
       netPrewarmTermsRef.current = [];
       netPrewarmDoneRef.current = false;
       netPrewarmInjectedRef.current = false;
+      // The deadline goes with it. A timer left running from the last open would
+      // fire into this one and release its run before the prewarm had started.
+      if (netPrewarmTimerRef.current) { clearTimeout(netPrewarmTimerRef.current); netPrewarmTimerRef.current = null; }
       const consolidated = consolidateIngredients(meals);
       setItems(consolidated);
       setCheckedItems(consolidated.map(() => true));
@@ -3076,6 +3099,24 @@ export default function WebViewCartSheet({
   // dense active-item order finishParallelAdd expects.
   // startPresearchCommit committed the parked pre-search adds. Gone.
 
+  /** The prewarm is finished, however it finished. Releases the run. */
+  const netPrewarmSettle = useCallback((why: string) => {
+    if (netPrewarmTimerRef.current) { clearTimeout(netPrewarmTimerRef.current); netPrewarmTimerRef.current = null; }
+    if (netPrewarmDoneRef.current) return;
+    netPrewarmDoneRef.current = true;
+    if (netPhaseRef.current === 'prewarm') netPhaseRef.current = 'idle';
+    console.log(`[Cart ${ts()}]`, 'search prewarm: finished —', why);
+  }, []);
+
+  /** Give the prewarm's next step a ceiling. Silence is a failure like any other. */
+  const netPrewarmArm = useCallback((ms: number, why: string) => {
+    if (netPrewarmTimerRef.current) clearTimeout(netPrewarmTimerRef.current);
+    netPrewarmTimerRef.current = setTimeout(() => {
+      netPrewarmTimerRef.current = null;
+      netPrewarmSettle(why);
+    }, ms);
+  }, [netPrewarmSettle]);
+
   /**
    * TAKE WHAT THE SELECTION SCREEN ALREADY LOOKED UP.
    *
@@ -3146,17 +3187,19 @@ export default function WebViewCartSheet({
       // to ask, and saying so HERE is what stops the run waiting: netStartSearch
       // stands back for a prewarm that is still answering, and this one is not.
       netPrewarmStartedRef.current = true;
-      netPrewarmDoneRef.current = true;
       netPrewarmTermsRef.current = terms;
       console.log(`[Cart ${ts()}]`, 'search prewarm: nothing left to look up — the selection screen got all', terms.length);
+      netPrewarmSettle('the selection screen answered everything');
       return;
     }
     netPrewarmStartedRef.current = true;
     netPhaseRef.current = 'prewarm';
     netPrewarmTermsRef.current = missing;
     console.log(`[Cart ${ts()}]`, 'search prewarm: asking the session for', missing.length, 'terms');
+    // A session probe that never answers is the commoner of the two silences.
+    netPrewarmArm(rail.budgets.sessionMs, 'the session never answered');
     webviewRef.current?.injectJavaScript(rail.sessionScript());
-  }, [netSeedFromEarlyPrewarm]);
+  }, [netSeedFromEarlyPrewarm, netPrewarmArm, netPrewarmSettle]);
 
   const beginSearchFlow = useCallback(() => {
     setStep('searching');
@@ -4522,6 +4565,27 @@ export default function WebViewCartSheet({
               webviewRef.current?.injectJavaScript(scriptsRef.current!.checkLoginScript);
               return;
             }
+            // SIGNED IN IS NOT THE SAME AS READY TO RUN, and this branch does
+            // BOTH jobs — it answers the login gate and then starts the run.
+            //
+            // Albertsons answers twice, and the early answer is posted before
+            // the page has resolved its API keys. Starting the run on it wrote
+            // nothing at all: every add came back `status 401`, because the key
+            // the write reads is a page global set by the cart read that the
+            // refined answer performs — and a run using the PREWARMED cart
+            // baseline never does a read of its own to set it. Measured
+            // 2026-09-02: `wrote 0 of 29`, twenty-nine 401s.
+            //
+            // Waiting is safe: the login-check deadline is 20s and the refined
+            // answer is about 1.3s behind, and it is deliberately left ARMED
+            // here so a refined answer that never comes still ends the step.
+            //
+            // A signed-OUT answer is acted on immediately, early or not. That is
+            // the entire reason the early answer exists.
+            if (msg.loggedIn && !netRail()?.sessionUsable(msg)) {
+              console.log(`[Cart ${ts()}]`, 'login answered early — waiting for the store to finish before starting');
+              return;
+            }
             tel().record('login_check', 'ok', {
               detail: { isLoggedIn: !!msg.loggedIn, source: 'network_session' },
             });
@@ -4570,9 +4634,7 @@ export default function WebViewCartSheet({
             // reading the quantity screen.
             if (msg.ok && msg.loggedIn && !getNetworkRail(lockedStoreIdRef.current)?.sessionUsable(msg)) return;
             if (!msg.ok || !msg.loggedIn || !msg.storeId || !msg.shoppingContext) {
-              console.log(`[Cart ${ts()}]`, 'search prewarm: no usable session — leaving it to the run');
-              netPhaseRef.current = 'idle';
-              netPrewarmDoneRef.current = true;
+              netPrewarmSettle('no usable session — leaving it to the run');
               return;
             }
             const sess = { storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext) };
@@ -4580,10 +4642,14 @@ export default function WebViewCartSheet({
             netSessionAtRef.current = Date.now();
             const railP = getNetworkRail(lockedStoreIdRef.current);
             const scriptP = railP?.searchBatch(netPrewarmTermsRef.current, sess) ?? null;
-            if (!scriptP) { netPhaseRef.current = 'idle'; netPrewarmDoneRef.current = true; return; }
+            if (!scriptP) { netPrewarmSettle('no search script for this store'); return; }
             netPrewarmInjectedRef.current = true;
             console.log(`[Cart ${ts()}]`, 'search prewarm: searching', netPrewarmTermsRef.current.length,
               'terms while the user is on the qty screen');
+            // The store's own ceiling for a batch this size. Past it the store
+            // has stopped answering, and the run should stop waiting on it.
+            netPrewarmArm(railP!.budgets.searchMs(netPrewarmTermsRef.current.length),
+              'the store stopped answering the batch');
             webviewRef.current?.injectJavaScript(scriptP);
             return;
           }
@@ -4660,8 +4726,7 @@ export default function WebViewCartSheet({
             && netPhaseRef.current !== 'search') {
           console.log(`[Cart ${ts()}]`, 'search prewarm: done —',
             netPrewarmCandidatesRef.current.size, 'terms answered before the user tapped');
-          netPhaseRef.current = 'idle';
-          netPrewarmDoneRef.current = true;
+          netPrewarmSettle('the batch came back');
           return;
         }
         if (msg.type === 'SEARCH_BATCH_DONE') {

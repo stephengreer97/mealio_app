@@ -181,6 +181,40 @@ describe('SilentLoginProbe cart injection (MEAL-152, MEAL-189)', () => {
     view.unmount();
   });
 
+  it('reads the cart ONCE when the rail answers the session twice', () => {
+    // ALBERTSONS ANSWERS TWICE: an early reply the instant /userinfo returns,
+    // then a refined one about 1.3s later once its API keys are resolved.
+    // reportLogin latches so the LOGIN answer was right; startCartCapture did
+    // not, so the probe fired the cart read twice:
+    //
+    //   probe albertsons cart capture: over the network, no page load
+    //   probe albertsons ALB_SESSION {"verified":true,…}
+    //   probe albertsons cart capture: over the network, no page load
+    //
+    // Two requests into the store measured to degrade under exactly that, and a
+    // re-armed 15s deadline on top. Note this is the RAIL branch only — the DOM
+    // branch above stays unlatched on purpose, because there a second answer is
+    // a retry after silence rather than the same answer twice.
+    const onLogin = jest.fn();
+    const view = render(
+      <SilentLoginProbe storeId="albertsons" onLogin={onLogin} onResult={jest.fn()} onError={jest.fn()} />,
+    );
+    fireLoadEnd('https://www.albertsons.com/robots.txt');
+    const before = mockInjected.length;
+    fireMessage({ type: 'ALB_SESSION', ok: true, loggedIn: true, early: true, storeId: '161', shoppingContext: 'pickup' });
+    const afterFirst = mockInjected.length;
+    expect(afterFirst).toBeGreaterThan(before);          // the read went out
+
+    fireMessage({ type: 'ALB_SESSION', ok: true, loggedIn: true, verified: true, storeId: '161', shoppingContext: 'pickup' });
+    expect(mockInjected.length).toBe(afterFirst);         // ...and not again
+
+    // The login answer is still published off the early one, which is the whole
+    // reason that reply exists.
+    expect(onLogin).toHaveBeenCalledWith('albertsons', true);
+    expect(onLogin).toHaveBeenCalledTimes(1);
+    view.unmount();
+  });
+
   it('gives a second capture in the same mount a fresh budget', () => {
     // startCartCapture is not latched — it runs on every LOGIN_STATUS:true, and
     // the login check is deliberately re-injected on each load — so one mounted

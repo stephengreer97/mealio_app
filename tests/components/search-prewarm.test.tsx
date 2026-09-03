@@ -768,6 +768,73 @@ describe('a saved id this store cannot write is not a shortcut', () => {
   });
 });
 
+describe('a prewarm that never comes back', () => {
+  // netStartSearch stands back for a prewarm that is still answering, and the
+  // note on netPrewarmMaxWaits CLAIMED "a prewarm that dies still releases the
+  // run immediately -- netPrewarmDoneRef is set on its failure paths too".
+  //
+  // True of the failures the prewarm is TOLD about. False of the two silences
+  // that matter: a session probe that never answers, and a batch whose
+  // SEARCH_BATCH_DONE never arrives because the store went quiet or the document
+  // was torn down. Neither posts anything, so nothing set the flag.
+  //
+  // MEASURED 2026-09-02, Albertsons, 31 items: the run waited 19.6s -- 60 waits
+  // of 300ms, the FLOOR of that ceiling -- and then searched anyway. On a bigger
+  // batch the ceiling is 300 waits, which is 90 seconds of standing still.
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
+
+  it('gives up when the session never answers, instead of holding the run', () => {
+    const { view, post, load } = openSheet();
+    load();
+    // ...and nothing comes back. No session, no failure message, silence.
+    act(() => { jest.advanceTimersByTime(20_000); });   // H-E-B's sessionMs is 15s
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION);
+
+    // The run searched rather than standing back for a prewarm that is gone.
+    expect(searchBatches()).toBeGreaterThan(0);
+    expect(injected.filter((s) => s.includes('productSearchPageV2')).pop()).toContain('sour cream');
+  });
+
+  it('gives up when the batch goes out and nothing comes back', () => {
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+    const duringPrewarm = searchBatches();
+    expect(duringPrewarm).toBe(1);
+    // The batch is out. No SEARCH_RESULT, no SEARCH_BATCH_DONE, nothing.
+    act(() => { jest.advanceTimersByTime(95_000); });   // past H-E-B's searchMs
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION);
+
+    expect(searchBatches()).toBe(duringPrewarm + 1);
+  });
+
+  it('does NOT give up on one that is still answering', () => {
+    // The deadline must not undo the wait itself, which is what stops two
+    // identical batches hitting the store at once.
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+    const duringPrewarm = searchBatches();
+    act(() => { jest.advanceTimersByTime(2_000); });
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION);
+
+    expect(searchBatches()).toBe(duringPrewarm);
+  });
+});
+
 describe('what the selection screen already looked up', () => {
   // The prewarm now starts when meals are TICKED, one screen earlier, so by the
   // time this sheet opens the answers are often already in hand. What matters is
