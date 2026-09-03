@@ -78,6 +78,13 @@ export interface NetworkRail {
   addBatch(items: NetworkAddItem[], opts?: {
     concurrency?: number;
     knownLines?: Record<string, number> | null;
+    /**
+     * Whether this store's write SETS a line or ADDS to it. Null means unknown,
+     * and a rail that does not know refuses any item the cart already holds.
+     * Passed through so the semantics can be measured with the rail's OWN
+     * script — measuring a reimplementation proves nothing about what ships.
+     */
+    absoluteQty?: boolean | null;
   }): string | null;
   /**
    * Can this store WRITE the candidate the matcher picked?
@@ -370,9 +377,10 @@ const WEGMANS_RAIL: NetworkRail = {
       })),
       {
         knownLines: opts?.knownLines ?? null,
-        // Unproven until measured. Null makes the script refuse any item the
-        // cart already holds rather than risk the MEAL-194 under-add.
-        absoluteQty: null,
+        // Passed THROUGH, so the semantics can be measured with the rail's own
+        // script rather than a reimplementation of it. Still null in the app
+        // until the measurement says otherwise.
+        absoluteQty: opts?.absoluteQty ?? null,
       },
     ),
   // The cart is addressed by productId, and the search returns skuId as the

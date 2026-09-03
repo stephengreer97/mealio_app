@@ -64,7 +64,7 @@ function hit(over: Record<string, unknown> = {}) {
 function netStub(opts: {
   hits?: unknown[]; algoliaStatus?: number;
   cart?: Array<Record<string, unknown>>; cartStatus?: number; writeStatus?: number;
-  customer?: unknown;
+  customer?: unknown; cartNoId?: boolean;
 } = {}) {
   return [
     '(function () {',
@@ -73,23 +73,65 @@ function netStub(opts: {
     // Recorded separately: the customer branch answers and returns before the
     // generic recorder below, and other tests count __commerce.length.
     '  window.__customerUrls = [];',
+    '  window.__writes = [];',
     '  window.__cart = ' + JSON.stringify(opts.cart ?? []) + ';',
     '  var HITS = ' + JSON.stringify(opts.hits ?? [hit()]) + ';',
     '  window.fetch = function (url, init) {',
     '    var u = String(url);',
     '    if (u.indexOf("algolia.net") > 0) {',
-    '      window.__algolia.push(JSON.parse(init.body));',
+    '      var body = JSON.parse(init.body);',
+    '      window.__algolia.push(body);',
+    // A sku-filtered lookup answers with THAT sku. The add resolves each item's
+    // catalogue row this way, and a stub that returns the same hit whatever is
+    // asked makes a batch of N look like a batch of 1.
+    '      var reqs = body.requests || [];',
+    '      var multi = reqs.length > 1 || (reqs[0] && /objectID:/.test(reqs[0].filters || ""));',
+    '      if (multi) {',
+    '        var results = reqs.map(function (rq) {',
+    '          var m = /objectID:"[0-9]+-([^"]+)"/.exec(rq.filters || "");',
+    '          if (!m) return { hits: HITS, nbHits: HITS.length };',
+    '          var one = JSON.parse(JSON.stringify(HITS[0] || {}));',
+    '          one.skuId = m[1]; one.productId = m[1]; one.objectID = "140-" + m[1];',
+    '          return { hits: [one], nbHits: 1 };',
+    '        });',
+    '        return Promise.resolve({ status: ' + String(opts.algoliaStatus ?? 200) + ',',
+    '          text: function () { return Promise.resolve(JSON.stringify({ results: results })); } });',
+    '      }',
     '      return Promise.resolve({ status: ' + String(opts.algoliaStatus ?? 200) + ',',
     '        text: function () { return Promise.resolve(JSON.stringify({ hits: HITS, nbHits: HITS.length, processingTimeMS: 13 })); } });',
+    '    }',
+    // Same-origin, unauthenticated: where the store's "140-CHAPEL-HILL" key
+    // comes from, and the one prerequisite of a write that needs no token.
+    '    if (u.indexOf("/api/stores") >= 0) {',
+    '      return Promise.resolve({ ok: true, status: 200, text: function () { return Promise.resolve(',
+    '        JSON.stringify([{ storeNumber: "140", key: "140-CHAPEL-HILL", name: "Chapel Hill" }])); } });',
     '    }',
     '    if (u.indexOf("/commerce/account/customer") > 0) {',
     '      window.__customerUrls.push(u);',
     '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve(',
-    '        ' + JSON.stringify(JSON.stringify(opts.customer ?? { id: 'c1' })) + '); } });',
+    '        ' + JSON.stringify(JSON.stringify(opts.customer ?? { customer: { id: 'cust-1', email: 'x@example.test' } })) + '); } });',
     '    }',
     '    if (u.indexOf("wegmans.cloud") > 0) {',
     '      var m = (init && init.method) || "GET";',
     '      window.__commerce.push({ url: u, method: m, body: init && init.body ? JSON.parse(init.body) : null });',
+    '      if (m === "POST" && u.indexOf("/lineitems") > 0) {',
+    '        var payload = JSON.parse(init.body);',
+    '        window.__writes.push(payload);',
+    '        var st2 = ' + String(opts.writeStatus ?? 200) + ';',
+    '        if (st2 === 200) {',
+    '          var lis = (payload.cartData && payload.cartData[0] && payload.cartData[0].lineItems) || [];',
+    '          for (var q = 0; q < lis.length; q++) {',
+    '            var hit = false;',
+    '            for (var w = 0; w < window.__cart.length; w++) {',
+    '              if (String(window.__cart[w].productId) === String(lis[q].sku)) {',
+    '                window.__cart[w].quantity = lis[q].quantity; hit = true;',
+    '              }',
+    '            }',
+    '            if (!hit) window.__cart.push({ productId: lis[q].sku, quantity: lis[q].quantity, productName: "Item" });',
+    '          }',
+    '        }',
+    '        return Promise.resolve({ status: st2, text: function () { return Promise.resolve("{}"); } });',
+    '      }',
     '      if (m === "POST") {',
     '        var st = ' + String(opts.writeStatus ?? 200) + ';',
     '        if (st === 200) {',
@@ -121,7 +163,7 @@ function netStub(opts: {
     '      });',
     '      return Promise.resolve({ status: ' + String(opts.cartStatus ?? 200) + ',',
     '        text: function () { return Promise.resolve(JSON.stringify({ grocery: {',
-    '          id: "cart-1", version: 13172, lineItems: lines,',
+    '          id: ' + (opts.cartNoId ? 'null' : '"cart-1"') + ', version: ' + (opts.cartNoId ? 'null' : '13172') + ', lineItems: lines,',
     '          custom: { customFieldsRaw: [{ name: "loyaltyNumber", value: "x" },',
     '                                      { name: "storeNumber", value: "140" }] } } })); } });',
     '    }',
@@ -327,11 +369,15 @@ describe('the add', () => {
     await runner.inject(buildWegmansNetworkAddBatchScript(
       [item(0, '608294', 2), item(1, '111', 1)],
     )!);
-    await runner.waitForMessage('NET_ADD_DONE', 25_000);
-    const calls = await runner.page.evaluate('window.__commerce') as Array<{ method: string; body: { items?: unknown[] } }>;
-    const writes = calls.filter((c) => c.method === 'POST');
-    expect(writes.length).toBe(1);
-    expect(writes[0].body.items!.length).toBe(2);
+    const done = await runner.waitForMessage('NET_ADD_DONE', 25_000) as Record<string, unknown>;
+    // ONE request for the whole meal, in the envelope the site itself sends.
+    const writes = await runner.page.evaluate('window.__writes') as Array<Record<string, any>>;
+    expect(JSON.stringify({ why: done.why ?? null, wrote: done.wrote })).toContain('"wrote":2');
+    expect(writes).toHaveLength(1);
+    expect(writes[0].cartData[0].lineItems).toHaveLength(2);
+    expect(writes[0].StoreKey).toBe('140-CHAPEL-HILL');
+    expect(writes[0].customerID).toBe('cust-1');
+    expect(writes[0].cartData[0].cartVersion).toBe(13172);
   }, AT_WEGMANS);
 
   itWithFixture('shop.html', 'REFUSES an item the cart already holds', async (runner) => {
@@ -532,5 +578,62 @@ describe('a cart line carries three ids and only one of them is the product', ()
       if (msgs[msgs.length - 1].storeId) break;
     }
     expect(msgs.some((m) => m.storeId === '140')).toBe(true);
+  }, AT_WEGMANS);
+});
+
+describe('a write always names the cart it is writing to', () => {
+  const item = (idx: number, id: string, qty: number) =>
+    ({ idx, productId: id, skuId: id, quantity: qty, name: 'Item ' + id });
+
+  // THE COSTLIEST BUG OF THE DAY, and it cost a real basket.
+  //
+  // The write names cartID and cartVersion. Sent without them the API does not
+  // fail — it CREATES A NEW CART, and the user's existing basket stops being
+  // the active one. Stephen's 20-item Wegmans cart was replaced by a one-item
+  // cart that way on 2026-09-03.
+  //
+  // The path in: the app passes `knownLines`, the prewarmed baseline, so the add
+  // could skip reading the cart. That baseline carries held quantities and no
+  // ids — and the write went out with cartID null.
+  itWithFixture('shop.html', 'reads the cart even when the baseline was handed to it', async (runner) => {
+    await runner.inject(cachedToken());
+    await runner.inject(netStub({ cart: [{ productId: '999', quantity: 1, productName: 'held' }] }));
+    await runner.inject(buildWegmansNetworkAddBatchScript(
+      [item(0, '608294', 1)],
+      // The shape the app actually passes.
+      { knownLines: { '999': 1 } },
+    )!);
+    await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    const writes = await runner.page.evaluate('window.__writes') as Array<Record<string, any>>;
+    expect(writes).toHaveLength(1);
+    expect(writes[0].cartData[0].cartID).toBe('cart-1');
+    expect(writes[0].cartData[0].cartVersion).toBe(13172);
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'refuses when the cart reads back with no id', async (runner) => {
+    // The cart ANSWERED — it simply carried no identity. That is the shape the
+    // guard exists for: a readable cart with nothing to address, where writing
+    // anyway creates a second basket.
+    await runner.inject(cachedToken());
+    await runner.inject(netStub({ cartNoId: true, cart: [{ productId: '999', quantity: 1, productName: 'held' }] }));
+    await runner.inject(buildWegmansNetworkAddBatchScript([item(0, '608294', 1)])!);
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
+    expect(res.success).toBe(false);
+    expect(res.reason).toBe('no_cart');
+    const writes = await runner.page.evaluate('window.__writes') as unknown[];
+    expect(writes).toHaveLength(0);
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'refuses rather than write to a cart it cannot name', async (runner) => {
+    // An envelope with no id is not a write, it is a new basket. Refusing sends
+    // the items to review, where the user sees them.
+    await runner.inject(cachedToken());
+    await runner.inject(netStub({ cartStatus: 500 }));
+    await runner.inject(buildWegmansNetworkAddBatchScript([item(0, '608294', 1)])!);
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
+    expect(res.success).toBe(false);
+    expect(res.reason).toBe('no_cart');
+    const writes = await runner.page.evaluate('window.__writes') as unknown[];
+    expect(writes).toHaveLength(0);
   }, AT_WEGMANS);
 });

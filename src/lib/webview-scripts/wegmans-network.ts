@@ -27,6 +27,9 @@ const ALGOLIA_APP = 'QGPPR19V8V';
 const ALGOLIA_KEY = '9a10b1401634e9a6e55161c3a60c200d';
 const ALGOLIA_HOST = 'https://qgppr19v8v-dsn.algolia.net';
 const ALGOLIA_INDEX = 'products';
+const ALGOLIA_URL = ALGOLIA_HOST + '/1/indexes/*/queries';
+/** The store's "140-CHAPEL-HILL" key, cached a day beside its number. */
+const STORE_KEY_CACHE = '__mealio_weg_storekey_v1';
 
 /** The commerce API. Named "development" and is what production calls. */
 const COMMERCE_BASE = 'https://api.digitaldevelopment.wegmans.cloud';
@@ -42,6 +45,14 @@ const STORE_CACHE_KEY = '__mealio_weg_store_v1';
  * unknown route before it adds CORS headers.
  */
 const CART_PATH = '/commerce/cart/carts/';
+/**
+ * The WRITE. "lineitems", one word, on the collection — captured from the shop
+ * app's own add, because every guessed shape (/carts/{id}, /carts/{id}/line-items,
+ * /carts/items, PUT, PATCH) came back as a bare "Failed to fetch": this gateway
+ * rejects an unknown route before it adds CORS headers, so a wrong path and a
+ * dead host are indistinguishable.
+ */
+const CART_WRITE_PATH = '/commerce/cart/carts/lineitems';
 const STORE_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -200,6 +211,117 @@ const WEG_PRELUDE = `
       n = n.en || n['en-US'] || n['en-GB'] || n[Object.keys(n)[0]];
     }
     return String(n || li.description || fallback || 'item');
+  };
+
+  /**
+   * The store's KEY, "140-CHAPEL-HILL", which the write names as StoreKey.
+   * /api/stores is same-origin and needs no token; 115 stores, cached a day.
+   */
+  WG.storeKey = async function (storeNo) {
+    if (!storeNo) return null;
+    try {
+      var c = JSON.parse(localStorage.getItem('${STORE_KEY_CACHE}') || 'null');
+      if (c && c.n === String(storeNo) && Date.now() - c.at < 86400000) return c.v;
+    } catch (e) {}
+    try {
+      var r = await fetch('/api/stores', { headers: { accept: 'application/json' } });
+      if (r.status && (r.status < 200 || r.status >= 300)) return null;
+      var list = JSON.parse(await r.text());
+      for (var i = 0; i < list.length; i++) {
+        if (String(list[i].storeNumber) === String(storeNo) && list[i].key) {
+          try { localStorage.setItem('${STORE_KEY_CACHE}', JSON.stringify({ n: String(storeNo), v: String(list[i].key), at: Date.now() })); } catch (e) {}
+          return String(list[i].key);
+        }
+      }
+    } catch (e) {}
+    return null;
+  };
+
+  /** customerID and customerEmail, which the write also names. */
+  WG.customerRef = async function (tok) {
+    if (WG.who) return WG.who;
+    var r = await WG.commerce('/commerce/account/customer', tok, { method: 'GET' }, 10000);
+    if (!r.ok) return null;
+    try {
+      var cu = r.data.customer || r.data;
+      if (cu && cu.id && cu.email) { WG.who = { id: String(cu.id), email: String(cu.email) }; return WG.who; }
+    } catch (e) {}
+    return null;
+  };
+
+  /**
+   * The catalogue row per sku. Every line-item field the write carries comes
+   * from here — category, planogram, upc, channel key, price in cents — so the
+   * add re-reads the catalogue rather than having a dozen extra fields plumbed
+   * through the app's candidate shape. One request for the whole batch.
+   */
+  WG.hitsBySku = async function (skus, storeNo) {
+    var out = {};
+    if (!skus.length) return out;
+    var reqs = [];
+    for (var i = 0; i < skus.length; i++) {
+      // BY objectID, which is "<store>-<sku>". skuId is in the index but is not
+      // a filterable facet — filtering on it returns 0 hits for a sku that
+      // demonstrably exists, which reads as "this store does not carry it".
+      reqs.push({ indexName: '${ALGOLIA_INDEX}', query: '',
+        filters: 'objectID:"' + storeNo + '-' + skus[i] + '"', hitsPerPage: 1 });
+    }
+    try {
+      var r = await fetch('${ALGOLIA_URL}', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json',
+          'x-algolia-application-id': '${ALGOLIA_APP}', 'x-algolia-api-key': '${ALGOLIA_KEY}' },
+        body: JSON.stringify({ requests: reqs }),
+      });
+      // text() then parse, like every other call here: a response shim that
+      // implements text() but not json() is the difference between a working
+      // batch and an empty one, and this file already standardises on text().
+      var j = JSON.parse(await r.text());
+      // A multi-query answers { results: [ { hits }, ... ] }; a single-index one
+      // answers { hits } directly. Accept both rather than assume the wrapper.
+      var res = j.results || [{ hits: j.hits || [] }];
+      for (var k = 0; k < res.length; k++) {
+        var hs = (res[k] && res[k].hits) || [];
+        for (var hh = 0; hh < hs.length; hh++) {
+          var h = hs[hh];
+          var key = String(h.skuId != null ? h.skuId : (h.productId != null ? h.productId : skus[k]));
+          if (!out[key]) out[key] = h;
+        }
+      }
+    } catch (e) {}
+    return out;
+  };
+
+  /** One line item, shaped exactly as the site shapes it. */
+  WG.lineItemFor = function (h, qty) {
+    var cats = h.category || [];
+    var top = cats.length ? cats[cats.length - 1] : null;
+    var price = h.price_pickup || h.price_delivery || {};
+    var custom = [
+      { name: 'category', value: top && top.name ? String(top.name) : 'Grocery' },
+      { name: 'categoryId', value: top && top.key ? String(top.key) : '' },
+      { name: 'itemLevelAdjustments', value: '[]' },
+      { name: 'isSoldAtStore', value: h.isSoldAtStore !== false },
+      { name: 'ebtEligible', value: !!h.ebtEligible },
+      { name: 'isAvailable', value: h.isAvailable !== false },
+      { name: 'planogram', value: typeof h.planogram === 'string' ? h.planogram : JSON.stringify(h.planogram || {}) },
+      { name: 'note', value: '' },
+      { name: 'bottleDeposit', value: h.bottleDeposit != null ? h.bottleDeposit : 0 },
+      { name: 'upc', value: h.upc || [] },
+      { name: 'fulfillmentTypes', value: h.fulfilmentType || h.fulfillmentTypes || ['pickup'] },
+      { name: 'maxQuantity', value: String(h.maxQuantity != null ? h.maxQuantity : 99) },
+    ];
+    return {
+      custom: custom,
+      distributionChannelKey: price.channelKey || (h.storeNumber + '-Delivery'),
+      isAlcoholic: !!h.isAlcoholic,
+      isSoldByWeight: !!h.isSoldByWeight,
+      onlineApproxUnitWeight: h.onlineApproxUnitWeight != null ? h.onlineApproxUnitWeight : 0,
+      onlineSellByUnit: h.onlineSellByUnit || 'ea',
+      quantity: qty,
+      sku: String(h.skuId != null ? h.skuId : h.sku),
+      standalonePrice: Math.round(Number(price.amount || 0) * 100),
+    };
   };
 
   WG.readCart = async function (tok, budgetMs) {
@@ -424,6 +546,7 @@ const WEG_PRELUDE = `
     '/commerce/saved-list/savedlists': '2024-02-20-preview',
     '/commerce/my-items': '2024-01-26',
     '/commerce/cart/carts/': '2024-02-19-preview',
+    '/commerce/cart/carts/lineitems': '2024-02-19-preview',
   };
   // Read off the site's own version table (TURBOPACK chunk 96047), which names
   // one per API: ACCOUNT 2024-03-06-preview, CART 2024-02-19-preview, CART_V2
@@ -799,8 +922,11 @@ ${WEG_PRELUDE}
       if (id) held[id] = (held[id] || 0) + q;
       rows.push({ name: WG.lineName(li, id), qty: q, itemId: id, available: true });
     }
+    // The cart OBJECT travels with it: the write needs the store number and the
+    // version out of the same response the baseline came from, and re-reading
+    // would be a second call whose answer could already differ.
     return { cartId: cartId ? String(cartId) : null, held: held, rows: rows,
-             version: cart.version != null ? cart.version : null };
+             version: cart.version != null ? cart.version : null, cart: cart };
   };
 
   try {
@@ -812,14 +938,57 @@ ${WEG_PRELUDE}
       return;
     }
 
-    var before = KNOWN ? { cartId: null, held: KNOWN, rows: [] } : await readCart(tok);
+    // ALWAYS READ THE CART. The prewarmed baseline can supply the held
+    // quantities, but it cannot supply the cartID or the cartVersion, and this
+    // write names both. Sent without them the API does not fail -- it CREATES A
+    // NEW CART, and the user's existing basket stops being the active one.
+    //
+    // That happened once, on Stephen's real cart, 2026-09-03: an app run passed
+    // knownLines, cartID went out as null, and a 20-item basket was replaced by
+    // a one-item cart. A read costs ~600ms; that is not a trade worth making.
+    var before = await readCart(tok);
+    if (before && KNOWN) {
+      // The prewarm's held counts are fresher for the RUN's purposes, but the
+      // ids have to come from the read.
+      before.held = KNOWN;
+    }
     if (!before) {
       for (var z = 0; z < ITEMS.length; z++) report(ITEMS[z], false, 'no_cart', 'could not read the cart to baseline against');
       post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0 });
       return;
     }
 
-    var list = [];
+    // WHAT THE WRITE NEEDS BESIDES THE CART, all of it cacheable.
+    //
+    //   StoreKey    "140-CHAPEL-HILL"  — /api/stores, same-origin and unauthenticated
+    //   customerID  + email            — /commerce/account/customer
+    //
+    var storeNo = null;
+    try { storeNo = WG.customField(before.cart || {}, 'storeNumber'); } catch (e) {}
+    if (!storeNo) storeNo = WG.cachedStore();
+    if (!before.cartId || before.version == null) {
+      // Refusing beats creating a second cart the user cannot see.
+      for (var q3 = 0; q3 < ITEMS.length; q3++) report(ITEMS[q3], false, 'no_cart',
+        'the cart has no id or version to write against');
+      post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0, why: 'no_cart_identity' });
+      return;
+    }
+    var storeKey = await WG.storeKey(storeNo);
+    var who = await WG.customerRef(tok);
+    if (!storeKey || !who) {
+      for (var q2 = 0; q2 < ITEMS.length; q2++) report(ITEMS[q2], false, 'write_refused',
+        'missing ' + (!storeKey ? 'store key' : 'customer ref'));
+      post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0, why: 'write_prereq' });
+      return;
+    }
+
+    // The catalogue row for each sku, which is where every line-item field
+    // comes from. One Algolia request for the whole batch.
+    var skus = [];
+    for (var s1 = 0; s1 < ITEMS.length; s1++) if (ITEMS[s1].productId) skus.push(String(ITEMS[s1].productId));
+    var rows = await WG.hitsBySku(skus, storeNo);
+
+    var lineItems = [];
     var planned = [];
     for (var i = 0; i < ITEMS.length; i++) {
       var it = ITEMS[i];
@@ -830,18 +999,43 @@ ${WEG_PRELUDE}
                'the cart already holds ' + have + ' of this and it is not yet measured whether this store SETS or ADDS the quantity');
         continue;
       }
-      list.push({ productId: it.productId, skuId: it.skuId || it.productId, quantity: have + want });
-      planned.push({ it: it, want: want, sent: have + want });
+      var hit = rows[String(it.productId)];
+      if (!hit) { report(it, false, 'write_refused', 'no catalogue row for sku ' + it.productId); continue; }
+      lineItems.push(WG.lineItemFor(hit, want));
+      planned.push({ it: it, want: want, sent: have + want, have: have });
     }
-    if (!list.length) { post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0 }); return; }
+    if (!lineItems.length) { post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0 }); return; }
 
-    var path = '/commerce/cart/carts/' + (before.cartId ? before.cartId + '/' : '') + '${opts.itemsPath ?? 'items'}';
-    var res = await WG.commerce(path, tok, { method: 'POST', body: JSON.stringify({ items: list }) }, 25000);
+    // THE ENVELOPE, captured from the site's own add on 2026-09-03.
+    //
+    //   POST /commerce/cart/carts/lineitems?api-version=2024-02-19-preview
+    //
+    // "lineitems", one word. Every hyphenated and RESTful guess -- /carts/{id},
+    // /carts/{id}/line-items, /carts/items, PUT, PATCH -- came back as a bare
+    // "Failed to fetch", because this gateway rejects an unknown route before it
+    // adds CORS headers. Guessing could not have found it; watching the site
+    // could, and did.
+    var body = {
+      StoreKey: storeKey,
+      cartData: [{
+        cartID: before.cartId,
+        cartVersion: before.version,
+        custom: [
+          { name: 'orderLevelAdjustments', value: '[]' },
+          { name: 'storeNumber', value: String(storeNo) },
+          { name: 'fulfillmentType', value: 'pickup' },
+        ],
+        isAlcoholic: false,
+        lineItems: lineItems,
+      }],
+      customerEmail: who.email,
+      customerID: who.id,
+    };
+    var res = await WG.commerce('${CART_WRITE_PATH}', tok, { method: 'POST', body: JSON.stringify(body) }, 25000);
     if (!res.ok) {
       for (var f = 0; f < planned.length; f++) report(planned[f].it, false, 'write_refused',
         res.why + (res.status ? ' ' + res.status : '') + (res.detail ? ': ' + res.detail : ''));
-      post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0, why: res.why, status: res.status || null,
-             triedPath: path });
+      post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0, why: res.why, status: res.status || null });
       return;
     }
 
@@ -856,6 +1050,11 @@ ${WEG_PRELUDE}
       else report(pl.it, false, 'not_in_cart_after_write', 'expected ' + pl.sent + ', cart holds ' + now, pl.want);
     }
     post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: wrote,
+           writeStatus: res.status || null,
+           // The gateway answers 200 with a body that can still describe a
+           // rejection, so the answer is carried for diagnosis rather than
+           // trusted. The CART is what decided the per-item verdicts above.
+           writePeek: (function () { try { return JSON.stringify(res.data).slice(0, 200); } catch (e) { return null; } })(),
            cartBefore: before.rows, cartAfter: after ? after.rows : [],
            cartLines: after ? after.rows.length : null, ms: res.ms });
   } catch (e) {

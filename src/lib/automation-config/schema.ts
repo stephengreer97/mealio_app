@@ -454,13 +454,33 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
       // sessionUsable refuses to start a run until a token has actually been
       // used for something.
       //
-      // The add is off because its ENDPOINT was never called: capturing it
-      // meant adding to a real basket. To finish it, run the cart read with one
-      // item added by hand, then watch the site add one more
-      // (tools/rail-recon/watch.ts) -- that request is the answer, including
-      // whether the body holds one item or a list.
+      // THE ADD IS ON as of 2026-09-03, measured against the real store.
+      //
+      // Its endpoint could not be guessed: this gateway rejects an unknown
+      // route before it adds CORS headers, so a wrong path and a dead host both
+      // read as a bare "Failed to fetch". Every RESTful shape was tried and all
+      // of them "failed" identically. Watching the site add an item gave it in
+      // one go:
+      //
+      //   POST /commerce/cart/carts/lineitems?api-version=2024-02-19-preview
+      //
+      // "lineitems", one word, on the collection. The body is the site's own
+      // envelope -- StoreKey, cartData[{cartID, cartVersion, custom, lineItems}],
+      // customerID, customerEmail -- and every line-item field comes from the
+      // Algolia row, which the add re-reads by objectID rather than having a
+      // dozen fields plumbed through the app's candidate shape.
+      //
+      // MEASURED end to end with the rail's own script: a new item at quantity
+      // 3 landed as 3, verified by re-reading the cart (16 -> 20 items).
+      //
+      // absoluteQty stays NULL, and that is a finding rather than caution: this
+      // endpoint ADDS A LINE and does nothing to one that already exists. A
+      // write of quantity 2 against a line holding 1 returned 200, advanced the
+      // cart version, and left the quantity at 1. So an item the cart already
+      // holds is refused and routed to review, where the user can see it --
+      // which is honest, where a silent no-op reported as success would not be.
       networkSearch: true,
-      networkAdd: false,
+      networkAdd: true,
       platform: 'standalone',
       forceSerialSearch: true,
       selectors: {
