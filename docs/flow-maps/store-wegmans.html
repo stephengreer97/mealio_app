@@ -63,11 +63,20 @@ gave it immediately. StoreKey comes from <code>/api/stores</code> (same-origin, 
 customer ref from the profile, and every line-item field from the Algolia row &mdash; looked up
 <b>by objectID</b> (<code>"140-75994"</code>), because <code>skuId</code> is in the index but is not
 a filterable facet and returns 0 hits for a sku that exists.</p>
-<p><b>&#9888; absoluteQty stays NULL, as a finding.</b> This endpoint ADDS A LINE and does nothing to
-one that already exists: quantity 2 against a line holding 1 returned 200, advanced the cart version
-and left the quantity at 1. An item already in the cart is refused as
-<code>line_already_present</code> and routed to review, where the user can set the quantity
-themselves &mdash; an "added" that added nothing would be a lie.</p>
+<p><b>&#9888; THE LINE ID DECIDES WHAT THE WRITE MEANS.</b></p>
+<table><tr><th>payload</th><th>what it does</th></tr>
+<tr><td>no line id</td><td>CREATES a line. For a sku the cart already holds it returns 200, advances
+the cart version, and changes nothing at all.</td></tr>
+<tr><td><code>id</code> of the existing line</td><td>SETS that line's quantity. Measured 1&nbsp;&rarr;&nbsp;2,
+then 2&nbsp;&rarr;&nbsp;3. The plain <code>id</code> field alone is enough.</td></tr></table>
+<p>So the add looks each item up in the baseline it just read: a line it finds is addressed by id and
+written <i>held + wanted</i>, exactly like every other rail; anything else is a new line at
+<i>wanted</i>. <b>Cart writes add on top</b> &mdash; an item already in the cart is not a special
+case and is never refused. It briefly was, having copied the Instacart guard, which exists there
+only because that store's write sets a line and its semantics were unmeasured.</p>
+<p>Reading it as purely additive would have been just as wrong in the other direction: <i>held +
+wanted</i> sent to an adding endpoint gives <i>held + held + wanted</i>, which is the MEAL-194
+over-add.</p>
 <p><b>&#9888; AN EXPIRED TOKEN IS NOT A SIGNED-OUT USER.</b> The access token lasts an hour. MSAL
 renews it with the refresh token beside it in the same cache &mdash; but only where the site's own
 code runs, and the rail runs on <code>robots.txt</code> where it never does. So an hour after the
