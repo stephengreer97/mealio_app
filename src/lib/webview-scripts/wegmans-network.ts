@@ -425,6 +425,13 @@ const WEG_PRELUDE = `
     '/commerce/my-items': '2024-01-26',
     '/commerce/cart/carts/': '2024-02-19-preview',
   };
+  // Read off the site's own version table (TURBOPACK chunk 96047), which names
+  // one per API: ACCOUNT 2024-03-06-preview, CART 2024-02-19-preview, CART_V2
+  // 2026-01-13-preview, COUPONS 2024-11-05-preview, COMMERCE_BROWSE 2023-09-22.
+  // The cart URL is built there from API_CART + "/carts/?" + API_CART_VERSION --
+  // the collection, with the trailing slash, for the read AND the write.
+  // (Written out rather than quoted: this whole script is a template literal,
+  // so a dollar-brace in a comment is an interpolation and breaks the build.)
   WG.versioned = function (path) {
     if (path.indexOf('api-version=') >= 0) return path;
     var base = path.split('?')[0];
