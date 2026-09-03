@@ -3689,6 +3689,21 @@ export default function WebViewCartSheet({
     // baseline is taken, and only then does the search flow begin.
     if (cartReadPendingNavRef.current) {
       cartReadPendingNavRef.current = false;
+      // RECORD THIS LANDING BEFORE RETURNING.
+      //
+      // `lastLoadEndUrlRef` is written per-branch in this handler, and that is
+      // deliberate rather than sloppy: the quiet-page hop and the login-status
+      // branch both read it for where the WebView was BEFORE the current load,
+      // and hoisting this to the top of the handler breaks nineteen tests
+      // across two suites. So a branch that returns early has to record its own
+      // landing, and this one did not.
+      //
+      // What that cost: the cart read lands, the session ask a moment later
+      // still sees an empty URL, and nothing loads again to wake it — the run
+      // spends its full 20s session budget and hands the user six manual
+      // searches. Stephen, on the run that did it: "Still login detection is
+      // not working". Mine, from the commit that added the gate.
+      lastLoadEndUrlRef.current = url;
       console.log(`[Cart ${ts()}]`, 'snapshotBefore: the store landed — reading the cart now');
       const railForPending = getNetworkRail(lockedStoreIdRef.current);
       if (railForPending) webviewRef.current?.injectJavaScript(railForPending.cartRead());
@@ -3697,6 +3712,9 @@ export default function WebViewCartSheet({
     // A network run waiting on its session: the injection at run start can land
     // while the page is mid-navigation and go nowhere. This is the retry.
     if (netActiveRef.current && netPhaseRef.current === 'session') {
+      // Same reason as the branch above: an early return records its own
+      // landing, because what runs after a session answer asks where we are.
+      lastLoadEndUrlRef.current = url;
       console.log(`[Cart ${ts()}]`, 'network run: re-reading the session on', url.slice(0, 60));
       const railForSession = getNetworkRail(lockedStoreIdRef.current);
       if (railForSession) webviewRef.current?.injectJavaScript(railForSession.sessionScript());

@@ -196,11 +196,19 @@ describe('a rail script is asked of the store, never of about:blank', () => {
     expect(injected.filter(isCartRead).length).toBeGreaterThan(0);
   });
 
-  it('gets to the session once the cart has answered', () => {
+  it('gets to the session on ONE page load, not two', () => {
+    // The quiet page loads ONCE. The first version of this test fired a second
+    // load after the cart answered and passed on the strength of it — while the
+    // real run, with only the one load it actually gets, waited out its whole
+    // 20s session budget and handed the user six manual searches.
+    //
+    // What made it possible: `lastLoadEndUrlRef` is written per-branch in
+    // onLoadEnd rather than once at the top, and the branch that ran the
+    // deferred cart read returned without writing it. So the store had landed,
+    // and nothing that ran afterwards could tell.
     const { loadEnd, post } = openAldi();
     loadEnd('https://www.aldi.us/robots.txt');
     post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
-    loadEnd('https://www.aldi.us/robots.txt');
     expect(injected.filter(isSession).length).toBeGreaterThan(0);
   });
 
