@@ -134,7 +134,11 @@ function netStub(opts: {
     '            var hit = false;',
     '            for (var w = 0; w < window.__cart.length; w++) {',
     '              if (String(window.__cart[w].productId) === String(lis[q].sku)) {',
-    '                window.__cart[w].quantity = lis[q].quantity; hit = true;',
+    // MEASURED: with the LINE ID the quantity is SET; without it the endpoint
+    // only creates lines and does nothing at all to one that exists. A stub
+    // that updates either way hides the whole reason the id is sent.
+    '                if (lis[q].id) window.__cart[w].quantity = lis[q].quantity;',
+    '                hit = true;',
     '              }',
     '            }',
     '            if (!hit) window.__cart.push({ productId: lis[q].sku, quantity: lis[q].quantity, productName: "Item" });',
@@ -390,18 +394,32 @@ describe('the add', () => {
     expect(writes[0].cartData[0].cartVersion).toBe(13172);
   }, AT_WEGMANS);
 
-  itWithFixture('shop.html', 'REFUSES an item the cart already holds', async (runner) => {
-    // Nobody has measured whether this store SETS a line or ADDS to it, and
-    // that is the one case where the two readings disagree. Declined, named,
-    // and sent to review rather than guessed at.
+  itWithFixture('shop.html', 'ADDS ON TOP of an item the cart already holds', async (runner) => {
+    // Stephen: "are preventing adding things that are already in the cart?
+    // Where did you get that idea?? No other store does that and that has never
+    // been the behavior."
+    //
+    // He is right and this file briefly did exactly that, having copied the
+    // Instacart rail's guard — which exists there only because that store's
+    // write SETS a line and nobody had measured it. Cart writes add on top;
+    // that is the rule, and re-running a meal doubling the cart is the point.
+    //
+    // Here that needs the LINE's id: without it the endpoint creates lines and
+    // does nothing to one that exists. With it, quantity is absolute, so
+    // held + wanted is what goes out.
     await runner.inject(cachedToken());
-    await runner.inject(netStub({ cart: [{ productId: '608294', quantity: 2, productName: 'Sour Cream' }] }));
-    await runner.inject(buildWegmansNetworkAddBatchScript([item(0, '608294', 1)])!);
+    await runner.inject(netStub({ cart: [{ productId: '608294', quantity: 2, productName: 'Daisy' }] }));
+    await runner.inject(buildWegmansNetworkAddBatchScript([item(0, '608294', 3)])!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
-    expect(res.success).toBe(false);
-    expect(res.reason).toBe('line_already_present');
-    const calls = await runner.page.evaluate('window.__commerce') as Array<{ method: string }>;
-    expect(calls.filter((c) => c.method === 'POST').length).toBe(0);
+    const writes = await runner.page.evaluate('window.__writes') as Array<Record<string, any>>;
+    expect(JSON.stringify({ reason: res.reason ?? null, detail: res.detail ?? null,
+      sent: writes[0] && writes[0].cartData[0].lineItems[0] })).toContain('"quantity":5');
+    expect(res.success).toBe(true);
+    const li = writes[0].cartData[0].lineItems[0];
+    expect(li.id).toBe('line-0-4e178fbf');
+    expect(li.quantity).toBe(5);
+    const cart = await runner.page.evaluate('window.__cart') as Array<Record<string, unknown>>;
+    expect(cart[0].quantity).toBe(5);
   }, AT_WEGMANS);
 
   itWithFixture('shop.html', 'the CART decides, not the write', async (runner) => {

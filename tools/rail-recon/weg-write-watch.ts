@@ -50,7 +50,9 @@ const RECORDER = `(function () {
   void cartBefore;
 
   // The add control, however it is labelled.
+  const INCREMENT = process.env.WEG_INC === '1';
   const clicked = await page.evaluate(`(function () {
+    var INCREMENT = ${process.env.WEG_INC === '1'};
     var pick = null;
     var all = document.querySelectorAll('button, [role=button]');
     for (var i = 0; i < all.length; i++) {
@@ -83,7 +85,8 @@ const RECORDER = `(function () {
 
   const reqs = await page.evaluate(`(function () {
     return (window.__req || []).filter(function (r) {
-      return /lineitems/i.test(r.url);
+      return r.method && r.method.toUpperCase() !== 'GET'
+        && /wegmans\.cloud/.test(r.url) && !/cooklist|signalr|coupons|feedback/.test(r.url);
     }).slice(0, 40);
   })()`) as any[];
   console.log('\n--- non-GET requests to wegmans ---');

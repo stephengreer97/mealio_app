@@ -1035,6 +1035,7 @@ ${WEG_PRELUDE}
     if (cart.lineItems && cart.lineItems.length) lines = cart.lineItems;
     else if (!lines.length) pick(r.data, 0);
     var held = {};
+    var lineIds = {};
     var rows = [];
     var cartId = cart.id || null;
     if (!cartId) { try { cartId = (r.data && (r.data.cartId || r.data.id)) || null; } catch (e) {} }
@@ -1044,13 +1045,17 @@ ${WEG_PRELUDE}
       var id = WG.lineSku(li);
       var q = Number(li.quantity != null ? li.quantity : (li.qty != null ? li.qty : 1));
       if (!(q > 0)) q = 1;
-      if (id) held[id] = (held[id] || 0) + q;
+      if (id) {
+        held[id] = (held[id] || 0) + q;
+        // The LINE's own id, which is what turns a write into a quantity change.
+        if (li.id != null) lineIds[id] = String(li.id);
+      }
       rows.push({ name: WG.lineName(li, id), qty: q, itemId: id, available: true });
     }
     // The cart OBJECT travels with it: the write needs the store number and the
     // version out of the same response the baseline came from, and re-reading
     // would be a second call whose answer could already differ.
-    return { cartId: cartId ? String(cartId) : null, held: held, rows: rows,
+    return { cartId: cartId ? String(cartId) : null, held: held, rows: rows, lineIds: lineIds,
              version: cart.version != null ? cart.version : null, cart: cart };
   };
 
@@ -1072,11 +1077,10 @@ ${WEG_PRELUDE}
     // knownLines, cartID went out as null, and a 20-item basket was replaced by
     // a one-item cart. A read costs ~600ms; that is not a trade worth making.
     var before = await readCart(tok);
-    if (before && KNOWN) {
-      // The prewarm's held counts are fresher for the RUN's purposes, but the
-      // ids have to come from the read.
-      before.held = KNOWN;
-    }
+    // KNOWN, the prewarm's baseline, is deliberately NOT used. The read above is
+    // newer, and its held counts have to agree with the line ids that come from
+    // the same response: a quantity computed from one snapshot and written
+    // against a line id from another is how a cart gets the wrong total.
     if (!before) {
       for (var z = 0; z < ITEMS.length; z++) report(ITEMS[z], false, 'no_cart', 'could not read the cart to baseline against');
       post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0 });
@@ -1119,19 +1123,35 @@ ${WEG_PRELUDE}
       var it = ITEMS[i];
       var have = Number(before.held[it.productId] || 0);
       var want = Math.max(1, Math.round(it.quantity || 1));
-      if (have > 0 && ABSOLUTE !== true) {
-        // MEASURED 2026-09-03, so this is not an unknown: the write adds a LINE
-        // and does nothing to one that exists. Quantity 2 against a line holding
-        // 1 returned 200, advanced the cart version, and left the quantity at 1.
-        // Topping up is not something this API offers, so the item goes to
-        // review rather than being reported as an add that did nothing.
-        report(it, false, 'line_already_present',
-               'the cart already holds ' + have + ' of this, and this store can only add a new line');
-        continue;
-      }
+      // WANT, NOT held + want.
+      //
+      // This endpoint ADDS. Every other rail here writes an ABSOLUTE quantity,
+      // so held + wanted is how they land on "add on top" -- Stephen's rule
+      // since 2026-09-01, and the reason re-running a meal doubles the cart on
+      // purpose. Sending held + wanted to an endpoint that adds would give
+      // held + held + wanted, which is the over-add MEAL-194 was about.
+      //
+      // An item the cart already holds is NOT a special case and is not
+      // refused. It briefly was, because this file copied the Instacart rail's
+      // guard -- and that guard exists there only because that store's write
+      // SETS a line and nobody had measured it. Stephen: "are preventing adding
+      // things that are already in the cart? Where did you get that idea?? No
+      // other store does that and that has never been the behavior."
       var hit = rows[String(it.productId)];
       if (!hit) { report(it, false, 'write_refused', 'no catalogue row for sku ' + it.productId); continue; }
-      lineItems.push(WG.lineItemFor(hit, want));
+      // AN EXISTING LINE IS ADDRESSED BY ITS ID, and then quantity is ABSOLUTE.
+      //
+      // Without the id this endpoint only CREATES lines: a write for a sku the
+      // cart already holds returns 200, advances the cart version and changes
+      // nothing at all. With the line's own id it SETS that line -- measured
+      // 1 -> 2, then 2 -> 3, and the plain "id" field alone does it.
+      //
+      // So held + wanted, exactly like every other rail, and re-running a meal
+      // adds on top the way Stephen chose on 2026-09-01.
+      var lineId = before.lineIds ? before.lineIds[String(it.productId)] : null;
+      var li2 = WG.lineItemFor(hit, lineId ? have + want : want);
+      if (lineId) li2.id = lineId;
+      lineItems.push(li2);
       planned.push({ it: it, want: want, sent: have + want, have: have });
     }
     if (!lineItems.length) { post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0 }); return; }
