@@ -19,9 +19,14 @@ against a live signed-in session before a line was written &mdash; see
   <tr><td>Cart read</td><td><code>GET /commerce/cart/carts/</code> + bearer</td><td>&mdash;</td></tr>
   <tr><td>Add</td><td><code>POST .../items</code></td><td><b>off</b> &mdash; endpoint never called</td></tr>
 </table>
-<p><b>Search needs no session, and that is not a detail.</b> It works for a SIGNED-OUT user and an
-expired token cannot break it &mdash; so the cart half failing does not take search with it. No
-other store here can say either.</p>
+<p><b>&#9888; The search ENDPOINT needs no session &mdash; but the search does.</b> An earlier version
+of this page said otherwise. Algolia is open, but the query has to be filtered to the user's STORE,
+and MEASURED 2026-09-03 the store number is not in any cookie, in localStorage, in the server HTML
+of <code>/</code> or <code>/shop</code>, or behind any of four plausible <code>/api</code> paths
+(all 404). It arrives with the customer profile, behind the bearer. Unfiltered, the query returns
+every store's catalogue &mdash; real products under real names carrying ids that are not valid
+where this user shops. So the rail REFUSES to search without a store number and caches it for a day
+once anything learns it.</p>
 <p><b>The cart half is the expensive half.</b> MSAL keeps the bearer ENCRYPTED
 (<code>{id, nonce, data}</code>, with a <code>msal.cache.encryption</code> cookie), and the commerce
 API refuses the cookie session: a <code>no-cors</code> request comes back <b>opaque</b>, so it is
