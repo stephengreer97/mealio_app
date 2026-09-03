@@ -347,7 +347,7 @@ export interface WorkerReport {
  */
 export type DefiniteFailureReason =
   | 'out_of_stock' | 'no_results' | 'quantity_limit_reached'
-  | 'low_confidence' | 'needs_weight'
+  | 'low_confidence' | 'needs_weight' | 'line_already_present'
   /**
    * The store never answered the search for this term -- a timeout or a dropped
    * request, not an empty result.

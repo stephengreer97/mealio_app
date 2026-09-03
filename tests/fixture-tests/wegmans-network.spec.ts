@@ -102,6 +102,16 @@ function netStub(opts: {
     '    }',
     // Same-origin, unauthenticated: where the store's "140-CHAPEL-HILL" key
     // comes from, and the one prerequisite of a write that needs no token.
+    '    if (u.indexOf("openid-configuration") > 0) {',
+    '      window.__oidc = (window.__oidc || 0) + 1;',
+    '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve(',
+    '        JSON.stringify({ token_endpoint: "https://myaccount.wegmans.test/tok" })); } });',
+    '    }',
+    '    if (u.indexOf("/tok") > 0) {',
+    '      window.__refreshBody = init && init.body ? String(init.body) : null;',
+    '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve(',
+    '        JSON.stringify({ access_token: "fresh-access-token", refresh_token: "rotated-rt", expires_in: 3600 })); } });',
+    '    }',
     '    if (u.indexOf("/api/stores") >= 0) {',
     '      return Promise.resolve({ ok: true, status: 200, text: function () { return Promise.resolve(',
     '        JSON.stringify([{ storeNumber: "140", key: "140-CHAPEL-HILL", name: "Chapel Hill" }])); } });',
@@ -389,7 +399,7 @@ describe('the add', () => {
     await runner.inject(buildWegmansNetworkAddBatchScript([item(0, '608294', 1)])!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
     expect(res.success).toBe(false);
-    expect(res.reason).toBe('qty_semantics_unproven');
+    expect(res.reason).toBe('line_already_present');
     const calls = await runner.page.evaluate('window.__commerce') as Array<{ method: string }>;
     expect(calls.filter((c) => c.method === 'POST').length).toBe(0);
   }, AT_WEGMANS);
@@ -430,7 +440,7 @@ describe('the add', () => {
  * code to make a request it could observe. On robots.txt nothing runs, so that
  * never happened and Wegmans never had a session at all.
  */
-function encryptedMsalCache(opts: { secondsLeft?: number; audience?: string } = {}) {
+function encryptedMsalCache(opts: { secondsLeft?: number; audience?: string; withRefresh?: boolean } = {}) {
   const clientId = 'dc83fc43-b665-438e-ac2f-1b4080bb5cdf';
   const secondsLeft = opts.secondsLeft ?? 3600;
   const audience = opts.audience ?? 'https://wegmansonline.onmicrosoft.com/api.digitaldevelopment.wegmans.cloud/Users.Profile.Read';
@@ -438,7 +448,16 @@ function encryptedMsalCache(opts: { secondsLeft?: number; audience?: string } = 
     credentialType: 'AccessToken',
     secret: 'hdr.payload.sig',
     target: audience,
+    clientId: '38c78f8d-d124-4796-8430-1cd476d9a982',
+    environment: 'myaccount.wegmans.test',
+    realm: '14892770-9ffd-4a38-807e-36292b99339e',
     expiresOn: String(Math.floor(Date.now() / 1000) + secondsLeft),
+  };
+  const refresh = {
+    credentialType: 'RefreshToken',
+    secret: 'refresh-token-value',
+    clientId: '38c78f8d-d124-4796-8430-1cd476d9a982',
+    environment: 'myaccount.wegmans.test',
   };
   return [
     '(async function () {',
@@ -456,8 +475,18 @@ function encryptedMsalCache(opts: { secondsLeft?: number; audience?: string } = 
     '  document.cookie = "msal.cache.encryption=" + encodeURIComponent(JSON.stringify(',
     '    { id: "cache-1", key: b64(rawKey) })) + "; path=/";',
     '  localStorage.setItem("msal.1.account.keys", JSON.stringify(["acct-0-myaccount.wegmans.com"]));',
-    '  localStorage.setItem("msal.1-' + clientId + '-b2c_1a_x.acct-0-accesstoken-x",',
+    '  localStorage.setItem("msal.1-' + clientId + '-b2c_1a_wegmanssignupsignin.acct-0-accesstoken-x",',
     '    JSON.stringify({ id: "cache-1", nonce: b64(salt), data: b64(new Uint8Array(ct)), lastUpdatedAt: "0" }));',
+    ...(opts.withRefresh ? [
+      '  var salt2 = crypto.getRandomValues(new Uint8Array(16));',
+      '  var dk2 = await crypto.subtle.deriveKey(',
+      '    { name: "HKDF", salt: salt2, hash: "SHA-256", info: enc.encode(' + JSON.stringify(clientId) + ') },',
+      '    base, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);',
+      '  var ct2 = await crypto.subtle.encrypt({ name: "AES-GCM", iv: new Uint8Array(12) }, dk2,',
+      '    enc.encode(' + JSON.stringify(JSON.stringify(refresh)) + '));',
+      '  localStorage.setItem("msal.1-' + clientId + '-b2c_1a_wegmanssignupsignin.acct-0-refreshtoken-x",',
+      '    JSON.stringify({ id: "cache-1", nonce: b64(salt2), data: b64(new Uint8Array(ct2)), lastUpdatedAt: "0" }));',
+    ] : []),
     '  window.__seeded = true;',
     '})().catch(function (e) { window.__seedErr = String(e && e.message || e); }); true;',
   ].join('\n');
@@ -635,5 +664,73 @@ describe('a write always names the cart it is writing to', () => {
     expect(res.reason).toBe('no_cart');
     const writes = await runner.page.evaluate('window.__writes') as unknown[];
     expect(writes).toHaveLength(0);
+  }, AT_WEGMANS);
+});
+
+describe('every script finds the bearer the same way', () => {
+  const item = (idx: number, id: string, qty: number) =>
+    ({ idx, productId: id, skuId: id, quantity: qty, name: 'Item ' + id });
+
+  // The session script had the MSAL fallback; the cart read and the add did
+  // not. So the moment the cached token aged out they reported no_token on a
+  // device that could read one in 40ms. Stephen's run, 2026-09-03: session
+  // fine, then "wrote 0 of 5, why: no_token" — "just tested wegmans and it
+  // immedietly failed".
+  //
+  // No cachedToken() is seeded in either test below. The MSAL cache is the ONLY
+  // source, which is what a real second run looks like once the hour is up.
+  itWithFixture('shop.html', 'the cart read falls back to the MSAL cache', async (runner) => {
+    await runner.inject(encryptedMsalCache());
+    await runner.page.waitForFunction('window.__seeded === true', undefined, { timeout: 5000 });
+    await runner.inject(netStub({ cart: [{ productId: '608294', quantity: 2, productName: 'Daisy Sour Cream' }] }));
+    await runner.inject(buildWegmansCartReadScript());
+    const msg = await runner.waitForMessage('CART_COUNT', 20_000) as Record<string, unknown>;
+    expect(msg.count).toBe(2);
+    expect(msg.reason).toBeUndefined();
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'the add falls back to the MSAL cache', async (runner) => {
+    await runner.inject(encryptedMsalCache());
+    await runner.page.waitForFunction('window.__seeded === true', undefined, { timeout: 5000 });
+    await runner.inject(netStub());
+    await runner.inject(buildWegmansNetworkAddBatchScript([item(0, '608294', 1)])!);
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
+    expect(res.reason).not.toBe('no_token');
+    expect(res.success).toBe(true);
+  }, AT_WEGMANS);
+});
+
+describe('an expired token is refreshed, not surrendered to', () => {
+  // The access token lasts an hour. MSAL renews it with the refresh token
+  // beside it — but only where the site's own code runs, and the rail runs on
+  // robots.txt where it never does. So an hour after the user last opened
+  // Wegmans, every script reported no_token and the run died at the gate, on a
+  // device holding a refresh token good for another six hours.
+  //
+  // Stephen, on exactly that: "just tested wegmans and it immedietly failed".
+  itWithFixture('shop.html', 'trades the refresh token for a new access token', async (runner) => {
+    // EXPIRED, with a refresh token beside it — the real second-run state.
+    await runner.inject(encryptedMsalCache({ secondsLeft: -300, withRefresh: true }));
+    await runner.page.waitForFunction('window.__seeded === true', undefined, { timeout: 5000 });
+    await runner.inject(netStub({ cart: [{ productId: '608294', quantity: 2, productName: 'Daisy' }] }));
+    await runner.inject(buildWegmansCartReadScript());
+    const msg = await runner.waitForMessage('CART_COUNT', 20_000) as Record<string, unknown>;
+    expect(msg.count).toBe(2);
+
+    const body = await runner.page.evaluate('window.__refreshBody') as string;
+    expect(body).toContain('grant_type=refresh_token');
+    expect(body).toContain('refresh-token-value');
+    // The scope comes off the EXPIRED token — it is the only record of what to
+    // ask for, which is why the walk keeps it even when the token is stale.
+    expect(decodeURIComponent(body)).toContain('wegmans.cloud');
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'does not refresh when the token is still good', async (runner) => {
+    await runner.inject(encryptedMsalCache({ withRefresh: true }));
+    await runner.page.waitForFunction('window.__seeded === true', undefined, { timeout: 5000 });
+    await runner.inject(netStub({ cart: [{ productId: '608294', quantity: 1, productName: 'Daisy' }] }));
+    await runner.inject(buildWegmansCartReadScript());
+    await runner.waitForMessage('CART_COUNT', 20_000);
+    expect(await runner.page.evaluate('window.__refreshBody || null')).toBeNull();
   }, AT_WEGMANS);
 });

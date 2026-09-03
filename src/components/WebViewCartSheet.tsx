@@ -123,7 +123,12 @@ interface SearchResult {
     | 'quantity_limit_reached' | 'needs_preference'
     /** The store never answered the search. Different from "it had nothing" and
      *  the screen says so, because the two suggest different next steps. */
-    | 'search_unanswered';
+    | 'search_unanswered'
+    /** The cart already holds this, and the store's write can only ADD a new
+     *  line — measured on Wegmans, whose API returns 200 for a quantity change
+     *  and changes nothing. Reaching review is the honest outcome: the user can
+     *  set the quantity themselves, where an "added" that added nothing lies. */
+    | 'line_already_present';
   isChoose: boolean; // true = choose-product flow (no searchTerm yet); false = review unmatched (searchTerm set but no match)
 }
 

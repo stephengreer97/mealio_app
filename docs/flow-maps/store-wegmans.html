@@ -65,7 +65,18 @@ customer ref from the profile, and every line-item field from the Algolia row &m
 a filterable facet and returns 0 hits for a sku that exists.</p>
 <p><b>&#9888; absoluteQty stays NULL, as a finding.</b> This endpoint ADDS A LINE and does nothing to
 one that already exists: quantity 2 against a line holding 1 returned 200, advanced the cart version
-and left the quantity at 1. An item already in the cart is refused and routed to review.</p>
+and left the quantity at 1. An item already in the cart is refused as
+<code>line_already_present</code> and routed to review, where the user can set the quantity
+themselves &mdash; an "added" that added nothing would be a lie.</p>
+<p><b>&#9888; AN EXPIRED TOKEN IS NOT A SIGNED-OUT USER.</b> The access token lasts an hour. MSAL
+renews it with the refresh token beside it in the same cache &mdash; but only where the site's own
+code runs, and the rail runs on <code>robots.txt</code> where it never does. So an hour after the
+user last opened Wegmans, every script reported <code>no_token</code> on a device holding a refresh
+token good for another six hours. The rail now does what MSAL does: <code>grant_type=refresh_token</code>
+to the B2C token endpoint, DISCOVERED from the authority's own public
+<code>openid-configuration</code> rather than assembled from guesses. The scope comes off the
+<i>expired</i> access token, the only record of what to ask for. The rotated refresh token is kept in
+our own storage and never written back into MSAL's encrypted cache.</p>
 <p><b>&#9888; A WRITE MUST NAME ITS CART.</b> Sent without <code>cartID</code> and
 <code>cartVersion</code> the API does not fail &mdash; it CREATES A NEW CART, and the existing basket
 stops being the active one. The app passes <code>knownLines</code> (the prewarmed baseline: held

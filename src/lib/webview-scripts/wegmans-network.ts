@@ -30,6 +30,9 @@ const ALGOLIA_INDEX = 'products';
 const ALGOLIA_URL = ALGOLIA_HOST + '/1/indexes/*/queries';
 /** The store's "140-CHAPEL-HILL" key, cached a day beside its number. */
 const STORE_KEY_CACHE = '__mealio_weg_storekey_v1';
+/** Our own refresh token and token endpoint, so a stale hour costs one POST. */
+const REFRESH_CACHE = '__mealio_weg_rt_v1';
+const ENDPOINT_CACHE = '__mealio_weg_oidc_v1';
 
 /** The commerce API. Named "development" and is what production calls. */
 const COMMERCE_BASE = 'https://api.digitaldevelopment.wegmans.cloud';
@@ -467,40 +470,123 @@ const WEG_PRELUDE = `
     return m ? m.slice(0) : [];
   };
 
-  WG.tokenFromCache = async function () {
-    if (!window.crypto || !window.crypto.subtle) return null;
+  /**
+   * THE token lookup. Cache first, then the MSAL store.
+   *
+   * Every script that needs a bearer goes through this. The session script had
+   * the MSAL fallback and the cart read and the add did not, so the moment the
+   * cached token aged out they reported no_token on a device that could read
+   * one in 40ms — which is exactly what Stephen's run did: session fine, then
+   * "wrote 0 of 5, why: no_token".
+   */
+  WG.token = async function () {
+    var t = WG.cachedToken();
+    if (t) return t;
+    try { t = await WG.tokenFromCache(); } catch (e) { t = null; }
+    if (t) return t;
+    // EXPIRED IS NOT SIGNED OUT.
+    //
+    // The access token lasts an hour. MSAL renews it with the refresh token
+    // beside it, but only when the site's own code runs — and the rail runs on
+    // robots.txt, where it never does. So an hour after the user last opened
+    // Wegmans, every script here reported no_token and the run failed at the
+    // gate, on a device holding a refresh token good for another six hours.
+    // Stephen, on exactly that: "just tested wegmans and it immedietly failed".
+    try { return await WG.refresh(); } catch (e) { return null; }
+  };
+
+  /** The B2C token endpoint, from the authority's own public discovery doc. */
+  WG.tokenEndpoint = async function (env, realm, policy) {
+    try {
+      var c = JSON.parse(localStorage.getItem('${ENDPOINT_CACHE}') || 'null');
+      if (c && c.v && Date.now() - c.at < 604800000) return c.v;
+    } catch (e) {}
+    if (!env || !realm || !policy) return null;
+    var url = 'https://' + env + '/' + realm + '/' + policy + '/v2.0/.well-known/openid-configuration';
+    try {
+      var r = await fetch(url);
+      var j = JSON.parse(await r.text());
+      if (j && j.token_endpoint) {
+        try { localStorage.setItem('${ENDPOINT_CACHE}', JSON.stringify({ v: j.token_endpoint, at: Date.now() })); } catch (e) {}
+        return j.token_endpoint;
+      }
+    } catch (e) {}
+    return null;
+  };
+
+  /**
+   * Trade the refresh token for a fresh access token, exactly as MSAL would.
+   *
+   * The new refresh token is kept in OUR storage rather than written back into
+   * MSAL's encrypted cache: re-encrypting into a store the site owns is a good
+   * way to corrupt someone's login, and the worst case here is that a rotated
+   * token makes the next refresh fail and the user's next visit to the site
+   * fixes it.
+   */
+  WG.refresh = async function () {
+    var creds = WG.msalCreds ? WG.msalCreds : await WG.readMsalCreds();
+    var rt = null;
+    try {
+      var mine = JSON.parse(localStorage.getItem('${REFRESH_CACHE}') || 'null');
+      if (mine && mine.v && Date.now() - mine.at < 86400000) rt = mine.v;
+    } catch (e) {}
+    if (!rt) rt = creds.refresh;
+    if (!rt || !creds.clientId) return null;
+    var ep = await WG.tokenEndpoint(creds.env, creds.realm, creds.policy);
+    if (!ep) return null;
+    var form = 'grant_type=refresh_token'
+      + '&client_id=' + encodeURIComponent(creds.clientId)
+      + '&refresh_token=' + encodeURIComponent(rt)
+      + (creds.scope ? '&scope=' + encodeURIComponent(creds.scope) : '');
+    try {
+      var r = await fetch(ep, { method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form });
+      var j = JSON.parse(await r.text());
+      if (!j || !j.access_token) return null;
+      WG.cacheToken(j.access_token);
+      if (j.refresh_token) {
+        try { localStorage.setItem('${REFRESH_CACHE}', JSON.stringify({ v: j.refresh_token, at: Date.now() })); } catch (e) {}
+      }
+      return j.access_token;
+    } catch (e) { return null; }
+  };
+
+  /**
+   * One walk of MSAL's cache, yielding everything the rail needs from it: the
+   * access token if it is still good, the refresh token, and the account
+   * identifiers a refresh has to quote. The policy comes out of the storage KEY
+   * — it is not a field on any credential.
+   */
+  WG.readMsalCreds = async function () {
+    var out = { access: null, refresh: null, clientId: null, realm: null, env: null,
+                scope: null, policy: null };
+    if (!window.crypto || !window.crypto.subtle) return (WG.msalCreds = out);
     var raw = null;
     var parts = document.cookie.split(';');
     for (var p = 0; p < parts.length; p++) {
-      var t = parts[p].replace(/^ +/, '');
-      if (t.indexOf('msal.cache.encryption') === 0) { raw = t.slice(t.indexOf('=') + 1); break; }
+      var t0 = parts[p].replace(/^ +/, '');
+      if (t0.indexOf('msal.cache.encryption') === 0) { raw = t0.slice(t0.indexOf('=') + 1); break; }
     }
-    if (!raw) return null;
+    if (!raw) return (WG.msalCreds = out);
     var meta;
-    try { meta = JSON.parse(decodeURIComponent(raw)); } catch (e) { return null; }
-    if (!meta || !meta.key) return null;
+    try { meta = JSON.parse(decodeURIComponent(raw)); } catch (e) { return (WG.msalCreds = out); }
+    if (!meta || !meta.key) return (WG.msalCreds = out);
     var base;
     try {
       base = await window.crypto.subtle.importKey('raw', WG.b64(meta.key), 'HKDF', false, ['deriveKey']);
-    } catch (e) { return null; }
+    } catch (e) { return (WG.msalCreds = out); }
     var ids = WG.clientIds();
-    var best = null;
+    var bestLeft = -1e9;
     for (var i = 0; i < localStorage.length; i++) {
       var k = localStorage.key(i);
       if (!k || k.indexOf('msal') < 0) continue;
+      if (!out.policy) {
+        var pm = k.match(/b2c_1a_[a-z0-9_]+/i);
+        if (pm) out.policy = pm[0];
+      }
       var j;
       try { j = JSON.parse(localStorage.getItem(k) || ''); } catch (e) { continue; }
       if (!j || !j.data || !j.nonce) continue;
-      // THE CONTEXT COMES OUT OF THE KEY ITSELF.
-      //
-      // MSAL's getContext returns its clientId when the storage key contains
-      // it, and window.msal.clientIds is where the shop app publishes those --
-      // but the rail runs on robots.txt, where no site code has run and that
-      // global does not exist. Reading it from there meant an empty context for
-      // every entry, the wrong derived key every time, and no token at all.
-      //
-      // The clientId is a UUID inside the key. Try each one the key carries,
-      // and the empty context for entries that carry none.
       var ctxs = WG.uuidsIn(k);
       for (var q = 0; q < ids.length; q++) { if (ids[q] && k.indexOf(ids[q]) >= 0) ctxs.unshift(ids[q]); }
       ctxs.push('');
@@ -509,22 +595,33 @@ const WEG_PRELUDE = `
           var dk = await window.crypto.subtle.deriveKey(
             { name: 'HKDF', salt: WG.b64(j.nonce), hash: 'SHA-256', info: new TextEncoder().encode(ctxs[ci]) },
             base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-          var pt = await window.crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv: new Uint8Array(12) }, dk, WG.b64(j.data));
-          var o = JSON.parse(new TextDecoder().decode(pt));
-          if (!o || o.credentialType !== 'AccessToken' || !o.secret) break;
-          // The commerce API's own audience, not any token the app happens to hold.
-          if (String(o.target || '').indexOf('wegmans.cloud') < 0) break;
-          var left = Number(o.expiresOn || 0) - Math.floor(Date.now() / 1000);
-          if (left < 60) break;
-          if (!best || left > best.left) best = { secret: o.secret, left: left };
+          var o = JSON.parse(new TextDecoder().decode(await window.crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: new Uint8Array(12) }, dk, WG.b64(j.data))));
+          if (o.clientId && !out.clientId) out.clientId = String(o.clientId);
+          if (o.environment && !out.env) out.env = String(o.environment);
+          if (o.realm && !out.realm) out.realm = String(o.realm);
+          if (o.credentialType === 'RefreshToken' && o.secret) out.refresh = String(o.secret);
+          if (o.credentialType === 'AccessToken' && o.secret
+              && String(o.target || '').indexOf('wegmans.cloud') >= 0) {
+            // The scope is kept even from an EXPIRED token: it is what a refresh
+            // has to ask for, and the expired one is the only record of it.
+            if (!out.scope) out.scope = String(o.target);
+            var left = Number(o.expiresOn || 0) - Math.floor(Date.now() / 1000);
+            if (left > 60 && left > bestLeft) { bestLeft = left; out.access = String(o.secret); }
+          }
           break;
         } catch (e) { /* wrong context for this entry; try the next */ }
       }
     }
-    if (!best) return null;
-    WG.cacheToken(best.secret);
-    return best.secret;
+    WG.msalCreds = out;
+    return out;
+  };
+
+  WG.tokenFromCache = async function () {
+    var c = await WG.readMsalCreds();
+    if (!c.access) return null;
+    WG.cacheToken(c.access);
+    return c.access;
   };
 
   WG.authHeaders = function (tok) {
@@ -608,8 +705,7 @@ ${WEG_PRELUDE}
     var accounts = WG.accountCount();
     // The cache FIRST. watchForToken only ever fires where the site's own code
     // runs, and the rail deliberately sits on a page where nothing runs.
-    var tok0 = WG.cachedToken();
-    if (!tok0) { try { tok0 = await WG.tokenFromCache(); } catch (e) { tok0 = null; } }
+    var tok0 = await WG.token();
     var stores = await WG.findStoreNumber(tok0, 10000);
     var storeNumber = null;
     for (var sx = 0; sx < stores.length; sx++) if (stores[sx] && stores[sx].v) { storeNumber = String(stores[sx].v); break; }
@@ -774,7 +870,7 @@ export function buildWegmansCartReadScript(): string {
 ${WEG_PRELUDE}
   try {
     WG.watchForToken();
-    var tok = WG.cachedToken();
+    var tok = await WG.token();
     if (!tok) {
       // NOT an empty cart. "Nobody could read it" and "it holds nothing" are
       // different facts, and calling the first the second makes every item the
@@ -883,7 +979,7 @@ ${WEG_PRELUDE}
   var reasonCatalog = [
     { reason: 'no_token' },
     { reason: 'no_cart' },
-    { reason: 'qty_semantics_unproven' },
+    { reason: 'line_already_present' },
     { reason: 'write_refused' },
     { reason: 'not_in_cart_after_write' },
   ];
@@ -931,7 +1027,7 @@ ${WEG_PRELUDE}
 
   try {
     WG.watchForToken();
-    var tok = WG.cachedToken();
+    var tok = await WG.token();
     if (!tok) {
       for (var n = 0; n < ITEMS.length; n++) report(ITEMS[n], false, 'no_token', 'no bearer for the commerce API');
       post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0, why: 'no_token' });
@@ -995,8 +1091,13 @@ ${WEG_PRELUDE}
       var have = Number(before.held[it.productId] || 0);
       var want = Math.max(1, Math.round(it.quantity || 1));
       if (have > 0 && ABSOLUTE !== true) {
-        report(it, false, 'qty_semantics_unproven',
-               'the cart already holds ' + have + ' of this and it is not yet measured whether this store SETS or ADDS the quantity');
+        // MEASURED 2026-09-03, so this is not an unknown: the write adds a LINE
+        // and does nothing to one that exists. Quantity 2 against a line holding
+        // 1 returned 200, advanced the cart version, and left the quantity at 1.
+        // Topping up is not something this API offers, so the item goes to
+        // review rather than being reported as an add that did nothing.
+        report(it, false, 'line_already_present',
+               'the cart already holds ' + have + ' of this, and this store can only add a new line');
         continue;
       }
       var hit = rows[String(it.productId)];

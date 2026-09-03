@@ -259,6 +259,12 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   //   at. It is a refusal to risk an over-add, not a failure to find the
   //   product, so it must reach the user as something to review.
   qty_semantics_unproven: 'match_rejected',
+  // line_already_present — MEASURED, unlike the one above. Wegmans' write adds
+  // a line and does nothing to one that already exists: quantity 2 against a
+  // line holding 1 returns 200, advances the cart version and leaves it at 1.
+  // So topping up is not something this store's API offers, and the item goes
+  // to review where the user can change it themselves.
+  line_already_present: 'match_rejected',
   // write_refused — the mutation itself was rejected. Nothing landed.
   write_refused: 'confirm_failed',
   // not_in_cart_after_write — the write reported success and the cart re-read
