@@ -1098,6 +1098,10 @@ export default function WebViewCartSheet({
    *  rather than asked again on top. */
   const LOGIN_POLL_ANSWER_MS = 12_000;
 
+  /** How long the hop to the quiet page gets before the run starts anyway. It is
+   *  a robots.txt: if it has not landed by now it is not going to. */
+  const QUIET_NAV_TIMEOUT_MS = 6_000;
+
   const NET_PREWARM_WAIT_MS = 300;
   /**
    * THREE SECONDS WAS NOT A WAIT, IT WAS A RACE.
@@ -1209,6 +1213,15 @@ export default function WebViewCartSheet({
   /** The rate the last tick was scheduled at, so a change is logged once rather
    *  than on every tick. */
   const loginPollRateRef = useRef(0);
+  /** snapshotBeforeNow, reachable from snapshotBeforeAndBeginSearch above it. */
+  const snapshotBeforeRef = useRef<() => void>(() => {});
+  /** True while the one hop from the storefront to the quiet page is in flight,
+   *  so its onLoadEnd knows to start the run rather than treat it as a login
+   *  page load. */
+  const postLoginQuietNavRef = useRef(false);
+  const quietNavTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** navTo, which is defined below the callbacks that need it. */
+  const navToRef = useRef<(url: string) => void>(() => {});
   /** noteLoginActivity, reachable from callbacks defined above it. */
   const noteLoginActivityRef = useRef<() => void>(() => {});
   /** The qty screen's items, for onLoadEnd — which has []-deps and would
@@ -2476,6 +2489,7 @@ export default function WebViewCartSheet({
       setWebviewUri(baseUrl);
     }
   }, []);
+  navToRef.current = navTo;
 
   useEffect(() => { webviewUriRef.current = webviewUri; }, [webviewUri]);
 
@@ -2512,6 +2526,7 @@ export default function WebViewCartSheet({
       netPrewarmTermsRef.current = [];
       netPrewarmDoneRef.current = false;
       netPrewarmInjectedRef.current = false;
+      postLoginQuietNavRef.current = false;
       // The deadline goes with it. A timer left running from the last open would
       // fire into this one and release its run before the prewarm had started.
       if (netPrewarmTimerRef.current) { clearTimeout(netPrewarmTimerRef.current); netPrewarmTimerRef.current = null; }
@@ -3329,6 +3344,55 @@ export default function WebViewCartSheet({
     // hidden while the before-probe loads the cart page. Otherwise a fresh-login
     // store (Albertsons) would briefly show /erums/cart on screen mid-probe.
     setStep('searching');
+    // GET OFF THE STOREFRONT BEFORE RUNNING IN IT.
+    //
+    // The rail lives on robots.txt: a page with no JavaScript of its own, so our
+    // requests get the renderer to themselves. A run that needed the LOGIN
+    // screen does not start there -- signing in means navigating to the real
+    // storefront -- and it was still sitting on it when the run began.
+    //
+    // MEASURED across four Albertsons runs on 2026-09-02, and the split is
+    // clean. The two that skipped the login screen stayed on robots.txt and
+    // their heartbeat was perfect (worstTick ~1000ms for a 1s interval). The two
+    // that signed in ran on the storefront and each lost a chunk of time to a
+    // FROZEN document -- 17.8s in the cart read at 20:44, 12.0s inside a single
+    // search at 21:19 (`ms= 15945 worstTick= 12027`), while the next request in
+    // that same document took 576ms. That is the store's own post-login
+    // bootstrap -- hydration, personalisation, analytics -- running in the
+    // renderer we are borrowing.
+    //
+    // So: one navigation to the quiet page, and the run starts when it lands.
+    // The cost is a robots.txt load. What it buys back was measured at twelve
+    // to eighteen seconds.
+    const quiet = scriptsRef.current?.railUrl;
+    // Only when we have actually LEFT it. An empty lastLoadEndUrl means nothing
+    // has navigated at all, so the WebView is still on the URI it opened with --
+    // which is the quiet page. Reading that as "on the storefront" sent every
+    // ordinary run on a pointless round trip.
+    const wentSomewhereElse = !!lastLoadEndUrlRef.current
+      && !!quiet && !lastLoadEndUrlRef.current.startsWith(quiet);
+    if (quiet && wentSomewhereElse && getNetworkRail(lockedStoreIdRef.current)) {
+      console.log(`[Cart ${ts()}]`, 'signed in on the storefront — moving to the quiet page before running');
+      postLoginQuietNavRef.current = true;
+      // A hop that never lands must not strand the run. The page is a
+      // robots.txt; if it has not arrived in this long it is not going to, and
+      // running on the storefront is still better than not running.
+      if (quietNavTimeoutRef.current) clearTimeout(quietNavTimeoutRef.current);
+      quietNavTimeoutRef.current = setTimeout(() => {
+        quietNavTimeoutRef.current = null;
+        if (!postLoginQuietNavRef.current) return;
+        postLoginQuietNavRef.current = false;
+        console.log(`[Cart ${ts()}]`, 'quiet page never loaded — starting the run where we are');
+        snapshotBeforeRef.current();
+      }, QUIET_NAV_TIMEOUT_MS);
+      navToRef.current(quiet);
+      return;
+    }
+    snapshotBeforeRef.current();
+  }, [setStep]);
+
+  /** The body of the above, once we are on a page worth running in. */
+  const snapshotBeforeNow = useCallback(() => {
     // Resolve the store from the ref: onMessage is created once (deps []) so the
     // lockedStoreId STATE it closes over is the pre-open value; the ref is current.
     const probeStoreId = lockedStoreIdRef.current;
@@ -3429,6 +3493,7 @@ export default function WebViewCartSheet({
       beginSearchFlow();
     }
   }, [beginSearchFlow, loginPrewarm]);
+  snapshotBeforeRef.current = snapshotBeforeNow;
   snapshotBeforeAndBeginSearchRef.current = snapshotBeforeAndBeginSearch;
 
   // ── WebView events ───────────────────────────────────────────────────────
@@ -3609,6 +3674,18 @@ export default function WebViewCartSheet({
     }
     // Track whether we're on a search results page so subsequent items skip homepage reload.
     onSearchPageRef.current = s.isSearchUrl(url);
+    // THE QUIET PAGE HAS LANDED after a sign-in — start the run in it.
+    //
+    // Ahead of every branch below, because this load is not a login page load,
+    // not a search page load and not a cart page load: it is the run's own
+    // starting line, and any of them would take it for something else.
+    if (postLoginQuietNavRef.current) {
+      postLoginQuietNavRef.current = false;
+      if (quietNavTimeoutRef.current) { clearTimeout(quietNavTimeoutRef.current); quietNavTimeoutRef.current = null; }
+      console.log(`[Cart ${ts()}]`, 'on the quiet page — starting the run');
+      snapshotBeforeRef.current();
+      return;
+    }
     // The store page has loaded and the user is still choosing quantities: this
     // is the only moment the search prewarm can run, and the only place it can
     // know the page is ready to answer.

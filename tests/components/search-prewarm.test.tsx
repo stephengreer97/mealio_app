@@ -127,7 +127,13 @@ function openSheet() {
   });
   // The prewarm runs when the store page has LOADED — the session probe reads a
   // bootstrap object the page publishes, so there is nothing to ask before then.
-  const load = (url = 'https://www.heb.com/') => act(() => {
+  //
+  // On robots.txt, because that is where the sheet actually sits: the rail wants
+  // a page with no JavaScript of its own. These said heb.com/ for a while, which
+  // was a fiction nothing depended on until the post-login hop to the quiet page
+  // started reading the last loaded URL — and then fourteen tests looked like a
+  // regression in the hop rather than a wrong URL in the harness.
+  const load = (url = 'https://www.heb.com/robots.txt') => act(() => {
     // The MAIN cell is the one with an onLoadEnd; the others are pool tiles.
     const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
     wv?.props?.onLoadEnd?.({ nativeEvent: { url } });
@@ -497,7 +503,7 @@ describe('a product already chosen is not searched again', () => {
         nativeEvent: { data: JSON.stringify(payload) },
       });
     });
-    const load = (url = 'https://www.heb.com/') => act(() => {
+    const load = (url = 'https://www.heb.com/robots.txt') => act(() => {
       const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
       wv?.props?.onLoadEnd?.({ nativeEvent: { url } });
     });
@@ -599,7 +605,7 @@ describe('a Choose Products run fills the bag with its search', () => {
     });
     const load = () => act(() => {
       const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
-      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/' } });
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/robots.txt' } });
     });
 
     // Nothing is chosen, so the sheet goes straight to the choose flow.
@@ -658,7 +664,7 @@ describe('a run records what it learned, so the next one need not search', () =>
     });
     const load = () => act(() => {
       const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
-      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/' } });
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/robots.txt' } });
     });
 
     load();
@@ -701,7 +707,7 @@ describe('a run records what it learned, so the next one need not search', () =>
     });
     const load = () => act(() => {
       const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
-      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/' } });
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/robots.txt' } });
     });
     load();
     post(SESSION);
@@ -751,7 +757,7 @@ describe('a saved id this store cannot write is not a shortcut', () => {
     });
     const load = () => act(() => {
       const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
-      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/' } });
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/robots.txt' } });
     });
 
     load();

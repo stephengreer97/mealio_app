@@ -278,6 +278,104 @@ describe('the login check and the early session answer', () => {
   });
 });
 
+describe('signing in leaves you on the storefront', () => {
+  // MEASURED across four Albertsons runs on 2026-09-02, and the split is clean.
+  //
+  // The rail lives on robots.txt: a page with no JavaScript of its own, so our
+  // requests get the renderer to themselves. A run that needed the LOGIN screen
+  // does not start there — signing in means navigating to the real storefront —
+  // and it was still sitting on it when the run began.
+  //
+  //   skipped the login screen   robots.txt    worstTick ~1000ms (a 1s interval)
+  //   signed in                  storefront    17.8s lost in the cart read (20:44)
+  //   signed in                  storefront    12.0s lost inside ONE search (21:19)
+  //
+  //   [Cart 21:19:51.354] net search PERDUE ms= 15945 worstTick= 12027
+  //   [Cart 21:19:51.922] net search Set2   ms=   576   <- same document, after
+  //
+  // Sixteen seconds for a request the store answered in half of one. That is the
+  // store's own post-login bootstrap running in the renderer we are borrowing.
+  /**
+   * The RUN's first act is reading the cart, so that script landing is the run
+   * having started.
+   *
+   * Keyed on CART_COUNT, which only the cart-read script posts. `cartservice`
+   * does not work: the session probe reads the cart too, so it matches before
+   * the run has begun and the test passed for the wrong reason.
+   */
+  const railScript = () => injected.filter((s) => s.includes('CART_COUNT')).length;
+
+  it('moves to the quiet page before running', () => {
+    (global as any).__prewarmStatus = 'unknown';
+    __applyAutomationConfigForTests({ stores: { albertsons: { networkSearch: true, networkAdd: true } } });
+    const view = render(
+      <WebViewCartSheet visible meals={[meal] as never} storeId="albertsons" storeName="Albertsons" onClose={() => {}} />,
+    );
+    const wv = () => view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+    const load = (url: string) => act(() => { wv()?.props?.onLoadEnd?.({ nativeEvent: { url } }); });
+    const post = (p: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({ nativeEvent: { data: JSON.stringify(p) } });
+    });
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    // Signing in takes the WebView to the storefront.
+    load('https://www.albertsons.com/?_t=123');
+    post(REFINED);
+
+    // The run does NOT start here — it hops first.
+    expect(railScript()).toBe(0);
+    expect(String(wv()?.props?.source?.uri || '')).toContain('robots.txt');
+
+    // ...and starts when the quiet page lands.
+    load('https://www.albertsons.com/robots.txt?_t=456');
+    expect(railScript()).toBeGreaterThan(0);
+  });
+
+  it('does not hop when the run never left the quiet page', () => {
+    // The ordinary run: the prewarm already knew, so there was no login screen
+    // and no navigation. A round trip here would be pure cost.
+    (global as any).__prewarmStatus = 'loggedIn';
+    __applyAutomationConfigForTests({ stores: { albertsons: { networkSearch: true, networkAdd: true } } });
+    const view = render(
+      <WebViewCartSheet visible meals={[meal] as never} storeId="albertsons" storeName="Albertsons" onClose={() => {}} />,
+    );
+    const post = (p: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({ nativeEvent: { data: JSON.stringify(p) } });
+    });
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(REFINED);
+    // Straight to the writes, no hop.
+    expect(writes()).toBe(1);
+  });
+
+  it('runs where it is if the quiet page never loads', () => {
+    // A hop that never lands must not strand the run.
+    jest.useFakeTimers();
+    try {
+      (global as any).__prewarmStatus = 'unknown';
+      __applyAutomationConfigForTests({ stores: { albertsons: { networkSearch: true, networkAdd: true } } });
+      const view = render(
+        <WebViewCartSheet visible meals={[meal] as never} storeId="albertsons" storeName="Albertsons" onClose={() => {}} />,
+      );
+      const wv = () => view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+      act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+      act(() => { wv()?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.albertsons.com/?_t=123' } }); });
+      act(() => {
+        view.getAllByTestId('mock-webview')[0].props.onMessage({
+          nativeEvent: { data: JSON.stringify(REFINED) },
+        });
+      });
+      expect(railScript()).toBe(0);
+      act(() => { jest.advanceTimersByTime(7_000); });
+      expect(railScript()).toBeGreaterThan(0);
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+});
+
 describe('the prewarm and the early session answer', () => {
   const searches = () => injected.filter((s) => s.includes('pgmsearch') || s.includes('xapi/search')).length;
 
