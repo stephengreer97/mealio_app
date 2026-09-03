@@ -183,7 +183,7 @@ flowchart LR
     DEC -->|"no rail"| ASSIST["<b>assisted</b><br/><i>the user adds</i>"]
 
     NET --> S1["<b>1 · session</b><br/><i>login gate, store id, pickup or delivery</i>"]
-    S1 -->|"no user"| LOGIN(["login step"])
+    S1 -->|"no user"| LOGIN(["login step.<br/><i>the store is asked again every 1s while<br/>the user signs in — 5s after the first 30 —<br/>never two questions at once. no button:<br/>they sign in and the run carries on</i>"])
     S1 -->|"signed in, but the store<br/>is not ready to be worked on"| S1W(["wait for the next answer.<br/><i>rail.sessionUsable — Albertsons<br/>answers twice and only the second<br/>one carries its API keys.<br/>Asked in THREE places: here, the<br/>prewarm, and the login_check branch<br/>that starts the run</i>"])
     S1W --> S1
     PRE -.->|"its own deadline, per store.<br/>a prewarm that goes quiet<br/>releases the run instead of<br/>holding it for up to 90s"| S2

@@ -93,7 +93,11 @@
         <code>myPreferredStore</code> over GraphQL; Albertsons reads its Angular bootstrap and
         the cart service. It answers all THREE places that decide login &mdash; the silent
         prewarm, the <code>login_check</code> step, and the re-ask on every page load while the
-        user sits on <code>login</code>. The DOM check is the fallback, reached only when the
+        user sits on <code>login</code> &mdash; plus a <b>poll</b> on that step, because the page-load
+        re-ask is gated on <code>isLoginSuccessUrl</code>/<code>reinjectLoginCheckOnNav</code> and a
+        store with neither used to need the user to press "I'm already logged in". One second, one
+        question at a time, five seconds after the first thirty: it is a REQUEST to the store (two
+        GraphQL posts at H-E-B, a 455&nbsp;ms fetch at Albertsons), not a page read. The DOM check is the fallback, reached only when the
         probe cannot answer, which is nearly always a page that has not finished its bootstrap
         &mdash; NOT a signed-out user, and it must never be reported as one.
         <br/><br/><b>How many answers it gives is a STORE fact</b>
