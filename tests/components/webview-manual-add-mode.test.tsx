@@ -93,7 +93,7 @@ jest.mock('../../src/lib/automation-config', () => {
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
-import { enableRail, SESSION_OK } from './helpers/railRun';
+import { enableRail, disableRail, SESSION_OK } from './helpers/railRun';
 
 const chosen = (name: string) => ({
   ingredientName: name, searchTerm: name, productQty: 1, qty: 1, unit: 'qty', measure: null,
@@ -190,57 +190,108 @@ async function runToDone(asked: string[], landed: string[]) {
   return view;
 }
 
+/**
+ * Enter manual mode the way it is still reached.
+ *
+ * The done screen's "Add the remaining items myself" button was removed on
+ * 2026-09-02 — see the describe below. Manual mode itself is not going anywhere:
+ * it is what a store with NO RAIL gets for the whole run, and what a run hands
+ * over to when it can neither add an item nor offer anything to review. That is
+ * the route these tests take now, and it exercises the same screen.
+ */
+function assistedRun(...names: string[]) {
+  disableRail();
+  const view = render(
+    <WebViewCartSheet
+      visible
+      meals={[{ id: 'm1', name: 'Tacos', ingredients: names.map(chosen) }] as never}
+      storeId="walmart"
+      storeName="Walmart"
+      onClose={() => {}}
+    />,
+  );
+  const post = (payload: Record<string, unknown>) => act(() => {
+    view.getAllByTestId('mock-webview')[0].props.onMessage({
+      nativeEvent: { data: JSON.stringify(payload) },
+    });
+  });
+  act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+  post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+  // The before-snapshot, which every run waits on before it decides anything.
+  post({ type: 'CART_COUNT', count: 0, items: [] });
+  act(() => { jest.advanceTimersByTime(2_000); });
+  return view;
+}
+
 beforeEach(() => { jest.useFakeTimers(); mockInjectSpy.mockClear(); });
 afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
 
-describe('the offer', () => {
-  it('appears on a run that left items unadded', async () => {
+describe('the done screen never offers to hand over the store', () => {
+  // Stephen, 2026-09-02: "get rid of the add it myself button from the end cart
+  // page entirely under all circumstances."
+  //
+  // It was MEAL-197's third rung and it made sense when the mid-run gate could
+  // only show what the CHOSEN product name returned: an ingredient offered wrong
+  // substitutes got skipped, and the done screen was the last chance to do
+  // anything about it. That gate now searches the ingredient name too, so the
+  // alternatives are offered where the question is actually being asked — one
+  // screen earlier, without leaving the app.
+  //
+  // "Under all circumstances" is why these are three cases and not one: the
+  // button was conditional, so a single negative assertion could pass merely by
+  // picking a state that never showed it.
+  it('not when items were left unadded', async () => {
     const view = await runToDone(['sour cream', 'tortillas'], ['sour cream']);
-    expect(view.queryByTestId('manual-start')).toBeTruthy();
+    expect(view.queryByTestId('manual-start')).toBeNull();
   });
 
-  it('is absent when everything landed', async () => {
-    // Nothing to hand over. Offering anyway would invite the user to re-add
-    // items they already have — the over-add the cart principles forbid.
+  it('not when several were left unadded', async () => {
+    const view = await runToDone(['sour cream', 'tortillas', 'limes'], ['sour cream']);
+    expect(view.queryByTestId('manual-start')).toBeNull();
+    expect(view.queryByText(/myself/i)).toBeNull();
+  });
+
+  it('not when everything landed either', async () => {
     const view = await runToDone(['sour cream', 'tortillas'], ['sour cream', 'tortillas']);
     expect(view.queryByTestId('manual-start')).toBeNull();
   });
 
-  it('counts only the items still missing', async () => {
-    const view = await runToDone(['sour cream', 'tortillas', 'limes'], ['sour cream']);
-    expect(view.queryByText(/add the 2 remaining items myself/i)).toBeTruthy();
+  it('but the list can still be copied — that rung stays', async () => {
+    // The floor: it works with no store adapter, no session and no network, and
+    // the user still leaves knowing what to buy.
+    const view = await runToDone(['sour cream', 'tortillas'], ['sour cream']);
+    expect(view.queryByTestId('manual-copy')).toBeTruthy();
   });
 });
 
 describe('walking the list', () => {
-  const enter = async () => {
-    const view = await runToDone(['sour cream', 'tortillas', 'limes'], ['sour cream']);
-    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
-    return view;
-  };
+  // Entered through an assisted run now — a store with no rail, where handing
+  // the user the searches IS the run. Same screen, same queue, and the only
+  // route left into it.
+  const enter = () => assistedRun('tortillas', 'limes');
 
-  it('names the first item and titles the position', async () => {
-    const view = await enter();
+  it('names the first item and titles the position', () => {
+    const view = enter();
     expect(view.queryByTestId('manual-bar')).toBeTruthy();
     expect(view.queryByText(/tortillas/i)).toBeTruthy();
     expect(view.queryByText(/add it yourself \(1 of 2\)/i)).toBeTruthy();
   });
 
-  it('advances to the next item on Next', async () => {
-    const view = await enter();
+  it('advances to the next item on Next', () => {
+    const view = enter();
     act(() => { fireEvent.press(view.getByTestId('manual-next')); });
     expect(view.queryByText(/add it yourself \(2 of 2\)/i)).toBeTruthy();
     expect(view.queryByText(/limes/i)).toBeTruthy();
   });
 
-  it('offers Finish rather than Next on the last item', async () => {
-    const view = await enter();
+  it('offers Finish rather than Next on the last item', () => {
+    const view = enter();
     act(() => { fireEvent.press(view.getByTestId('manual-next')); });
     expect(view.queryByText(/^Finish$/)).toBeTruthy();
   });
 
-  it('returns to the done screen at the end', async () => {
-    const view = await enter();
+  it('returns to the done screen at the end', () => {
+    const view = enter();
     act(() => { fireEvent.press(view.getByTestId('manual-next')); });
     act(() => { fireEvent.press(view.getByTestId('manual-next')); });
     expect(view.queryByTestId('manual-bar')).toBeNull();
@@ -248,45 +299,31 @@ describe('walking the list', () => {
   });
 });
 
-describe('a walked item is not offered again', () => {
-  it('drops both the skipped and the added, not just the skipped', async () => {
-    // Measured on a device. Finishing a two-item pass — one item added by hand
-    // in H-E-B's own UI, one walked past — left the offer still reading "Add the
-    // 2 remaining items myself", handing back the exact items the user had just
-    // dealt with. Remembering only Skip was the reason.
-    //
-    // Skip and Next are both "you have seen this one". Whether anything landed
-    // is the cart's business, and the re-probe settles it.
-    const view = await runToDone(['sour cream', 'tortillas', 'limes'], ['sour cream']);
-    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
-    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });   // skip tortillas
-    act(() => { fireEvent.press(view.getByTestId('manual-next')); });   // finish on limes
-    expect(view.queryByTestId('manual-start')).toBeNull();
-  });
-
-  it('carries on to the next item rather than ending the pass', async () => {
-    const view = await runToDone(['sour cream', 'tortillas', 'limes'], ['sour cream']);
-    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
+describe('skipping an item', () => {
+  // The "not offered again" half of this went with the done-screen offer: there
+  // is no second offer left to re-present a walked item on. What still matters —
+  // and is what a user actually does — is that Skip moves on rather than ending
+  // the pass.
+  it('carries on to the next item rather than ending the pass', () => {
+    const view = assistedRun('tortillas', 'limes');
     act(() => { fireEvent.press(view.getByTestId('manual-skip')); });
     expect(view.queryByTestId('manual-bar')).toBeTruthy();
     expect(view.queryByText(/add it yourself \(2 of 2\)/i)).toBeTruthy();
   });
 
-  // NOT covered here, and named so nobody assumes it is: `manualHandled` is
-  // appended as the user advances rather than set to the whole queue up front,
-  // so an exit halfway through does not mark the unseen tail as dealt with.
-  // Mid-pass exit goes through the sheet's own close, which ends the run, so
-  // there is no screen left to assert the difference on — a mutant that marks
-  // the whole queue up front passes every test in this file. The incremental
-  // version is kept because it is the honest one, not because a test forces it.
+  it('reaches the done screen after the last one', () => {
+    const view = assistedRun('tortillas', 'limes');
+    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });
+    expect(view.queryByTestId('manual-bar')).toBeNull();
+  });
 });
 
 describe('the safety property', () => {
-  it('injects nothing into a page the user is driving', async () => {
+  it('injects nothing into a page the user is driving', () => {
     // The store's own add button is the one being pressed. Any script of ours
     // running on this page could add a second copy behind the user's back.
-    const view = await runToDone(['sour cream', 'tortillas'], ['sour cream']);
-    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
+    const view = assistedRun('tortillas', 'limes');
     mockInjectSpy.mockClear();
     act(() => {
       view.getAllByTestId('mock-webview')[0].props.onLoadEnd({
@@ -309,7 +346,7 @@ describe('the run that actually needs it', () => {
   // The offer was unreachable on precisely the run it exists for, and every unit
   // test above passed while that was true. So this one drives the real path —
   // gate, review screen, Skip — rather than posting a failure directly.
-  it('offers the hand-over for an ingredient skipped at review', () => {
+  it('offers alternatives on the review screen, so the done screen need not', () => {
     const view = render(sheet(chosen('fresh mint')));
     const post = (payload: Record<string, unknown>) => act(() => {
       view.getAllByTestId('mock-webview')[0].props.onMessage({
@@ -336,8 +373,15 @@ describe('the run that actually needs it', () => {
     act(() => { fireEvent.press(view.getByText(/skip this ingredient/i)); });
 
     // The device stopped here: "1 item you skipped", and nothing to do about it.
+    // The answer used to be a hand-over button on THIS screen. It is now one
+    // screen earlier: the gate above showed what the store offered, and when the
+    // chosen product name returns nothing the run asks again by ingredient name
+    // so there is something real to pick from. A user who skips that has
+    // declined the alternatives, not been denied them.
     expect(view.queryByText(/1 item you skipped/i)).toBeTruthy();
-    expect(view.queryByTestId('manual-start')).toBeTruthy();
+    expect(view.queryByTestId('manual-start')).toBeNull();
+    // ...and they still leave with the list.
+    expect(view.queryByTestId('manual-copy')).toBeTruthy();
   });
 });
 
@@ -345,9 +389,11 @@ describe('coming back from a manual pass', () => {
   // The product the user picks by hand is titled by the STORE, and the cart
   // audit matches intended names exactly. Left alone, a SUCCESSFUL manual add
   // reads as a failure and gets offered a second time.
-  async function manualPassThen(cartRows: Array<{ name: string; qty: number }>) {
-    const view = await runToDone(['sour cream', 'fresh mint'], ['sour cream']);
-    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
+  function manualPassThen(cartRows: Array<{ name: string; qty: number }>) {
+    // Entered the way manual mode is still entered: an assisted run, which hands
+    // the user every search because the store has no rail.
+    const view = assistedRun('sour cream', 'fresh mint');
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
     act(() => { fireEvent.press(view.getByTestId('manual-next')); });   // Finish
     // Short, deliberately: the re-probe arms a result timeout on the way out of
     // manual mode, and advancing past it would clear the pending phase so the
@@ -371,18 +417,13 @@ describe('coming back from a manual pass', () => {
     { name: 'Goodness Gardens Fresh Mint, 0.5 oz', qty: 1 },
   ];
 
-  it('does not re-offer an item the user added under a different title', async () => {
-    const view = await manualPassThen(ADDED_BY_HAND);
-    expect(view.queryByTestId('manual-start')).toBeNull();
-  });
-
-  it('does not call it a failure', async () => {
-    const view = await manualPassThen(ADDED_BY_HAND);
+  it('does not call it a failure', () => {
+    const view = manualPassThen(ADDED_BY_HAND);
     expect(view.queryByText(/could not add.*fresh mint/i)).toBeNull();
   });
 
-  it('does not call the user\u2019s own choice an item Mealio did not add', async () => {
-    const view = await manualPassThen(ADDED_BY_HAND);
+  it('does not call the user\u2019s own choice an item Mealio did not add', () => {
+    const view = manualPassThen(ADDED_BY_HAND);
     // queryAllByText, not queryByText: the copy appears in both the banner
     // summary and its expandable detail, so a single-element query throws
     // "found multiple elements" instead of failing on the claim.
@@ -396,9 +437,16 @@ describe('state does not leak into the next run', () => {
     // remounted between runs — it is hidden and shown. So this drives ONE
     // instance through two runs via the `visible` prop. Rendering a second
     // component instead (the obvious way to write it) starts run 2 from a fresh
-    // mount, where the leak cannot show: that version passed with the reset
-    // deleted.
-    const view = render(sheet(chosen('sour cream'), chosen('fresh mint')));
+    // mount, where the leak cannot show.
+    //
+    // The observable was the done screen's hand-over button, which is gone. It
+    // is the manual QUEUE itself now, which is the thing `manualHandled` was
+    // ever able to withhold from.
+    const meals = [{ id: 'm1', name: 'Tacos', ingredients: [chosen('sour cream'), chosen('fresh mint')] }];
+    disableRail();
+    const view = render(
+      <WebViewCartSheet visible meals={meals as never} storeId="walmart" storeName="Walmart" onClose={() => {}} />,
+    );
     const post = (payload: Record<string, unknown>) => act(() => {
       view.getAllByTestId('mock-webview')[0].props.onMessage({
         nativeEvent: { data: JSON.stringify(payload) },
@@ -406,62 +454,33 @@ describe('state does not leak into the next run', () => {
     });
     const drive = () => {
       act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-      enableRail();
-      // Over the rail: one session probe answers the login check, another the
-      // run's own read after the baseline.
-      post(SESSION_OK);
-      post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
-      post(SESSION_OK);
-      for (const productName of ['sour cream', 'fresh mint']) {
-        post({ type: 'SEARCH_RESULT', source: 'network', term: productName,
-             candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null,
-                            price: '$2', productId: 'p' + productName, skuId: 's' + productName }] });
-      }
-      post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
-      // The rail writes both, reports one landing and one not.
-      post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
-      post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
-      post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
-    // A beat: finishParallelAdd arms the reconcile probe asynchronously, and a
-    // CART_COUNT that lands before it is armed reads as phase `null` and is
-    // dropped — the run then sits until its session deadline.
-    act(() => { jest.advanceTimersByTime(500); });
-      // A beat: finishParallelAdd arms the reconcile probe asynchronously, and a
-      // CART_COUNT that arrives before it is armed is read as phase `null` and
-      // dropped — the run then sits until its session deadline.
-      act(() => { jest.advanceTimersByTime(500); });
-      post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
-      // The reconcile tops up the shortfall over the rail; answer it, still short,
-      // which is what leaves the item on the failed list.
-      post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
-      post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [{ name: 'sour cream', qty: 1 }], cartAfter: [{ name: 'sour cream', qty: 1 }] });
-      // The done screen's after-probe. It runs now that the rail counts its
-      // writes; unanswered, the screen sits on the spinner and never renders the
-      // hand-over this file is about.
-      post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
-      act(() => { jest.advanceTimersByTime(30_000); });
+      post({ type: 'LOGIN_STATUS', isLoggedIn: true });
+      post({ type: 'CART_COUNT', count: 0, items: [] });
+      act(() => { jest.advanceTimersByTime(2_000); });
     };
 
     drive();
-    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
-    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });   // skip, and finish
+    // Both items are handed over; skip the first and finish on the second.
+    expect(view.queryByText(/add it yourself \(1 of 2\)/i)).toBeTruthy();
+    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });
     act(() => { jest.advanceTimersByTime(2_000); });
-    // The skip took effect: nothing left to hand over on this run.
-    expect(view.queryByTestId('manual-start')).toBeNull();
+    expect(view.queryByTestId('manual-bar')).toBeNull();
 
     // Close and re-open the SAME sheet on the same ingredients.
     view.rerender(
-      <WebViewCartSheet visible={false} meals={[{ id: 'm1', name: 'Tacos', ingredients: [chosen('sour cream'), chosen('fresh mint')] }] as never}
-        storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+      <WebViewCartSheet visible={false} meals={meals as never} storeId="walmart" storeName="Walmart" onClose={() => {}} />,
     );
     act(() => { jest.advanceTimersByTime(500); });
-    view.rerender(sheet(chosen('sour cream'), chosen('fresh mint')));
+    view.rerender(
+      <WebViewCartSheet visible meals={meals as never} storeId="walmart" storeName="Walmart" onClose={() => {}} />,
+    );
     act(() => { jest.advanceTimersByTime(500); });
     drive();
 
-    // Run 2 fails on fresh mint too. A `manualSkipped` carried over from run 1
-    // would silently withhold it.
-    expect(view.queryByTestId('manual-start')).toBeTruthy();
+    // Run 2 must hand over BOTH again. A `manualHandled` carried over from run 1
+    // would silently withhold them.
+    expect(view.queryByText(/add it yourself \(1 of 2\)/i)).toBeTruthy();
   });
 });
 
@@ -472,153 +491,39 @@ describe('the hand-over survives what the store throws at it', () => {
     // that already landed on this run. Reachable only because 'manual' was
     // missing from handleHttpBlock's ignore list, which every other post-run
     // step is on.
-    const view = render(sheet(chosen('sour cream'), chosen('fresh mint')));
-    const post = (payload: Record<string, unknown>) => act(() => {
-      view.getAllByTestId('mock-webview')[0].props.onMessage({
-        nativeEvent: { data: JSON.stringify(payload) },
-      });
-    });
-    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-    enableRail();
-    // Over the rail: one session probe answers the login check, another the
-    // run's own read after the baseline.
-    post(SESSION_OK);
-    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
-    post(SESSION_OK);
-    for (const productName of ['sour cream', 'fresh mint']) {
-      post({ type: 'SEARCH_RESULT', source: 'network', term: productName,
-             candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null,
-                            price: '$2', productId: 'p' + productName, skuId: 's' + productName }] });
-    }
-    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
-    // The rail writes both, reports one landing and one not.
-    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
-    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
-    post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
-    // A beat: finishParallelAdd arms the reconcile probe asynchronously, and a
-    // CART_COUNT that lands before it is armed reads as phase `null` and is
-    // dropped — the run then sits until its session deadline.
-    act(() => { jest.advanceTimersByTime(500); });
-    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
-      // The reconcile tops up the shortfall over the rail; answer it, still short,
-      // which is what leaves the item on the failed list.
-      post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
-      post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [{ name: 'sour cream', qty: 1 }], cartAfter: [{ name: 'sour cream', qty: 1 }] });
-    act(() => { jest.advanceTimersByTime(30_000); });
-
-    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
+    const view = assistedRun('sour cream', 'fresh mint');
     act(() => {
       view.getAllByTestId('mock-webview')[0].props.onHttpError({
-        nativeEvent: { statusCode: 403, url: 'https://www.heb.com/search?q=fresh%20mint' },
+        nativeEvent: { statusCode: 403, url: 'https://www.walmart.com/search?q=fresh%20mint' },
       });
     });
     expect(view.queryByTestId('manual-bar')).toBeTruthy();
     expect(view.queryByText(/try again/i)).toBeNull();
   });
-
-  it('does not carry the pre-manual verdict onto the post-manual screen', () => {
-    // The rows are cleared on the way in because they are about to be stale. The
-    // sentence built from those same rows has to go with them, or the user lands
-    // on a screen with no breakdown and a banner still asserting what their cart
-    // holds — under a screen they reached by changing it.
-    const view = render(sheet(chosen('sour cream'), chosen('fresh mint')));
-    const post = (payload: Record<string, unknown>) => act(() => {
-      view.getAllByTestId('mock-webview')[0].props.onMessage({
-        nativeEvent: { data: JSON.stringify(payload) },
-      });
-    });
-    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-    enableRail();
-    // Over the rail: one session probe answers the login check, another the
-    // run's own read after the baseline.
-    post(SESSION_OK);
-    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
-    post(SESSION_OK);
-    for (const productName of ['sour cream', 'fresh mint']) {
-      post({ type: 'SEARCH_RESULT', source: 'network', term: productName,
-             candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null,
-                            price: '$2', productId: 'p' + productName, skuId: 's' + productName }] });
-    }
-    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
-    // The rail writes both, reports one landing and one not.
-    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
-    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
-    post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
-    // A beat: finishParallelAdd arms the reconcile probe asynchronously, and a
-    // CART_COUNT that lands before it is armed reads as phase `null` and is
-    // dropped — the run then sits until its session deadline.
-    act(() => { jest.advanceTimersByTime(500); });
-    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
-      // The reconcile tops up the shortfall over the rail; answer it, still short,
-      // which is what leaves the item on the failed list.
-      post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
-      post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [{ name: 'sour cream', qty: 1 }], cartAfter: [{ name: 'sour cream', qty: 1 }] });
-    // The done screen's after-probe. It runs now that the rail counts its
-    // writes, and the verdict sentence this case is about is built from it.
-    act(() => { jest.advanceTimersByTime(500); });
-    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
-    act(() => { jest.advanceTimersByTime(30_000); });
-    expect(view.queryAllByText(/we checked your/i).length).toBeGreaterThan(0);
-
-    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
-    act(() => { fireEvent.press(view.getByTestId('manual-next')); });   // Finish
-
-    // Back on the done screen, with the re-probe still in flight and no new cart
-    // read yet. Asserting while the manual bar is up would prove nothing — the
-    // done panel is unmounted there, so the banner is absent whatever the state
-    // says. This is the moment the stale sentence would be visible.
-    expect(view.queryByTestId('manual-bar')).toBeNull();
-    expect(view.queryAllByText(/we checked your/i).length).toBe(0);
-  });
 });
 
 describe('a probe still in flight when the user takes over', () => {
   it('does not let it write results for the screen they just left', () => {
-    // The offer is tappable while "Updating your cart…" is still spinning, so
-    // the after-probe can be mid-navigation when manual mode starts. Its
-    // CART_COUNT then lands DURING the manual pass, describing a cart from
-    // before the user touched it — and writes rows and a verdict from it.
-    const view = render(sheet(chosen('sour cream'), chosen('fresh mint')));
-    const post = (payload: Record<string, unknown>) => act(() => {
-      view.getAllByTestId('mock-webview')[0].props.onMessage({
-        nativeEvent: { data: JSON.stringify(payload) },
-      });
-    });
-    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
-    enableRail();
-    // Over the rail: one session probe answers the login check, another the
-    // run's own read after the baseline.
-    post(SESSION_OK);
-    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
-    post(SESSION_OK);
-    for (const productName of ['sour cream', 'fresh mint']) {
-      post({ type: 'SEARCH_RESULT', source: 'network', term: productName,
-             candidates: [{ productName, imageUrl: null, outOfStock: false, preferences: null,
-                            price: '$2', productId: 'p' + productName, skuId: 's' + productName }] });
-    }
-    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
-    // The rail writes both, reports one landing and one not.
-    post({ type: 'NET_ADD_RESULT', idx: 0, name: 'sour cream', success: true, productId: 'psour cream', skuId: 'ssour cream', reason: null });
-    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
-    post({ type: 'NET_ADD_DONE', wrote: 2, count: 2, cartBefore: [], cartAfter: [{ name: 'sour cream', qty: 1 }] });
-    // A beat: finishParallelAdd arms the reconcile probe asynchronously, and a
-    // CART_COUNT that lands before it is armed reads as phase `null` and is
-    // dropped — the run then sits until its session deadline.
-    act(() => { jest.advanceTimersByTime(500); });
-    // The RECONCILE is answered — the run has to reach the done screen for the
-    // offer to exist at all. It tops the shortfall up and is refused again.
-    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], source: 'network' });
-    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'fresh mint', success: false, productId: 'pfresh mint', skuId: 'sfresh mint', reason: 'not_found' });
-    post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [{ name: 'sour cream', qty: 1 }], cartAfter: [{ name: 'sour cream', qty: 1 }] });
-    act(() => { jest.advanceTimersByTime(30_000); });
-
-    // The AFTER probe is the one left in flight — that is the whole case. The
-    // failed list on screen is the run's own, and the offer is already up.
-    act(() => { fireEvent.press(view.getByTestId('manual-start')); });
+    // A cart read can be mid-flight when manual mode starts. Its CART_COUNT then
+    // lands DURING the pass, describing a cart from before the user touched it —
+    // and, left alone, writes rows and a verdict from it.
+    //
+    // startManualMode drops the pending probe and its timeouts on the way in for
+    // exactly this. That guard is what is under test; the route in has changed
+    // (the done screen's offer is gone) but the hazard has not.
+    const view = assistedRun('sour cream', 'fresh mint');
     expect(view.queryByTestId('manual-bar')).toBeTruthy();
 
-    // The stale read arrives now, describing the pre-manual cart.
-    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'sour cream', qty: 1 }], url: 'https://heb.test/cart' });
+    // A stale read arrives mid-pass.
+    act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify({
+          type: 'CART_COUNT', count: 1,
+          items: [{ name: 'sour cream', qty: 1 }], url: 'https://walmart.test/cart',
+        }) },
+      });
+    });
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
     act(() => { fireEvent.press(view.getByTestId('manual-next')); });   // Finish
 
     // Nothing from that read may be on the screen: it is a snapshot of a cart

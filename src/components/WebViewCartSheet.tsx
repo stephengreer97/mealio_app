@@ -1052,6 +1052,37 @@ export default function WebViewCartSheet({
   const netActiveRef = useRef(false);
   const netPhaseRef = useRef<'idle' | 'prewarm' | 'session' | 'search' | 'add'>('idle');
   /** How long the run stands back for an in-flight prewarm, and how many times. */
+  /**
+   * AUTOMATIC SIGN-IN DETECTION, so nobody has to tell us they are signed in.
+   *
+   * The login step used to carry an "I'm already logged in" button. It existed
+   * because re-checking on a page load is gated -- `isLoginSuccessUrl` or
+   * `reinjectLoginCheckOnNav` -- so a store with neither, or a sign-in that
+   * finishes without a navigation we notice, left a signed-in user staring at a
+   * prompt with no way forward but that button.
+   *
+   * Stephen asked for a 100ms poll and whether the call is a heavy lift. It is:
+   * this is not a page read, it is a request to the store. H-E-B's session probe
+   * is TWO GraphQL posts; Albertsons' is a fetch to its account endpoint,
+   * measured at 455ms. At 100ms that is 10-20 requests a second at the one
+   * operation a store watches hardest, against a store MEAL-207 already records
+   * degrading under burst -- and half of them would be answering a question the
+   * previous one had not finished asking.
+   *
+   * So: one second, never overlapping, and slowing to five after the first
+   * thirty. Thirty seconds covers actually signing in; past that the sheet is
+   * sitting open and nobody is typing. The page-load re-check still fires as it
+   * always did, so the ordinary case -- tap Sign in, the store navigates -- is
+   * still answered the instant the new page lands, not on a tick.
+   */
+  const LOGIN_POLL_FAST_MS = 1_000;
+  const LOGIN_POLL_SLOW_MS = 5_000;
+  const LOGIN_POLL_FAST_TICKS = 30;
+  /** How long one check may go unanswered before another is allowed out. Long
+   *  enough for the slowest rail session budget, so a slow store is waited for
+   *  rather than asked again on top. */
+  const LOGIN_POLL_ANSWER_MS = 12_000;
+
   const NET_PREWARM_WAIT_MS = 300;
   /**
    * THREE SECONDS WAS NOT A WAIT, IT WAS A RACE.
@@ -1134,6 +1165,12 @@ export default function WebViewCartSheet({
    * over, and a prewarm giving up is not a run failing.
    */
   const netPrewarmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The sign-in poll: its next tick, whether one is unanswered, and how many
+   *  have gone out (which is what decides fast or slow). */
+  const loginPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loginPollBusyRef = useRef(false);
+  const loginPollFreeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loginPollTicksRef = useRef(0);
   /** The qty screen's items, for onLoadEnd — which has []-deps and would
    *  otherwise read this run's initial empty list. */
   const qtyItemsRef = useRef<ConsolidatedIngredient[]>([]);
@@ -3815,8 +3852,22 @@ export default function WebViewCartSheet({
   // MEAL-9's floor. Deliberately not gated on a store adapter or a live session:
   // this is what the user gets when everything else has failed, so it must not be
   // able to fail itself.
+  /**
+   * The floor: everything Mealio did not put in the cart, as a list you can
+   * paste anywhere. No store adapter, no session, no network.
+   *
+   * FAILED AND SKIPPED, and the skipped half became load-bearing when the
+   * "add them myself" button was removed (2026-09-02). That button covered both,
+   * and a Skip on the review screen has never meant "I don't want this" -- an
+   * ingredient nobody wanted was unchecked on the qty screen and never entered
+   * the run at all. Reaching review means the user asked for it and none of the
+   * offered products were it. Copying only the failures left that user with a
+   * done screen naming an ingredient and no way to take it with them.
+   */
   const copyFailedList = useCallback(async () => {
-    const names = failedNamesRef.current;
+    const names = [...failedNamesRef.current, ...Object.values(skippedByIdxRef.current)]
+      .filter((n): n is string => !!n)
+      .filter((n, i, a) => a.indexOf(n) === i);
     if (names.length === 0) return;
     await Clipboard.setStringAsync(names.join('\n'));
     setCopiedList(true);
@@ -3839,22 +3890,43 @@ export default function WebViewCartSheet({
     armLoginCheckTimeout();
   }, [setStep, armLoginCheckTimeout]);
 
-  // Manual "I'm already logged in" recovery from the login step. If detection
-  // timed out or posted logged-out on a slow load but the user is in fact
-  // signed in, one tap re-runs the check from a fresh store load and, if logged
-  // in, proceeds without the user re-entering anything. Universal safety net so
-  // a genuinely-logged-in user is never stranded on the login prompt.
-  const recheckLogin = useCallback(() => {
-    searchIdxRef.current = 0;
-    onSearchPageRef.current = false;
-    loadQueueRef.current = [loginCheckScript()];
-    lastLoadEndUrlRef.current = '';
-    expectedNavUrlRef.current = '';
-    setStep('login_check');
-    setSearchingLabel('Checking login…');
-    navTo(scriptsRef.current!.storeUrl);
-    armLoginCheckTimeout();
-  }, [setStep, armLoginCheckTimeout]);
+  /**
+   * Ask the store, on a timer, whether they have signed in yet.
+   *
+   * Only while the login screen is up, only one question at a time, and it stops
+   * the moment the step changes -- which is what a successful answer does.
+   */
+  useEffect(() => {
+    const stop = () => {
+      if (loginPollRef.current) { clearTimeout(loginPollRef.current); loginPollRef.current = null; }
+      if (loginPollFreeRef.current) { clearTimeout(loginPollFreeRef.current); loginPollFreeRef.current = null; }
+      loginPollBusyRef.current = false;
+    };
+    if (step !== 'login') { stop(); loginPollTicksRef.current = 0; return; }
+    let alive = true;
+    const tick = () => {
+      if (!alive || stepRef.current !== 'login') return;
+      // NEVER TWO AT ONCE. A store slower than the interval would otherwise get
+      // a second copy of the same question on top of the first, which is the
+      // burst shape that makes this one stop answering at all.
+      if (!loginPollBusyRef.current) {
+        loginPollBusyRef.current = true;
+        loginPollTicksRef.current += 1;
+        webviewRef.current?.injectJavaScript(loginCheckScript());
+        // An answer clears this (see onMessage); this is for the one that never
+        // comes, so a single dropped request cannot stop the poll for good.
+        loginPollFreeRef.current = setTimeout(() => {
+          loginPollFreeRef.current = null;
+          loginPollBusyRef.current = false;
+        }, LOGIN_POLL_ANSWER_MS);
+      }
+      loginPollRef.current = setTimeout(tick,
+        loginPollTicksRef.current < LOGIN_POLL_FAST_TICKS ? LOGIN_POLL_FAST_MS : LOGIN_POLL_SLOW_MS);
+    };
+    loginPollRef.current = setTimeout(tick, LOGIN_POLL_FAST_MS);
+    return () => { alive = false; stop(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, loginCheckScript]);
 
   const onMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -3904,6 +3976,11 @@ export default function WebViewCartSheet({
         }
 
         if (msg.type === 'LOGIN_STATUS') {
+          // The poll got its answer here too -- a store with no rail is asked
+          // this way, and a rail store falls back to it when its session probe
+          // cannot answer.
+          if (loginPollFreeRef.current) { clearTimeout(loginPollFreeRef.current); loginPollFreeRef.current = null; }
+          loginPollBusyRef.current = false;
           // Funnel: the login gate is the first place a run can silently stall.
           // Recorded on the RESULT (not at injection) because the recorder only
           // exists once the server has issued a runId.
@@ -4609,6 +4686,9 @@ export default function WebViewCartSheet({
           // verdict that step expects rather than being routed through the run.
           if (stepRef.current === 'login_check' || stepRef.current === 'login') {
             const onLoginStep = stepRef.current === 'login';
+            // The poll got its answer, so the next tick may ask again.
+            if (loginPollFreeRef.current) { clearTimeout(loginPollFreeRef.current); loginPollFreeRef.current = null; }
+            loginPollBusyRef.current = false;
             console.log(`[Cart ${ts()}]`, 'login answered over the network:', JSON.stringify(msg).slice(0, 200));
             if (!msg.ok) {
               // Could not answer — usually the page had not finished its
@@ -5624,12 +5704,16 @@ export default function WebViewCartSheet({
               remounts as it swaps. */}
           {step === 'login' ? (
             <View style={styles.topBar}>
+              {/* No "I'm already logged in" button any more. It was the user
+                  doing a job the app should do for itself: the page-load
+                  re-check is gated, so a store with neither isLoginSuccessUrl
+                  nor reinjectLoginCheckOnNav -- or a sign-in that finishes
+                  without a navigation -- left a signed-in user with nothing but
+                  that button. The poll above asks for them. */}
               <Text style={styles.loginBanner}>
-                Log in to your {storeName} account, then Mealio will add your ingredients automatically.
+                Log in to your {storeName} account and Mealio will carry on by
+                itself — no need to come back here.
               </Text>
-              <TouchableOpacity style={styles.retryBtn} onPress={recheckLogin}>
-                <Text style={styles.retryBtnText}>I'm already logged in</Text>
-              </TouchableOpacity>
             </View>
           ) : step === 'robot_challenge' ? (
             <View style={styles.topBar}>
@@ -6368,35 +6452,19 @@ export default function WebViewCartSheet({
           // Only reachable with no names at all (every finalize path compiles
           // them), and with no names there is nothing to resolve quantities
           // against — the product count is then the most that is true.
-          // What "Add it yourself" hands over (MEAL-197).
+          // MEAL-197's "Add it yourself" hand-over was computed here, from the
+          // failed and skipped names. Removed 2026-09-02 on Stephen's call: the
+          // done screen is where a run ENDS, and an offer to go shopping by hand
+          // belongs before it. What used to justify it -- an item that reached
+          // the mid-run gate, was offered wrong substitutes and got skipped --
+          // is now answered on that gate itself, which shows the alternatives an
+          // ingredient-name search found rather than only the ones the chosen
+          // product returned.
           //
-          // Failed AND skipped, and the skipped half is the important one. On a
-          // device run of a 12-ingredient meal, the two items H-E-B could not
-          // match reached the mid-run "Items Not Added" gate, offered wrong
-          // substitutes (tea bags, for fresh mint), and were skipped — so they
-          // landed in `skippedNames`, `failedNames` came back EMPTY, and the
-          // hand-over never appeared on the one run that needed it.
-          //
-          // "Skip this ingredient" on the Pick a Substitute screen does not mean
-          // "I don't want this". An ingredient the user did not want was
-          // unchecked on the qty screen and never entered the run at all;
-          // reaching review means they asked for it and none of the offered
-          // substitutes were it. That user still wants fresh mint.
-          //
-          // Offering is not adding — nothing enters the cart without their tap —
-          // so the failure mode of including these is a button they ignore,
-          // against a dead end for the failure mode of leaving them out.
-          //
-          // `failedNames` is used rather than the run's own failure list because
-          // MEAL-199 corrects it against the cart read, so an item the cart
-          // turned out to hold is already struck and never offered.
-          const manualCandidates = [...failedNames, ...skippedNames]
-            .filter((n, i, a) => a.indexOf(n) === i)
-            // Minus everything a manual pass already walked the user past. Skip
-            // AND Next: they have been given the storefront for this item once,
-            // and offering it again asks the same question twice.
-            .filter((n) => !manualHandled.includes(n));
-          const manualAvailable = manualCandidates.length > 0 && !!getStoreScripts(lockedStoreId)?.getSearchUrl;
+          // `skippedNames` survives: it still names what was passed over on the
+          // done screen, and Skip has never meant "I don't want this" -- an
+          // unwanted ingredient was unchecked on the qty screen and never
+          // entered the run.
           const failedUnits = failedNames.length > 0
             ? unitsForNames(failedNames, runIntendedRef.current)
             : totalFailed;
@@ -6709,24 +6777,17 @@ export default function WebViewCartSheet({
                     <Text style={styles.primaryBtnText}>Open {storeName} Cart to Checkout</Text>
                   </TouchableOpacity>
                 )}
-                {/* MEAL-9 rung 3 (MEAL-197): a failed add stops being a dead
-                    end. The store is open, the session is live, and we know what
-                    to search for — so the user can finish by hand rather than
-                    abandon Mealio and shop with no list. */}
-                {manualAvailable && (
-                  <TouchableOpacity
-                    onPress={() => startManualMode(manualCandidates)}
-                    style={[styles.secondaryBtn, { borderColor: storeColor }]}
-                    testID="manual-start"
-                  >
-                    <Text style={[styles.secondaryBtnText, { color: storeColor }]}>
-                      Add {manualCandidates.length === 1 ? 'it' : `the ${manualCandidates.length} remaining items`} myself
-                    </Text>
-                  </TouchableOpacity>
-                )}
+                {/* "Add the remaining items myself" was here, and is gone on
+                    Stephen's call: the done screen is where a run ENDS, and an
+                    offer to go shopping by hand belongs before it, not after.
+                    Anything Mealio could not add now reaches the review screen
+                    with alternatives to pick from, which is the answer to the
+                    same question one step earlier and without leaving the app.
+                    The copy-the-list link below stays -- it is the floor, and it
+                    asks nothing of the store. */}
                 {/* MEAL-9 rung 4, the floor. Works with no store adapter, no
                     session and no network: the user still leaves with the list. */}
-                {failedNames.length > 0 && (
+                {(failedNames.length > 0 || skippedNames.length > 0) && (
                   <TouchableOpacity onPress={copyFailedList} style={styles.linkBtn} testID="manual-copy">
                     <Text style={[styles.linkBtnText, { color: storeColor }]}>
                       {copiedList ? 'Copied' : 'Copy the list instead'}
