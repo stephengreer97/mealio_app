@@ -122,7 +122,11 @@ describe('the session probe', () => {
     // ActiveCarts answers the session AND the cart identity in one call — no
     // other rail here gets both from one request.
     expect(msg.cartId).toBe('16636288909');
-    expect(msg.storeId).toBe('12');
+    // storeId is the SHOP, and there is none to find in a bare fixture — which
+    // is the honest answer, because sending the retailer id here would search a
+    // catalogue the user cannot buy from. The retailer is reported separately.
+    expect(msg.retailerId).toBe('12');
+    expect(msg.storeId).toBeNull();
   }, AT_ALDI);
 
   itWithFixture('storefront.html', 'a store that cannot answer is NOT a signed-out user', async (runner) => {
@@ -180,6 +184,32 @@ describe('search', () => {
     const failed = await runner.waitForMessage('SEARCH_RESULT_FAILED', 20_000) as Record<string, unknown>;
     expect(failed.term).toBe('sour cream');
     await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+  }, AT_ALDI);
+});
+
+describe('the shop it is shopping', () => {
+  it('refuses to search without one, rather than searching the wrong catalogue', () => {
+    // The shop is NOT the retailer. ALDI the chain is 12; the branch the user
+    // shops is 8583, and every operation takes the branch. Sending the retailer
+    // id searches a catalogue the user cannot buy from — every candidate would
+    // be a product that is not there, which is the over-add rule wearing a
+    // different hat.
+    expect(buildAldiNetworkSearchBatchScript(['sour cream'], { shopId: null })).toBeNull();
+    expect(buildAldiNetworkSearchBatchScript(['sour cream'], {})).toBeNull();
+    expect(buildAldiNetworkSearchBatchScript(['sour cream'], { shopId: '8583' })).toBeTruthy();
+  });
+
+  itWithFixture('storefront.html', 'reports where it looked, so a device run can say', async (runner) => {
+    // Finding the shop id is the one thing left to close on this store. The
+    // probe lists its attempts rather than failing silently, so the next person
+    // reads an answer instead of guessing again.
+    await runner.inject(gqlStub());
+    await runner.inject(buildAldiSessionScript());
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(Array.isArray(msg.shopTries)).toBe(true);
+    // The retailer is reported SEPARATELY, so the two can never be confused
+    // again by reading one field.
+    expect(msg.retailerId).toBe('12');
   }, AT_ALDI);
 });
 

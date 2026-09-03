@@ -259,16 +259,24 @@ ${IC_PRELUDE}
     }
     if (!mine && list.length) mine = list[0];
     var shopTries = IC.findShopId();
+    // THE SHOP ID IS NOT THE RETAILER ID, and confusing them searches the wrong
+    // catalogue. The retailer is ALDI-the-chain (12). The shop is the branch the
+    // user is shopping (8583 on this device), and it is what every search and
+    // cart operation takes. ActiveCarts gives us the first and not the second,
+    // so it is looked for -- and when it is not found, storeId is NULL and the
+    // rail refuses to build a search rather than send the wrong number.
+    var shopId = shopTries.length ? String(shopTries[0].v) : null;
     post({
       ok: true,
       loggedIn: !!mine,
       cartId: mine ? String(mine.id) : null,
       itemCount: mine ? mine.itemCount : null,
       retailerId: mine && mine.retailer ? String(mine.retailer.id) : null,
-      // The engine's NetworkSession wants these two names.
-      storeId: mine && mine.retailer ? String(mine.retailer.id) : null,
+      // The engine's NetworkSession wants these two names. storeId is the SHOP.
+      storeId: shopId,
       shoppingContext: 'delivery',
       shopTries: shopTries,
+      shopFrom: shopTries.length ? shopTries[0].from : null,
       ms: carts.ms,
       harvested: IC.harvested || 0,
       source: 'activeCarts',
@@ -296,6 +304,19 @@ export function buildAldiNetworkSearchBatchScript(
   opts: { shopId?: string | null; requestMs?: number } = {},
 ): string | null {
   if (!terms.length) return null;
+  // NO SHOP, NO SEARCH.
+  //
+  // Every operation on this platform takes the shop the user is actually
+  // shopping, and it is not the retailer id ActiveCarts hands back -- ALDI the
+  // chain is 12, the branch is 8583. Sending the wrong one searches a catalogue
+  // the user cannot buy from, which is the over-add rule's problem wearing a
+  // different hat: every candidate would be a product that is not there.
+  //
+  // Returning null hands the run to the assisted path, which is honest. Finding
+  // the shop id is the one thing left to close on this store; the session probe
+  // reports where it looked (`shopTries`) so a device run says which source
+  // works rather than leaving the next person to guess again.
+  if (!opts.shopId) return null;
   const seed = JSON.stringify(ALDI_SEED_OPS);
   return `(async function () {
 ${IC_PRELUDE}
