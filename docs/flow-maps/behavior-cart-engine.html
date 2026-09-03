@@ -188,6 +188,7 @@ flowchart LR
     CHOOSE --> S0
     S0{{"is the WebView on the store yet?"}} -->|"no — about:blank,<br/>or still loading"| S0W(["wait for the load.<br/><i>every rail script is same-origin. asked of<br/>about:blank they come back empty, and an<br/>empty answer from our own script reads as<br/>a store that would not answer</i>"])
     S0W --> S0
+    S0W --- S0WHY{{"The wait is only as good as the record of where we ARE.<br/>onLoadEnd writes lastLoadEndUrl PER BRANCH — deliberately, because the<br/>quiet-page hop and the LOGIN_STATUS branch both read it for where the<br/>WebView was BEFORE the current load, and hoisting it to the top of the<br/>handler breaks 19 tests across two suites. So a branch that returns early<br/>must record its own landing. The deferred cart read did not, and the<br/>session ask behind it waited out 20s for a page that had already arrived."}}
     S0 -->|"yes"| S1["<b>1 · session</b><br/><i>login gate, store id, pickup or delivery</i>"]
     S1 -->|"no user"| LOGIN(["login step. <b>no button.</b><br/><i>every page load, redirect and SPA step<br/>asks again; a timer backs it up at 1s while<br/>the page has moved in the last 45s, 5s when<br/>it has not. never two questions at once</i>"])
     LOGIN -->|"signed in"| QUIET(["hop back to <code>railUrl</code><br/><i>signing in navigates to the real<br/>storefront; running there lost<br/>12–18s to the store's own<br/>post-login bootstrap</i>"])
