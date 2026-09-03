@@ -175,12 +175,17 @@ describe('WebViewCartSheet — login_check timeout', () => {
   afterEach(() => jest.useRealTimers());
 
   it('falls back to the login webview when LOGIN_STATUS never arrives', () => {
+    // WALMART, because this is the DOM login check's timeout and Walmart is a
+    // store that still uses it. ALDI used to be the vehicle here and gained a
+    // rail (MEAL-208), which answers the login question over the network
+    // instead — so the test was no longer exercising the path it names. The
+    // rail's own equivalent is covered in login-detected-automatically.test.tsx.
     const { getByText, queryByText } = render(
       <WebViewCartSheet
         visible
         meals={[baseMeal()]}
-        storeId="aldi"
-        storeName="ALDI"
+        storeId="walmart"
+        storeName="Walmart"
         onClose={() => {}}
       />,
     );

@@ -18,7 +18,14 @@ import {
   buildAlbertsonsNetworkSearchBatchScript,
   buildAlbertsonsSessionScript,
 } from './albertsons-network';
+import {
+  buildAldiCartReadScript,
+  buildAldiNetworkAddBatchScript,
+  buildAldiNetworkSearchBatchScript,
+  buildAldiSessionScript,
+} from './aldi-network';
 import { ALBERTSONS_FAMILY_IDS } from './albertsons';
+import { isInstacartStore } from './instacart';
 
 /** What the session probe has to establish before a run can start. */
 export interface NetworkSession {
@@ -271,10 +278,62 @@ export function railConfigKey(storeId: string | null | undefined): string {
   return storeId;
 }
 
+/**
+ * Instacart Storefront, which ALDI runs on.
+ *
+ * Registered against the PLATFORM rather than the banner: INSTACART_TENANTS is
+ * the registry, so a tenant added there gets this rail without another entry
+ * here. That is the same reasoning railConfigKey uses for the fifteen
+ * Albertsons banners.
+ */
+const INSTACART_RAIL: NetworkRail = {
+  sessionMessageType: 'ALDI_SESSION',
+  sessionScript: () => buildAldiSessionScript(),
+  searchBatch: (terms, sess) =>
+    buildAldiNetworkSearchBatchScript(terms, {
+      shopId: sess.storeId,
+      requestMs: INSTACART_RAIL.budgets.searchRequestMs,
+    }),
+  cartRead: () => buildAldiCartReadScript(),
+  addBatch: (items, opts) =>
+    buildAldiNetworkAddBatchScript(
+      items.map((i) => ({ idx: i.idx, productId: i.productId, quantity: i.quantity, name: i.name })),
+      {
+        knownLines: opts?.knownLines ?? null,
+        // Unproven until measured on a device -- see the note on
+        // buildAldiNetworkAddBatchScript. Null makes the script refuse any item
+        // the cart already holds rather than risk the MEAL-194 under-add.
+        absoluteQty: null,
+      },
+    ),
+  // The cart is addressed by the item id the search returns
+  // (items_23898-18647633). There is no sku on this platform at all.
+  writable: (c) => !!c.productId,
+  // One session answer. ActiveCarts takes no arguments and returns everything
+  // the run needs, so there is no early/refined split to wait out.
+  sessionUsable: () => true,
+  // No preference concept on this platform.
+  needsPreference: () => false,
+  // MEASURED 2026-09-02 against a live session: ActiveCarts 176ms, CartItems
+  // 306ms, AsyncItemSearch 556ms for one term. Generous against that, and the
+  // search budget carries the extra hydration call every batch makes.
+  budgets: {
+    sessionMs: 20_000,
+    searchMs: (terms) => Math.min(20_000 + terms * 3_000, 90_000),
+    searchResumeMs: 20_000,
+    addMs: (items) => Math.min(30_000 + items * 1_500, 90_000),
+    cartProbeMs: 20_000,
+    searchRequestMs: 15_000,
+    // No cold-start problem observed; the first call was as quick as the rest.
+    searchFirstRequestMs: 15_000,
+  },
+};
+
 export function getNetworkRail(storeId: string | null | undefined): NetworkRail | null {
   if (!storeId) return null;
   if (storeId === 'heb') return HEB_RAIL;
   if ((ALBERTSONS_FAMILY_IDS as readonly string[]).includes(storeId)) return ALBERTSONS_RAIL;
+  if (isInstacartStore(storeId)) return INSTACART_RAIL;
   return null;
 }
 
@@ -282,4 +341,5 @@ export function getNetworkRail(storeId: string | null | undefined): NetworkRail 
 export const NETWORK_SESSION_MESSAGE_TYPES: readonly string[] = [
   HEB_RAIL.sessionMessageType,
   ALBERTSONS_RAIL.sessionMessageType,
+  INSTACART_RAIL.sessionMessageType,
 ];

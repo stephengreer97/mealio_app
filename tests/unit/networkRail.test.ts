@@ -6,6 +6,7 @@
 // A store silently losing its rail here would not fail loudly; it would quietly
 // go back to the markup heuristic this work exists to stop trusting.
 
+import { INSTACART_TENANTS } from '../../src/lib/webview-scripts/instacart';
 import { railConfigKey, getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../../src/lib/webview-scripts/network-rail';
 import { ALBERTSONS_FAMILY_IDS } from '../../src/lib/webview-scripts/albertsons';
 
@@ -27,8 +28,20 @@ describe('network rail resolution', () => {
     }
   });
 
+  it('gives every Instacart tenant the same rail, by platform not by name', () => {
+    // ALDI is not named anywhere in getNetworkRail. The rail is registered
+    // against the PLATFORM, so a tenant added to INSTACART_TENANTS gets it
+    // without another line here — the same reasoning that gives the fifteen
+    // Albertsons banners one rail.
+    for (const id of Object.keys(INSTACART_TENANTS)) {
+      const rail = getNetworkRail(id);
+      expect(rail).not.toBeNull();
+      expect(rail!.sessionMessageType).toBe('ALDI_SESSION');
+    }
+  });
+
   it('gives no rail to a store that has none, so those keep the page path', () => {
-    for (const id of ['walmart', 'aldi', 'wegmans', 'amazon', 'kroger', 'nonsense']) {
+    for (const id of ['walmart', 'wegmans', 'amazon', 'kroger', 'nonsense']) {
       expect(getNetworkRail(id)).toBeNull();
     }
     expect(getNetworkRail(null)).toBeNull();

@@ -233,6 +233,32 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   //   most important one in this list: read as an empty result it tells a user
   //   the store does not stock their groceries (MEAL-207).
   search_error: 'match_rejected',
+  // MEAL-208, the Instacart rail (ALDI and any tenant added to
+  // INSTACART_TENANTS). This platform accepts allow-listed persisted queries
+  // only, so two of its failures are about the QUERY rather than the groceries:
+  //
+  // no_hash — the operation map had no sha256 for the operation we needed, so
+  //   nothing was sent. A harvest problem on our side. Never a fact about stock.
+  no_hash: 'match_rejected',
+  // gql_error — the endpoint answered 200 with an errors array. Most often
+  //   PERSISTED_QUERY_NOT_FOUND, which means Instacart deployed and our hashes
+  //   are stale; the rail drops its cache and re-harvests. Also not about stock.
+  gql_error: 'match_rejected',
+  // no_cart — the cart could not be read, so there was no baseline to write
+  //   against. A write is absolute at every store here, so writing without one
+  //   would SET a line the user already had down to what this run asked for.
+  no_cart: 'confirm_failed',
+  // qty_semantics_unproven — the cart already holds this item, and nobody has
+  //   measured whether this store SETS a line or ADDS to it. The two readings
+  //   disagree only in that case, so the item is declined rather than guessed
+  //   at. It is a refusal to risk an over-add, not a failure to find the
+  //   product, so it must reach the user as something to review.
+  qty_semantics_unproven: 'match_rejected',
+  // write_refused — the mutation itself was rejected. Nothing landed.
+  write_refused: 'confirm_failed',
+  // not_in_cart_after_write — the write reported success and the cart re-read
+  //   does not show it. The cart decides, always; this is that rule firing.
+  not_in_cart_after_write: 'confirm_failed',
   low_confidence: 'match_rejected',
   out_of_stock: 'out_of_stock',
   needs_weight: 'match_rejected',

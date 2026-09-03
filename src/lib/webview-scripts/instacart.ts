@@ -564,6 +564,14 @@ export function getInstacartScripts(t: InstacartTenant): StoreScripts {
   const cfg = storeConfig(t.storeId);
   return {
     storeUrl: cfg.storeUrl ?? t.origin,
+    // THE QUIET PAGE. The rail asks this tenant's own GraphQL endpoint and reads
+    // no DOM, so the storefront is pure cost: its bundles share the renderer
+    // with our requests, which on Albertsons was measured as a 1-second timer
+    // firing 12 seconds late. robots.txt has no JavaScript of its own.
+    //
+    // Same origin as the store, which is not optional — the session is a cookie
+    // on this origin and a rail on another host would have none of it.
+    railUrl: (cfg.storeUrl ?? t.origin) + '/robots.txt',
     loginUrl: cfg.loginUrl ?? t.origin,  // login is via the hamburger menu, not a page
     cartUrl: cfg.cartUrl ?? t.origin,    // no dedicated cart page; it's a side panel
     domain: t.domain,

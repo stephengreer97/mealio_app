@@ -402,6 +402,25 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
       cacheBustNav: false,
       spaSearch: true,
       workerCount: 3,
+      // ── The Instacart rail ────────────────────────────────────────────────
+      //
+      // SEARCH ON, ADD OFF, and the asymmetry is deliberate rather than
+      // cautious-by-default.
+      //
+      // Search and the cart read were MEASURED end to end against a live
+      // session (docs/network-rail-research/02-aldi.md): every operation, its
+      // arguments and its timing. The add was mapped the same way, but one
+      // question about it has no answer yet — whether a write SETS a cart line
+      // or ADDS to it. The script refuses any item the cart already holds
+      // rather than guess, so turning it on would still be safe; it is off
+      // because a half-answered add is not worth shipping when the search half
+      // is the part that makes a run slow.
+      //
+      // To finish it: measure the semantics on a device (add one item by hand,
+      // then write the same itemId with quantity 2 and see whether the cart
+      // holds 2 or 3), set absoluteQty in the rail, and flip this.
+      networkSearch: true,
+      networkAdd: false,
       selectors: {
         // Per-banner by nature: the /store/{slug}/ path is ALDI's, so this one
         // cannot be shared with the platform the way atc/inc/menu are.
