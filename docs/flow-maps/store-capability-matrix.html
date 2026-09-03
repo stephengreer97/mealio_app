@@ -95,7 +95,16 @@
         prewarm, the <code>login_check</code> step, and the re-ask on every page load while the
         user sits on <code>login</code>. The DOM check is the fallback, reached only when the
         probe cannot answer, which is nearly always a page that has not finished its bootstrap
-        &mdash; NOT a signed-out user, and it must never be reported as one.</td>
+        &mdash; NOT a signed-out user, and it must never be reported as one.
+        <br/><br/><b>How many answers it gives is a STORE fact</b>
+        (<code>rail.sessionUsable</code>). H-E-B posts once. Albertsons posts TWICE: an early
+        one the moment <code>/userinfo</code> replies &mdash; so no budget of ours can make the
+        sheet think a signed-in user is signed out &mdash; and a refined one ~1.3&nbsp;s later
+        once the API keys are resolved and the token is proved against a real cart read. Only
+        the refined one can search or write. The engine had "a session probe answers once" baked
+        in and took the first: measured 2026-09-02 as <code>wrote 0 of 29</code> and a full
+        basket handed back to the user. The login gate still answers off the early one, which is
+        the entire reason it exists.</td>
         <td><b>The write's own response.</b> It returns the cart, so a write that succeeded is a
         confirmed landing and says so (<code>HebAddConfirmation.via = 'network'</code>) &mdash;
         which is what lets the reconcile refuse a cart read that contradicts it.</td>

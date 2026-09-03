@@ -184,6 +184,8 @@ flowchart LR
 
     NET --> S1["<b>1 · session</b><br/><i>login gate, store id, pickup or delivery</i>"]
     S1 -->|"no user"| LOGIN(["login step"])
+    S1 -->|"signed in, but the store<br/>is not ready to be worked on"| S1W(["wait for the next answer.<br/><i>rail.sessionUsable — Albertsons<br/>answers twice and only the second<br/>one carries its API keys</i>"])
+    S1W --> S1
     S1 --> S2["<b>2 · search</b><br/>every term, no navigation<br/><i>a nav mid-batch re-asks what died</i>"]
     PRE(["prewarmed answers<br/><i>from the qty screen, and from<br/>My Meals before that</i>"]) -.->|"seeded, so a<br/>prewarmed term is<br/>never in the batch"| S2
     S2 --> S3["<b>3 · add</b><br/>one write per matched item<br/>quantity = what the cart holds + asked"]
