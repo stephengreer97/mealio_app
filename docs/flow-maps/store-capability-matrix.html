@@ -121,7 +121,11 @@
         confirmed landing and says so (<code>HebAddConfirmation.via = 'network'</code>) &mdash;
         which is what lets the reconcile refuse a cart read that contradicts it.</td>
         <td><b>The rail</b> (<code>cartRead</code>), for the before, reconcile and after
-        snapshots alike. No page load. It answers the same <code>CART_COUNT</code> the cart page
+        snapshots alike. No page load. <b>On the quiet page</b> &mdash; a run that went through the
+        LOGIN screen is left on the real storefront, and running there cost 12&ndash;18&nbsp;s to a
+        frozen renderer on both signed-in runs of 2026-09-02 (<code>ms= 15945 worstTick= 12027</code>
+        for a request the store answered in 576&nbsp;ms). A confirmed sign-in hops back to
+        <code>railUrl</code> first. It answers the same <code>CART_COUNT</code> the cart page
         used to, so nothing downstream can tell which read replied.</td></tr>
     <tr><td><b>Walmart</b><br/><b>ALDI</b><br/><b>Amazon Fresh</b><br/><b>Wegmans</b></td>
         <td>The store's own login check, injected into the page the user is about to drive. This
