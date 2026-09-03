@@ -4,6 +4,7 @@ import { chromium, Page } from 'playwright';
 import { getNetworkRail } from '../../src/lib/webview-scripts/network-rail';
 import { buildWegmansCartReadScript } from '../../src/lib/webview-scripts/wegmans-network';
 import { buildAldiCartReadScript } from '../../src/lib/webview-scripts/aldi-network';
+import { buildWalmartCartReadScript } from '../../src/lib/webview-scripts/walmart-network';
 
 const ALL: Record<string, unknown>[] = [];
 let bound = false;
@@ -30,10 +31,12 @@ async function collect(page: Page, script: string, want: string[], ms = 40000) {
 (async () => {
   const STORE = process.env.RAIL_STORE || 'wegmans';
   const rail = getNetworkRail(STORE)!;
-  const cartRead = STORE === 'aldi' ? buildAldiCartReadScript() : buildWegmansCartReadScript();
-  const HOST = STORE === 'aldi' ? 'https://www.aldi.us/robots.txt' : 'https://www.wegmans.com/robots.txt';
+  const cartRead = STORE === 'aldi' ? buildAldiCartReadScript()
+    : STORE === 'walmart' ? buildWalmartCartReadScript() : buildWegmansCartReadScript();
+  const HOST = STORE === 'aldi' ? 'https://www.aldi.us/robots.txt'
+    : STORE === 'walmart' ? 'https://www.walmart.com/robots.txt' : 'https://www.wegmans.com/robots.txt';
   const b = await chromium.connectOverCDP('http://localhost:9333');
-  const page = b.contexts()[0].pages().find((p) => /wegmans\.com|aldi\.us/.test(p.url()));
+  const page = b.contexts()[0].pages().find((p) => /wegmans\.com|aldi\.us|walmart\.com/.test(p.url()));
   if (!page) { console.log('no wegmans page'); process.exit(1); }
   await page.goto(HOST, { waitUntil: 'domcontentloaded', timeout: 40000 });
   await page.waitForTimeout(1200);

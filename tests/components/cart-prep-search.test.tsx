@@ -192,7 +192,10 @@ const PREPPED_MEALS = [
 // it now goes over the rail and navigates nowhere. Their half of this invariant
 // is asked where their terms now go: tests/unit/ingredientPrep.test.ts drives
 // `rail.searchBatch` for every store in the catalog, these two included.
-const URL_STORES = ['walmart', 'amazon'];
+// Walmart left on 2026-09-03 when its rail landed, for the same reason ALDI and
+// Wegmans did: its terms now go over the rail, so it navigates nowhere and
+// ingredientPrep.test.ts is where its half of this invariant is asked.
+const URL_STORES = ['amazon'];
 
 /**
  * A single CHOSEN row, on its own.

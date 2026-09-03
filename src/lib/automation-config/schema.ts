@@ -374,6 +374,27 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
     walmart: {
       enabled: true,
       platform: 'standalone',
+      // ── The Walmart rail ──────────────────────────────────────────────────
+      //
+      // SEARCH ON, ADD ON, both measured against a signed-in session on
+      // 2026-09-03 (docs/network-rail-research/03-walmart.md).
+      //
+      // The search is the odd one: /search?q= is server-rendered Next.js and the
+      // whole result set is in a __NEXT_DATA__ script tag, so a search is one
+      // GET and one JSON.parse rather than an API call. Same properties as the
+      // other rails, reached differently.
+      //
+      // The cart is Walmart's own persisted-query scheme —
+      // /orchestra/<domain>/graphql/<Operation>/<sha256> — and THE HEADERS ARE
+      // THE GATE: content-type alone is answered 418 Access Denied, a partial
+      // set gets 429 and a savings interstitial, the full set gets 200.
+      //
+      // Login needs no request at all: glassCartIdMap in localStorage carries
+      // both the cart id and isGuest.
+      networkSearch: true,
+      networkAdd: true,
+      // The rail replaces the click-through, so nothing here searches serially
+      // through a rendered page any more.
       storeUrl: 'https://www.walmart.com/grocery',
       loginUrl: 'https://www.walmart.com/account/login',
       cartUrl: 'https://www.walmart.com/cart',

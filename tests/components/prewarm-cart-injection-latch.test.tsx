@@ -54,9 +54,14 @@ import SilentLoginProbe from '../../src/components/SilentLoginProbe';
 // cart. H-E-B stopped doing that on 2026-09-01: it has a rail, so the prewarm
 // asks for the cart by request from the page it is already on. Walmart has no
 // rail and still navigates, so it is where this guard still earns its keep.
-const STORE = 'walmart';
+// AMAZON, not Walmart. This exercises the PAGE cart path — the injection into a
+// rendered cart — and Walmart stopped having one on 2026-09-03 when its rail
+// landed: a store with a rail reads its cart over the network and injects
+// nothing. Amazon Fresh is the last store without a rail, and the reason is
+// written down: its search returns a rendered grid and no structured payload.
+const STORE = 'amazon';
 const HOME_URL = 'https://www.heb.com/';
-const CART_URL = 'https://www.walmart.com/cart?_t=1754500000000';
+const CART_URL = 'https://www.amazon.com/cart?_t=1754500000000';
 // Shape from auth-urls.ts (AUTH_REDIRECT_URL_PATTERN matches '/sso/').
 const INTERSTITIAL_URL = 'https://www.heb.com/bin/sso/authorize?code=test';
 

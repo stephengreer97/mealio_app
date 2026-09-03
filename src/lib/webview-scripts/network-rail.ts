@@ -7,6 +7,12 @@
 // lives, so adding the next store is one entry here rather than another branch
 // threaded through the sheet.
 import {
+  buildWalmartSessionScript,
+  buildWalmartCartReadScript,
+  buildWalmartNetworkSearchBatchScript,
+  buildWalmartNetworkAddBatchScript,
+} from './walmart-network';
+import {
   buildHebCartReadScript,
   buildHebNetworkAddBatchScript,
   buildHebNetworkSearchBatchScript,
@@ -125,6 +131,20 @@ export interface NetworkRail {
    * H-E-B posts once and answers true to whatever it posts.
    */
   sessionUsable(msg: { early?: boolean; storeId?: string | null }): boolean;
+
+  /**
+   * Does a run need a STORE from the session before it can start?
+   *
+   * True for every rail whose catalogue is per store — H-E-B, the Albertsons
+   * family, ALDI's shop, Wegmans' store number — because a search filtered to
+   * the wrong one returns products the user cannot buy. Walmart has no such
+   * thing on this path: its search is national and its cart is the account's,
+   * and demanding one handed every Walmart run straight to the user with
+   * 'session_no_store'.
+   *
+   * Undefined means true, so this only has to be said where it is false.
+   */
+  needsStoreId?: boolean;
   /**
    * Does this candidate need the user to choose a variant before it can be
    * written?
@@ -414,12 +434,64 @@ const WEGMANS_RAIL: NetworkRail = {
   },
 };
 
+/**
+ * Walmart.
+ *
+ * The odd one out in exactly one way: its SEARCH is a GET of a server-rendered
+ * page whose whole result set is in a __NEXT_DATA__ script tag, rather than an
+ * API call. One request, one JSON.parse, no rendering and no selectors — the
+ * same properties the other three have, reached differently.
+ *
+ * Its cart is Walmart's own persisted-query scheme, with the operation name and
+ * hash in the URL path. The headers are the gate: too few and the answer is 418
+ * Access Denied.
+ */
+export const WALMART_RAIL: NetworkRail = {
+  sessionMessageType: 'WMT_SESSION',
+  sessionScript: buildWalmartSessionScript,
+  searchBatch: (terms) => buildWalmartNetworkSearchBatchScript(terms),
+  cartRead: () => buildWalmartCartReadScript(),
+  addBatch: (items, opts) =>
+    buildWalmartNetworkAddBatchScript(
+      items.map((i) => ({ idx: i.idx, productId: i.productId, skuId: i.skuId ?? null,
+                          quantity: i.quantity, name: i.name })),
+      {
+        // UNMEASURED: whether updateItems SETS a line or ADDS to it. ALDI and
+        // Wegmans both surprised me on this question, and Wegmans turned out to
+        // do BOTH depending on a line id — so it is null until a device says
+        // otherwise, and null means the script sends held + wanted, which is
+        // right for a SET and is checked against the cart afterwards either way.
+        absoluteQty: opts?.absoluteQty ?? null,
+      },
+    ),
+  // The OFFER is the identifier. usItemId rides along for display and is sent
+  // empty on the write, which is measured rather than assumed.
+  writable: (c) => !!c.productId,
+  // One answer, from localStorage. Nothing to wait out.
+  sessionUsable: () => true,
+  // No store to resolve: national search, account cart.
+  needsStoreId: false,
+  needsPreference: () => false,
+  // MEASURED: cart read ~700-800ms, search ~1.5-3s for a 500KB document. The
+  // search is the slow half here because it is a whole page.
+  budgets: {
+    sessionMs: 10_000,
+    searchMs: (terms) => Math.min(15_000 + terms * 4_000, 90_000),
+    searchResumeMs: 20_000,
+    addMs: (items) => Math.min(30_000 + items * 3_000, 120_000),
+    cartProbeMs: 20_000,
+    searchRequestMs: 20_000,
+    searchFirstRequestMs: 25_000,
+  },
+};
+
 export function getNetworkRail(storeId: string | null | undefined): NetworkRail | null {
   if (!storeId) return null;
   if (storeId === 'heb') return HEB_RAIL;
   if ((ALBERTSONS_FAMILY_IDS as readonly string[]).includes(storeId)) return ALBERTSONS_RAIL;
   if (isInstacartStore(storeId)) return INSTACART_RAIL;
   if (storeId === 'wegmans') return WEGMANS_RAIL;
+  if (storeId === 'walmart') return WALMART_RAIL;
   return null;
 }
 
@@ -429,4 +501,5 @@ export const NETWORK_SESSION_MESSAGE_TYPES: readonly string[] = [
   ALBERTSONS_RAIL.sessionMessageType,
   INSTACART_RAIL.sessionMessageType,
   WEGMANS_RAIL.sessionMessageType,
+  WALMART_RAIL.sessionMessageType,
 ];

@@ -203,10 +203,11 @@ describe('the search prewarm', () => {
   it('does not prewarm a store with no rail', () => {
     __resetAutomationConfigForTests();
     render(
-      <WebViewCartSheet visible meals={[meal] as never} storeId="walmart" storeName="Walmart" onClose={() => {}} />,
+      <WebViewCartSheet visible meals={[meal] as never} storeId="amazon" storeName="Amazon Fresh" onClose={() => {}} />,
     );
-    // Walmart is assisted: there is no rail to ask, and nothing should be
-    // injected speculatively into a page the user is about to drive.
+    // Amazon Fresh is assisted: there is no rail to ask, and nothing should be
+    // injected speculatively into a page the user is about to drive. (This said
+    // Walmart until 2026-09-03, when Walmart got a rail.)
     expect(searchBatches()).toBe(0);
   });
 });
@@ -299,7 +300,7 @@ describe('the page is loaded before the run needs it', () => {
     // have not finished with buys nothing and starts a session they may not use.
     __resetAutomationConfigForTests();
     const view = render(
-      <WebViewCartSheet visible meals={[meal] as never} storeId="walmart" storeName="Walmart" onClose={() => {}} />,
+      <WebViewCartSheet visible meals={[meal] as never} storeId="amazon" storeName="Amazon Fresh" onClose={() => {}} />,
     );
     const main = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
     expect(main).toBeFalsy();

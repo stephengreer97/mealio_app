@@ -5254,7 +5254,20 @@ export default function WebViewCartSheet({
             return;
           }
           if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
-          if (!msg.storeId || !msg.shoppingContext) { netHandOverToUser('session_no_store'); return; }
+          // A STORE ID ONLY WHERE THERE IS A STORE.
+          //
+          // Three rails answer with one because their catalogue and prices are
+          // per store: H-E-B, the Albertsons family, ALDI's shop and Wegmans'
+          // store number all decide what a search may even return. Walmart has
+          // no such thing on this path — its search is national and its cart is
+          // the account's — so demanding one handed every Walmart run straight
+          // to the user with 'session_no_store'.
+          //
+          // The rail says whether it needs one, rather than the engine assuming
+          // every store is shaped like the first four.
+          if (netRail()?.needsStoreId !== false && (!msg.storeId || !msg.shoppingContext)) {
+            netHandOverToUser('session_no_store'); return;
+          }
           netSessionRef.current = { storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext) };
           netSessionAtRef.current = Date.now();
           // Same reason as the reuse path: consumed once, so a duplicate answer

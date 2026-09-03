@@ -205,8 +205,8 @@ function assistedRun(...names: string[]) {
     <WebViewCartSheet
       visible
       meals={[{ id: 'm1', name: 'Tacos', ingredients: names.map(chosen) }] as never}
-      storeId="walmart"
-      storeName="Walmart"
+      storeId="amazon"
+      storeName="Amazon Fresh"
       onClose={() => {}}
     />,
   );
@@ -449,7 +449,7 @@ describe('state does not leak into the next run', () => {
     const meals = [{ id: 'm1', name: 'Tacos', ingredients: [chosen('sour cream'), chosen('fresh mint')] }];
     disableRail();
     const view = render(
-      <WebViewCartSheet visible meals={meals as never} storeId="walmart" storeName="Walmart" onClose={() => {}} />,
+      <WebViewCartSheet visible meals={meals as never} storeId="amazon" storeName="Amazon Fresh" onClose={() => {}} />,
     );
     const post = (payload: Record<string, unknown>) => act(() => {
       view.getAllByTestId('mock-webview')[0].props.onMessage({
@@ -473,11 +473,11 @@ describe('state does not leak into the next run', () => {
 
     // Close and re-open the SAME sheet on the same ingredients.
     view.rerender(
-      <WebViewCartSheet visible={false} meals={meals as never} storeId="walmart" storeName="Walmart" onClose={() => {}} />,
+      <WebViewCartSheet visible={false} meals={meals as never} storeId="amazon" storeName="Amazon Fresh" onClose={() => {}} />,
     );
     act(() => { jest.advanceTimersByTime(500); });
     view.rerender(
-      <WebViewCartSheet visible meals={meals as never} storeId="walmart" storeName="Walmart" onClose={() => {}} />,
+      <WebViewCartSheet visible meals={meals as never} storeId="amazon" storeName="Amazon Fresh" onClose={() => {}} />,
     );
     act(() => { jest.advanceTimersByTime(500); });
     drive();
@@ -498,7 +498,7 @@ describe('the hand-over survives what the store throws at it', () => {
     const view = assistedRun('sour cream', 'fresh mint');
     act(() => {
       view.getAllByTestId('mock-webview')[0].props.onHttpError({
-        nativeEvent: { statusCode: 403, url: 'https://www.walmart.com/search?q=fresh%20mint' },
+        nativeEvent: { statusCode: 403, url: 'https://www.amazon.com/s?k=fresh%20mint' },
       });
     });
     expect(view.queryByTestId('manual-bar')).toBeTruthy();
@@ -523,7 +523,7 @@ describe('a probe still in flight when the user takes over', () => {
       view.getAllByTestId('mock-webview')[0].props.onMessage({
         nativeEvent: { data: JSON.stringify({
           type: 'CART_COUNT', count: 1,
-          items: [{ name: 'sour cream', qty: 1 }], url: 'https://walmart.test/cart',
+          items: [{ name: 'sour cream', qty: 1 }], url: 'https://amazon.test/cart',
         }) },
       });
     });

@@ -203,6 +203,10 @@ export function getScripts(): StoreScripts {
 
   return {
     storeUrl: cfg.storeUrl ?? WALMART_URL,
+    // The rail's quiet page: no JavaScript of its own, so our requests get the
+    // renderer to themselves, and same-origin so localStorage and the cookies
+    // are all there. Same choice as the other three rails.
+    railUrl: 'https://www.walmart.com/robots.txt',
     loginUrl: cfg.loginUrl ?? WALMART_LOGIN_URL,
     cartUrl: cfg.cartUrl ?? WALMART_CART_URL,
     domain: WALMART_DOMAIN,

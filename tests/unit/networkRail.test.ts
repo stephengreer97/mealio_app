@@ -41,7 +41,11 @@ describe('network rail resolution', () => {
   });
 
   it('gives no rail to a store that has none, so those keep the page path', () => {
-    for (const id of ['walmart', 'amazon', 'kroger', 'nonsense']) {
+    // Walmart left this list on 2026-09-03 when its rail landed. Amazon Fresh
+    // is still here, and the reason is written down: its search returns a
+    // rendered grid and no structured payload, so there is nothing to parse
+    // without the DOM work this whole effort exists to delete.
+    for (const id of ['amazon', 'kroger', 'nonsense']) {
       expect(getNetworkRail(id)).toBeNull();
     }
     expect(getNetworkRail(null)).toBeNull();

@@ -184,8 +184,8 @@ describe('WebViewCartSheet — login_check timeout', () => {
       <WebViewCartSheet
         visible
         meals={[baseMeal()]}
-        storeId="walmart"
-        storeName="Walmart"
+        storeId="amazon"
+        storeName="Amazon Fresh"
         onClose={() => {}}
       />,
     );

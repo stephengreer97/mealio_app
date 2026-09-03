@@ -55,7 +55,12 @@ import { buildCartPageCountScript, getCartPageUrl } from '../../src/lib/webview-
 // Albertsons family has a rail as of 2026-09-01, so its prewarm asks for the
 // cart by request from the page it is already on and never makes that
 // navigation. Walmart has no rail and still does.
-const STORE = 'walmart';
+// AMAZON, not Walmart. This exercises the PAGE cart path — the injection into a
+// rendered cart — and Walmart stopped having one on 2026-09-03 when its rail
+// landed: a store with a rail reads its cart over the network and injects
+// nothing. Amazon Fresh is the last store without a rail, and the reason is
+// written down: its search returns a rendered grid and no structured payload.
+const STORE = 'amazon';
 const CART_URL = getCartPageUrl(STORE)!;
 const SSO_URL = 'https://www.acmemarkets.com/bin/safeway/unified/sso/authorize?code=abc123';
 
