@@ -9,13 +9,42 @@
   <h1>Walmart add-to-cart automation</h1>
 <div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
 <h3>Walmart is ASSISTED (2026-09-01)</h3>
-<p>DOM automation was removed from Mealio. Walmart had no API or in-page rail behind it, so it no
-longer adds to the cart on the user's behalf: <b>Mealio searches each ingredient and hands the
-user the results page; they add what they want and tap Next.</b></p>
-<p>Everything below about extractors, add clicks, worker pools and selector drift is
-<b>HISTORY</b>. It is kept because it is the evidence for MEAL-210, which asks whether this store can
-have a real in-page rail like H-E-B and the Albertsons family &mdash; and because the login check
-and the search URL, which the assisted route still uses, are described here too.</p>
+<p><b>Walmart has a rail as of 2026-09-03</b>, and it is the fourth. Measured end to end against a
+signed-in session and then driven through the app: login, search, add, cart read, reconcile
+&mdash; <code>wrote 3 of 3, confirmed 3</code>.</p>
+<table><tr><th>Phase</th><th>How</th><th>Measured</th></tr>
+<tr><td>Login</td><td><code>glassCartIdMap</code> in localStorage &mdash; carries the cart id AND <code>isGuest</code></td><td><b>0 network</b></td></tr>
+<tr><td>Search</td><td><code>GET /search?q=</code>, then the <code>__NEXT_DATA__</code> script tag</td><td>~2&nbsp;s, 24 candidates</td></tr>
+<tr><td>Cart read</td><td><code>POST /orchestra/cartxo/graphql/MergeAndGetCart/&lt;hash&gt;</code></td><td>~800&nbsp;ms</td></tr>
+<tr><td>Add</td><td><code>POST /orchestra/home/graphql/updateItems/&lt;hash&gt;</code>, items as a LIST</td><td>held 2 + 1 &rarr; 3</td></tr></table>
+<p><b>The search is the PAGE, and the page is JSON.</b> Walmart server-renders its results into
+<code>__NEXT_DATA__</code>, so a search is one GET and one <code>JSON.parse</code>: no rendering, no
+selectors, nothing to drift. A different shape from the other three rails, which call an API, but
+the same properties.</p>
+<p><b>&#9888; Anchor on the TAG, not the id.</b> An inline script near the top of the document reads
+<code>getElementById("__NEXT_DATA__")</code>, so a plain <code>indexOf</code> for the id lands ~900
+bytes short of the payload and parses minified JavaScript. The first device run reported
+<code>unparseable</code> on a document that was perfectly fine.</p>
+<p><b>&#9888; THE HEADERS ARE THE GATE.</b> <code>content-type</code> alone is answered <b>418 Access
+Denied</b>; a partial set gets <b>429</b> and a savings interstitial; the full set gets <b>200</b>.
+<code>x-o-platform-version</code> must be PRESENT but not correct &mdash; a deliberately bogus
+version still answered 200 &mdash; so nothing has to be harvested from a page first. 418/429/403 are
+reported as <code>blocked</code>, which is not the same fact as an empty shelf.</p>
+<p><b>&#9888; An existing line is addressed by <code>lineItemId</code></b>, and then quantity is
+ABSOLUTE (measured 1&nbsp;&rarr;&nbsp;2). Without it the write creates a line and does nothing to one
+that exists. The field name is load-bearing: plain <code>id</code> and <code>cartLineId</code> both
+answered "400: Bad Request". So <i>held + wanted</i> for a line that exists, <i>wanted</i> for a new
+one &mdash; add on top, like every other rail.</p>
+<p><b>&#9888; NO PRICE.</b> The SSR payload carries <code>priceInfo</code> with every field empty and
+<code>price: 0</code> on every item, so Walmart candidates reach the Choose Products screen without
+one. The only rail with this gap.</p>
+<p><b>&#9888; A rail may have NO STORE.</b> The engine used to demand a <code>storeId</code> and a
+<code>shoppingContext</code> from every session, because the first four rails all have a catalogue
+that is per store. Walmart's search is national and its cart is the account's, so every run was
+handed to the user with <code>session_no_store</code> until the rail could say
+<code>needsStoreId: false</code>.</p>
+<p>Everything below about extractors, add clicks, worker pools and selector drift is <b>HISTORY</b>,
+kept as the evidence that led here.</p>
 </div>
 
   <div class="sub">Read off <code>webview-scripts/walmart.ts</code>, <code>WebViewCartSheet.tsx</code>
