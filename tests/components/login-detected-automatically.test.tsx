@@ -224,6 +224,112 @@ describe('asking the store on a timer instead', () => {
   });
 });
 
+describe('what you can watch in the log', () => {
+  // Stephen, 2026-09-02: "do we have any logging that I can watch for this login
+  // checker probe?" There was none — the timer asked in complete silence, which
+  // made a poll you cannot see doing a job you cannot verify.
+  //
+  // ONE TAG for the whole conversation, so `grep login-poll` follows a sign-in
+  // start to finish: what triggered each ask, what came back, how long it took,
+  // when the rate changes and when it stops.
+  const lines = (): string[] => {
+    const spy = console.log as unknown as jest.Mock;
+    return spy.mock.calls
+      .map((c) => c.map((x: unknown) => String(x)).join(' '))
+      .filter((l) => l.includes('[login-poll]'));
+  };
+  let spy: jest.SpyInstance;
+  beforeEach(() => { spy = jest.spyOn(console, 'log').mockImplementation(() => {}); });
+  afterEach(() => { spy.mockRestore(); });
+
+  it('says when it starts, what it is asking and how often', () => {
+    atTheLoginScreen();
+    expect(lines().some((l) => /started .* heb every 1000ms/.test(l))).toBe(true);
+  });
+
+  it('names what triggered each ask', () => {
+    const { view, post } = atTheLoginScreen();
+    act(() => { jest.advanceTimersByTime(1_100); });
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    expect(lines().some((l) => l.includes('ask #1 (timer)'))).toBe(true);
+    act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onNavigationStateChange({
+        url: 'https://www.heb.com/my-account', loading: false,
+      });
+    });
+    expect(lines().some((l) => l.includes('ask #2 (page moved, no load'))).toBe(true);
+  });
+
+  it('pairs the answer with its question, and times it', () => {
+    const { post } = atTheLoginScreen();
+    act(() => { jest.advanceTimersByTime(1_100); });
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    expect(lines().some((l) => /ask #1 → signed out in \d+ms/.test(l))).toBe(true);
+  });
+
+  it('does not pair an answer with a question nobody asked', () => {
+    // The login check that PUT the user on this screen is not a poll answer.
+    // Logging it as one produced "ask #0 → signed out in 1788401254337ms".
+    atTheLoginScreen();
+    expect(lines().some((l) => l.includes('ask #0'))).toBe(false);
+  });
+
+  it('says SIGNED IN when that is what came back', () => {
+    const { post } = atTheLoginScreen();
+    act(() => { jest.advanceTimersByTime(1_100); });
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: true, storeId: '476', shoppingContext: 'CURBSIDE_DELIVERY' });
+    expect(lines().some((l) => l.includes('→ SIGNED IN'))).toBe(true);
+  });
+
+  it('says when the rate changes, once, not on every tick', () => {
+    const { post } = atTheLoginScreen();
+    for (let i = 0; i < 60; i++) {
+      act(() => { jest.advanceTimersByTime(1_100); });
+      post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    }
+    const slowed = lines().filter((l) => l.includes('every 5000ms'));
+    expect(slowed.length).toBe(1);
+    expect(slowed[0]).toMatch(/nothing has happened/);
+  });
+
+  it('says when it stops, and how many it asked', () => {
+    const { post } = atTheLoginScreen();
+    act(() => { jest.advanceTimersByTime(1_100); });
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: true, storeId: '476', shoppingContext: 'CURBSIDE_DELIVERY' });
+    expect(lines().some((l) => /stopped after 1 ask\(s\)/.test(l))).toBe(true);
+  });
+
+  it('does not dump the whole answer once a second', () => {
+    // The full-JSON line was written for a one-shot login check and now sits in
+    // a poll. Two hundred characters per tick is how the rail phase got pushed
+    // out of the device log once already. The routine ticks get the compact
+    // line; the whole answer is kept for the ones that decide something.
+    const all = (): string[] => (console.log as unknown as jest.Mock).mock.calls
+      .map((c) => c.map((x: unknown) => String(x)).join(' '));
+    const { post } = atTheLoginScreen();
+    // Measured from AFTER the setup: the check that put the user on this screen
+    // is not a poll answer, and it is right that it gets the full line.
+    const dumpsBefore = all().filter((l) => l.includes('login answered over the network')).length;
+    for (let i = 0; i < 5; i++) {
+      act(() => { jest.advanceTimersByTime(1_100); });
+      post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    }
+    expect(all().filter((l) => l.includes('login answered over the network')).length).toBe(dumpsBefore);
+    expect(lines().filter((l) => /ask #\d+ → signed out/.test(l)).length).toBe(5);
+
+    // ...but a signed-IN answer is worth the whole thing: it starts a run.
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: true, storeId: '476', shoppingContext: 'CURBSIDE_DELIVERY' });
+    expect(all().some((l) => l.includes('login answered over the network'))).toBe(true);
+  });
+
+  it('says when an ask went unanswered', () => {
+    atTheLoginScreen();
+    act(() => { jest.advanceTimersByTime(1_100); });
+    act(() => { jest.advanceTimersByTime(13_000); });
+    expect(lines().some((l) => l.includes('never answered in'))).toBe(true);
+  });
+});
+
 describe('the redirect after signing in', () => {
   // Stephen, 2026-09-02: "After a login, the user is redirected. Can we not
   // detect that redirect and then poll the login when that happens?"

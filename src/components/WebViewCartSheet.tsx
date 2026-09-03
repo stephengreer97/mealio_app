@@ -1202,6 +1202,13 @@ export default function WebViewCartSheet({
   /** The poll's current tick, so activity can pull the next one forward rather
    *  than waiting out a slow interval that was scheduled before it. */
   const loginPollTickRef = useRef<() => void>(() => {});
+  /** Which ask this is, and when it went out — so the log can pair a question
+   *  with its answer and time it. */
+  const loginPollSeqRef = useRef(0);
+  const loginPollAskedAtRef = useRef(0);
+  /** The rate the last tick was scheduled at, so a change is logged once rather
+   *  than on every tick. */
+  const loginPollRateRef = useRef(0);
   /** noteLoginActivity, reachable from callbacks defined above it. */
   const noteLoginActivityRef = useRef<() => void>(() => {});
   /** The qty screen's items, for onLoadEnd — which has []-deps and would
@@ -3668,10 +3675,13 @@ export default function WebViewCartSheet({
         // verdict here no matter what the other two do — and this verdict starts
         // the run, so it is the one that can begin an automation underneath a
         // user who has not signed in yet.
-        console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — back on store, re-asking');
-        webviewRef.current?.injectJavaScript(loginCheckScript());
+        // Through the shared asker, so it carries the same tag and the same
+        // one-at-a-time rule as the timer's questions.
+        if (!askWhoIsSignedInRef.current('page loaded: ' + url.slice(0, 60))) {
+          console.log(`[Cart ${ts()}]`, '[login-poll] page loaded while an ask was already out — not asking twice');
+        }
       } else {
-        console.log(`[Cart ${ts()}]`, 'onLoadEnd login step — not on store yet, skipping re-inject');
+        console.log(`[Cart ${ts()}]`, '[login-poll] page loaded but not on the store yet — not asking', url.slice(0, 80));
       }
     } else if (netActiveRef.current && netPhaseRef.current === 'search') {
       // The page moved while the search was running in it. Anything still
@@ -3712,17 +3722,9 @@ export default function WebViewCartSheet({
       loginNavUrlRef.current = url;
       noteLoginActivityRef.current();
       if (!netRail()) return;   // see the onLoadEnd gate: DOM checks stay gated
-      if (loginPollBusyRef.current) return;
-      loginPollBusyRef.current = true;
-      console.log(`[Cart ${ts()}]`, 'login step — page moved, asking again');
-      webviewRef.current?.injectJavaScript(loginCheckScript());
-      if (loginPollFreeRef.current) clearTimeout(loginPollFreeRef.current);
-      loginPollFreeRef.current = setTimeout(() => {
-        loginPollFreeRef.current = null;
-        loginPollBusyRef.current = false;
-      }, LOGIN_POLL_ANSWER_MS);
+      askWhoIsSignedInRef.current('page moved, no load: ' + url.slice(0, 60));
     },
-    [netRail, loginCheckScript],
+    [netRail],
   );
 
   // Single entry point for every "Mealio can't drive the store" condition —
@@ -3934,6 +3936,38 @@ export default function WebViewCartSheet({
   }, [setStep, armLoginCheckTimeout]);
 
   /**
+   * ASK THE STORE WHO IS SIGNED IN, and say so in the log.
+   *
+   * Every route into this question -- the timer, a page load, an SPA step --
+   * comes through here, so `[login-poll]` is the one string to grep for while
+   * watching a sign-in. Returns false when the ask was skipped because one is
+   * already out, which is not a fault and is why the skip is silent: at one
+   * question a second, logging both the skip and the ask would double the noise
+   * for no extra fact.
+   */
+  const askWhoIsSignedIn = useCallback((why: string): boolean => {
+    if (loginPollBusyRef.current) return false;
+    loginPollBusyRef.current = true;
+    loginPollSeqRef.current += 1;
+    loginPollAskedAtRef.current = Date.now();
+    console.log(`[Cart ${ts()}]`, `[login-poll] ask #${loginPollSeqRef.current} (${why})`);
+    webviewRef.current?.injectJavaScript(loginCheckScript());
+    // An answer clears this (see onMessage); this is for the one that never
+    // comes, so a single dropped request cannot stop the poll for good.
+    if (loginPollFreeRef.current) clearTimeout(loginPollFreeRef.current);
+    loginPollFreeRef.current = setTimeout(() => {
+      loginPollFreeRef.current = null;
+      loginPollBusyRef.current = false;
+      console.log(`[Cart ${ts()}]`, `[login-poll] ask #${loginPollSeqRef.current} never answered in`,
+        LOGIN_POLL_ANSWER_MS, 'ms — asking again');
+    }, LOGIN_POLL_ANSWER_MS);
+    return true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loginCheckScript]);
+  const askWhoIsSignedInRef = useRef(askWhoIsSignedIn);
+  askWhoIsSignedInRef.current = askWhoIsSignedIn;
+
+  /**
    * The login page moved: a load, a redirect, an SPA step.
    *
    * Two things follow, and the second is the one that is easy to miss. The
@@ -3962,31 +3996,45 @@ export default function WebViewCartSheet({
       if (loginPollFreeRef.current) { clearTimeout(loginPollFreeRef.current); loginPollFreeRef.current = null; }
       loginPollBusyRef.current = false;
     };
-    if (step !== 'login') { stop(); loginNavUrlRef.current = ''; return; }
+    if (step !== 'login') {
+      stop();
+      loginNavUrlRef.current = '';
+      loginPollSeqRef.current = 0;
+      loginPollRateRef.current = 0;
+      return;
+    }
     // Arriving on this screen IS the page having moved.
     loginActivityAtRef.current = Date.now();
+    console.log(`[Cart ${ts()}]`, `[login-poll] started — asking ${lockedStoreIdRef.current} every ${LOGIN_POLL_FAST_MS}ms while the user signs in`);
     let alive = true;
     const tick = () => {
       if (!alive || stepRef.current !== 'login') return;
       // NEVER TWO AT ONCE. A store slower than the interval would otherwise get
       // a second copy of the same question on top of the first, which is the
       // burst shape that makes this one stop answering at all.
-      if (!loginPollBusyRef.current) {
-        loginPollBusyRef.current = true;
-        webviewRef.current?.injectJavaScript(loginCheckScript());
-        // An answer clears this (see onMessage); this is for the one that never
-        // comes, so a single dropped request cannot stop the poll for good.
-        loginPollFreeRef.current = setTimeout(() => {
-          loginPollFreeRef.current = null;
-          loginPollBusyRef.current = false;
-        }, LOGIN_POLL_ANSWER_MS);
-      }
+      askWhoIsSignedInRef.current('timer');
       const movedRecently = Date.now() - loginActivityAtRef.current < LOGIN_ACTIVE_WINDOW_MS;
-      loginPollRef.current = setTimeout(tick, movedRecently ? LOGIN_POLL_FAST_MS : LOGIN_POLL_SLOW_MS);
+      const rate = movedRecently ? LOGIN_POLL_FAST_MS : LOGIN_POLL_SLOW_MS;
+      // Once per CHANGE, not once per tick — the rate is the thing worth
+      // noticing and it changes rarely.
+      if (rate !== loginPollRateRef.current) {
+        loginPollRateRef.current = rate;
+        console.log(`[Cart ${ts()}]`, `[login-poll] every ${rate}ms —`,
+          movedRecently ? 'the page moved recently' : `nothing has happened for ${LOGIN_ACTIVE_WINDOW_MS}ms`);
+      }
+      loginPollRef.current = setTimeout(tick, rate);
     };
     loginPollTickRef.current = tick;
+    loginPollRateRef.current = LOGIN_POLL_FAST_MS;
     loginPollRef.current = setTimeout(tick, LOGIN_POLL_FAST_MS);
-    return () => { alive = false; stop(); };
+    // The stop is logged HERE, not in the `step !== 'login'` branch above: React
+    // runs this cleanup BEFORE the next effect body, so by the time that branch
+    // looks there is no timer left to notice and the line never came out.
+    return () => {
+      alive = false;
+      console.log(`[Cart ${ts()}]`, `[login-poll] stopped after ${loginPollSeqRef.current} ask(s)`);
+      stop();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, loginCheckScript]);
 
@@ -4041,8 +4089,15 @@ export default function WebViewCartSheet({
           // The poll got its answer here too -- a store with no rail is asked
           // this way, and a rail store falls back to it when its session probe
           // cannot answer.
+          // Read before clearing — see the rail branch above for why.
+          const wasPollingDom = loginPollBusyRef.current;
           if (loginPollFreeRef.current) { clearTimeout(loginPollFreeRef.current); loginPollFreeRef.current = null; }
           loginPollBusyRef.current = false;
+          if (wasPollingDom && stepRef.current === 'login') {
+            console.log(`[Cart ${ts()}]`, `[login-poll] ask #${loginPollSeqRef.current} →`,
+              msg.isLoggedIn ? 'SIGNED IN' : 'signed out', '(page check)',
+              `in ${Date.now() - loginPollAskedAtRef.current}ms`);
+          }
           // Funnel: the login gate is the first place a run can silently stall.
           // Recorded on the RESULT (not at injection) because the recorder only
           // exists once the server has issued a runId.
@@ -4749,9 +4804,31 @@ export default function WebViewCartSheet({
           if (stepRef.current === 'login_check' || stepRef.current === 'login') {
             const onLoginStep = stepRef.current === 'login';
             // The poll got its answer, so the next tick may ask again.
+            //
+            // Read BEFORE it is cleared: an answer that nothing asked for is the
+            // login check that put the user on this screen in the first place,
+            // and pairing it with "ask #0" produced a line claiming a reply
+            // 1,788,401,254,337ms after a question nobody put.
+            const wasPolling = loginPollBusyRef.current;
             if (loginPollFreeRef.current) { clearTimeout(loginPollFreeRef.current); loginPollFreeRef.current = null; }
             loginPollBusyRef.current = false;
-            console.log(`[Cart ${ts()}]`, 'login answered over the network:', JSON.stringify(msg).slice(0, 200));
+            if (wasPolling) console.log(`[Cart ${ts()}]`,
+              `[login-poll] ask #${loginPollSeqRef.current} →`,
+              !msg.ok ? 'could not tell (' + (msg.why || 'no reason') + ')'
+                : msg.loggedIn ? (netRail()?.sessionUsable(msg) ? 'SIGNED IN' : 'signed in, store not ready yet')
+                : 'signed out',
+              `in ${Date.now() - loginPollAskedAtRef.current}ms`);
+            // THE FULL ANSWER, but not once a second.
+            //
+            // This line was written for a one-shot login check and now sits in a
+            // poll. Two hundred characters of JSON per tick is how the rail
+            // phase got pushed out of the device log once already. The compact
+            // `[login-poll]` line above carries the routine ticks; the whole
+            // answer is kept for the ones that decide something -- a check that
+            // was not a poll, or one that says the user is in.
+            if (!wasPolling || msg.loggedIn) {
+              console.log(`[Cart ${ts()}]`, 'login answered over the network:', JSON.stringify(msg).slice(0, 200));
+            }
             if (!msg.ok) {
               // Could not answer — usually the page had not finished its
               // bootstrap. Not a signed-out user, and saying so would wall one,
