@@ -81,10 +81,11 @@ jest.mock('react-native-safe-area-context', () => {
  * asked too early" sees that injection and passes no matter what the run did.
  * The first version of this file did exactly that and survived the mutant.
  */
+let mockPrewarmedCart: { count: number | null; items: unknown[] } | null = null;
 jest.mock('../../src/context/LoginPrewarmContext', () => ({
   useLoginPrewarm: () => ({
     getStatus: () => 'loggedIn',
-    takePrewarmedCart: () => null,
+    takePrewarmedCart: () => mockPrewarmedCart,
     getSearchResults: () => new Map(),
     setSearchTerms: () => {},
     checkStore: () => {},
@@ -106,7 +107,7 @@ jest.mock('../../src/lib/api', () => ({
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 import { __applyAutomationConfigForTests, __resetAutomationConfigForTests } from '../../src/lib/automation-config';
 
-beforeEach(() => { injected.length = 0; });
+beforeEach(() => { injected.length = 0; mockPrewarmedCart = null; });
 afterEach(() => __resetAutomationConfigForTests());
 
 const unchosen = { id: 'm1', name: 'Quesadilla', ingredients: [
@@ -195,6 +196,30 @@ describe('a rail script is asked of the store, never of about:blank', () => {
     post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     loadEnd('https://www.aldi.us/robots.txt');
     expect(injected.filter(isSession).length).toBeGreaterThan(0);
+  });
+
+  // THE PATH THE DEVICE ACTUALLY TOOK, and the only one that reaches the
+  // session ask cold. With a prewarmed baseline there is no cart read to wait
+  // on: the run skips straight from the baseline to the search flow, and the
+  // session ask is the first script it injects — three milliseconds after the
+  // sheet opened, with the quiet page still 2.5s away.
+  //
+  // Without this case the session's own gate is unreachable from a test, because
+  // the gated cart read in front of it has already forced a load to land.
+  describe('when the prewarm already has the baseline', () => {
+    it('still asks no session until a store page has loaded', () => {
+      mockPrewarmedCart = { count: 0, items: [] };
+      openAldi();
+      expect(injected.filter(isCartRead)).toHaveLength(0);
+      expect(injected.filter(isSession)).toHaveLength(0);
+    });
+
+    it('asks as soon as the quiet page lands', () => {
+      mockPrewarmedCart = { count: 0, items: [] };
+      const { loadEnd } = openAldi();
+      loadEnd('https://www.aldi.us/robots.txt');
+      expect(injected.filter(isSession).length).toBeGreaterThan(0);
+    });
   });
 
   it('ignores a page that is not the store', () => {
