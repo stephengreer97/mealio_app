@@ -203,7 +203,8 @@ flowchart LR
     A1 --> A2(["the user adds, taps Next"])
 
     S1 -.->|"cannot answer"| ASSIST
-    S2 -.->|"one term unanswered"| REV(["that item &rarr; review,<br/><i>and asked again by INGREDIENT name<br/>so the card has alternatives on it</i>"])
+    S2 -.->|"any row that reaches review"| REV(["that item &rarr; review,<br/><i>and asked again by INGREDIENT name —<br/>EVERY unmatched row, not only the empty<br/>ones. merged with what the product-name<br/>search found, deduped by product id,<br/>ranked against the ingredient</i>"])
+    REV --- REVWHY{{"Near-variants used to be treated as the better offer, and they are —<br/>while the product still exists. When it does not they are other sizes<br/>of a discontinued line, and a row with two poor ones is no better<br/>served than a row with none. It only LOOKS better served.<br/>Merged rather than swapped: swapping was safe only while this ran<br/>for rows that had nothing to lose."}}
     S3 -.->|"no cart baseline"| ASSIST
 
     classDef net fill:#1e3a8a,stroke:#3b82f6,color:#fff
