@@ -1765,6 +1765,13 @@ describe('every reason an unwritten item can carry routes it to review', () => {
     'needs_weight',        // sold by weight, no amount chosen
     'needs_preference',    // needs a variant chosen first
     'quantity_limit_reached', // the cart is already at the store's cap
+    // The cart already holds it and the store's write can only ADD a new line,
+    // so a retry meets the same wall. Stephen, 2026-09-03: "the final cart page
+    // said we could not add a couple items. Why not? If they're not available,
+    // why were we not sent to review?" — they were available; they were already
+    // his. The done screen is where he can do nothing about it; review is where
+    // he can.
+    'line_already_present',
   ] as const;
 
   it.each(REASONS_ON_UNWRITTEN_ITEMS)('%s is a definitive failure, not a shortfall', (reason) => {

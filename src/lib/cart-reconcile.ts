@@ -493,7 +493,16 @@ export function reconcileParallelAdd(
     if (r && !r.success && (r.reason === 'out_of_stock' || r.reason === 'no_results'
         || r.reason === 'quantity_limit_reached'
         || r.reason === 'low_confidence' || r.reason === 'needs_weight'
-        || r.reason === 'search_unanswered' || r.reason === 'needs_preference')) {
+        || r.reason === 'search_unanswered' || r.reason === 'needs_preference'
+        // The cart already holds it and this store's write can only ADD a new
+        // line, so a retry finds exactly the same wall. Stephen, 2026-09-03:
+        // "the final cart page said we could not add a couple items. Why not?
+        // If they're not available, why were we not sent to review?" — they
+        // WERE available; they were already his. Routing them to retry sent
+        // them round the same refusal and then reported them as unadded on the
+        // done screen, where he could do nothing about them. Review is where he
+        // can.
+        || r.reason === 'line_already_present')) {
       definiteFailures.push({ index, reason: r.reason });
       return;
     }

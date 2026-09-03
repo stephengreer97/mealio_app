@@ -296,6 +296,20 @@ const WEG_PRELUDE = `
   };
 
   /** One line item, shaped exactly as the site shapes it. */
+  /**
+   * Does the user have to choose a WEIGHT for this?
+   *
+   * Only when the unit of sale is itself a weight. "Each" is not, whatever the
+   * price is quoted per, and whatever isSoldByWeight says.
+   */
+  WG.soldByWeight = function (h) {
+    var u = String(h.onlineSellByUnit == null ? '' : h.onlineSellByUnit).toLowerCase().replace(/[. ]/g, '');
+    if (u) return u === 'lb' || u === 'lbs' || u === 'pound' || u === 'pounds'
+      || u === 'oz' || u === 'ounce' || u === 'ounces' || u === 'kg' || u === 'g';
+    // No unit named at all: fall back to the flag, which is the only signal left.
+    return !!h.isSoldByWeight;
+  };
+
   WG.lineItemFor = function (h, qty) {
     var cats = h.category || [];
     var top = cats.length ? cats[cats.length - 1] : null;
@@ -318,6 +332,8 @@ const WEG_PRELUDE = `
       custom: custom,
       distributionChannelKey: price.channelKey || (h.storeNumber + '-Delivery'),
       isAlcoholic: !!h.isAlcoholic,
+      // The STORE's own flag here, not our sold-by-weight reading: this field
+      // is echoed back to their API and has to say what their index says.
       isSoldByWeight: !!h.isSoldByWeight,
       onlineApproxUnitWeight: h.onlineApproxUnitWeight != null ? h.onlineApproxUnitWeight : 0,
       onlineSellByUnit: h.onlineSellByUnit || 'ea',
@@ -831,7 +847,20 @@ ${WEG_PRELUDE}
       price: price,
       productId: h.productId != null ? String(h.productId) : null,
       skuId: h.skuId != null ? String(h.skuId) : null,
-      isWeightItem: !!h.isSoldByWeight,
+      // SOLD by weight, not PRICED by weight. isSoldByWeight is true for both,
+      // so it cannot be the discriminator -- MEASURED 2026-09-03:
+      //
+      //   Butter Boy French Butter  isSoldByWeight true, onlineSellByUnit "Each",
+      //                             approxUnitWeight 0.25, $6.48 a unit
+      //   Fresh Sea Scallops        isSoldByWeight true, onlineSellByUnit "lb",
+      //                             approxUnitWeight 0,   $32.99 a pound
+      //
+      // Wegmans shows an average weight and a per-pound price on plenty of
+      // things it sells BY THE UNIT. Reading isSoldByWeight sent the butter to
+      // review asking Stephen to choose a weight for something you buy one of:
+      // "That is not true. Wegmans gives an average weight, but it is sold by
+      // the unit qty."
+      isWeightItem: WG.soldByWeight(h),
       maxOrderQuantity: h.maxQuantity != null ? Number(h.maxQuantity) : null,
       // Kept so a saved product survives a store change: the id is per store,
       // the barcode is not. See the note on storeProductKey.

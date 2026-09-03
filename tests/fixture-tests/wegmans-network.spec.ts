@@ -734,3 +734,42 @@ describe('an expired token is refreshed, not surrendered to', () => {
     expect(await runner.page.evaluate('window.__refreshBody || null')).toBeNull();
   }, AT_WEGMANS);
 });
+
+describe('priced by weight is not sold by weight', () => {
+  // Stephen, 2026-09-03: "Mealio says its because it is sold by weight and we
+  // need to choose a weight. That is not true. Wegmans gives an average weight,
+  // but it is sold by the unit qty."
+  //
+  // MEASURED against store 140, and isSoldByWeight is true for BOTH of these,
+  // so it cannot be the discriminator:
+  //
+  //   Butter Boy French Butter   onlineSellByUnit "Each", approx 0.25lb, $6.48 a unit
+  //   Fresh Sea Scallops         onlineSellByUnit "lb",   approx 0,      $32.99 a pound
+  //
+  // The unit of SALE is the answer. Asking someone to pick a weight for a thing
+  // you buy one of sends it to review for nothing.
+  const check = (label: string, over: Record<string, unknown>, expected: boolean) => {
+    itWithFixture('shop.html', label, async (runner) => {
+      await runner.inject(cachedToken());
+      await runner.inject(netStub({ hits: [hit(over)] }));
+      await runner.inject(buildWegmansNetworkSearchBatchScript(['butter'], { storeNumber: '140' })!);
+      const msg = await runner.waitForMessage('SEARCH_RESULT', 20_000) as Record<string, unknown>;
+      const cands = msg.candidates as Array<Record<string, unknown>>;
+      expect(cands[0].isWeightItem).toBe(expected);
+    }, AT_WEGMANS);
+  };
+
+  check('sold Each with an average weight is NOT a weight item',
+    { isSoldByWeight: true, onlineSellByUnit: 'Each', onlineApproxUnitWeight: 0.25 }, false);
+  check('sold by the pound IS a weight item',
+    { isSoldByWeight: true, onlineSellByUnit: 'lb', onlineApproxUnitWeight: 0 }, true);
+  check('sold "ea", lower case, is not',
+    { isSoldByWeight: true, onlineSellByUnit: 'ea' }, false);
+  check('sold by the ounce is',
+    { isSoldByWeight: true, onlineSellByUnit: 'oz' }, true);
+  // With no unit named the flag is the only signal left, so it is used.
+  check('no unit named falls back to the flag (true)',
+    { isSoldByWeight: true, onlineSellByUnit: null }, true);
+  check('no unit named falls back to the flag (false)',
+    { isSoldByWeight: false, onlineSellByUnit: null }, false);
+});
