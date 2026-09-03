@@ -27,13 +27,31 @@ of <code>/</code> or <code>/shop</code>, or behind any of four plausible <code>/
 every store's catalogue &mdash; real products under real names carrying ids that are not valid
 where this user shops. So the rail REFUSES to search without a store number and caches it for a day
 once anything learns it.</p>
-<p><b>The cart half is the expensive half.</b> MSAL keeps the bearer ENCRYPTED
-(<code>{id, nonce, data}</code>, with a <code>msal.cache.encryption</code> cookie), and the commerce
-API refuses the cookie session: a <code>no-cors</code> request comes back <b>opaque</b>, so it is
-answered and we are not allowed to read it. The rail therefore has a token PROVIDER &mdash; a cache
-keyed on the JWT's own expiry, and a capture that takes the header off the site's own commerce call.
-A 401 forgets the cache. <code>sessionUsable</code> is the strictest of the four rails: only a token
-that has actually been USED lets a run start.</p>
+<p><b>The bearer is READABLE, 2026-09-03.</b> This said the opposite for a fortnight, and the rail
+waited for a capture that could never happen &mdash; it takes the header off the site's own commerce
+call, and the rail runs on <code>robots.txt</code> where no site code ever runs. So Wegmans had no
+session at all: search answered 0 of 6 and the cart read said <code>no_token</code>.</p>
+<p>MSAL's scheme, read out of their own bundle and confirmed on a device:</p>
+<pre style="overflow-x:auto"><code>cookie msal.cache.encryption = { id, key }          32-byte key, base64
+entry  msal.&lt;...&gt;            = { id, nonce, data }
+
+salt = base64(entry.nonce)     the field is named nonce; it IS the salt
+info = the clientId, but ONLY when the entry key contains it
+aes  = HKDF-SHA256(cookie.key, salt, info) -> AES-GCM 256
+iv   = TWELVE ZERO BYTES       not the stored nonce</code></pre>
+<p>Same-origin is all it needs, so the quiet page can do it: <b>no network, no page load, nothing
+for the user to do</b>. The clientId comes out of the STORAGE KEY rather than <code>window.msal</code>,
+which only exists on the shop app. A cache keyed on the JWT's own expiry still fronts it, and a 401
+still forgets it.</p>
+<p><b>And every commerce call needs <code>?api-version=</code>.</b> Without it the gateway rejects
+BEFORE it adds CORS headers, so the browser reports a bare "Failed to fetch" with no status &mdash;
+indistinguishable from a dead host, which is exactly the wrong conclusion this map used to draw.
+With it, <code>/commerce/account/customer</code> answers <b>200 in 302&nbsp;ms</b>.</p>
+<p><b>&#9888; STILL BLOCKED: the store number.</b> Not in the customer profile (which carries only
+<code>hasInstacartAccountsForStores</code>), not in localStorage, sessionStorage, cookies, IndexedDB,
+the shop HTML, or any commerce endpoint this account populates. The shop app knows it &mdash; it
+fetches <code>/api/stores/store-number/140</code> &mdash; but keeps it somewhere not yet found.
+Search stays refused without it, and that refusal is correct: see below.</p>
 <p><b>&#9888; The product id is PER STORE.</b> The same Daisy sour cream is <code>626485</code> at
 store 50 and <code>608294</code> at store 140, and unfiltered "sour cream" returns 32,223 hits
 &mdash; every store's catalogue at once. So the <code>storeNumber</code> filter is not optional, and
