@@ -69,3 +69,56 @@ exists to avoid.
    page load. That is worth an hour and nothing else here is.
 3. **Revisit if Amazon Fresh moves to a JSON storefront.** Their newer surfaces
    do use GraphQL; this one does not yet.
+
+---
+
+## 2026-09-03 — a second look, on the device
+
+Asked to compare Walmart and Amazon Fresh. **Walmart is ready to build; this is
+not.** What changed and what did not:
+
+### Login and cart count — MEASURED, zero network
+
+Both are readable from a page the run is already on, with no request at all:
+
+| fact | where |
+|---|---|
+| signed in | `x-main` cookie present (73 chars), and `#nav-link-accountList` has no `signin` href |
+| cart count | `#nav-cart-count` text — read `14` on the live page |
+| customer id | `ATT22UAS4XJJ8`, sent in the page's own `/cross_border_interstitial_sp/render` POST |
+
+That is a better login signal than three of the four shipped rails have.
+
+### Search — THE PROBLEM
+
+Walmart hands its results over as JSON inside the page. Amazon does not:
+
+```
+data-asin attributes          0
+<script type="application/json">  0
+add-to-cart forms             0
+```
+
+`/s?k=<term>&i=amazonfresh` rendered a page whose title was right
+(`Amazon.com : sour cream`) and whose result grid was not in the markup at the
+moment it was read. So the results are either injected later by script or come
+from a route not yet found. Either way there is no structured payload to parse,
+and parsing the rendered grid is the DOM work this whole effort exists to
+delete.
+
+### Cart write — NOT CAPTURED
+
+The recorder that caught Wegmans and Walmart in one click each found no add
+control to press: 119 buttons on `/s`, 39 on the Fresh variant, none matching
+add-to-cart. Amazon's classic form posts (`/gp/aws/cart/add.html`,
+`/gp/add-to-cart/json`) are plausible and were NOT tested — writing a guessed
+endpoint to a real basket is how the Wegmans cart got replaced, so it was not
+tried.
+
+### Verdict
+
+Amazon Fresh needs one more session with a Fresh page that actually renders its
+grid — most likely the ALM storefront reached through the store picker rather
+than a bare `/s` URL, since `almStorefront` markers are present but the results
+are not. Until then the open questions are the two that matter: **is there a
+JSON search**, and **what does an add actually POST**.

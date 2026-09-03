@@ -78,30 +78,74 @@ further.
   buys 12–18 seconds. For Walmart, a session with no page-sensor history may
   look *more* like a bot, not less. Measure it before assuming.
 
-## Login detection — INFERRED
+## Login detection — PARTLY MEASURED, 2026-09-03
 
-`accountLandingPage` and `GetUserResidency` both answered signed-in. Either is a
-candidate. Cheaper and better: Walmart's own bootstrap
-`GET /orchestra/api/ccm/v3/bootstrap` is a plain REST call — check whether its
-body names the customer. **It answered 429 when tried, so this is untested.**
+`__NEXT_DATA__` on a signed-in page contains a `"customerId":"…"` — present and
+non-empty when signed in. Zero network, same origin, no page of our own beyond
+the search document a run fetches anyway.
 
-## Search — INFERRED
+Not yet measured: what a signed-OUT page carries in that field, which is the
+half that actually decides. Check it before trusting it — the Albertsons
+early-session bug came from exactly this shape of assumption.
 
-Not captured: the search navigation was what got blocked on the desktop, and by
-the time the phone was driving, the waiting room had started. Walmart's search
-operation is well known to be in the `search` domain
-(`/orchestra/search/graphql/Search/<hash>`), and the app's existing
-`walmart.ts` already has a working search URL for the assisted path.
+## Search — MEASURED, 2026-09-03
 
-## Cart write — INFERRED
+**The results are in the page, as JSON.** `/search?q=<term>` is server-rendered
+Next.js, and `#__NEXT_DATA__` carries:
 
-`cartxo` holds `MergeAndGetCart` and `clearCartWarnings`, so the add is in the
-same domain. Expect `addToCartV2` or `AddToCart`, POST,
-`{"variables":{"input":{"cartId":…,"items":[…]}}}`.
+```
+props.pageProps.initialData.searchResult.itemStacks[].items[]
+```
 
-**Bulk add — leaning yes.** `MergeAndGetCart` already takes an input object with
-a strategy, and Walmart's "add all to cart" from a list is a single call in
-their own UI. The `items` array is the thing to confirm.
+So a search is ONE GET of an HTML document and a `JSON.parse` of one script tag
+— no rendering, no DOM walking, no selectors to drift. That is a different
+proposition from the other three rails (which call an API directly) but it has
+the same properties: one request, structured output.
+
+`props.pageProps.persistedQueriesConfig` confirms `enablePersistedQueries: true`,
+so a pure-GraphQL search exists too; the SSR route needs no hash and is the
+cheaper thing to build first.
+
+## Cart write — MEASURED, 2026-09-03
+
+Captured by clicking Add on a real search page with a fetch/XHR recorder
+installed before the page's own scripts.
+
+```
+POST /orchestra/home/graphql/updateItems/f7a7a5c72f31319f198a9097f111a1a5f121ed523e4400fcc215aa98152c5e4b
+{"variables":{
+  "getDetailedAccesspoint": false,
+  "input": {
+    "cartId": "3d56809c-…",
+    "items": [{ "offerId": "8EFDEF50A94834269068E1D2F4DFF5EF",
+                "quantity": 1, "usItemId": "", "name": "Fruit Riot Sour Candy Mango Mix, 8 oz" }],
+    "enableLiquorBox": true, "skipPolicyCheck": false, "enableCartSplitClarity": false,
+    "features": ["lmpdel","mlrx","vsrx","maappl","accfournudge","potp","byod","vptires",
+                 "pdr","gepmss","dd","qsr","qsr_qty","qsro4w","cbs","tfd","moqvariant",
+                 "wfss","dynevgn"]
+  },
+  …~20 further boolean feature flags
+}}
+```
+
+**Three things the guess above got wrong, and they matter:**
+
+| guessed | measured |
+|---|---|
+| domain `cartxo` | **`home`** |
+| name `addToCartV2` / `AddToCart` | **`updateItems`** |
+| item keyed by usItemId | **`offerId`** — `usItemId` is sent EMPTY |
+
+**Bulk add — yes, confirmed.** `items` is a list.
+
+**`cartId` needs no call.** It is in localStorage under `glassCartIdMap`
+(~106 bytes, keyed by cart type). The same id appears in both `MergeAndGetCart`
+and `updateItems`.
+
+Unmeasured: whether `updateItems` SETS a line or ADDS to it. Both ALDI and
+Wegmans surprised me on exactly this question — Wegmans turned out to do BOTH
+depending on whether a line id is present — so measure it before shipping, with
+an item already in the cart, and read the cart back.
 
 ## Getting the hashes
 
