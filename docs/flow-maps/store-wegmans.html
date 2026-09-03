@@ -77,6 +77,14 @@ to the B2C token endpoint, DISCOVERED from the authority's own public
 <code>openid-configuration</code> rather than assembled from guesses. The scope comes off the
 <i>expired</i> access token, the only record of what to ask for. The rotated refresh token is kept in
 our own storage and never written back into MSAL's encrypted cache.</p>
+<p><b>&#9888; PRICED by weight is not SOLD by weight.</b> <code>isSoldByWeight</code> is true for
+both of these, so it cannot be the discriminator:</p>
+<table><tr><th>product</th><th><code>onlineSellByUnit</code></th><th>approx</th><th>price</th></tr>
+<tr><td>Butter Boy French Butter</td><td><b>Each</b></td><td>0.25&nbsp;lb</td><td>$6.48 a unit, quoted $25.89/lb</td></tr>
+<tr><td>Fresh Sea Scallops</td><td><b>lb</b></td><td>0</td><td>$32.99 a pound</td></tr></table>
+<p>The unit of SALE is the answer. Reading the flag asked the user to choose a weight for a block of
+butter you buy one of. The flag is still ECHOED to their API on a write &mdash; that field has to say
+what their index says &mdash; but it does not decide our screens.</p>
 <p><b>&#9888; A WRITE MUST NAME ITS CART.</b> Sent without <code>cartID</code> and
 <code>cartVersion</code> the API does not fail &mdash; it CREATES A NEW CART, and the existing basket
 stops being the active one. The app passes <code>knownLines</code> (the prewarmed baseline: held
