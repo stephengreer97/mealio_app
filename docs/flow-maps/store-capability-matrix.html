@@ -102,9 +102,13 @@
         sheet think a signed-in user is signed out &mdash; and a refined one ~1.3&nbsp;s later
         once the API keys are resolved and the token is proved against a real cart read. Only
         the refined one can search or write. The engine had "a session probe answers once" baked
-        in and took the first: measured 2026-09-02 as <code>wrote 0 of 29</code> and a full
-        basket handed back to the user. The login gate still answers off the early one, which is
-        the entire reason it exists.</td>
+        in and took the first: measured 2026-09-02 as <code>wrote 0 of 29</code> and twenty-nine
+        <code>401</code>s, because the subscription key the write reads is a page global that only
+        the refined answer's cart read sets. Asked in THREE places, all of which had it wrong: the
+        run's session phase, the search prewarm, and the <code>login_check</code> branch that
+        starts the run. The silent login probe had the same fault in a different shape and read
+        the cart twice. The login gate still answers off the early one, which is the entire reason
+        it exists.</td>
         <td><b>The write's own response.</b> It returns the cart, so a write that succeeded is a
         confirmed landing and says so (<code>HebAddConfirmation.via = 'network'</code>) &mdash;
         which is what lets the reconcile refuse a cart read that contradicts it.</td>
