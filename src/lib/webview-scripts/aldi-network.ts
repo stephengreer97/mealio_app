@@ -632,6 +632,10 @@ export function buildAldiNetworkAddBatchScript(
     shopId?: string | null;
     knownLines?: Record<string, number> | null;
     absoluteQty?: boolean | null;
+    /** The tenant whose storefront holds the shop id. ALDI is the only banner
+     *  that has ever run through this rail; the option exists so the next one
+     *  does not have to discover this the hard way. */
+    slug?: string;
   } = {},
 ): string | null {
   const writable = items.filter((i) => !!i.productId);
@@ -661,6 +665,30 @@ ${IC_PRELUDE}
   ];
 
   var readCart = async function () {
+    // THE SHOP, FOUND HERE IF NOBODY HANDED IT OVER.
+    //
+    // CartItems needs a shopId, and the rail's addBatch is not given one -- it
+    // gets items and knownLines and nothing else. So SHOP was null on every
+    // run, CartItems answered with nothing usable, and the held map came back EMPTY
+    // for a cart full of items.
+    //
+    // That is not a quiet degradation on this store, because its write is
+    // ABSOLUTE: with have stuck at 0 the script writes the WANTED amount as the
+    // line's whole total. An item the user already had three of, asked for once, would be
+    // SET TO ONE. It could take things out of the cart. The after-write check
+    // was blind for the same reason and could not have caught it.
+    if (!SHOP) {
+      // findShopId(slug, budgetMs) returns the TRIES it made, not an id — the
+      // first one that found something is the answer. Same walk the cart read
+      // does; calling it as if it returned the id put an ARRAY in SHOP, which
+      // is falsy in none of the right ways and made this look fixed when it was
+      // not.
+      try {
+        var tries2 = await IC.findShopId('${opts.slug ?? 'aldi'}', 15000);
+        for (var t2 = 0; t2 < tries2.length; t2++) if (tries2[t2] && tries2[t2].v) { SHOP = String(tries2[t2].v); break; }
+      } catch (e) {}
+    }
+    if (!SHOP) return null;
     var carts = await IC.gql('ActiveCarts', {}, 12000);
     if (!carts.ok) return null;
     var list = [];
@@ -668,9 +696,17 @@ ${IC_PRELUDE}
     if (!list.length) return null;
     var cartId = String(list[0].id);
     var items = await IC.gql('CartItems', { id: cartId, shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000);
+    // A CART THAT COULD NOT BE READ IS NOT AN EMPTY CART.
+    //
+    // This used to fall through and return an empty held map, which on a store
+    // whose write is ABSOLUTE means every item looks unheld and every line gets
+    // SET to the wanted amount. An unreadable cart would quietly overwrite the
+    // user's quantities. Returning null makes the add report no_cart and touch
+    // nothing.
+    if (!items.ok) return null;
     var held = {};
     var rows = [];
-    if (items.ok) {
+    {
       var lines = [];
       try { lines = items.data.userCart.cartItemCollection.cartItems || []; } catch (e) {}
       for (var i = 0; i < lines.length; i++) {

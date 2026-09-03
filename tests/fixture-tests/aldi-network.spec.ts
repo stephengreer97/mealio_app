@@ -376,3 +376,45 @@ describe('the operation hashes', () => {
     expect(cached).toBeNull();
   }, AT_ALDI);
 });
+
+describe('the add reads the cart it is writing to', () => {
+  const item = (idx: number, id: string, qty: number) =>
+    ({ idx, productId: id, quantity: qty, name: 'Item ' + id });
+
+  // Stephen: "does this bug exist in ALDI too? I can add items which are
+  // already in my cart, right?" It did, and it was worse than the Wegmans one.
+  //
+  // CartItems needs a shopId. The rail's addBatch is never given one — it gets
+  // items and knownLines and nothing else — so SHOP was null, the cart read
+  // inside the add answered with nothing usable, and `held` was EMPTY for a
+  // cart full of items.
+  //
+  // On a store whose write is ABSOLUTE that does not degrade quietly. With have
+  // stuck at 0 the script writes the WANTED amount as the line's whole total:
+  // an item the user already had three of, asked for once, would be SET TO ONE.
+  // It could take things out of the cart. The after-write check read the same
+  // empty map, so it could not have caught it either.
+  itWithFixture('storefront.html', 'finds the shop itself, so held quantities are real', async (runner) => {
+    await runner.inject(gqlStub({ cart: { 'items_23898-1': 2 } }));
+    // No shopId passed — exactly how the rail calls it.
+    await runner.inject(buildAldiNetworkAddBatchScript([item(0, 'items_23898-1', 3)], { absoluteQty: true })!);
+    await runner.waitForMessage('NET_ADD_DONE', 25_000);
+    const writes = await runner.page.evaluate('window.__writes') as Array<Record<string, unknown>>;
+    expect(writes).toHaveLength(1);
+    // held 2 + wanted 3. Not 3, which is what an empty baseline would send —
+    // and which would have REDUCED a line holding more than that.
+    expect(writes[0].quantity).toBe(5);
+  }, AT_ALDI);
+
+  itWithFixture('storefront.html', 'a cart it cannot read is not an empty cart', async (runner) => {
+    // The other half: if the read fails, the run must not fall through to
+    // "nothing is held" and start writing absolute quantities against it.
+    await runner.inject(gqlStub({ fail: 'CartItems', failCode: 'INTERNAL' }));
+    await runner.inject(buildAldiNetworkAddBatchScript([item(0, 'items_23898-1', 3)], { absoluteQty: true })!);
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
+    expect(res.success).toBe(false);
+    expect(res.reason).toBe('no_cart');
+    const writes = await runner.page.evaluate('window.__writes') as unknown[];
+    expect(writes).toHaveLength(0);
+  }, AT_ALDI);
+});

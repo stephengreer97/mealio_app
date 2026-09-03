@@ -3,6 +3,7 @@
 import { chromium, Page } from 'playwright';
 import { getNetworkRail } from '../../src/lib/webview-scripts/network-rail';
 import { buildWegmansCartReadScript } from '../../src/lib/webview-scripts/wegmans-network';
+import { buildAldiCartReadScript } from '../../src/lib/webview-scripts/aldi-network';
 
 const ALL: Record<string, unknown>[] = [];
 let bound = false;
@@ -27,14 +28,17 @@ async function collect(page: Page, script: string, want: string[], ms = 40000) {
 }
 
 (async () => {
-  const rail = getNetworkRail('wegmans')!;
+  const STORE = process.env.RAIL_STORE || 'wegmans';
+  const rail = getNetworkRail(STORE)!;
+  const cartRead = STORE === 'aldi' ? buildAldiCartReadScript() : buildWegmansCartReadScript();
+  const HOST = STORE === 'aldi' ? 'https://www.aldi.us/robots.txt' : 'https://www.wegmans.com/robots.txt';
   const b = await chromium.connectOverCDP('http://localhost:9333');
-  const page = b.contexts()[0].pages().find((p) => /wegmans\.com/.test(p.url()));
+  const page = b.contexts()[0].pages().find((p) => /wegmans\.com|aldi\.us/.test(p.url()));
   if (!page) { console.log('no wegmans page'); process.exit(1); }
-  await page.goto('https://www.wegmans.com/robots.txt', { waitUntil: 'domcontentloaded', timeout: 40000 });
+  await page.goto(HOST, { waitUntil: 'domcontentloaded', timeout: 40000 });
   await page.waitForTimeout(1200);
 
-  const before = await collect(page, buildWegmansCartReadScript(), ['CART_COUNT']);
+  const before = await collect(page, cartRead, ['CART_COUNT']);
   const b0 = before.find((m) => m.type === 'CART_COUNT') as any;
   console.log('cart before:', b0.count, 'lines', (b0.items || []).length);
 
@@ -57,7 +61,7 @@ async function collect(page: Page, script: string, want: string[], ms = 40000) {
   const res = await collect(page, script, ['NET_ADD_DONE']);
   for (const m of res) console.log(' ', JSON.stringify(m).slice(0, 300));
 
-  const after = await collect(page, buildWegmansCartReadScript(), ['CART_COUNT']);
+  const after = await collect(page, cartRead, ['CART_COUNT']);
   const a0 = after.find((m) => m.type === 'CART_COUNT') as any;
   console.log('cart after:', a0.count, 'items across', (a0.items || []).length, 'lines');
   for (const it of items) {
