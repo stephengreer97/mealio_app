@@ -88,7 +88,7 @@
   <h2>3 &middot; How each store is read</h2>
   <table class="src">
     <tr><th>Store</th><th>Login detection</th><th>Add confirmation</th><th>Cart read (snapshots)</th></tr>
-    <tr><td><b>H-E-B</b><br/><b>Albertsons family</b></td>
+    <tr><td><b>H-E-B</b><br/><b>Albertsons family</b><br/><b>ALDI</b> (and every<br/>Instacart tenant)</td>
         <td><b>The rail's session probe, always.</b> H-E-B asks
         <code>myPreferredStore</code> over GraphQL; Albertsons reads its Angular bootstrap and
         the cart service. It answers all THREE places that decide login &mdash; the silent
@@ -127,7 +127,7 @@
         for a request the store answered in 576&nbsp;ms). A confirmed sign-in hops back to
         <code>railUrl</code> first. It answers the same <code>CART_COUNT</code> the cart page
         used to, so nothing downstream can tell which read replied.</td></tr>
-    <tr><td><b>Walmart</b><br/><b>ALDI</b><br/><b>Amazon Fresh</b><br/><b>Wegmans</b></td>
+    <tr><td><b>Walmart</b><br/><b>Amazon Fresh</b><br/><b>Wegmans</b></td>
         <td>The store's own login check, injected into the page the user is about to drive. This
         is the last DOM script in Mealio, and it is a READ, not automation.</td>
         <td>&mdash; <b>nothing to confirm.</b> Mealio does not add on these stores, so it makes

@@ -7,15 +7,37 @@
   <span class="crumb">Stores &rsaquo; <b>ALDI</b> &middot; Instacart Storefront platform</span></div>
 <header>
   <h1>ALDI &mdash; and the Instacart Storefront platform</h1>
-<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
-<h3>ALDI is ASSISTED (2026-09-01)</h3>
-<p>DOM automation was removed from Mealio. ALDI had no API or in-page rail behind it, so it no
-longer adds to the cart on the user's behalf: <b>Mealio searches each ingredient and hands the
-user the results page; they add what they want and tap Next.</b></p>
+<div class="wrap" style="border-left:4px solid #1a7f4b;padding-left:14px">
+<h3>ALDI HAS A RAIL (2026-09-03)</h3>
+<p>MEAL-211 asked whether this store could have a real rail like H-E-B and the Albertsons family.
+It can, and it does. Every operation was executed against a live signed-in session before a line
+was written &mdash; see <code>docs/network-rail-research/02-aldi.md</code>.</p>
+<table class="src">
+  <tr><th>Phase</th><th>Operation</th><th>Measured</th></tr>
+  <tr><td>Session <b>and</b> cart id</td><td><code>ActiveCarts</code> &mdash; takes no arguments</td><td>176&nbsp;ms</td></tr>
+  <tr><td>Search</td><td><code>AsyncItemSearch</code> &rarr; item ids only</td><td>556&nbsp;ms</td></tr>
+  <tr><td>Hydrate</td><td><code>ItemDetailsRetailerProduct($ids: [ID!]!)</code> &mdash; every term in ONE call</td><td>&mdash;</td></tr>
+  <tr><td>Cart read</td><td><code>CartItems</code></td><td>306&nbsp;ms</td></tr>
+  <tr><td>Add</td><td><code>UpdateCartItemsMutation($cartItemUpdates: [CartsCartItemUpdate!]!)</code></td><td><b>off</b> &mdash; see below</td></tr>
+</table>
+<p><b>Registered against the PLATFORM, not the banner.</b> <code>getNetworkRail</code> never names
+ALDI; it asks <code>isInstacartStore</code>. A tenant added to <code>INSTACART_TENANTS</code> gets
+this rail with no second entry &mdash; the same reasoning that gives fifteen Albertsons banners one
+rail.</p>
+<p><b>Persisted queries only.</b> A query sent with its text is refused
+(<code>PersistedQueryNotSupported</code>), and so is introspection. The rail harvests the
+operation&rarr;hash map out of the storefront's own JavaScript, caches it 12&nbsp;h, and forgets the
+cache on <code>PERSISTED_QUERY_NOT_FOUND</code> &mdash; the Albertsons APIM-key pattern, including
+its forget-on-rejection trigger.</p>
+<p><b>The add is OFF, and not out of caution.</b> Nobody has measured whether this store SETS a cart
+line or ADDS to it. The script therefore writes only where the two readings agree &mdash; the cart
+holds none of the item, so <i>held + wanted</i> is just <i>wanted</i> &mdash; and DECLINES an item
+the cart already holds, with a reason that reaches the review screen. Two fixture tests run the same
+script against a stub that sets and a stub that adds; the cart is correct under both. Measure the
+semantics, set <code>absoluteQty</code>, flip <code>networkAdd</code>.</p>
 <p>Everything below about extractors, add clicks, worker pools and selector drift is
-<b>HISTORY</b>. It is kept because it is the evidence for MEAL-211, which asks whether this store can
-have a real in-page rail like H-E-B and the Albertsons family &mdash; and because the login check
-and the search URL, which the assisted route still uses, are described here too.</p>
+<b>HISTORY</b>, kept as the evidence that led here. The login check and the search URL are still
+what the ASSISTED route uses when the rail is off or cannot answer.</p>
 </div>
 
   <div class="sub">Read off <code>webview-scripts/instacart.ts</code>,
