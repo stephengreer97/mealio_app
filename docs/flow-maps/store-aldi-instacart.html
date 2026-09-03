@@ -29,7 +29,22 @@ rail.</p>
 operation&rarr;hash map out of the storefront's own JavaScript, caches it 12&nbsp;h, and forgets the
 cache on <code>PERSISTED_QUERY_NOT_FOUND</code> &mdash; the Albertsons APIM-key pattern, including
 its forget-on-rejection trigger.</p>
-<p><b>The add is OFF, and not out of caution.</b> Nobody has measured whether this store SETS a cart
+<p><b>The add is ON as of 2026-09-03, and the question below is answered.</b> Stephen authorised a
+single write: the cart held 1 of <code>items_23898-46580608</code>, we wrote <code>quantity 2</code>,
+read it back as <b>2 and not 3</b>, and restored it to 1. The line is <b>SET</b> &mdash;
+<code>quantity</code> is absolute, so <i>held + wanted</i> (what this script always wrote) is right
+and the refusal below is lifted. The storefront's own bundle says the same independently: its
+<code>updateCartItems</code> takes <code>finalQuantity</code> from the value you send and derives the
+delta only for analytics, its bulk-add computes <i>held + wanted</i> itself before sending, the
+variable is called <code>newQuantity</code>, and <code>quantityDelta</code> appears nowhere.</p>
+<p><b>Setting that measurement up found a worse bug.</b> A cart line carries TWO ids &mdash; its own
+<code>id</code> (<code>35303533299</code>, the CART LINE) and <code>basketProduct.itemId</code>
+(<code>items_23898-46580608</code>, the ITEM, and exactly what Search returns). The read used
+<code>li.id</code>, so the held-quantity map was keyed by line ids no search result could match:
+every item looked like <i>have = 0</i>, the refusal could never fire, and the after-write check
+would have called every successful write a failure. Seventeen tests passed over it because the STUB
+emitted the flat shape the broken extractor read rather than the shape the store sends.</p>
+<p><b>The history below.</b> Nobody has measured whether this store SETS a cart
 line or ADDS to it. The script therefore writes only where the two readings agree &mdash; the cart
 holds none of the item, so <i>held + wanted</i> is just <i>wanted</i> &mdash; and DECLINES an item
 the cart already holds, with a reason that reaches the review screen. Two fixture tests run the same
