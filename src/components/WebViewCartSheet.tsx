@@ -1623,6 +1623,36 @@ export default function WebViewCartSheet({
   }, []);
 
   // startParallelSearch drove the search pool. Gone; a choose run now asks the
+  /**
+   * A CHOOSE RUN IS OVER WHEN THE SEARCH IS.
+   *
+   * The user picks the product, so the rail's job ends with the candidates — it
+   * writes nothing. This lived inline in the SEARCH_BATCH_DONE handler, which
+   * meant the run that never sends a search batch never reached it: when every
+   * term was already answered by the prewarm, the shortcut went straight to
+   * netStartAdds.
+   *
+   * MEASURED, ALDI, 2026-09-03: a choose run with all six terms prewarmed ended
+   * on "Items Not Added — 6 items could not be added to cart", which is the
+   * reconcile screen's framing of a run that had never intended to add
+   * anything. On a store whose write is switched ON the same path would have
+   * gone to netStartAdds with products the user had not chosen yet.
+   */
+  const netFinishChoose = useCallback(() => {
+    netChooseOnlyRef.current = false;
+    netActiveRef.current = false;
+    netPhaseRef.current = 'idle';
+    const byIdx = new Map<number, Candidate[]>();
+    activeItemsRef.current.forEach((item, idx) => {
+      const term = item.searchTerm || item.ingredientName;
+      byIdx.set(idx, netCandidatesRef.current.get(term) ?? []);
+    });
+    console.log(`[Cart ${ts()}]`, 'network choose: handing', byIdx.size, 'results to the choose screen');
+    finishParallelSearch(byIdx);
+  }, [finishParallelSearch]);
+  const netFinishChooseRef = useRef(netFinishChoose);
+  netFinishChooseRef.current = netFinishChoose;
+
   // rail and feeds finishParallelSearch directly.
 
   // ── Parallel ADD (FEATURE_PARALLEL_ADD) ─────────────────────────────────────
@@ -2323,9 +2353,12 @@ export default function WebViewCartSheet({
 
     if (missing.length === 0) {
       // Everything was prewarmed. The run skips its search phase entirely.
-      console.log(`[Cart ${ts()}]`, 'network run: all', terms.length, 'terms already prewarmed — straight to writing');
+      console.log(`[Cart ${ts()}]`, 'network run: all', terms.length,
+        'terms already prewarmed — skipping the search phase');
       netSearchTermsRef.current = terms;
       netPhaseRef.current = 'search';
+      // The same fork the end of a search takes. A choose run stops here.
+      if (netChooseOnlyRef.current) { netFinishChooseRef.current(); return; }
       netStartAddsRef.current();
       return;
     }
@@ -5221,24 +5254,7 @@ export default function WebViewCartSheet({
           if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
           console.log(`[Cart ${ts()}]`, 'network search done:', netCandidatesRef.current.size, 'answered,',
             netFailedTermsRef.current.size, 'failed');
-          if (netChooseOnlyRef.current) {
-            // A CHOOSE run: the user picks the product, so the rail's job ended
-            // with the search. Hand the candidates to the same function the
-            // parallel search pool used to call, so the Choose Products screen
-            // is fed identically however the search was done — the pool is gone,
-            // the screen it filled is not.
-            netChooseOnlyRef.current = false;
-            netActiveRef.current = false;
-            netPhaseRef.current = 'idle';
-            const byIdx = new Map<number, Candidate[]>();
-            activeItemsRef.current.forEach((item, idx) => {
-              const term = item.searchTerm || item.ingredientName;
-              byIdx.set(idx, netCandidatesRef.current.get(term) ?? []);
-            });
-            console.log(`[Cart ${ts()}]`, 'network choose: handing', byIdx.size, 'results to the choose screen');
-            finishParallelSearch(byIdx);
-            return;
-          }
+          if (netChooseOnlyRef.current) { netFinishChooseRef.current(); return; }
           netStartAdds();
           return;
         }

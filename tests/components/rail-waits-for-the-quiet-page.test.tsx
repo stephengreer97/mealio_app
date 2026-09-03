@@ -82,11 +82,13 @@ jest.mock('react-native-safe-area-context', () => {
  * The first version of this file did exactly that and survived the mutant.
  */
 let mockPrewarmedCart: { count: number | null; items: unknown[] } | null = null;
+/** Candidates the SEARCH prewarm already has, keyed by term. */
+let mockPrewarmedSearch: Map<string, unknown[]> = new Map();
 jest.mock('../../src/context/LoginPrewarmContext', () => ({
   useLoginPrewarm: () => ({
     getStatus: () => 'loggedIn',
     takePrewarmedCart: () => mockPrewarmedCart,
-    getSearchResults: () => new Map(),
+    getSearchResults: () => mockPrewarmedSearch,
     setSearchTerms: () => {},
     checkStore: () => {},
     statusVersion: 0,
@@ -107,7 +109,11 @@ jest.mock('../../src/lib/api', () => ({
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 import { __applyAutomationConfigForTests, __resetAutomationConfigForTests } from '../../src/lib/automation-config';
 
-beforeEach(() => { injected.length = 0; mockPrewarmedCart = null; });
+beforeEach(() => {
+  injected.length = 0;
+  mockPrewarmedCart = null;
+  mockPrewarmedSearch = new Map();
+});
 afterEach(() => __resetAutomationConfigForTests());
 
 const unchosen = { id: 'm1', name: 'Quesadilla', ingredients: [
@@ -227,5 +233,37 @@ describe('a rail script is asked of the store, never of about:blank', () => {
     loadEnd('about:blank');
     expect(injected.filter(isCartRead)).toHaveLength(0);
     expect(injected.filter(isSession)).toHaveLength(0);
+  });
+});
+
+
+describe('a choose run stops at the choose screen', () => {
+  // The rail's job on a choose run ends with the candidates: the user picks, so
+  // nothing is written. That fork lived only at the end of a search batch, and a
+  // run whose terms were ALL answered by the prewarm sends no batch — it took
+  // the shortcut straight into the add path instead.
+  //
+  // On ALDI, whose write is off, that surfaced as "Items Not Added — 6 items
+  // could not be added to cart" on a run that had never intended to add
+  // anything. On a store whose write is on it would have gone to the adds with
+  // products the user had not chosen.
+  const CANDIDATE = {
+    productName: 'Friendly Farms Sour Cream, 16 oz', imageUrl: null, outOfStock: false,
+    preferences: null, price: '$1.65', productId: 'items_23898-1', skuId: null,
+  };
+
+  it('offers the candidates rather than reporting a failed add', () => {
+    mockPrewarmedCart = { count: 0, items: [] };
+    mockPrewarmedSearch = new Map([['sour cream', [CANDIDATE]]]);
+    const { loadEnd, post, queryByText } = openAldi();
+    loadEnd('https://www.aldi.us/robots.txt');
+    post({
+      type: 'ALDI_SESSION', ok: true, loggedIn: true,
+      cartId: '1', storeId: '8583', retailerId: '12', shoppingContext: 'delivery',
+    });
+    // No SEARCH_RESULT and no SEARCH_BATCH_DONE: the whole point is that this
+    // run never sends a search batch.
+    expect(queryByText('Friendly Farms Sour Cream, 16 oz')).toBeTruthy();
+    expect(queryByText(/could not be added/i)).toBeNull();
   });
 });
