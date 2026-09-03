@@ -71,6 +71,28 @@ jest.mock('react-native-safe-area-context', () => {
   };
 });
 
+/**
+ * A PREWARM THAT HAS ALREADY PROVEN THE LOGIN, which is the state the bug needs
+ * and the state a real phone is almost always in: the probe runs when the store
+ * tab is tapped, long before the sheet opens.
+ *
+ * Without this the sheet falls to its own login check, that check injects the
+ * SAME session script one load later, and a test watching for "was the session
+ * asked too early" sees that injection and passes no matter what the run did.
+ * The first version of this file did exactly that and survived the mutant.
+ */
+jest.mock('../../src/context/LoginPrewarmContext', () => ({
+  useLoginPrewarm: () => ({
+    getStatus: () => 'loggedIn',
+    takePrewarmedCart: () => null,
+    getSearchResults: () => new Map(),
+    setSearchTerms: () => {},
+    checkStore: () => {},
+    statusVersion: 0,
+  }),
+  LoginPrewarmProvider: ({ children }: any) => children,
+}));
+
 jest.mock('../../src/lib/api', () => ({
   kroger: { searchProducts: jest.fn(() => new Promise(() => {})) },
   meals: { update: jest.fn(() => new Promise(() => {})) },
@@ -115,18 +137,25 @@ function openAldi() {
   return { ...view, post, loadEnd };
 }
 
-/** The Instacart session probe, by something only it carries. */
-const isSession = (js: string) => js.includes('__mealioIC');
+// EVERY Instacart rail script shares a prelude, so `__mealioIC` matches all
+// three of them. The first version of this file keyed on it and could not tell
+// the session ask from the cart read that precedes it — which is the difference
+// the tests below are entirely about. Key on what each script POSTS instead.
+const isSession = (js: string) => js.includes('ALDI_SESSION');
+const isCartRead = (js: string) => js.includes('CART_COUNT');
 
 describe('a store whose search is on and whose add is off', () => {
   it('runs a choose on the rail instead of handing the user its search page', () => {
     const { post, loadEnd, queryByText } = openAldi();
+    // The real order, as the device log has it: the baseline is read first, and
+    // the run asks for the session only once it has one.
+    loadEnd('https://www.aldi.us/robots.txt');
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     loadEnd('https://www.aldi.us/robots.txt');
     post({
       type: 'ALDI_SESSION', ok: true, loggedIn: true,
       cartId: '1', storeId: '8583', retailerId: '12', shoppingContext: 'delivery',
     });
-    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     post({
       type: 'SEARCH_RESULT', source: 'network', term: 'sour cream',
       candidates: [{
@@ -139,24 +168,39 @@ describe('a store whose search is on and whose add is off', () => {
   });
 });
 
-describe('the session is asked of the store, never of about:blank', () => {
-  it('injects nothing until a store page has actually loaded', () => {
+describe('a rail script is asked of the store, never of about:blank', () => {
+  // The cart read comes FIRST in a run — the baseline is taken, then the search
+  // flow begins — so on a cold open it is the script that meets about:blank.
+  // The session ask is a few milliseconds behind it. Both are same-origin and
+  // both were ungated.
+  it('reads no cart until a store page has actually loaded', () => {
     openAldi();
-    // The sheet has opened and the run has started; the WebView is on its way to
-    // the quiet page and has arrived nowhere. Asking here is what produced the
-    // `no_response` that ended the run.
+    expect(injected.filter(isCartRead)).toHaveLength(0);
+  });
+
+  it('asks no session until a store page has actually loaded', () => {
+    openAldi();
     expect(injected.filter(isSession)).toHaveLength(0);
   });
 
-  it('asks as soon as the quiet page lands', () => {
+  it('reads the cart as soon as the quiet page lands', () => {
     const { loadEnd } = openAldi();
+    loadEnd('https://www.aldi.us/robots.txt');
+    expect(injected.filter(isCartRead).length).toBeGreaterThan(0);
+  });
+
+  it('gets to the session once the cart has answered', () => {
+    const { loadEnd, post } = openAldi();
+    loadEnd('https://www.aldi.us/robots.txt');
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     loadEnd('https://www.aldi.us/robots.txt');
     expect(injected.filter(isSession).length).toBeGreaterThan(0);
   });
 
-  it('still ignores a page that is not the store', () => {
+  it('ignores a page that is not the store', () => {
     const { loadEnd } = openAldi();
     loadEnd('about:blank');
+    expect(injected.filter(isCartRead)).toHaveLength(0);
     expect(injected.filter(isSession)).toHaveLength(0);
   });
 });

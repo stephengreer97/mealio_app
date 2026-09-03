@@ -1234,6 +1234,26 @@ export default function WebViewCartSheet({
   const navToRef = useRef<(url: string) => void>(() => {});
   /** startLoginCheck, for the entry points defined above it. */
   const startLoginCheckRef = useRef<() => void>(() => {});
+  /**
+   * IS THE WEBVIEW ACTUALLY ON THE STORE?
+   *
+   * Every rail script is same-origin — a session read, a cart read, a search.
+   * Injected anywhere else they do not fail loudly, they come back empty, and
+   * an empty answer from our own script is indistinguishable from a store that
+   * would not answer. That is how an ALDI run on 2026-09-03 handed six searches
+   * to the user 98ms after the sheet opened, having asked `about:blank` whether
+   * it was signed in.
+   *
+   * An empty lastLoadEndUrl means nothing has finished loading yet, which is
+   * exactly the case to wait out.
+   */
+  const onStorePage = useCallback(() => {
+    const url = lastLoadEndUrlRef.current;
+    const domain = scriptsRef.current?.domain;
+    return !!url && !!domain && url.includes(domain);
+  }, []);
+  /** A rail cart read that is waiting for the store page to land. */
+  const cartReadPendingNavRef = useRef(false);
   /** noteLoginActivity, reachable from callbacks defined above it. */
   const noteLoginActivityRef = useRef<() => void>(() => {});
   /** The qty screen's items, for onLoadEnd — which has []-deps and would
@@ -2452,14 +2472,13 @@ export default function WebViewCartSheet({
     // Off-origin, we simply wait: the onLoadEnd retry below injects the moment
     // the quiet page lands, and the budget armed just above is what bounds the
     // wait rather than an answer we cannot trust.
-    const here = lastLoadEndUrlRef.current;
-    if (here && here.includes(scriptsRef.current!.domain)) {
+    if (onStorePage()) {
       webviewRef.current?.injectJavaScript(rail.sessionScript());
     } else {
       console.log(`[Cart ${ts()}]`, 'network run: not on the store yet —',
         'waiting for the quiet page instead of asking about:blank');
     }
-  }, [netArm, setStep, netRail, netHandOverToUser, netStartSearch]);
+  }, [netArm, setStep, netRail, netHandOverToUser, netStartSearch, onStorePage]);
 
   netResumeSearchAfterNavRef.current = netResumeSearchAfterNav;
 
@@ -2675,6 +2694,7 @@ export default function WebViewCartSheet({
       if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
       isCustomSearchRef.current = false;
       cartProbeBeginSearchRef.current = false;
+      cartReadPendingNavRef.current = false;
       cartCountBeforeRef.current = null;
       robotChallengeResumeIdxRef.current = -1;
       consecutiveTimeoutsRef.current = 0;
@@ -3537,8 +3557,19 @@ export default function WebViewCartSheet({
         cartCountPendingRef.current = null;
         beginSearchFlow();
       }, cartProbeTimeoutMs());
-      console.log(`[Cart ${ts()}]`, 'snapshotBefore: reading the cart over the network, no page load');
-      webviewRef.current?.injectJavaScript(railForBefore.cartRead());
+      // Same gate as the session ask, for the same reason and one step earlier
+      // in the run: this is the FIRST rail script a run injects, so on a cold
+      // open with no prewarmed baseline it is the one that meets about:blank.
+      // It degrades more quietly than the session did — the timeout armed above
+      // starts the search with no baseline rather than handing over — and a run
+      // that reconciles against no baseline is its own bug.
+      if (onStorePage()) {
+        console.log(`[Cart ${ts()}]`, 'snapshotBefore: reading the cart over the network, no page load');
+        webviewRef.current?.injectJavaScript(railForBefore.cartRead());
+      } else {
+        console.log(`[Cart ${ts()}]`, 'snapshotBefore: not on the store yet — reading the cart when it lands');
+        cartReadPendingNavRef.current = true;
+      }
       return;
     }
     const cartPageScript = buildCartPageCountScript(probeStoreId);
@@ -3618,6 +3649,16 @@ export default function WebViewCartSheet({
     // with its own blast radius across 20+ banners; MEAL-136 fixed the host.
     if (!s || !url.includes(s.domain)) {
       console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'skipped: not store domain');
+      return;
+    }
+    // A rail cart read that was deferred because the store had not landed yet.
+    // Checked before the session retry because it happens first in a run: the
+    // baseline is taken, and only then does the search flow begin.
+    if (cartReadPendingNavRef.current) {
+      cartReadPendingNavRef.current = false;
+      console.log(`[Cart ${ts()}]`, 'snapshotBefore: the store landed — reading the cart now');
+      const railForPending = getNetworkRail(lockedStoreIdRef.current);
+      if (railForPending) webviewRef.current?.injectJavaScript(railForPending.cartRead());
       return;
     }
     // A network run waiting on its session: the injection at run start can land
