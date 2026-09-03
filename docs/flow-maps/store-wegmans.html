@@ -17,7 +17,7 @@ against a live signed-in session before a line was written &mdash; see
   <tr><td>Login</td><td><code>msal.&lt;n&gt;.account.keys</code> in localStorage &mdash; MSAL keeps this in the CLEAR</td><td><b>0 network</b></td></tr>
   <tr><td>Search</td><td>Algolia, index <code>products</code>, search-only key from the site's own URLs</td><td><b>13&nbsp;ms</b> filtered</td></tr>
   <tr><td>Cart read</td><td><code>GET /commerce/cart/carts/</code> + bearer</td><td>&mdash;</td></tr>
-  <tr><td>Add</td><td><code>POST .../items</code></td><td><b>off</b> &mdash; endpoint never called</td></tr>
+  <tr><td>Add</td><td><code>POST /commerce/cart/carts/lineitems</code> + bearer</td><td><b>on</b> &mdash; qty 3 landed as 3</td></tr>
 </table>
 <p><b>&#9888; The search ENDPOINT needs no session &mdash; but the search does.</b> An earlier version
 of this page said otherwise. Algolia is open, but the query has to be filtered to the user's STORE,
@@ -47,11 +47,31 @@ still forgets it.</p>
 BEFORE it adds CORS headers, so the browser reports a bare "Failed to fetch" with no status &mdash;
 indistinguishable from a dead host, which is exactly the wrong conclusion this map used to draw.
 With it, <code>/commerce/account/customer</code> answers <b>200 in 302&nbsp;ms</b>.</p>
-<p><b>&#9888; STILL BLOCKED: the store number.</b> Not in the customer profile (which carries only
-<code>hasInstacartAccountsForStores</code>), not in localStorage, sessionStorage, cookies, IndexedDB,
-the shop HTML, or any commerce endpoint this account populates. The shop app knows it &mdash; it
-fetches <code>/api/stores/store-number/140</code> &mdash; but keeps it somewhere not yet found.
-Search stays refused without it, and that refusal is correct: see below.</p>
+<p><b>The store number is in the CART</b>, at
+<code>grocery.custom.customFieldsRaw[]</code> where <code>name === 'storeNumber'</code> &mdash; BY
+NAME, never by index. Nowhere else: not the customer profile (which carries only
+<code>hasInstacartAccountsForStores</code>), not storage, not a cookie, not the shop HTML. One call
+answers both halves, because that response IS the cart.</p>
+<p><b>The write, 2026-09-03.</b></p>
+<pre style="overflow-x:auto"><code>POST /commerce/cart/carts/lineitems?api-version=2024-02-19-preview
+{ StoreKey, cartData:[{ cartID, cartVersion, custom, lineItems:[…] }], customerID, customerEmail }</code></pre>
+<p><code>lineitems</code>, one word, on the collection. It could not be guessed: this gateway rejects
+an unknown route BEFORE adding CORS headers, so a wrong path and a dead host both read as a bare
+"Failed to fetch" &mdash; <code>/carts/{id}</code>, <code>/carts/{id}/line-items</code>,
+<code>/carts/items</code>, PUT and PATCH all "failed" identically. Watching the site add one item
+gave it immediately. StoreKey comes from <code>/api/stores</code> (same-origin, no token), the
+customer ref from the profile, and every line-item field from the Algolia row &mdash; looked up
+<b>by objectID</b> (<code>"140-75994"</code>), because <code>skuId</code> is in the index but is not
+a filterable facet and returns 0 hits for a sku that exists.</p>
+<p><b>&#9888; absoluteQty stays NULL, as a finding.</b> This endpoint ADDS A LINE and does nothing to
+one that already exists: quantity 2 against a line holding 1 returned 200, advanced the cart version
+and left the quantity at 1. An item already in the cart is refused and routed to review.</p>
+<p><b>&#9888; A WRITE MUST NAME ITS CART.</b> Sent without <code>cartID</code> and
+<code>cartVersion</code> the API does not fail &mdash; it CREATES A NEW CART, and the existing basket
+stops being the active one. The app passes <code>knownLines</code> (the prewarmed baseline: held
+quantities, no ids), the add skipped its own read on the strength of it, and a real 20-item basket
+became a one-item cart. The add now always reads the cart, and refuses if what it reads back has no
+id or version.</p>
 <p><b>&#9888; The product id is PER STORE.</b> The same Daisy sour cream is <code>626485</code> at
 store 50 and <code>608294</code> at store 140, and unfiltered "sour cream" returns 32,223 hits
 &mdash; every store's catalogue at once. So the <code>storeNumber</code> filter is not optional, and
