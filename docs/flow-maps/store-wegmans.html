@@ -78,6 +78,7 @@ flowchart TD
     ISIN -->|yes| BEFORE["<b>before-snapshot</b><br/><code>CART_COUNT phase=before</code>"]
 
     BEFORE --> ROUTE{{"chooseAddStrategy"}}
+    ROUTE -->|"nothing chosen yet:<br/><code>networkSearch</code> is ON"| WGCHOOSE(["<b>networkChoose</b> — the rail<br/><i>Algolia, ~585ms for 24 candidates.<br/>needs the store number, which is<br/>behind the bearer</i>"])
     ROUTE -->|"<code>forceSerialSearch: true</code><br/>always"| SER["<b>serial</b><br/>one item at a time,<br/>one WebView"]
     ROUTE -.->|"parallelAdd / presearch<br/>never reached here"| NEVER["worker pool<br/><i>code kept for a retry;<br/>the WAF 403s even<br/>2 staggered workers</i>"]
 

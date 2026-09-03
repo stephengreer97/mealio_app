@@ -56,18 +56,20 @@
         at all &mdash; including the cart reads, which the rail answers itself
         (<code>NetworkRail.cartRead</code>). Verifiable: every write is checked against that
         write's own response.</td></tr>
-    <tr><td><code>networkChoose</code></td><td>the same two, on a choose run</td>
+    <tr><td><code>networkChoose</code></td><td>those two, <b>plus ALDI and Wegmans</b></td>
         <td>The same rail, SEARCH ONLY. A choose run needs candidates for the Choose Products
-        screen, not adds. It asks, it does not buy.</td></tr>
-    <tr><td><code>assisted</code></td><td>Walmart, ALDI, Amazon Fresh, Wegmans</td>
+        screen, not adds. It asks, it does not buy &mdash; which is why it is gated on
+        <code>networkSearch</code> ALONE. ALDI and Wegmans have a measured search and a write that
+        is still unproven, and until 2026-09-03 one flag stood for both and denied them this.</td></tr>
+    <tr><td><code>assisted</code></td><td>Walmart and Amazon Fresh always;<br/>ALDI and Wegmans on an ADD run</td>
         <td>Mealio searches each ingredient and hands the user the results page; the user adds
         and taps Next. No automation, and nothing claimed that was not seen. It is what
         &ldquo;manual mode&rdquo; already did, promoted from a rescue to a route.</td></tr>
     <tr><td>&mdash;</td><td>Kroger family</td>
         <td>Never reaches this decision: the SERVER fans out per ingredient.</td></tr>
   </table>
-  <p><b>The four assisted stores had no other rail</b>, so removing DOM automation is what put
-  them there. MEAL-210&ndash;213 ask, one per store, whether each can have a real in-page rail
+  <p><b>Walmart and Amazon Fresh have no rail at all</b>, so removing DOM automation is what put
+  them here; ALDI and Wegmans have one and are assisted only where it cannot yet write. MEAL-210&ndash;213 ask, one per store, whether each can have a real in-page rail
   like the two that do &mdash; each citing what is already ruled out, so nobody re-runs MEAL-17
   (Walmart affiliate URL, blocked), MEAL-18 (Amazon cart URL, dead) or MEAL-34 (Instacart
   platform, not a path).</p>

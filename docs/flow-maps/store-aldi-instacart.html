@@ -35,6 +35,12 @@ holds none of the item, so <i>held + wanted</i> is just <i>wanted</i> &mdash; an
 the cart already holds, with a reason that reaches the review screen. Two fixture tests run the same
 script against a stub that sets and a stub that adds; the cart is correct under both. Measure the
 semantics, set <code>absoluteQty</code>, flip <code>networkAdd</code>.</p>
+<p><b>Off does not mean assisted.</b> A CHOOSE run &mdash; every ingredient still needing a product
+&mdash; writes to no cart, so it takes the rail on this store's search alone and ends at the Choose
+Products screen. Until 2026-09-03 one capability flag stood for search and add together and this
+store got neither: a choose run fell through to <code>assisted</code> and handed the user six manual
+searches. Measured on device after the fix: sheet open to Choose Products in 6.9&nbsp;s, session in
+427&nbsp;ms, six of six ingredients answered.</p>
 <p>Everything below about extractors, add clicks, worker pools and selector drift is
 <b>HISTORY</b>, kept as the evidence that led here. The login check and the search URL are still
 what the ASSISTED route uses when the rail is off or cannot answer.</p>
@@ -65,7 +71,9 @@ flowchart TD
     BEFORE["<b>before-snapshot</b><br/>side panel + header badge"]
 
     BEFORE --> ROUTE{{"chooseAddStrategy"}}
-    ROUTE -->|"<code>forceSerialSearch: true</code>"| SER["<b>serial</b> — always"]
+    ROUTE -->|"nothing chosen yet:<br/><code>networkSearch</code> is ON"| RAILCHOOSE(["<b>networkChoose</b> — the rail<br/><i>search only, no page loads.<br/>ends at Choose Products</i>"])
+    ROUTE -->|"items to add:<br/><code>networkAdd</code> is OFF"| ASSISTED(["<b>assisted</b> — the user adds"])
+    ASSISTED --> SER["<b>serial</b> — always<br/><i>HISTORY below; the assisted<br/>route only navigates now</i>"]
     ROUTE -.->|"never reached"| POOLX["3-worker pool<br/><i>5 parallel workers still 403'd<br/>on 2026-06-17 even with the<br/>cache-buster removed —<br/>concurrency itself is the trigger</i>"]
 
     SER --> NAV["navigate<br/><code>{origin}/store/{slug}/s?k=term</code><br/><b>clean URL, no <code>?_t=</code></b>"]

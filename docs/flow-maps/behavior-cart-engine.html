@@ -24,7 +24,8 @@ flowchart TD
 
     QTY["<b>qty</b><br/><i>setup</i> · 'Set quantities'"]
     QTY -->|"tap Add Ingredients"| LC
-    LC["<b>login_check</b><br/><i>running</i> · 'Checking login…'<br/><i>a store with a network rail is<br/>asked over the network here</i>"]
+    LC["<b>login_check</b><br/><i>running</i> · 'Checking login…'<br/><i>a store with a network rail is asked over<br/>the network, from its QUIET page — the sheet<br/>already opened there, so the common case<br/>navigates nowhere at all. it asked from the<br/>full storefront until 2026-09-03: 5.7s to host<br/>a 121ms question, then a hop straight back off</i>"]
+    LC --- LCSKIP(["skipped entirely when the PREWARM<br/>already proved the login.<br/><i>positive we are out → show the webview.<br/>positive we are in → carry on.<br/>no signal → ask. all three arms, at BOTH<br/>entry points — the auto-start branch had<br/>only the first and re-checked from cold</i>"])
     LC -->|"LOGIN_STATUS false"| LOGIN
     LC -->|"LOGIN_STATUS true"| SEARCHING
     LOGIN["<b>login</b><br/><i>attention</i> · 'Log in to &lt;store&gt;'"]
@@ -177,12 +178,17 @@ flowchart TD
   adds and can prove it, or it does not, in which case Mealio searches and the USER adds.</p>
   <pre class="mermaid">
 flowchart LR
-    BSF["beginSearchFlow"] --> DEC{{"chooseAddStrategy<br/><i>two inputs, where it had six</i>"}}
-    DEC -->|"has a rail,<br/>and items to add"| NET["<b>network</b>"]
-    DEC -->|"has a rail,<br/>nothing chosen yet"| CHOOSE["<b>networkChoose</b><br/><i>search only</i>"]
-    DEC -->|"no rail"| ASSIST["<b>assisted</b><br/><i>the user adds</i>"]
+    BSF["beginSearchFlow"] --> DEC{{"chooseAddStrategy<br/><i>TWO capabilities, asked separately</i>"}}
+    DEC -->|"items to add, and<br/>the store can WRITE"| NET["<b>network</b>"]
+    DEC -->|"nothing chosen yet, and<br/>the store can SEARCH"| CHOOSE["<b>networkChoose</b><br/><i>search only</i>"]
+    DEC -->|"neither"| ASSIST["<b>assisted</b><br/><i>the user adds</i>"]
+    DEC --- DECWHY{{"A choose run writes to no cart, so it must not be asked for a write.<br/>One combined flag meant ALDI and Wegmans — search measured and ON,<br/>write deliberately still off — fell through to assisted and handed the<br/>user six manual searches, on the two stores whose search is fastest."}}
 
-    NET --> S1["<b>1 · session</b><br/><i>login gate, store id, pickup or delivery</i>"]
+    NET --> S0
+    CHOOSE --> S0
+    S0{{"is the WebView on the store yet?"}} -->|"no — about:blank,<br/>or still loading"| S0W(["wait for the load.<br/><i>every rail script is same-origin. asked of<br/>about:blank they come back empty, and an<br/>empty answer from our own script reads as<br/>a store that would not answer</i>"])
+    S0W --> S0
+    S0 -->|"yes"| S1["<b>1 · session</b><br/><i>login gate, store id, pickup or delivery</i>"]
     S1 -->|"no user"| LOGIN(["login step. <b>no button.</b><br/><i>every page load, redirect and SPA step<br/>asks again; a timer backs it up at 1s while<br/>the page has moved in the last 45s, 5s when<br/>it has not. never two questions at once</i>"])
     LOGIN -->|"signed in"| QUIET(["hop back to <code>railUrl</code><br/><i>signing in navigates to the real<br/>storefront; running there lost<br/>12–18s to the store's own<br/>post-login bootstrap</i>"])
     QUIET --> S1
@@ -196,8 +202,7 @@ flowchart LR
     S2 --> S3["<b>3 · add</b><br/>one write per matched item<br/>quantity = what the cart holds + asked"]
     S3 --> FIN(["finishParallelAdd()<br/><i>reconcile, verdict, done</i>"])
 
-    CHOOSE --> C1["session, then search"]
-    C1 --> C2(["finishParallelSearch()<br/><i>the Choose Products screen</i>"])
+    S2 -->|"choose run"| C2(["netFinishChoose()<br/><i>the Choose Products screen.<br/>reached from BOTH ends of the search:<br/>the batch coming back, and the shortcut<br/>taken when the prewarm already answered<br/>every term</i>"])
 
     ASSIST --> A1["one search URL per ingredient"]
     A1 --> A2(["the user adds, taps Next"])
