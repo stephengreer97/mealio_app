@@ -64,6 +64,7 @@ flowchart TD
     S0 --> USE2
 
     USE1{{"<b>THE ADD GATE</b><br/>score = 100, reachable ONLY via<br/>the equality fast path.<br/>Exact after normalisation and<br/>phrase collapse — nothing else<br/>is ever added to a cart."}}
+    USE1 --- SIZE{{"ONE EXCEPTION, 2026-09-03: <code>sameProductBarSize</code>.<br/>A store that appends its pack size to every product name can never<br/>produce a 100 — ALDI's \"Happy Harvest Crushed Tomatoes, 28 oz\"<br/>against a saved \"Happy Harvest Crushed Tomatoes\" scores 99, forever.<br/>14 of 14 of Stephen's items went to review on that.<br/><br/>It is NOT \"accept 99\": a 99 also covers EXTRA WORDS, and would have<br/>matched \"Organic Broccoli\" to \"Season's Choice Organic Broccoli<br/>Florets\". The candidate must be the term plus a trailing SIZE and<br/>nothing else — and only when exactly ONE candidate qualifies, because<br/>two sizes of one product is a choice the user never made.<br/><br/>Measured on his run: 8 of 14 matched, 0 wrong, 6 rightly left to him."}}
     USE2{{"<b>RANKING ONLY</b><br/>rankChoiceCandidates reorders a<br/>list a human is about to read."}}
 
     classDef good fill:#14532d,stroke:#22c55e,color:#fff
@@ -143,7 +144,8 @@ flowchart TD
   </ol>
   <p>That is why the ranking lives in its own module and not in <code>_scoring.ts</code>:
   <code>scoreMatch</code> is copied verbatim into six injected store scripts, and each store's
-  add gate is <code>scoreMatch(term, name) === 100</code> or the equivalent equality. Changing
+  add gate is <code>scoreMatch(term, name) === 100</code> or the equivalent equality &mdash; plus,
+  in the rail's own add path, the size-suffix exception above. Changing
   <code>_scoring.ts</code> risks widening or narrowing what the add gate accepts, which is the one
   governing-principle breach this work could cause.</p>
 
