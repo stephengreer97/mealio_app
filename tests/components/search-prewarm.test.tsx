@@ -454,11 +454,19 @@ describe('a chosen product that no longer exists', () => {
     expect(injected.some((s) => s.includes('cartItemV2'))).toBe(true);
   });
 
-  it('does NOT re-search when the store returned near-variants', () => {
+  it('searches it even when the store returned near-variants', () => {
+    // THE RULE REVERSED, 2026-09-02. Stephen: "We should do a ingredientName
+    // search on every reconcilliation run. Not just the ones where there are no
+    // suggestions."
+    //
+    // The old rule reasoned that near-variants were the better offer — "the
+    // 24 oz of the thing you picked" over twelve unrelated sour creams. That
+    // holds when the product still exists. When it does not, the near-variants
+    // are other sizes of a discontinued line, and an item with two poor ones is
+    // no better served than an item with none. It only looks better served.
     const { view, post, load } = openSheet();
     load();
     post(SESSION);
-    // Results, just nothing scoring an exact match. These are the better offer.
     post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('Sour Cream 24 oz')] });
     post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
     post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
@@ -468,7 +476,59 @@ describe('a chosen product that no longer exists', () => {
     const beforeCart = fallbackBatches();
     post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
 
-    expect(fallbackBatches()).toBe(beforeCart);
+    expect(fallbackBatches()).toBe(beforeCart + 1);
+  });
+
+  it('keeps the near-variants and adds to them, rather than swapping', () => {
+    // Replacing was safe while this only ran for rows that had NOTHING. Now that
+    // it runs for every unmatched row, a swap would throw away the one thing the
+    // product-name search is good at to make room for results that are broader
+    // but not always better.
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('Daisy Sour Cream 24 oz')] });
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    // The ingredient-name batch answers with something the product search missed.
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'Sour Cream',
+           candidates: [candidate('H-E-B Sour Cream, 16 oz')] });
+    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'tortillas', success: true, productId: 'ptortillas', skuId: 'stortillas' });
+    post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [], cartAfter: [{ name: 'tortillas', qty: 1 }] });
+    act(() => { jest.advanceTimersByTime(500); });
+    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'tortillas', qty: 1 }], source: 'network' });
+    act(() => { jest.advanceTimersByTime(500); });
+
+    act(() => { fireEvent.press(view.getByText(/review 1 ingredient/i)); });
+    // BOTH are on the card.
+    expect(view.queryByText(/Daisy Sour Cream 24 oz/i)).toBeTruthy();
+    expect(view.queryByText(/H-E-B Sour Cream, 16 oz/i)).toBeTruthy();
+  });
+
+  it('does not offer the same product twice when both searches return it', () => {
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('Daisy Sour Cream 24 oz')] });
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    // The same product, from the ingredient-name search. Same id.
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'Sour Cream',
+           candidates: [candidate('Daisy Sour Cream 24 oz')] });
+    post({ type: 'NET_ADD_RESULT', idx: 1, name: 'tortillas', success: true, productId: 'ptortillas', skuId: 'stortillas' });
+    post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [], cartAfter: [{ name: 'tortillas', qty: 1 }] });
+    act(() => { jest.advanceTimersByTime(500); });
+    post({ type: 'CART_COUNT', count: 1, items: [{ name: 'tortillas', qty: 1 }], source: 'network' });
+    act(() => { jest.advanceTimersByTime(500); });
+
+    act(() => { fireEvent.press(view.getByText(/review 1 ingredient/i)); });
+    expect(view.queryAllByText(/Daisy Sour Cream 24 oz/i).length).toBe(1);
   });
 });
 

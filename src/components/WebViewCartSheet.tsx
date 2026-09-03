@@ -1904,12 +1904,23 @@ export default function WebViewCartSheet({
         // and LOADED A PAGE to be told the same thing 1.8 s later — measured
         // doing exactly that on a device run.
         const outOfStockExact = exact.length > 0 && exact.every((c) => c.outOfStock);
-        // Nothing at all came back for the chosen product. Ask again by
-        // ingredient name so the review screen has something to offer. Skipped
-        // when the two are the same string -- that search has already happened
-        // and returned nothing.
-        if (candidates.length === 0 && item.ingredientName
-            && item.ingredientName !== term) {
+        // EVERY row that reaches review is asked for by INGREDIENT NAME too,
+        // not only the ones that came back empty.
+        //
+        // Stephen, 2026-09-02: "We should do a ingredientName search on every
+        // reconcilliation run. Not just the ones where there are no
+        // suggestions."
+        //
+        // The chosen-product search returns near-variants of a product the user
+        // picked once and the store may have moved on from -- other sizes of the
+        // same discontinued line. The ingredient name returns what the store
+        // actually stocks for the thing they are cooking. An item with a couple
+        // of poor near-variants is not better served than one with none; it just
+        // looks like it is.
+        //
+        // Skipped only when the two strings are the SAME, which is a choose run:
+        // that search has already happened and asking again buys nothing.
+        if (item.ingredientName && item.ingredientName !== term) {
           netFallbackWantedRef.current.set(idx, item.ingredientName);
         }
         netResultsRef.current.set(idx, {
@@ -2135,24 +2146,49 @@ export default function WebViewCartSheet({
   netStartFallbackSearchRef.current = netStartFallbackSearch;
 
   /**
-   * Swap the fallback's candidates in before anything renders the review list.
+   * Fold the ingredient-name results into the review list before anything
+   * renders it.
    *
-   * Only for the items that had NONE. An item with near-variants keeps them:
-   * "the 24 oz of the thing you picked" beats twelve unrelated sour creams.
+   * ADDED TO what the chosen-product search found, not swapped for it. This used
+   * to run only for the rows that came back EMPTY, and replacing was safe then
+   * because there was nothing to replace. Now that every unmatched row is asked
+   * for by ingredient name, replacing would throw away the one thing the product
+   * search is good at -- "the 24 oz of the thing you picked" -- to make room for
+   * results that are broader but not always better.
+   *
+   * Deduped by the store's own id, because the same product legitimately comes
+   * back from both searches, and ranked against the INGREDIENT name: that is
+   * what the user is shopping for. The product name they picked once is a clue,
+   * not the question.
    */
   const netApplyFallbackCandidates = useCallback(() => {
     if (netFallbackWantedRef.current.size === 0) return;
-    let swapped = 0;
+    let widened = 0;
+    let added = 0;
     netFallbackWantedRef.current.forEach((name, idx) => {
       const got = netFallbackCandidatesRef.current.get(name);
       if (!got || got.length === 0) return;
       const entry = netResultsRef.current.get(idx);
       if (!entry || entry.success) return;
-      netResultsRef.current.set(idx, { ...entry, candidates: got, searchedBy: 'ingredient' });
-      swapped += 1;
+      const seen = new Set(entry.candidates.map((c) => c.productId || c.productName));
+      const fresh = got.filter((c) => {
+        const key = c.productId || c.productName;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (fresh.length === 0) return;
+      netResultsRef.current.set(idx, {
+        ...entry,
+        candidates: rankChoiceCandidates(name, [...entry.candidates, ...fresh]),
+        searchedBy: 'ingredient',
+      });
+      widened += 1;
+      added += fresh.length;
     });
-    if (swapped > 0) {
-      console.log(`[Cart ${ts()}]`, 'network run: review shows ingredient-name results for', swapped, 'item(s)');
+    if (widened > 0) {
+      console.log(`[Cart ${ts()}]`, 'network run: review widened with', added,
+        'ingredient-name result(s) across', widened, 'item(s)');
     }
   }, []);
   netApplyFallbackCandidatesRef.current = netApplyFallbackCandidates;
