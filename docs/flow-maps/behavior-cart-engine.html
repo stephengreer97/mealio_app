@@ -183,7 +183,8 @@ flowchart LR
     DEC -->|"no rail"| ASSIST["<b>assisted</b><br/><i>the user adds</i>"]
 
     NET --> S1["<b>1 · session</b><br/><i>login gate, store id, pickup or delivery</i>"]
-    S1 -->|"no user"| LOGIN(["login step.<br/><i>the store is asked again every 1s while<br/>the user signs in — 5s after the first 30 —<br/>never two questions at once. no button:<br/>they sign in and the run carries on</i>"])
+    S1 -->|"no user"| LOGIN(["login step. <b>no button.</b><br/><i>every page load, redirect and SPA step<br/>asks again; a timer backs it up at 1s while<br/>the page has moved in the last 45s, 5s when<br/>it has not. never two questions at once</i>"])
+    LOGIN --- LOGINWHY{{"Keyed on the page MOVING, not on a tick count. A tick count<br/>measures how long the screen has been up, which on a 2FA login<br/>is mostly a user waiting for a text — so it slowed to 5s before<br/>they had typed the code. Entering the code is a navigation, and<br/>a navigation pulls the next tick forward, so a login three<br/>minutes in is as quick as one three seconds in."}}
     S1 -->|"signed in, but the store<br/>is not ready to be worked on"| S1W(["wait for the next answer.<br/><i>rail.sessionUsable — Albertsons<br/>answers twice and only the second<br/>one carries its API keys.<br/>Asked in THREE places: here, the<br/>prewarm, and the login_check branch<br/>that starts the run</i>"])
     S1W --> S1
     PRE -.->|"its own deadline, per store.<br/>a prewarm that goes quiet<br/>releases the run instead of<br/>holding it for up to 90s"| S2
