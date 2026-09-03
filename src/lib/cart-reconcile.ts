@@ -347,7 +347,40 @@ export interface WorkerReport {
  */
 export type DefiniteFailureReason =
   | 'out_of_stock' | 'no_results' | 'quantity_limit_reached'
-  | 'low_confidence' | 'needs_weight';
+  | 'low_confidence' | 'needs_weight'
+  /**
+   * The store never answered the search for this term -- a timeout or a dropped
+   * request, not an empty result.
+   *
+   * It belongs here for the reason the engine's own comment gives when it stamps
+   * the reason: "it goes to review instead, which is where an item nobody could
+   * answer for belongs, and the user can pick or skip it." That was the
+   * intention and it was not what happened. The reason was not in this union, so
+   * the item fell through to `toMatch`, the cart had none of it, and it came out
+   * as a QUANTITY SHORTFALL -- a top-up. The top-up then had no product id to
+   * write and handed the user the store's own search page.
+   *
+   * Measured on Stephen's 31-item Albertsons run of 2026-09-02:
+   *   reconcile: confirmed= 29 retry= 2 [...] review= 0 []
+   *   cart verdicts: ... missing= [] unverified= 2
+   * Two items nobody could search for, reported as a shortfall and routed to
+   * the last-resort screen.
+   */
+  | 'search_unanswered'
+  /**
+   * The product needs a variant chosen -- H-E-B's "sliced or shaved?".
+   *
+   * Same story as `search_unanswered`, found the same way. The engine's comment
+   * where it stamps this reads "Either way it goes to review, where the user
+   * picks on the page. Silence is the one outcome not available." It was not in
+   * this union either, so it went to quantity matching instead, came out as a
+   * shortfall, and -- because the branch that stamps it returns BEFORE recording
+   * a match -- the top-up had no product id to write and handed over the store.
+   *
+   * A variant the user must choose is the review screen's entire purpose. The
+   * screen has copy for it and SearchResult has carried the reason all along.
+   */
+  | 'needs_preference';
 
 /**
  * One item the parallel pass attempted, paired with its worker's report.
@@ -459,7 +492,8 @@ export function reconcileParallelAdd(
     // to DefiniteFailureReason is a decision someone makes here on purpose.
     if (r && !r.success && (r.reason === 'out_of_stock' || r.reason === 'no_results'
         || r.reason === 'quantity_limit_reached'
-        || r.reason === 'low_confidence' || r.reason === 'needs_weight')) {
+        || r.reason === 'low_confidence' || r.reason === 'needs_weight'
+        || r.reason === 'search_unanswered' || r.reason === 'needs_preference')) {
       definiteFailures.push({ index, reason: r.reason });
       return;
     }

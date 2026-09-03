@@ -117,7 +117,10 @@ interface SearchResult {
    *  change that. It reaches the review screen like any other definitive
    *  failure. */
   reason: 'out_of_stock' | 'no_results' | 'low_confidence' | 'needs_weight'
-    | 'quantity_limit_reached' | 'needs_preference';
+    | 'quantity_limit_reached' | 'needs_preference'
+    /** The store never answered the search. Different from "it had nothing" and
+     *  the screen says so, because the two suggest different next steps. */
+    | 'search_unanswered';
   isChoose: boolean; // true = choose-product flow (no searchTerm yet); false = review unmatched (searchTerm set but no match)
 }
 
@@ -1742,6 +1745,16 @@ export default function WebViewCartSheet({
       // run. The item goes to review instead, which is where an item nobody
       // could answer for belongs, and the user can pick or skip it.
       if (netFailedTermsRef.current.has(term)) {
+        // ...and ask again by INGREDIENT name, so the review screen has
+        // alternatives to show rather than an empty card. Stephen, 2026-09-02:
+        // "Failed Add, then failed lookup, we should show the user their
+        // alternatives." The no-results branch below has done this for a while;
+        // this branch never did, which is why his two stranded items reached the
+        // user with nothing to pick from. Fired in one batch alongside the
+        // writes, so it costs no wall-clock.
+        if (item.ingredientName && item.ingredientName !== term) {
+          netFallbackWantedRef.current.set(idx, item.ingredientName);
+        }
         netResultsRef.current.set(idx, {
           success: false, productName: null, reason: 'search_unanswered', candidates: [],
         });
@@ -4281,10 +4294,50 @@ export default function WebViewCartSheet({
                   writes.length, 'writable of', routing.retry.length);
               }
 
-              // The top-up needed a page. There are no pages any more: an item
-              // the rail cannot re-write is one we cannot correct on the user's
-              // behalf, so we say so and hand them the searches.
-              console.log(`[Cart ${ts()}]`, 'network top-up: cannot write these — handing over');
+              // A REVIEW CARD ALREADY WAITING OUTRANKS HANDING OVER THE STORE.
+              //
+              // Stephen, 2026-09-02: "Those two should be going to
+              // reconcilliation (review ingredients screen). Not do it yourself.
+              // Why? Failed Add, then failed lookup, we should show the user
+              // their alternatives."
+              //
+              // His case is fixed at the SOURCE -- an unanswered search, and a
+              // product needing a variant chosen, are definitive failures now, so
+              // neither reaches this branch at all (see DefiniteFailureReason and
+              // the routing-table test in cartReconcile.test.ts).
+              //
+              // NO TEST REACHES THIS GUARD, and that is stated rather than
+              // implied: with both reasons registered, every item that arrives
+              // here as a shortfall was matched, and a matched item is writable,
+              // so the branch above takes it. It is kept because the mistake it
+              // covers has now been made TWICE -- a new failure reason added to
+              // the engine without being registered in the reconcile's list --
+              // and its cost is the exact thing being reported here: a user
+              // dumped on the storefront while the review queue held cards for
+              // them. Eight lines to turn the next instance of that into a
+              // survivable one.
+              //
+              // If it ever does fire, the log line below says so by name.
+              if (searchResultsRef.current.length > 0) {
+                console.log(`[Cart ${ts()}]`, 'network top-up: cannot write',
+                  routing.retry.length, '— showing the', searchResultsRef.current.length,
+                  'item(s) already queued for review instead of handing over');
+                // The done screen is reached THROUGH the review, so it needs the
+                // successes now: the top-up path that normally records them is
+                // not the one being taken.
+                addResultsRef.current = confirmed;
+                setCartResultRows(rows);
+                setTotalAdded(confirmed.length);
+                setAddedNames(confirmed.map((x) => x.name));
+                setTotalFailed(searchResultsRef.current.length);
+                reconcileFinalizedRef.current = true;
+                setReviewIdx(0);
+                setStep('searchResult');
+                return;
+              }
+              // Nothing to review and nothing writable. The store itself is
+              // genuinely the best we can offer.
+              console.log(`[Cart ${ts()}]`, 'network top-up: cannot write these and nothing to review — handing over');
               startAssistedModeRef.current();
               return;
             }
@@ -5952,6 +6005,13 @@ export default function WebViewCartSheet({
                 )}
                 {!isChoose && currentReview.reason === 'low_confidence' && (
                   <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3, marginBottom: 6 }}>No exact match found</Text>
+                )}
+                {/* Not the same as "the store had nothing", and not written as
+                    though it were: the search never came back, so the right next
+                    step is to pick from what we could find or try again — not to
+                    conclude the store does not stock it. */}
+                {!isChoose && currentReview.reason === 'search_unanswered' && (
+                  <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginBottom: 6 }}>⚠ {storeName} didn't answer our search for this</Text>
                 )}
                 {!isChoose && currentReview.reason === 'needs_weight' && (
                   <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.brand, marginBottom: 6 }}>⚖ Sold by weight — choose how much to add</Text>

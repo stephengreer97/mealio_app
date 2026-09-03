@@ -1729,3 +1729,54 @@ describe('the over-add warning needs a before-snapshot to mean anything', () => 
     expect(out.over.map((o) => o.name)).toContain('Impulse Candy Bar');
   });
 });
+
+// ── The routing table that broke twice ───────────────────────────────────────
+//
+// An ingredient the run never wrote is not in the cart. To the reconcile that
+// looks identical to a QUANTITY SHORTFALL, and a shortfall is re-written — so it
+// is routed to the top-up, which has no product id for it, and the last line of
+// that branch hands the user the store's own search page.
+//
+// The only thing that stops it is the reason being a DefiniteFailureReason.
+// Two reasons were missing, and BOTH have a code comment beside them promising
+// the opposite:
+//
+//   search_unanswered  "it goes to review instead, which is where an item
+//                       nobody could answer for belongs"
+//   needs_preference   "Either way it goes to review, where the user picks on
+//                       the page. Silence is the one outcome not available."
+//
+// Stephen, 2026-09-02, on a 31-item run that added 29 and sent him to the store
+// for the other two: "Those two should be going to reconcilliation (review
+// ingredients screen). Not do it yourself."
+//
+// So this is not a test of a function, it is a test of a LIST — the one place a
+// new failure reason has to be registered, and the one nobody remembered to.
+describe('every reason an unwritten item can carry routes it to review', () => {
+  // Stamped by WebViewCartSheet on an item that never reaches the write batch.
+  // Grep `netResultsRef.current.set` for the full set; these are the ones whose
+  // branch `continue`s without recording a match, which is what makes them
+  // unwritable later.
+  const REASONS_ON_UNWRITTEN_ITEMS = [
+    'search_unanswered',   // the store never answered the search
+    'no_results',          // it answered, with nothing
+    'low_confidence',      // it answered, with nothing exact
+    'out_of_stock',        // exact match, not sellable today
+    'needs_weight',        // sold by weight, no amount chosen
+    'needs_preference',    // needs a variant chosen first
+    'quantity_limit_reached', // the cart is already at the store's cap
+  ] as const;
+
+  it.each(REASONS_ON_UNWRITTEN_ITEMS)('%s is a definitive failure, not a shortfall', (reason) => {
+    const out = reconcileParallelAdd(
+      [{
+        name: 'Chicken Tenders', expectedQty: 1, isWeight: false,
+        report: { success: false, productName: null, reason },
+      }],
+      [],   // nothing landed in the cart
+    );
+    expect(out.definiteFailures).toEqual([{ index: 0, reason }]);
+    // ...and specifically NOT queued for an unattended re-add it cannot perform.
+    expect(out.topUps).toEqual([]);
+  });
+});
