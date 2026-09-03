@@ -330,6 +330,63 @@ describe('what it will and will not ask', () => {
   });
 });
 
+describe('standing down while a batch is on the wire', () => {
+  // MEASURED 2026-09-02, and the worst case there is. The sheet opened 8s after
+  // this probe started its batch; standing the probe down only stopped it
+  // starting ANOTHER one, so the probe, the sheet's own prewarm and then the run
+  // were all searching Albertsons at the same time. Every term came back
+  // `no_response` and the user was handed the store to finish by hand.
+  it('stops the batch, rather than only declining to start the next one', async () => {
+    const utils = await renderApp();
+    await signedInAt(STORE);
+    select(MEALS.slice(0, 1));
+    await settle();
+    expect(utils.queryByTestId(`search-probe-${STORE}`)).not.toBeNull();
+
+    // What MyMealsScreen does when the cart sheet opens.
+    act(() => { prewarm.setSearchTerms(STORE, []); });
+    expect(utils.queryByTestId(`search-probe-${STORE}`)).toBeNull();
+  });
+
+  it('keeps the answers that did arrive before it was stopped', async () => {
+    await renderApp();
+    await signedInAt(STORE);
+    select(MEALS.slice(0, 1));
+    await settle();
+    await act(async () => {
+      searchProbes()[0].onCandidates(STORE, 'first-0', [{ productId: '1' }]);
+      jest.advanceTimersByTime(1);
+    });
+
+    act(() => { prewarm.setSearchTerms(STORE, []); });
+
+    // The sheet still gets what was answered — that is the head start, and
+    // stopping the probe must not throw it away.
+    const have = prewarm.getSearchResults(STORE, ['first-0', 'second-0']);
+    expect([...have.keys()]).toEqual(['first-0']);
+  });
+
+  it('will ask again for a term the stopped batch never answered', async () => {
+    await renderApp();
+    await signedInAt(STORE);
+    select(MEALS.slice(0, 1));
+    await settle();
+    await act(async () => {
+      searchProbes()[0].onCandidates(STORE, 'first-0', [{ productId: '1' }]);
+      jest.advanceTimersByTime(1);
+    });
+    act(() => { prewarm.setSearchTerms(STORE, []); });
+
+    // Back to the selection screen, same meal ticked again.
+    select(MEALS.slice(0, 1));
+    await settle();
+
+    // Only the unanswered one. The answered term is served from cache.
+    expect(searchProbes()).toHaveLength(2);
+    expect(searchProbes()[1].terms).toEqual(['second-0']);
+  });
+});
+
 describe('signing out', () => {
   it('unmounts the probe and drops what it had looked up', async () => {
     const utils = await renderApp();

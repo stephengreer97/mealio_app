@@ -285,6 +285,24 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     setSearchBatch(batch);
   }, []);
 
+  /**
+   * Tear down the batch on the wire, if there is one.
+   *
+   * Terms it never answered go back to being askable — they are dropped from
+   * `asked` — while anything it did answer stays in `done` and is skipped by
+   * `pumpSearch` on that basis instead.
+   */
+  const abortSearchBatch = useCallback((why: string) => {
+    const batch = searchBatchRef.current;
+    if (!batch) return;
+    const answered = searchDoneRef.current.get(batch.storeId);
+    const asked = searchAskedRef.current.get(batch.storeId);
+    if (asked) for (const t of batch.terms) if (!answered?.has(t)) asked.delete(t);
+    searchBatchRef.current = null;
+    setSearchBatch(null);
+    console.log('[Prewarm] search prewarm stopped', batch.storeId, '—', why);
+  }, []);
+
   const setSearchTerms = useCallback(
     (storeId: string, terms: string[]) => {
       if (!storeId || !userRef.current) return;
@@ -307,13 +325,30 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
       // them reaches the store: only the selection that is still standing when
       // the tapping stops gets looked up.
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-      if (!terms.length) { searchDebounceRef.current = null; return; }
+      if (!terms.length) {
+        searchDebounceRef.current = null;
+        // STANDING DOWN MEANS STOPPING, not just declining to start again.
+        //
+        // Emptying the set has two callers and both mean "this is not wanted any
+        // more": the user unticked everything, or the cart sheet has opened and
+        // is doing its own asking. Leaving a batch running through either was
+        // measured on 2026-09-02 as the worst case there is — the sheet opened
+        // 8s after this probe started, and its prewarm, its run and this probe
+        // were all searching Albertsons at once. Every term came back
+        // `no_response` and the user was handed the store to finish by hand.
+        //
+        // Unmounting kills the WebView and the requests with it. Answers already
+        // received are KEPT (they are in `done` and the sheet reads them); the
+        // aborted terms leave `asked` so a later selection can ask again.
+        abortSearchBatch('the selection stood down');
+        return;
+      }
       searchDebounceRef.current = setTimeout(() => {
         searchDebounceRef.current = null;
         pumpSearch();
       }, SEARCH_DEBOUNCE_MS);
     },
-    [pumpSearch],
+    [pumpSearch, abortSearchBatch],
   );
 
   const handleSearchCandidates = useCallback(

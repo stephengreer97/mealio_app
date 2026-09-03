@@ -83,6 +83,29 @@ export interface NetworkRail {
    */
   writable(candidate: { productId?: string | null; skuId?: string | null }): boolean;
   /**
+   * Is this session answer one the run can actually WORK on?
+   *
+   * Not the same question as "is the user signed in". A store may answer the
+   * login question long before it can answer the search-and-write question, and
+   * Albertsons does exactly that on purpose: it posts the moment /userinfo comes
+   * back -- so no budget of ours can make the sheet think a signed-in user is
+   * signed out -- and only then resolves the API keys and proves the token by
+   * reading the cart. The first answer carries `hasSearchKey: false`.
+   *
+   * MEASURED 2026-09-02 on a 31-item run. The engine took the first answer and
+   * went straight to writing: `wrote 0 of 29`, twenty-seven "nothing found for
+   * N chosen products", and a full basket handed back to the user. It had been
+   * hidden because the sheet's own prewarm happened to consume the early answer
+   * first; once the selection screen started answering the searches, the prewarm
+   * stopped running and the run met the early answer head-on.
+   *
+   * The login gate is deliberately NOT behind this -- that is what the early
+   * answer exists for. This gates only the work that needs keys.
+   *
+   * H-E-B posts once and answers true to whatever it posts.
+   */
+  sessionUsable(msg: { early?: boolean; storeId?: string | null }): boolean;
+  /**
    * Does this candidate need the user to choose a variant before it can be
    * written?
    *
@@ -156,6 +179,8 @@ const HEB_RAIL: NetworkRail = {
       opts,
     ),
   writable: (c) => !!c.productId && !!c.skuId,
+  // One session answer, and it is complete when it lands.
+  sessionUsable: () => true,
   needsPreference: (c) => (c.preferences ?? []).some((p) => !!p.preferenceId),
   // MEASURED on the device 2026-09-02: eleven terms, all prewarmed, tap to done
   // in 6.9s; a search batch answers in about a second. Generous against that and
@@ -186,6 +211,15 @@ const ALBERTSONS_RAIL: NetworkRail = {
   // The cart is addressed by product id; the search returns no sku, and none is
   // needed to write.
   writable: (c) => !!c.productId,
+  // TWO ANSWERS, and the first one cannot search or write. `early` is posted
+  // straight off /userinfo, before __albEnsureKeys has run; the refined one
+  // follows about 1.3s later with the keys resolved and the token proved
+  // against a real cart read.
+  //
+  // An early answer with NO store is let through, because nothing more is
+  // coming -- the script returns after it -- and the run should fail fast on
+  // session_no_store rather than sit out its whole 25s deadline.
+  sessionUsable: (msg) => !msg.early || !msg.storeId,
   // No preference concept on this platform. Answering false rather than leaving
   // the engine to infer it from an empty array is the whole point of asking.
   needsPreference: () => false,

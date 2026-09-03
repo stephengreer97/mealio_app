@@ -205,6 +205,50 @@ describe('the search prewarm', () => {
   });
 });
 
+describe('a store that answers the session probe twice', () => {
+  // ALBERTSONS DOES. It replies early off /userinfo and then again about 1.3s
+  // later, verified, once the cart read confirms the token. Both are ok and
+  // loggedIn. The prewarm had no latch, so both injected the whole batch:
+  //
+  //   18:52:17.856  search prewarm: searching 2 terms
+  //   18:52:19.156  search prewarm: searching 2 terms     <- the same two
+  //
+  // Four requests where there should have been two, into the one store measured
+  // to degrade under exactly that (MEAL-207). Every term in that run came back
+  // no_response and the user was handed the store to finish by hand.
+  //
+  // Driven here through H-E-B because the latch is engine code, not a store
+  // rule — any rail that answers twice would have done the same thing.
+  it('sends ONE search batch, not one per answer', () => {
+    const { post, load } = openSheet();
+    load();
+    post(SESSION);
+    expect(searchBatches()).toBe(1);
+    post(SESSION);
+    post(SESSION);
+    expect(searchBatches()).toBe(1);
+  });
+
+  it('and the run still reuses what that one batch answered', () => {
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+    post(SESSION);
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('sour cream')] });
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+    const beforeTap = searchBatches();
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION);
+
+    expect(searchBatches()).toBe(beforeTap);
+    expect(injected.some((s) => s.includes('cartItemV2'))).toBe(true);
+  });
+});
+
 describe('the page is loaded before the run needs it', () => {
   // The other half of what mounting the WebView through the qty screen buys, and
   // the more valuable half.

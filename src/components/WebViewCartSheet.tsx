@@ -1095,6 +1095,22 @@ export default function WebViewCartSheet({
    *  WebView stays mounted through the qty screen either way, because keeping
    *  the page LOADED is worth more than the prewarm that needed it. */
   const netPrewarmDoneRef = useRef(false);
+  /**
+   * The prewarm's search batch has gone out. One batch, whatever the store says.
+   *
+   * ALBERTSONS ANSWERS THE SESSION PROBE TWICE — an early reply off /userinfo,
+   * then a verified one about 1.3s later once the cart read confirms the token.
+   * Both are `ok` and `loggedIn`, and the branch below had no latch, so both
+   * injected the whole search batch. Measured 2026-09-02 on a 31-item run:
+   *
+   *   18:52:17.856  search prewarm: searching 2 terms
+   *   18:52:19.156  search prewarm: searching 2 terms     <- same two terms
+   *
+   * Four requests where there should have been two, into the one store measured
+   * to degrade under exactly that (MEAL-207). Every term in that run came back
+   * `no_response` and the user was handed the store to finish by hand.
+   */
+  const netPrewarmInjectedRef = useRef(false);
   /** The qty screen's items, for onLoadEnd — which has []-deps and would
    *  otherwise read this run's initial empty list. */
   const qtyItemsRef = useRef<ConsolidatedIngredient[]>([]);
@@ -2386,6 +2402,7 @@ export default function WebViewCartSheet({
       netPrewarmCandidatesRef.current = new Map();
       netPrewarmTermsRef.current = [];
       netPrewarmDoneRef.current = false;
+      netPrewarmInjectedRef.current = false;
       const consolidated = consolidateIngredients(meals);
       setItems(consolidated);
       setCheckedItems(consolidated.map(() => true));
@@ -4543,6 +4560,15 @@ export default function WebViewCartSheet({
           // the one thing this feature exists to avoid.
           if (netPhaseRef.current === 'prewarm' && !netActiveRef.current
               && stepRef.current === 'qty') {
+            // ONE BATCH. A store that answers the session probe twice must not
+            // get two — see netPrewarmInjectedRef. Silent, because the second
+            // answer is normal here rather than a fault.
+            if (netPrewarmInjectedRef.current) return;
+            // ...and not on the early answer either. Searching before the keys
+            // are resolved is the same mistake the run made, one phase earlier:
+            // the refined answer is a second or so behind and the user is still
+            // reading the quantity screen.
+            if (msg.ok && msg.loggedIn && !getNetworkRail(lockedStoreIdRef.current)?.sessionUsable(msg)) return;
             if (!msg.ok || !msg.loggedIn || !msg.storeId || !msg.shoppingContext) {
               console.log(`[Cart ${ts()}]`, 'search prewarm: no usable session — leaving it to the run');
               netPhaseRef.current = 'idle';
@@ -4555,6 +4581,7 @@ export default function WebViewCartSheet({
             const railP = getNetworkRail(lockedStoreIdRef.current);
             const scriptP = railP?.searchBatch(netPrewarmTermsRef.current, sess) ?? null;
             if (!scriptP) { netPhaseRef.current = 'idle'; netPrewarmDoneRef.current = true; return; }
+            netPrewarmInjectedRef.current = true;
             console.log(`[Cart ${ts()}]`, 'search prewarm: searching', netPrewarmTermsRef.current.length,
               'terms while the user is on the qty screen');
             webviewRef.current?.injectJavaScript(scriptP);
@@ -4562,17 +4589,33 @@ export default function WebViewCartSheet({
           }
           if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
           if (netSessionSettledRef.current) return;
-          if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
           console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));
-          if (!msg.ok) { netHandOverToUser('session_' + (msg.why || 'failed')); return; }
+          if (!msg.ok) {
+            if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+            netHandOverToUser('session_' + (msg.why || 'failed'));
+            return;
+          }
           if (!msg.loggedIn) {
             // The gate did its job. Hand the user the login screen exactly as the
-            // page-based login check would have.
+            // page-based login check would have. Answered off the EARLY reply on
+            // a store that sends one, deliberately -- the login question is the
+            // one thing that must never wait on our budgets.
+            if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
             netActiveRef.current = false;
             netPhaseRef.current = 'idle';
             setStep('login');
             return;
           }
+          // SIGNED IN IS NOT THE SAME AS READY TO RUN. Albertsons answers the
+          // login question before it has resolved the API keys, and a run built
+          // on that answer wrote nothing at all -- see rail.sessionUsable. The
+          // deadline stays ARMED here on purpose: if the refined answer never
+          // comes, the session budget is what ends the wait.
+          if (!netRail()?.sessionUsable(msg)) {
+            console.log(`[Cart ${ts()}]`, 'network run: session answered early — waiting for the store to finish');
+            return;
+          }
+          if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
           if (!msg.storeId || !msg.shoppingContext) { netHandOverToUser('session_no_store'); return; }
           netSessionRef.current = { storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext) };
           netSessionAtRef.current = Date.now();

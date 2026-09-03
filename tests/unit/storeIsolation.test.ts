@@ -30,7 +30,7 @@ describe('every rail answers every question the engine asks', () => {
   // by accident — it fails here instead.
   const MEMBERS = [
     'sessionMessageType', 'sessionScript', 'searchBatch',
-    'cartRead', 'addBatch', 'writable', 'needsPreference', 'budgets',
+    'cartRead', 'addBatch', 'writable', 'needsPreference', 'sessionUsable', 'budgets',
   ] as const;
 
   for (const id of RAIL_STORES) {
@@ -129,6 +129,44 @@ describe('how long to wait is a store fact', () => {
       expect(rail.budgets.searchMs(10_000)).toBeLessThanOrEqual(180_000);
       expect(rail.budgets.addMs(10_000)).toBeLessThanOrEqual(180_000);
     }
+  });
+});
+
+describe('signed in is not the same as ready to run', () => {
+  // MEASURED 2026-09-02. Albertsons answers the session probe TWICE: once the
+  // instant /userinfo comes back, so no budget of ours can make the sheet think
+  // a signed-in user is signed out, and again about 1.3s later with the API keys
+  // resolved and the token proved against a real cart read.
+  //
+  // The engine took the first one and went straight to writing. `wrote 0 of 29`,
+  // twenty-seven "nothing found for N chosen products", and a full basket handed
+  // back to the user to add by hand.
+  //
+  // It stayed hidden for as long as it did because the sheet's own prewarm
+  // happened to consume the early answer first. Once the selection screen
+  // started answering the searches, the prewarm stopped running and the run met
+  // the early answer head-on — which is exactly the shape of
+  // [[one-stores-rule-is-not-everyones]]: shared code carrying one store's
+  // assumption about how many answers a session probe gives.
+  const EARLY = { early: true, storeId: '161' };
+  const REFINED = { storeId: '161' };
+
+  it('Albertsons refuses the early answer and takes the refined one', () => {
+    expect(getNetworkRail('albertsons')!.sessionUsable(EARLY)).toBe(false);
+    expect(getNetworkRail('albertsons')!.sessionUsable(REFINED)).toBe(true);
+  });
+
+  it('H-E-B posts once, so whatever it posts is ready', () => {
+    expect(getNetworkRail('heb')!.sessionUsable(REFINED)).toBe(true);
+    // Even shaped like an early answer — H-E-B never sends one, and answering
+    // false here would strand its run waiting for a message that never comes.
+    expect(getNetworkRail('heb')!.sessionUsable(EARLY)).toBe(true);
+  });
+
+  it('an early answer with no store is let through — nothing more is coming', () => {
+    // The script returns after posting it. Waiting would burn the whole 25s
+    // session budget to reach the same handover the run can make immediately.
+    expect(getNetworkRail('albertsons')!.sessionUsable({ early: true, storeId: null })).toBe(true);
   });
 });
 
