@@ -1232,6 +1232,8 @@ export default function WebViewCartSheet({
   const quietNavTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** navTo, which is defined below the callbacks that need it. */
   const navToRef = useRef<(url: string) => void>(() => {});
+  /** startLoginCheck, for the entry points defined above it. */
+  const startLoginCheckRef = useRef<() => void>(() => {});
   /** noteLoginActivity, reachable from callbacks defined above it. */
   const noteLoginActivityRef = useRef<() => void>(() => {});
   /** The qty screen's items, for onLoadEnd — which has []-deps and would
@@ -2435,7 +2437,28 @@ export default function WebViewCartSheet({
     if (!rail) { netHandOverToUser('no_rail'); return; }
     // The store's own ceiling, not a shared one. See NetworkRail.budgets.
     netArm(rail.budgets.sessionMs, 'session_timeout');
-    webviewRef.current?.injectJavaScript(rail.sessionScript());
+    // ONLY IF WE ARE ACTUALLY ON THE STORE. Everything the session script does
+    // is same-origin, so injecting it anywhere else is not merely useless — it
+    // comes back `no_response`, which reads as a store that would not answer,
+    // and the run hands six searches to the user on the strength of it.
+    //
+    // MEASURED, ALDI, 2026-09-03: the sheet opened, the prewarm had already
+    // proven the login so the login check was skipped, and this fired 3ms later
+    // with the WebView still on `about:blank` — the quiet page was 2.5s from
+    // landing. Handing over took 98ms end to end. The bug was always here; the
+    // login check was hiding it by spending six seconds on a storefront load
+    // first.
+    //
+    // Off-origin, we simply wait: the onLoadEnd retry below injects the moment
+    // the quiet page lands, and the budget armed just above is what bounds the
+    // wait rather than an answer we cannot trust.
+    const here = lastLoadEndUrlRef.current;
+    if (here && here.includes(scriptsRef.current!.domain)) {
+      webviewRef.current?.injectJavaScript(rail.sessionScript());
+    } else {
+      console.log(`[Cart ${ts()}]`, 'network run: not on the store yet —',
+        'waiting for the quiet page instead of asking about:blank');
+    }
   }, [netArm, setStep, netRail, netHandOverToUser, netStartSearch]);
 
   netResumeSearchAfterNavRef.current = netResumeSearchAfterNav;
@@ -2715,15 +2738,21 @@ export default function WebViewCartSheet({
         runKindRef.current = 'choose';
         console.log(`[Cart ${ts()}]`, 'auto-start: active=', activeItemsRef.current.length, activeItemsRef.current.map(i => i.ingredientName));
         searchIdxRef.current = 0;
-        if (loginPrewarm.getStatus(openStoreId) === 'loggedOut') {
+        // THE SAME THREE-WAY RULE handleStartSearch uses, and it has to be
+        // spelled out here too because this branch is its own entry point: a
+        // run where anything still needs choosing never reaches the qty screen,
+        // so it never reaches that function. It had only the loggedOut arm, so
+        // a prewarm that had ALREADY proven the user signed in was thrown away
+        // and the whole login check run again from cold.
+        const pre = loginPrewarm.getStatus(openStoreId);
+        if (pre === 'loggedOut') {
           console.log(`[Cart ${ts()}]`, 'prewarm: known logged out — surfacing login directly');
           surfaceLoginDirect();
+        } else if (pre === 'loggedIn') {
+          console.log(`[Cart ${ts()}]`, 'prewarm: known logged in — skipping login check, going straight to snapshot');
+          snapshotBeforeAndBeginSearchRef.current();
         } else {
-          setStep('login_check');
-          setSearchingLabel('Checking login…');
-          loadQueueRef.current = [loginCheckScript()];
-          navTo(scriptsRef.current!.storeUrl);
-          armLoginCheckTimeout();
+          startLoginCheckRef.current();
         }
       } else {
         setStep('qty');
@@ -2985,6 +3014,34 @@ export default function WebViewCartSheet({
     }, LOGIN_CHECK_TIMEOUT_MS);
   }, []);
 
+  /**
+   * ASK THE STORE WHETHER WE ARE SIGNED IN, on the lightest page that can answer.
+   *
+   * A store with a network rail is asked over the network. Running a DOM check
+   * first and the rail's session probe a moment later asked the same question
+   * twice and let the weaker answer go first — the DOM one is an inference from
+   * markup that exists in both states, where the rail's is a token the origin
+   * accepts, proven by a real cart read.
+   *
+   * WHERE it asks is the part that was wrong. Both entry points navigated to
+   * `storeUrl` — the full storefront — for every store, rail or not. On the
+   * ALDI run of 2026-09-03 that cost 5.7s to load a page whose only job was to
+   * host a 121ms question, and then the post-login hop below had to navigate
+   * straight back off it. A rail asks from its quiet page, which is where the
+   * sheet already opened, so for the common case this now navigates nowhere at
+   * all and the answer arrives on the load that was already in flight.
+   */
+  const startLoginCheck = useCallback(() => {
+    setStep('login_check');
+    setSearchingLabel('Checking login…');
+    loadQueueRef.current = [loginCheckScript()];
+    const rail = !!getNetworkRail(lockedStoreIdRef.current);
+    const where = (rail && scriptsRef.current!.railUrl) || scriptsRef.current!.storeUrl;
+    navToRef.current(where);
+    armLoginCheckTimeout();
+  }, [setStep, loginCheckScript, armLoginCheckTimeout]);
+  startLoginCheckRef.current = startLoginCheck;
+
   // Skip the login_check round-trip and jump straight to the login webview.
   // Used when the silent pre-warm already told us the user is logged OUT of this
   // store, so we surface the sign-in prompt immediately instead of loading the
@@ -3076,16 +3133,7 @@ export default function WebViewCartSheet({
     }
     // Login state unknown (probe still running, errored, or not started) — fall
     // back to the live login check.
-    setStep('login_check');
-    setSearchingLabel('Checking login…');
-    // A store with a network rail is asked over the network here too. Running the
-    // DOM check first and the rail's session probe a moment later asked the same
-    // question twice and let the weaker answer go first — and the DOM one is an
-    // inference from markup that exists in both states, where the rail's is a
-    // token the origin accepts, proven by a real cart read.
-    loadQueueRef.current = [loginCheckScript()];
-    navTo(scriptsRef.current!.storeUrl);
-    armLoginCheckTimeout();
+    startLoginCheckRef.current();
   };
 
   // ── Navigation to next search item ──────────────────────────────────────
@@ -3365,11 +3413,18 @@ export default function WebViewCartSheet({
     // that is what makes its write verifiable — Albertsons verifies from the
     // write's own response, which returns the whole cart, so it has no
     // equivalent switch to demand.
-    const networkCapable = !!getNetworkRail(lockedStoreIdRef.current)
-      && netCfg.networkSearch === true
+    //
+    // TWO capabilities, not one. A choose run only ever searches — it ends in
+    // the Choose Products screen and writes to no cart — so demanding the ADD
+    // switch of it sent ALDI and Wegmans, whose search is on and whose write is
+    // deliberately still off, down the assisted path and handed the user six
+    // manual searches each.
+    const networkSearchCapable = !!getNetworkRail(lockedStoreIdRef.current)
+      && netCfg.networkSearch === true;
+    const networkAddCapable = networkSearchCapable
       && netCfg.networkAdd === true
       && (lockedStoreIdRef.current !== 'heb' || netCfg.cartSkuConfirm === true);
-    const strategy = chooseAddStrategy({ allChoose, networkCapable });
+    const strategy = chooseAddStrategy({ allChoose, networkSearchCapable, networkAddCapable });
     console.log(`[Cart ${ts()}]`, 'beginSearchFlow: allChoose=', allChoose, 'activeLen=', active.length,
       'store=', lockedStoreIdRef.current, 'strategy=', strategy);
     if (strategy === 'network' || strategy === 'networkChoose') {
@@ -4049,14 +4104,10 @@ export default function WebViewCartSheet({
     consecutiveTimeoutsRef.current = 0;
     searchIdxRef.current = 0;
     onSearchPageRef.current = false;
-    loadQueueRef.current = [loginCheckScript()];
     lastLoadEndUrlRef.current = '';
     expectedNavUrlRef.current = '';
-    setStep('login_check');
-    setSearchingLabel('Checking login…');
-    navTo(scriptsRef.current!.storeUrl);
-    armLoginCheckTimeout();
-  }, [setStep, armLoginCheckTimeout]);
+    startLoginCheckRef.current();
+  }, []);
 
   /**
    * ASK THE STORE WHO IS SIGNED IN, and say so in the log.

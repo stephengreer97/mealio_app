@@ -44,8 +44,8 @@ import { BUNDLED_AUTOMATION_CONFIG } from '../../src/lib/automation-config/schem
 const strategyCases = () => {
   const out: Array<Parameters<typeof chooseAddStrategy>[0]> = [];
   for (const allChoose of [true, false]) {
-    for (const networkCapable of [true, false]) {
-      out.push({ allChoose, networkCapable });
+    for (const cap of [true, false]) {
+      out.push({ allChoose, networkSearchCapable: cap, networkAddCapable: cap });
     }
   }
   return out;
@@ -58,14 +58,14 @@ describe('chooseAddStrategy', () => {
   // for a choose run, or Mealio searches and the USER adds.
   it('a store with no rail gets no automation, whatever else is true', () => {
     for (const allChoose of [true, false]) {
-      expect(chooseAddStrategy({ allChoose, networkCapable: false })).toBe('assisted');
+      expect(chooseAddStrategy({ allChoose, networkSearchCapable: false, networkAddCapable: false })).toBe('assisted');
     }
     // Absent is not "maybe" — a store is capable or it is assisted.
     expect(chooseAddStrategy({ allChoose: false })).toBe('assisted');
   });
 
   it('a rail store adds over the network', () => {
-    expect(chooseAddStrategy({ allChoose: false, networkCapable: true })).toBe('network');
+    expect(chooseAddStrategy({ allChoose: false, networkSearchCapable: true, networkAddCapable: true })).toBe('network');
   });
 
   it('a choose run STAYS on the rail, for search only', () => {
@@ -73,7 +73,7 @@ describe('chooseAddStrategy', () => {
     // drop the Choose Products screen on the two stores best able to fill it —
     // which is what happened when the pooled search that used to serve it was
     // deleted along with the rest of the DOM path.
-    expect(chooseAddStrategy({ allChoose: true, networkCapable: true })).toBe('networkChoose');
+    expect(chooseAddStrategy({ allChoose: true, networkSearchCapable: true, networkAddCapable: true })).toBe('networkChoose');
   });
 
   it('only ever answers with a route the caller handles', () => {
@@ -168,5 +168,22 @@ describe('every declared flag reaches a decision', () => {
       expect(Object.keys(bundled)).toContain(key);
       expect(observe(bundled)).toBe(observe({ ...bundled, [key]: altered(bundled[key]) }));
     }
+  });
+});
+
+describe('a store whose search is on and whose add is off', () => {
+  // ALDI and Wegmans both ship this way on purpose: their search is measured
+  // and their write is not yet proven. A run where everything still needs
+  // choosing never writes to a cart, so it must still get the rail.
+  it('still takes the rail for a choose run', () => {
+    expect(chooseAddStrategy({
+      allChoose: true, networkSearchCapable: true, networkAddCapable: false,
+    })).toBe('networkChoose');
+  });
+
+  it('but hands an add run to the user', () => {
+    expect(chooseAddStrategy({
+      allChoose: false, networkSearchCapable: true, networkAddCapable: false,
+    })).toBe('assisted');
   });
 });

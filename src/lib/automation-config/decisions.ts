@@ -63,8 +63,14 @@ export type AddStrategy = 'network' | 'networkChoose' | 'assisted';
 export interface AddStrategyInput {
   /** Every active item still needs a product chosen. */
   allChoose: boolean;
-  /** The store can search AND add over the network, and both are switched on. */
-  networkCapable?: boolean;
+  /** The store has a rail and network SEARCH is switched on. */
+  networkSearchCapable?: boolean;
+  /**
+   * ...and network ADD is switched on too, including any per-store proof
+   * switch. Implies networkSearchCapable: a rail that cannot search has
+   * nothing to add.
+   */
+  networkAddCapable?: boolean;
 }
 
 /**
@@ -91,8 +97,16 @@ export function chooseAddStrategy(input: AddStrategyInput): AddStrategy {
   // A choose run stays on the rail too, for search only. It needs candidates,
   // not adds, and letting it fall through to `assisted` would drop the Choose
   // Products screen on exactly the stores best able to fill it.
-  if (input.networkCapable) return input.allChoose ? 'networkChoose' : 'network';
-  return 'assisted';
+  //
+  // The two capabilities are asked SEPARATELY because a choose run never writes
+  // to a cart. Reading one combined "can do both" flag meant a search-on/add-off
+  // store -- ALDI and Wegmans, both of them deliberately half-on while their
+  // write is unproven -- fell through to `assisted` and handed the user six
+  // manual searches, on the exact stores whose search is fastest. Stephen,
+  // 2026-09-03, on an ALDI run that did this: "first test out the gate and
+  // login detection is not working for ALDI even though I am logged in".
+  if (input.allChoose) return input.networkSearchCapable ? 'networkChoose' : 'assisted';
+  return input.networkAddCapable ? 'network' : 'assisted';
 }
 
 // shouldStartPresearch, commitJitterMs and parallelAddWorkerCount lived here.

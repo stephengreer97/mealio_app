@@ -182,9 +182,17 @@ const PREPPED_MEALS = [
 // Stores whose run NAVIGATES to a search page — which since the DOM removal
 // means the assisted ones. A rail store loads no page at all, so there is no URL
 // to inspect; ingredientPrep.test.ts asks the same question of its search batch.
-const URL_STORES = ['walmart', 'amazon', 'aldi', 'wegmans'];
-const SCRIPT_STORES = ['aldi', 'wegmans'];
-const ALL_STORES = [...URL_STORES, ...SCRIPT_STORES];
+// Stores with NO rail, which is what makes them URL stores: the user does the
+// adding, so the run reaches the store by navigating its search page, and that
+// URL is the surface a preparation could leak onto.
+//
+// ALDI and Wegmans left this list on 2026-09-03. They were only ever here
+// because a choose run fell through to `assisted` on them, and that was the bug
+// — both have a measured network search, and a choose run writes to no cart, so
+// it now goes over the rail and navigates nowhere. Their half of this invariant
+// is asked where their terms now go: tests/unit/ingredientPrep.test.ts drives
+// `rail.searchBatch` for every store in the catalog, these two included.
+const URL_STORES = ['walmart', 'amazon'];
 
 /**
  * A single CHOSEN row, on its own.

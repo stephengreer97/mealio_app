@@ -419,6 +419,12 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
       // To finish it: measure the semantics on a device (add one item by hand,
       // then write the same itemId with quantity 2 and see whether the cart
       // holds 2 or 3), set absoluteQty in the rail, and flip this.
+      //
+      // OFF DOES NOT MEAN ASSISTED. A run where everything still needs choosing
+      // never writes to a cart, so it takes the rail on this store's search
+      // alone and ends at the Choose Products screen — measured on device at
+      // 5.7s for six ingredients, all six answered. Until 2026-09-03 one flag
+      // stood for both halves and this store got neither.
       networkSearch: true,
       networkAdd: false,
       selectors: {
