@@ -35,6 +35,13 @@ const COMMERCE_BASE = 'https://api.digitaldevelopment.wegmans.cloud';
 const TOKEN_CACHE_KEY = '__mealio_weg_tok_v1';
 /** The user's store number, once something has managed to learn it. */
 const STORE_CACHE_KEY = '__mealio_weg_store_v1';
+/**
+ * The cart the shop app itself reads. A trailing slash and its own api-version,
+ * both load-bearing: /commerce/cart/carts/active and every other shape guessed
+ * for this came back as a bare "Failed to fetch", because the gateway rejects an
+ * unknown route before it adds CORS headers.
+ */
+const CART_PATH = '/commerce/cart/carts/';
 const STORE_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -123,20 +130,108 @@ const WEG_PRELUDE = `
   // product on the next run. That is the failure the cart rules exist to
   // prevent, so the rail refuses to search rather than risk it.
   //
-  // MEASURED 2026-09-03, and this is the awkward part: the store number is
-  // nowhere a page can be asked for it. Not a cookie, not localStorage, not the
-  // server-rendered HTML of / or /shop, and /api/stores/preferred,
-  // /api/user/store, /api/stores/mine and /api/customer/store are all 404. It
-  // arrives with the customer profile, which is behind the bearer.
+  // WHERE IT ACTUALLY IS: the CART.
   //
-  // So Wegmans SEARCH depends on having had a token once, even though the
-  // search endpoint itself needs no session at all. Cached for a day, so it is
-  // one page load rather than one a run.
+  // It is nowhere a page can simply be asked. Not a cookie, not localStorage,
+  // not sessionStorage, not IndexedDB, not the server-rendered HTML of / or
+  // /shop, and every /api/user/store-shaped guess is a 404. It is NOT in the
+  // customer profile either, which was this rail's original guess and carries
+  // only hasInstacartAccountsForStores.
+  //
+  // Found 2026-09-03 by recording every response the shop app received during a
+  // cold boot and asking which one first mentioned the number: the cart. It is
+  // a commercetools cart, and the store rides in its custom fields:
+  //
+  //   GET /commerce/cart/carts/?api-version=2024-02-19-preview
+  //     -> grocery.custom.customFieldsRaw[] where name === 'storeNumber'
+  //
+  // BY NAME, never by index. It sat at [6] on the run that found it, behind
+  // loyalty and coupon fields that have no reason to keep their order.
+  //
+  // One call answers both halves: the same response carries grocery.lineItems,
+  // which is the cart baseline. So a run that reads the cart already knows the
+  // store, and the customer profile is only a fallback.
+  /** The grocery cart out of the carts response, whatever it is wrapped in. */
+  WG.groceryCart = function (data) {
+    if (!data || typeof data !== 'object') return null;
+    if (data.grocery && typeof data.grocery === 'object') return data.grocery;
+    if (data.cart && typeof data.cart === 'object') return data.cart;
+    return data;
+  };
+
+  /** A commercetools custom field, BY NAME. Index is not stable. */
+  WG.customField = function (cart, name) {
+    try {
+      var raw = cart.custom.customFieldsRaw || [];
+      for (var i = 0; i < raw.length; i++) {
+        if (raw[i] && String(raw[i].name) === name) return raw[i].value;
+      }
+    } catch (e) {}
+    return null;
+  };
+
+  /**
+   * THE SKU, which is the only id on a cart line that SEARCH also speaks.
+   *
+   * A line carries three, and two of them are traps — MEASURED 2026-09-03:
+   *   li.id           f2cc4dd6-...   the LINE
+   *   li.productId    47b86662-...   the commercetools PRODUCT
+   *   li.variant.sku  45407          the SKU  <- search returns this
+   *
+   * Reading either UUID keys the held-quantity map by ids no search result can
+   * match, so every item looks like have = 0 and nothing downstream can tell
+   * what the cart already holds. That exact bug shipped on the Instacart rail
+   * and was caught only against a live cart.
+   */
+  WG.lineSku = function (li) {
+    try {
+      if (li.variant && li.variant.sku != null) return String(li.variant.sku);
+    } catch (e) {}
+    if (li.productKey != null) return String(li.productKey);
+    if (li.skuId != null) return String(li.skuId);
+    if (li.sku != null) return String(li.sku);
+    return null;
+  };
+
+  /** commercetools names are localised objects as often as they are strings. */
+  WG.lineName = function (li, fallback) {
+    var n = li.name != null ? li.name : (li.productName != null ? li.productName : null);
+    if (n && typeof n === 'object') {
+      n = n.en || n['en-US'] || n['en-GB'] || n[Object.keys(n)[0]];
+    }
+    return String(n || li.description || fallback || 'item');
+  };
+
+  WG.readCart = async function (tok, budgetMs) {
+    return WG.commerce('${CART_PATH}', tok, { method: 'GET' }, budgetMs || 12000);
+  };
+
   WG.findStoreNumber = async function (tok, budgetMs) {
     var tries = [];
     var cached = WG.cachedStore();
     if (cached) { tries.push({ from: 'cache', v: cached }); return tries; }
-    if (!tok) { tries.push({ from: 'customer', v: null, why: 'no_token' }); return tries; }
+    if (!tok) { tries.push({ from: 'cart', v: null, why: 'no_token' }); return tries; }
+    // The CART first: it is where the number actually lives, and the same
+    // response is the cart baseline a run needs anyway.
+    var rc = await WG.readCart(tok, budgetMs || 12000);
+    // Kept for the session answer and the baseline: this response is the cart,
+    // so nothing downstream has to fetch it a second time.
+    WG.lastCart = rc;
+    if (rc.ok) {
+      var cart = WG.groceryCart(rc.data);
+      var v = cart ? WG.customField(cart, 'storeNumber') : null;
+      var sv = v == null ? null : String(v);
+      if (sv && /^[0-9]{1,4}$/.test(sv)) {
+        tries.push({ from: 'cart', v: sv, ms: rc.ms });
+        try { localStorage.setItem('${STORE_CACHE_KEY}', JSON.stringify({ v: sv, at: Date.now() })); } catch (e) {}
+        return tries;
+      }
+      tries.push({ from: 'cart', v: null, ms: rc.ms });
+    } else {
+      tries.push({ from: 'cart', v: null, why: rc.why });
+    }
+    // The profile is a fallback only. It did not carry the number on the
+    // account this was measured against, but it costs one call to be sure.
     var r = await WG.commerce('/commerce/account/customer', tok, { method: 'GET' }, budgetMs || 10000);
     if (!r.ok) { tries.push({ from: 'customer', v: null, why: r.why }); return tries; }
     var n = WG.storeFromCustomer(r.data);
@@ -328,6 +423,7 @@ const WEG_PRELUDE = `
     '/commerce/order/orders/activeorders': '2024-03-04-preview',
     '/commerce/saved-list/savedlists': '2024-02-20-preview',
     '/commerce/my-items': '2024-01-26',
+    '/commerce/cart/carts/': '2024-02-19-preview',
   };
   WG.versioned = function (path) {
     if (path.indexOf('api-version=') >= 0) return path;
@@ -403,16 +499,19 @@ ${WEG_PRELUDE}
       accounts: accounts, storeTries: stores,
     });
 
-    // Now the part the cart needs. The token is not in localStorage in any
-    // readable form, so this is a cache lookup and nothing more; the capture
-    // above is what fills it, on a page where the site's own code runs.
+    // THE CART IS THE PROOF, and it is a cart we need anyway.
+    //
+    // This used to spend a second call on /commerce/account/customer purely to
+    // see whether the token was accepted. A cart read answers the same question
+    // and returns the baseline with it, so the run gets both for one request.
     var tok = tok0;
     var verified = false;
     var why = 'no_token';
     if (tok) {
-      var who = await WG.commerce('/commerce/account/customer', tok, { method: 'GET' }, 8000);
-      verified = !!who.ok;
-      if (!who.ok) why = who.why;
+      var rc2 = WG.lastCart;
+      if (!rc2) rc2 = await WG.readCart(tok, 8000);
+      verified = !!(rc2 && rc2.ok);
+      if (rc2 && !rc2.ok) why = rc2.why;
     }
     post({
       ok: true, loggedIn: true, verified: verified,
@@ -554,43 +653,47 @@ ${WEG_PRELUDE}
                 why: 'no_token' });
       return;
     }
-    var r = await WG.commerce('/commerce/cart/carts/', tok, { method: 'GET' }, 15000);
+    var r = await WG.readCart(tok, 15000);
     if (!r.ok) {
       WG.post({ type: 'CART_COUNT', count: null, source: 'network', reason: 'rail_read_failed',
                 why: r.why, status: r.status || null });
       return;
     }
-    // The exact envelope has not been seen with items in it, so the lines are
-    // looked for rather than assumed at a fixed path. The shape is REPORTED on
-    // the first run that has a non-empty cart, which is what turns this into
-    // something exact.
-    var lines = [];
-    var pick = function (n, depth) {
-      if (!n || depth > 6 || lines.length) return;
-      if (Array.isArray(n)) {
-        var looksRight = n.length > 0 && n[0] && typeof n[0] === 'object'
-          && (n[0].quantity != null || n[0].qty != null);
-        if (looksRight) { lines = n; return; }
-        for (var i = 0; i < n.length; i++) pick(n[i], depth + 1);
-        return;
-      }
-      if (typeof n !== 'object') return;
-      for (var k in n) { if (Object.prototype.hasOwnProperty.call(n, k)) pick(n[k], depth + 1); }
-    };
-    pick(r.data, 0);
+    // THE MEASURED SHAPE, 2026-09-03, against a cart holding 13 items.
+    // This used to WALK the response for anything array-shaped with a quantity,
+    // because the envelope had never been seen with items in it. It has now.
+    var cart = WG.groceryCart(r.data) || {};
+    var lines = cart.lineItems || cart.items || [];
+    if (!lines.length) {
+      // Kept as a fallback, not as the plan: an envelope change should degrade
+      // to a guess rather than to an empty cart, because "empty" is the reading
+      // that makes everything the user already owns look newly added.
+      var pick = function (n, depth) {
+        if (!n || depth > 6 || lines.length) return;
+        if (Object.prototype.toString.call(n) === '[object Array]') {
+          if (n.length > 0 && n[0] && typeof n[0] === 'object' && n[0].quantity != null) { lines = n; return; }
+          for (var i = 0; i < n.length; i++) pick(n[i], depth + 1);
+          return;
+        }
+        if (typeof n !== 'object') return;
+        for (var k in n) { if (Object.prototype.hasOwnProperty.call(n, k)) pick(n[k], depth + 1); }
+      };
+      pick(r.data, 0);
+    }
     var rows = [];
     var count = 0;
     for (var i2 = 0; i2 < lines.length; i2++) {
       var li = lines[i2] || {};
       var qty = Number(li.quantity != null ? li.quantity : (li.qty != null ? li.qty : 1));
       if (!(qty > 0)) qty = 1;
-      var id = li.productId != null ? String(li.productId)
-             : (li.skuId != null ? String(li.skuId) : (li.itemId != null ? String(li.itemId) : null));
-      var nm = li.productName || li.name || li.description || id || 'item';
-      rows.push({ name: String(nm), qty: qty, itemId: id, available: li.isAvailable !== false });
+      var id = WG.lineSku(li);
+      rows.push({ name: WG.lineName(li, id), qty: qty, itemId: id, available: li.isAvailable !== false });
       count += qty;
     }
+    // cartId and version travel with it: this is a commercetools cart, so any
+    // write has to quote the version it was read at.
     WG.post({ type: 'CART_COUNT', count: count, items: rows, source: 'network', ms: r.ms,
+              cartId: cart.id || null, version: cart.version != null ? cart.version : null,
               shape: rows.length ? null : JSON.stringify(r.data || {}).slice(0, 300) });
   } catch (e) {
     WG.post({ type: 'CART_COUNT', count: null, source: 'network', reason: 'rail_read_threw',
@@ -669,20 +772,28 @@ ${WEG_PRELUDE}
       if (typeof n !== 'object') return;
       for (var k in n) { if (Object.prototype.hasOwnProperty.call(n, k)) pick(n[k], depth + 1); }
     };
-    pick(r.data, 0);
+    // The measured envelope first; the walk above is the fallback. Same reading
+    // as the cart read, and it has to be: this map is what decides whether an
+    // item is already held, and the read and the write disagreeing about that
+    // is how a cart gets double-added.
+    var cart = WG.groceryCart(r.data) || {};
+    if (cart.lineItems && cart.lineItems.length) lines = cart.lineItems;
+    else if (!lines.length) pick(r.data, 0);
     var held = {};
     var rows = [];
-    var cartId = null;
-    try { cartId = (r.data && (r.data.cartId || r.data.id)) || null; } catch (e) {}
+    var cartId = cart.id || null;
+    if (!cartId) { try { cartId = (r.data && (r.data.cartId || r.data.id)) || null; } catch (e) {} }
     for (var i2 = 0; i2 < lines.length; i2++) {
       var li = lines[i2] || {};
-      var id = li.productId != null ? String(li.productId) : (li.skuId != null ? String(li.skuId) : null);
+      // variant.sku — the ONLY id a cart line shares with a search result.
+      var id = WG.lineSku(li);
       var q = Number(li.quantity != null ? li.quantity : (li.qty != null ? li.qty : 1));
       if (!(q > 0)) q = 1;
       if (id) held[id] = (held[id] || 0) + q;
-      rows.push({ name: String(li.productName || li.name || id || 'item'), qty: q, itemId: id, available: true });
+      rows.push({ name: WG.lineName(li, id), qty: q, itemId: id, available: true });
     }
-    return { cartId: cartId ? String(cartId) : null, held: held, rows: rows };
+    return { cartId: cartId ? String(cartId) : null, held: held, rows: rows,
+             version: cart.version != null ? cart.version : null };
   };
 
   try {

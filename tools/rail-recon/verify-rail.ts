@@ -75,7 +75,12 @@ async function main() {
 
   // 1. session
   const sess = await collect(page, rail.sessionScript(), [rail.sessionMessageType]);
-  const answers = sess.filter((m) => m.type === rail.sessionMessageType);
+  // A rail may answer TWICE — an early verdict and a refined one — and `collect`
+  // returns on the first. Albertsons and Wegmans both do; reading only the first
+  // reported "no usable session" for a rail that was about to say it had one.
+  await page.waitForTimeout(6000);
+  const answers = ALL.filter((m) => m.type === rail.sessionMessageType);
+  void sess;
   console.log('SESSION —', answers.length, 'answer(s)');
   for (const a of answers) console.log('  ', JSON.stringify(a).slice(0, 420));
   const usable = answers.filter((a) => rail.sessionUsable(a as never)).pop();

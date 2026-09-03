@@ -108,8 +108,22 @@ function netStub(opts: {
     '        }',
     '        return Promise.resolve({ status: st, text: function () { return Promise.resolve("{}"); } });',
     '      }',
+    // THE MEASURED ENVELOPE, 2026-09-03. This used to answer a flat
+    // { cartId, items: [{ productId, quantity }] } — the shape the old parser
+    // happened to read, and not the shape the store sends. A commercetools cart
+    // nests its lines and carries THREE ids per line, only one of which
+    // (variant.sku) is the one search speaks. The store number rides in the
+    // cart's custom fields, which is the only place it exists at all.
+    '      var lines = window.__cart.map(function (it, i) {',
+    '        return { id: "line-" + i + "-4e178fbf", productId: "prod-" + i + "-47b86662",',
+    '                 productKey: String(it.productId), variant: { sku: String(it.productId), id: "1" },',
+    '                 name: { "en-US": it.productName || "Item" }, quantity: it.quantity };',
+    '      });',
     '      return Promise.resolve({ status: ' + String(opts.cartStatus ?? 200) + ',',
-    '        text: function () { return Promise.resolve(JSON.stringify({ cartId: "cart-1", items: window.__cart })); } });',
+    '        text: function () { return Promise.resolve(JSON.stringify({ grocery: {',
+    '          id: "cart-1", version: 13172, lineItems: lines,',
+    '          custom: { customFieldsRaw: [{ name: "loyaltyNumber", value: "x" },',
+    '                                      { name: "storeNumber", value: "140" }] } } })); } });',
     '    }',
     '    return Promise.resolve({ status: 404, text: function () { return Promise.resolve(""); } });',
     '  };',
@@ -437,10 +451,12 @@ describe('the bearer, read straight out of the MSAL cache', () => {
     await runner.waitForMessage('WEGMANS_SESSION', 20_000);
     // The EARLY session answer is posted before the store lookup finishes, so
     // waiting on the message alone reads window.__commerce too soon.
-    await runner.page.waitForFunction('window.__customerUrls.length > 0', undefined, { timeout: 10000 });
-    const urls = await runner.page.evaluate('window.__customerUrls') as string[];
-    expect(urls.length).toBeGreaterThan(0);
-    for (const u of urls) expect(u).toContain('api-version=');
+    // The CART is the first commerce call a session makes now — it is where the
+    // store number lives — so that is the URL to inspect.
+    await runner.page.waitForFunction('window.__commerce.length > 0', undefined, { timeout: 10000 });
+    const calls = await runner.page.evaluate('window.__commerce') as Array<{ url: string }>;
+    expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) expect(c.url).toContain('api-version=');
   }, AT_WEGMANS);
 
   itWithFixture('shop.html', 'ignores a token for a DIFFERENT audience', async (runner) => {
@@ -463,5 +479,58 @@ describe('the bearer, read straight out of the MSAL cache', () => {
     const msg = await runner.waitForMessage('WEGMANS_SESSION', 20_000) as Record<string, unknown>;
     const tries = (msg.storeTries ?? []) as Array<Record<string, unknown>>;
     expect(tries.some((t) => t.why === 'no_token')).toBe(true);
+  }, AT_WEGMANS);
+});
+
+describe('a cart line carries three ids and only one of them is the product', () => {
+  // MEASURED against Stephen's cart, 2026-09-03:
+  //
+  //   li.id           f2cc4dd6-…    the LINE
+  //   li.productId    47b86662-…    the commercetools PRODUCT
+  //   li.variant.sku  45407         the SKU, and what SEARCH returns
+  //
+  // Reading either UUID keys the held-quantity map by ids no search result can
+  // match: every item looks like have = 0, the refusal of an item already in
+  // the cart cannot fire, and the after-write check cannot confirm a line. That
+  // exact bug shipped on the Instacart rail and was only caught against a live
+  // cart, because the stub there described the shape the broken parser read.
+  itWithFixture('shop.html', 'keys the cart by the SKU, not by either UUID', async (runner) => {
+    await runner.inject(cachedToken());
+    await runner.inject(netStub({ cart: [{ productId: '608294', quantity: 2, productName: 'Daisy Sour Cream' }] }));
+    await runner.inject(buildWegmansCartReadScript());
+    const msg = await runner.waitForMessage('CART_COUNT', 20_000) as Record<string, unknown>;
+    const items = msg.items as Array<Record<string, unknown>>;
+    expect(items).toHaveLength(1);
+    expect(items[0].itemId).toBe('608294');
+    // Not the line id and not the product UUID, both of which the stub emits.
+    expect(String(items[0].itemId)).not.toContain('line-');
+    expect(String(items[0].itemId)).not.toContain('prod-');
+    // The name is a localised object on a commercetools line.
+    expect(items[0].name).toBe('Daisy Sour Cream');
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'carries the cart id and version a write would need', async (runner) => {
+    await runner.inject(cachedToken());
+    await runner.inject(netStub({ cart: [{ productId: '608294', quantity: 1, productName: 'x' }] }));
+    await runner.inject(buildWegmansCartReadScript());
+    const msg = await runner.waitForMessage('CART_COUNT', 20_000) as Record<string, unknown>;
+    expect(msg.cartId).toBe('cart-1');
+    expect(msg.version).toBe(13172);
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'finds the store number in the cart custom fields', async (runner) => {
+    // BY NAME, never by index — it sat behind loyalty and coupon fields that
+    // have no reason to keep their order. And this is the ONLY place it exists:
+    // not the customer profile, not storage, not a cookie, not the HTML.
+    await runner.inject(encryptedMsalCache());
+    await runner.page.waitForFunction('window.__seeded === true', undefined, { timeout: 5000 });
+    await runner.inject(netStub());
+    await runner.inject(buildWegmansSessionScript());
+    const msgs: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 2; i += 1) {
+      msgs.push(await runner.waitForMessage('WEGMANS_SESSION', 20_000) as Record<string, unknown>);
+      if (msgs[msgs.length - 1].storeId) break;
+    }
+    expect(msgs.some((m) => m.storeId === '140')).toBe(true);
   }, AT_WEGMANS);
 });
