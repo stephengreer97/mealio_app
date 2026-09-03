@@ -306,10 +306,20 @@ const INSTACART_RAIL: NetworkRail = {
       items.map((i) => ({ idx: i.idx, productId: i.productId, quantity: i.quantity, name: i.name })),
       {
         knownLines: opts?.knownLines ?? null,
-        // Unproven until measured on a device -- see the note on
-        // buildAldiNetworkAddBatchScript. Null makes the script refuse any item
-        // the cart already holds rather than risk the MEAL-194 under-add.
-        absoluteQty: null,
+        // MEASURED against the real store, 2026-09-03, on one authorised write.
+        // The cart held 1 of items_23898-46580608; we wrote quantity 2 and read
+        // it back as 2, not 3, then restored it to 1. The write SETS the line.
+        //
+        // The storefront's own bundle says the same thing independently: its
+        // updateCartItems computes `finalQuantity: u` from the value you send
+        // and derives the delta (u - d) only for analytics, and its bulk-add
+        // path computes held + wanted ITSELF before sending. There is no
+        // quantityDelta anywhere in it. The mutation variable is named
+        // newQuantity.
+        //
+        // So held + wanted, which is what this script already writes, is right —
+        // and the refusal of an item the cart already holds can lift.
+        absoluteQty: true,
       },
     ),
   // The cart is addressed by the item id the search returns

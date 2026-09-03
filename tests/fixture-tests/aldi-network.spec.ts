@@ -57,9 +57,26 @@ function gqlStub(opts: {
     '  var SET = ' + JSON.stringify(opts.setSemantics !== false) + ';',
     '  var FAIL = ' + JSON.stringify(opts.fail ?? null) + ';',
     '  var FAILCODE = ' + JSON.stringify(opts.failCode ?? 'PERSISTED_QUERY_NOT_FOUND') + ';',
+    // THE REAL SHAPE, read off the live cart on 2026-09-03.
+    //
+    // A cart line's own `id` is the CART LINE (a bare number like 35303533299).
+    // The item is one level down, on `basketProduct`, whose `itemId` is exactly
+    // what Search returns as productId. The two are different id spaces.
+    //
+    // This stub used to emit a flat { itemId, quantity, name }, which is the
+    // shape the old extractor happened to read — so every test here passed
+    // against a cart the store does not send, while the real rail keyed its
+    // held-quantity map by line ids that no search result could ever match.
+    // A double is a model, not an oracle: it was right exactly where it had
+    // been exercised.
     '  function cartLines() {',
     '    var out = [];',
-    '    for (var k in window.__lines) out.push({ itemId: k, quantity: window.__lines[k], name: "Item " + k });',
+    '    var line = 35303533299;',
+    '    for (var k in window.__lines) {',
+    '      out.push({ id: String(line++), quantity: window.__lines[k], quantityType: "each",',
+    '                 basketProduct: { id: k, itemId: k, productId: String(k).split("-")[1] || null,',
+    '                                  name: "Item " + k } });',
+    '    }',
     '    return out;',
     '  }',
     '  window.fetch = function (url, init) {',

@@ -561,10 +561,28 @@ ${IC_PRELUDE}
       var li = lines[i] || {};
       var qty = Number(li.quantity != null ? li.quantity : 1);
       if (!(qty > 0)) qty = 1;
-      var nm = li.name || null;
-      if (!nm) { try { nm = li.item.name || (li.item.viewSection && li.item.viewSection.titleString); } catch (e) {} }
+      // basketProduct FIRST, and li.id LAST.
+      //
+      // A cart line carries two different ids and only one of them is the item.
+      // MEASURED against the real cart on 2026-09-03:
+      //   li.id                      = 35303533299            <- the CART LINE
+      //   li.basketProduct.itemId    = items_23898-46580608   <- the ITEM
+      // and the second is exactly what Search returns as productId.
+      //
+      // Reading li.id meant the held map was keyed by line ids that no search
+      // result could ever match. Everything downstream that asks how many of this
+      // the cart already holds got 0 for every item, always: the add's refusal of
+      // an item the cart already holds could not fire, and its after-write check
+      // -- which reads this same map to decide whether the write landed -- would
+      // have called every successful write a failure.
+      var bp = li.basketProduct || null;
       var iid = null;
-      try { iid = String(li.itemId || (li.item && li.item.id) || li.id); } catch (e) {}
+      try { iid = String((bp && (bp.itemId || bp.id)) || li.itemId || (li.item && li.item.id) || li.id); } catch (e) {}
+      // The NAME comes from the same place, so a cart row stops reading
+      // "35303533299" on the review screen.
+      var nm = li.name || null;
+      if (!nm && bp && bp.name) nm = bp.name;
+      if (!nm) { try { nm = li.item.name || (li.item.viewSection && li.item.viewSection.titleString); } catch (e) {} }
       rows.push({ name: String(nm || iid || 'item'), qty: qty, itemId: iid, available: true });
       count += qty;
     }
@@ -657,12 +675,15 @@ ${IC_PRELUDE}
       try { lines = items.data.userCart.cartItemCollection.cartItems || []; } catch (e) {}
       for (var i = 0; i < lines.length; i++) {
         var li = lines[i] || {};
+        // The item, not the cart line — see the note on the read above.
+        var bp = li.basketProduct || null;
         var iid = null;
-        try { iid = String(li.itemId || (li.item && li.item.id) || li.id); } catch (e) {}
+        try { iid = String((bp && (bp.itemId || bp.id)) || li.itemId || (li.item && li.item.id) || li.id); } catch (e) {}
         var q = Number(li.quantity != null ? li.quantity : 1);
         if (!(q > 0)) q = 1;
         if (iid) held[iid] = (held[iid] || 0) + q;
         var nm = li.name || null;
+        if (!nm && bp && bp.name) nm = bp.name;
         if (!nm) { try { nm = li.item.name; } catch (e) {} }
         rows.push({ name: String(nm || iid || 'item'), qty: q, itemId: iid, available: true });
       }
