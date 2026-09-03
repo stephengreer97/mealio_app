@@ -187,3 +187,69 @@ export function scoreMatch(a: string, b: string): number {
   const s2 = scoreOne(normStrip(a), normStrip(b));
   return Math.max(s1, s2);
 }
+
+/**
+ * Units a store appends to a product name. Not a general unit list: these are
+ * the ones that appear in a trailing SIZE, which is the only place this is used.
+ */
+const SIZE_UNITS = '(?:fl\\s*oz|oz|lbs?|ct|count|g|kg|mg|ml|l|liters?|litres?|'
+  + 'pk|packs?|pieces?|each|ea|qt|pt|gal|dozen)';
+
+/** A trailing ", 28 oz" / " - 8 count" / ", per lb" / ", 1.6 oz", one at a time. */
+const SIZE_TAIL = new RegExp(
+  '[,\\-\\s]*(?:per\\s+)?(?:\\d+(?:[.,/]\\d+)?\\s*)?' + SIZE_UNITS + '\\.?\\s*$', 'i');
+
+/**
+ * Peel trailing sizes off a product name.
+ *
+ * On the RAW string, not the normalised one. normDiacritic turns every
+ * non-alphanumeric into a space, so "1.6 oz" becomes "1 6 oz" and the decimal
+ * that the size pattern is matching on is gone — three of ALDI's eight
+ * size-suffixed names are decimals, and stripping after normalising left a
+ * stray "1" behind on each. Normalise once at the end, for the comparison.
+ *
+ * "Cilantro Bunch, each, 1 each" -> "cilantro bunch".
+ */
+function stripTrailingSizes(name: string): string {
+  let s = name;
+  for (let i = 0; i < 4; i += 1) {
+    const next = s.replace(SIZE_TAIL, '').replace(/[,\-\s]+$/, '');
+    if (next === s || !next) break;
+    s = next;
+  }
+  return normDiacritic(s);
+}
+
+/**
+ * IS THE CANDIDATE THE SAME PRODUCT, DIFFERING ONLY BY A TRAILING SIZE?
+ *
+ * scoreMatch returns 100 only for strings that are equal after normalisation,
+ * and the add path requires 100 — deliberately, because anything looser adds a
+ * product the user did not ask for. But a store that appends its pack size to
+ * every product name can then never produce a 100:
+ *
+ *   saved     "Happy Harvest Crushed Tomatoes"
+ *   ALDI      "Happy Harvest Crushed Tomatoes, 28 oz"      -> 99, forever
+ *
+ * MEASURED on Stephen's own run, 2026-09-03: 14 of 14 items scored 99 and every
+ * one went to review. "Seems like you are stripping the search name? You
+ * shouldn't do that." Nothing was stripping it — the store was ADDING to it.
+ *
+ * This is deliberately narrower than "accept 99". A 99 also covers a candidate
+ * with EXTRA WORDS, and on that same run 99 would have matched "Organic
+ * Broccoli" to "Season's Choice Organic Broccoli Florets, 10 oz" — a different
+ * product, a different brand. The rule here is that everything the candidate has
+ * beyond the term is a size, and nothing else.
+ *
+ * The caller must also require that exactly ONE candidate qualifies. Where a
+ * store lists the same product in two sizes, picking one is a size choice the
+ * user never made, and that belongs on the review screen.
+ */
+export function sameProductBarSize(term: string, candidateName: string): boolean {
+  const t = normDiacritic(term);
+  const c = normDiacritic(candidateName);
+  if (!t || !c || t === c) return false;
+  // The RAW candidate, for the reason stripTrailingSizes explains: normalising
+  // first destroys the decimal point that the size pattern matches on.
+  return stripTrailingSizes(candidateName) === t;
+}

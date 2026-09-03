@@ -467,7 +467,12 @@ describe('a chosen product that no longer exists', () => {
     const { view, post, load } = openSheet();
     load();
     post(SESSION);
-    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('Sour Cream 24 oz')] });
+    // "Light Sour Cream", not "Sour Cream 24 oz". A candidate that is the term
+    // plus ONLY a size is the same product — ALDI appends its pack size to
+    // every name, and treating that as a near-variant is what sent 14 of 14 of
+    // Stephen's items to review on 2026-09-03. A near-variant differs by a
+    // WORD. The fixture has to say which of the two it means.
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('Light Sour Cream 24 oz')] });
     post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
     post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
 
@@ -477,6 +482,32 @@ describe('a chosen product that no longer exists', () => {
     post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
 
     expect(fallbackBatches()).toBe(beforeCart + 1);
+  });
+
+  it('will not choose BETWEEN two sizes of the product', () => {
+    // The other half of the size rule, and the dangerous half.
+    //
+    // One candidate that is the term plus a size is the same product, so it is
+    // written. TWO of them is a question only the user can answer — writing
+    // either one puts a size in their cart that they never asked for, which is
+    // the one thing the cart rules never allow. So it goes to review, exactly
+    // as an unmatched item does.
+    const { view, post, load } = openSheet();
+    load();
+    post(SESSION);
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream',
+           candidates: [candidate('Sour Cream, 16 oz'), candidate('Sour Cream, 24 oz')] });
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'tortillas', candidates: [candidate('tortillas')] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
+
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+
+    // Neither size reached a write.
+    const writes = injected.filter((js) => js.includes('cartItemV2'));
+    expect(writes.some((js) => js.includes('pSour Cream, 16 oz'))).toBe(false);
+    expect(writes.some((js) => js.includes('pSour Cream, 24 oz'))).toBe(false);
   });
 
   it('keeps the near-variants and adds to them, rather than swapping', () => {

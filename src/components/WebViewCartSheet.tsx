@@ -61,7 +61,7 @@ import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOp
 import { HebAddConfirmation, confirmDetail } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
-import { scoreMatch } from '../lib/webview-scripts/_scoring';
+import { sameProductBarSize, scoreMatch } from '../lib/webview-scripts/_scoring';
 import {
 } from '../lib/webview-scripts/heb-network-search';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
@@ -1947,7 +1947,36 @@ export default function WebViewCartSheet({
       // The SAME rule the page path uses: an exact name, in stock. Anything
       // looser here would add a product the user did not ask for, which is the
       // one thing the cart rules never allow.
-      const exact = candidates.filter((c) => scoreMatch(term, c.productName) === 100);
+      let exact = candidates.filter((c) => scoreMatch(term, c.productName) === 100);
+      // A STORE THAT APPENDS ITS PACK SIZE CAN NEVER PRODUCE A 100.
+      //
+      //   saved     "Happy Harvest Crushed Tomatoes"
+      //   ALDI      "Happy Harvest Crushed Tomatoes, 28 oz"    -> 99, forever
+      //
+      // Stephen's run of 2026-09-03: 14 of 14 scored 99 and every one went to
+      // review. Nothing was stripping his saved name — the store was adding to
+      // it. Eight of those fourteen are this case exactly.
+      //
+      // Still not "accept 99": a 99 also covers a candidate with EXTRA WORDS,
+      // and on that same run it would have matched "Organic Broccoli" to
+      // "Season's Choice Organic Broccoli Florets" — different product,
+      // different brand. sameProductBarSize allows a trailing SIZE and nothing
+      // else.
+      //
+      // And only when exactly ONE candidate qualifies. Two sizes of the same
+      // product is a choice the user never made, and that is the review
+      // screen's job, not this function's.
+      if (exact.length === 0) {
+        const barSize = candidates.filter((c) => sameProductBarSize(term, c.productName));
+        if (barSize.length === 1) {
+          console.log(`[Cart ${ts()}]`, 'match: size-only —', JSON.stringify(term), '->',
+            JSON.stringify(barSize[0].productName));
+          exact = barSize;
+        } else if (barSize.length > 1) {
+          console.log(`[Cart ${ts()}]`, 'match:', barSize.length, 'sizes of', JSON.stringify(term),
+            '— the user picks which');
+        }
+      }
       // WRITABILITY IS THE STORE'S RULE, NOT THIS FUNCTION'S. H-E-B addresses a
       // cart line by sku; Albertsons addresses it by product id and its search
       // returns no sku at all. Requiring both here meant no Albertsons candidate
