@@ -49,6 +49,20 @@ npx tsx tools/rail-recon/watch.ts wegmans "https://www.wegmans.com/shop/search?s
 URL, status, GraphQL operation name, request headers (cookies and bearer tokens
 redacted) and a peek at the body.
 
+## Verifying a rail you have built
+
+```bash
+npx tsx tools/rail-recon/verify-rail.ts aldi
+npx tsx tools/rail-recon/verify-rail.ts wegmans
+```
+
+Runs the rail's OWN scripts — the ones the app ships — against the real store and
+prints what came back: the session answer, a search with its candidates and
+timing, and the cart read. Not a stub and not a reimplementation, so if it says
+the search works, the app's search works.
+
+It does not run the add. That writes to a real basket.
+
 ## Rules that are not optional
 
 - **Read only.** Discovering the write endpoint is one thing; putting groceries

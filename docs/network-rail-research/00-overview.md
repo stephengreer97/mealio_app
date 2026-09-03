@@ -8,27 +8,36 @@ JavaScript or its behaviour and has **not** been executed. The difference
 matters: this whole project's worst bugs came from treating one store's rule as
 everyone's, and treating an inference as a measurement is the same mistake.
 
-## The one-paragraph answer
+## Where this stands (2026-09-03)
 
-**ALDI is fully mapped and ready to implement** — every operation measured
-against a live session, and its add takes an array, so bulk add is one call.
-**Wegmans has the fastest search of any store we have touched** — Algolia, no
-session at all, 13ms — but its cart API needs a bearer that MSAL keeps
-encrypted, so the cart half costs a heavy page load per token. A search-only
-Wegmans rail is a real option and is written up. **Walmart works and is the most defended**;
-probing it has a cost. **Amazon Fresh has no JSON API worth the name** and is
-the one store here where a rail may not be the right answer.
+**ALDI and Wegmans are BUILT** — `src/lib/webview-scripts/aldi-network.ts` and
+`wegmans-network.ts`, registered in `network-rail.ts`, 31 fixture tests running
+the real scripts. Search and cart read are on; **both adds are off**, each for a
+named reason, each one measurement away. Walmart is researched and not built.
+Amazon Fresh should not be.
 
-Build order: **ALDI first** — it is done bar the writing, and it lights up every
-banner in `INSTACART_TENANTS` rather than one store. **Wegmans second**, search
-first and the cart only if Stephen wants it. Walmart third. Amazon not at all.
-
-| | Login detection | Search | Cart read | Bulk add | Verdict |
+| | Login | Search | Cart read | Add | State |
 |---|---|---|---|---|---|
-| **Wegmans** | localStorage, **0 network** | Algolia, **no auth**, 13ms | bearer only — **token is encrypted** | likely | search rail yes, cart needs a decision |
-| **ALDI** | `ActiveCarts`, 176ms | `AsyncItemSearch`, 556ms | `CartItems`, 306ms | **YES — one call** | **fully mapped** |
-| **Walmart** | cookie | GraphQL, hash-locked | GraphQL | likely | build third, carefully |
-| **Amazon Fresh** | cookie | none found | AJAX fragment | unlikely | **do not build yet** |
+| **ALDI** | `ActiveCarts` 176ms | `AsyncItemSearch` 556ms | `CartItems` 306ms | bulk, one call | **built**, add off |
+| **Wegmans** | localStorage, **0 network** | Algolia, **no session**, 13ms | bearer | endpoint unseen | **built**, add off |
+| **Walmart** | cookie | hash-locked | `getCart` | likely bulk | researched only |
+| **Amazon Fresh** | cookie | none exists | HTML fragment | no | do not build |
+
+### The two things that would finish them
+
+1. **ALDI: which shop?** Every operation takes the shop the user is shopping
+   (8583 here), which is NOT the retailer id `ActiveCarts` returns (12). The
+   rail refuses to search without it rather than search the wrong catalogue, so
+   ALDI's search is inert until this is found. The session probe reports where
+   it looked (`shopTries`); one device run reads the answer off it.
+2. **Both: is quantity absolute?** H-E-B and Albertsons both SET a line rather
+   than adding to it. Neither of these two has been measured, so both scripts
+   write only where the readings agree (the cart holds none of the item) and
+   decline where they do not. Add one item by hand, write the same id with
+   quantity 2, see whether the cart holds 2 or 3.
+
+`npx tsx tools/rail-recon/verify-rail.ts aldi` runs the shipped scripts against
+the real store and answers the first one.
 
 ## What every rail here must do, whatever the store
 
