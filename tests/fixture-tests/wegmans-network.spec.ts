@@ -70,6 +70,9 @@ function netStub(opts: {
     '(function () {',
     '  window.__algolia = [];',
     '  window.__commerce = [];',
+    // Recorded separately: the customer branch answers and returns before the
+    // generic recorder below, and other tests count __commerce.length.
+    '  window.__customerUrls = [];',
     '  window.__cart = ' + JSON.stringify(opts.cart ?? []) + ';',
     '  var HITS = ' + JSON.stringify(opts.hits ?? [hit()]) + ';',
     '  window.fetch = function (url, init) {',
@@ -80,6 +83,7 @@ function netStub(opts: {
     '        text: function () { return Promise.resolve(JSON.stringify({ hits: HITS, nbHits: HITS.length, processingTimeMS: 13 })); } });',
     '    }',
     '    if (u.indexOf("/commerce/account/customer") > 0) {',
+    '      window.__customerUrls.push(u);',
     '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve(',
     '        ' + JSON.stringify(JSON.stringify(opts.customer ?? { id: 'c1' })) + '); } });',
     '    }',
@@ -350,5 +354,114 @@ describe('the add', () => {
     const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
     expect(res.success).toBe(false);
     expect(res.reason).toBe('not_in_cart_after_write');
+  }, AT_WEGMANS);
+});
+
+/**
+ * A REAL MSAL ENCRYPTED CACHE, built with MSAL's own scheme.
+ *
+ * Read out of their bundle and confirmed against Stephen's phone:
+ *   salt = base64(entry.nonce)   -- the field is called nonce; it is the SALT
+ *   info = the clientId, but only when the entry key contains it
+ *   key  = HKDF-SHA256(cookie.key, salt, info) -> AES-GCM 256
+ *   iv   = TWELVE ZERO BYTES     -- not the stored nonce
+ *
+ * The rail believed this cache was unreadable and waited for the site's own
+ * code to make a request it could observe. On robots.txt nothing runs, so that
+ * never happened and Wegmans never had a session at all.
+ */
+function encryptedMsalCache(opts: { secondsLeft?: number; audience?: string } = {}) {
+  const clientId = 'dc83fc43-b665-438e-ac2f-1b4080bb5cdf';
+  const secondsLeft = opts.secondsLeft ?? 3600;
+  const audience = opts.audience ?? 'https://wegmansonline.onmicrosoft.com/api.digitaldevelopment.wegmans.cloud/Users.Profile.Read';
+  const entry = {
+    credentialType: 'AccessToken',
+    secret: 'hdr.payload.sig',
+    target: audience,
+    expiresOn: String(Math.floor(Date.now() / 1000) + secondsLeft),
+  };
+  return [
+    '(async function () {',
+    '  window.__cryptoInfo = typeof crypto + "/" + typeof (crypto && crypto.subtle) + "/secure=" + window.isSecureContext;',
+    '  var enc = new TextEncoder();',
+    '  var rawKey = crypto.getRandomValues(new Uint8Array(32));',
+    '  var b64 = function (u) { return btoa(String.fromCharCode.apply(null, Array.from(u))); };',
+    '  var salt = crypto.getRandomValues(new Uint8Array(16));',
+    '  var base = await crypto.subtle.importKey("raw", rawKey, "HKDF", false, ["deriveKey"]);',
+    '  var dk = await crypto.subtle.deriveKey(',
+    '    { name: "HKDF", salt: salt, hash: "SHA-256", info: enc.encode(' + JSON.stringify(clientId) + ') },',
+    '    base, { name: "AES-GCM", length: 256 }, false, ["encrypt"]);',
+    '  var ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: new Uint8Array(12) }, dk,',
+    '    enc.encode(' + JSON.stringify(JSON.stringify(entry)) + '));',
+    '  document.cookie = "msal.cache.encryption=" + encodeURIComponent(JSON.stringify(',
+    '    { id: "cache-1", key: b64(rawKey) })) + "; path=/";',
+    '  localStorage.setItem("msal.1.account.keys", JSON.stringify(["acct-0-myaccount.wegmans.com"]));',
+    '  localStorage.setItem("msal.1-' + clientId + '-b2c_1a_x.acct-0-accesstoken-x",',
+    '    JSON.stringify({ id: "cache-1", nonce: b64(salt), data: b64(new Uint8Array(ct)), lastUpdatedAt: "0" }));',
+    '  window.__seeded = true;',
+    '})().catch(function (e) { window.__seedErr = String(e && e.message || e); }); true;',
+  ].join('\n');
+}
+
+// SubtleCrypto only exists in a SECURE CONTEXT. A fixture with no url option
+// runs at origin `null`, where crypto.subtle is undefined — so these three pass
+// AT_WEGMANS, naming the https origin the rail actually runs on.
+describe('the bearer, read straight out of the MSAL cache', () => {
+  itWithFixture('shop.html', 'decrypts it with no network and no page of our own', async (runner) => {
+    await runner.inject(encryptedMsalCache());
+    try {
+      await runner.page.waitForFunction('window.__seeded === true', undefined, { timeout: 5000 });
+    } catch (e) {
+      const info = await runner.page.evaluate('[window.__cryptoInfo, window.__seedErr, location.origin]');
+      throw new Error('seed failed: ' + JSON.stringify(info));
+    }
+    await runner.inject(netStub());
+    await runner.inject(buildWegmansSessionScript());
+    const msg = await runner.waitForMessage('WEGMANS_SESSION', 20_000) as Record<string, unknown>;
+    // The proof: the store lookup was ATTEMPTED. Before this it could not be —
+    // there was no token to attempt it with, and it reported 'no_token'.
+    const tries = (msg.storeTries ?? []) as Array<Record<string, unknown>>;
+    expect(tries.length).toBeGreaterThan(0);
+    expect(tries.some((t) => t.why === 'no_token')).toBe(false);
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'sends the api-version the gateway demands', async (runner) => {
+    // WITHOUT IT THERE IS NO ERROR TO READ. The gateway rejects the request
+    // before it adds CORS headers, so the browser reports a bare "Failed to
+    // fetch" with no status — indistinguishable from an unreachable host, which
+    // is exactly what made this API look unusable from the page.
+    await runner.inject(encryptedMsalCache());
+    await runner.page.waitForFunction('window.__seeded === true', undefined, { timeout: 5000 });
+    await runner.inject(netStub());
+    await runner.inject(buildWegmansSessionScript());
+    await runner.waitForMessage('WEGMANS_SESSION', 20_000);
+    // The EARLY session answer is posted before the store lookup finishes, so
+    // waiting on the message alone reads window.__commerce too soon.
+    await runner.page.waitForFunction('window.__customerUrls.length > 0', undefined, { timeout: 10000 });
+    const urls = await runner.page.evaluate('window.__customerUrls') as string[];
+    expect(urls.length).toBeGreaterThan(0);
+    for (const u of urls) expect(u).toContain('api-version=');
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'ignores a token for a DIFFERENT audience', async (runner) => {
+    // The cache holds tokens for several APIs. Only the commerce one is ours;
+    // sending another API's token would 401 and drop a good session.
+    await runner.inject(encryptedMsalCache({ audience: 'https://graph.microsoft.com/User.Read' }));
+    await runner.page.waitForFunction('window.__seeded === true', undefined, { timeout: 5000 });
+    await runner.inject(netStub());
+    await runner.inject(buildWegmansSessionScript());
+    const msg = await runner.waitForMessage('WEGMANS_SESSION', 20_000) as Record<string, unknown>;
+    const tries = (msg.storeTries ?? []) as Array<Record<string, unknown>>;
+    expect(tries.some((t) => t.why === 'no_token')).toBe(true);
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'ignores one that has already expired', async (runner) => {
+    await runner.inject(encryptedMsalCache({ secondsLeft: 10 }));
+    await runner.page.waitForFunction('window.__seeded === true', undefined, { timeout: 5000 });
+    await runner.inject(netStub());
+    await runner.inject(buildWegmansSessionScript());
+    const msg = await runner.waitForMessage('WEGMANS_SESSION', 20_000) as Record<string, unknown>;
+    const tries = (msg.storeTries ?? []) as Array<Record<string, unknown>>;
+    expect(tries.some((t) => t.why === 'no_token')).toBe(true);
   }, AT_WEGMANS);
 });

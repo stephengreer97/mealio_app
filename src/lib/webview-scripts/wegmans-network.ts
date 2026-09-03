@@ -203,8 +203,137 @@ const WEG_PRELUDE = `
     };
   };
 
+  // THE BEARER, WITH NO NETWORK AND NO PAGE LOAD.
+  //
+  // MSAL keeps its token cache ENCRYPTED in localStorage. This was written off
+  // as unreadable, and the rail waited for the site's own code to make a
+  // request it could observe -- which never happens on robots.txt, because
+  // nothing runs there. So the token was never obtained and Wegmans never had
+  // a usable session.
+  //
+  // It is readable. The scheme is MSAL's own, read out of their bundle:
+  //
+  //   cookie msal.cache.encryption = { id, key }      key is base64, 32 bytes
+  //   entry  msal.<...>            = { id, nonce, data }
+  //
+  //   salt = base64(entry.nonce)          16 bytes, called "nonce", IS THE SALT
+  //   info = clientId, but ONLY when the entry key contains it (getContext)
+  //   aes  = HKDF-SHA256(cookie.key, salt, info) -> AES-GCM 256
+  //   iv   = TWELVE ZERO BYTES            not the stored nonce
+  //
+  // MEASURED on Stephen's phone 2026-09-03: decrypts his AccessToken with ~55
+  // minutes left, and that token answered /commerce/account/customer in 302ms.
+  //
+  // Same origin is all it needs, so robots.txt can do it.
+  WG.b64 = function (s) {
+    var t = String(s).split('-').join('+').split('_').join('/');
+    var bin = atob(t + '==='.slice((t.length + 3) % 4));
+    var u = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    return u;
+  };
+
+  WG.clientIds = function () {
+    var out = [];
+    try {
+      var m = window.msal && window.msal.clientIds;
+      if (Object.prototype.toString.call(m) === '[object Array]') out = m.slice(0);
+      else if (m && typeof m === 'object') { for (var k in m) if (m[k]) out.push(String(m[k])); }
+      else if (typeof m === 'string') out = [m];
+    } catch (e) {}
+    return out;
+  };
+
+  /** Every UUID in a string, most-specific first. MSAL's context is one of these. */
+  WG.uuidsIn = function (k) {
+    var m = String(k).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g);
+    return m ? m.slice(0) : [];
+  };
+
+  WG.tokenFromCache = async function () {
+    if (!window.crypto || !window.crypto.subtle) return null;
+    var raw = null;
+    var parts = document.cookie.split(';');
+    for (var p = 0; p < parts.length; p++) {
+      var t = parts[p].replace(/^ +/, '');
+      if (t.indexOf('msal.cache.encryption') === 0) { raw = t.slice(t.indexOf('=') + 1); break; }
+    }
+    if (!raw) return null;
+    var meta;
+    try { meta = JSON.parse(decodeURIComponent(raw)); } catch (e) { return null; }
+    if (!meta || !meta.key) return null;
+    var base;
+    try {
+      base = await window.crypto.subtle.importKey('raw', WG.b64(meta.key), 'HKDF', false, ['deriveKey']);
+    } catch (e) { return null; }
+    var ids = WG.clientIds();
+    var best = null;
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (!k || k.indexOf('msal') < 0) continue;
+      var j;
+      try { j = JSON.parse(localStorage.getItem(k) || ''); } catch (e) { continue; }
+      if (!j || !j.data || !j.nonce) continue;
+      // THE CONTEXT COMES OUT OF THE KEY ITSELF.
+      //
+      // MSAL's getContext returns its clientId when the storage key contains
+      // it, and window.msal.clientIds is where the shop app publishes those --
+      // but the rail runs on robots.txt, where no site code has run and that
+      // global does not exist. Reading it from there meant an empty context for
+      // every entry, the wrong derived key every time, and no token at all.
+      //
+      // The clientId is a UUID inside the key. Try each one the key carries,
+      // and the empty context for entries that carry none.
+      var ctxs = WG.uuidsIn(k);
+      for (var q = 0; q < ids.length; q++) { if (ids[q] && k.indexOf(ids[q]) >= 0) ctxs.unshift(ids[q]); }
+      ctxs.push('');
+      for (var ci = 0; ci < ctxs.length; ci++) {
+        try {
+          var dk = await window.crypto.subtle.deriveKey(
+            { name: 'HKDF', salt: WG.b64(j.nonce), hash: 'SHA-256', info: new TextEncoder().encode(ctxs[ci]) },
+            base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+          var pt = await window.crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: new Uint8Array(12) }, dk, WG.b64(j.data));
+          var o = JSON.parse(new TextDecoder().decode(pt));
+          if (!o || o.credentialType !== 'AccessToken' || !o.secret) break;
+          // The commerce API's own audience, not any token the app happens to hold.
+          if (String(o.target || '').indexOf('wegmans.cloud') < 0) break;
+          var left = Number(o.expiresOn || 0) - Math.floor(Date.now() / 1000);
+          if (left < 60) break;
+          if (!best || left > best.left) best = { secret: o.secret, left: left };
+          break;
+        } catch (e) { /* wrong context for this entry; try the next */ }
+      }
+    }
+    if (!best) return null;
+    WG.cacheToken(best.secret);
+    return best.secret;
+  };
+
   WG.authHeaders = function (tok) {
     return { authorization: 'Bearer ' + tok, accept: 'application/json' };
+  };
+
+  // THE api-version QUERY IS NOT OPTIONAL.
+  //
+  // Without it the gateway rejects the request BEFORE it adds CORS headers, so
+  // the browser reports a bare "Failed to fetch" with no status — which reads
+  // exactly like an unreachable host. That is what made the commerce API look
+  // unusable from the page: every call, with or without a token, failed the
+  // same way. With the version, /commerce/account/customer answers 200 in
+  // 302ms. Versions are per-path and were read off the site's own requests.
+  WG.API_VERSION = {
+    '/commerce/account/customer': '2024-03-06-preview',
+    '/commerce/account/addresses': '2024-03-06-preview',
+    '/commerce/order/orders/activeorders': '2024-03-04-preview',
+    '/commerce/saved-list/savedlists': '2024-02-20-preview',
+    '/commerce/my-items': '2024-01-26',
+  };
+  WG.versioned = function (path) {
+    if (path.indexOf('api-version=') >= 0) return path;
+    var base = path.split('?')[0];
+    var v = WG.API_VERSION[base] || '2024-03-06-preview';
+    return path + (path.indexOf('?') >= 0 ? '&' : '?') + 'api-version=' + v;
   };
 
   WG.commerce = async function (path, tok, init, budgetMs) {
@@ -217,7 +346,7 @@ const WEG_PRELUDE = `
     if (opts.body) opts.headers['content-type'] = 'application/json';
     var r, txt;
     try {
-      r = await fetch('${COMMERCE_BASE}' + path, opts);
+      r = await fetch('${COMMERCE_BASE}' + WG.versioned(path), opts);
       clearTimeout(to);
       txt = await r.text();
     } catch (e) {
@@ -251,7 +380,10 @@ ${WEG_PRELUDE}
   try {
     WG.watchForToken();
     var accounts = WG.accountCount();
+    // The cache FIRST. watchForToken only ever fires where the site's own code
+    // runs, and the rail deliberately sits on a page where nothing runs.
     var tok0 = WG.cachedToken();
+    if (!tok0) { try { tok0 = await WG.tokenFromCache(); } catch (e) { tok0 = null; } }
     var stores = await WG.findStoreNumber(tok0, 10000);
     var storeNumber = null;
     for (var sx = 0; sx < stores.length; sx++) if (stores[sx] && stores[sx].v) { storeNumber = String(stores[sx].v); break; }
