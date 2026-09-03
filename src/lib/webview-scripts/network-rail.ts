@@ -24,6 +24,12 @@ import {
   buildAldiNetworkSearchBatchScript,
   buildAldiSessionScript,
 } from './aldi-network';
+import {
+  buildWegmansCartReadScript,
+  buildWegmansNetworkAddBatchScript,
+  buildWegmansNetworkSearchBatchScript,
+  buildWegmansSessionScript,
+} from './wegmans-network';
 import { ALBERTSONS_FAMILY_IDS } from './albertsons';
 import { isInstacartStore } from './instacart';
 
@@ -329,11 +335,73 @@ const INSTACART_RAIL: NetworkRail = {
   },
 };
 
+/**
+ * Wegmans. The only store here whose SEARCH needs no session at all.
+ *
+ * Algolia answers in 13ms with a public search key, so a Wegmans search works
+ * signed-out and cannot be broken by an expired token. The cart half needs a
+ * bearer that MSAL keeps encrypted, which is why sessionUsable below is the
+ * strictest of the three rails.
+ */
+const WEGMANS_RAIL: NetworkRail = {
+  sessionMessageType: 'WEGMANS_SESSION',
+  sessionScript: buildWegmansSessionScript,
+  searchBatch: (terms, sess) =>
+    buildWegmansNetworkSearchBatchScript(terms, {
+      storeNumber: sess.storeId,
+      requestMs: WEGMANS_RAIL.budgets.searchRequestMs,
+    }),
+  cartRead: () => buildWegmansCartReadScript(),
+  addBatch: (items, opts) =>
+    buildWegmansNetworkAddBatchScript(
+      items.map((i) => ({
+        idx: i.idx, productId: i.productId, skuId: i.skuId ?? null,
+        quantity: i.quantity, name: i.name,
+      })),
+      {
+        knownLines: opts?.knownLines ?? null,
+        // Unproven until measured. Null makes the script refuse any item the
+        // cart already holds rather than risk the MEAL-194 under-add.
+        absoluteQty: null,
+      },
+    ),
+  // The cart is addressed by productId, and the search returns skuId as the
+  // same value. Nothing needs both, so requiring both would break this store
+  // the way it broke Albertsons.
+  writable: (c) => !!c.productId,
+  /**
+   * TWO ANSWERS, and the second is the one the run waits for.
+   *
+   * `early` settles the login gate the instant the localStorage read is done --
+   * no budget of ours may make a signed-in user wait to be told they are signed
+   * in. But a run needs the cart, the cart needs a bearer, and the bearer is in
+   * an encrypted MSAL cache. `cartCapable` is the probe having actually used
+   * one, so it is what lets the run start.
+   *
+   * Exactly the shape Albertsons taught us, for a different reason.
+   */
+  sessionUsable: (msg) => !(msg as { early?: boolean }).early,
+  // No preference concept on this store.
+  needsPreference: () => false,
+  // MEASURED 2026-09-02: Algolia 13ms filtered, 26ms not. Nothing here shows the
+  // Albertsons cold-start, so the budgets are the tighter H-E-B shape.
+  budgets: {
+    sessionMs: 15_000,
+    searchMs: (terms) => Math.min(10_000 + terms * 1_500, 45_000),
+    searchResumeMs: 15_000,
+    addMs: (items) => Math.min(30_000 + items * 3_000, 120_000),
+    cartProbeMs: 15_000,
+    searchRequestMs: 12_000,
+    searchFirstRequestMs: 12_000,
+  },
+};
+
 export function getNetworkRail(storeId: string | null | undefined): NetworkRail | null {
   if (!storeId) return null;
   if (storeId === 'heb') return HEB_RAIL;
   if ((ALBERTSONS_FAMILY_IDS as readonly string[]).includes(storeId)) return ALBERTSONS_RAIL;
   if (isInstacartStore(storeId)) return INSTACART_RAIL;
+  if (storeId === 'wegmans') return WEGMANS_RAIL;
   return null;
 }
 
@@ -342,4 +410,5 @@ export const NETWORK_SESSION_MESSAGE_TYPES: readonly string[] = [
   HEB_RAIL.sessionMessageType,
   ALBERTSONS_RAIL.sessionMessageType,
   INSTACART_RAIL.sessionMessageType,
+  WEGMANS_RAIL.sessionMessageType,
 ];

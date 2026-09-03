@@ -240,6 +240,11 @@ export const ADD_REASON_CODES: Record<string, StepFailureCode> = {
   // no_hash — the operation map had no sha256 for the operation we needed, so
   //   nothing was sent. A harvest problem on our side. Never a fact about stock.
   no_hash: 'match_rejected',
+  // no_token — MEAL-208, the Wegmans rail. Its commerce API is bearer-only and
+  //   MSAL keeps the bearer encrypted, so a run can be signed in and still have
+  //   nothing to authenticate a cart call with. Emphatically not a fact about
+  //   the groceries: the SEARCH half needs no session and answered fine.
+  no_token: 'confirm_failed',
   // gql_error — the endpoint answered 200 with an errors array. Most often
   //   PERSISTED_QUERY_NOT_FOUND, which means Instacart deployed and our hashes
   //   are stale; the rail drops its cache and re-harvests. Also not about stock.

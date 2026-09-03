@@ -41,7 +41,7 @@ describe('network rail resolution', () => {
   });
 
   it('gives no rail to a store that has none, so those keep the page path', () => {
-    for (const id of ['walmart', 'wegmans', 'amazon', 'kroger', 'nonsense']) {
+    for (const id of ['walmart', 'amazon', 'kroger', 'nonsense']) {
       expect(getNetworkRail(id)).toBeNull();
     }
     expect(getNetworkRail(null)).toBeNull();

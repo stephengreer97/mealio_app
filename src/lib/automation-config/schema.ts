@@ -429,6 +429,31 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
     },
     wegmans: {
       enabled: true,
+      // ── The Wegmans rail ─────────────────────────────────────────────────
+      //
+      // SEARCH ON, ADD OFF, and for a different reason than ALDI's.
+      //
+      // Search here needs NO SESSION AT ALL. It is Algolia with a search-only
+      // key that ships in the site's own request URLs -- MEASURED at 13ms with
+      // a storeNumber filter, from a plain curl with no cookies and no token.
+      // So it works for a signed-out user, it cannot be broken by an expired
+      // token, and it is the fastest search of any store here.
+      //
+      // The cart is the other half and it needs a bearer. MSAL keeps that
+      // ENCRYPTED ({id, nonce, data}, with a msal.cache.encryption cookie), and
+      // the commerce API refuses the cookie session -- a no-cors request comes
+      // back opaque, so it is answered and we are not allowed to read it. The
+      // rail therefore has a token PROVIDER with fallbacks, and its
+      // sessionUsable refuses to start a run until a token has actually been
+      // used for something.
+      //
+      // The add is off because its ENDPOINT was never called: capturing it
+      // meant adding to a real basket. To finish it, run the cart read with one
+      // item added by hand, then watch the site add one more
+      // (tools/rail-recon/watch.ts) -- that request is the answer, including
+      // whether the body holds one item or a list.
+      networkSearch: true,
+      networkAdd: false,
       platform: 'standalone',
       forceSerialSearch: true,
       selectors: {

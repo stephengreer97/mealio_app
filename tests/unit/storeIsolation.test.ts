@@ -28,7 +28,7 @@ import * as path from 'path';
 // so a store gaining one cannot quietly skip these guards. ALDI is here through
 // INSTACART_TENANTS rather than by name: the rail is registered against the
 // PLATFORM, so any tenant added to that registry has to satisfy this file too.
-const RAIL_STORES = ['heb', ...ALBERTSONS_FAMILY_IDS, ...Object.keys(INSTACART_TENANTS)];
+const RAIL_STORES = ['heb', 'wegmans', ...ALBERTSONS_FAMILY_IDS, ...Object.keys(INSTACART_TENANTS)];
 
 describe('every rail answers every question the engine asks', () => {
   // A new store that omits a member does not inherit another store's behaviour
@@ -69,11 +69,11 @@ describe('every rail answers every question the engine asks', () => {
 
   it('every rail posts a session message type of its own', () => {
     const types = RAIL_STORES.map((id) => getNetworkRail(id)!.sessionMessageType);
-    // Three rails, three types. Albertsons' fifteen banners share one rail and
+    // Four rails, four types. Albertsons' fifteen banners share one rail and
     // therefore one type, and every Instacart tenant shares another for the same
-    // reason — the rail is registered against the PLATFORM. H-E-B's is its own.
-    // Two rails sharing a type would cross their answers.
-    expect(new Set(types).size).toBe(3);
+    // reason — that rail is registered against the PLATFORM. H-E-B and Wegmans
+    // each have their own. Two rails sharing a type would cross their answers.
+    expect(new Set(types).size).toBe(4);
     for (const t of types) expect(NETWORK_SESSION_MESSAGE_TYPES).toContain(t);
   });
 });

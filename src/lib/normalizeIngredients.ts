@@ -167,18 +167,28 @@ function sanitizeStoreProducts(raw: any): { storeProducts: Record<string, StoreP
     if (typeof upc !== 'string' || !upc.trim()) continue;
     const name = (value as any).name;
     const sku = (value as any).sku;
+    const barcode = (value as any).barcode;
     clean[key] = {
       upc,
       name: typeof name === 'string' ? name : '',
       // Absent rather than empty when the store has none — Albertsons never
       // has one, and a row that never had it must serialise as it always did.
       ...(typeof sku === 'string' && sku.trim() ? { sku } : {}),
+      // EVERY FIELD ADDED HERE HAS TO BE ADDED HERE.
+      //
+      // This function is a whitelist: a key it does not name is dropped on the
+      // way through, silently. That is what it is for, and it is also how the
+      // saved-product feature was once broken end to end — `sku` was written by
+      // the rail, sent to the server, stored, read back, and thrown away right
+      // here, so H-E-B re-searched every ingredient forever and nothing said
+      // why. `barcode` is Wegmans' equivalent and would fail identically.
+      ...(typeof barcode === 'string' && barcode.trim() ? { barcode } : {}),
     };
   }
   return Object.keys(clean).length ? { storeProducts: clean } : null;
 }
 
-type StoreProductEntry = { upc: string; name: string; sku?: string };
+type StoreProductEntry = { upc: string; name: string; sku?: string; barcode?: string };
 
 export function normalizeIngredients(raw: any): Ingredient[] {
   if (!Array.isArray(raw)) return [];

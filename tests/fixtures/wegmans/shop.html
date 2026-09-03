@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Wegmans shop — rail fixture</title></head>
+<body>
+<!--
+  A DELIBERATELY EMPTY DOCUMENT, and that is the point.
+
+  Every other fixture in this directory is captured markup, because the scripts
+  they test READ that markup. The Wegmans rail reads none: it asks the store's
+  own GraphQL endpoint and never touches the DOM. So the honest fixture for it is
+  a page with nothing in it — if a test here ever starts depending on markup,
+  something has gone wrong with the rail rather than with the fixture.
+
+  The one thing the scripts do need from a document is a place to run and a
+  localStorage to cache the operation hashes in. The spec injects a localStorage
+  stub because about:blank does not have a usable one under the harness.
+-->
+<div id="root"></div>
+</body>
+</html>

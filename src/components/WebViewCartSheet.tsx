@@ -94,6 +94,10 @@ interface Candidate {
    *  dropdown, in order. Increments differ per product, so this drives the
    *  weight chooser + add (qty = the Nth option). */
   weightOptions?: number[];
+  /** The product's real BARCODE, where the search returns one. Wegmans does;
+   *  nothing else here has. Saved beside the id because a Wegmans id is only
+   *  valid at the store it was chosen at. */
+  upc?: string | null;
   /** Store's own product id, when the extractor can see one. Present on HEB
    *  candidates read from __NEXT_DATA__ (MEAL-13); the DOM scrapers have no id in
    *  the card markup and leave both of these undefined. Needed by MEAL-14. */
@@ -255,8 +259,9 @@ function storedProductFor(item: { storeProducts?: Record<string, { upc: string; 
   return getStoreProduct(item, storeId);
 }
 
-function railStoreProduct(c: { productId?: string | null; skuId?: string | null; productName?: string })
-  : { upc: string; name: string; sku?: string } | null {
+function railStoreProduct(c: {
+  productId?: string | null; skuId?: string | null; productName?: string; upc?: string | null;
+}): { upc: string; name: string; sku?: string; barcode?: string } | null {
   if (!c || !c.productId) return null;
   return {
     upc: String(c.productId),
@@ -264,6 +269,11 @@ function railStoreProduct(c: { productId?: string | null; skuId?: string | null;
     // H-E-B addresses a cart line by sku and refuses to build a write without
     // one, so a saved product that omitted it would be unusable there.
     ...(c.skuId ? { sku: String(c.skuId) } : {}),
+    // The real barcode, where the store hands one over. Wegmans does, and it is
+    // the only thing about a Wegmans product that survives a store change: its
+    // product id is per store (626485 at store 50, 608294 at store 140 for the
+    // same item), so a saved id alone would resolve to the wrong product.
+    ...(c.upc ? { barcode: String(c.upc) } : {}),
   };
 }
 
@@ -1475,17 +1485,17 @@ export default function WebViewCartSheet({
   // or SEARCH_AND_ADD_RESULT, and when the next script is popped from queue.
   const inflightScriptRef = useRef<string | null>(null);
 
-  // ── Wegmans parallel search pool (storeId === 'wegmans' choose-flow only) ──
+  // ── THE WORKER POOLS LIVED HERE ───────────────────────────────────────────
+  //
   // Worker WebViews are gone with the page pools they served. One WebView is
   // mounted for the whole run and it never renders a storefront page: it exists
   // to carry the origin's cookies, which is the only thing the RN side cannot
   // hold for itself.
-  // Worker count + initial-dispatch stagger are per-store, overridable, but the
-  // GLOBAL defaults are kept low for anti-bot reasons: 3 workers (was 5), and a
-  // 400ms staggered dispatch so they don't all fire in one simultaneous burst.
-  // The stagger also activates the pool's per-worker jitter (i*base + random),
-  // so the request pattern isn't a fixed metronome.
-  // THE WORKER POOLS LIVED HERE.
+  //
+  // This block used to open by naming a store, which outlived the code by two
+  // days and then set off the isolation guard that forbids the engine
+  // mentioning a rail store at all. The guard was right twice over: the branch
+  // it described was deleted, and the store it named now has a rail.
   //
   // Three of them: a search pool, a fused search+add pool, and a pre-search pool
   // that parked loaded results pages across the qty screen so N adds could fire

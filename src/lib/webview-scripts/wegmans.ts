@@ -21,6 +21,11 @@ import type { StoreScripts } from './index';
 const WEGMANS_URL = 'https://www.wegmans.com';
 const WEGMANS_LOGIN_URL = 'https://www.wegmans.com';
 const WEGMANS_CART_URL = 'https://www.wegmans.com/cart';
+// THE QUIET PAGE. The rail asks Algolia and the commerce API and reads no DOM,
+// so the storefront is pure cost -- its bundles share the renderer with our
+// requests. Same origin as the store, because the MSAL cache and the session
+// cookies are per origin and a rail on another host would have neither.
+const WEGMANS_RAIL_URL = 'https://www.wegmans.com/robots.txt';
 const WEGMANS_DOMAIN = 'wegmans.com';
 
 //      injection's answer is better evidence than anything on this page.
@@ -310,6 +315,7 @@ export function getScripts(): StoreScripts {
     loginUrl: cfg.loginUrl ?? WEGMANS_LOGIN_URL,
     cartUrl: cfg.cartUrl ?? WEGMANS_CART_URL,
     domain: WEGMANS_DOMAIN,
+    railUrl: WEGMANS_RAIL_URL,
     isSearchUrl: (url: string) => url.includes('wegmans.com/search') || url.includes('wegmans.com/shop'),
     isLoginSuccessUrl: (url: string) =>
       url.includes('wegmans.com') && !url.includes('/sign-in') && !url.includes('/login'),

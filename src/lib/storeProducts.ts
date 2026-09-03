@@ -46,6 +46,25 @@ export interface StoreProduct {
    * writes by UPC.
    */
   sku?: string;
+  /**
+   * The product's real BARCODE, where the store gives us one.
+   *
+   * Not to be confused with `upc` above, which is misnamed: it holds the
+   * STORE's own product id. This is the number on the packet, and it is here
+   * because of Wegmans.
+   *
+   * MEASURED 2026-09-02: the same Daisy sour cream is `626485` at store 50 and
+   * `608294` at store 140. Every other store here has one id per product across
+   * its whole estate, which is what lets Kroger's banners and the Albertsons
+   * family share a key. Wegmans does not, so a saved id is only valid at the
+   * store it was chosen at -- and a user who changes store would silently
+   * resolve to the wrong product or to nothing.
+   *
+   * The barcode does not move. Stephen's call, 2026-09-03: save it too, and
+   * re-resolve against the new store's catalogue rather than making the user
+   * choose everything again.
+   */
+  barcode?: string;
 }
 
 /**
@@ -83,6 +102,7 @@ export function getStoreProduct(ing: any, storeId: string | null | undefined): S
     upc: entry.upc,
     name: typeof entry.name === 'string' ? entry.name : '',
     ...(typeof entry.sku === 'string' && entry.sku ? { sku: entry.sku } : {}),
+    ...(typeof entry.barcode === 'string' && entry.barcode ? { barcode: entry.barcode } : {}),
   };
 }
 
@@ -110,6 +130,10 @@ export function withStoreProduct<T extends Record<string, any>>(
         upc: product.upc,
         name: product.name,
         ...(product.sku ? { sku: product.sku } : {}),
+        // Written only when there is one, so a store that has no barcode
+        // serialises exactly as it did before this field existed -- the same
+        // rule `sku` and `prep` follow.
+        ...(product.barcode ? { barcode: product.barcode } : {}),
       },
     },
   };
