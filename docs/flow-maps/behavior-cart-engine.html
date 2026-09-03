@@ -199,7 +199,7 @@ flowchart LR
     A1 --> A2(["the user adds, taps Next"])
 
     S1 -.->|"cannot answer"| ASSIST
-    S2 -.->|"one term unanswered"| REV(["that item &rarr; review"])
+    S2 -.->|"one term unanswered"| REV(["that item &rarr; review,<br/><i>and asked again by INGREDIENT name<br/>so the card has alternatives on it</i>"])
     S3 -.->|"no cart baseline"| ASSIST
 
     classDef net fill:#1e3a8a,stroke:#3b82f6,color:#fff
