@@ -167,6 +167,17 @@ flowchart TD
   the choice and dies with it — renaming a row or clearing its product removes the id along with the
   remembered weight and the dropdown, because a stale weight biases an add while a stale identifier
   resolves and adds the wrong product outright.</p>
+  <p><b>&#9888; One store's id is not stable across its own shops.</b> Wegmans numbers a product
+  per store &mdash; the same Daisy sour cream is <code>626485</code> at store 50 and
+  <code>608294</code> at store 140 &mdash; where Kroger's banners and the Albertsons family share one
+  catalogue, which is what lets <code>storeProductKey</code> fold them onto a single key. So a saved
+  entry also carries <code>barcode</code> when the store gives one: the id does not survive a store
+  change and the barcode does, so the choice is re-resolved rather than thrown away.</p>
+  <p><b>Every field added to a saved product has to be added to the SANITISER.</b>
+  <code>sanitizeStoreProducts</code> is a whitelist and drops what it does not name, silently. That
+  is what it is for, and it is also how the whole feature was once broken end to end: <code>sku</code>
+  was written by the rail, sent, stored, read back, and thrown away there, so H-E-B re-searched every
+  ingredient forever with nothing to say why.</p>
   <p><code>normProductQty</code> clamps non-positive or invalid values to 1, because saved meal data
   can leak <code>qty: 0</code> from the chooser flow — which would otherwise disable the cart
   button entirely.</p>
