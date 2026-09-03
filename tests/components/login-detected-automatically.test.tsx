@@ -120,9 +120,9 @@ describe('the login screen', () => {
     expect(view.queryByText(/already logged in/i)).toBeNull();
   });
 
-  it('tells the user they can just sign in and leave it', () => {
+  it('says signing in once is the whole of it', () => {
     const { view } = atTheLoginScreen();
-    expect(view.queryByText(/carry on by itself/i)).toBeTruthy();
+    expect(view.queryByText(/log into your H-E-B account once and Mealio won.t ask again/i)).toBeTruthy();
   });
 });
 

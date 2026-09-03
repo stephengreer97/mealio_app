@@ -5850,8 +5850,7 @@ export default function WebViewCartSheet({
                   without a navigation -- left a signed-in user with nothing but
                   that button. The poll above asks for them. */}
               <Text style={styles.loginBanner}>
-                Log in to your {storeName} account and Mealio will carry on by
-                itself — no need to come back here.
+                Log into your {storeName} account once and Mealio won't ask again.
               </Text>
             </View>
           ) : step === 'robot_challenge' ? (

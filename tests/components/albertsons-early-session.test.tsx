@@ -218,7 +218,7 @@ describe('the run and the early session answer', () => {
     post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
     // The caption over the store's own login page — what the signed-out user
     // actually gets, rather than a ref nobody can see.
-    expect(view.queryByText(/log in to your Albertsons account/i)).toBeTruthy();
+    expect(view.queryByText(/log into your Albertsons account once/i)).toBeTruthy();
   });
 });
 
@@ -274,7 +274,7 @@ describe('the login check and the early session answer', () => {
     // signed-out user wait to be told to sign in.
     const { view, post } = openOnLoginCheck();
     post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
-    expect(view.queryByText(/log in to your Albertsons account/i)).toBeTruthy();
+    expect(view.queryByText(/log into your Albertsons account once/i)).toBeTruthy();
   });
 });
 
