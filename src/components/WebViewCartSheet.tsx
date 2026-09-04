@@ -3115,6 +3115,40 @@ export default function WebViewCartSheet({
   /** armLoginCheckTimeout, for the message handler, which is defined below it
    *  and must not carry it as a dependency. */
   const armLoginCheckTimeoutRef = useRef<() => void>(() => {});
+
+  /**
+   * PUT THE USER ON THE SIGN-IN SCREEN, on a page they can sign in on.
+   *
+   * Every route to the login step goes through here, and that is the point:
+   * there were FOUR of them, each deciding for itself whether to navigate, and
+   * the two that a rail store actually uses did not navigate at all. They set
+   * the step and left the WebView wherever it was — which for a rail store is
+   * robots.txt.
+   *
+   * MEASURED on the Pixel, 2026-09-04. H-E-B, signed out: "Log in to H-E-B",
+   * "Log into your H-E-B account once and Mealio won't ask again", and a blank
+   * white page with nothing to type into. Twice, because the first fix only
+   * reached two of the four.
+   *
+   * The skip is still here and still earns its place — a store whose check
+   * opened a sign-in menu must not have it navigated away — but it now asks
+   * whether the page can be signed in ON. See canSignInHere.
+   */
+  const surfaceLogin = useCallback(() => {
+    const s = scriptsRef.current!;
+    const here = canSignInHere({
+      url: lastLoadEndUrlRef.current, domain: s.domain, railUrl: s.railUrl,
+    });
+    setStep('login');
+    lastLoadEndUrlRef.current = '';
+    if (!here) {
+      console.log(`[Cart ${ts()}]`, 'login: navigating to', s.loginUrl, '— cannot sign in on', lastLoadEndUrlRef.current || '(nothing loaded)');
+      setWebviewUri(s.loginUrl);
+    }
+  }, [setStep, setWebviewUri]);
+  /** For the []-dep message handler, which is defined below this. */
+  const surfaceLoginRef = useRef<() => void>(() => {});
+  surfaceLoginRef.current = surfaceLogin;
   const armLoginCheckTimeout = useCallback(() => {
     if (loginCheckTimeoutRef.current) clearTimeout(loginCheckTimeoutRef.current);
     loginCheckTimeoutRef.current = setTimeout(() => {
@@ -3131,18 +3165,7 @@ export default function WebViewCartSheet({
       loginCheckActiveRef.current = false;
       // Mirror the LOGIN_STATUS:false branch: show the webview so the user
       // can log in (or see whatever the store is actually displaying).
-      // NOT "is this the store's domain" — see canSignInHere. The rail parks on
-      // robots.txt, which passes that test and is a blank text file.
-      const canSignInOnThisPage = canSignInHere({
-        url: lastLoadEndUrlRef.current,
-        domain: scriptsRef.current!.domain,
-        railUrl: scriptsRef.current!.railUrl,
-      });
-      setStep('login');
-      lastLoadEndUrlRef.current = '';
-      if (!canSignInOnThisPage) {
-        setWebviewUri(scriptsRef.current!.loginUrl);
-      }
+      surfaceLoginRef.current();
     }, LOGIN_CHECK_TIMEOUT_MS);
   }, []);
   armLoginCheckTimeoutRef.current = armLoginCheckTimeout;
@@ -3224,9 +3247,7 @@ export default function WebViewCartSheet({
       // is the honest move — the user can see their own session — and it is what
       // the check's own timeout does anyway, six seconds later.
       console.log(`[Cart ${ts()}]`, 'no login check for', lockedStoreIdRef.current, '— handing over the store');
-      setStep('login');
-      lastLoadEndUrlRef.current = '';
-      setWebviewUri(scriptsRef.current!.loginUrl);
+      surfaceLoginRef.current();
       return;
     }
     netSessionRepairFromRef.current = 0;
@@ -3270,11 +3291,9 @@ export default function WebViewCartSheet({
     tel().record('login_check', 'ok', {
       detail: { isLoggedIn: false, source: 'prewarm' },
     });
-    setStep('login');
     setSearchingLabel('Sign in to continue');
-    lastLoadEndUrlRef.current = '';
-    setWebviewUri(scriptsRef.current!.loginUrl);
-  }, [setStep]);
+    surfaceLoginRef.current();
+  }, []);
 
   // Kick off pre-search parking while the user is still on the qty screen: the
   // silent pre-warm says they're logged in, the store supports parallel workers,
@@ -3926,8 +3945,10 @@ export default function WebViewCartSheet({
         loginCheckActiveRef.current = false;
         loadQueueRef.current = [];
         expectedNavUrlRef.current = '';
-        setStep('login');
-        lastLoadEndUrlRef.current = '';
+        // Through the same door as the rest. The store has redirected us to its
+        // own sign-in page, so canSignInHere says yes and nothing navigates —
+        // which is the behaviour this branch always had, now stated once.
+        surfaceLoginRef.current();
         return;
       }
     }
@@ -4047,10 +4068,8 @@ export default function WebViewCartSheet({
       // or we landed on a login page during the login step. Show the webview
       // so the user can log in.
       console.log(`[Cart ${ts()}]`, 'onLoadEnd detected login page — showing webview');
-      if (stepRef.current !== 'login') {
-        setStep('login');
-        lastLoadEndUrlRef.current = '';
-      }
+      // Same door. We are ON a sign-in page here, so this navigates nowhere.
+      if (stepRef.current !== 'login') surfaceLoginRef.current();
     } else if (stepRef.current === 'login' && loginCheckScript()) {
       // Re-inject login check after login completes and the user lands back on
       // the store. By here, /login & /sign-in URLs were already handled above, so
@@ -4494,20 +4513,8 @@ export default function WebViewCartSheet({
             snapshotBeforeAndBeginSearch();
           } else if (stepRef.current !== 'login') {
             // First transition to login — show the webview for the user to log
-            // in. Navigate unless the page they are already looking at is one
-            // they could sign in ON: a store whose check opened a sign-in UI
-            // would lose it, and the rail's quiet page has nothing to lose and
-            // nothing to offer. See canSignInHere for what that cost.
-            const canSignInOnThisPage = canSignInHere({
-              url: lastLoadEndUrlRef.current,
-              domain: scriptsRef.current!.domain,
-              railUrl: scriptsRef.current!.railUrl,
-            });
-            setStep('login');
-            lastLoadEndUrlRef.current = '';
-            if (!canSignInOnThisPage) {
-              setWebviewUri(scriptsRef.current!.loginUrl);
-            }
+            // in, on a page they can sign in on. See surfaceLogin.
+            surfaceLoginRef.current();
           }
           // If already on login step and got false again (e.g. re-injection on
           // login page), do nothing — user is still logging in.
@@ -5321,10 +5328,9 @@ export default function WebViewCartSheet({
               netSessionAtRef.current = Date.now();
             }
             if (msg.loggedIn) snapshotBeforeAndBeginSearch();
-            else if (!onLoginStep) {
-              setStep('login');
-              lastLoadEndUrlRef.current = '';
-            }
+            // THE ROUTE A RAIL STORE ACTUALLY TAKES, and it used to set the step
+            // and navigate nowhere — leaving the user looking at robots.txt.
+            else if (!onLoginStep) surfaceLoginRef.current();
             // Already on the login step and still signed out: stay put. Saying it
             // again would re-render the sheet under someone mid-sign-in.
             return;
@@ -5383,7 +5389,7 @@ export default function WebViewCartSheet({
             if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
             netActiveRef.current = false;
             netPhaseRef.current = 'idle';
-            setStep('login');
+            surfaceLoginRef.current();
             return;
           }
           // SIGNED IN IS NOT THE SAME AS READY TO RUN. Albertsons answers the
