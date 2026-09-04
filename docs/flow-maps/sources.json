@@ -56,7 +56,6 @@
       "title": "Amazon Fresh",
       "sources": [
         "src/lib/webview-scripts/amazon-fresh.ts",
-        "src/lib/webview-scripts/cart-confirm.ts",
         "src/lib/automation-config/schema.ts"
       ],
       "readAt": "e26e03b"
@@ -76,7 +75,6 @@
       "sources": [
         "src/lib/webview-scripts/albertsons.ts",
         "src/lib/webview-scripts/auth-urls.ts",
-        "src/lib/selector-health.ts",
         "src/lib/automation-config/schema.ts"
       ],
       "readAt": "e26e03b"
@@ -133,7 +131,6 @@
       "sources": [
         "src/lib/automation-config",
         "src/lib/store-catalog",
-        "src/lib/selector-health.ts",
         "src/constants/stores.ts"
       ],
       "readAt": "e26e03b"
