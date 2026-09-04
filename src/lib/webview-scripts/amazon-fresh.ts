@@ -1,14 +1,9 @@
 import { storeConfig, searchUrlFor } from '../automation-config';
-// Injectable JavaScript strings for Amazon Fresh WebView automation.
-// All scripts communicate back to React Native via window.ReactNativeWebView.postMessage.
+// Amazon Fresh: the addresses, and one login check.
 //
-// Ported from ~/mealio_ext/content-amazon-fresh.js — same selectors and logic,
-// adapted to the StoreScripts interface used by the store registry.
+// This store has no network rail, so it is ASSISTED — Mealio searches, the user
+// adds. See the note on buildCheckLoginScript below.
 //
-// Amazon Fresh has two completely different card layouts:
-//   TYPE A — Storefront carousel  (e.g. /fmc/storefront/fresh)
-//   TYPE B — Search results       (e.g. /s?k=...&i=amazonfresh)
-// Both types use lazy rendering that requires polling for elements.
 
 
 const AMAZON_URL = 'https://www.amazon.com/fresh';
@@ -16,36 +11,21 @@ const AMAZON_LOGIN_URL = 'https://www.amazon.com/ap/signin';
 const AMAZON_CART_URL = 'https://www.amazon.com/cart';
 const AMAZON_DOMAIN = 'amazon.com';
 
-// ── Login check ─────────────────────────────────────────────────────────────
-
-
 const SELECTOR_KEY = 'amazon';
 
-// Compiled-in selector fallbacks; the remote automation config overrides them so
-// an Amazon Fresh redesign is a config push rather than an App Store release.
-// Amazon serves TWO distinct search-result layouts (the Fresh "qs-widget" cards
-// and the generic search-result cards), so most selectors come in A/B pairs and
-// both must be configurable. Read only inside a build function.
-// Exported for the fixture drift census (MEAL-30) — see the note on heb.ts's copy.
-export const SEL_FALLBACKS = {
-  cardA: '[data-csa-c-item-type="asin"]',
-  nameA: '.a-truncate-full.a-offscreen',
-  atcWrapperA: '.qs-atc-plus',
-  addBtnA: 'button[aria-label^="Add to Cart,"]',
-  stepperA: '[id^="qs-widget-stepper-"]',
-  qtyDisplayA: '.qs-widget-dropdown-flex-wrapper button[aria-label^="Current quantity"]',
-  incBtnA: '.qs-widget-increment-button-flex-wrapper input[aria-label^="Add "]',
-  cardB: '[data-component-type="s-search-result"]',
-  nameB: 'h2',
-  atcContainerB: 'span[data-action="fresh-add-to-cart"]',
-  stepperB: 'fieldset[data-a-component="stepper"]',
-  qtyDisplayB: 'span[data-a-selector="value"]',
-  incBtnB: 'button[data-action="a-stepper-increment"]',
-  atcBtnBMobile: 'button[aria-label="Add to cart"]',
-  incBtnBMobile: 'span[data-action="qs-widget-increment-decl"]',
-};
-
-
+// THE LAST DOM READ IN THE BUILD, and it is not a fallback from anything.
+//
+// Amazon Fresh is the one store with no network rail: Mealio searches for the
+// user here and the user does the adding. This twenty-line check is the only
+// way this build can tell whether they are signed in, so it is primary, not a
+// second opinion — the thing the 2026-09-04 removal was aimed at. Everything
+// else that read a storefront is gone, including this store's own selector
+// table, whose extractors and add-to-cart clickers went with the DOM
+// automation on 2026-09-01.
+//
+// It goes when Amazon Fresh gets a rail, and not before: replacing a check that
+// works with an unverified one on the only store nobody can regression-test
+// from a fixture would be trading a known thing for a guess.
 function buildCheckLoginScript(): string {
   return `(async function() {
   if (window.__amazonLoginCheckActive) return;
@@ -72,20 +52,6 @@ function buildCheckLoginScript(): string {
 })();true;`;
 }
 
-// ── Product extraction ──────────────────────────────────────────────────────
-
-
-
-// ── Add to cart ──────────────────────────────────────────────────────────────
-
-
-// ── Search navigation ────────────────────────────────────────────────────────
-
-
-// ── Search + auto-add ────────────────────────────────────────────────────────
-
-
-// ── Export ────────────────────────────────────────────────────────────────────
 
 export function getScripts() {
   const cfg = storeConfig(SELECTOR_KEY);

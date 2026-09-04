@@ -153,120 +153,17 @@ function platformFor(storeId: string, declared?: PlatformId): PlatformId | undef
   return current.stores[storeId]?.platform ?? declared;
 }
 
-/**
- * The platform's shared selector table, or {} when there is none.
- *
- * Returns {} — never undefined, never throws — for a platform this build does not
- * have a table for. That covers 'standalone' and 'kroger' (no table by design) and
- * the older-app-meets-newer-config case where the id itself is unrecognised. The
- * store's own selectors and the call-site fallbacks are unaffected, so a store can
- * lose its INHERITANCE without ever losing its selectors.
- */
-function platformSelectors(storeId: string, declared?: PlatformId): StoreSelectors {
-  const platform = platformFor(storeId, declared);
-  if (!platform) return {};
-  return current.platforms[platform]?.selectors ?? {};
-}
-
-/**
- * Selectors for a store, ready to interpolate into an injected script.
- *
- * Values are returned as JS string LITERALS (quotes included) via
- * JSON.stringify, so a template does:
- *
- *     var ATC_SEL = ${sel.atc};        // not '${sel.atc}'
- *
- * merge.ts already rejects selectors containing quotes or backslashes; this is the
- * second, independent defense. Doing the escaping here rather than at each of the
- * ~40 interpolation sites means a new site can't forget it.
- *
- * PRECEDENCE, least to most specific — most specific wins:
- *
- *     call-site `fallbacks`  <  platforms.<platform>.selectors  <  stores.<id>.selectors
- *
- * so a platform push fixes every banner on the platform in one go, while a banner
- * that has diverged pins the one key it needs and is untouched by that push. Each
- * of the two config layers is itself already remote-over-bundled, merged in
- * merge.ts. `fallbacks` supplies the literal a store script used before it was
- * moved into config, so an unknown key yields working JS instead of `undefined`.
- *
- * `platform` is the adapter's own declaration; see platformFor().
- */
-export function selectorsFor(
-  storeId: string,
-  fallbacks: StoreSelectors = {},
-  platform?: PlatformId,
-): Record<string, string> {
-  const configured = current.stores[storeId]?.selectors ?? {};
-  const merged: StoreSelectors = {
-    ...fallbacks,
-    ...platformSelectors(storeId, platform),
-    ...configured,
-  };
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(merged)) out[key] = JSON.stringify(value);
-  // A key the caller never declared a fallback for and config never set would be
-  // `undefined` in the template. Return an empty-string literal so the script
-  // still parses; a selector matching nothing degrades to "found no candidates",
-  // which the funnel records as `candidates: empty` rather than a syntax error.
-  return new Proxy(out, {
-    get: (target, prop: string) => (prop in target ? target[prop] : '""'),
-  });
-}
-
-/**
- * Selectors as RAW strings — no surrounding quotes, no escaping.
- *
- * For the handful of sites that embed a selector INSIDE a JS literal the script
- * already owns:
- *
- *     document.querySelector('${raw.searchTrigger}')   // not ${sel.searchTrigger}
- *
- * Those sites exist because moving an already-shipped selector into config must
- * not change the BYTES of the script that ships (selectorsFor's JSON.stringify
- * emits `"a[href=\"x\"]"`, which is different text from the `'a[href="x"]'` the
- * script had inline). See tests/unit/webview-scripts/aldiGeneratedScripts.test.ts.
- *
- * The escaping that selectorsFor provides is replaced here by re-validation: a
- * CONFIGURED value that could break out of a single-quoted literal (quote,
- * backslash, backtick, newline, `${`) is dropped and the compile-time fallback
- * stands, so the worst a bad or hostile push can do is fail to take effect.
- * `fallbacks` is developer-authored and used verbatim — that is the only way a
- * default containing a double quote can survive to the page.
- *
- * Same precedence as selectorsFor (fallbacks < platform < store), with the same
- * re-validation applied at BOTH config layers. Note the consequence for a bundled
- * PLATFORM selector containing a double quote, which most of them do: it is
- * re-validated like any configured value, dropped, and the identical call-site
- * fallback stands. That is exactly what already happened to the bundled STORE
- * selectors this table was extracted from, which is why moving them here does not
- * change a byte of what ships.
- *
- * Prefer selectorsFor() for any NEW interpolation site. This one is for keeping
- * faith with scripts that are already in users' hands.
- */
-export function rawSelectorsFor(
-  storeId: string,
-  fallbacks: StoreSelectors = {},
-  platform?: PlatformId,
-): Record<string, string> {
-  const configured = current.stores[storeId]?.selectors ?? {};
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(fallbacks)) {
-    if (typeof value === 'string') out[key] = value;
-  }
-  for (const [key, value] of Object.entries(platformSelectors(storeId, platform))) {
-    if (isValidSelector(value)) out[key] = value;
-  }
-  for (const [key, value] of Object.entries(configured)) {
-    if (isValidSelector(value)) out[key] = value;
-  }
-  // Mirror selectorsFor: an undeclared key yields an empty selector rather than
-  // the string "undefined" spliced into the page.
-  return new Proxy(out, {
-    get: (target, prop: string) => (prop in target ? target[prop] : ''),
-  });
-}
+// selectorsFor(), rawSelectorsFor() and platformSelectors() lived here: three
+// functions and ~90 lines whose whole job was to layer a remote selector push
+// over the compiled-in fallbacks and hand the result to an injected script as an
+// escaped JS literal.
+//
+// Deleted 2026-09-04 with the last selector. Nothing reads a storefront any
+// more — every store Mealio automates it automates over the network — so there
+// is no selector to push and no script to interpolate one into. The `selectors`
+// key is still parsed and still validated (see merge.ts) so an older build
+// meeting a newer config, or the reverse, is unremarkable; it is simply read by
+// nobody.
 
 /**
  * Cart-page URL for a store, honoring a remote `cartUrl` override (MEAL-156).

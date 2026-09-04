@@ -91,32 +91,12 @@ export function buildLiveSuite(cfg: LiveSuiteConfig) {
       try { await context?.close(); } catch { /* ignore */ }
     });
 
-    describe('CHECK_LOGIN_SCRIPT', () => {
-      it('reports LOGIN_STATUS:false when not logged in', async () => {
-        await page.goto(cfg.homepageUrl, { waitUntil: 'domcontentloaded' });
-        const session = await installInjectBridge(context, page);
-        await session.inject(cfg.scripts.checkLoginScript);
-        const status = await session.waitForMessage('LOGIN_STATUS', 15_000);
-        expect(status.isLoggedIn).toBe(false);
-      });
-
-      it('reports LOGIN_STATUS:true after a successful login', async () => {
-        await cfg.login(page, cachedCreds!);
-        const session = await installInjectBridge(context, page);
-        await session.inject(cfg.scripts.checkLoginScript);
-        const status = await session.waitForMessage('LOGIN_STATUS', 15_000);
-        expect(status.isLoggedIn).toBe(true);
-      });
-
-      it('reports LOGIN_STATUS:false again after logout', async () => {
-        await cfg.login(page, cachedCreds!);
-        await cfg.logout(page);
-        const session = await installInjectBridge(context, page);
-        await session.inject(cfg.scripts.checkLoginScript);
-        const status = await session.waitForMessage('LOGIN_STATUS', 15_000);
-        expect(status.isLoggedIn).toBe(false);
-      });
-    });
+    // THE LOGIN-CHECK SUITE IS GONE, along with the scripts it drove.
+    //
+    // Every store with a network rail now answers "who is signed in" from its
+    // own session endpoint, and those are covered from captured fixtures rather
+    // than from a live browser. Amazon Fresh is the only store left carrying a
+    // checkLoginScript, and it has no live suite of its own to run it in.
 
     if (cfg.extraTests) {
       const ctx: ExtraTestCtx = {

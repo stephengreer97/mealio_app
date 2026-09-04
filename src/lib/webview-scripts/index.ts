@@ -1,22 +1,13 @@
 // Store scripts registry — maps storeId → injectable WebView scripts.
 
-import {
-  HEB_URL, HEB_LOGIN_URL, HEB_CART_URL,
-  CHECK_LOGIN_SCRIPT,
-} from './heb';
+import { getScripts as getHebScripts } from './heb';
 import { getScripts as getWalmartScripts } from './walmart';
 import { getScripts as getAlbertsonsScripts, ALBERTSONS_FAMILY_IDS } from './albertsons';
 import { getInstacartScriptsFor, INSTACART_STORE_IDS } from './instacart';
 import { getScripts as getAmazonFreshScripts } from './amazon-fresh';
 import { getScripts as getWegmansScripts } from './wegmans';
 import { getScripts as getMockStoreScripts, MOCK_STORE_ENABLED } from './mockstore';
-import { storeConfig, searchUrlFor, isStoreEnabled } from '../automation-config';
-import {
-  SelectorSurface,
-  albertsonsSelectorSurface,
-  selectorSurfaceFor,
-  withSelectorProbe,
-} from '../selector-health';
+import { isStoreEnabled } from '../automation-config';
 
 export interface StoreScripts {
   storeUrl: string;
@@ -59,15 +50,24 @@ export interface StoreScripts {
    *  Needed for stores whose login detection relies on a background poll that
    *  dies when the page reloads after the user signs in (e.g. Albertsons). */
   reinjectLoginCheckOnNav?: boolean;
-  /** Injected to check if the user is logged in. Posts LOGIN_STATUS. */
-  checkLoginScript: string;
-  // ── Parallel product search (optional) ──────────────────────────────────
-  // A store that provides BOTH of these opts into the 5-worker parallel pool
-  // for the choose-product flow: WebViewCartSheet dispatches each ingredient
-  // to a hidden worker WebView loaded at getSearchUrl, injects
-  // buildWorkerScript, and collects WORKER_RESULT. Omit them to stay on the
-  // sequential single-WebView path.
-  /** Direct search-results URL for a term (loads results without typing). */
+  /**
+   * Injected to check if the user is signed in. Posts LOGIN_STATUS.
+   *
+   * OPTIONAL, and absent on every store that has a network rail: there, the
+   * rail's own session probe is the answer, and a second opinion read off the
+   * page is how a signed-in user gets shown a sign-in wall. Only Amazon Fresh
+   * still carries one, because it has no rail — and even that one is a fetch,
+   * not a DOM read.
+   */
+  checkLoginScript?: string;
+  /**
+   * Where to send the USER to finish a term by hand.
+   *
+   * A destination, not a scraper. Nothing of ours reads this page — the assisted
+   * route navigates here and the person takes over — which is why it outlived
+   * every selector in the build. A store without one lands the user on the
+   * storefront and leaves them to type.
+   */
   getSearchUrl?: (term: string) => string;
   /** Default true: navigations append a `?_t=<ts>` cache-buster. Set false for
    *  stores whose anti-bot flags that synthetic query (ALDI) — navTo then uses
@@ -75,99 +75,9 @@ export interface StoreScripts {
   cacheBustNav?: boolean;
 }
 
-// ── HEB adapter ──────────────────────────────────────────────────────────────
-
-// A FUNCTION, not a module-level const: the injected scripts interpolate
-// selectors from the remote automation config, which loads after this module is
-// imported. Building the adapter per call means a config push takes effect on the
-// next cart run instead of requiring an app restart.
-function getHebScripts(): StoreScripts {
-  const cfg = storeConfig('heb');
-  return {
-  storeUrl: cfg.storeUrl ?? HEB_URL,
-  // The same quiet page Albertsons uses, and for the same measured reason.
-  //
-  // Stephen, 2026-09-02: "HEB was extremely fast yesterday. Now its not
-  // working." Every term came back TypeError: Failed to fetch on a SAME-ORIGIN
-  // POST to /graphql, immediately followed by two "re-reading the session"
-  // lines -- the storefront homepage had navigated and taken the in-flight
-  // requests with it. Fast on the runs where it happened to have settled,
-  // broken on the ones where it had not.
-  //
-  // The rail needs the origin's cookies and nothing else: no DOM, no clicks,
-  // nothing on screen. robots.txt is the same origin, carries the same session,
-  // and has nothing that can redirect.
-  railUrl: `${HEB_URL}/robots.txt`,
-  loginUrl: cfg.loginUrl ?? HEB_LOGIN_URL,
-  cartUrl: cfg.cartUrl ?? HEB_CART_URL,
-  domain: 'heb.com',
-  // Opens the My H-E-B app (com.heb.myheb). HEB exposes no cart-specific deep
-  // link, so this lands on the app's home — still better than the website. The
-  // 'heb://' scheme was wrong (copied the Kroger-family naming; HEB isn't Kroger).
-  appScheme: 'myheb://',
-  isSearchUrl: (url) => url.includes('/search'),
-  // Do NOT match the OIDC callback — it must complete its redirect chain
-  // to set session cookies. onLoadEnd re-injection handles post-login detection.
-  isLoginSuccessUrl: () => false,
-  // Logged-out profile clicks redirect to accounts.heb.com (an /authorize URL).
-  // Recognize it so the login check shows the form immediately.
-  isLoginPageUrl: (url) => /accounts\.heb\.com/i.test(url) || /\/my-account\/login/i.test(url),
-  // After the user signs in, HEB lands back on www.heb.com. Re-run the login
-  // check there so the flow continues on its own. The auth-redirect skip means
-  // this only fires once the OIDC chain settles on the store (cookies set), and
-  // never on the accounts.heb.com login form, so it can't fight the user.
-  reinjectLoginCheckOnNav: true,
-  checkLoginScript: CHECK_LOGIN_SCRIPT,
-  getSearchUrl: (term) =>
-    searchUrlFor('heb', term, 'https://www.heb.com/search?q=' + encodeURIComponent(term)),
-  cacheBustNav: cfg.cacheBustNav,
-  };
-}
-
-// Worker composition lived here: it attached the pre-search and parallel-add
-// worker scripts to every adapter at one seam, so that "the probe goes on the
-// FINISHED worker" was a property of the registry rather than a rule three call
-// sites had to remember (MEAL-31). There are no workers now.
-
-// ── Selector health (MEAL-31) ────────────────────────────────────────────────
-
-/**
- * Prepend the selector probe to every script this adapter hands the WebView.
- *
- * Done HERE, at the one seam every store's scripts pass through, rather than in
- * each of the six adapters: a store added later is measured without anyone
- * remembering to opt it in, and there is a single place to read to know what is
- * instrumented. The prefix is a no-op only for a script that interpolates none of
- * the store's configured selectors — which today is the mock store, and Amazon
- * Fresh's search-navigation script. The other five stores' search-navigation
- * scripts DO name a selector or two and so do carry a probe (~1.3 KB); they
- * navigate away immediately and the probe dies with the page, so it samples
- * nothing and costs only the injected bytes.
- *
- * PREPENDED, not appended, and that is load-bearing rather than stylistic — see
- * the module header of selector-health.ts. The parallel-pool wrappers install
- * postMessage overrides that swallow messages they do not recognise, and running
- * first is what puts the probe's hook UNDER them, next to the native bridge.
- * That only holds if what is wrapped is the FINISHED worker, which is why
- * attachWorkerScripts runs before this and not after.
- *
- * The builder fields are wrapped lazily so a script is only scanned when it is
- * actually built. Nothing here can throw: withSelectorProbe returns the original
- * script on any failure.
- */
-function withSelectorProbes(surface: SelectorSurface | null, s: StoreScripts): StoreScripts {
-  if (!surface) return s;
-  // The login check is the only script left to probe. The workers it also
-  // wrapped are gone, and so is every extractor and add script the probe was
-  // built to watch for selector drift (MEAL-31) — there are no selectors on a
-  // rail, and an assisted store is driven by the user, who can see the page.
-  return { ...s, checkLoginScript: withSelectorProbe(surface, s.checkLoginScript) };
-}
-
-/** Everything the registry does to a store's raw scripts. */
-function finish(surface: SelectorSurface | null, s: StoreScripts): StoreScripts {
-  return withSelectorProbes(surface, s);
-}
+// Worker composition lived here, and the selector-health probe that wrapped
+// every script it produced. Both are gone: there are no workers, and there are
+// no selectors to watch drift.
 
 // ── Lookup ───────────────────────────────────────────────────────────────────
 
@@ -189,25 +99,20 @@ export function getStoreScripts(storeId: string): StoreScripts | null {
   // separate retailers whose selectors can drift apart.
   if (INSTACART_STORE_IDS.includes(storeId)) {
     const instacart = getInstacartScriptsFor(storeId);
-    return instacart && finish(selectorSurfaceFor(storeId), instacart);
+    return instacart;
   }
 
   switch (storeId) {
-    case 'heb':     return finish(selectorSurfaceFor(storeId), getHebScripts());
-    case 'walmart': return finish(selectorSurfaceFor(storeId), getWalmartScripts());
-    case 'amazon':  return finish(selectorSurfaceFor(storeId), getAmazonFreshScripts());
-    case 'wegmans': return finish(selectorSurfaceFor(storeId), getWegmansScripts());
+    case 'heb':     return getHebScripts();
+    case 'walmart': return getWalmartScripts();
+    case 'amazon':  return getAmazonFreshScripts();
+    case 'wegmans': return getWegmansScripts();
     // Dev/e2e only: the deterministic mock store for Maestro. Returns null in
     // production (flag unset) so it can never be reached even if a meal carries it.
-    // Deliberately unprobed: it has no automation-config selector table, and a
-    // deterministic fixture store has no drift to catch.
-    case 'mockstore':      return MOCK_STORE_ENABLED ? finish(null, getMockStoreScripts()) : null;
+    case 'mockstore':      return MOCK_STORE_ENABLED ? getMockStoreScripts() : null;
     default:
       if (ALBERTSONS_FAMILY_IDS.includes(storeId)) {
-        // One selector table serves all 15 banners, so the surface is the shared
-        // 'albertsons' one whichever banner is running — the same key the kill
-        // switch above is checked against.
-        return finish(albertsonsSelectorSurface(), getAlbertsonsScripts(storeId));
+        return getAlbertsonsScripts(storeId);
       }
       return null;
   }

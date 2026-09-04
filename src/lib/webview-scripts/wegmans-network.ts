@@ -733,6 +733,32 @@ ${WEG_PRELUDE}
       return;
     }
 
+    // AN ACCOUNT IS NOT A TOKEN, and with neither token this cannot answer.
+    //
+    // The access token lasts an hour; the refresh token beside it about six.
+    // MSAL renews both, but only where the site's own code runs -- and the rail
+    // deliberately sits on robots.txt, where nothing runs. So a user who has not
+    // opened Wegmans in a day holds two expired credentials and nothing to mint
+    // with. WG.token() has already tried the cache, MSAL's own store and a
+    // refresh by the time we get here.
+    //
+    // MEASURED 2026-09-04 on Stephen's device: the refresh token had expired
+    // 6771 seconds earlier, and the session still answered "signed in". The run
+    // then read no_token, wrote no_token, and told him nothing was added.
+    //
+    // ok:false is the honest report -- not "signed out", which walls a user
+    // whose cookies are perfectly good, and not "signed in", which is the
+    // failure above. It means COULD NOT ANSWER, and the engine's repair pass
+    // takes it from there: one load of the real storefront runs MSAL, which
+    // signs them back in from those cookies and mints a fresh pair, and the
+    // probe is re-asked on that page. Nobody is shown a sign-in form unless the
+    // site itself declines to sign them in.
+    if (!tok0) {
+      post({ ok: false, why: 'token_expired', source: 'msal',
+             accounts: accounts, storeId: storeNumber, storeTries: stores });
+      return;
+    }
+
     // Signed in. Answer the LOGIN gate now -- no budget of ours may make a
     // signed-in user wait to be told they are signed in.
     post({

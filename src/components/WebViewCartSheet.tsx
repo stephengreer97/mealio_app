@@ -56,7 +56,6 @@ import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
-import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-health';
 import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation, confirmDetail } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
@@ -829,6 +828,18 @@ export default function WebViewCartSheet({
   // behavior as an explicit "not logged in" — instead of spinning forever.
   const loginCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const LOGIN_CHECK_TIMEOUT_MS = cfgTimeouts.loginCheckMs;
+  /**
+   * HOW MANY TIMES TO LET THE SITE FIX ITS OWN SESSION before asking the user.
+   *
+   * A rail parks on a quiet page so the storefront's bundles cannot slow its
+   * requests down. The cost of that is a session the site has not bootstrapped,
+   * and the cure is one visit to the real storefront. Three asks — the visit,
+   * then two more while its scripts settle — is about four seconds, well inside
+   * the login check's own timeout, which is what catches the store that never
+   * answers at all.
+   */
+  const SESSION_REPAIR_ATTEMPTS = 3;
+  const SESSION_REPAIR_WAIT_MS = 1_500;
   // Tracks which search idx to resume from after a robot/captcha challenge
   // (Walmart redirects to /blocked when it suspects automation; user has to
   // press-and-hold to verify). -1 when no challenge in progress.
@@ -1043,19 +1054,27 @@ export default function WebViewCartSheet({
   const netRail = useCallback(() => getNetworkRail(lockedStoreIdRef.current), []);
 
   /**
-   * The login check this store uses: the network rail's session probe when it has
-   * one, the DOM check otherwise.
+   * How this store answers "who is signed in": its rail's session probe, or the
+   * store's own check when it has no rail.
    *
    * A helper rather than the choice written out at each site, because the choice
    * WAS written out at each site and three of the five were missed — so
    * Albertsons kept getting the DOM verdict from whichever entry point happened
    * to run, no matter what the converted ones did. Every injection of a login
    * check goes through here.
+   *
+   * Null when a store has neither, which is a store this build cannot answer the
+   * question for at all. Every caller treats that as "ask the user" rather than
+   * guessing, and nothing falls back to reading a page: a rail store that could
+   * silently downgrade to a DOM verdict is a rail store with two answers and no
+   * way to tell which one you got.
    */
-  const loginCheckScript = useCallback(() => {
+  const loginCheckScript = useCallback((): string | null => {
     const rail = getNetworkRail(lockedStoreIdRef.current);
-    return rail ? rail.sessionScript() : scriptsRef.current!.checkLoginScript;
+    return rail ? rail.sessionScript() : (scriptsRef.current?.checkLoginScript ?? null);
   }, []);
+  /** Repair passes spent this run — see SESSION_REPAIR_ATTEMPTS. */
+  const netSessionRepairsRef = useRef(0);
   const netCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
   // The term list of the live search phase, kept so it can be re-asked if the
   // page navigates out from under the script. netSearchInjectsRef caps that:
@@ -1452,17 +1471,6 @@ export default function WebViewCartSheet({
   // Keyed by worker id; the main WebView uses MAIN_SURFACE.
   const MAIN_SURFACE = -1;
   const extractWhyRef = useRef<Record<number, string | null>>({});
-  // MEAL-31: per-selector resolution, accumulated across every WebView this run
-  // uses — the main one and both worker pools — and reported as ONE row at the
-  // end. A ref rather than state: nothing renders from it, and a setState per
-  // sample would re-render the sheet ~20 times a run to display nothing.
-  const selectorHealthRef = useRef(new SelectorHealthTally());
-  /** Fold a SELECTOR_HEALTH message in. Returns true when it was one. */
-  const ingestSelectorHealth = useCallback((msg: { type?: string; sel?: unknown }): boolean => {
-    if (msg?.type !== SELECTOR_HEALTH_MESSAGE) return false;
-    selectorHealthRef.current.ingest(msg.sel);
-    return true;
-  }, []);
   const takeExtractWhy = useCallback((surface: number): string | null => {
     const why = extractWhyRef.current[surface] ?? null;
     // Consume it: a stale reason attached to a LATER search would be worse than
@@ -2741,7 +2749,6 @@ export default function WebViewCartSheet({
       // MyMealsScreen mount does the same). Without this, run 2 would report run
       // 1's selector samples — and it is a RATE, so carrying a healthy run's
       // denominator into a broken one is exactly the way to hide the break.
-      selectorHealthRef.current = new SelectorHealthTally();
       // A rail store lands on its QUIET page: the rail needs the origin's
       // cookies and nothing else, and the storefront homepage was starving it.
       // A run that falls back to the page pool navigates itself from here.
@@ -3025,32 +3032,6 @@ export default function WebViewCartSheet({
     } else {
       tel().record('run_summary', 'ok', { detail: runSummaryDetail(summaryFacts) });
     }
-    // MEAL-31: what every configured selector did this run, as ONE row.
-    //
-    // Emitted BEFORE run_summary would have been the tidier reading order, but it
-    // goes after deliberately: run_summary is the row most worth keeping if a
-    // batch is dropped, and nothing should be able to delay it. This row is an
-    // 'ok' reconcile so it never lands a code on the run's tally — a store having
-    // half-drifted is not this run failing, and it must not colour the code the
-    // dashboard groups on.
-    //
-    // It rides on `reconcile` rather than a step name of its own. The reason
-    // recorded here was that StepName is a contract shared with the Kroger Brands
-    // web extension and a member only this app emits would read as a hole on the
-    // extension's chart; MEAL-29 established that there is no such counterparty,
-    // so that is no longer a constraint and a step name of its own is available
-    // to whoever wants one. It stays on `reconcile` because it IS a reconcile —
-    // splitting it would need a reason of its own, and nobody has offered one.
-    // `phase` in the detail is how it is told apart from the other reconcile rows
-    // (the cart diff, the MEAL-47 recovery, the north-star correction) — the same
-    // way those already tell each other apart.
-    //
-    // undefined when nothing was sampled: a run that never reached a store page,
-    // or a store with no probed selectors. No row at all is the honest report,
-    // and it is what keeps the volume cost of this feature at zero for a run that
-    // measured nothing.
-    const selectorDetail = selectorHealthRef.current.detail();
-    if (selectorDetail) tel().record('reconcile', 'ok', { detail: selectorDetail });
     void tel().flush();
     // skippedByIdx / unverifiedWeightLines are read above; automationCompletedRef
     // keeps this to one firing per run whatever re-renders the extra dependencies
@@ -3172,14 +3153,26 @@ export default function WebViewCartSheet({
   netSurfaceChallengeRef.current = netSurfaceChallenge;
 
   const startLoginCheck = useCallback(() => {
+    const check = loginCheckScript();
+    if (!check) {
+      // Nothing in this build can answer for this store. Showing the storefront
+      // is the honest move — the user can see their own session — and it is what
+      // the check's own timeout does anyway, six seconds later.
+      console.log(`[Cart ${ts()}]`, 'no login check for', lockedStoreIdRef.current, '— handing over the store');
+      setStep('login');
+      lastLoadEndUrlRef.current = '';
+      setWebviewUri(scriptsRef.current!.loginUrl);
+      return;
+    }
+    netSessionRepairsRef.current = 0;
     setStep('login_check');
     setSearchingLabel('Checking login…');
-    loadQueueRef.current = [loginCheckScript()];
+    loadQueueRef.current = [check];
     const rail = !!getNetworkRail(lockedStoreIdRef.current);
     const where = (rail && scriptsRef.current!.railUrl) || scriptsRef.current!.storeUrl;
     navToRef.current(where);
     armLoginCheckTimeout();
-  }, [setStep, loginCheckScript, armLoginCheckTimeout]);
+  }, [setStep, loginCheckScript, armLoginCheckTimeout, setWebviewUri]);
   startLoginCheckRef.current = startLoginCheck;
 
   // Skip the login_check round-trip and jump straight to the login webview.
@@ -3976,13 +3969,12 @@ export default function WebViewCartSheet({
       console.log(`[Cart ${ts()}]`, 'onLoadEnd injecting script:', label);
       inflightScriptRef.current = script;
       webviewRef.current?.injectJavaScript(script);
-    } else if (stepRef.current === 'login_check' && s.checkLoginScript) {
-      // Queue was consumed by a redirect (e.g. /fresh → /alm/storefront).
-      // Re-inject the login check on the final page — the SAME check the step
-      // started with, or this quietly downgrades a rail store to the DOM answer
-      // on any redirect, which is most of them.
+    } else if (stepRef.current === 'login_check' && loginCheckScript()) {
+      // Queue was consumed by a redirect (e.g. /fresh → /alm/storefront), or the
+      // repair pass below moved us to the storefront on purpose. Either way the
+      // check is re-asked on the page we actually landed on.
       console.log(`[Cart ${ts()}]`, 'onLoadEnd login_check step — re-injecting after redirect');
-      webviewRef.current?.injectJavaScript(loginCheckScript());
+      webviewRef.current?.injectJavaScript(loginCheckScript()!);
     } else if ((stepRef.current === 'login_check' || stepRef.current === 'login') &&
                /\/login|\/sign-in|\/signin/i.test(url)) {
       // Login check clicked a profile icon and HEB navigated to a login page,
@@ -3993,7 +3985,7 @@ export default function WebViewCartSheet({
         setStep('login');
         lastLoadEndUrlRef.current = '';
       }
-    } else if (stepRef.current === 'login' && s.checkLoginScript) {
+    } else if (stepRef.current === 'login' && loginCheckScript()) {
       // Re-inject login check after login completes and the user lands back on
       // the store. By here, /login & /sign-in URLs were already handled above, so
       // this fires on the post-login store page. During multi-step logins (Amazon
@@ -4294,7 +4286,9 @@ export default function WebViewCartSheet({
     loginPollSeqRef.current += 1;
     loginPollAskedAtRef.current = Date.now();
     console.log(`[Cart ${ts()}]`, `[login-poll] ask #${loginPollSeqRef.current} (${why})`);
-    webviewRef.current?.injectJavaScript(loginCheckScript());
+    const check = loginCheckScript();
+    if (!check) { loginPollBusyRef.current = false; return false; }
+    webviewRef.current?.injectJavaScript(check);
     // An answer clears this (see onMessage); this is for the one that never
     // comes, so a single dropped request cannot stop the poll for good.
     if (loginPollFreeRef.current) clearTimeout(loginPollFreeRef.current);
@@ -4385,11 +4379,6 @@ export default function WebViewCartSheet({
     (event: WebViewMessageEvent) => {
       try {
         const msg = JSON.parse(event.nativeEvent.data);
-        // MEAL-31's samples ride the same bridge as everything else and there is
-        // one per script completion, so they are folded in and dropped BEFORE the
-        // log line — otherwise the console buffer the bug-report path uploads
-        // fills with selector maps nobody reads.
-        if (ingestSelectorHealth(msg)) return;
         console.log(`[Cart ${ts()}]`, 'onMessage type=', msg.type, msg);
 
         // A store's buildSearchScript is about to do window.location.href = target.
@@ -5173,11 +5162,50 @@ export default function WebViewCartSheet({
               console.log(`[Cart ${ts()}]`, 'login answered over the network:', JSON.stringify(msg).slice(0, 200));
             }
             if (!msg.ok) {
-              // Could not answer — usually the page had not finished its
-              // bootstrap. Not a signed-out user, and saying so would wall one,
-              // so the DOM check gets the page instead.
-              console.log(`[Cart ${ts()}]`, 'network session inconclusive —', msg.why, '— falling back to the DOM check');
-              webviewRef.current?.injectJavaScript(scriptsRef.current!.checkLoginScript);
+              // COULD NOT ANSWER. Not a signed-out user — saying so would wall
+              // one — and no longer a cue to go read the page instead: a store
+              // with two ways to answer this has no way to tell you which one
+              // you got, which is how a signed-in ALDI user was shown a sign-in
+              // wall while the storefront's own API knew their shop id.
+              //
+              // The site is usually the thing that can fix this, so the site is
+              // asked. The rail parks on a quiet page (robots.txt) that runs
+              // none of the storefront's JavaScript, which is exactly what makes
+              // it fast and exactly what leaves an unbootstrapped session
+              // unbootstrapped. Loading the real storefront once runs the site's
+              // own code — which signs the user back in from their cookies and,
+              // on Wegmans, has MSAL mint a fresh token pair.
+              //
+              // MEASURED 2026-09-04: Wegmans' access token lasts an hour and its
+              // refresh token about six. Stephen's 00:34 run found the refresh
+              // token 6771 seconds expired, so nothing on the rail could mint
+              // anything and every call answered no_token. Their cookies were
+              // fine the whole time.
+              //
+              // Bounded, because a store that cannot answer twice is not going
+              // to answer the third time, and the login check's own timeout is
+              // the backstop that hands the user the storefront.
+              if (netSessionRepairsRef.current < SESSION_REPAIR_ATTEMPTS) {
+                const attempt = ++netSessionRepairsRef.current;
+                console.log(`[Cart ${ts()}]`, 'network session inconclusive —', msg.why,
+                  `— asking the site to fix it (attempt ${attempt}/${SESSION_REPAIR_ATTEMPTS})`);
+                if (attempt === 1) {
+                  // The storefront, not the quiet page: its own JavaScript is
+                  // the whole point of going there.
+                  navToRef.current(scriptsRef.current!.storeUrl);
+                } else {
+                  // Already there; give the site's bootstrap another moment and
+                  // ask again rather than reloading it out from under itself.
+                  setTimeout(() => {
+                    if (stepRef.current !== 'login_check') return;
+                    const again = loginCheckScript();
+                    if (again) webviewRef.current?.injectJavaScript(again);
+                  }, SESSION_REPAIR_WAIT_MS);
+                }
+                return;
+              }
+              console.log(`[Cart ${ts()}]`, 'network session still inconclusive after',
+                netSessionRepairsRef.current, 'repair attempts — leaving it to the login check timeout');
               return;
             }
             // SIGNED IN IS NOT THE SAME AS READY TO RUN, and this branch does
@@ -5687,7 +5715,7 @@ export default function WebViewCartSheet({
         // ignore
       }
     },
-    [navigateToAddItem, ingestSelectorHealth],
+    [navigateToAddItem],
   );
 
   // ── Review step helpers ──────────────────────────────────────────────────

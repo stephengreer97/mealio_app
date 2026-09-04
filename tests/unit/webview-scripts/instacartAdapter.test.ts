@@ -2,32 +2,19 @@
 //
 // WHAT THESE PROVE, AND WHAT THEY DO NOT
 // They prove the adapter's TENANT TOKENS round-trip: swap the tenant and the
-// origin, the /store/{slug}/ path segment and the login-guard name all move
-// with it, so the pieces the ticket parameterized are genuinely parameterized.
-//
-// They do NOT prove "no ALDI string is left hardcoded", and should not be read
-// that way. retenant() below substitutes exactly those three tokens; any
-// ALDI-shaped text containing none of them passes invisibly. Known residue that
-// slips straight through, all of it deliberate:
-//   • English word lists — /ask or search/i, /^Add 1 (?:item|ct)\s+(.+)/i
-//   • #search-bar-input, a platform id rather than a configured selector
-//   • a USD-only price regex /\$\d+\.\d{2}/, in three places
-//   • the CRITICAL / COMMON word sets in the inlined scorer, tuned with a
-//     comment that says "ALDI has limited selection"
-// These are defensible as platform-level for a white-labelled storefront whose
-// only banner is US and English, and none is a bug today. They are the work a
-// genuinely different banner would surface, and they are not covered here.
+// origin and the /store/{slug}/ path segment move with it, so the pieces the
+// ticket parameterized are genuinely parameterized, and that every tenant is
+// wired to the rail and the registry.
 //
 // They do NOT prove any second storefront works. The synthetic tenant below is
-// a fiction on a .test domain; no HTML from Publix, Sprouts, or any other banner
-// has ever been captured or run through this adapter. A tenant whose DOM differs
-// from ALDI's would pass every test in this file and fail on a phone. Only
-// captured fixtures (tests/fixtures/<storeId>/) can close that gap.
+// a fiction on a .test domain; no traffic from Publix, Sprouts, or any other
+// banner has ever been run through this adapter. A tenant whose API answers
+// differently would pass every test here and fail on a phone.
 //
-// ALDI's own behaviour is covered elsewhere and more strongly:
-//   • tests/fixture-tests/aldi.spec.ts     — behaviour against real ALDI HTML
-//   • tests/unit/webview-scripts/aldiGeneratedScripts.test.ts
-//                                          — the injected JS, pinned byte for byte
+// The surface they cover is much smaller than it was, because the adapter is:
+// every injected script it used to build is gone, the last of them on
+// 2026-09-04. ALDI's real behaviour is covered against captured traffic in
+// tests/fixture-tests/aldi-network.spec.ts.
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -64,128 +51,43 @@ const SYNTHETIC: InstacartTenant = {
   domain: 'example-co.test',
 };
 
-/** All injectable scripts a tenant produces, keyed for readable failures. */
-function scriptsOf(t: InstacartTenant): Record<string, string> {
-  const s = getInstacartScripts(t);
-  // The extractor, the add click, the in-page search, the fused search-and-add
-  // and the pool worker were all here. ALDI runs assisted now — Mealio hands the
-  // user a search URL and they add it themselves — so the login check is the only
-  // script the adapter still injects.
-  return { checkLogin: s.checkLoginScript };
-}
-
-/** The window guard name the adapter derives for a tenant. Mirrors loginFlag()
- *  in instacart.ts, which is module-private. */
-const loginFlagOf = (t: InstacartTenant) => `__${t.storeId}LoginCheckActive`;
-
-/** Rewrite the synthetic tenant's THREE tokens back to ALDI's. If those tokens
- *  are fully parameterized, the result is ALDI's script exactly. Longest tokens
- *  first so a shorter one can't chew a prefix of a longer one.
- *
- *  Note the scope: this catches a hardcoded aldi.us or /store/aldi/, and nothing
- *  else. ALDI-derived text that mentions no token — English copy, a USD price
- *  regex, the tuned scorer word lists — round-trips unchanged and passes. See
- *  the file header. */
-function retenant(src: string): string {
-  return src
-    .split(SYNTHETIC.origin).join(ALDI.origin)
-    .split(`/store/${SYNTHETIC.slug}/`).join(`/store/${ALDI.slug}/`)
-    .split(loginFlagOf(SYNTHETIC)).join(loginFlagOf(ALDI));
-}
-
 describe('the tenant seam is complete', () => {
-  const aldiScripts = () => scriptsOf(ALDI);
-  const synthScripts = () => scriptsOf(SYNTHETIC);
-
-  it.each(Object.keys(scriptsOf(ALDI)))(
-    '%s differs from ALDI only by tenant tokens',
-    (name) => {
-      // After substituting the tenant's own origin/slug/flag back to ALDI's, the
-      // two scripts are the same text — so a hardcoded aldi.us or a stray
-      // /store/aldi/ shows up here as a diff. That is the whole claim; it is not
-      // a claim that nothing ALDI-derived remains (see the file header).
-      expect(retenant(synthScripts()[name])).toBe(aldiScripts()[name]);
-    },
-  );
-
-  it('no script mentions a tenant it was not built for', () => {
-    for (const [name, src] of Object.entries(synthScripts())) {
-      expect(`${name}: ${src.includes('aldi')}`).toBe(`${name}: false`);
-    }
-  });
-
-  it('URLs, domain and selectors all follow the tenant', () => {
+  it('every URL and the domain follow the tenant', () => {
     const s = getInstacartScripts(SYNTHETIC);
     expect(s.storeUrl).toBe('https://shop.example-co.test');
     expect(s.loginUrl).toBe('https://shop.example-co.test');
     expect(s.cartUrl).toBe('https://shop.example-co.test');
+    expect(s.railUrl).toBe('https://shop.example-co.test/robots.txt');
     expect(s.domain).toBe('example-co.test');
     expect(getInstacartSearchUrl(SYNTHETIC, 'sour cream')).toBe(
       'https://shop.example-co.test/store/example-co/s?k=sour%20cream',
     );
-    // The product-card selector used to be checked here: slug-derived, not a
-    // shared constant, which is what stopped one banner's cards from being
-    // scraped on another's page. Nothing scrapes cards now. The tenant seam that
-    // still matters is the one above — every URL and the domain follow the
-    // tenant — plus the login guard and search URL asserted elsewhere in this
-    // file.
   });
 
-  it('isSearchUrl matches this tenant\'s store pages and not another\'s', () => {
+  it('mentions no other tenant anywhere in what it produces', () => {
+    // The claim the round-trip test used to make about five injected scripts,
+    // now made about what is left: a hardcoded aldi.us or /store/aldi/ in the
+    // adapter would surface here.
+    const s = getInstacartScripts(SYNTHETIC);
+    const surface = [s.storeUrl, s.loginUrl, s.cartUrl, s.railUrl ?? '', s.domain,
+                     getInstacartSearchUrl(SYNTHETIC, 'milk'), s.getSearchUrl!('milk')].join(' ');
+    expect(surface).not.toContain('aldi');
+  });
+
+  it('injects no script of its own — the rail does all of it', () => {
+    // Every one this adapter used to build is gone: the extractor, the add
+    // click, the in-page search, the fused search-and-add, the pool worker, and
+    // finally (2026-09-04) the login check that opened the hamburger menu and
+    // read its text. The tenant's storefront GraphQL answers all of it.
+    expect(getInstacartScripts(SYNTHETIC).checkLoginScript).toBeUndefined();
+  });
+
+  it("isSearchUrl matches this tenant's store pages and not another's", () => {
     const s = getInstacartScripts(SYNTHETIC);
     expect(s.isSearchUrl('https://shop.example-co.test/store/example-co/s?k=milk')).toBe(true);
     expect(s.isSearchUrl('https://shop.example-co.test/store/example-co/storefront')).toBe(true);
     expect(s.isSearchUrl('https://www.aldi.us/store/aldi/s?k=milk')).toBe(false);
     expect(s.isSearchUrl('https://shop.example-co.test/help')).toBe(false);
-  });
-
-  it('the sign-in-modal exclusion follows the menu selector it excludes', () => {
-    // The login poll skips a tick when some OTHER modal is up, so it doesn't
-    // yank the Main Menu open over a sign-in form. That exclusion used to be a
-    // hardcoded :not([aria-label="Main Menu"]) sitting next to a parameterized
-    // s.menu — override the menu and the exclusion stopped matching, silently,
-    // and the poll went back to fighting the modal.
-    const renamed: InstacartTenant = {
-      ...SYNTHETIC,
-      selectorOverrides: { menu: '[role="dialog"][aria-label="Hovedmeny"]' },
-    };
-    const src = scriptsOf(renamed).checkLogin;
-    expect(src).toContain('[role="dialog"][aria-modal="true"]:not([aria-label="Hovedmeny"])');
-    expect(src).not.toContain(':not([aria-label="Main Menu"])');
-  });
-
-  it('excludes the whole menu selector when it carries no aria-label', () => {
-    // Fallback branch: a banner whose menu is identified some other way still
-    // gets an exclusion that names it, rather than an empty :not() that would
-    // match the menu itself and stall the poll forever.
-    const byTestId: InstacartTenant = {
-      ...SYNTHETIC,
-      selectorOverrides: { menu: '[data-testid=main-menu-dialog]' },
-    };
-    expect(scriptsOf(byTestId).checkLogin).toContain(':not([data-testid=main-menu-dialog])');
-  });
-
-  it('gives each tenant its own login guard, so two cannot clobber each other', () => {
-    expect(scriptsOf(ALDI).checkLogin).toContain('window.__aldiLoginCheckActive');
-    expect(scriptsOf(SYNTHETIC).checkLogin).toContain('window.__examplecoLoginCheckActive');
-  });
-
-  it('lets a banner override login wording without touching search or add', () => {
-    // Login is where the ticket expects banners to diverge (membership gates,
-    // SSO). Prove that divergence is expressible, and contained.
-    const gated: InstacartTenant = {
-      ...SYNTHETIC,
-      signedOutWords: 'become a member|sign in',
-      signedInWords: 'my membership|sign out',
-    };
-    const base = scriptsOf(SYNTHETIC);
-    const withGate = scriptsOf(gated);
-    expect(withGate.checkLogin).toContain('/become a member|sign in/');
-    expect(withGate.checkLogin).not.toBe(base.checkLogin);
-    // Everything else is byte-identical — the override is scoped to login.
-    for (const name of ['extract', 'addToCart', 'search', 'searchAndAdd', 'worker']) {
-      expect(withGate[name]).toBe(base[name]);
-    }
   });
 });
 

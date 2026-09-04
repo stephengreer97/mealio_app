@@ -20,7 +20,7 @@ import {
 // already logged in to a store and (b) — when logged in — pre-captures the cart
 // "before" snapshot, WITHOUT ever showing UI or submitting credentials.
 //
-// It loads the store home page and injects the same `checkLoginScript` the cart
+// It loads the store home page and injects the same session check the cart
 // engine uses. On a logged-in result it continues in the SAME session to read
 // the cart (the same URL/click path the live before-snapshot uses) and
 // reports { count, items } so add-to-cart can skip the cart round-trip. Reading
@@ -198,14 +198,14 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
       // asking again (WebViewCartSheet, `pre === 'loggedOut'`). Getting it wrong
       // costs a signed-in user their entire run.
       //
-      // The DOM check is still the fallback, and reachable: see onMessage, where
-      // a session probe that cannot answer hands the page back to it rather than
-      // guessing.
+      // There is no DOM fallback behind it any more. A store that has a rail is
+      // answered by its rail or not at all — see onMessage, where a probe that
+      // cannot answer now reports NOTHING rather than a second, weaker opinion.
       const rail = getNetworkRail(storeId);
       if (rail) {
         console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — asking over the network');
         webviewRef.current?.injectJavaScript(rail.sessionScript());
-      } else {
+      } else if (scripts.checkLoginScript) {
         console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — injecting check script');
         webviewRef.current?.injectJavaScript(scripts.checkLoginScript);
       }
@@ -295,12 +295,19 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
           if (!msg.ok) {
             // The probe could not answer — most often the page had not finished
             // its bootstrap, so the session globals were simply absent. That is
-            // NOT a signed-out user, and saying so here would wall one. Hand the
-            // page to the DOM check instead, which is what this store used before
-            // the rail existed.
-            console.log('[Prewarm] probe', storeId, 'network session inconclusive —', msg.why, '— falling back to the DOM check');
-            const fb = getStoreScripts(storeId);
-            if (fb?.checkLoginScript) webviewRef.current?.injectJavaScript(fb.checkLoginScript);
+            // NOT a signed-out user, and saying so here would wall one.
+            //
+            // So it says nothing at all, and that is the right answer for a
+            // PREWARM specifically: an unanswered prewarm is the case the cart
+            // engine already handles best — it runs its own check, on its own
+            // WebView, with a repair pass behind it. Reporting a guess is the
+            // only way this can do harm, because a prewarm 'loggedOut' is
+            // terminal and walls the user without ever asking again.
+            //
+            // The DOM check that used to catch this is gone (2026-09-04). Two
+            // ways to answer one question is two answers with no way to know
+            // which you got.
+            console.log('[Prewarm] probe', storeId, 'network session inconclusive —', msg.why, '— reporting nothing');
             return;
           }
           reportLogin(!!msg.loggedIn);

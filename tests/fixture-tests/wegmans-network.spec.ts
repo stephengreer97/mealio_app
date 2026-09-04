@@ -188,18 +188,24 @@ function netStub(opts: {
 }
 
 describe('the session probe', () => {
-  itWithFixture('shop.html', 'answers the login question with no network at all', async (runner) => {
+  itWithFixture('shop.html', 'answers the login question before it reads a cart', async (runner) => {
     // The best login signal of any store here: MSAL keeps a PLAINTEXT account
-    // list even when the credential cache is encrypted.
+    // list even when the credential cache is encrypted. The early answer is
+    // posted off that list, so no budget of ours can make a signed-in user wait
+    // to be told they are signed in.
     await runner.inject(msal(1));
+    await runner.inject(cachedToken());
     await runner.inject(netStub());
     await runner.inject(buildWegmansSessionScript());
     const early = await runner.waitForMessage('WEGMANS_SESSION', 15_000,
       (m) => (m as Record<string, unknown>).early === true) as Record<string, unknown>;
     expect(early.loggedIn).toBe(true);
-    // No request was needed to say so.
-    const calls = await runner.page.evaluate('window.__commerce.length');
-    expect(calls).toBe(0);
+    expect(early.accounts).toBe(1);
+    // A TOKEN IS PART OF THE PREMISE NOW, and that is the 2026-09-04 change.
+    // This test used to run with no token at all and assert signed-in anyway;
+    // an account list proves an account, not a session, and the run built on
+    // that answer failed every call it made. The no-token case has its own test
+    // below and its own answer: ok:false.
   }, AT_WEGMANS);
 
   itWithFixture('shop.html', 'no account is a definitive signed-out', async (runner) => {
@@ -211,28 +217,44 @@ describe('the session probe', () => {
     expect(msg.loggedIn).toBe(false);
   }, AT_WEGMANS);
 
-  itWithFixture('shop.html', 'signed in but no token is NOT usable for a run', async (runner) => {
+  itWithFixture('shop.html', 'an account with no token answers COULD NOT ANSWER', async (runner) => {
     // An account existing and a token working are different facts, and a run
     // built on the first one wrote nothing at all on Albertsons.
     //
     // CHANGED 2026-09-04: this used to answer loggedIn TRUE with cartCapable
-    // false, and that was the worst of both. The access token lasts an hour and
-    // the refresh token about six; when both age out there is nothing left to
-    // mint with, and "signed in" lets the run proceed to fail every call — cart
-    // read no_token, write no_token, "nothing was added". Measured that morning:
-    // the refresh token had expired 6771 seconds earlier and the session still
-    // said signed in.
+    // false, which is the worst of the three available answers. The access token
+    // lasts an hour and the refresh token about six; when both age out there is
+    // nothing left to mint with, and "signed in" lets the run proceed to fail
+    // every call — cart read no_token, write no_token, "nothing was added".
+    // Measured that morning: the refresh token had expired 6771 seconds earlier
+    // and the session still said signed in.
     //
-    // Opening the store fixes it and costs the user almost nothing: their
-    // Wegmans cookies are still good, so the site signs them in again by itself
-    // and MSAL re-mints the pair.
+    // "Signed out" would be the opposite mistake — a sign-in wall for a user
+    // whose cookies are fine. ok:false says what is true, COULD NOT ANSWER, and
+    // the engine's repair pass loads the real storefront so MSAL can mint a
+    // fresh pair and the question can be asked again.
     await runner.inject(msal(1));
     await runner.inject(netStub());
     await runner.inject(buildWegmansSessionScript());
-    const refined = await runner.waitForMessage('WEGMANS_SESSION', 15_000,
-      (m) => (m as Record<string, unknown>).early === undefined) as Record<string, unknown>;
-    expect(refined.loggedIn).toBe(false);
-    expect(refined.why).toBe('token_expired');
+    const msg = await runner.waitForMessage('WEGMANS_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.ok).toBe(false);
+    expect(msg.why).toBe('token_expired');
+    // It does NOT claim a verdict either way. Both would be wrong, and each is
+    // wrong in a way that costs the user their run.
+    expect(msg.loggedIn).toBeUndefined();
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'and never claims signed-in first', async (runner) => {
+    // The early answer exists so no budget of ours can make a signed-in user
+    // wait to be told they are signed in. It must not be posted here: the
+    // engine's login gate takes the early answer, so an early loggedIn:true
+    // would let the run start on a session that has just said it cannot answer.
+    await runner.inject(msal(1));
+    await runner.inject(netStub());
+    await runner.inject(buildWegmansSessionScript());
+    await runner.waitForMessage('WEGMANS_SESSION', 15_000);
+    const all = runner.messagesOfType('WEGMANS_SESSION') as Array<Record<string, unknown>>;
+    expect(all.filter((m) => m.loggedIn === true)).toEqual([]);
   }, AT_WEGMANS);
 
   itWithFixture('shop.html', 'with a cached token it proves it before saying so', async (runner) => {
@@ -254,12 +276,11 @@ describe('the session probe', () => {
     await runner.inject(cachedToken(-10));
     await runner.inject(netStub());
     await runner.inject(buildWegmansSessionScript());
-    // Same outcome as above and for the same reason: with nothing mintable the
-    // honest answer is a sign-in, not a signed-in user whose every call fails.
-    const refined = await runner.waitForMessage('WEGMANS_SESSION', 15_000,
-      (m) => (m as Record<string, unknown>).early === undefined) as Record<string, unknown>;
-    expect(refined.loggedIn).toBe(false);
-    expect(refined.why).toBe('token_expired');
+    // Same outcome as above and for the same reason: an expired cache with
+    // nothing mintable behind it is a question this cannot answer.
+    const msg = await runner.waitForMessage('WEGMANS_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.ok).toBe(false);
+    expect(msg.why).toBe('token_expired');
   }, AT_WEGMANS);
 });
 
