@@ -62,6 +62,7 @@ import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecover
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { sameProductBarSize, scoreMatch } from '../lib/webview-scripts/_scoring';
 import { challengeMayTakeTheScreen } from '../lib/cart-challenge';
+import { firstAddableIdx, reviewUnaddableReason } from '../lib/review-selection';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -652,11 +653,15 @@ export default function WebViewCartSheet({
   // right). Tapping it opens the full-screen viewer (MEAL-64).
   const [viewerOpen, setViewerOpen] = useState(false);
   const preview = useDraggablePreview(88, 88, 12, () => setViewerOpen(true));
+  /** Which review item is on screen, for the callbacks that close over nothing. */
+  const reviewIdxRef = useRef(0);
   // Re-center the thumbnail on each new ingredient being reviewed. The Pick a
   // Substitute flow rests slightly lower than Choose Product — its search box has
   // a reason line above it, so the centered default otherwise reads as too high.
   useEffect(() => {
     const rev = searchResultsRef.current[reviewIdx];
+    // For the []-dep message handler, which cannot read this state directly.
+    reviewIdxRef.current = reviewIdx;
     preview.setDefaultOffset(rev && !rev.isChoose ? REVIEW_PREVIEW_Y_OFFSET : 0);
     // Close the viewer on the way to the next ingredient — it would otherwise
     // stay up showing the previous product's photo.
@@ -2864,9 +2869,14 @@ export default function WebViewCartSheet({
     }
   }, [visible]);
 
-  // Reset selection when review item changes
+  // Reset selection when review item changes.
+  //
+  // Not always index 0: on a REVIEW an out-of-stock product cannot be added, so
+  // starting on one is a dead end with two disabled buttons. See
+  // firstAddableIdx — presentational, and the choose flow keeps 0 on purpose.
   useEffect(() => {
-    setSelectedSuggIdx(0);
+    const r = searchResultsRef.current[reviewIdx];
+    setSelectedSuggIdx(r && !r.isChoose ? firstAddableIdx(r.candidates) : 0);
     setSelectedPreference(null);
     setCustomText('');
     setCustomSuggestions([]);
@@ -5374,7 +5384,10 @@ export default function WebViewCartSheet({
           console.log(`[Cart ${ts()}]`, 'CUSTOM SEARCH network result:', subs.length, 'candidates');
           setCustomSuggestions(subs);
           setCustomSearching(false);
-          setSelectedSuggIdx(0);
+          // Same rule as the reset above: a substitute search that returns an
+          // out-of-stock product first must not preselect it.
+          setSelectedSuggIdx(
+            searchResultsRef.current[reviewIdxRef.current]?.isChoose ? 0 : firstAddableIdx(subs));
           setCustomText('');
           return;
         }
@@ -6604,6 +6617,9 @@ export default function WebViewCartSheet({
           const maxWeightSteps = weightOpts ? weightOpts.length : Infinity;
           const needsPref = candidate && !candidate.outOfStock && candidate.preferences && candidate.preferences.length > 0;
           console.log(`[Cart ${ts()}]`, 'review render', { isChoose, reviewIdx, candidateName: candidate?.productName, prefs: candidate?.preferences, needsPref, selectedSuggIdx });
+          // WHY the add is disabled, said out loud. Stock before quantity: a
+          // quantity is something the reader can fix.
+          const unaddableReason = reviewUnaddableReason(candidate, totalQty, storeName);
           const canAdd = !customSearching && (
             selectedSuggIdx === 'custom'
               ? customText.trim().length > 0
@@ -6835,8 +6851,8 @@ export default function WebViewCartSheet({
                     </View>
                   );
                 })}
-                {!isChoose && totalQty === 0 && typeof selectedSuggIdx === 'number' && (
-                  <Text style={styles.qtyHint}>Set a quantity above to add this to your cart.</Text>
+                {!isChoose && typeof selectedSuggIdx === 'number' && unaddableReason && (
+                  <Text style={styles.qtyHint}>{unaddableReason}</Text>
                 )}
 
                 {isChoose ? (
