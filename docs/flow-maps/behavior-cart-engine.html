@@ -47,6 +47,24 @@ them the form. The login poll covers that step instead. Same rule as
 <p><b>2026-09-04.</b> The over-add check's "explained" list now includes what the run tried and
 was refused, not only the unverified weight lines. See the reconcile map for the measurement.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<h3>2026-09-04 &mdash; where a failed add goes, and when to believe "signed out"</h3>
+<p><b>ANY PROBLEM ADDING IS A REVIEW.</b> The reconcile already routed its definitive failures there.
+What did not was the RETRY path: an item it thought it could fix, retried, and still could not get
+went onto the done screen as "Could not add: X" &mdash; the one place the user can do nothing about
+it. Those become review cards now, with whatever the search already found, and a refusal the screen
+cannot otherwise explain says so rather than naming a cause we do not have.</p>
+<p><b>The one exception is a CAP.</b> "You already have fifteen of these" is not a question about the
+product, so no other product answers it: <code>quantity_limit_reached</code> keeps its own banner and
+never becomes a review card.</p>
+<p><b>A SIGNED-OUT ANSWER FROM THE QUIET PAGE IS NOT FINAL.</b> Albertsons cannot resolve a session
+from robots.txt until its own JavaScript has run once &mdash; /userinfo answers 200 with no token,
+which on a real page IS the expired-session answer. Measured: it said signed out for six seconds
+about a signed-in user, who was shown a sign-in wall and then signed in by himself. The site gets one
+storefront load before that answer is believed. This reverses the earlier "act on a signed-out early
+answer immediately" rule, which was right on its own reasoning and wrong when the answer is
+wrong.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>running</b> — the bubble spins</span>

@@ -46,6 +46,15 @@ definitive, so the reconcile RETRIED it into the same wall and the run reported 
 review card. Codes matching OUT_OF_STOCK / UNAVAILABLE now report <code>out_of_stock</code>; a
 refusal that is not about availability (a cap, an alcohol limit) still does not.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<p><b>2026-09-04 &mdash; the cap comes from the cart now.</b> Stephen's Morton Salt: the cart held
+15, the write asked for 16, the store refused, and because the run had skipped the search for an
+already-chosen product it carried no <code>maxOrderQuantity</code> &mdash; so the clamp could not
+fire and the refusal was reported as unaddable with no explanation. The cart read selects
+<code>product { maximumOrderQuantity }</code>, exactly as H-E-B's own CartItemFragment does, and the
+clamp turns it into <code>quantity_limit_reached</code> before the write: no write, no review card,
+its own banner.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b> — the state machine</span>

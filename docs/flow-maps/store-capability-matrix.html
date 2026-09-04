@@ -53,6 +53,13 @@ theirs.</p>
 <p>Both end in the same place: the ingredient goes to review with candidates, and the cart is left as
 if the item had never been addable.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<p><b>2026-09-04.</b> H-E-B's per-product cap now comes from the CART as well as the search
+(<code>product { maximumOrderQuantity }</code>, which its own CartItemFragment selects) &mdash; a run
+whose products are already chosen skips the search, so those items used to reach the write with no
+cap and no way to know they were at one. And a signed-out answer from a rail's quiet page is no
+longer acted on until the storefront has had one load; see the cart-engine map.</p>
+</div>
 </header>
 
 <div class="notes" style="margin-top:0">
