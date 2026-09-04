@@ -5249,6 +5249,25 @@ export default function WebViewCartSheet({
               // Bounded, because a store that cannot answer twice is not going
               // to answer the third time, and the login check's own timeout is
               // the backstop that hands the user the storefront.
+              // NEVER WHILE THE USER IS SIGNING IN.
+              //
+              // The repair navigates, and on the login step the page it would
+              // navigate away from is a sign-in form with the user's typing in
+              // it. Worse, an ok:false is GUARANTEED there: H-E-B's sign-in
+              // lives on accounts.heb.com, so the session script is cross-origin
+              // and cannot answer by construction.
+              //
+              // MEASURED, Pixel, 2026-09-04, minutes after the repair shipped:
+              //   10:32:44  login: navigating to .../my-account/login
+              //   10:32:46  onLoadEnd accounts.heb.com/interaction/.../login
+              //   10:32:49  onLoadEnd https://www.heb.com/?_t=...
+              // — the repair pulling the user off the form they were handed.
+              //
+              // The poll is what covers this step: it re-asks every second and
+              // notices the moment the sign-in completes. Same rule as
+              // challengeMayTakeTheScreen — a run may be interrupted, a person
+              // may not.
+              if (onLoginStep) return;
               const now = Date.now();
               if (netSessionRepairFromRef.current === 0) {
                 netSessionRepairFromRef.current = now;

@@ -193,6 +193,45 @@ describe('when the probe cannot answer, the site is asked to fix itself', () => 
     expect(view.queryByText(/Finding Products/i)).toBeTruthy();
   });
 
+  it('never while the user is signing in', () => {
+    // The repair NAVIGATES, and on the login step the page it would navigate
+    // away from is a sign-in form with the user's typing in it. An unanswerable
+    // session is guaranteed there — H-E-B's sign-in is on accounts.heb.com, so
+    // the script is cross-origin and cannot answer by construction.
+    //
+    // Caught on the device minutes after the repair shipped:
+    //   10:32:44  login: navigating to .../my-account/login
+    //   10:32:46  onLoadEnd accounts.heb.com/interaction/.../login
+    //   10:32:49  onLoadEnd https://www.heb.com/?_t=...
+    //
+    // The run reaches the login step WITHOUT an inconclusive answer first, so
+    // the repair window is untouched and the next ok:false is its FIRST — the
+    // one that navigates. Getting here any other way spends the first attempt
+    // early and the test passes whether or not the guard exists.
+    enableRail();
+    const view = render(
+      <WebViewCartSheet visible meals={[{ id: 'm1', name: 'Tacos', ingredients: [chosen('sour cream')] }] as never}
+        storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+    );
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    expect(view.queryByText(/log into your H-E-B account/i)).toBeTruthy();
+    const onTheForm = uri(view);
+    expect(onTheForm).toContain('/my-account/login');
+    // Now the poll asks from the sign-in page and cannot get an answer.
+    for (let i = 0; i < 5; i++) {
+      post({ type: 'HEB_SESSION', ok: false, why: 'no_response' });
+      act(() => { jest.advanceTimersByTime(2_100); });
+    }
+    // The user is still on the form they were typing into.
+    expect(uri(view)).toBe(onTheForm);
+  });
+
   it('gives up eventually, rather than holding the user forever', () => {
     // A ceiling, not a wait. Past it the login check's own timeout takes over
     // and hands the storefront to the user, which is the honest end of a session
