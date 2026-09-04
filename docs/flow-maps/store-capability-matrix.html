@@ -74,6 +74,13 @@ the user cannot buy. A session without one now surfaces the storefront and asks 
 handing over manual searches. Walmart alone does not (<code>needsStoreId: false</code>) &mdash;
 national search, account cart, and the fulfilling store is a checkout question.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #ef4444;padding-left:14px">
+<p><b>2026-09-04 &mdash; Amazon Fresh is gone.</b> It was the last store with no network rail, so it
+could only search and hand the user the page to add from. Removed from the catalogue rather than
+carried as the one store Mealio cannot add to. Every store here now has a rail; the last DOM read in
+production went with it, and "assisted" is now a state a store passes through (rail off, or unable to
+answer) rather than what a store IS.</p>
+</div>
 </header>
 
 <div class="notes" style="margin-top:0">

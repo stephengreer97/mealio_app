@@ -65,6 +65,13 @@ what the ASSISTED route uses when the rail is off or cannot answer.</p>
   <code>automation-config/schema.ts</code> (<code>platforms.instacart</code>) and
   <code>webview-scripts/index.ts</code>. One adapter, parameterized by tenant. One tenant has
   ever run through it.</div>
+<div class="wrap" style="border-left:4px solid #ef4444;padding-left:14px">
+<p><b>2026-09-04 &mdash; Amazon Fresh is gone.</b> It was the last store with no network rail, so it
+could only search and hand the user the page to add from. Removed from the catalogue rather than
+carried as the one store Mealio cannot add to. Every store here now has a rail; the last DOM read in
+production went with it, and "assisted" is now a state a store passes through (rail off, or unable to
+answer) rather than what a store IS.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b></span>
