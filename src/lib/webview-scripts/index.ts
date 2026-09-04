@@ -4,7 +4,6 @@ import { getScripts as getHebScripts } from './heb';
 import { getScripts as getWalmartScripts } from './walmart';
 import { getScripts as getAlbertsonsScripts, ALBERTSONS_FAMILY_IDS } from './albertsons';
 import { getInstacartScriptsFor, INSTACART_STORE_IDS } from './instacart';
-import { getScripts as getAmazonFreshScripts } from './amazon-fresh';
 import { getScripts as getWegmansScripts } from './wegmans';
 import { getScripts as getMockStoreScripts, MOCK_STORE_ENABLED } from './mockstore';
 import { isStoreEnabled } from '../automation-config';
@@ -55,9 +54,11 @@ export interface StoreScripts {
    *
    * OPTIONAL, and absent on every store that has a network rail: there, the
    * rail's own session probe is the answer, and a second opinion read off the
-   * page is how a signed-in user gets shown a sign-in wall. Only Amazon Fresh
-   * still carries one, because it has no rail — and even that one is a fetch,
-   * not a DOM read.
+   * page is how a signed-in user gets shown a sign-in wall.
+   *
+   * Nothing in production carries one any more: Amazon Fresh was the last, and
+   * it was dropped with the store on 2026-09-04. The mock store keeps one
+   * because it is a fixture we serve ourselves.
    */
   checkLoginScript?: string;
   /**
@@ -78,17 +79,19 @@ export interface StoreScripts {
    * do it.
    *
    * Absent on every store with a rail, which asks the store's API instead and
-   * needs no page at all. Present on exactly two: Amazon Fresh, which has no
-   * rail, and the mock store. Each carries its own reader in its own file — this
-   * used to be a table of six in cart-count.ts, which every store imports, and
-   * four of those six entries had been unreachable since their rails shipped.
+   * needs no page at all. Present on exactly one: the mock store, a dev fixture
+   * we serve ourselves. It used to be a table of six in cart-count.ts, which
+   * every store imports, and four of those six entries had been unreachable
+   * since their rails shipped.
    *
-   * `url` navigates; `openScript` clicks its way there for a store whose cart
-   * URL is unreliable. One or the other, then `countScript` posts the CART_COUNT.
+   * `url` navigates there; `countScript` then posts the CART_COUNT.
+   *
+   * `openScript` — click your way to the cart, for a store whose cart URL is
+   * unreliable — went with Amazon Fresh on 2026-09-04. It was the only store
+   * that ever had one.
    */
   cartPage?: {
-    url?: string;
-    openScript?: string;
+    url: string;
     countScript: string;
   };
 }
@@ -123,7 +126,6 @@ export function getStoreScripts(storeId: string): StoreScripts | null {
   switch (storeId) {
     case 'heb':     return getHebScripts();
     case 'walmart': return getWalmartScripts();
-    case 'amazon':  return getAmazonFreshScripts();
     case 'wegmans': return getWegmansScripts();
     // Dev/e2e only: the deterministic mock store for Maestro. Returns null in
     // production (flag unset) so it can never be reached even if a meal carries it.

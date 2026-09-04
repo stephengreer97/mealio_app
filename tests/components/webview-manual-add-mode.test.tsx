@@ -205,8 +205,8 @@ function assistedRun(...names: string[]) {
     <WebViewCartSheet
       visible
       meals={[{ id: 'm1', name: 'Tacos', ingredients: names.map(chosen) }] as never}
-      storeId="amazon"
-      storeName="Amazon Fresh"
+      storeId="heb"
+      storeName="H-E-B"
       onClose={() => {}}
     />,
   );
@@ -449,7 +449,7 @@ describe('state does not leak into the next run', () => {
     const meals = [{ id: 'm1', name: 'Tacos', ingredients: [chosen('sour cream'), chosen('fresh mint')] }];
     disableRail();
     const view = render(
-      <WebViewCartSheet visible meals={meals as never} storeId="amazon" storeName="Amazon Fresh" onClose={() => {}} />,
+      <WebViewCartSheet visible meals={meals as never} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
     );
     const post = (payload: Record<string, unknown>) => act(() => {
       view.getAllByTestId('mock-webview')[0].props.onMessage({
@@ -473,11 +473,11 @@ describe('state does not leak into the next run', () => {
 
     // Close and re-open the SAME sheet on the same ingredients.
     view.rerender(
-      <WebViewCartSheet visible={false} meals={meals as never} storeId="amazon" storeName="Amazon Fresh" onClose={() => {}} />,
+      <WebViewCartSheet visible={false} meals={meals as never} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
     );
     act(() => { jest.advanceTimersByTime(500); });
     view.rerender(
-      <WebViewCartSheet visible meals={meals as never} storeId="amazon" storeName="Amazon Fresh" onClose={() => {}} />,
+      <WebViewCartSheet visible meals={meals as never} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
     );
     act(() => { jest.advanceTimersByTime(500); });
     drive();

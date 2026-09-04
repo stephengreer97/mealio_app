@@ -29,6 +29,21 @@ const mockInjected: string[] = [];
 /** The live WebView props, so the test can fire onLoadEnd / onMessage. */
 let mockWebViewProps: any = null;
 
+// THE MOCK STORE, because it is the only one left on this path.
+//
+// Amazon Fresh carried this test and left the catalogue on 2026-09-04; every
+// real store has a rail and is answered by it without loading a page at all.
+// The behaviour is still shipped — the mock store uses it for the Maestro e2e —
+// so the guard moves rather than goes.
+//
+// jest.mock is hoisted above the imports, which is what lets MOCK_STORE_ENABLED
+// be true before the registry reads it. Setting the env var in the file body
+// would run too late.
+jest.mock('../../src/lib/webview-scripts/mockstore', () => ({
+  ...jest.requireActual('../../src/lib/webview-scripts/mockstore'),
+  MOCK_STORE_ENABLED: true,
+}));
+
 jest.mock('react-native-webview', () => {
   const RealReact = jest.requireActual('react');
   const RealView = jest.requireActual('react-native').View;
@@ -59,7 +74,7 @@ import SilentLoginProbe from '../../src/components/SilentLoginProbe';
 // landed: a store with a rail reads its cart over the network and injects
 // nothing. Amazon Fresh is the last store without a rail, and the reason is
 // written down: its search returns a rendered grid and no structured payload.
-const STORE = 'amazon';
+const STORE = 'mockstore';
 const HOME_URL = 'https://www.heb.com/';
 const CART_URL = 'https://www.amazon.com/cart?_t=1754500000000';
 // Shape from auth-urls.ts (AUTH_REDIRECT_URL_PATTERN matches '/sso/').

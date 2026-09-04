@@ -17,6 +17,14 @@ jest.mock('../../src/lib/purchases', () => ({
 }));
 
 const injected: string[] = [];
+// Hoisted above the imports, which is what lets MOCK_STORE_ENABLED be true
+// before the store registry reads it — the dev store is the only one left with
+// no rail, and one test below needs exactly that.
+jest.mock('../../src/lib/webview-scripts/mockstore', () => ({
+  ...jest.requireActual('../../src/lib/webview-scripts/mockstore'),
+  MOCK_STORE_ENABLED: true,
+}));
+
 jest.mock('react-native-webview', () => {
   const RealReact = jest.requireActual('react');
   const RealView = jest.requireActual('react-native').View;
@@ -203,7 +211,7 @@ describe('the search prewarm', () => {
   it('does not prewarm a store with no rail', () => {
     __resetAutomationConfigForTests();
     render(
-      <WebViewCartSheet visible meals={[meal] as never} storeId="amazon" storeName="Amazon Fresh" onClose={() => {}} />,
+      <WebViewCartSheet visible meals={[meal] as never} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
     );
     // Amazon Fresh is assisted: there is no rail to ask, and nothing should be
     // injected speculatively into a page the user is about to drive. (This said
@@ -298,9 +306,15 @@ describe('the page is loaded before the run needs it', () => {
   it('does NOT mount it on a store with no rail', () => {
     // An assisted store's WebView is the user's. Loading it behind a screen they
     // have not finished with buys nothing and starts a session they may not use.
+    //
+    // THE MOCK STORE, because it is the only store left without a rail: Amazon
+    // Fresh was the last real one and left the catalogue on 2026-09-04. The
+    // property is not about that store though — it is about what happens when a
+    // rail is absent, which is a state any store passes through before it has
+    // one.
     __resetAutomationConfigForTests();
     const view = render(
-      <WebViewCartSheet visible meals={[meal] as never} storeId="amazon" storeName="Amazon Fresh" onClose={() => {}} />,
+      <WebViewCartSheet visible meals={[meal] as never} storeId="mockstore" storeName="Mock Store" onClose={() => {}} />,
     );
     const main = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
     expect(main).toBeFalsy();

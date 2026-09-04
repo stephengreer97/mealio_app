@@ -29,6 +29,21 @@ import React from 'react';
 
 // Mock factories are hoisted, so they cannot close over outer variables — the
 // injected-script log lives on globalThis and is read back through it.
+// THE MOCK STORE, because it is the only one left on this path.
+//
+// Amazon Fresh carried this test and left the catalogue on 2026-09-04; every
+// real store has a rail and is answered by it without loading a page at all.
+// The behaviour is still shipped — the mock store uses it for the Maestro e2e —
+// so the guard moves rather than goes.
+//
+// jest.mock is hoisted above the imports, which is what lets MOCK_STORE_ENABLED
+// be true before the registry reads it. Setting the env var in the file body
+// would run too late.
+jest.mock('../../src/lib/webview-scripts/mockstore', () => ({
+  ...jest.requireActual('../../src/lib/webview-scripts/mockstore'),
+  MOCK_STORE_ENABLED: true,
+}));
+
 jest.mock('react-native-webview', () => {
   const RealReact = jest.requireActual('react');
   const RealView = jest.requireActual('react-native').View;
@@ -60,7 +75,7 @@ import { getStoreScripts } from '../../src/lib/webview-scripts';
 // landed: a store with a rail reads its cart over the network and injects
 // nothing. Amazon Fresh is the last store without a rail, and the reason is
 // written down: its search returns a rendered grid and no structured payload.
-const STORE = 'amazon';
+const STORE = 'mockstore';
 // Amazon reaches its cart by CLICKING, not by URL, so there is no cart URL to
 // read — this is just a plausible page for the load events below to carry. It
 // used to come from a shared table keyed by store id; the store owns its own

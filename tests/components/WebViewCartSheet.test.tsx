@@ -175,32 +175,36 @@ describe('WebViewCartSheet — login_check timeout', () => {
   afterEach(() => jest.useRealTimers());
 
   it('falls back to the login webview when LOGIN_STATUS never arrives', () => {
-    // WALMART, because this is the DOM login check's timeout and Walmart is a
-    // store that still uses it. ALDI used to be the vehicle here and gained a
-    // rail (MEAL-208), which answers the login question over the network
-    // instead — so the test was no longer exercising the path it names. The
-    // rail's own equivalent is covered in login-detected-automatically.test.tsx.
+    // THE PROPERTY IS "IT DOES NOT SPIN FOREVER", and it outlived the check it
+    // was written for. There is no DOM login check left in production — Amazon
+    // Fresh carried the last one and left the catalogue on 2026-09-04 — so this
+    // drives a rail store, whose session probe simply never answers.
+    //
+    // Asserted on the SCREEN the timeout reaches rather than on the spinner's
+    // words: a rail run's caption is the bag animation's ("Connecting…"), not
+    // "Checking login…", so the old assertion passed on the first line and
+    // would have passed on the second whatever happened.
     const { getByText, queryByText } = render(
       <WebViewCartSheet
         visible
         meals={[baseMeal()]}
-        storeId="amazon"
-        storeName="Amazon Fresh"
+        storeId="heb"
+        storeName="H-E-B"
         onClose={() => {}}
       />,
     );
     act(() => {
       fireEvent.press(getByText(/add ingredients to/i));
     });
-    // In login_check: spinner shows "Checking login…".
-    expect(getByText(/checking login/i)).toBeTruthy();
+    // Nothing about the sign-in screen yet — the check is still out.
+    expect(queryByText(/log into your H-E-B account/i)).toBeNull();
 
-    // No LOGIN_STATUS ever posts. After the safety window the sheet must
-    // NOT still be spinning on the login check.
+    // No session answer ever posts. After the safety window the sheet must hand
+    // the user the sign-in screen rather than spin.
     act(() => {
-      jest.advanceTimersByTime(21_000);
+      jest.advanceTimersByTime(41_000);
     });
-    expect(queryByText(/checking login/i)).toBeNull();
+    expect(queryByText(/log into your H-E-B account/i)).toBeTruthy();
   });
 });
 

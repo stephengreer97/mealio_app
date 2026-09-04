@@ -66,7 +66,9 @@ function safeDecode(payload: string): string {
  * term expression, then the store's own URL builder.
  */
 describe('preparation never reaches the store', () => {
-  const STORE_IDS = ['heb', 'walmart', 'aldi', 'amazon', 'wegmans', 'albertsons', 'safeway'];
+  // Amazon Fresh left the catalogue on 2026-09-04, and with it the last store
+  // that had no rail — every store here now goes over one.
+  const STORE_IDS = ['heb', 'walmart', 'aldi', 'wegmans', 'albertsons', 'safeway'];
 
   /** The cart's own term expression, from WebViewCartSheet. */
   const termOf = (item: { searchTerm: string | null; ingredientName: string }) =>

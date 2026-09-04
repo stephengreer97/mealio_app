@@ -45,7 +45,7 @@ describe('network rail resolution', () => {
     // is still here, and the reason is written down: its search returns a
     // rendered grid and no structured payload, so there is nothing to parse
     // without the DOM work this whole effort exists to delete.
-    for (const id of ['amazon', 'kroger', 'nonsense']) {
+    for (const id of ['kroger', 'nonsense']) {
       expect(getNetworkRail(id)).toBeNull();
     }
     expect(getNetworkRail(null)).toBeNull();

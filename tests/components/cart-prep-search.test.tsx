@@ -195,7 +195,18 @@ const PREPPED_MEALS = [
 // Walmart left on 2026-09-03 when its rail landed, for the same reason ALDI and
 // Wegmans did: its terms now go over the rail, so it navigates nowhere and
 // ingredientPrep.test.ts is where its half of this invariant is asked.
-const URL_STORES = ['amazon'];
+//
+// AND AMAZON FRESH LEFT ON 2026-09-04, with the store itself — so the list is
+// EMPTY, and that is the honest state rather than an oversight. Every store in
+// the catalogue now has a rail, so no run navigates to a search page as part of
+// the automated pass, and there is no URL for a preparation to leak onto.
+//
+// The invariant has not gone anywhere: ingredientPrep.test.ts drives
+// `rail.searchBatch` for every store in the catalogue and asserts the same
+// thing about what actually goes upstream. This list stays so that a store
+// arriving WITHOUT a rail is asked the question again — it.each over an empty
+// array is a no-op, not a false pass, and the guard below says so.
+const URL_STORES: string[] = [];
 
 /**
  * A single CHOSEN row, on its own.
@@ -274,24 +285,25 @@ describe('the cart never asks a store for a preparation', () => {
   // it — and of the rail's search batch, for every store in the catalog. What is
   // left below is the component-level half: the run really does reach a store,
   // and it reaches it with a bare product term.
-  it.each(URL_STORES)('navigates %s to a search URL with no preparation in it', (storeId) => {
-    const { beginSearching } = startRun(storeId);
-    beginSearching();
-
-    const urls = [...navigated(), ...built().filter((b) => b.key === 'getSearchUrl').map((b) => b.out)];
-    // The store was really searched, by a URL, for the bare product. This is the
-    // guard the surviving mutant needed: without it "no URL carries a prep" is
-    // true of a run that navigated nowhere.
-    const searches = urls.filter((u) => /Onion/i.test(u));
-    expect(searches.length).toBeGreaterThan(0);
-
-    for (const url of urls) {
-      for (const phrase of [...PREP_PHRASES, 'prep']) {
-        expect(url.toLowerCase()).not.toContain(phrase);
-        expect(decodeSafely(url).toLowerCase()).not.toContain(phrase);
-      }
-    }
+  it('has no navigating stores left, and fails loudly if one returns', () => {
+    // Every store in the catalogue has a rail, so none navigates to a search
+    // page. If that changes, this fails and the deleted block below is what has
+    // to come back — a silently empty it.each would just report green.
+    expect(URL_STORES).toEqual([]);
   });
+
+  // The navigating-store case lived here: render a run for a store with no
+  // rail, let it search, and assert the URL it went to carried the ingredient
+  // and not its preparation.
+  //
+  // It is deleted rather than skipped because there is no store to run it on —
+  // jest refuses an empty `it.each` table, and a skipped block is a claim that
+  // something is being checked. The invariant moved with the stores:
+  // ingredientPrep.test.ts drives `rail.searchBatch` for every store in the
+  // catalogue and asserts the same thing about what goes upstream.
+  //
+  // If a store without a rail is ever added, this block comes back with it —
+  // the guard above fails the moment URL_STORES stops being empty.
 
 
   it('still shows the shopper what each meal wants done to the ingredient', () => {

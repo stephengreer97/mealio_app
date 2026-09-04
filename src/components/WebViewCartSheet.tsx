@@ -1653,7 +1653,7 @@ export default function WebViewCartSheet({
         term: item.ingredientName,
         // Ranked for the same reason as the sequential choose branch below, and
         // this is the path that matters most: every store with a worker pool
-        // (heb, walmart, albertsons, amazon) reaches the choose screen through
+        // (heb, walmart, albertsons) reaches the choose screen through
         // HERE, not through the SEARCH_RESULT handler. Only the forced-serial
         // stores (aldi, wegmans) take the other one. `item.ingredientName` is
         // the same value the sequential branch scores as `scoreTarget` — a
@@ -1743,7 +1743,6 @@ export default function WebViewCartSheet({
     const cartPage = scriptsRef.current?.cartPage;
     const cartPageScript = cartPage?.countScript ?? null;
     const cartPageUrl = cartPage?.url ?? capturedCartUrlRef.current;
-    const openCartScript = cartPage?.openScript ?? null;
     if (cartPageScript) {
       if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
       cartRowsTimeoutRef.current = setTimeout(() => { cartRowsTimeoutRef.current = null; setCartRowsTimedOut(true); }, CART_ROWS_TIMEOUT_MS);
@@ -1759,17 +1758,13 @@ export default function WebViewCartSheet({
         setStep('done');
       }
     }, CART_PROBE_RESULT_TIMEOUT_MS);
-    if (cartPageScript && (cartPageUrl || openCartScript)) {
+    if (cartPageScript && cartPageUrl) {
       cartCountPendingRef.current = phase;
       cartProbeBeginSearchRef.current = false;
       loadQueueRef.current = [cartPageScript];
       lastLoadEndUrlRef.current = '';
       expectedNavUrlRef.current = '';
-      if (cartPageUrl) {
-        setWebviewUri(cartPageUrl + (cartPageUrl.includes('?') ? '&' : '?') + '_t=' + Date.now());
-      } else {
-        webviewRef.current?.injectJavaScript(openCartScript!);
-      }
+      setWebviewUri(cartPageUrl + (cartPageUrl.includes('?') ? '&' : '?') + '_t=' + Date.now());
       return;
     }
     // Nothing can read this store's cart: no rail, and no page reader either.
@@ -3906,13 +3901,12 @@ export default function WebViewCartSheet({
       return;
     }
     // The store's own page reader, for a store with no rail. See
-    // StoreScripts.cartPage — today that is Amazon Fresh and the mock store.
+    // StoreScripts.cartPage — today that is the mock store alone.
     const cartPage = scriptsRef.current?.cartPage;
     const cartPageScript = cartPage?.countScript ?? null;
     const cartPageUrl = cartPage?.url ?? null;
-    const openCartScript = cartPage?.openScript ?? null;
-    console.log(`[Cart ${ts()}]`, 'snapshotBefore: storeId=', probeStoreId, 'cartUrl=', !!cartPageUrl, 'cartClick=', !!openCartScript, 'activeLen=', activeItemsRef.current.length);
-    if (cartPageScript && (cartPageUrl || openCartScript)) {
+    console.log(`[Cart ${ts()}]`, 'snapshotBefore: storeId=', probeStoreId, 'cartUrl=', !!cartPageUrl, 'activeLen=', activeItemsRef.current.length);
+    if (cartPageScript && cartPageUrl) {
       cartCountPendingRef.current = 'before';
       cartProbeBeginSearchRef.current = true;
       loadQueueRef.current = [cartPageScript];
@@ -3928,10 +3922,7 @@ export default function WebViewCartSheet({
         loadQueueRef.current = [];
         beginSearchFlow();
       }, CART_PROBE_TIMEOUT_MS);
-      // URL stores navigate directly; click stores (Amazon) click the cart icon
-      // on the current page, which navigates — onLoadEnd then pops the count script.
-      if (cartPageUrl) setWebviewUri(cartPageUrl + '?_t=' + Date.now());
-      else webviewRef.current?.injectJavaScript(openCartScript!);
+      setWebviewUri(cartPageUrl + '?_t=' + Date.now());
     } else {
       // No rail and no page reader: this store's cart cannot be read, so the run
       // starts without a baseline rather than with a made-up one.
@@ -3967,6 +3958,24 @@ export default function WebViewCartSheet({
     // A rail cart read that was deferred because the store had not landed yet.
     // Checked before the session retry because it happens first in a run: the
     // baseline is taken, and only then does the search flow begin.
+    // Manual mode injects NOTHING (MEAL-197). Checked before every other branch
+    // so no stale ref from the automated run can route a script into a page the
+    // user is driving by hand.
+    //
+    // IT WAS NOT. It sat BELOW the two branches that fire on a stale ref — the
+    // deferred cart read and the session retry — which are precisely the ones
+    // its own comment named. Both inject, and both can still be armed when a run
+    // gives up and hands the user the store: `netActiveRef` and
+    // `netPhaseRef === 'session'` survive the handover.
+    //
+    // It went unnoticed because the test for this property drove Amazon Fresh,
+    // the one store with no rail, where neither branch has a script to inject.
+    // Removing that store (2026-09-04) put a rail store on the same path and the
+    // property failed immediately.
+    if (stepRef.current === 'manual') {
+      console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'manual mode — no injection');
+      return;
+    }
     if (cartReadPendingNavRef.current) {
       cartReadPendingNavRef.current = false;
       netChallengeShownRef.current = false;
@@ -3999,13 +4008,6 @@ export default function WebViewCartSheet({
       console.log(`[Cart ${ts()}]`, 'network run: re-reading the session on', url.slice(0, 60));
       const railForSession = getNetworkRail(lockedStoreIdRef.current);
       if (railForSession) webviewRef.current?.injectJavaScript(railForSession.sessionScript());
-      return;
-    }
-    // Manual mode injects NOTHING (MEAL-197). Checked before every other branch
-    // — including the cold-slot one — so no stale ref from the automated run can
-    // route a script into a page the user is driving by hand.
-    if (stepRef.current === 'manual') {
-      console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'manual mode — no injection');
       return;
     }
     // Walmart anti-bot redirect: /blocked?url=<encoded original>. We surface

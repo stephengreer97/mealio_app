@@ -512,28 +512,6 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
         searchInput: 'input[type="search"], input[placeholder*="earch" i]',
       },
     },
-    amazon: {
-      enabled: true,
-      platform: 'standalone',
-      selectors: {
-        // Amazon Fresh renders two distinct card layouts; both are matched.
-        cardA: '[data-csa-c-item-type="asin"]',
-        nameA: '.a-truncate-full.a-offscreen',
-        atcWrapperA: '.qs-atc-plus',
-        addBtnA: 'button[aria-label^="Add to Cart,"]',
-        stepperA: '[id^="qs-widget-stepper-"]',
-        qtyDisplayA: '.qs-widget-dropdown-flex-wrapper button[aria-label^="Current quantity"]',
-        incBtnA: '.qs-widget-increment-button-flex-wrapper input[aria-label^="Add "]',
-        cardB: '[data-component-type="s-search-result"]',
-        nameB: 'h2',
-        atcContainerB: 'span[data-action="fresh-add-to-cart"]',
-        stepperB: 'fieldset[data-a-component="stepper"]',
-        qtyDisplayB: 'span[data-a-selector="value"]',
-        incBtnB: 'button[data-action="a-stepper-increment"]',
-        atcBtnBMobile: 'button[aria-label="Add to cart"]',
-        incBtnBMobile: 'span[data-action="qs-widget-increment-decl"]',
-      },
-    },
     // The Albertsons family (Safeway, Vons, Jewel-Osco, …) all share one
     // storefront platform and therefore one selector set — which now lives in
     // platforms.albertsons above. Per-banner URLs are derived from the storeId by

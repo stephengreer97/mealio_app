@@ -17,8 +17,8 @@
 with two ways to answer "who is signed in" has no way to tell you which answer you got. A session
 that cannot answer now asks the SITE &mdash; one load of the real storefront, then the same probe
 again on that page, for up to 30s &mdash; and only hands the user a sign-in screen if that fails.
-<b>Amazon Fresh is the exception and the only one:</b> it has no rail, so its check is primary
-rather than a fallback.</p>
+Since Amazon Fresh was removed on 2026-09-04 there is no exception left: every store in the
+catalogue has a rail, and no production store reads a page to answer anything.</p>
 </div>
 <div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
 <p><b>2026-09-04.</b> Two engine-wide fixes found by driving the Pixel: the sheet's open now
@@ -89,8 +89,6 @@ national search, account cart, and the fulfilling store is a checkout question.<
         <td><code>walmart.ts</code></td><td>yes</td></tr>
     <tr><td><b>Wegmans</b></td><td><code>standalone</code></td><td>1</td><td><code>wegmans</code></td>
         <td><code>wegmans.ts</code></td><td>yes</td></tr>
-    <tr><td><b>Amazon Fresh</b></td><td><code>standalone</code></td><td>1</td><td><code>amazon</code></td>
-        <td><code>amazon-fresh.ts</code></td><td>yes</td></tr>
     <tr><td><b>ALDI</b></td><td><code>instacart</code></td><td>1 tenant<br/><i>the only one ever run</i></td>
         <td><code>aldi</code> <i>(per banner)</i></td><td><code>instacart.ts</code></td><td>yes</td></tr>
     <tr><td><b>Albertsons family</b></td><td><code>albertsons</code></td><td><b>15</b></td>
@@ -124,18 +122,13 @@ national search, account cart, and the fulfilling store is a checkout question.<
         screen, not adds. It asks, it does not buy &mdash; which is why it is gated on
         <code>networkSearch</code> ALONE. ALDI and Wegmans have a measured search and a write that
         is still unproven, and until 2026-09-03 one flag stood for both and denied them this.</td></tr>
-    <tr><td><code>assisted</code></td><td>Amazon Fresh, alone<br/><i>(Walmart got a rail on 2026-09-03.<br/>Amazon is the last one without, and the<br/>reason is its search: a rendered grid and<br/>no structured payload to parse)</i><i>(ALDI's add went ON 2026-09-03,<br/>once its quantity was measured.<br/>Wegmans got its bearer the same day<br/>but has no store number yet, so its<br/>search still refuses to build)</i></td>
-        <td>Mealio searches each ingredient and hands the user the results page; the user adds
-        and taps Next. No automation, and nothing claimed that was not seen. It is what
-        &ldquo;manual mode&rdquo; already did, promoted from a rescue to a route.</td></tr>
     <tr><td>&mdash;</td><td>Kroger family</td>
         <td>Never reaches this decision: the SERVER fans out per ingredient.</td></tr>
   </table>
-  <p><b>Walmart and Amazon Fresh have no rail at all</b>, so removing DOM automation is what put
-  them here; ALDI and Wegmans have one and are assisted only where it cannot yet write. MEAL-210&ndash;213 ask, one per store, whether each can have a real in-page rail
-  like the two that do &mdash; each citing what is already ruled out, so nobody re-runs MEAL-17
-  (Walmart affiliate URL, blocked), MEAL-18 (Amazon cart URL, dead) or MEAL-34 (Instacart
-  platform, not a path).</p>
+  <p><b>Every store in the catalogue now has a rail.</b> Walmart's landed on 2026-09-03; Amazon
+  Fresh, the last without one, was removed from the product entirely on 2026-09-04 rather than
+  left as the one store Mealio could not add to. A store is assisted today only where its rail is
+  switched off or cannot answer &mdash; never because of what it is.</p>
   <p><b>The rail assumes one document, and does not always get one.</b> Its batch runs inside
   the page it was injected into; if that page navigates mid-batch every in-flight fetch rejects
   as <code>TypeError: Failed to fetch</code> and the loop stops dead. An 18-term run died at 3/18
@@ -192,13 +185,6 @@ national search, account cart, and the fulfilling store is a checkout question.<
         for a request the store answered in 576&nbsp;ms). A confirmed sign-in hops back to
         <code>railUrl</code> first. It answers the same <code>CART_COUNT</code> the cart page
         used to, so nothing downstream can tell which read replied.</td></tr>
-    <tr><td><b>Walmart</b><br/><b>Amazon Fresh</b></td>
-        <td>The store's own login check, injected into the page the user is about to drive. This
-        is the last DOM script in Mealio, and it is a READ, not automation.</td>
-        <td>&mdash; <b>nothing to confirm.</b> Mealio does not add on these stores, so it makes
-        no claim about what landed. The user watched it happen.</td>
-        <td>cart page, <b>path-guarded</b> (<code>cart-count.ts</code>) &mdash; the breakdown on
-        the done screen. Still a read, still not automation.</td></tr>
     <tr><td><b>Kroger family</b></td>
         <td colspan="3">OAuth. The server holds the token and does the adding; none of this
         column applies.</td></tr>
@@ -215,8 +201,6 @@ national search, account cart, and the fulfilling store is a checkout question.<
     <tr><td>H-E-B</td><td><code>myheb://</code></td>
         <td>lands on the app's home &mdash; H-E-B exposes no cart-specific deep link.
         <code>heb://</code> was wrong (copied from Kroger-family naming)</td></tr>
-    <tr><td>Amazon Fresh</td><td><code>com.amazon.mobile.shopping.web://amazon.com/gp/cart/view.html</code></td>
-        <td>the URL-carrying scheme. Bare <code>amazon://</code> and <code>amzn://</code> do not work</td></tr>
     <tr><td>every other store</td><td>&mdash;</td><td>opens <code>cartUrl</code> in the browser</td></tr>
   </table>
 

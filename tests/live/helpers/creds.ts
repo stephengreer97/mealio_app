@@ -24,7 +24,6 @@ export interface AllCreds {
   walmart?: StoreCreds;
   albertsons?: StoreCreds;
   aldi?: StoreCreds;
-  amazon?: StoreCreds;
   kroger?: StoreCreds & { refreshToken?: string };
 }
 

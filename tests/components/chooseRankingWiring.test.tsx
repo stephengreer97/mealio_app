@@ -158,7 +158,7 @@ describe('MEAL-28 — the choose screen shows the ranked order', () => {
 
 // The describe above drives the SEARCH_RESULT handler, which is the SEQUENTIAL
 // choose path — and only aldi and wegmans take it. Every store with a worker
-// pool (heb, walmart, albertsons, amazon) reaches the choose screen through
+// pool (heb, walmart, albertsons) reaches the choose screen through
 // finishParallelSearch instead, and walmart and albertsons are where most of
 // the measured win comes from. Shipping the ranking on one path and measuring
 // it on the other is exactly the gap this covers.

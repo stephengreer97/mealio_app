@@ -72,11 +72,13 @@ describe('where the user can actually sign in', () => {
     expect(canSignInHere({ url: '', ...HEB })).toBe(false);
   });
 
-  it('works for a store with no rail, where any store page will do', () => {
-    // Amazon Fresh has no quiet page, so the old rule was right there and stays
-    // right: nothing is excluded but the pages that are not this store's.
-    const amazon = { domain: 'amazon.com', railUrl: null };
-    expect(canSignInHere({ url: 'https://www.amazon.com/ap/signin', ...amazon })).toBe(true);
-    expect(canSignInHere({ url: 'https://www.heb.com/', ...amazon })).toBe(false);
+  it('works for a store with no quiet page', () => {
+    // No store ships without a rail today — Amazon Fresh was the last and left
+    // the catalogue on 2026-09-04 — but the mock store has no railUrl, and a
+    // store added before its rail would not either. Nothing is excluded then
+    // but the pages that are not this store's.
+    const noRail = { domain: 'mealiomockstore.vercel.app', railUrl: null };
+    expect(canSignInHere({ url: 'https://mealiomockstore.vercel.app/login', ...noRail })).toBe(true);
+    expect(canSignInHere({ url: 'https://www.heb.com/', ...noRail })).toBe(false);
   });
 });

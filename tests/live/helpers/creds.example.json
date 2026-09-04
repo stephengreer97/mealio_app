@@ -19,18 +19,12 @@
     "email": "test-account@example.com",
     "password": "PLACEHOLDER",
     "cartUrl": "https://www.acmemarkets.com/shop/cart.html",
-    "_note": "Albertsons family — uses ACME login by default. To test other family members, set 'storeId' here."
+    "_note": "Albertsons family \u2014 uses ACME login by default. To test other family members, set 'storeId' here."
   },
   "aldi": {
     "email": "test-account@example.com",
     "password": "PLACEHOLDER",
     "cartUrl": "https://www.aldi.us/cart"
-  },
-  "amazon": {
-    "email": "test-account@example.com",
-    "password": "PLACEHOLDER",
-    "cartUrl": "https://www.amazon.com/cart",
-    "_note": "2FA: if you have OTP-via-email or SMS enabled, the test will pause and prompt you in the terminal."
   },
   "kroger": {
     "email": "test-account@example.com",

@@ -42,7 +42,7 @@ export function isKrogerBrand(storeId: string): boolean {
 
 // Stores supported via in-app WebView cart automation
 export const WEBVIEW_STORE_IDS = new Set([
-  'heb', 'walmart', 'aldi', 'amazon', 'wegmans',
+  'heb', 'walmart', 'aldi', 'wegmans',
   // Albertsons family — all use the same platform
   'albertsons', 'safeway', 'vons', 'jewel_osco', 'shaws', 'acme',
   'tom_thumb', 'randalls', 'pavilions', 'star_market', 'haggen',
@@ -87,7 +87,6 @@ export const BUNDLED_STORES: Store[] = [
   { id: 'acme',           name: 'Acme Markets',        color: '#F04035' },
   { id: 'albertsons',     name: 'Albertsons',          color: '#009ee5' },
   { id: 'aldi',           name: 'ALDI',                color: '#02205F' },
-  { id: 'amazon',         name: 'Amazon Fresh',        color: '#78BD21' },
   { id: 'bakers',         name: "Baker's",             color: '#EE3124' },
   { id: 'balduccis',      name: "Balducci's",          color: '#8D2B1E' },
   { id: 'carrs',          name: 'Carrs',               color: '#E5171D' },

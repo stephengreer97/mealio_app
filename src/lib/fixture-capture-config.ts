@@ -337,59 +337,6 @@ export const FIXTURE_CAPTURE_STORES: Record<string, StoreCaptureConfig> = {
     ],
   },
 
-  'amazon-fresh': {
-    // The bare /ap/signin URL needs OpenID return_to params and shows an
-    // error when hit directly. Land on the Fresh storefront instead — Amazon
-    // surfaces "Hello, sign in" there and handles the auth round-trip on tap.
-    loginUrl: 'https://www.amazon.com/fresh',
-    fixtures: [
-      {
-        file: 'logged-in-home.html',
-        url: 'https://www.amazon.com/fresh',
-        waitFor: '#nav-greeting-name, #nav-logobar-greeting.nav-greeting-recognized',
-        instruction:
-          'The top nav must show a "Hello, <name>" greeting. CHECK_LOGIN_SCRIPT checks for #nav-logobar-greeting carrying the class "nav-greeting-recognized" AND a child <a id="nav-greeting-name"> — both must be in the captured DOM. If you only see "Hello, sign in" the page is logged out.',
-      },
-      {
-        file: 'search-results-tortillas.html',
-        url: 'https://www.amazon.com/s?k=mission+flour+tortillas&i=amazonfresh',
-        waitFor: '[data-component-type="s-search-result"]',
-      },
-      {
-        file: 'cart-with-items.html',
-        url: 'https://www.amazon.com/cart',
-        waitFor: 'body',
-        instruction:
-          'Add at least one Amazon Fresh item to the cart first. This is the cart LANDING page (the "cart of carts" with a collapsed Fresh preview + a "view full cart" link). Capture it as-is.',
-      },
-      {
-        file: 'cart-fresh-full.html',
-        url: 'https://www.amazon.com/cart',
-        waitFor: 'body',
-        instruction:
-          'Add 2+ DIFFERENT Amazon Fresh items to your cart. Tap the cart icon, then on the Amazon Fresh section tap "View full cart" (the cart_expand_link_fresh link) so EVERY item is listed individually with its name and quantity. Capture THAT expanded Fresh cart page (not the collapsed cart-of-carts summary). This is what the cart snapshot reads.',
-      },
-      {
-        file: 'search-results-product-in-cart.html',
-        url: 'https://www.amazon.com/s?k=sour+cream&i=amazonfresh',
-        instruction:
-          'Tap "Add to cart" on one product. The button changes to a stepper. Tap Capture.',
-      },
-      {
-        file: 'search-results-stepper-open.html',
-        url: 'https://www.amazon.com/s?k=sour+cream&i=amazonfresh',
-        suggestedDelayMs: 2000,
-        instruction:
-          'Tap the qty stepper on a product already in cart. Use "Capture in 2s".',
-      },
-      {
-        file: 'search-results-out-of-stock.html',
-        url: 'https://www.amazon.com/s?k=seasonal&i=amazonfresh',
-        optional: true,
-        instruction: 'Find any Out of Stock / Currently Unavailable tile. Tap Capture.',
-      },
-    ],
-  },
 };
 
 export type StoreId = keyof typeof FIXTURE_CAPTURE_STORES;

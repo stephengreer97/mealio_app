@@ -56,8 +56,10 @@ describe('every rail answers every question the engine asks', () => {
     // The whole family, not just the banner that shares its name.
     expect(RAIL_STORES).toContain('safeway');
     expect(RAIL_STORES).toContain('vons');
-    // And not the store that has no rail.
-    expect(RAIL_STORES).not.toContain('amazon');
+    // EVERY store in the catalogue has one as of 2026-09-04, when Amazon Fresh
+    // — the last without — was removed. So this is the whole catalogue, and a
+    // store arriving without a rail has to be a decision someone makes here.
+    expect(RAIL_STORES.length).toBe([...WEBVIEW_STORE_IDS].filter((s) => s !== 'mockstore').length);
   });
 
   for (const id of RAIL_STORES) {

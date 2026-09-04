@@ -73,7 +73,7 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 'login' until LOGIN_STATUS:true flips us into pre-capturing the cart.
   const phaseRef = useRef<'login' | 'cart'>('login');
-  const cartMethodRef = useRef<'url' | 'click' | 'inline' | null>(null);
+  const cartMethodRef = useRef<'url' | 'inline' | null>(null);
   // How many times this capture has injected the count script (MEAL-189).
   // Counted, not latched, and NOT keyed on the URL — see the note in onLoadEnd.
   const cartInjectionsRef = useRef(0);
@@ -120,7 +120,6 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
   const startCartCapture = useCallback(() => {
     const cartPage = scripts?.cartPage;
     const cartUrl = cartPage?.url ?? null;
-    const click = cartPage?.openScript ?? null;
     const countScript = cartPage?.countScript ?? null;
     phaseRef.current = 'cart';
     cartInjectionsRef.current = 0;
@@ -140,15 +139,11 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
       return;
     }
     if (countScript && cartUrl) {
-      // URL cart (HEB, Albertsons family): navigate, then count on load.
+      // Navigate, then count on load. The only store left on this path is the
+      // mock one — every real store has a rail and is answered above.
       cartMethodRef.current = 'url';
       console.log('[Prewarm] probe', storeId, 'cart capture: navigate to', cartUrl);
       setUri(cartUrl + (cartUrl.includes('?') ? '&' : '?') + '_t=' + Date.now());
-    } else if (countScript && click) {
-      // Click cart (Amazon Fresh): click the cart icon, then count on load.
-      cartMethodRef.current = 'click';
-      console.log('[Prewarm] probe', storeId, 'cart capture: click cart icon');
-      webviewRef.current?.injectJavaScript(click);
     } else {
       console.log('[Prewarm] probe', storeId, 'no cart method — reporting logged-in without a baseline');
       finish({ isLoggedIn: true });
@@ -207,7 +202,7 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
         console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — injecting check script');
         webviewRef.current?.injectJavaScript(scripts.checkLoginScript);
       }
-    } else if (cartMethodRef.current === 'url' || cartMethodRef.current === 'click') {
+    } else if (cartMethodRef.current === 'url') {
       // Same skip as the login branch above, and two tickets converge on it.
       //
       // The count scripts REFUSE to answer on a page that is not the cart —

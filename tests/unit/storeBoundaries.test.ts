@@ -43,7 +43,6 @@ const STORE_FILES: Record<string, string[]> = {
   albertsons: ['albertsons.ts', 'albertsons-network.ts'],
   instacart: ['instacart.ts', 'aldi-network.ts'],
   wegmans: ['wegmans.ts', 'wegmans-network.ts'],
-  amazon: ['amazon-fresh.ts'],
   mockstore: ['mockstore.ts'],
 };
 
