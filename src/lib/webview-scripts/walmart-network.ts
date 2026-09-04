@@ -251,8 +251,17 @@ const WM_PRELUDE = `
       outOfStock: it.canAddToCart === false || /out of stock|unavailable/i.test(avail),
       preferences: null,
       price: price,
-      // THE OFFER IS THE IDENTIFIER. The write names offerId and sends
-      // usItemId EMPTY, which is measured, not assumed.
+      // THE OFFER IS THE IDENTIFIER, and it is not a choice.
+      //
+      // usItemId is the stable PRODUCT and offerId is a seller-and-price OFFER,
+      // so the product id looks like the better thing to save. The write will
+      // not take it: MEASURED 2026-09-03, updateItems answers "offerId is
+      // invalid" for a payload carrying usItemId and a real lineItemId, and the
+      // same for an empty offerId. The site itself sends usItemId EMPTY.
+      //
+      // Both are saved on a chosen product all the same. If an offer ever
+      // retires, the write fails, the cart disagrees and the row reaches review
+      // — and the saved usItemId is what a re-resolve would start from.
       productId: it.offerId != null ? String(it.offerId) : null,
       skuId: it.usItemId != null ? String(it.usItemId) : null,
       isWeightItem: WM.soldByWeight(it),

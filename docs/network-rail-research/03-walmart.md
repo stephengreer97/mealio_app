@@ -158,3 +158,36 @@ The pragmatic fallback: the hashes observed above are real and can be pinned in
 the rail as constants with an expiry behaviour — on a 404/400 from a pinned
 hash, hand over to the assisted path rather than guessing. That is worse than
 harvesting but it ships.
+
+
+## The identifier — MEASURED, 2026-09-03
+
+Stephen: "if usItemId is the stable key, then why are we keying on offerId".
+
+Because the write will not take anything else.
+
+| | |
+|---|---|
+| `usItemId` | the PRODUCT. Stable. |
+| `offerId` | a specific OFFER — seller and price. Can retire. |
+
+`updateItems` was called with `usItemId` populated, a real `lineItemId`, and no
+`offerId`; and again with `offerId: ""`. Both answered **`"offerId is invalid"`**
+with the cart unchanged. Walmart's own site sends `usItemId` EMPTY on every add.
+
+So offerId is not a preference, it is the only identifier this endpoint acts on.
+Both ids are saved on a chosen product regardless: if an offer retires the write
+fails, the cart disagrees, and the row reaches review — and the saved usItemId is
+where a re-resolve (`/ip/<usItemId>` carries the current offer in its
+`__NEXT_DATA__`) would start. Not built: no offer has been seen to retire yet,
+and every page fetch on this store costs bot-defence budget.
+
+## Recovering from a block — MEASURED
+
+A challenged session does NOT recover by waiting or by more fetches: a `fetch`
+never runs PerimeterX's JavaScript, which is what issues a fresh decision cookie.
+Loading `https://www.walmart.com/` in the WebView once cleared it immediately
+(title back to "Walmart | Save Money. Live better.", `__NEXT_DATA__` present).
+
+Which is convenient: the assisted hand-over a blocked run already performs puts
+the user on a real store page, so the act of degrading also repairs the session.
