@@ -1160,6 +1160,55 @@ export function splitCartLeftover(
  * name; any further unit the cart holds under that same title is still nothing's
  * claim and is still reported.
  */
+/**
+ * The items this run ATTEMPTED and was told it could not add.
+ *
+ * For the over-add check, and it is the only honest answer to "who put this
+ * line in the cart". A definitive failure — out of stock, no results, needs a
+ * weight — routes out of the qty matching entirely (see reconcileParallelAdd),
+ * so it contributes NOTHING to `intended`. Any cart line it left behind is then
+ * a line nothing accounts for, and the done screen says "your cart has 1 item
+ * Mealio didn't intend to add".
+ *
+ * Mealio intended it. It asked for it by name.
+ *
+ * MEASURED, Albertsons, Pixel, 2026-09-04. Six items, five written. The sixth:
+ *
+ *   10:38:06  cart before: 44 units, 25 lines, no Sargento cheese
+ *   10:38:23  network add 'Sargento Shredded 4 Cheese...' failed: out_of_stock
+ *   10:38:25  cart now holds it: qty 1, available: false
+ *   10:38:26  reconcile: OVER-ADD detected [Sargento Shredded 4 Cheese...]
+ *
+ * The store ACCEPTED the write and flagged the line unavailable — the rail's
+ * own script says so in as many words ("the store added it but marked it
+ * unavailable") — while reconcileParallelAdd's comment says an out-of-stock item
+ * "is genuinely not in the cart". Two files, one fact, opposite beliefs: the
+ * shape of [[one-stores-rule-is-not-everyones]].
+ *
+ * ONE unit per failed attempt, no more, and that cap is what keeps this from
+ * blinding the double-add check: a SUCCESSFUL item is already accounted for in
+ * `intended` at its full requested quantity, so an extra unit of it still
+ * surfaces. Only the failures are explained here, and only once each.
+ */
+export function attemptedFailureNames(
+  attempts: AttemptedAdd[],
+  definiteFailures: { index: number }[],
+): string[] {
+  const names: string[] = [];
+  for (const f of definiteFailures) {
+    const a = attempts[f.index];
+    // The store's product title where the write had one, else what we searched
+    // for. Both are compared with normalizeName, which is what the cart rows
+    // are matched by.
+    // The store's product title where the write reported one, else the name we
+    // intended. Both are compared with normalizeName, which is what the cart
+    // rows are matched by.
+    const name = a?.report?.productName || a?.name;
+    if (name) names.push(String(name));
+  }
+  return names;
+}
+
 export function dropExplainedOverAdds(over: OverAdd[], explainedRows: string[]): OverAdd[] {
   if (explainedRows.length === 0) return over;
   const remaining = over.map((o) => ({ ...o }));

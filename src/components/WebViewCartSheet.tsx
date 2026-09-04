@@ -58,7 +58,7 @@ import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { AddConfirmation, confirmDetail } from '../lib/cart-confirmation';
-import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
+import { attemptedFailureNames, auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { sameProductBarSize, scoreMatch } from '../lib/webview-scripts/_scoring';
 import { challengeMayTakeTheScreen } from '../lib/cart-challenge';
@@ -4947,7 +4947,18 @@ export default function WebViewCartSheet({
             // stay the exact residue of its claim (credited + overAddUnits ===
             // cartUnits) — the row is still consumed as nothing's claim, it just
             // isn't reported as unwanted on top of being reported as unverified.
-            const unexplainedOver = dropExplainedOverAdds(outcome.overAdds, unverifiedCartNamesRef.current);
+            // EXPLAINED ALSO BY WHAT THIS RUN TRIED AND WAS REFUSED.
+            //
+            // A definitive failure never enters the qty matching, so it accounts
+            // for nothing — and a store that ACCEPTS the write and flags the line
+            // unavailable (Albertsons does exactly that) leaves a row nothing
+            // explains. Measured 2026-09-04: "your cart has 1 item Mealio didn't
+            // intend to add", naming the cheese Mealio had asked for by name
+            // ninety seconds earlier. See attemptedFailureNames.
+            const unexplainedOver = dropExplainedOverAdds(outcome.overAdds, [
+              ...unverifiedCartNamesRef.current,
+              ...attemptedFailureNames(attempts, outcome.definiteFailures),
+            ]);
             if (unexplainedOver.length > 0) {
               const lockedName = getStores().find((s) => s.id === lockedStoreIdRef.current)?.name ?? storeName;
               const list = unexplainedOver.map(overAddLabel).join(', ');
