@@ -1343,6 +1343,9 @@ export default function WebViewCartSheet({
   /** This run went down the network route. The top-up reads it to decide whether
    *  it may stay on that rail. */
   const netRunRef = useRef(false);
+  /** The in-flight top-up is a REVIEW PICK, not the reconcile's own correction.
+   *  Its failure must not offer the review again — see navigateToAddItem. */
+  const netReviewAddRef = useRef(false);
   /** A network top-up is in flight; its results finalize the run. */
   const netTopUpRef = useRef<Map<number, ConsolidatedIngredient> | null>(null);
   /** Assigned once finishParallelAdd exists, so the add deadline can finalize
@@ -2627,12 +2630,15 @@ export default function WebViewCartSheet({
       'needs_preference', 'search_unanswered', 'line_already_present',
     ]);
     const toReview: number[] = [];
+    // ...unless the user has already reviewed this one — see netReviewAddRef.
+    const fromReview = netReviewAddRef.current;
+    netReviewAddRef.current = false;
     netResultsRef.current.forEach((r, idx) => {
       if (!r.success) {
         stillMissing.push({
           name: r.productName || '', success: false, reason: r.reason || 'top_up_failed',
         });
-        if (r.reason !== 'quantity_limit_reached') toReview.push(idx);
+        if (!fromReview && r.reason !== 'quantity_limit_reached') toReview.push(idx);
       }
     });
     // Built the same way the reconcile builds its own review cards, from the
@@ -2791,6 +2797,7 @@ export default function WebViewCartSheet({
       setCapReached([]);
       netRunRef.current = false;
       netTopUpRef.current = null;
+      netReviewAddRef.current = false;
       netMatchedRef.current = new Map();
       setManualQueue([]);
       setManualIdx(0);
@@ -3529,6 +3536,15 @@ export default function WebViewCartSheet({
       if (script) {
         console.log(`[Cart ${ts()}]`, 'review add over the network:', item.productName, 'x', item.qty);
         netTopUpRef.current = new Map([[idx, item as unknown as ConsolidatedIngredient]]);
+        // THE USER HAS ALREADY REVIEWED THIS ONE. A review pick is shaped as a
+        // top-up because that is what it is, and it finishes through the same
+        // netFinalize — which now routes a failed top-up back to review. Without
+        // this flag that is a LOOP: pick a substitute, the store refuses it, the
+        // sheet offers the review again, and the only way out is to skip.
+        //
+        // A failure here lands on the done screen instead, which is the honest
+        // end: the user has already been given the choice this run has to offer.
+        netReviewAddRef.current = true;
         netResultsRef.current = new Map();
         netWriteFanoutRef.current = new Map();
         netActiveRef.current = true;

@@ -224,3 +224,41 @@ describe('an item the store would not add', () => {
     expect(view.queryByText(/review \d+ ingredient/i)).toBeNull();
   });
 });
+
+describe('and the review fires once, not in a loop', () => {
+  // A review pick is written as a TOP-UP — it is the reconcile's own correction
+  // in every respect but who chose it — so it finishes through the same
+  // netFinalize that now routes a failed top-up back to review.
+  //
+  // Without a guard that is a loop: pick a substitute, the store refuses it,
+  // the sheet offers the review again, and the only way out is to skip. The
+  // user has already been given the choice this run has to offer, so a failure
+  // there lands on the done screen.
+  it('a substitute the store also refuses does not re-open the review', async () => {
+    const view = await shortThenRefused('cart_not_incremented');
+    act(() => { fireEvent.press(view.getByText(/review \d+ ingredient/i)); });
+    // Pick the candidate the search found, with a quantity.
+    const plus = view.queryAllByText('+')[0];
+    expect(plus).toBeTruthy();
+    act(() => { fireEvent.press(plus); });
+    const addOnly = view.queryByText(/add to cart only/i);
+    expect(addOnly).toBeTruthy();
+    act(() => { fireEvent.press(addOnly!); });
+    // The store refuses the substitute too.
+    act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify({
+          type: 'NET_ADD_RESULT', idx: 0, name: 'Sour Cream', success: false,
+          productId: 'p1', skuId: 's1', reason: 'cart_not_incremented' }) },
+      });
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify({
+          type: 'NET_ADD_DONE', wrote: 0, count: 1, cartBefore: [], cartAfter: [] }) },
+      });
+    });
+    act(() => { jest.advanceTimersByTime(30_000); });
+    await act(async () => {});
+    // No second offer. The run ends where the user can see what happened.
+    expect(view.queryByText(/review \d+ ingredient/i)).toBeNull();
+  });
+});
