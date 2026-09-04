@@ -399,7 +399,10 @@ describe('HEB MEAL-202: many terms, one page, no navigation', () => {
 });
 
 describe('HEB MEAL-202: the store\'s own limits', () => {
-  const addStub = (armByProduct: Record<string, string>, cartLines: unknown[]) => [
+  const addStub = (
+    armByProduct: Record<string, string | { arm: string; code?: string; message?: string }>,
+    cartLines: unknown[],
+  ) => [
     '(function () {',
     '  window.__writes = [];',
     '  var ARMS = ' + JSON.stringify(armByProduct) + ';',
@@ -430,7 +433,11 @@ describe('HEB MEAL-202: the store\'s own limits', () => {
     '      for (var w = 0; w < sent.length; w++) {',
     '      var vars = sent[w];',
     '      window.__writes.push(vars);',
-    '      var arm = ARMS[vars.productId] || "Cart";',
+    '      var spec = ARMS[vars.productId] || "Cart";',
+    // An entry may be a bare arm name, or { arm, code, message } for the error
+    // arms — which is what lets a test say what the STORE said, not just that it
+    // said no.
+    '      var arm = (spec && spec.arm) ? spec.arm : spec;',
     // The cart REFLECTS an accepted write, which a real one does. Without this
     // the stub accepts every write and then reports a cart that never changed,
     // and the rail's own verification -- accepted but absent, write it once more
@@ -447,8 +454,10 @@ describe('HEB MEAL-202: the store\'s own limits', () => {
     '          estimatedWeight: null, product: { id: pid, fullDisplayName: "X" },',
     '          sku: { id: String(vars.skuId) } });',
     '      }',
-    '      answers[body.operationName === "cartItemV2" ? "single" : ("a" + w)] =',
-    '        { __typename: arm, id: "c1", message: "Quantity limit reached." };',
+    '      var ans = { __typename: arm, id: "c1",',
+    '        message: (spec && spec.message) ? spec.message : "Quantity limit reached." };',
+    '      if (spec && spec.code) ans.code = spec.code;',
+    '      answers[body.operationName === "cartItemV2" ? "single" : ("a" + w)] = ans;',
     '      }',
     '      if (body.operationName === "cartItemV2") {',
     '        return Promise.resolve({ ok: true, status: 200, text: function () {',
@@ -508,6 +517,73 @@ describe('HEB MEAL-202: the store\'s own limits', () => {
     runner.clearMessages();
     await runner.inject(REPORT_WRITES);
     expect((await runner.waitForMessage('WRITES', 10_000)).writes).toHaveLength(0);
+  });
+
+  itWithFixture('logged-in-home.html', 'an unavailable item is out of stock, not a generic error', async (runner) => {
+    // Stephen's run, 2026-09-04 12:09. H-E-B refused the write and SAID WHY:
+    //
+    //   name 'Morton Salt, 26 oz'  reason 'error_arm'
+    //   detail 'This item is out of stock. Try searching for a different item.'
+    //
+    // error_arm is not a definitive failure, so the reconcile sent it to RETRY.
+    // The retry hit the identical wall and the run finished telling him "could
+    // not add Morton Salt" with no review card, no alternatives, and nothing he
+    // could do — while the store's own message was advising exactly the thing
+    // the review screen exists for.
+    await runner.inject(addStub({
+      '88955': {
+        arm: 'AddItemToCartV2Error', code: 'OUT_OF_STOCK',
+        message: 'This item is out of stock. Try searching for a different item.',
+      },
+    }, []));
+    await runner.inject(buildHebNetworkAddBatchScript([{
+      idx: 0, productId: '88955', skuId: '2460001001', quantity: 1,
+      name: 'Morton Salt, 26 oz',
+    }])!);
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 15_000);
+    expect(res.success).toBe(false);
+    // out_of_stock is a DEFINITIVE failure: it routes to review with the
+    // ingredient-name candidates, instead of round-tripping the same refusal.
+    expect(res.reason).toBe('out_of_stock');
+    // The store's own words and its code both reach us — the code was selected
+    // by the mutation from the start and had never been read.
+    expect(res.code).toBe('OUT_OF_STOCK');
+    expect(res.detail).toMatch(/out of stock/i);
+  });
+
+  itWithFixture('logged-in-home.html', 'every flavour of UNAVAILABLE goes the same way', async (runner) => {
+    // H-E-B's own bundles carry the vocabulary: OUT_OF_STOCK, UNAVAILABLE,
+    // UNAVAILABLE_FOR_STORE / _TIMESLOT / _DELIVERY / _PICKUP,
+    // ITEM_UNAVAILABLE_DUE_TO_BLACKOUT, UNAVAILABLE_DUE_TO_OUTAGE. Every one of
+    // them means the same thing to a shopper — not this product, today — and
+    // every one of them is answerable by picking something else.
+    await runner.inject(addStub({
+      '1': { arm: 'AddItemToCartV2Error', code: 'UNAVAILABLE_FOR_STORE', message: 'no' },
+      '2': { arm: 'AddItemToCartV2TimeslotError', code: 'UNAVAILABLE_FOR_TIMESLOT', message: 'no' },
+      '3': { arm: 'ITEM_UNAVAILABLE_DUE_TO_BLACKOUT', code: 'ITEM_UNAVAILABLE_DUE_TO_BLACKOUT', message: 'no' },
+    }, []));
+    await runner.inject(buildHebNetworkAddBatchScript([
+      { idx: 0, productId: '1', skuId: 's1', quantity: 1, name: 'A' },
+      { idx: 1, productId: '2', skuId: 's2', quantity: 1, name: 'B' },
+      { idx: 2, productId: '3', skuId: 's3', quantity: 1, name: 'C' },
+    ])!);
+    await runner.waitForMessage('NET_ADD_DONE', 20_000);
+    const results = runner.messagesOfType('NET_ADD_RESULT') as Array<Record<string, unknown>>;
+    expect(results.map((r) => r.reason)).toEqual(['out_of_stock', 'out_of_stock', 'out_of_stock']);
+  });
+
+  itWithFixture('logged-in-home.html', 'and a refusal that is NOT about availability still is not', async (runner) => {
+    // The other half. A cap, a timeslot conflict, a payment problem — those are
+    // not answered by picking a different product, and calling them out of stock
+    // would send the user to a review screen to solve the wrong problem.
+    await runner.inject(addStub({
+      '1': { arm: 'AddItemToCartV2Error', code: 'ALCOHOL_LIMIT', message: 'Too much wine.' },
+    }, []));
+    await runner.inject(buildHebNetworkAddBatchScript([
+      { idx: 0, productId: '1', skuId: 's1', quantity: 1, name: 'A' },
+    ])!);
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 15_000);
+    expect(res.reason).toBe('error_arm');
   });
 
   itWithFixture('logged-in-home.html', 'sends a chosen purchase preference, and omits it when there is none', async (runner) => {

@@ -622,6 +622,7 @@ ${CART_READ_FN}
     { reason: 'preference_line_ambiguous' },
     { reason: 'quantity_limit_reached' },
     { reason: 'error_arm' },
+    { reason: 'out_of_stock' },
     { reason: 'unexpected_shape' },
     { reason: 'threw' },
     { reason: 'blocked' },
@@ -780,11 +781,16 @@ ${CART_READ_FN}
   function applyOne(p, data, why, detail) {
     var it = p.it;
     if (why) { report(it, false, why, detail || null); return; }
-    var arm = null, msg = null;
+    var arm = null, msg = null, code = null;
     try {
       var a = data.addItemToCartV2;
       arm = a && a.__typename;
       msg = a && a.message ? String(a.message).slice(0, 160) : null;
+      // The mutation has ALWAYS selected this and nothing has ever read it.
+      // AddItemToCartV2Error carries a code field; the timeslot arm aliases its
+      // own code to errorCode, which is why both are checked. (No backticks in
+      // this file: it is one template literal, and a backtick ends it.)
+      code = a && (a.code || a.errorCode) ? String(a.code || a.errorCode) : null;
     } catch (e) {}
     // AddOnsCart wraps a cart -- the item went in. Reading it as a failure would
     // send the caller on to add the same product a second way.
@@ -796,14 +802,44 @@ ${CART_READ_FN}
     // anyway.
     var ok = arm === 'Cart' || arm === 'AddOnsCart';
     if (ok) { wrote++; accepted.push({ it: it, want: p.want }); }
+    // UNAVAILABLE IS OUT OF STOCK, and the difference is everything the user
+    // can do about it.
+    //
+    // MEASURED, Stephen's H-E-B run, 2026-09-04 12:09:
+    //   name 'Morton Salt, 26 oz'  reason 'error_arm'
+    //   detail 'This item is out of stock. Try searching for a different item.'
+    //
+    // The store said so in its own words and we filed it as a generic error
+    // arm. error_arm is not a definitive failure, so the reconcile sent the item
+    // to RETRY; the retry hit the identical wall, and the run finished telling
+    // him "could not add Morton Salt" with no review card, no alternatives and
+    // nothing to do. out_of_stock routes to review, which is where the store's
+    // own advice -- try a different item -- can actually be taken.
+    //
+    // On the CODE first, because it is the machine-readable field and the site's
+    // own bundles carry the vocabulary: OUT_OF_STOCK, UNAVAILABLE,
+    // UNAVAILABLE_FOR_STORE / _TIMESLOT / _DELIVERY / _PICKUP,
+    // ITEM_UNAVAILABLE_DUE_TO_BLACKOUT, UNAVAILABLE_DUE_TO_OUTAGE. Every one of
+    // them means the same thing to a shopper: not this product, today. The
+    // message is the fallback, for an arm that carries no code.
+    var unavailable = !ok && (
+      (code && /OUT_OF_STOCK|UNAVAILABLE/i.test(code))
+      || (!code && msg && /out of stock|unavailable|not available/i.test(msg)));
     // The sent quantity rides along so a clamped add is visible as a SHORT add
     // rather than passing for a full one -- the reconcile's own short-add
     // detection then reports it to the user.
     post({ type: 'NET_ADD_RESULT', idx: it.idx, name: it.name, productId: it.productId,
            skuId: it.skuId, asked: it.quantity, sent: p.want, base: p.base,
            preferenceId: it.purchasePreferenceId || null,
-           success: ok, reason: ok ? null : (arm ? 'error_arm' : 'unexpected_shape'),
-           detail: msg || null });
+           success: ok,
+           reason: ok ? null
+             : unavailable ? 'out_of_stock'
+             : arm ? 'error_arm' : 'unexpected_shape',
+           // The store's own words reach the user through the review card, and
+           // its code reaches the funnel — this was the one field that could
+           // have told us which errors are worth routing and it was never
+           // posted.
+           detail: msg || null, code: code || null, arm: arm || null });
   }
 
   // One lane. The per-item checks only read the cart snapshot we already hold,
