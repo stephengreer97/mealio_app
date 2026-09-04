@@ -81,6 +81,18 @@ carried as the one store Mealio cannot add to. Every store here now has a rail; 
 production went with it, and "assisted" is now a state a store passes through (rail off, or unable to
 answer) rather than what a store IS.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<p><b>2026-09-04 &mdash; the cart-query rail is deleted.</b> <code>heb-cart-query.ts</code> had been
+unreachable since the H-E-B selectors and login check went: its only importer in src was
+<code>heb.ts</code>, which lost the import that day. 1,299 lines of shipped-but-dead code, holding
+the LAST <code>querySelector</code> in the codebase. MEAL-14's capability is superseded rather than
+lost &mdash; <code>heb-network-search</code> reads the cart before and after its own write and
+verifies each line against it.</p>
+<p>What remains of DOM access anywhere: ALDI string-searching
+<code>document.documentElement.innerHTML</code> for a shopId (with a fetch fallback), and Walmart
+doing an <code>indexOf</code> for <code>&lt;script id="__NEXT_DATA__"</code> in a body it fetched
+itself. Neither is a selector and neither is on the add path.</p>
+</div>
 </header>
 
 <div class="notes" style="margin-top:0">

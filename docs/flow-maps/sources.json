@@ -27,7 +27,6 @@
       "title": "H-E-B",
       "sources": [
         "src/lib/webview-scripts/heb.ts",
-        "src/lib/webview-scripts/heb-cart-query.ts",
         "src/lib/automation-config/schema.ts",
         "src/lib/automation-config/decisions.ts",
         "src/lib/cart-reconcile.ts",
