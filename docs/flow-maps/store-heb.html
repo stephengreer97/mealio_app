@@ -9,6 +9,17 @@
   <h1>H-E-B add-to-cart automation</h1>
   <div class="sub">The path a run actually takes, read off <code>WebViewCartSheet.tsx</code>,
   <code>automation-config/</code>, <code>webview-scripts/heb.ts</code> and <code>cart-reconcile.ts</code>.</div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<h3>2026-09-04</h3>
+<p>H-E-B's DOM login check is gone &mdash; the one that clicked the profile icon and then polled the
+account panel's text for the words "log out" for eight seconds &mdash; along with its selector
+table. The rail's session probe is the only answer, with the storefront-reload repair behind it
+rather than a second opinion read off a page.</p>
+<p>The store's own precondition moved onto its rail as <code>addRequires</code>:
+<code>cartSkuConfirm</code> is what puts the cart query in front of the write, and without it this
+store's add cannot be checked. It used to be <code>lockedStoreId !== 'heb'</code> written into the
+cart engine &mdash; one store's rule in the code path all five run through.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b> — the state machine</span>

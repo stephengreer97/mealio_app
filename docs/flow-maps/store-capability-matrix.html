@@ -11,6 +11,15 @@
   <code>automation-config/schema.ts</code>, <code>webview-scripts/cart-count.ts</code> and the
   defaults in <code>WebViewCartSheet.tsx</code>. Where a comment and the code disagree, the code
   is what is listed and the disagreement is named at the bottom.</div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<h3>No DOM login check anywhere a rail exists (2026-09-04)</h3>
+<p>Every rail store's page-reading login check is deleted, and nothing falls back to one: a store
+with two ways to answer "who is signed in" has no way to tell you which answer you got. A session
+that cannot answer now asks the SITE &mdash; one load of the real storefront, then the same probe
+again on that page, for up to 30s &mdash; and only hands the user a sign-in screen if that fails.
+<b>Amazon Fresh is the exception and the only one:</b> it has no rail, so its check is primary
+rather than a fallback.</p>
+</div>
 </header>
 
 <div class="notes" style="margin-top:0">

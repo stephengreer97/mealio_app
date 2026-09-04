@@ -208,7 +208,10 @@ flowchart LR
     ASSIST --> A1["one search URL per ingredient"]
     A1 --> A2(["the user adds, taps Next"])
 
-    S1 -.->|"cannot answer"| ASSIST
+    S1 -.->|"CANNOT ANSWER<br/>(not the same as signed out)"| REPAIR(["<b>ask the site to fix itself</b><br/><i>load the real storefront — the rail sits on a<br/>quiet page precisely because it runs none of<br/>the site's JavaScript, which is also why an<br/>unbootstrapped session stays that way. then<br/>re-ask on that page every 2s for up to 30s,<br/>ONE ask pending however many answers arrive,<br/>with the login-check deadline re-armed each<br/>time. no DOM check behind it since 2026-09-04</i>"])
+    REPAIR --> S1
+    REPAIR -.->|"still nothing after 30s"| LOGIN
+    REPAIR --- REPAIRWHY{{"Budgeted in TIME, not in asks. The first version allowed three asks:<br/>the storefront's own load events spent two of them inside 900ms, on a<br/>Wegmans page whose MSAL took NINETEEN seconds to mint a token. The repair<br/>was over 3.4s in, the login check timed out, and a signed-in user was shown<br/>a sign-in screen one second before their store said they were signed in.<br/>Measured on the Pixel, 2026-09-04."}}
     S2 -.->|"any row that reaches review"| REV(["that item &rarr; review,<br/><i>and asked again by INGREDIENT name —<br/>EVERY unmatched row, not only the empty<br/>ones. merged with what the product-name<br/>search found, deduped by product id,<br/>ranked against the ingredient</i>"])
     REV --- REVWHY{{"Near-variants used to be treated as the better offer, and they are —<br/>while the product still exists. When it does not they are other sizes<br/>of a discontinued line, and a row with two poor ones is no better<br/>served than a row with none. It only LOOKS better served.<br/>Merged rather than swapped: swapping was safe only while this ran<br/>for rows that had nothing to lose."}}
     S3 -.->|"no cart baseline"| ASSIST
