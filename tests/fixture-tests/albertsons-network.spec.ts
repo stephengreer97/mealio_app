@@ -955,14 +955,26 @@ describe('an out-of-stock item the store accepts anyway', () => {
       '    if (String(url).indexOf("/cart/customer/") !== -1) {',
       '      return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body()); } });',
       '    }',
-      // EVERY line in the batch, and a qty of 0 REMOVES — which is what the
-      // store's own stepper does when you take the last one out. The undo is
-      // checked against this, and against a store that will not let go (see
-      // "says so honestly" below).
+      // MODELLED ON THE REAL STORE, measured 2026-09-04 against Stephen's cart:
+      //
+      //   POST   cartItemsList [{itemId, qty: 0}]  -> 400, line still there
+      //   DELETE /cart/items, add-shaped body      -> 200, line gone
+      //
+      // A quantity of zero is NOT how this store removes anything, so the stub
+      // refuses it the way the store does. Without that, a POST-with-zero
+      // implementation passes these tests and fails on a phone.
       '    var sent = JSON.parse(init.body).cartItemsList || [];',
+      '    var isDelete = String(init.method || "POST").toUpperCase() === "DELETE";',
+      '    if (isDelete) {',
+      '      for (var d = 0; d < sent.length; d++) delete window.__lines[sent[d].itemId];',
+      '      return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body()); } });',
+      '    }',
       '    for (var i = 0; i < sent.length; i++) {',
-      '      if (Number(sent[i].qty) <= 0) delete window.__lines[sent[i].itemId];',
-      '      else window.__lines[sent[i].itemId] = sent[i].qty;',
+      '      if (Number(sent[i].qty) <= 0) {',
+      '        return Promise.resolve({ status: 400, json: function () {',
+      '          return Promise.resolve({ errorCode: "OSMS-CART-0009" }); } });',
+      '      }',
+      '      window.__lines[sent[i].itemId] = sent[i].qty;',
       '    }',
       '    return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body()); } });',
       '  };',
@@ -1050,10 +1062,8 @@ describe('an out-of-stock item the store accepts anyway', () => {
       '(function () {',
       '  var prior = window.fetch;',
       '  window.fetch = function (url, init) {',
-      '    var isWrite = init && init.body && String(init.body).indexOf("cartItemsList") !== -1;',
-      '    var sent = isWrite ? (JSON.parse(init.body).cartItemsList || []) : [];',
-      '    var zeroing = sent.length > 0 && Number(sent[0].qty) <= 0;',
-      '    if (!zeroing) return prior.apply(window, arguments);',
+      '    var isDel = String((init && init.method) || "POST").toUpperCase() === "DELETE";',
+      '    if (!isDel) return prior.apply(window, arguments);',
       '    return Promise.resolve({ status: 200, json: function () {',
       '      return Promise.resolve({ carts: [{ cartItemsList: [',
       '        { itemId: "184040105", qty: 1, name: "Mist Winter Pine - Each", isAvailable: false }',

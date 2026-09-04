@@ -1422,55 +1422,88 @@ ${ALB_PRELUDE}
   // whole cart, so the outcome is READ rather than assumed, and every item says
   // in its own detail whether the line went.
   if (undo.length > 0) {
-    var undoLines = [], undoOk = false, undoWhy = 'no_response';
+    // TWO SHAPES, and which one depends on whether the cart held this line
+    // before the run.
+    //
+    //   held 0  -- this write created the line, so it is DELETED.
+    //   held N  -- the user already had N, so it is SET BACK to N with an
+    //              ordinary quantity write. We undo our own write and nothing
+    //              else, which is the same rule the write itself follows.
+    //
+    // MEASURED against the live store, 2026-09-04, on Stephen's own dead line
+    // (Sargento Shredded 4 Cheese, qty 1, isAvailable false):
+    //
+    //   POST   cartItemsList [{itemId, qty: 0}]      -> 400, line still there
+    //   DELETE /cart/items/{id}                      -> 404
+    //   POST   /cart/items/delete                    -> 404
+    //   DELETE /cart/items, body {itemIds:[id]}      -> 400 OSMS-CART-0009
+    //   DELETE /cart/items, ADD-SHAPED body          -> 200, LINE GONE
+    //
+    // A quantity of zero is not how this store removes anything: it answers 400
+    // and keeps the line. The DELETE takes the same body the add takes, and the
+    // 400s along the way were all one thing -- serviceType. The gateway says so
+    // itself ("Invalid request - Service Type should be DUG, D...") and
+    // __albCartUrl already sends the right one.
+    var undoRemove = [], undoRestore = [];
     for (var d0 = 0; d0 < undo.length; d0++) {
-      undoLines.push({ itemId: undo[d0].itemId, qty: undo[d0].qty });
+      (undo[d0].qty > 0 ? undoRestore : undoRemove).push(undo[d0]);
     }
-    var uCtl = new AbortController();
-    var uTo = setTimeout(function () { uCtl.abort(); }, 15000);
-    var ur = null;
-    try {
-      ur = await fetch(__albCartUrl(), {
-        method: 'POST', credentials: 'include', headers: __albCartHeaders(A.cartKey),
-        body: JSON.stringify({
-          preferenceList: [{ cartCategory: '1P_WINE' }],
-          cartItemsList: undoLines,
-          cartCategory: 'abs'
-        }),
-        signal: uCtl.signal
-      });
-      clearTimeout(uTo);
-      undoWhy = 'status ' + ur.status;
-    } catch (e) { clearTimeout(uTo); }
-    var uAfter = {};
-    if (ur && ur.status === 200) {
+    var undoOk = true, undoWhy = null, uAfter = {}, sawCart = false;
+
+    var undoCall = async function (method, rows) {
+      var lines = [];
+      for (var i = 0; i < rows.length; i++) lines.push({ itemId: rows[i].itemId, qty: rows[i].qty });
+      var ctl = new AbortController();
+      var to = setTimeout(function () { ctl.abort(); }, 15000);
       try {
-        var uj = await ur.json();
-        var ul = ((uj.carts || [])[0] || {}).cartItemsList || [];
+        var r = await fetch(__albCartUrl(), {
+          method: method, credentials: 'include', headers: __albCartHeaders(A.cartKey),
+          body: JSON.stringify({
+            preferenceList: [{ cartCategory: '1P_WINE' }],
+            cartItemsList: lines,
+            cartCategory: 'abs'
+          }),
+          signal: ctl.signal
+        });
+        clearTimeout(to);
+        if (r.status !== 200) { undoOk = false; undoWhy = method + ' status ' + r.status; return; }
+        var j = await r.json();
+        var ul = ((j.carts || [])[0] || {}).cartItemsList || [];
+        // The whole cart comes back, so the outcome is READ, not assumed.
+        uAfter = {};
         for (var u1 = 0; u1 < ul.length; u1++) uAfter[String(ul[u1].itemId)] = Number(ul[u1].qty);
-        undoOk = true;
-      } catch (e) { undoWhy = 'unparseable'; }
-    }
+        sawCart = true;
+      } catch (e) {
+        clearTimeout(to);
+        undoOk = false;
+        undoWhy = method + ' ' + String(e).slice(0, 60);
+      }
+    };
+
+    // DELETE first: a restore that follows it re-reads the cart, so the final
+    // snapshot reflects both.
+    if (undoRemove.length > 0) await undoCall('DELETE', undoRemove);
+    if (undoRestore.length > 0) await undoCall('POST', undoRestore);
+
     for (var d1 = 0; d1 < undo.length; d1++) {
       var uItem = undo[d1];
-      // The cart's own answer, not ours: absent means removed, and a number
-      // means the line is still there holding that many.
       var left = Object.prototype.hasOwnProperty.call(uAfter, uItem.itemId)
         ? uAfter[uItem.itemId] : 0;
-      var gone = undoOk && left <= uItem.qty;
+      var gone = sawCart && left <= uItem.qty;
       base.lines[uItem.itemId] = left;
       var why = gone
         ? (uItem.qty > 0
             ? 'the store marked it unavailable; put back to the ' + uItem.qty + ' you already had'
             : 'the store marked it unavailable; taken back out of your cart')
         : 'the store marked it unavailable and would not let go of the line ('
-            + (undoOk ? 'cart still holds ' + left : undoWhy) + ')';
+            + (sawCart ? 'cart still holds ' + left : (undoWhy || 'no response')) + ')';
       for (var d2 = 0; d2 < uItem.members.length; d2++) {
         report(uItem.members[d2], false, 'out_of_stock', why);
       }
     }
     post({ type: 'NET_UNDO_DONE', count: undo.length,
-           removed: undoLines.length, ok: undoOk, why: undoOk ? null : undoWhy });
+           removed: undoRemove.length, restored: undoRestore.length,
+           ok: undoOk && sawCart, why: (undoOk && sawCart) ? null : (undoWhy || 'no_cart') });
   }
 
   var afterCart = await __albReadCart(10000);
