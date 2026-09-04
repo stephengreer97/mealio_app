@@ -194,112 +194,17 @@ function buildCheckLoginScript(): string {
 //
 // Each worker is instantiated with its workerId baked into the script body.
 
-function buildWegmansWorkerExtractBody(): string {
-  const s = sel();
-  return `
-(function() {
-  function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
-  function dbg(payload) {
-    try { window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({ type: 'WORKER_DEBUG', workerId: WORKER_ID }, payload))); } catch(_) {}
-  }
-  function getNameFromTile(tile) {
-    var h3 = tile.querySelector('h3[data-testid="-baseHeading"]');
-    if (!h3) return null;
-    var t = (h3.textContent || '').trim().replace(/\\s+/g, ' ');
-    return t.length > 0 ? t : null;
-  }
-  function findCard(el) {
-    var node = el;
-    for (var up = 0; up < 8; up++) {
-      if (!node || !node.parentElement) return null;
-      node = node.parentElement;
-      if (node.querySelector('img')) return node;
-    }
-    return null;
-  }
-  function extractPrice(card) {
-    var priceEl = card.querySelector('[class*="price"], [data-testid*="price"], [class*="Price"]');
-    if (priceEl) {
-      var t = priceEl.textContent.trim();
-      if (t) return t;
-    }
-    var m = card.textContent.match(/\\$\\d+\\.\\d{2}/);
-    return m ? m[0] : null;
-  }
+// THE WORKER POOL IS GONE, for the same reason it went on Instacart: it read a
+// rendered results grid by selector and clicked Add, and wegmans-network.ts now
+// asks Algolia and the commerce API directly, with the cart as the judge.
+//
+// SEL_FALLBACKS stays. It is still what the assisted route and the
+// selector-drift check read, and Wegmans is assisted whenever the rail cannot
+// answer.
 
-  // Extract query from URL. Skip if this is a warmup load (no query).
-  var query = '';
-  try {
-    var sp = new URLSearchParams(window.location.search);
-    query = sp.get('query') || '';
-  } catch(_) {}
-  if (!query) {
-    dbg({ step: 'warmup_load', url: window.location.href });
-    return;
-  }
-
-  // Async extraction
-  (async function() {
-    dbg({ step: 'extract_start', query: query, url: window.location.href });
-
-    // Poll for tiles. First page load on a worker has MSAL bootstrap so allow
-    // up to 12s; subsequent loads on the same worker are faster.
-    var TILE_SEL = ${s.tile};
-    var tiles = [];
-    var waitedMs = 0;
-    for (var poll = 0; poll < 60; poll++) {
-      tiles = Array.from(document.querySelectorAll(TILE_SEL)).slice(0, 20);
-      if (tiles.length > 0) break;
-      await wait(200);
-      waitedMs += 200;
-    }
-
-    if (tiles.length === 0) {
-      dbg({ step: 'no_tiles', waitedMs: waitedMs });
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'WORKER_RESULT', workerId: WORKER_ID, query: query, candidates: [],
-      }));
-      return;
-    }
-
-    var seen = new Set();
-    var candidates = [];
-    for (var ti = 0; ti < tiles.length && candidates.length < 8; ti++) {
-      var tile = tiles[ti];
-      var name = getNameFromTile(tile);
-      if (!name || seen.has(name)) continue;
-      seen.add(name);
-      var card = findCard(tile.querySelector('h3[data-testid="-baseHeading"]')) || tile;
-      var imgEl = card.querySelector('img');
-      candidates.push({
-        productName: name,
-        imageUrl: imgEl ? imgEl.src : null,
-        outOfStock: false,
-        preferences: null,
-        price: extractPrice(card),
-        isWeightItem: false,
-      });
-    }
-
-    dbg({ step: 'extract_done', waitedMs: waitedMs, candidateCount: candidates.length, firstName: candidates[0] ? candidates[0].productName : null });
-    window.ReactNativeWebView.postMessage(JSON.stringify({
-      type: 'WORKER_RESULT', workerId: WORKER_ID, query: query, candidates: candidates,
-    }));
-  })();
-})();
-true;
-`;
-}
-
-/** Returns injectedJavaScript for a single worker. The workerId is baked in. */
-export function buildWegmansWorkerScript(workerId: number): string {
-  return 'var WORKER_ID = ' + workerId + ';\n' + buildWegmansWorkerExtractBody();
-}
-
-/** Returns the Wegmans warmup URL for a worker (loads homepage to bootstrap MSAL). */
-export function getWegmansWarmupUrl(): string {
-  return WEGMANS_URL;
-}
+// getWegmansWarmupUrl is gone with the pool it served. It loaded the homepage
+// in a worker so MSAL would bootstrap and leave a token behind to observe; the
+// rail decrypts MSAL's cache directly now and needs no page at all.
 
 /** Returns the Wegmans search URL for a given query. */
 export function getWegmansSearchUrl(query: string): string {

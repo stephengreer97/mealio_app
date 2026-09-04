@@ -996,93 +996,20 @@ export function buildOpenCartScript(storeId: string): string | null {
 // same number. The fix is a positive open-signal (the panel dialog present with
 // its own empty-state), which needs a captured empty-panel fixture we do not
 // hold. Written up for Stephen rather than guessed at.
-const INSTACART_CART_PANEL_SCRIPT = `(async function() {
-  function wait(ms){return new Promise(function(r){setTimeout(r,ms);});}
-  function norm(s){return (s||'').trim().replace(/\\s+/g,' ');}
+// THE INSTACART CART PANEL SCRIPT IS GONE, and with it buildInlineCartScript.
+//
+// It opened the storefront's side panel in the DOM, counted the line items it
+// found there, and closed it again — a cart read done by driving a UI. Every
+// Instacart banner now has a rail (getNetworkRail returns INSTACART_RAIL for
+// exactly the set isInstacartStore covers), and both call sites in
+// WebViewCartSheet sat AFTER the rail's early return, so nothing could reach
+// this any more.
+//
+// The invariant those two facts used to protect — a tenant that can read its
+// own cart, with no silent degradation for a banner nobody remembered — has
+// moved to where the reading now happens: instacartAdapter.test.ts asks the
+// RAIL for every tenant in the registry.
 
-  // The cart opener: floating button, or the header "View Cart. Items in cart: N"
-  // button (same element the header-badge count reads).
-  var OPEN_SEL = '[data-testid="floating-cart-button"], button[aria-label^="View Cart"], button[aria-label*="Items in cart"]';
-  // Each cart line item carries an "Increment quantity of <name>" button. Scope
-  // detection to the dialog/overlay that contains them so we don't pick up the
-  // increment buttons on search-result tiles (products already in the cart).
-  var INC_SEL = 'button[aria-label^="Increment quantity of "]';
-
-  // The opened cart's aria-label may differ from the empty placeholder's exact
-  // "Cart", so don't match on label — find the FIRST [role=dialog] that actually
-  // contains item rows (increment buttons).
-  function cartItemBtns(){
-    var dialogs = document.querySelectorAll('[role="dialog"]');
-    for (var i=0;i<dialogs.length;i++){
-      var b = dialogs[i].querySelectorAll(INC_SEL);
-      if (b.length>0) return Array.prototype.slice.call(b);
-    }
-    return [];
-  }
-
-  // Detect FIRST (so we don't click an already-open panel shut). Only click the
-  // opener when no populated cart is visible.
-  var incBtns = cartItemBtns();
-  if (incBtns.length === 0) {
-    var opener = document.querySelector(OPEN_SEL);
-    if (opener) { try { opener.click(); } catch(e){} }
-  }
-  // Poll for the panel's line items to render (up to ~6s).
-  for (var j=0;j<30 && incBtns.length===0;j++){
-    await wait(200);
-    incBtns = cartItemBtns();
-  }
-
-  // Stepper qty for a row: walk up from the increment button to the container
-  // that shows "Quantity: N" (bounded so we don't capture the whole panel / the
-  // package descriptor like "(1 ct)" in the product name).
-  function qtyForRow(btn){
-    var node = btn;
-    for (var d=0; d<5 && node; d++){
-      var m = (node.textContent || '').match(/quantity:\\s*(\\d+)/i);
-      if (m) return parseInt(m[1],10) || 1;
-      node = node.parentElement;
-    }
-    return 1;
-  }
-
-  var count = 0, items = [], seen = {};
-  for (var k=0;k<incBtns.length;k++){
-    var name = norm((incBtns[k].getAttribute('aria-label')||'').replace(/^Increment quantity of\\s+/i,''));
-    if (!name || seen[name]) continue;
-    seen[name] = true;
-    var qty = qtyForRow(incBtns[k]);
-    count += qty;
-    items.push({ name: name, qty: qty });
-  }
-
-  // Close the panel so it doesn't block the next search.
-  try {
-    var closeBtn = document.querySelector('[data-testid="cart-close-button"]');
-    if (closeBtn) closeBtn.click();
-    else document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true}));
-  } catch(e){}
-
-  window.ReactNativeWebView.postMessage(JSON.stringify({ type:'CART_COUNT', count: count, items: items }));
-})(); true;`;
-
-/**
- * Stores whose cart is an in-page side panel (no dedicated URL, no navigation):
- * returns a single self-contained script that opens the panel, counts line
- * items, posts CART_COUNT { count, items:[{name,qty}] }, and closes the panel.
- * Inject it DIRECTLY (not via the nav/onLoadEnd chain). Null for other stores.
- */
-export function buildInlineCartScript(storeId: string): string | null {
-  // Registry-driven, not `storeId === 'aldi'`. The side panel is a property of
-  // Instacart Storefront, so it belongs to every banner on it. Hardcoding one
-  // banner meant a second tenant got null from all three of
-  // buildInlineCartScript / buildCartPageCountScript / buildOpenCartScript, at
-  // which point WebViewCartSheet takes NO cart-probe branch — no before
-  // baseline, no after count, no cart breakdown on the done screen, and no
-  // error either. Pinned by tests/unit/webview-scripts/instacartAdapter.test.ts.
-  if (isInstacartStore(storeId)) return INSTACART_CART_PANEL_SCRIPT;
-  return null;
-}
 
 // No redirect has been observed on www.heb.com/cart (200, 0 redirects, measured
 // anonymously on 2026-08-07 under the app's mobile UA), so the guard below is

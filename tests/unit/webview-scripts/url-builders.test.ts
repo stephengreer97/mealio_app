@@ -1,6 +1,5 @@
 import {
   getWegmansSearchUrl,
-  getWegmansWarmupUrl,
 } from '../../../src/lib/webview-scripts/wegmans';
 import {
   getAlbertsonsCartPageUrl,
@@ -36,12 +35,6 @@ describe('getWegmansSearchUrl', () => {
     // that's the case so callers know the limitation.
     const url = getWegmansSearchUrl("Ben's Original");
     expect(url).toBe("https://www.wegmans.com/shop/search?query=Ben's%20Original");
-  });
-});
-
-describe('getWegmansWarmupUrl', () => {
-  it('returns the homepage URL', () => {
-    expect(getWegmansWarmupUrl()).toBe('https://www.wegmans.com');
   });
 });
 

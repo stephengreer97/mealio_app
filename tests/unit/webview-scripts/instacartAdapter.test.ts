@@ -32,6 +32,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { getNetworkRail } from '../../../src/lib/webview-scripts/network-rail';
 import {
   INSTACART_TENANTS,
   INSTACART_STORE_IDS,
@@ -43,7 +44,6 @@ import {
 import { getStoreScripts } from '../../../src/lib/webview-scripts';
 import {
   buildCartCountScript,
-  buildInlineCartScript,
   buildCartPageCountScript,
   buildOpenCartScript,
 } from '../../../src/lib/webview-scripts/cart-count';
@@ -219,9 +219,14 @@ describe('tenant registry', () => {
     // error anywhere in that component. Silent degradation is the failure mode
     // this asserts against.
     for (const id of INSTACART_STORE_IDS) {
-      const probes =
-        !!buildInlineCartScript(id) || !!buildCartPageCountScript(id) || !!buildOpenCartScript(id);
-      expect(`${id}: ${probes}`).toBe(`${id}: true`);
+      // THE RAIL is the cart probe now. The side panel this used to check —
+      // open the drawer, count what is rendered, close it — was deleted on
+      // 2026-09-04 along with the rest of the DOM automation, and it had been
+      // unreachable before that: both call sites sat after the rail's early
+      // return. The invariant is unchanged and still worth having, so it asks
+      // the thing that does the reading.
+      const rail = getNetworkRail(id);
+      expect(`${id}: ${!!rail && !!rail.cartRead()}`).toBe(`${id}: true`);
     }
   });
 
@@ -247,10 +252,10 @@ describe('tenant registry', () => {
     expect(INSTACART_TENANTS[id]).toBeUndefined();   // don't clobber a real one
     INSTACART_TENANTS[id] = SYNTHETIC;
     try {
-      expect(buildInlineCartScript(id)).not.toBeNull();
+      expect(getNetworkRail(id)).not.toBeNull();
       expect(buildCartCountScript(id)).not.toBeNull();
-      // Same platform, same panel and same badge: byte-for-byte what ALDI gets.
-      expect(buildInlineCartScript(id)).toBe(buildInlineCartScript('aldi'));
+      // Same platform, same rail and same badge: byte-for-byte what ALDI gets.
+      expect(getNetworkRail(id)!.cartRead()).toBe(getNetworkRail('aldi')!.cartRead());
       expect(buildCartCountScript(id)).toBe(buildCartCountScript('aldi'));
     } finally {
       delete INSTACART_TENANTS[id];

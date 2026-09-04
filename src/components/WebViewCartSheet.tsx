@@ -57,7 +57,7 @@ import { getAutomationConfig, getConfigVersion } from '../lib/automation-config'
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { SELECTOR_HEALTH_MESSAGE, SelectorHealthTally } from '../lib/selector-health';
-import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, buildInlineCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation, confirmDetail } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
@@ -1701,8 +1701,7 @@ export default function WebViewCartSheet({
     const cartPageScript = buildCartPageCountScript(sid);
     const cartPageUrl = getCartPageUrl(sid) ?? capturedCartUrlRef.current;
     const openCartScript = buildOpenCartScript(sid);
-    const inlineCartScript = buildInlineCartScript(sid);
-    if (cartPageScript || inlineCartScript) {
+    if (cartPageScript) {
       if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
       cartRowsTimeoutRef.current = setTimeout(() => { cartRowsTimeoutRef.current = null; setCartRowsTimedOut(true); }, CART_ROWS_TIMEOUT_MS);
     }
@@ -1717,11 +1716,6 @@ export default function WebViewCartSheet({
         setStep('done');
       }
     }, CART_PROBE_RESULT_TIMEOUT_MS);
-    if (inlineCartScript) {
-      cartCountPendingRef.current = phase;
-      webviewRef.current?.injectJavaScript(inlineCartScript);
-      return;
-    }
     if (cartPageScript && (cartPageUrl || openCartScript)) {
       cartCountPendingRef.current = phase;
       cartProbeBeginSearchRef.current = false;
@@ -3701,27 +3695,7 @@ export default function WebViewCartSheet({
     const cartPageScript = buildCartPageCountScript(probeStoreId);
     const cartPageUrl = getCartPageUrl(probeStoreId);     // HEB / Albertsons: direct URL
     const openCartScript = buildOpenCartScript(probeStoreId); // Amazon: click the cart icon
-    const inlineCartScript = buildInlineCartScript(probeStoreId); // ALDI: in-page side panel
-    console.log(`[Cart ${ts()}]`, 'snapshotBefore: storeId=', probeStoreId, 'cartUrl=', !!cartPageUrl, 'cartClick=', !!openCartScript, 'inlineCart=', !!inlineCartScript, 'activeLen=', activeItemsRef.current.length);
-    if (inlineCartScript) {
-      // Side-panel cart (ALDI): no navigation — inject the self-contained
-      // open+count+close script directly, and gate the search start on the
-      // before-count (the panel is closed before CART_COUNT posts, so the search
-      // bar is clear). Reuse the cart-probe timeout as the safety net.
-      cartCountPendingRef.current = 'before';
-      cartProbeBeginSearchRef.current = true;
-      if (cartProbeTimeoutRef.current) clearTimeout(cartProbeTimeoutRef.current);
-      cartProbeTimeoutRef.current = setTimeout(() => {
-        cartProbeTimeoutRef.current = null;
-        if (!cartProbeBeginSearchRef.current) return;
-        console.log(`[Cart ${ts()}]`, 'inline cart before-probe timed out — starting search without a baseline');
-        cartProbeBeginSearchRef.current = false;
-        cartCountPendingRef.current = null;
-        beginSearchFlow();
-      }, CART_PROBE_TIMEOUT_MS);
-      webviewRef.current?.injectJavaScript(inlineCartScript);
-      return;
-    }
+    console.log(`[Cart ${ts()}]`, 'snapshotBefore: storeId=', probeStoreId, 'cartUrl=', !!cartPageUrl, 'cartClick=', !!openCartScript, 'activeLen=', activeItemsRef.current.length);
     if (cartPageScript && (cartPageUrl || openCartScript)) {
       cartCountPendingRef.current = 'before';
       cartProbeBeginSearchRef.current = true;
@@ -7197,7 +7171,7 @@ export default function WebViewCartSheet({
                 </View>
               )}
 
-              {!cartResultRows && !cartRowsTimedOut && (buildCartPageCountScript(lockedStoreId) || buildInlineCartScript(lockedStoreId)) && (manualUsedRef.current ? cartCountBeforeRef.current != null : shouldProbeAfterRun({ addsAttempted: addsAttemptedRef.current, hasBaseline: cartCountBeforeRef.current != null })) ? (
+              {!cartResultRows && !cartRowsTimedOut && buildCartPageCountScript(lockedStoreId) && (manualUsedRef.current ? cartCountBeforeRef.current != null : shouldProbeAfterRun({ addsAttempted: addsAttemptedRef.current, hasBaseline: cartCountBeforeRef.current != null })) ? (
                 // Cart-page store (or inline side-panel store like ALDI) with a
                 // baseline: the after-probe is reading the cart. Show a loading
                 // state instead of the plain list so the breakdown doesn't flash

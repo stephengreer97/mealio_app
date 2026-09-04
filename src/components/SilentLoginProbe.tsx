@@ -10,7 +10,6 @@ import {
   getCartPageUrl,
   buildCartPageCountScript,
   buildOpenCartScript,
-  buildInlineCartScript,
   CartItem,
 } from '../lib/webview-scripts/cart-count';
 
@@ -23,7 +22,7 @@ import {
 //
 // It loads the store home page and injects the same `checkLoginScript` the cart
 // engine uses. On a logged-in result it continues in the SAME session to read
-// the cart (the same URL/click/inline path the live before-snapshot uses) and
+// the cart (the same URL/click path the live before-snapshot uses) and
 // reports { count, items } so add-to-cart can skip the cart round-trip. Reading
 // the DOM never triggers store 2FA (that only fires on a login submission).
 //
@@ -122,7 +121,6 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
   // the live before-snapshot does. If the store has no usable cart method we
   // still report logged-in (just without a baseline).
   const startCartCapture = useCallback(() => {
-    const inline = buildInlineCartScript(storeId);
     const cartUrl = getCartPageUrl(storeId);
     const click = buildOpenCartScript(storeId);
     const countScript = buildCartPageCountScript(storeId);
@@ -143,12 +141,7 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
       webviewRef.current?.injectJavaScript(rail.cartRead());
       return;
     }
-    if (inline) {
-      // Self-contained open+count+close (ALDI side panel).
-      cartMethodRef.current = 'inline';
-      console.log('[Prewarm] probe', storeId, 'cart capture: inline panel');
-      webviewRef.current?.injectJavaScript(inline);
-    } else if (countScript && cartUrl) {
+    if (countScript && cartUrl) {
       // URL cart (HEB, Albertsons family): navigate, then count on load.
       cartMethodRef.current = 'url';
       console.log('[Prewarm] probe', storeId, 'cart capture: navigate to', cartUrl);

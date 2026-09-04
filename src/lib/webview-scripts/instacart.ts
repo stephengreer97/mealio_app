@@ -362,130 +362,32 @@ function buildCheckLoginScript(t: InstacartTenant): string {
 // it will still return plausible-looking numbers, so nothing will fail loudly.
 
 
-// ── Parallel worker support ───────────────────────────────────────────────────
+// ── Parallel worker support: REMOVED ─────────────────────────────────────────
 //
-// Mirrors the Wegmans 5-worker pool (see wegmans.ts buildWegmansWorkerScript
-// and useParallelSearchPool): each hidden worker WebView loads a search URL
-// from getInstacartSearchUrl, and this injected script extracts up to 8 product
-// candidates and posts WORKER_RESULT with the baked-in workerId. Unlike the
+// This mirrored the Wegmans worker pool: hidden WebViews loading search URLs,
+// an injected extractor reading product cards out of the rendered grid, and a
+// WORKER_RESULT per worker. Both pools are gone (2026-09-04) and so are their
+// extractors — the note below survives as the record of what was here. Unlike the
 // sequential buildExtractProductsScript(), every dispatch is a fresh page load,
 // so no stale-tile detection is needed.
 //
 // Note this path is built but NOT used for ALDI at runtime: forceSerialSearch is
 // on because the platform's anti-bot 403s the concurrent burst. See getScripts().
 
-function buildWorkerExtractBody(t: InstacartTenant): string {
-  const s = sel(t);
-  return `(function() {
-  function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
-  function dbg(obj) {
-    try {
-      obj.type = 'WORKER_DEBUG'; obj.workerId = WORKER_ID;
-      window.ReactNativeWebView.postMessage(JSON.stringify(obj));
-    } catch(_) {}
-  }
-
-  var CARD_LINK_SEL = ${s.cardLink};
-  var ATC_SEL = ${s.atc};
-
-  function findCard(el) {
-    var node = el.parentElement;
-    for (var depth = 0; depth < 10 && node; depth++) {
-      if (node.querySelector('img') && node.textContent.length > 30) return node;
-      node = node.parentElement;
-    }
-    return null;
-  }
-
-  function extractPrice(card) {
-    if (!card) return null;
-    var text = card.textContent || '';
-    var m = text.match(/\\$\\d+\\.\\d{2}/);
-    return m ? m[0] : null;
-  }
-
-  function getProductName(card) {
-    var addBtn = card.querySelector(ATC_SEL);
-    if (addBtn) {
-      var m = (addBtn.getAttribute('aria-label') || '').match(/^Add 1 (?:item|ct)\\s+(.+)/i);
-      if (m) return m[1].trim();
-    }
-    var img = card.querySelector('img[alt]');
-    if (img) {
-      var alt = img.getAttribute('alt').trim();
-      if (alt.length > 2 && !/placeholder|logo|banner/i.test(alt)) return alt;
-    }
-    var link = card.querySelector(CARD_LINK_SEL);
-    if (link) {
-      var href = link.getAttribute('href') || '';
-      var slugMatch = href.match(/\\/products\\/\\d+-(.+)/);
-      if (slugMatch) {
-        return slugMatch[1].split('-').map(function(w) {
-          return w.charAt(0).toUpperCase() + w.slice(1);
-        }).join(' ');
-      }
-    }
-    return null;
-  }
-
-  // Query comes from the search URL (/store/${t.slug}/s?k=...). No query means a
-  // warmup/initial load — stay silent so the pool doesn't record a result.
-  var query = '';
-  try {
-    var sp = new URLSearchParams(window.location.search);
-    query = sp.get('k') || '';
-  } catch(_) {}
-  if (!query) {
-    dbg({ step: 'warmup_load', url: window.location.href });
-    return;
-  }
-
-  (async function() {
-    dbg({ step: 'extract_start', query: query, url: window.location.href });
-
-    var productLinks = [];
-    var waitedMs = 0;
-    for (var poll = 0; poll < 50; poll++) {
-      productLinks = Array.from(document.querySelectorAll(CARD_LINK_SEL));
-      if (productLinks.length > 0) break;
-      await wait(200);
-      waitedMs += 200;
-    }
-
-    var seen = new Set();
-    var candidates = [];
-    for (var pi = 0; pi < productLinks.length && candidates.length < 8; pi++) {
-      var card = findCard(productLinks[pi]);
-      if (!card) continue;
-      var name = getProductName(card);
-      if (!name || seen.has(name)) continue;
-      seen.add(name);
-      var addBtn = card.querySelector(ATC_SEL);
-      var outOfStock = addBtn ? (addBtn.disabled || addBtn.getAttribute('aria-disabled') === 'true') : false;
-      var imgEl = card.querySelector('img');
-      candidates.push({
-        productName: name,
-        imageUrl: imgEl ? imgEl.src : null,
-        outOfStock: outOfStock,
-        preferences: null,
-        price: extractPrice(card),
-      });
-    }
-
-    dbg({ step: 'extract_done', waitedMs: waitedMs, candidateCount: candidates.length, firstName: candidates[0] ? candidates[0].productName : null });
-    window.ReactNativeWebView.postMessage(JSON.stringify({
-      type: 'WORKER_RESULT', workerId: WORKER_ID, query: query, candidates: candidates,
-    }));
-  })();
-})();
-true;
-`;
-}
-
-/** Returns injectedJavaScript for a single worker. The workerId is baked in. */
-export function buildInstacartWorkerScript(t: InstacartTenant, workerId: number): string {
-  return 'var WORKER_ID = ' + workerId + ';\n' + buildWorkerExtractBody(t);
-}
+// THE WORKER POOL IS GONE.
+//
+// It navigated a pool of hidden WebViews to search pages, waited for a results
+// grid to render, read product cards out of the DOM by selector, and clicked
+// Add. Roughly 110 lines of extractor plus the builder that baked a worker id
+// into it, deleted here rather than left standing unreferenced.
+//
+// What replaced it is aldi-network.ts: the storefront's own GraphQL, with the
+// cart as the judge of what landed. Nothing has called a worker since
+// 2026-09-01 — this removes the code that was still sitting there.
+//
+// searchPrefix and menuExclusion STAY. They are not worker code: the first
+// builds the search URL the assisted route hands the user, and the second is
+// used by the login check.
 
 /** Returns the Instacart search-results URL for a query on this tenant. */
 export function getInstacartSearchUrl(t: InstacartTenant, query: string): string {
@@ -516,10 +418,11 @@ export function getInstacartSearchUrl(t: InstacartTenant, query: string): string
  *      `selectors` only for a key where this banner genuinely diverges.
  *   4. A `fixture-capture-config.ts` entry, or the documented
  *      `npm run capture -- <storeId>` has nothing to drive and step 6 is manual.
- *   5. Nothing for cart probing: buildInlineCartScript() and extractorFor() in
- *      cart-count.ts both dispatch on this registry via isInstacartStore(), so a
- *      tenant gets the side panel and the header badge for free. (They used to
- *      test for 'aldi' by name, which silently gave a second banner no cart
+ *   5. Nothing for cart probing: the RAIL reads the cart, and getNetworkRail
+ *      dispatches on this registry via isInstacartStore(), so a tenant gets it
+ *      for free. (The side-panel script that used to do this was deleted on
+ *      2026-09-04; before that it tested for 'aldi' by name, silently giving a
+ *      second banner no cart
  *      probe at all; tests/unit/webview-scripts/instacartAdapter.test.ts pins it.)
  *   6. Captured fixtures under tests/fixtures/<storeId>/ and a spec modelled on
  *      tests/fixture-tests/aldi.spec.ts.
