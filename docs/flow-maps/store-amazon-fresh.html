@@ -16,10 +16,17 @@ user the results page; they add what they want and tap Next.</b></p>
 <b>HISTORY</b>. It is kept because it is the evidence for MEAL-212, which asks whether this store can
 have a real in-page rail like H-E-B and the Albertsons family &mdash; and because the login check
 and the search URL, which the assisted route still uses, are described here too.</p>
+<p><b>2026-09-04.</b> The selector table (<code>SEL_FALLBACKS</code>) and the badge-confirmation
+module <code>cart-confirm.ts</code> are gone; nothing had called either since the DOM scripts went.
+This store's <b>cart-page reader</b> moved here too, off a shared table in
+<code>cart-count.ts</code> and onto <code>StoreScripts.cartPage</code> in
+<code>amazon-fresh.ts</code>. Amazon Fresh is now the ONLY store in the build that reads a
+storefront at all &mdash; its login check &mdash; and that check is primary, not a fallback,
+because this store has no rail to fall back from.</p>
 </div>
 
-  <div class="sub">Read off <code>webview-scripts/amazon-fresh.ts</code> and
-  <code>webview-scripts/cart-confirm.ts</code>. The only store where the page can be perfectly
+  <div class="sub">Read off <code>webview-scripts/amazon-fresh.ts</code>, which now holds
+  everything this store does. The only store where the page can be perfectly
   healthy and still return nothing — because the account has no Fresh store selected.</div>
 </header>
 <div class="legend">
@@ -184,7 +191,8 @@ flowchart TD
     <tr><td>Empty-state / no-store detection</td><td><code>buildFreshEmptyStateFn</code></td></tr>
     <tr><td>Type A vs Type B fork</td><td><i>gone with the DOM scripts (2026-09-01)</i> — Amazon Fresh is assisted now, so nothing of ours reads a card</td></tr>
     <tr><td>Modal interception</td><td><code>confirmWeightModal</code> (two copies — add and search+add)</td></tr>
-    <tr><td>Badge confirmation</td><td><code>src/lib/webview-scripts/cart-confirm.ts</code></td></tr>
+    <tr><td>Badge confirmation</td><td><i>deleted 2026-09-04</i> — <code>cart-confirm.ts</code> had no caller after the DOM scripts went</td></tr>
+    <tr><td>Cart-page read</td><td><code>src/lib/webview-scripts/amazon-fresh.ts</code> (<code>cartPage</code>) — moved off the shared table in <code>cart-count.ts</code>, 2026-09-04</td></tr>
     <tr><td>Selectors (A/B pairs)</td><td><code>automation-config/schema.ts</code> → <code>stores.amazon</code></td></tr>
   </table>
 </div>

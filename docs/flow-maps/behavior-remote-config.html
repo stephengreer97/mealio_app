@@ -10,6 +10,16 @@
   <div class="sub">Read off <code>lib/automation-config/</code>, <code>lib/store-catalog/</code> and
   <code>lib/selector-health.ts</code>. Two identical pipelines and one measurement loop — the
   machinery that turns "Albertsons renamed a button" from an App Store review into a config push.</div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<p><b>2026-09-04.</b> The <code>selectors</code> layer of this config no longer drives anything.
+<code>selectorsFor()</code>, <code>rawSelectorsFor()</code> and <code>platformSelectors()</code> are
+deleted with the last selector, and so are <code>selector-health.ts</code> and the drift census that
+read them. The key is still parsed and still validated, so an older build meeting a newer config is
+unremarkable &mdash; it is simply read by nobody. The levers that still work are the kill switch
+(<code>enabled</code>), the URLs, <code>searchUrlTemplate</code>, the timeouts and the
+<code>networkSearch</code> / <code>networkAdd</code> / <code>cartSkuConfirm</code> flags. The
+<code>cartUrl</code> override went with the cart-page navigation it repointed.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Pipeline step</b></span>
