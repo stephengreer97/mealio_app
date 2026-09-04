@@ -212,18 +212,27 @@ describe('the session probe', () => {
   }, AT_WEGMANS);
 
   itWithFixture('shop.html', 'signed in but no token is NOT usable for a run', async (runner) => {
-    // The Albertsons shape, for a different reason: an account existing and a
-    // token working are different facts, and a run built on the first one wrote
-    // nothing at all on that store.
+    // An account existing and a token working are different facts, and a run
+    // built on the first one wrote nothing at all on Albertsons.
+    //
+    // CHANGED 2026-09-04: this used to answer loggedIn TRUE with cartCapable
+    // false, and that was the worst of both. The access token lasts an hour and
+    // the refresh token about six; when both age out there is nothing left to
+    // mint with, and "signed in" lets the run proceed to fail every call — cart
+    // read no_token, write no_token, "nothing was added". Measured that morning:
+    // the refresh token had expired 6771 seconds earlier and the session still
+    // said signed in.
+    //
+    // Opening the store fixes it and costs the user almost nothing: their
+    // Wegmans cookies are still good, so the site signs them in again by itself
+    // and MSAL re-mints the pair.
     await runner.inject(msal(1));
     await runner.inject(netStub());
     await runner.inject(buildWegmansSessionScript());
     const refined = await runner.waitForMessage('WEGMANS_SESSION', 15_000,
-      (m) => (m as Record<string, unknown>).early === undefined
-        && (m as Record<string, unknown>).loggedIn === true) as Record<string, unknown>;
-    expect(refined.verified).toBe(false);
-    expect(refined.cartCapable).toBe(false);
-    expect(refined.why).toBe('no_token');
+      (m) => (m as Record<string, unknown>).early === undefined) as Record<string, unknown>;
+    expect(refined.loggedIn).toBe(false);
+    expect(refined.why).toBe('token_expired');
   }, AT_WEGMANS);
 
   itWithFixture('shop.html', 'with a cached token it proves it before saying so', async (runner) => {
@@ -245,10 +254,12 @@ describe('the session probe', () => {
     await runner.inject(cachedToken(-10));
     await runner.inject(netStub());
     await runner.inject(buildWegmansSessionScript());
+    // Same outcome as above and for the same reason: with nothing mintable the
+    // honest answer is a sign-in, not a signed-in user whose every call fails.
     const refined = await runner.waitForMessage('WEGMANS_SESSION', 15_000,
-      (m) => (m as Record<string, unknown>).cartCapable !== undefined) as Record<string, unknown>;
-    expect(refined.cartCapable).toBe(false);
-    expect(refined.why).toBe('no_token');
+      (m) => (m as Record<string, unknown>).early === undefined) as Record<string, unknown>;
+    expect(refined.loggedIn).toBe(false);
+    expect(refined.why).toBe('token_expired');
   }, AT_WEGMANS);
 });
 
