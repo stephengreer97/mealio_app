@@ -95,6 +95,14 @@ verifies each line against it.</p>
 doing an <code>indexOf</code> for <code>&lt;script id="__NEXT_DATA__"</code> in a body it fetched
 itself. Neither is a selector and neither is on the add path.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<p><b>2026-09-04 &mdash; H-E-B's error code is <code>UNKNOWN</code>.</b> The unavailable-means-out-of-stock
+rule reads the store's error code first and its message second. The message fallback was gated on
+there being no code &mdash; and H-E-B sends <code>'UNKNOWN'</code>, a code whose meaning is that it
+has not classified the failure, alongside "This item is out of stock. Try searching for a different
+item." So the one case where the message is all there is was the case the gate excluded. The code is
+a fast path now, not a gate: either signal routes the item to review.</p>
+</div>
 </header>
 
 <div class="notes" style="margin-top:0">

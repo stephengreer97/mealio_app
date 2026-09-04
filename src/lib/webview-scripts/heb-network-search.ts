@@ -862,9 +862,25 @@ ${CART_READ_FN}
     // ITEM_UNAVAILABLE_DUE_TO_BLACKOUT, UNAVAILABLE_DUE_TO_OUTAGE. Every one of
     // them means the same thing to a shopper: not this product, today. The
     // message is the fallback, for an arm that carries no code.
+    //
+    // THE MESSAGE IS CONSULTED WHETHER OR NOT THERE IS A CODE, and the first
+    // version of this got that wrong. It read the message only when the code was
+    // ABSENT, on the reasoning that a store which sends a code has classified
+    // the failure itself.
+    //
+    // H-E-B sends 'UNKNOWN'. Measured on Stephen's run, 2026-09-04 18:36:
+    //   name    'Morton Salt, 26 oz'
+    //   code    'UNKNOWN'
+    //   detail  'This item is out of stock. Try searching for a different item.'
+    // A code that says the store did not classify it is the one case where the
+    // message is all there is — and it was the exact case the gate excluded. He
+    // got the warning again: "Checking the store page, its out of stock. I
+    // should have been sent to review."
+    //
+    // So the code is a fast path, not a gate. Either signal is enough.
     var unavailable = !ok && (
       (code && /OUT_OF_STOCK|UNAVAILABLE/i.test(code))
-      || (!code && msg && /out of stock|unavailable|not available/i.test(msg)));
+      || (msg && /out of stock|unavailable|not available/i.test(msg)));
     // The sent quantity rides along so a clamped add is visible as a SHORT add
     // rather than passing for a full one -- the reconcile's own short-add
     // detection then reports it to the user.

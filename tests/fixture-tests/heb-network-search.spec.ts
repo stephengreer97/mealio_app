@@ -551,6 +551,31 @@ describe('HEB MEAL-202: the store\'s own limits', () => {
     expect(res.detail).toMatch(/out of stock/i);
   });
 
+  itWithFixture('logged-in-home.html', 'and believes the MESSAGE when the code says UNKNOWN', async (runner) => {
+    // THE CASE THE FIRST FIX MISSED. It read the message only when there was no
+    // code at all, reasoning that a store sending one had classified the failure
+    // itself. H-E-B sends 'UNKNOWN' — a code whose whole meaning is that it has
+    // NOT classified it — so the message, which says out of stock in plain
+    // English, was skipped and the item was reported as a generic error again.
+    //
+    // Measured on Stephen's run, 2026-09-04 18:36:
+    //   code    'UNKNOWN'
+    //   detail  'This item is out of stock. Try searching for a different item.'
+    await runner.inject(addStub({
+      '88955': {
+        arm: 'AddItemToCartV2Error', code: 'UNKNOWN',
+        message: 'This item is out of stock. Try searching for a different item.',
+      },
+    }, []));
+    await runner.inject(buildHebNetworkAddBatchScript([{
+      idx: 0, productId: '88955', skuId: '2460001001', quantity: 1,
+      name: 'Morton Salt, 26 oz',
+    }])!);
+    const res = await runner.waitForMessage('NET_ADD_RESULT', 15_000);
+    expect(res.reason).toBe('out_of_stock');
+    expect(res.code).toBe('UNKNOWN');
+  });
+
   itWithFixture('logged-in-home.html', 'every flavour of UNAVAILABLE goes the same way', async (runner) => {
     // H-E-B's own bundles carry the vocabulary: OUT_OF_STOCK, UNAVAILABLE,
     // UNAVAILABLE_FOR_STORE / _TIMESLOT / _DELIVERY / _PICKUP,
