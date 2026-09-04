@@ -97,6 +97,25 @@ const WM_PRELUDE = `
     };
   };
 
+  /** The statuses this store uses to say no-because-you-look-like-a-robot. */
+  WM.blockedStatus = function (st) {
+    return st === 418 || st === 429 || st === 403 || st === 412;
+  };
+
+  /**
+   * A challenge page, which arrives with a 200.
+   *
+   * Cheap and specific: the interstitial is ~15KB and titled "Robot or human?",
+   * where a real search document is ~780KB. Checking only the head of the body
+   * keeps this off the hot path for a real page.
+   */
+  WM.isChallenge = function (html) {
+    var head = String(html || '').slice(0, 4000);
+    return head.indexOf('Robot or human') >= 0
+      || head.indexOf('px-captcha') >= 0
+      || head.indexOf('Access Denied') >= 0;
+  };
+
   WM.gql = async function (domain, op, kind, hash, variables, budgetMs) {
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 20000);
@@ -116,7 +135,15 @@ const WM_PRELUDE = `
     var ms = Date.now() - t0;
     // 418 and 429 are the anti-bot answers, and they are NOT the same as a
     // store that said no: they mean the request did not look like the site's.
-    if (r.status === 418 || r.status === 429 || r.status === 403) {
+    // THE ANTI-BOT ANSWERS, and 412 is one of them.
+    //
+    // MEASURED 2026-09-03: after a burst of searches this session started
+    // getting 412 Precondition Failed on the cart and a challenge on search.
+    // Blocked is not the same fact as a store that said no, and the two must
+    // not be reported as one: a run that hands over because it was blocked can
+    // still put the user in front of the store, where a run that thinks the
+    // cart is empty writes nonsense.
+    if (WM.blockedStatus(r.status)) {
       return { ok: false, why: 'blocked', status: r.status, ms: ms };
     }
     if (r.status < 200 || r.status >= 300) {
@@ -159,10 +186,15 @@ const WM_PRELUDE = `
       return { ok: false, why: 'no_response', ms: Date.now() - t0 };
     }
     var ms = Date.now() - t0;
-    if (r.status === 418 || r.status === 429 || r.status === 403) {
-      return { ok: false, why: 'blocked', status: r.status, ms: ms };
-    }
+    if (WM.blockedStatus(r.status)) return { ok: false, why: 'blocked', status: r.status, ms: ms };
     if (r.status < 200 || r.status >= 300) return { ok: false, why: 'http', status: r.status, ms: ms };
+    // A CHALLENGE IS SERVED AS A 200.
+    //
+    // MEASURED: /search?q= answered 200, 15KB, titled "Robot or human?" — a
+    // PerimeterX interstitial wearing a success status. Reading that as
+    // "no payload" reports an empty shelf for a store that never looked, and
+    // sends the user to review holding nothing.
+    if (WM.isChallenge(html)) return { ok: false, why: 'blocked', status: 200, ms: ms, challenge: true };
     // THE TAG, not the first mention of it.
     //
     // An inline script near the top of the document READS
@@ -318,10 +350,24 @@ ${WM_PRELUDE}
   try {
     for (var t = 0; t < TERMS.length; t++) {
       var term = TERMS[t];
+      // PACED. A burst of full-page searches from one session is what a scraper
+      // looks like, and this store answers that with a challenge — measured
+      // 2026-09-03, after which even the homepage came back "Robot or human?".
+      // A short gap between terms costs a second across a meal and makes the
+      // run look like someone typing.
+      if (t > 0) await new Promise(function (res) { setTimeout(res, 400 + Math.floor(Math.random() * 400)); });
       var r = await WM.searchOnce(term, 20000);
       if (!r.ok) {
         post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: r.why,
                status: r.status || null, ms: r.ms });
+        // BLOCKED STOPS THE BATCH. Fourteen more requests to a store that has
+        // just refused one will not find a different answer, and each of them
+        // digs the session in deeper. The run hands over to the user instead.
+        if (r.why === 'blocked') {
+          post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length,
+                 blocked: true, at: t });
+          return;
+        }
         continue;
       }
       var cands = [];

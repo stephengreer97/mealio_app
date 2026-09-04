@@ -5316,6 +5316,19 @@ export default function WebViewCartSheet({
         }
         if (msg.type === 'SEARCH_BATCH_DONE') {
           if (!netActiveRef.current || netPhaseRef.current !== 'search') return;
+          // A STORE THAT BLOCKED US IS NOT A STORE WITH NOTHING.
+          //
+          // Walmart answers a burst of searches with a challenge page — served
+          // as a 200, titled "Robot or human?". Routing that to review would
+          // hand the user an empty Choose Products screen for a store that
+          // never looked. Handing over puts them in front of the storefront,
+          // which is the one place the run can still be finished.
+          if ((msg as { blocked?: boolean }).blocked) {
+            if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+            console.log(`[Cart ${ts()}]`, 'network run: the store blocked the search — handing over');
+            netHandOverToUser('search_blocked');
+            return;
+          }
           if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
           console.log(`[Cart ${ts()}]`, 'network search done:', netCandidatesRef.current.size, 'answered,',
             netFailedTermsRef.current.size, 'failed');

@@ -289,3 +289,68 @@ describe('the add', () => {
     expect(res.reason).toBe('blocked');
   }, AT_WALMART);
 });
+
+describe('a challenge is not an empty shelf', () => {
+  // Stephen, 2026-09-03, after a Walmart run: "It said no items were added...
+  // it also seemed to not be able to read the cart."
+  //
+  // What had happened: an hour of my probing tripped this store's bot defence.
+  // The cart answered 412 and the search answered 200 with a 15KB page titled
+  // "Robot or human?" — a challenge wearing a success status. The rail read
+  // that as "no payload", which is the same words it would use for a store
+  // that returned nothing, and the run reported an empty result for a store
+  // that never looked.
+  const CHALLENGE = '<!doctype html><html><head><title>Robot or human?</title></head>'
+    + '<body><div id="px-captcha"></div></body></html>';
+
+  function challengeStub(opts: { onSearch?: boolean; cartStatus?: number } = {}) {
+    return [
+      '(function () {',
+      '  window.__writes = [];',
+      '  window.fetch = function (url, init) {',
+      '    var u = String(url);',
+      '    if (u.indexOf("/search?q=") >= 0) {',
+      '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve(',
+      opts.onSearch === false ? '        "<html></html>"' : '        ' + JSON.stringify(CHALLENGE),
+      '      ); } });',
+      '    }',
+      '    if (u.indexOf("/MergeAndGetCart/") >= 0) {',
+      '      return Promise.resolve({ status: ' + String(opts.cartStatus ?? 200) + ',',
+      '        text: function () { return Promise.resolve(JSON.stringify({ data: { mergeAndGetCart: { lineItems: [] } } })); } });',
+      '    }',
+      '    return Promise.resolve({ status: 404, text: function () { return Promise.resolve(""); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n');
+  }
+
+  itWithFixture('logged-in-home.html', 'a 200 challenge page reports blocked, not no_payload', async (runner) => {
+    await runner.inject(cartMap());
+    await runner.inject(challengeStub());
+    await runner.inject(buildWalmartNetworkSearchBatchScript(['sour cream'])!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT_FAILED', 25_000) as Record<string, unknown>;
+    expect(msg.why).toBe('blocked');
+    expect(msg.status).toBe(200);
+  }, AT_WALMART);
+
+  itWithFixture('logged-in-home.html', 'stops the batch rather than digging in deeper', async (runner) => {
+    // Fourteen more requests to a store that just refused one will not find a
+    // different answer, and each one digs the session in further.
+    await runner.inject(cartMap());
+    await runner.inject(challengeStub());
+    await runner.inject(buildWalmartNetworkSearchBatchScript(['a', 'b', 'c', 'd'])!);
+    const done = await runner.waitForMessage('SEARCH_BATCH_DONE', 25_000) as Record<string, unknown>;
+    expect(done.blocked).toBe(true);
+    expect(done.at).toBe(0);
+  }, AT_WALMART);
+
+  itWithFixture('logged-in-home.html', '412 on the cart is blocked, not an empty cart', async (runner) => {
+    await runner.inject(cartMap());
+    await runner.inject(challengeStub({ cartStatus: 412 }));
+    await runner.inject(buildWalmartCartReadScript());
+    const msg = await runner.waitForMessage('CART_COUNT', 20_000) as Record<string, unknown>;
+    expect(msg.count).toBeNull();
+    expect(msg.why).toBe('blocked');
+    expect(msg.status).toBe(412);
+  }, AT_WALMART);
+});
