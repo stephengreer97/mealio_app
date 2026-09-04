@@ -405,14 +405,17 @@ export function addFailureCode(reason: string | null | undefined): StepFailureCo
 /**
  * Code for a `blocked` step, keyed by the reason surfaceBlocker was called with.
  *
- * 'fresh-no-store' is the imperfect one: Amazon Fresh answering with its empty
- * state means no store or delivery address is selected, which is a session
- * precondition rather than a robot wall. It rides on auth_required because the
- * fix family (pre-warm the session before the run) is the same one; the raw
- * reason stays in detail so it can be split off the auth chart.
+ * A MISSING STORE IS NOT A ROBOT WALL. It is a session precondition — the user
+ * has never told this store which branch they shop at, and nothing about the
+ * run can proceed until they do. It rides on auth_required because the fix
+ * family is the same one, and the raw reason stays in `detail` so it can be
+ * split off the auth chart.
+ *
+ * 'fresh-no-store' was Amazon Fresh's spelling of the same thing, from the DOM
+ * era. Both are kept: an older build's rows are still arriving.
  */
 export function blockFailureCode(reason: string): StepFailureCode {
-  return reason === 'fresh-no-store' ? 'auth_required' : 'waf_block';
+  return (reason === 'no_store' || reason === 'fresh-no-store') ? 'auth_required' : 'waf_block';
 }
 
 export interface StepRecord {

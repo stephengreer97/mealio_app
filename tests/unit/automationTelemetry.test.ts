@@ -430,6 +430,10 @@ describe('failure codes', () => {
     expect(blockFailureCode('http-403')).toBe('waf_block');
     expect(blockFailureCode('nudge')).toBe('waf_block');
     expect(blockFailureCode('fresh-no-store')).toBe('auth_required');
+    // A store the user has never chosen is a session precondition, not a robot
+    // wall, and charting it as one would say a WAF got harder when what
+    // happened is that somebody opened the app for the first time.
+    expect(blockFailureCode('no_store')).toBe('auth_required');
   });
 
   it('sends the code as a top-level field, only on failing rows', async () => {

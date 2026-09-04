@@ -3321,6 +3321,46 @@ export default function WebViewCartSheet({
   }, [setStep]);
   netSurfaceChallengeRef.current = netSurfaceChallenge;
 
+  /**
+   * NO STORE CHOSEN. Show them the storefront and ask.
+   *
+   * Four of the five rails cannot run without one: H-E-B, the Albertsons
+   * family, ALDI's shop and Wegmans' store number all decide what a search may
+   * even return, so a run without one would be shopping a catalogue the user
+   * cannot buy from. Walmart says needsStoreId: false and never reaches here —
+   * its search is national and its cart is the account's, and the store it
+   * fulfils from is a checkout question, not an add-to-cart one.
+   *
+   * The storefront, because that is where every one of these stores keeps its
+   * picker. A store that wants somewhere more specific can say so; none needs
+   * to today, and inventing a field for a case nobody has is how the selector
+   * tables started.
+   *
+   * Reuses the challenge screen deliberately: the shape is identical — the page
+   * needs a person for a moment, then the run resumes — and Try again already
+   * restarts from the login check, which re-reads the session and picks up the
+   * store they just chose.
+   */
+  const surfaceStorePicker = useCallback(() => {
+    if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+    netActiveRef.current = false;
+    netPhaseRef.current = 'idle';
+    lastLoadEndUrlRef.current = '';
+    console.log(`[Cart ${ts()}]`, 'network run: no store chosen — asking the user to pick one');
+    // 'blocked' is the taxonomy's word for "the store needs something from the
+    // user before we can go on", which is exactly this — the same row a
+    // challenge writes, told apart by its reason.
+    tel().record('blocked', 'blocked', {
+      detail: { reason: 'no_store' }, code: blockFailureCode('no_store'),
+    });
+    setBlockReason('no_store');
+    blockReasonRef.current = 'no_store';
+    setStep('robot_challenge');
+    navToRef.current(scriptsRef.current!.storeUrl);
+  }, [setStep, tel]);
+  const surfaceStorePickerRef = useRef<() => void>(() => {});
+  surfaceStorePickerRef.current = surfaceStorePicker;
+
   const startLoginCheck = useCallback(() => {
     const check = loginCheckScript();
     if (!check) {
@@ -5555,7 +5595,21 @@ export default function WebViewCartSheet({
           // The rail says whether it needs one, rather than the engine assuming
           // every store is shaped like the first four.
           if (netRail()?.needsStoreId !== false && (!msg.storeId || !msg.shoppingContext)) {
-            netHandOverToUser('session_no_store'); return;
+            // ASK THEM TO PICK ONE. Handing over six manual searches was the
+            // wrong answer to a question with one obvious fix.
+            //
+            // Stephen, 2026-09-04: "If a store is not chosen, then we need to
+            // surface the webview and prompt the user to choose a store." He is
+            // right, and it is the one blocker case where the user can finish in
+            // a tap: the picker is on the storefront, and every one of these
+            // stores puts it there.
+            //
+            // The same screen a challenge uses, because it is the same shape —
+            // something on the page needs a person, then the run picks up. Its
+            // banner already said "a store or address to choose"; now it says
+            // only that, when that is what is wrong.
+            surfaceStorePickerRef.current();
+            return;
           }
           netSessionRef.current = { storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext) };
           netSessionAtRef.current = Date.now();
@@ -6460,12 +6514,22 @@ export default function WebViewCartSheet({
             </View>
           ) : step === 'robot_challenge' ? (
             <View style={styles.topBar}>
-              <Text style={styles.loginBanner}>
-                Something is blocking Mealio from working on {storeName}. Take care of anything
-                showing in the browser below (a prompt, a store or address to choose, or a
-                "verify you're human" check), then tap Try again.
+              <Text style={styles.loginBanner} testID="blocker-banner">
+                {blockReason === 'no_store' ? (
+                  <>
+                    Choose a {storeName} store in the browser below, then tap Try again.
+                    {' '}Mealio needs to know which one you shop at — prices and what is in
+                    stock are different at every store.
+                  </>
+                ) : (
+                  <>
+                    Something is blocking Mealio from working on {storeName}. Take care of anything
+                    showing in the browser below (a prompt, a store or address to choose, or a
+                    "verify you're human" check), then tap Try again.
+                  </>
+                )}
               </Text>
-              <TouchableOpacity style={styles.retryBtn} onPress={retryAfterBlock}>
+              <TouchableOpacity style={styles.retryBtn} onPress={retryAfterBlock} testID="blocker-retry">
                 <Text style={styles.retryBtnText}>Try again</Text>
               </TouchableOpacity>
             </View>
