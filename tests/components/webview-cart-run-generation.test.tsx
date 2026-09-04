@@ -166,7 +166,7 @@ describe('a cart sheet closed before its run id arrives', () => {
     await landStartFor('heb');
 
     // Covers the sheet that closes itself on open for a store it cannot automate
-    // (a Kroger-family id or mockstore has no WebView scripts, so the reset-on-open
+    // (a Kroger-family id has no WebView scripts, so the reset-on-open
     // effect calls onClose immediately). A run that automated nothing is not the
     // run a bug report is about.
     expect(getLastAutomationRun()).toBeNull();

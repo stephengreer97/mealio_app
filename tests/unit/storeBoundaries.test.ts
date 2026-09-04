@@ -43,7 +43,6 @@ const STORE_FILES: Record<string, string[]> = {
   albertsons: ['albertsons.ts', 'albertsons-network.ts'],
   instacart: ['instacart.ts', 'aldi-network.ts'],
   wegmans: ['wegmans.ts', 'wegmans-network.ts'],
-  mockstore: ['mockstore.ts'],
 };
 
 /** The two files whose job is knowing every store. */
@@ -121,11 +120,6 @@ describe('nothing shared can reach into a store', () => {
       const reached = importsOf(rel)
         .map((i) => ({ i, store: storeOf(i) }))
         .filter((x) => x.store !== null)
-        // The mock store is a dev-only fixture we serve ourselves, not a
-        // storefront, and constants/stores.ts reads its build flag to keep it
-        // out of production. It is a store here only because it implements the
-        // same interface.
-        .filter((x) => x.store !== 'mockstore')
         .map((x) => `${x.i} (${x.store})`);
       expect(reached).toEqual([]);
     });
@@ -176,7 +170,7 @@ describe('shared code does not name a store', () => {
   // to skip it. Anything under lib/webview-scripts/ is covered automatically;
   // everything else that a cart run passes through is listed, and the list is
   // short on purpose.
-  const ids = storeIds().filter((id) => id !== 'mockstore');
+  const ids = storeIds();
   const registries = new Set(REGISTRIES);
   const ALSO_SHARED = [
     'components/WebViewCartSheet.tsx',   // the cart engine

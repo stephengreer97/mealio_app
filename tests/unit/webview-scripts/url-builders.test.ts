@@ -135,13 +135,10 @@ describe('getAlbertsonsCartPageUrl', () => {
   // was unguarded. WEBVIEW_STORE_IDS is the hand-maintained source of truth for
   // which stores run the WebView engine, so it is what a new banner gets added to,
   // and anything in it must resolve to a script bundle.
-  // `mockstore` is the local development storefront and deliberately has no
-  // scripts — the sheet opens and closes again for it. It is the one member of the
-  // set that is not a real banner, so it is named here rather than silently
-  // tolerated by a looser assertion.
-  it('has scripts for every real store the app says runs the WebView engine', () => {
+  // Every member resolves — there is no exception any more. `mockstore` was one
+  // until 2026-09-04, when it was removed along with Amazon Fresh.
+  it('has scripts for every store the app says runs the WebView engine', () => {
     const withoutScripts = [...WEBVIEW_STORE_IDS]
-      .filter((id) => id !== 'mockstore')
       .filter((id) => !getStoreScripts(id));
     expect(withoutScripts).toEqual([]);
   });

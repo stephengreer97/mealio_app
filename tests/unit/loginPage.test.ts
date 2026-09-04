@@ -77,8 +77,8 @@ describe('where the user can actually sign in', () => {
     // the catalogue on 2026-09-04 — but the mock store has no railUrl, and a
     // store added before its rail would not either. Nothing is excluded then
     // but the pages that are not this store's.
-    const noRail = { domain: 'mealiomockstore.vercel.app', railUrl: null };
-    expect(canSignInHere({ url: 'https://mealiomockstore.vercel.app/login', ...noRail })).toBe(true);
+    const noRail = { domain: 'example.test', railUrl: null };
+    expect(canSignInHere({ url: 'https://example.test/login', ...noRail })).toBe(true);
     expect(canSignInHere({ url: 'https://www.heb.com/', ...noRail })).toBe(false);
   });
 });

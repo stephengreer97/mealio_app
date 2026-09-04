@@ -59,7 +59,7 @@ describe('every rail answers every question the engine asks', () => {
     // EVERY store in the catalogue has one as of 2026-09-04, when Amazon Fresh
     // — the last without — was removed. So this is the whole catalogue, and a
     // store arriving without a rail has to be a decision someone makes here.
-    expect(RAIL_STORES.length).toBe([...WEBVIEW_STORE_IDS].filter((s) => s !== 'mockstore').length);
+    expect(RAIL_STORES.length).toBe([...WEBVIEW_STORE_IDS].length);
   });
 
   for (const id of RAIL_STORES) {
