@@ -60,6 +60,13 @@ whose products are already chosen skips the search, so those items used to reach
 cap and no way to know they were at one. And a signed-out answer from a rail's quiet page is no
 longer acted on until the storefront has had one load; see the cart-engine map.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<p><b>2026-09-04 &mdash; Albertsons removal, measured.</b> A quantity of 0 does NOT remove a line
+here: it answers 400 and the line stays. The removal is <code>DELETE /cart/items</code> taking the
+same body the add takes, with the user's real <code>serviceType</code> (DUG) &mdash; every 400 along
+the way was that one parameter. A line the run CREATED is deleted; a line the user already had is set
+back to their quantity.</p>
+</div>
 </header>
 
 <div class="notes" style="margin-top:0">

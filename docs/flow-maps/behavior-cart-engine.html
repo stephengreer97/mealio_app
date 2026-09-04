@@ -65,6 +65,19 @@ storefront load before that answer is believed. This reverses the earlier "act o
 answer immediately" rule, which was right on its own reasoning and wrong when the answer is
 wrong.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<h3>2026-09-04 &mdash; the review fires ONCE</h3>
+<p>A review pick is written as a top-up, so it finishes through the same <code>netFinalize</code>
+that routes a failed top-up back to review &mdash; the shape of a loop. Two locks stop it:
+<code>netReviewAddRef</code> marks the in-flight top-up as a review pick, and the card a failure would
+add carries the item's own term, which is already in the queue. Either alone holds; removing both
+re-opens the review. So a substitute the store also refuses lands on the DONE screen &mdash; the user
+has already been given the choice this run has to offer.</p>
+<p>Review cards created by that routing take their candidates from <code>netCandidatesRef</code>
+(the search, keyed by term) with the ingredient-name fallback behind it. Reading them off the ADD
+result gave every card an EMPTY list, because that handler stores <code>candidates: []</code> on
+every row it writes.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>running</b> — the bubble spins</span>
