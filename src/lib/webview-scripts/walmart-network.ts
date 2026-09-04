@@ -26,7 +26,27 @@ const OPS = {
   MergeAndGetCart: '3ec6afb6cfeca435e690c537532ef47683874107384f76904e2327d4941979ef',
   /** home. The add — captured from a real Add-to-cart click. */
   updateItems: 'f7a7a5c72f31319f198a9097f111a1a5f121ed523e4400fcc215aa98152c5e4b',
+  /**
+   * snb. THE SEARCH THE SITE ITSELF USES for a client-side navigation.
+   *
+   * Captured by driving next.router.push('/search?q=...') and recording what
+   * the app called. The page route uses getInitialProps, so there is no
+   * /_next/data JSON route to fetch — every variant 404s — and this is the
+   * fast path instead.
+   */
+  Search: '464cab4ac4aad772cd9b3cd6de458f56bb524d4b537612466028461ec5e05f58',
 };
+
+/**
+ * The Search operation's variables, captured verbatim from the site.
+ *
+ * SEVENTY-TWO of them, and a persisted query answers 400 if the set does not
+ * match — a hand-built subset was rejected outright. So the template is pinned
+ * as the site sent it and only the query is swapped. When a deploy changes the
+ * signature this stops working, which is exactly why the page fetch is still
+ * there behind it: the rail falls back and the run carries on slower.
+ */
+const SEARCH_VARS_TEMPLATE = '{"id":"","dealsId":"","query":"__TERM__","nudgeContext":"","page":1,"prg":"mWeb","catId":"","facet":"","sort":"best_match","rawFacet":"","seoPath":"","ps":40,"limit":40,"ptss":"","trsp":"","beShelfId":"","recall_set":"","module_search":"","min_price":"","max_price":"","storeSlotBooked":"","additionalQueryParams":{"hidden_facet":null,"translation":null,"isMoreOptionsTileEnabled":true,"isGenAiEnabled":true,"rootDimension":"","altQuery":"","selectedFilter":"","neuralSearchSeeAll":false,"isModuleArrayReq":false,"enableGenericItemTileOptions":true,"isLMPBrowsePage":false},"searchArgs":{"query":"__TERM__","cat_id":"","prg":"mWeb","facet":""},"enableDesktopHighlights":false,"enableVolumePricing":false,"enableCopyBlock":true,"enableVariantCount":false,"enableSlaBadgeV2":true,"enableUnifiedProductFragment":true,"enableESSCarousel":false,"enableSearchBenefitsBanner":false,"enableSparkyPLPModule":false,"fitmentFieldParams":{"powerSportEnabled":true,"dynamicFitmentEnabled":true,"extendedAttributesEnabled":true,"extendedAttributesV2Enabled":true,"fuelTypeEnabled":true},"fitmentSearchParams":{"id":"","dealsId":"","query":"__TERM__","nudgeContext":"","page":1,"prg":"mWeb","catId":"","facet":"","sort":"best_match","rawFacet":"","seoPath":"","ps":40,"limit":40,"ptss":"","trsp":"","beShelfId":"","recall_set":"","module_search":"","min_price":"","max_price":"","storeSlotBooked":"","additionalQueryParams":{"hidden_facet":null,"translation":null,"isMoreOptionsTileEnabled":true,"isGenAiEnabled":true,"rootDimension":"","altQuery":"","selectedFilter":"","neuralSearchSeeAll":false,"isModuleArrayReq":false,"enableGenericItemTileOptions":true,"isLMPBrowsePage":false},"searchArgs":{"query":"sour cream","cat_id":"","prg":"mWeb","facet":""},"enableDesktopHighlights":false,"enableVolumePricing":false,"enableCopyBlock":true,"enableVariantCount":false,"enableSlaBadgeV2":true,"enableUnifiedProductFragment":true,"enableESSCarousel":false,"enableSearchBenefitsBanner":false,"enableSparkyPLPModule":false,"cat_id":"","_be_shelf_id":""},"searchParams":{"id":"","dealsId":"","query":"__TERM__","nudgeContext":"","page":1,"prg":"mWeb","catId":"","facet":"","sort":"best_match","rawFacet":"","seoPath":"","ps":40,"limit":40,"ptss":"","trsp":"","beShelfId":"","recall_set":"","module_search":"","min_price":"","max_price":"","storeSlotBooked":"","additionalQueryParams":{"hidden_facet":null,"translation":null,"isMoreOptionsTileEnabled":true,"isGenAiEnabled":true,"rootDimension":"","altQuery":"","selectedFilter":"","neuralSearchSeeAll":false,"isModuleArrayReq":false,"enableGenericItemTileOptions":true,"isLMPBrowsePage":false},"searchArgs":{"query":"sour cream","cat_id":"","prg":"mWeb","facet":""},"enableDesktopHighlights":false,"enableVolumePricing":false,"enableCopyBlock":true,"enableVariantCount":false,"enableSlaBadgeV2":true,"enableUnifiedProductFragment":true,"enableESSCarousel":false,"enableSearchBenefitsBanner":false,"enableSparkyPLPModule":false,"cat_id":"","_be_shelf_id":""},"fetchBadSplit":true,"enableFashionTopNav":false,"enableUnifiedSchema":true,"postProcessingVersion":2,"version":"v2","enableRelatedSearches":true,"enablePortableFacets":true,"enableFacetCount":true,"fetchMarquee":true,"fetchSkyline":true,"fetchGallery":false,"fetchSbaTop":true,"fetchDataV1":true,"fetchDataV2":false,"fungibilityEnabled":false,"enableAdsPromoData":false,"fetchDac":true,"tenant":"WM_GLASS","enableMultiSave":false,"enableInStoreShelfMessage":false,"enableSellerType":false,"enableItemRank":false,"enableOptimisticWeightUpdate":false,"enableAdditionalSearchDepartmentAnalytics":true,"enableFulfillmentTagsEnhacements":false,"enableRxDrugScheduleModal":false,"enablePromoData":true,"enableSignInToSeePrice":false,"enablePromotionMessages":false,"enableDebugAnalyticsTags":false,"enableItemLimits":false,"enableCanAddToList":false,"enableIsFreeWarranty":false,"enableShopSimilarBottomSheet":false,"adsParams":{"fungibilityEnabled":false},"pageType":"SearchPage","enableAdsUnifiedProductTile":false}';
 
 /** Cart identity and login state, both in one localStorage key. */
 const CART_MAP_KEY = 'glassCartIdMap';
@@ -36,6 +56,8 @@ const WM_PRELUDE = `
   WM.post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
+
+  WM.SEARCH_VARS = '${SEARCH_VARS_TEMPLATE}';
 
   WM.uuid = function () {
     var s = '';
@@ -170,7 +192,48 @@ const WM_PRELUDE = `
    * rendering, no selectors, nothing to drift. It is a different shape from the
    * other three rails, which call an API, but it has the same properties.
    */
-  WM.searchOnce = async function (term, budgetMs) {
+  /**
+   * THE FAST SEARCH: the site's own Search operation.
+   *
+   * Returns null when it cannot be used, so the caller falls back to the page
+   * rather than failing the term. Items live at itemStacks[].itemsV2 here,
+   * where the server-rendered page calls the same list .items.
+   */
+  WM.searchOp = async function (term, budgetMs) {
+    var vars;
+    try {
+      vars = JSON.parse(String(WM.SEARCH_VARS).split('__TERM__').join(
+        String(term).split('"').join(' ').split(String.fromCharCode(92)).join(' ')));
+    } catch (e) { return null; }
+    var ctl = new AbortController();
+    var to = setTimeout(function () { ctl.abort(); }, budgetMs || 20000);
+    var t0 = Date.now();
+    var r, txt;
+    try {
+      r = await fetch('${ORIGIN}/orchestra/snb/graphql/Search/${OPS.Search}/search?variables='
+        + encodeURIComponent(JSON.stringify(vars)),
+        { credentials: 'include', signal: ctl.signal, headers: WM.headers('Search', 'query') });
+      clearTimeout(to);
+      txt = await r.text();
+    } catch (e) { clearTimeout(to); return null; }
+    var ms = Date.now() - t0;
+    if (WM.blockedStatus(r.status)) return { ok: false, why: 'blocked', status: r.status, ms: ms };
+    if (r.status < 200 || r.status >= 300) return null;
+    var j;
+    try { j = JSON.parse(txt); } catch (e) { return null; }
+    var stacks = null;
+    try { stacks = j.data.search.searchResult.itemStacks; } catch (e) {}
+    if (!stacks) return null;
+    var items = [];
+    for (var s2 = 0; s2 < stacks.length; s2++) {
+      var list = stacks[s2].itemsV2 || stacks[s2].items || [];
+      for (var i = 0; i < list.length; i++) items.push(list[i]);
+    }
+    if (!items.length) return null;
+    return { ok: true, items: items, ms: ms, bytes: txt.length, via: 'op' };
+  };
+
+  WM.searchPage = async function (term, budgetMs) {
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 20000);
     var t0 = Date.now();
@@ -223,7 +286,23 @@ const WM_PRELUDE = `
     } catch (e) {}
     var signedIn = null;
     try { signedIn = html.indexOf('"customerId":"') >= 0; } catch (e) {}
-    return { ok: true, items: items, ms: ms, signedIn: signedIn, bytes: html.length };
+    return { ok: true, items: items, ms: ms, signedIn: signedIn, bytes: html.length, via: 'page' };
+  };
+
+  /**
+   * The operation first, the page behind it.
+   *
+   * MEASURED 2026-09-03: the operation answers in ~0.9s against ~1.2-1.5s for
+   * the 610-780KB document, and it is the request the site itself makes for a
+   * client-side search — which matters as much as the speed on a store that
+   * challenges anything that looks like page scraping.
+   */
+  WM.searchOnce = async function (term, budgetMs) {
+    var op = await WM.searchOp(term, budgetMs);
+    if (op && op.ok) return op;
+    // A block is a block: do not spend a 700KB page fetch proving it twice.
+    if (op && op.why === 'blocked') return op;
+    return WM.searchPage(term, budgetMs);
   };
 
   /** Sold by the pound, rather than merely priced that way. */
@@ -234,12 +313,36 @@ const WM_PRELUDE = `
   };
 
   WM.candidate = function (it) {
+    // THE PRICE, which only the OPERATION carries.
+    //
+    // The server-rendered page ships priceInfo with every field empty and
+    // price: 0 on every item — Walmart strips it there — which is why this rail
+    // reached the Choose Products screen without prices at all. The Search
+    // operation returns priceDetails.priceLines instead, and DISCOUNTED_PRICE
+    // is the one the shopper pays.
     var price = null;
     try {
-      var p = it.priceInfo && it.priceInfo.currentPrice;
-      if (p && p.priceString) price = String(p.priceString);
-      else if (p && p.price != null) price = '$' + Number(p.price).toFixed(2);
+      var lines = it.priceInfo && it.priceInfo.priceDetails && it.priceInfo.priceDetails.priceLines;
+      if (lines) {
+        for (var li = 0; li < lines.length && !price; li++) {
+          if (String(lines[li].lineType) !== 'DISCOUNTED_PRICE') continue;
+          var vals = lines[li].values || [];
+          for (var vi = 0; vi < vals.length && !price; vi++) {
+            if (String(vals[vi].key) === 'PRICE' && vals[vi].value != null) {
+              price = '$' + String(vals[vi].value);
+            }
+          }
+        }
+      }
     } catch (e) {}
+    // The page's shape, for the fallback path.
+    if (!price) {
+      try {
+        var p = it.priceInfo && it.priceInfo.currentPrice;
+        if (p && p.priceString) price = String(p.priceString);
+        else if (p && p.price) price = '$' + Number(p.price).toFixed(2);
+      } catch (e) {}
+    }
     var img = null;
     try { img = it.imageInfo && (it.imageInfo.thumbnailUrl || it.imageInfo.size200Url) || it.image || null; } catch (e) {}
     var avail = String(it.availabilityStatusDisplayValue || it.availabilityStatus || '');

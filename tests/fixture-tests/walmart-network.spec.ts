@@ -354,3 +354,85 @@ describe('a challenge is not an empty shelf', () => {
     expect(msg.status).toBe(412);
   }, AT_WALMART);
 });
+
+describe('the search takes the operation, not the page', () => {
+  // MEASURED 2026-09-03: the site's own client-side search is
+  // GET /orchestra/snb/graphql/Search/<hash>/search?variables=..., which answers
+  // in ~1.0s where the server-rendered document takes ~1.2-2.3s and weighs
+  // 610-780KB. On a store that challenges anything resembling page scraping,
+  // making the request the site itself makes matters as much as the speed.
+  //
+  // There is no /_next/data route to use instead: the page uses
+  // getInitialProps, and every variant of that URL 404s.
+  const opDoc = (items: unknown[]) => JSON.stringify({
+    data: { search: { searchResult: { itemStacks: [{ itemsV2: items }] } } },
+  });
+
+  function stub(opts: { opStatus?: number; opItems?: unknown[] | null; pageItems?: unknown[] } = {}) {
+    return [
+      '(function () {',
+      '  window.__calls = [];',
+      '  window.fetch = function (url) {',
+      '    var u = String(url);',
+      '    window.__calls.push(u.indexOf("/graphql/Search/") >= 0 ? "op" : (u.indexOf("/search?q=") >= 0 ? "page" : "other"));',
+      '    if (u.indexOf("/graphql/Search/") >= 0) {',
+      '      return Promise.resolve({ status: ' + String(opts.opStatus ?? 200) + ', text: function () {',
+      '        return Promise.resolve(' + JSON.stringify(opts.opItems === null ? '{"data":{}}' : opDoc(opts.opItems ?? [hit()])) + '); } });',
+      '    }',
+      '    if (u.indexOf("/search?q=") >= 0) {',
+      '      return Promise.resolve({ status: 200, text: function () {',
+      '        return Promise.resolve(' + JSON.stringify(searchDoc(opts.pageItems ?? [hit({ offerId: 'FROM-PAGE' })])) + '); } });',
+      '    }',
+      '    return Promise.resolve({ status: 404, text: function () { return Promise.resolve(""); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n');
+  }
+
+  itWithFixture('logged-in-home.html', 'uses the operation and never fetches the page', async (runner) => {
+    await runner.inject(cartMap());
+    await runner.inject(stub());
+    await runner.inject(buildWalmartNetworkSearchBatchScript(['sour cream'])!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 25_000) as Record<string, unknown>;
+    expect((msg.candidates as Array<Record<string, unknown>>)[0].productId)
+      .toBe('C9CD90D38EC24123AB6FBB669B830D0F');
+    const calls = await runner.page.evaluate('window.__calls') as string[];
+    expect(calls).toContain('op');
+    expect(calls).not.toContain('page');
+  }, AT_WALMART);
+
+  itWithFixture('logged-in-home.html', 'falls back to the page when the operation cannot answer', async (runner) => {
+    // A persisted hash retires with a deploy. The page is slower and it still
+    // works, so the run carries on rather than failing the term.
+    await runner.inject(cartMap());
+    await runner.inject(stub({ opItems: null }));
+    await runner.inject(buildWalmartNetworkSearchBatchScript(['sour cream'])!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 25_000) as Record<string, unknown>;
+    expect((msg.candidates as Array<Record<string, unknown>>)[0].productId).toBe('FROM-PAGE');
+    const calls = await runner.page.evaluate('window.__calls') as string[];
+    expect(calls).toContain('page');
+  }, AT_WALMART);
+
+  itWithFixture('logged-in-home.html', 'does not spend a 700KB page proving a block twice', async (runner) => {
+    await runner.inject(cartMap());
+    await runner.inject(stub({ opStatus: 412 }));
+    await runner.inject(buildWalmartNetworkSearchBatchScript(['sour cream'])!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT_FAILED', 25_000) as Record<string, unknown>;
+    expect(msg.why).toBe('blocked');
+    const calls = await runner.page.evaluate('window.__calls') as string[];
+    expect(calls).not.toContain('page');
+  }, AT_WALMART);
+
+  itWithFixture('logged-in-home.html', 'reads the price the operation carries', async (runner) => {
+    // The page ships priceInfo with every field empty and price: 0, which is
+    // why this rail had no prices at all. The operation returns priceLines.
+    await runner.inject(cartMap());
+    await runner.inject(stub({ opItems: [hit({ priceInfo: { priceDetails: { priceLines: [
+      { lineType: 'COMPARISON', values: [{ key: 'WAS_PRICE', value: '2.94' }] },
+      { lineType: 'DISCOUNTED_PRICE', values: [{ key: 'PRICE', value: '2.79' }] },
+    ] } } })] }));
+    await runner.inject(buildWalmartNetworkSearchBatchScript(['sour cream'])!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 25_000) as Record<string, unknown>;
+    expect((msg.candidates as Array<Record<string, unknown>>)[0].price).toBe('$2.79');
+  }, AT_WALMART);
+});
