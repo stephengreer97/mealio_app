@@ -35,6 +35,18 @@ ABSOLUTE (measured 1&nbsp;&rarr;&nbsp;2). Without it the write creates a line an
 that exists. The field name is load-bearing: plain <code>id</code> and <code>cartLineId</code> both
 answered "400: Bad Request". So <i>held + wanted</i> for a line that exists, <i>wanted</i> for a new
 one &mdash; add on top, like every other rail.</p>
+<p><b>&#9888; THE CHALLENGE WEARS A 200.</b> After a burst of searches this store answers
+<code>/search?q=</code> with a 15&nbsp;KB document titled <b>"Robot or human?"</b> and the cart with
+<b>412</b>. Status alone cannot see the first, and reading its body as "no payload" says the same
+thing the rail would say for a store that genuinely returned nothing &mdash; which sends the user to
+an empty Choose Products screen for a store that never looked. So: 412 joins 418/429/403 as
+<code>blocked</code>, a 200 whose head says "Robot or human" is <code>blocked</code>, and the FIRST
+block stops the batch and hands over to the user. Searches are paced with a short random gap.</p>
+<p><b>&#9888; Open question, and the real one:</b> a normal run does 6&ndash;14 searches in a burst,
+which is not far off what tripped this. A lighter search than a 780&nbsp;KB document per term &mdash;
+the Next.js data route <code>/_next/data/&lt;buildId&gt;/search.json</code> &mdash; would be quieter
+AND faster. Unmeasured: by the time it was tried the session was challenged on the homepage too, so
+there was no buildId to read.</p>
 <p><b>&#9888; NO PRICE.</b> The SSR payload carries <code>priceInfo</code> with every field empty and
 <code>price: 0</code> on every item, so Walmart candidates reach the Choose Products screen without
 one. The only rail with this gap.</p>
