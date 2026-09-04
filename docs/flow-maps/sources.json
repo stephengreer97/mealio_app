@@ -21,7 +21,7 @@
         "src/constants/features.ts",
         "src/constants/stores.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "store-heb.html": {
       "title": "H-E-B",
@@ -33,7 +33,7 @@
         "src/lib/cart-reconcile.ts",
         "src/components/WebViewCartSheet.tsx"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "store-walmart.html": {
       "title": "Walmart",
@@ -42,7 +42,7 @@
         "src/lib/webview-scripts/_scoring.ts",
         "src/lib/automation-config/schema.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "store-wegmans.html": {
       "title": "Wegmans",
@@ -50,7 +50,7 @@
         "src/lib/webview-scripts/wegmans.ts",
         "src/lib/automation-config/schema.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "store-aldi-instacart.html": {
       "title": "ALDI / Instacart Storefront",
@@ -60,7 +60,7 @@
         "src/lib/webview-scripts/cart-count.ts",
         "src/lib/automation-config/schema.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "store-albertsons-family.html": {
       "title": "Albertsons family",
@@ -69,7 +69,7 @@
         "src/lib/webview-scripts/auth-urls.ts",
         "src/lib/automation-config/schema.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "store-kroger-family.html": {
       "title": "Kroger family",
@@ -79,7 +79,7 @@
         "src/lib/api.ts",
         "src/constants/stores.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "store-mockstore.html": {
       "title": "Mock Store",
@@ -88,7 +88,7 @@
         "src/lib/webview-scripts/index.ts",
         "src/constants/stores.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "behavior-cart-engine.html": {
       "title": "The cart engine",
@@ -98,14 +98,14 @@
         "src/lib/webview-scripts/index.ts",
         "src/lib/automation-config/decisions.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "behavior-cart-reconcile.html": {
       "title": "Reconciliation & the verdict",
       "sources": [
         "src/lib/cart-reconcile.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "behavior-choose-products.html": {
       "title": "Choose Products & matching",
@@ -116,7 +116,7 @@
         "src/lib/saveChosenIngredient.ts",
         "src/components/ChooseProductsIntroSheet.tsx"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "behavior-remote-config.html": {
       "title": "Remote config & catalog",
@@ -125,7 +125,7 @@
         "src/lib/store-catalog",
         "src/constants/stores.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "behavior-telemetry.html": {
       "title": "Telemetry & the north-star",
@@ -133,7 +133,7 @@
         "src/lib/north-star.ts",
         "src/lib/automation-telemetry.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "behavior-auth.html": {
       "title": "Login, tokens & session",
@@ -143,7 +143,7 @@
         "src/screens/auth",
         "src/navigation/RootNavigator.tsx"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "behavior-account.html": {
       "title": "Account, subscription & admin",
@@ -154,7 +154,7 @@
         "src/lib/fixture-capture-config.ts",
         "src/navigation/MainTabs.tsx"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "behavior-creator.html": {
       "title": "Creator account",
@@ -163,7 +163,7 @@
         "src/components/YouTubeConnectCard.tsx",
         "src/components/PlatformLinksCard.tsx"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     },
     "behavior-meal-lifecycle.html": {
       "title": "Meal lifecycle & ingredients",
@@ -174,7 +174,7 @@
         "src/lib/normalizeIngredients.ts",
         "src/lib/consolidateIngredients.ts"
       ],
-      "readAt": "16cab6b"
+      "readAt": "9635e7b"
     }
   }
 }
