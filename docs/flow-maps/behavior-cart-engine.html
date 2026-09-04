@@ -78,6 +78,19 @@ has already been given the choice this run has to offer.</p>
 result gave every card an EMPTY list, because that handler stores <code>candidates: []</code> on
 every row it writes.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<h3>2026-09-04 &mdash; no store chosen is a PROMPT</h3>
+<p><code>session_no_store</code> used to hand the user the storefront and a list of terms to search by
+hand. It now stops the run, shows the storefront, and asks: "Choose a &lt;store&gt; store in the
+browser below, then tap Try again &mdash; prices and what is in stock are different at every store."
+The WHY is in the banner on purpose; "choose a store" alone reads as busywork.</p>
+<p>It reuses the <code>robot_challenge</code> screen because the shape is the same &mdash; the page
+needs a person for a moment, then the run resumes &mdash; and Try again already restarts from the
+login check, which re-reads the session and picks up the store they chose. The banner is the only
+difference between the two cases.</p>
+<p>Four of the five rails need a store; Walmart says <code>needsStoreId: false</code> and never
+reaches this, because its search is national and its cart is the account's.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>running</b> — the bubble spins</span>

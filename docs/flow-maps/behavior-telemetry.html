@@ -10,6 +10,12 @@
   <div class="sub">Read off <code>lib/north-star.ts</code> and
   <code>lib/automation-telemetry.ts</code>. "The automation ran" and "the user got their groceries"
   are different numbers, and only the second one is worth steering by.</div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<p><b>2026-09-04.</b> A <code>blocked</code> row with <code>reason: 'no_store'</code> codes as
+<code>auth_required</code>, not <code>waf_block</code>. It is a session precondition &mdash; the user
+has never told the store which branch they shop at &mdash; and charting it as a robot wall would say
+a WAF got harder when what happened is that somebody opened the app for the first time.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#22c55e"></span><b>In the numerator</b></span>
