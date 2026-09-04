@@ -269,11 +269,45 @@ describe('the login check and the early session answer', () => {
     expect(writes()).toBe(1);
   });
 
-  it('a signed-out early answer still goes straight to the login screen', () => {
-    // The whole reason the early answer exists: no budget of ours may make a
-    // signed-out user wait to be told to sign in.
+  it('a signed-out early answer gives the STOREFRONT a chance first', () => {
+    // CHANGED 2026-09-04, and this reverses a deliberate decision, so here is
+    // the measurement that reversed it.
+    //
+    // The early answer exists so that no budget of ours makes a signed-out user
+    // wait to be told to sign in, and acting on it immediately was right on that
+    // reasoning. It is wrong when the answer is wrong — and from the QUIET PAGE
+    // this store's answer is wrong for a signed-in user, because /userinfo
+    // cannot resolve the session there until the site's own code has run once.
+    //
+    //   12:53:08.8  signed out, from robots.txt   -> sign-in screen
+    //   12:53:09.7  the storefront loads
+    //   12:53:10.0  ask #1 -> signed out
+    //   12:53:14.2  ask #5 -> SIGNED IN
+    //   12:53:15.0  verified
+    //
+    // Stephen: "I am already signed in, but it took me to the sign into
+    // albertsons page for few seconds before realizing I am logged in. That
+    // should not happen."
+    //
+    // So: one storefront load, then believe the answer. A genuinely signed-out
+    // user reaches the same screen about a second later; a signed-in one never
+    // sees it at all.
     const { view, post } = openOnLoginCheck();
     post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
+    expect(view.queryByText(/log into your Albertsons account once/i)).toBeNull();
+  });
+
+  it('and takes the second answer at its word', () => {
+    // The other half. Once the site has had its load, a signed-out answer IS
+    // final and the user is not left waiting for a session that is not coming.
+    const { view, post } = openOnLoginCheck();
+    post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
+    act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onLoadEnd({
+        nativeEvent: { url: 'https://www.albertsons.com/?_t=2' },
+      });
+    });
+    post({ type: 'ALB_SESSION', ok: true, loggedIn: false, source: 'userinfo' });
     expect(view.queryByText(/log into your Albertsons account once/i)).toBeTruthy();
   });
 });

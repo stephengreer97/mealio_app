@@ -62,7 +62,7 @@ import { attemptedFailureNames, auditCartAfterRun, buildCartVerdict, dropExplain
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { sameProductBarSize, scoreMatch } from '../lib/webview-scripts/_scoring';
 import { challengeMayTakeTheScreen } from '../lib/cart-challenge';
-import { canSignInHere } from '../lib/login-page';
+import { canSignInHere, signedOutIsFinal } from '../lib/login-page';
 import { firstAddableIdx, reviewUnaddableReason } from '../lib/review-selection';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 
@@ -3194,6 +3194,7 @@ export default function WebViewCartSheet({
     const s = scriptsRef.current!;
     const here = canSignInHere({
       url: lastLoadEndUrlRef.current, domain: s.domain, railUrl: s.railUrl,
+      isLoginPageUrl: s.isLoginPageUrl ?? null,
     });
     setStep('login');
     lastLoadEndUrlRef.current = '';
@@ -5414,6 +5415,22 @@ export default function WebViewCartSheet({
               netSessionAtRef.current = Date.now();
             }
             if (msg.loggedIn) snapshotBeforeAndBeginSearch();
+            // NOT FINAL FROM THE QUIET PAGE. Some stores cannot answer this from
+            // robots.txt until their own code has run once, and they say SIGNED
+            // OUT rather than "I do not know" — Albertsons showed Stephen a
+            // sign-in wall and then signed him in by itself six seconds later.
+            // The repair already knows how to give the site a storefront load;
+            // it just has to happen BEFORE the wall rather than underneath it.
+            else if (!onLoginStep && !signedOutIsFinal({
+              url: lastLoadEndUrlRef.current,
+              domain: scriptsRef.current!.domain,
+              railUrl: scriptsRef.current!.railUrl,
+            }) && netSessionRepairFromRef.current === 0) {
+              netSessionRepairFromRef.current = Date.now();
+              console.log(`[Cart ${ts()}]`, 'signed out on the quiet page — letting the storefront answer first');
+              navToRef.current(scriptsRef.current!.storeUrl);
+              armLoginCheckTimeoutRef.current();
+            }
             // THE ROUTE A RAIL STORE ACTUALLY TAKES, and it used to set the step
             // and navigate nowhere — leaving the user looking at robots.txt.
             else if (!onLoginStep) surfaceLoginRef.current();

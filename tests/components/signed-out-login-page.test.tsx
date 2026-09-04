@@ -123,12 +123,29 @@ function signedOutOnTheQuietPage() {
 
 describe('a signed-out rail store', () => {
   it('is taken off the quiet page to somewhere it can sign in', () => {
-    const { view, post } = signedOutOnTheQuietPage();
+    const { view, post, load } = signedOutOnTheQuietPage();
+    // The FIRST signed-out answer from the quiet page is not acted on — some
+    // stores cannot resolve a session there until their own code has run, and
+    // Albertsons answered "signed out" for six seconds about a user who was
+    // signed in. See signedOutIsFinal. The storefront gets one load...
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    load('https://www.heb.com/?_t=2');
+    // ...and its answer is taken at its word.
     post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
     expect(view.queryByText(/log into your H-E-B account/i)).toBeTruthy();
-    // THE ASSERTION. robots.txt has no sign-in form; the login URL does.
+    // THE ASSERTION THIS FILE IS FOR. robots.txt has no sign-in form; the login
+    // URL does.
     expect(uriOf(view)).not.toContain('robots.txt');
     expect(uriOf(view)).toContain('/my-account/login');
+  });
+
+  it('and is not shown a sign-in wall on the quiet page\'s word alone', () => {
+    const { view, post } = signedOutOnTheQuietPage();
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    expect(view.queryByText(/log into your H-E-B account/i)).toBeNull();
+    // It went to the storefront to ask there, which is where the site's own
+    // code runs and where a session that only needed waking up wakes up.
+    expect(uriOf(view)).not.toContain('robots.txt');
   });
 
   it('and every OTHER route to the login step goes through the same door', () => {
@@ -147,10 +164,11 @@ describe('a signed-out rail store', () => {
     expect(src.slice(0, at)).toMatch(/const surfaceLogin = useCallback\([\s\S]*$/);
   });
 
-  it('leaves a real store page alone, which is why the skip exists', () => {
-    // A store whose check opened a sign-in menu must not have it navigated out
-    // from under the user. That was the whole reason for the skip, and it still
-    // holds — the rule changed from "on this domain" to "can sign in here".
+  it('leaves the store\'s own sign-in page alone', () => {
+    // Where the skip earns its place: the store has redirected us to its form,
+    // and navigating again would throw away the chain that got us there. The
+    // rule went from "on this domain" to "is this a sign-in page" — the wide
+    // version left users on the storefront homepage under the word "Log in".
     enableRail();
     const view = render(
       <WebViewCartSheet visible meals={MEALS}
@@ -159,7 +177,7 @@ describe('a signed-out rail store', () => {
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
     act(() => {
       view.getAllByTestId('mock-webview')[0].props.onLoadEnd({
-        nativeEvent: { url: 'https://www.heb.com/my-account/sign-in-menu-open' },
+        nativeEvent: { url: 'https://www.heb.com/my-account/login' },
       });
     });
     const before = uriOf(view);

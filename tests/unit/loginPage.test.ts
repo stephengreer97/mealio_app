@@ -31,11 +31,33 @@ describe('where the user can actually sign in', () => {
     })).toBe(false);
   });
 
-  it('yes on a real store page, which is the case worth protecting', () => {
-    // The reason the skip exists: a store whose check opened a sign-in menu
-    // must not have it navigated out from under the user.
+  it('yes on the store\'s own sign-in page', () => {
+    // Where the skip earns its place: the store has redirected us to its form,
+    // and navigating again would throw away the chain that got us there.
     expect(canSignInHere({ url: 'https://www.heb.com/my-account/login', ...HEB })).toBe(true);
-    expect(canSignInHere({ url: 'https://www.heb.com/', ...HEB })).toBe(true);
+    expect(canSignInHere({ url: 'https://accounts.heb.com/interaction/abc/login', ...HEB, domain: 'heb.com' })).toBe(true);
+  });
+
+  it('NO on the storefront homepage, which is not a sign-in page', () => {
+    // TIGHTENED 2026-09-04. The rule was "is this the store's domain", written
+    // when a DOM login check could open a sign-in menu on the storefront and
+    // navigating away would have lost it. Every one of those checks is deleted,
+    // and the wide rule had a cost: the session repair sends the user to the
+    // STOREFRONT, which passed — so they were left on the homepage under the
+    // word "Log in", with the sign-in link somewhere on the page to find.
+    expect(canSignInHere({ url: 'https://www.heb.com/', ...HEB })).toBe(false);
+    expect(canSignInHere({ url: 'https://www.heb.com?_t=17885.3', ...HEB })).toBe(false);
+  });
+
+  it('asks the STORE where it has an opinion', () => {
+    // H-E-B's sign-in lives on accounts.heb.com, and its adapter says so. A
+    // store that knows better than a regex is asked.
+    const said: string[] = [];
+    expect(canSignInHere({
+      url: 'https://www.heb.com/whatever', ...HEB,
+      isLoginPageUrl: (u) => { said.push(u); return true; },
+    })).toBe(true);
+    expect(said).toEqual(['https://www.heb.com/whatever']);
   });
 
   it('not on about:blank', () => {
