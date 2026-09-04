@@ -38,7 +38,7 @@ const SRC = path.resolve(__dirname, '../../src');
  * codebase and one storefront however many names it trades under.
  */
 const STORE_FILES: Record<string, string[]> = {
-  heb: ['heb.ts', 'heb-network-search.ts', 'heb-cart-query.ts'],
+  heb: ['heb.ts', 'heb-network-search.ts'],
   walmart: ['walmart.ts', 'walmart-network.ts'],
   albertsons: ['albertsons.ts', 'albertsons-network.ts'],
   instacart: ['instacart.ts', 'aldi-network.ts'],

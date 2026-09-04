@@ -315,7 +315,7 @@ export interface WorkerReport {
   reason: string | null;
   /**
    * MEAL-14: what the STORE'S CART said about this item, when the store has a
-   * cart query we can read (H-E-B, behind `stores.heb.cartSkuConfirm`). Null for
+   * write that can prove what it did. Null for
    * every store and every path still confirming off the DOM — absence means "no
    * cart verdict", which is not the same as a negative one.
    */

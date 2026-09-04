@@ -182,7 +182,7 @@ beforeEach(() => {
 async function runToReconcile(
   answer: Record<string, unknown>,
   workerSucceeded = true,
-  // A rail verdict riding on the add's report, exactly as heb-cart-query posts
+  // A rail verdict riding on the add's report, exactly as the rail's own write posts
   // it. Present, it is what the walled-cart guard weighs the cart read against.
   confirm?: Record<string, unknown>,
 ) {
