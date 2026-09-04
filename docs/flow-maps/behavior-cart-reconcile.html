@@ -10,6 +10,18 @@
   <div class="sub">Read off <code>lib/cart-reconcile.ts</code> (1,557 lines, and every one of them
   a case somebody hit). Shared by every WebView store. This is the layer that decides what the done
   screen is allowed to say.</div>
+<div class="wrap" style="border-left:4px solid #ef4444;padding-left:14px">
+<h3>2026-09-04 &mdash; a refused item is not an unintended one</h3>
+<p>A definitive failure (out of stock, no results, needs a weight) routes out of the quantity
+matching, so it accounts for NOTHING &mdash; and a store that <b>accepts the write and flags the line
+unavailable</b> then leaves a cart row nothing explains, which the over-add check reports as "your
+cart has 1 item Mealio didn't intend to add". Measured on Albertsons: the row named was the cheese
+Mealio had asked for by name seventeen seconds earlier. <code>attemptedFailureNames</code> now
+explains those rows, one unit per failed attempt.</p>
+<p>The safety net is unchanged for the two cases it exists for: a product the run never mentioned is
+still reported, and a DOUBLE-add of something it did add is still reported &mdash; only FAILURES are
+named, and a successful item is already accounted for at its full requested quantity.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#22c55e"></span><b>Confirmed by the cart</b></span>
