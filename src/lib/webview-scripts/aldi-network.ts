@@ -22,6 +22,7 @@
 // harvest, cache, and forget the cache the moment the store says a hash is
 // unknown.
 import { INSTACART_TENANTS } from './instacart';
+import type { NetworkRail } from './network-rail';
 
 /** Where the harvested operation map is cached, and for how long. */
 const OPS_CACHE_KEY = '__mealio_ic_ops_v1';
@@ -787,3 +788,70 @@ ${IC_PRELUDE}
   }
 })(); true;`;
 }
+
+// ── The rail ─────────────────────────────────────────────────────────────────
+//
+// Moved here from network-rail.ts on 2026-09-04. A rail is a store's answer to
+// the questions the engine asks, so it belongs in the store's own file: editing
+// this one no longer means opening a file the other four are also in.
+
+/**
+ * Instacart Storefront, which ALDI runs on.
+ *
+ * Registered against the PLATFORM rather than the banner: INSTACART_TENANTS is
+ * the registry, so a tenant added there gets this rail without another entry
+ * here. That is the same reasoning railConfigKey uses for the fifteen
+ * Albertsons banners.
+ */
+export const INSTACART_RAIL: NetworkRail = {
+  sessionMessageType: 'ALDI_SESSION',
+  sessionScript: () => buildAldiSessionScript(),
+  searchBatch: (terms, sess) =>
+    buildAldiNetworkSearchBatchScript(terms, {
+      shopId: sess.storeId,
+      requestMs: INSTACART_RAIL.budgets.searchRequestMs,
+    }),
+  cartRead: () => buildAldiCartReadScript(),
+  addBatch: (items, opts) =>
+    buildAldiNetworkAddBatchScript(
+      items.map((i) => ({ idx: i.idx, productId: i.productId, quantity: i.quantity, name: i.name })),
+      {
+        knownLines: opts?.knownLines ?? null,
+        // MEASURED against the real store, 2026-09-03, on one authorised write.
+        // The cart held 1 of items_23898-46580608; we wrote quantity 2 and read
+        // it back as 2, not 3, then restored it to 1. The write SETS the line.
+        //
+        // The storefront's own bundle says the same thing independently: its
+        // updateCartItems computes `finalQuantity: u` from the value you send
+        // and derives the delta (u - d) only for analytics, and its bulk-add
+        // path computes held + wanted ITSELF before sending. There is no
+        // quantityDelta anywhere in it. The mutation variable is named
+        // newQuantity.
+        //
+        // So held + wanted, which is what this script already writes, is right —
+        // and the refusal of an item the cart already holds can lift.
+        absoluteQty: true,
+      },
+    ),
+  // The cart is addressed by the item id the search returns
+  // (items_23898-18647633). There is no sku on this platform at all.
+  writable: (c) => !!c.productId,
+  // One session answer. ActiveCarts takes no arguments and returns everything
+  // the run needs, so there is no early/refined split to wait out.
+  sessionUsable: () => true,
+  // No preference concept on this platform.
+  needsPreference: () => false,
+  // MEASURED 2026-09-02 against a live session: ActiveCarts 176ms, CartItems
+  // 306ms, AsyncItemSearch 556ms for one term. Generous against that, and the
+  // search budget carries the extra hydration call every batch makes.
+  budgets: {
+    sessionMs: 20_000,
+    searchMs: (terms) => Math.min(20_000 + terms * 3_000, 90_000),
+    searchResumeMs: 20_000,
+    addMs: (items) => Math.min(30_000 + items * 1_500, 90_000),
+    cartProbeMs: 20_000,
+    searchRequestMs: 15_000,
+    // No cold-start problem observed; the first call was as quick as the rest.
+    searchFirstRequestMs: 15_000,
+  },
+};

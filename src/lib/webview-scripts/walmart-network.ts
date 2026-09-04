@@ -1,3 +1,4 @@
+import type { NetworkRail } from './network-rail';
 /**
  * Walmart, over the network.
  *
@@ -632,3 +633,65 @@ ${WM_PRELUDE}
   }
 })(); true;`;
 }
+
+// ── The rail ─────────────────────────────────────────────────────────────────
+//
+// Moved here from network-rail.ts on 2026-09-04. A rail is a store's answer to
+// the questions the engine asks, so it belongs in the store's own file: editing
+// this one no longer means opening a file the other four are also in.
+
+/**
+ * Walmart.
+ *
+ * The odd one out in exactly one way: its SEARCH is a GET of a server-rendered
+ * page whose whole result set is in a __NEXT_DATA__ script tag, rather than an
+ * API call. One request, one JSON.parse, no rendering and no selectors — the
+ * same properties the other three have, reached differently.
+ *
+ * Its cart is Walmart's own persisted-query scheme, with the operation name and
+ * hash in the URL path. The headers are the gate: too few and the answer is 418
+ * Access Denied.
+ */
+export const WALMART_RAIL: NetworkRail = {
+  sessionMessageType: 'WMT_SESSION',
+  sessionScript: buildWalmartSessionScript,
+  searchBatch: (terms) => buildWalmartNetworkSearchBatchScript(terms),
+  cartRead: () => buildWalmartCartReadScript(),
+  addBatch: (items, opts) =>
+    buildWalmartNetworkAddBatchScript(
+      items.map((i) => ({ idx: i.idx, productId: i.productId, skuId: i.skuId ?? null,
+                          quantity: i.quantity, name: i.name })),
+      {
+        // UNMEASURED: whether updateItems SETS a line or ADDS to it. ALDI and
+        // Wegmans both surprised me on this question, and Wegmans turned out to
+        // do BOTH depending on a line id — so it is null until a device says
+        // otherwise, and null means the script sends held + wanted, which is
+        // right for a SET and is checked against the cart afterwards either way.
+        absoluteQty: opts?.absoluteQty ?? null,
+      },
+    ),
+  // The OFFER is the identifier. usItemId rides along for display and is sent
+  // empty on the write, which is measured rather than assumed.
+  writable: (c) => !!c.productId,
+  // One answer, from localStorage. Nothing to wait out.
+  sessionUsable: () => true,
+  // No store to resolve: national search, account cart.
+  needsStoreId: false,
+  needsPreference: () => false,
+  // MEASURED: cart read ~700-800ms, search ~1.5-3s for a 500KB document. The
+  // search is the slow half here because it is a whole page.
+  budgets: {
+    sessionMs: 10_000,
+    // The BASE covers one cold request, which is allowed 25s below. It was
+    // 15_000, so a one-term search had a 19s phase deadline over a request with
+    // a 25s budget: the phase gave up while the request it was waiting for was
+    // still legitimately running. Found by storeIsolation.test.ts on the day
+    // that check was extended past the two stores it had been written for.
+    searchMs: (terms) => Math.min(30_000 + terms * 4_000, 90_000),
+    searchResumeMs: 20_000,
+    addMs: (items) => Math.min(30_000 + items * 3_000, 120_000),
+    cartProbeMs: 20_000,
+    searchRequestMs: 20_000,
+    searchFirstRequestMs: 25_000,
+  },
+};

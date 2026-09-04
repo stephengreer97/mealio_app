@@ -23,7 +23,7 @@ import {
   findUnaddedItems,
   normalizeName,
 } from './webview-scripts/cart-count';
-import { HebAddConfirmation } from './webview-scripts/heb-cart-query';
+import { AddConfirmation } from './cart-confirmation';
 
 // ── Sold-by-weight ────────────────────────────────────────────────────────────
 
@@ -319,7 +319,7 @@ export interface WorkerReport {
    * every store and every path still confirming off the DOM — absence means "no
    * cart verdict", which is not the same as a negative one.
    */
-  confirm?: HebAddConfirmation | null;
+  confirm?: AddConfirmation | null;
 }
 
 /** Failure reasons that are definitive: the item is genuinely not in the cart

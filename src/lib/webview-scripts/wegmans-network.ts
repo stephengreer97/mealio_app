@@ -1,3 +1,4 @@
+import type { NetworkRail } from './network-rail';
 // Wegmans over the network.
 //
 // Researched 2026-09-02/03 against a live signed-in session on the device; see
@@ -1238,3 +1239,74 @@ ${WEG_PRELUDE}
   }
 })(); true;`;
 }
+
+// ── The rail ─────────────────────────────────────────────────────────────────
+//
+// Moved here from network-rail.ts on 2026-09-04. A rail is a store's answer to
+// the questions the engine asks, so it belongs in the store's own file: editing
+// this one no longer means opening a file the other four are also in.
+
+/**
+ * Wegmans. The only store here whose SEARCH needs no session at all.
+ *
+ * Algolia answers in 13ms with a public search key, so a Wegmans search works
+ * signed-out and cannot be broken by an expired token. The cart half needs a
+ * bearer that MSAL keeps encrypted, which is why sessionUsable below is the
+ * strictest of the three rails.
+ */
+export const WEGMANS_RAIL: NetworkRail = {
+  sessionMessageType: 'WEGMANS_SESSION',
+  sessionScript: buildWegmansSessionScript,
+  searchBatch: (terms, sess) =>
+    buildWegmansNetworkSearchBatchScript(terms, {
+      storeNumber: sess.storeId,
+      requestMs: WEGMANS_RAIL.budgets.searchRequestMs,
+    }),
+  cartRead: () => buildWegmansCartReadScript(),
+  addBatch: (items, opts) =>
+    buildWegmansNetworkAddBatchScript(
+      items.map((i) => ({
+        idx: i.idx, productId: i.productId, skuId: i.skuId ?? null,
+        quantity: i.quantity, name: i.name,
+      })),
+      {
+        knownLines: opts?.knownLines ?? null,
+        // Passed THROUGH, so the semantics can be measured with the rail's own
+        // script rather than a reimplementation of it. Still null in the app
+        // until the measurement says otherwise.
+        absoluteQty: opts?.absoluteQty ?? null,
+      },
+    ),
+  // The cart is addressed by productId, and the search returns skuId as the
+  // same value. Nothing needs both, so requiring both would break this store
+  // the way it broke Albertsons.
+  writable: (c) => !!c.productId,
+  /**
+   * TWO ANSWERS, and the second is the one the run waits for.
+   *
+   * `early` settles the login gate the instant the localStorage read is done --
+   * no budget of ours may make a signed-in user wait to be told they are signed
+   * in. But a run needs the cart, the cart needs a bearer, and the bearer is in
+   * an encrypted MSAL cache. `cartCapable` is the probe having actually used
+   * one, so it is what lets the run start.
+   *
+   * Exactly the shape Albertsons taught us, for a different reason.
+   */
+  sessionUsable: (msg) => !(msg as { early?: boolean }).early,
+  // No preference concept on this store.
+  needsPreference: () => false,
+  // MEASURED 2026-09-02: Algolia 13ms filtered, 26ms not. Nothing here shows the
+  // Albertsons cold-start, so the budgets are the tighter H-E-B shape.
+  budgets: {
+    sessionMs: 15_000,
+    // Base above the 12s per-request budget below, for the same reason as
+    // Walmart's: at 10_000 a single-term search deadlined at 11.5s over a
+    // request allowed 12s.
+    searchMs: (terms) => Math.min(15_000 + terms * 1_500, 45_000),
+    searchResumeMs: 15_000,
+    addMs: (items) => Math.min(30_000 + items * 3_000, 120_000),
+    cartProbeMs: 15_000,
+    searchRequestMs: 12_000,
+    searchFirstRequestMs: 12_000,
+  },
+};

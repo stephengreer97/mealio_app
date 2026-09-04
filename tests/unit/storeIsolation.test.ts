@@ -19,16 +19,23 @@
 
 import { getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../../src/lib/webview-scripts/network-rail';
 import { getStoreScripts } from '../../src/lib/webview-scripts';
-import { INSTACART_TENANTS } from '../../src/lib/webview-scripts/instacart';
-import { ALBERTSONS_FAMILY_IDS } from '../../src/lib/webview-scripts/albertsons';
-import * as fs from 'fs';
-import * as path from 'path';
+import { WEBVIEW_STORE_IDS } from '../../src/constants/stores';
 
-// Every store that HAS a rail, read from the same places the engine reads them,
-// so a store gaining one cannot quietly skip these guards. ALDI is here through
-// INSTACART_TENANTS rather than by name: the rail is registered against the
-// PLATFORM, so any tenant added to that registry has to satisfy this file too.
-const RAIL_STORES = ['heb', 'wegmans', ...ALBERTSONS_FAMILY_IDS, ...Object.keys(INSTACART_TENANTS)];
+/**
+ * Every store that HAS a rail — DERIVED, by asking the registry about every
+ * store in the catalogue, rather than listed.
+ *
+ * It used to be a list, and the list was wrong within a day: Walmart's rail
+ * shipped on 2026-09-03 and none of the guards in this file were applied to it,
+ * because nobody remembered to add the word 'walmart' to an array at the top of
+ * a test. A store cannot skip these by being forgotten now.
+ */
+const RAIL_STORES = [...WEBVIEW_STORE_IDS].filter((id) => !!getNetworkRail(id));
+
+/** One representative per rail, so a per-rail assertion runs once, not fifteen
+ *  times for the Albertsons banners. */
+const ONE_PER_RAIL = RAIL_STORES.filter((id, i, all) =>
+  all.findIndex((o) => getNetworkRail(o) === getNetworkRail(id)) === i);
 
 describe('every rail answers every question the engine asks', () => {
   // A new store that omits a member does not inherit another store's behaviour
@@ -37,6 +44,21 @@ describe('every rail answers every question the engine asks', () => {
     'sessionMessageType', 'sessionScript', 'searchBatch',
     'cartRead', 'addBatch', 'writable', 'needsPreference', 'sessionUsable', 'budgets',
   ] as const;
+
+  it('there are five of them, and the list found them all', () => {
+    // If the derivation above breaks, every it.each below runs zero times and
+    // this file passes while checking nothing.
+    expect(ONE_PER_RAIL.length).toBe(5);
+    expect(RAIL_STORES).toContain('heb');
+    expect(RAIL_STORES).toContain('walmart');
+    expect(RAIL_STORES).toContain('wegmans');
+    expect(RAIL_STORES).toContain('aldi');
+    // The whole family, not just the banner that shares its name.
+    expect(RAIL_STORES).toContain('safeway');
+    expect(RAIL_STORES).toContain('vons');
+    // And not the store that has no rail.
+    expect(RAIL_STORES).not.toContain('amazon');
+  });
 
   for (const id of RAIL_STORES) {
     it(`${id} implements the whole rail`, () => {
@@ -61,43 +83,91 @@ describe('every rail answers every question the engine asks', () => {
     for (const id of RAIL_STORES) {
       const scripts = getStoreScripts(id)!;
       expect(scripts.railUrl).toBeTruthy();
-      // Same origin as the store, or the session cookies do not apply.
-      expect(scripts.railUrl!.startsWith(scripts.storeUrl)).toBe(true);
+      // Same ORIGIN as the store, or the session cookies and localStorage do not
+      // apply — that is the whole requirement, and it is not the same as sharing
+      // a prefix. Walmart's storeUrl is /grocery and its rail sits on
+      // /robots.txt, which a startsWith check called a violation.
+      expect(`${id}: ${new URL(scripts.railUrl!).origin}`)
+        .toBe(`${id}: ${new URL(scripts.storeUrl).origin}`);
       expect(scripts.railUrl).not.toBe(scripts.storeUrl);
     }
   });
 
   it('every rail posts a session message type of its own', () => {
     const types = RAIL_STORES.map((id) => getNetworkRail(id)!.sessionMessageType);
-    // Four rails, four types. Albertsons' fifteen banners share one rail and
+    // Five rails, five types. Albertsons' fifteen banners share one rail and
     // therefore one type, and every Instacart tenant shares another for the same
-    // reason — that rail is registered against the PLATFORM. H-E-B and Wegmans
-    // each have their own. Two rails sharing a type would cross their answers.
-    expect(new Set(types).size).toBe(4);
+    // reason — that rail is registered against the PLATFORM. Two rails sharing a
+    // type would cross their answers in the sheet's dispatcher.
+    expect(new Set(types).size).toBe(5);
     for (const t of types) expect(NETWORK_SESSION_MESSAGE_TYPES).toContain(t);
   });
-});
 
-describe('the cart engine does not branch on store id', () => {
-  // A count, not a ban: the remaining branches are Amazon Fresh's store-picker,
-  // which has no rail and no other home yet. The number is pinned so a new one
-  // has to be argued for — the question being "why can the rail not answer
-  // this?", which is how `writable` and `railUrl` came to exist.
-  const SRC = fs.readFileSync(
-    path.resolve(__dirname, '../../src/components/WebViewCartSheet.tsx'), 'utf8');
-
-  it('has no per-store branch for any store that HAS a rail', () => {
-    const offenders = RAIL_STORES.filter((id) => SRC.includes(`=== '${id}'`));
-    expect(offenders).toEqual([]);
+  it('and no rail is another rail', () => {
+    // Cheap, and it catches the copy-paste that gives a new store the previous
+    // store's object outright — which would pass every member check above and
+    // send one store's requests to another store's endpoints.
+    const objs = ONE_PER_RAIL.map((id) => getNetworkRail(id));
+    expect(new Set(objs).size).toBe(objs.length);
   });
 
-  it('holds the line on the stores that still have one', () => {
-    const branches = SRC.match(/=== '(heb|albertsons|walmart|amazon|aldi|wegmans|kroger)'/g) ?? [];
-    // Amazon Fresh only. If this fails upward, move the difference onto the rail
-    // (or the store's scripts) instead of raising the number.
-    expect(branches.length).toBeLessThanOrEqual(3);
+  it.each(ONE_PER_RAIL)('%s states every budget itself', (id) => {
+    // Was asserted for H-E-B and Albertsons only, which is how three rails
+    // shipped without anyone checking. A budget is a store fact; a rail that
+    // omitted one would take whatever the type default gave it — undefined,
+    // which reads as an immediate timeout.
+    const b = getNetworkRail(id)!.budgets;
+    for (const k of ['sessionMs', 'searchResumeMs', 'cartProbeMs',
+                     'searchRequestMs', 'searchFirstRequestMs'] as const) {
+      expect(`${id}.${k}: ${typeof b[k]}`).toBe(`${id}.${k}: number`);
+      expect(b[k]).toBeGreaterThan(0);
+    }
+    expect(b.searchMs(10)).toBeGreaterThan(0);
+    expect(b.addMs(10)).toBeGreaterThan(0);
+    // A bigger batch waits longer, and every budget is capped so a store that
+    // has stopped answering still ends the phase.
+    expect(b.searchMs(20)).toBeGreaterThan(b.searchMs(1));
+    expect(b.addMs(20)).toBeGreaterThan(b.addMs(1));
+    expect(b.searchMs(10_000)).toBeLessThanOrEqual(180_000);
+    expect(b.addMs(10_000)).toBeLessThanOrEqual(180_000);
+    // A per-request budget always fits inside its batch budget, or the phase
+    // deadline fires while one request is still legitimately running.
+    expect(b.searchFirstRequestMs).toBeLessThan(b.searchMs(1));
+  });
+
+  it.each(ONE_PER_RAIL)('%s builds a script for every phase', (id) => {
+    const rail = getNetworkRail(id)!;
+    const sess = { storeId: '1', shoppingContext: 'pickup' };
+    expect(typeof rail.sessionScript()).toBe('string');
+    expect(typeof rail.cartRead()).toBe('string');
+    expect(typeof rail.searchBatch(['milk'], sess)).toBe('string');
+    expect(typeof rail.addBatch(
+      [{ idx: 0, productId: 'p1', skuId: 's1', quantity: 1, name: 'Milk' }])).toBe('string');
+  });
+
+  it.each(ONE_PER_RAIL)('%s injects nothing that would break in a template literal', (id) => {
+    // Every one of these ships spliced into a template literal in an injected
+    // script. A stray backtick ends the literal and a dollar-brace becomes an
+    // interpolation — both are BUILD failures, and both have happened here
+    // repeatedly, including inside comments.
+    const rail = getNetworkRail(id)!;
+    const sess = { storeId: '1', shoppingContext: 'pickup' };
+    const scripts = [rail.sessionScript(), rail.cartRead(),
+                     rail.searchBatch(['milk'], sess) ?? '',
+                     rail.addBatch([{ idx: 0, productId: 'p', skuId: 's', quantity: 1, name: 'M' }]) ?? ''];
+    for (const src of scripts) {
+      // The script itself is one big template literal's OUTPUT, so what matters
+      // is that it parses as JavaScript.
+      expect(() => new Function(`return function(){ ${src} }`)).not.toThrow();
+    }
   });
 });
+
+// The cart engine's per-store branches used to be counted here, with the count
+// pinned so a new one had to be argued for. There are none left to count, and
+// the rule is now enforced structurally and for every shared module rather than
+// by a number in one test — see tests/unit/storeBoundaries.test.ts, which reads
+// the real import graph and fails on a store id appearing in shared code at all.
 
 describe('how long to wait is a store fact', () => {
   // These were three constants in the engine, each tuned on whichever store was

@@ -23,18 +23,18 @@ import {
 } from '../../src/lib/cart-reconcile';
 import type { AttemptedAdd, IntendedItem, OverAdd, RecoveredAdd, WorkerReport } from '../../src/lib/cart-reconcile';
 import type { CartRow } from '../../src/lib/webview-scripts/cart-count';
-import type { HebAddConfirmation } from '../../src/lib/webview-scripts/heb-cart-query';
+import type { AddConfirmation } from '../../src/lib/cart-confirmation';
 
 const row = (name: string, qty: number, isWeight = false): CartRow =>
   ({ name, qty, added: true, isWeight });
 
 /** A cart verdict, as MEAL-14's rail posts it back from the page. */
 const confirm = (
-  state: HebAddConfirmation['state'],
+  state: AddConfirmation['state'],
   reason: string,
   skuId: string | null = null,
   productId: string | null = null,
-): HebAddConfirmation => ({ state, via: 'cart_query', reason, skuId, productId });
+): AddConfirmation => ({ state, via: 'cart_query', reason, skuId, productId });
 
 const attempt = (
   name: string,

@@ -57,13 +57,11 @@ import { getAutomationConfig, getConfigVersion } from '../lib/automation-config'
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
 import { diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
-import { HebAddConfirmation, confirmDetail } from '../lib/webview-scripts/heb-cart-query';
+import { AddConfirmation, confirmDetail } from '../lib/cart-confirmation';
 import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { sameProductBarSize, scoreMatch } from '../lib/webview-scripts/_scoring';
 import { challengeMayTakeTheScreen } from '../lib/cart-challenge';
-import {
-} from '../lib/webview-scripts/heb-network-search';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -161,7 +159,7 @@ interface AddResult {
   candidates: Candidate[];
   /** MEAL-14: the cart's own verdict for this item, when the store has a cart
    *  query we can read. Null = no verdict, NOT a negative one. */
-  confirm?: HebAddConfirmation | null;
+  confirm?: AddConfirmation | null;
   /** 'ingredient' when these candidates came from the SECOND search — the one
    *  by ingredient name, run because the chosen product returned nothing. Kept
    *  so the review screen and telemetry can tell "here is what we found for
@@ -625,16 +623,19 @@ export default function WebViewCartSheet({
   // for the 403 page does NOT auto-resume — that resume re-navigated and
   // re-blocked, which was the tight 403 loop.
   const blockReasonRef = useRef<string | null>(null);
-  // Amazon Fresh only: set when a search reports the "no results … in Amazon Fresh"
-  // empty-state (see FRESH_EMPTY_STATE_FN). Means the account has no Fresh store /
-  // serviceable delivery address. Checked at the end-of-search gates so we surface
-  // the "choose a store" prompt only when the WHOLE run came up empty (not a single
-  // genuine miss). Reset on open + on retry.
-  const freshStoreUnavailableRef = useRef(false);
-  // Latest handleStoreUnavailable, called from the []-dep search-finish callbacks
-  // (finishParallelSearch / navigateToSearchItem) without pulling it into their deps
-  // — it's defined later in the component, so a direct dep would hit the TDZ.
-  const handleStoreUnavailableRef = useRef<() => void>(() => {});
+  // THE AMAZON FRESH "no store selected" ROUTE LIVED HERE, and it was the last
+  // per-store branch in this component.
+  //
+  // It surfaced the Fresh store picker when a whole run came back empty AND a
+  // search had reported the "no results … in Amazon Fresh" empty-state. The
+  // thing that reported it was the DOM worker pool, deleted 2026-09-01, so the
+  // flag it read had been permanently false since — the two branches that
+  // checked it could not fire, and this store's name was in shared code for a
+  // route nothing could reach.
+  //
+  // Amazon Fresh is assisted: it hands the user its own storefront and they add
+  // from it, where the picker is one tap away and visible. If that turns out not
+  // to be enough, the signal belongs on the store, not in this file.
 
   // Step: review
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -1636,17 +1637,6 @@ export default function WebViewCartSheet({
     }
     const summary = results.map((r) => ({ term: r.term, count: r.candidates.length, first: r.candidates[0]?.productName }));
     console.log(`[Cart ${ts()}]`, 'parallel search: finishing → review', JSON.stringify(summary));
-    // Amazon Fresh: every item came back empty AND a search reported the Fresh
-    // empty-state → no store/address selected. Surface the picker instead of a
-    // review screen full of "No products found".
-    if (
-      lockedStoreIdRef.current === 'amazon' &&
-      freshStoreUnavailableRef.current &&
-      results.every((r) => r.candidates.length === 0)
-    ) {
-      handleStoreUnavailableRef.current();
-      return;
-    }
     searchResultsRef.current = results;
     setSearchResults(results);
     setStep('review');
@@ -1775,15 +1765,7 @@ export default function WebViewCartSheet({
         successCount++;
       }
     }
-    console.log(`[Cart ${ts()}]`, 'parallel add: pass done. reported success=', successCount, 'of', active.length, '— reconciling against cart', 'freshStoreUnavailable=', freshStoreUnavailableRef.current);
-    // Amazon Fresh: nothing added AND a worker saw the Fresh "no results" empty-
-    // state → no store/address selected. Surface the picker instead of routing the
-    // whole run to the "could not add" review. (Parallel-ADD path, which reconciles
-    // against the cart rather than going through finishParallelSearch.)
-    if (lockedStoreIdRef.current === 'amazon' && freshStoreUnavailableRef.current && successCount === 0) {
-      handleStoreUnavailableRef.current();
-      return;
-    }
+    console.log(`[Cart ${ts()}]`, 'parallel add: pass done. reported success=', successCount, 'of', active.length, '— reconciling against cart');
     parallelReconcileArmedRef.current = true;
     cartProbeRetriedRef.current = false;
     // Reset the per-item counter so the cart-check holds the ring at 85% and the
@@ -2753,7 +2735,6 @@ export default function WebViewCartSheet({
       setFailedItems([]);
       setBlockReason(null);
       blockReasonRef.current = null;
-      freshStoreUnavailableRef.current = false;
       extractWhyRef.current = {};
       // A fresh tally per run. This component survives between runs in the
       // SHIPPING configuration: FEATURE_BACKGROUND_CART is on, which is what
@@ -3554,21 +3535,21 @@ export default function WebViewCartSheet({
     // banner id finds nothing and reads as a store with no rail.
     const netCfg = getAutomationConfig().stores?.[railConfigKey(lockedStoreIdRef.current)] ?? {};
     // Capability, not a store name. A store qualifies when it HAS a rail and both
-    // of its switches are on. H-E-B additionally requires cartSkuConfirm, because
-    // that is what makes its write verifiable — Albertsons verifies from the
-    // write's own response, which returns the whole cart, so it has no
-    // equivalent switch to demand.
+    // of its switches are on, plus whatever else that rail says its write
+    // depends on — see NetworkRail.addRequires, which is where H-E-B's
+    // cartSkuConfirm precondition went when it stopped being an `=== 'heb'` in
+    // this file.
     //
     // TWO capabilities, not one. A choose run only ever searches — it ends in
     // the Choose Products screen and writes to no cart — so demanding the ADD
     // switch of it sent ALDI and Wegmans, whose search is on and whose write is
     // deliberately still off, down the assisted path and handed the user six
     // manual searches each.
-    const networkSearchCapable = !!getNetworkRail(lockedStoreIdRef.current)
-      && netCfg.networkSearch === true;
+    const railForRun = getNetworkRail(lockedStoreIdRef.current);
+    const networkSearchCapable = !!railForRun && netCfg.networkSearch === true;
     const networkAddCapable = networkSearchCapable
       && netCfg.networkAdd === true
-      && (lockedStoreIdRef.current !== 'heb' || netCfg.cartSkuConfirm === true);
+      && (railForRun!.addRequires?.(netCfg as Record<string, unknown>) ?? true);
     const strategy = chooseAddStrategy({ allChoose, networkSearchCapable, networkAddCapable });
     console.log(`[Cart ${ts()}]`, 'beginSearchFlow: allChoose=', allChoose, 'activeLen=', active.length,
       'store=', lockedStoreIdRef.current, 'strategy=', strategy);
@@ -4129,18 +4110,6 @@ export default function WebViewCartSheet({
     if (typeof code === 'number') handleHttpBlock(code, url);
   }, [handleHttpBlock]);
 
-  // Amazon Fresh: the whole run came back empty with the Fresh "no results" empty-
-  // state, meaning no store / delivery address is selected. Tear down the in-flight
-  // run and surface the Fresh storefront (reusing the robot_challenge step + banner
-  // + manual "Try again") so the user can pick a store, then retry. No polling.
-  const handleStoreUnavailable = useCallback(() => {
-    console.log(`[Cart ${ts()}]`, 'Amazon Fresh: no store/address selected — surfacing store picker');
-    surfaceBlocker('fresh-no-store');
-    // Land on the Fresh storefront so the store/address picker is available.
-    navTo(scriptsRef.current!.storeUrl);
-  }, [surfaceBlocker, navTo]);
-  useEffect(() => { handleStoreUnavailableRef.current = handleStoreUnavailable; }, [handleStoreUnavailable]);
-
   // Manual retry from the blocked state: re-run the login check from a fresh
   // store load. If the block cleared (or the user solved a challenge) it
   // proceeds; if not, the 403 fires again and we land back here.
@@ -4272,7 +4241,6 @@ export default function WebViewCartSheet({
   const retryAfterBlock = useCallback(() => {
     setBlockReason(null);
     blockReasonRef.current = null;
-    freshStoreUnavailableRef.current = false;
     robotChallengeResumeIdxRef.current = -1;
     consecutiveTimeoutsRef.current = 0;
     searchIdxRef.current = 0;
@@ -5530,7 +5498,7 @@ export default function WebViewCartSheet({
                     state: 'landed', reason: 'network_write', via: 'network',
                     skuId: typeof msg.skuId === 'string' ? msg.skuId : null,
                     productId: typeof msg.productId === 'string' ? msg.productId : null,
-                  } satisfies HebAddConfirmation
+                  } satisfies AddConfirmation
                 : null,
             });
           }

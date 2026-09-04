@@ -1,3 +1,4 @@
+import type { NetworkRail } from './network-rail';
 // Albertsons network rail — search and add over the store's own REST API.
 //
 // The shape of this file mirrors heb-network-search.ts on purpose: same message
@@ -1401,3 +1402,59 @@ ${ALB_PRELUDE}
          cartAfter: afterCart.ok ? (afterCart.rows || null) : null });
 })(); true;`;
 }
+
+// ── The rail ─────────────────────────────────────────────────────────────────
+//
+// Moved here from network-rail.ts on 2026-09-04. A rail is a store's answer to
+// the questions the engine asks, so it belongs in the store's own file: editing
+// this one no longer means opening a file the other four are also in.
+
+export const ALBERTSONS_RAIL: NetworkRail = {
+  sessionMessageType: 'ALB_SESSION',
+  sessionScript: buildAlbertsonsSessionScript,
+  searchBatch: (terms, sess) =>
+    buildAlbertsonsNetworkSearchBatchScript(terms, {
+      storeId: sess.storeId,
+      requestMs: ALBERTSONS_RAIL.budgets.searchRequestMs,
+      firstRequestMs: ALBERTSONS_RAIL.budgets.searchFirstRequestMs,
+    }),
+  cartRead: () => buildAlbertsonsCartReadScript(),
+  addBatch: (items, opts) => buildAlbertsonsNetworkAddBatchScript(items, opts),
+  // The cart is addressed by product id; the search returns no sku, and none is
+  // needed to write.
+  writable: (c) => !!c.productId,
+  // TWO ANSWERS, and the first one cannot search or write. `early` is posted
+  // straight off /userinfo, before __albEnsureKeys has run; the refined one
+  // follows about 1.3s later with the keys resolved and the token proved
+  // against a real cart read.
+  //
+  // An early answer with NO store is let through, because nothing more is
+  // coming -- the script returns after it -- and the run should fail fast on
+  // session_no_store rather than sit out its whole 25s deadline.
+  sessionUsable: (msg) => !msg.early || !msg.storeId,
+  // No preference concept on this platform. Answering false rather than leaving
+  // the engine to infer it from an empty array is the whole point of asking.
+  needsPreference: () => false,
+  // MEASURED 2026-09-02. The first request into a fresh document has been seen
+  // at 40-70s while later ones take 0.3s, so the search ceiling covers a slow
+  // start PLUS the terms. A flat 40s once expired on the same tick the first
+  // result arrived and threw away six good answers.
+  budgets: {
+    sessionMs: 25_000,
+    searchMs: (terms) => Math.min(45_000 + terms * 8_000, 180_000),
+    searchResumeMs: 40_000,
+    // Writes are serial here -- the store loses concurrent ones -- so this
+    // scales with the batch rather than sitting flat.
+    addMs: (items) => Math.min(45_000 + items * 4_000, 180_000),
+    // The read has been measured at 6.6s on a cold document and 0.5s on a warm
+    // one. Ten seconds expired between the two, which is the worst place for a
+    // deadline to sit.
+    cartProbeMs: 30_000,
+    searchRequestMs: 15_000,
+    // The cold one gets room. Measured 2026-09-02 with the heartbeat showing a
+    // 1.002s gap for a 1s interval -- so the document was provably NOT frozen --
+    // the first request ran the whole 15s budget and was aborted, while every
+    // one after it answered in 0.3s. Aborting a slow answer makes it no answer.
+    searchFirstRequestMs: 40_000,
+  },
+};

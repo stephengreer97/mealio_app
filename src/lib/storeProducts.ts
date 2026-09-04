@@ -27,7 +27,7 @@
 //     the same rule `prep` follows in normalizeIngredients.
 
 import { isKrogerBrand } from '../constants/stores';
-import { ALBERTSONS_FAMILY_IDS } from './webview-scripts/albertsons';
+import { railConfigKey } from './webview-scripts/network-rail';
 
 /** A product the user picked, as the store identifies it. `name` is kept beside
  *  the id for display and for debugging a stale id — it is never searched. */
@@ -85,10 +85,13 @@ export function storeProductKey(storeId: string | null | undefined): string {
   // choice away and searched the name again.
   //
   // Availability still varies by location, and that is checked when the product
-  // is looked up or written, not here. Same rule the rail's own config key
-  // follows (railConfigKey).
-  if ((ALBERTSONS_FAMILY_IDS as readonly string[]).includes(storeId)) return 'albertsons';
-  return storeId;
+  // is looked up or written, not here.
+  //
+  // Through railConfigKey rather than the family list directly: that function
+  // already answers "which platform is this banner", the rail's own config reads
+  // it, and asking it here means this file names no store and imports no store's
+  // module. Two copies of a family list is how one of them goes stale.
+  return railConfigKey(storeId);
 }
 
 /** The product chosen for this store on this ingredient, or null. Tolerates the

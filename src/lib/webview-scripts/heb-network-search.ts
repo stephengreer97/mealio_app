@@ -1,3 +1,4 @@
+import type { NetworkRail } from './network-rail';
 /**
  * H-E-B search over the network, instead of loading a results page (MEAL-202).
  *
@@ -904,3 +905,46 @@ ${CART_READ_FN}
          cartBefore: rowsOf(before), cartAfter: rowsOf(after) });
 })(); true;`;
 }
+
+// ── The rail ─────────────────────────────────────────────────────────────────
+//
+// Moved here from network-rail.ts on 2026-09-04. A rail is a store's answer to
+// the questions the engine asks, so it belongs in the store's own file: editing
+// this one no longer means opening a file the other four are also in.
+
+export const HEB_RAIL: NetworkRail = {
+  sessionMessageType: 'HEB_SESSION',
+  sessionScript: buildHebSessionScript,
+  searchBatch: (terms, sess) => buildHebNetworkSearchBatchScript(terms, sess),
+  cartRead: () => buildHebCartReadScript(),
+  addBatch: (items, opts) =>
+    buildHebNetworkAddBatchScript(
+      // H-E-B addresses a cart line by sku, so an item without one is not
+      // writable there; the filter is the store's constraint, not a shared rule.
+      items.filter((i) => !!i.skuId).map((i) => ({ ...i, skuId: String(i.skuId) })),
+      opts,
+    ),
+  writable: (c) => !!c.productId && !!c.skuId,
+  // One session answer, and it is complete when it lands.
+  sessionUsable: () => true,
+  // THE STORE'S OWN PRECONDITION. cartSkuConfirm is what puts H-E-B's cart query
+  // in front of the write; without it the add has no way to check that what it
+  // reported actually landed, and an unverifiable write is the one thing this
+  // store must not do. No other rail needs a second switch — each verifies from
+  // its own write's response.
+  addRequires: (cfg) => cfg.cartSkuConfirm === true,
+  needsPreference: (c) => (c.preferences ?? []).some((p) => !!p.preferenceId),
+  // MEASURED on the device 2026-09-02: eleven terms, all prewarmed, tap to done
+  // in 6.9s; a search batch answers in about a second. Generous against that and
+  // still a fraction of what Albertsons needs.
+  budgets: {
+    sessionMs: 15_000,
+    searchMs: (terms) => Math.min(20_000 + terms * 2_000, 90_000),
+    searchResumeMs: 20_000,
+    addMs: (items) => Math.min(30_000 + items * 3_000, 120_000),
+    // Measured at well under a second on this store.
+    cartProbeMs: 12_000,
+    searchRequestMs: 15_000,
+    searchFirstRequestMs: 15_000,
+  },
+};

@@ -1,4 +1,4 @@
-import { confirmDetail } from '../../src/lib/webview-scripts/heb-cart-query';
+import { confirmDetail } from '../../src/lib/cart-confirmation';
 
 // confirmDetail is all that survived lib/pool-add-funnel. The rest of that module
 // — recordPoolAdd's per-item attribution and presearchAddDispatched's cold-slot
