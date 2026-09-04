@@ -21,7 +21,7 @@
         "src/constants/features.ts",
         "src/constants/stores.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "store-heb.html": {
       "title": "H-E-B",
@@ -33,7 +33,7 @@
         "src/lib/cart-reconcile.ts",
         "src/components/WebViewCartSheet.tsx"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "store-walmart.html": {
       "title": "Walmart",
@@ -42,7 +42,7 @@
         "src/lib/webview-scripts/_scoring.ts",
         "src/lib/automation-config/schema.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "store-wegmans.html": {
       "title": "Wegmans",
@@ -50,7 +50,7 @@
         "src/lib/webview-scripts/wegmans.ts",
         "src/lib/automation-config/schema.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "store-amazon-fresh.html": {
       "title": "Amazon Fresh",
@@ -58,7 +58,7 @@
         "src/lib/webview-scripts/amazon-fresh.ts",
         "src/lib/automation-config/schema.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "store-aldi-instacart.html": {
       "title": "ALDI / Instacart Storefront",
@@ -68,7 +68,7 @@
         "src/lib/webview-scripts/cart-count.ts",
         "src/lib/automation-config/schema.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "store-albertsons-family.html": {
       "title": "Albertsons family",
@@ -77,7 +77,7 @@
         "src/lib/webview-scripts/auth-urls.ts",
         "src/lib/automation-config/schema.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "store-kroger-family.html": {
       "title": "Kroger family",
@@ -87,7 +87,7 @@
         "src/lib/api.ts",
         "src/constants/stores.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "store-mockstore.html": {
       "title": "Mock Store",
@@ -96,7 +96,7 @@
         "src/lib/webview-scripts/index.ts",
         "src/constants/stores.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "behavior-cart-engine.html": {
       "title": "The cart engine",
@@ -106,14 +106,14 @@
         "src/lib/webview-scripts/index.ts",
         "src/lib/automation-config/decisions.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "behavior-cart-reconcile.html": {
       "title": "Reconciliation & the verdict",
       "sources": [
         "src/lib/cart-reconcile.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "behavior-choose-products.html": {
       "title": "Choose Products & matching",
@@ -124,7 +124,7 @@
         "src/lib/saveChosenIngredient.ts",
         "src/components/ChooseProductsIntroSheet.tsx"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "behavior-remote-config.html": {
       "title": "Remote config & catalog",
@@ -133,7 +133,7 @@
         "src/lib/store-catalog",
         "src/constants/stores.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "behavior-telemetry.html": {
       "title": "Telemetry & the north-star",
@@ -141,7 +141,7 @@
         "src/lib/north-star.ts",
         "src/lib/automation-telemetry.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "behavior-auth.html": {
       "title": "Login, tokens & session",
@@ -151,7 +151,7 @@
         "src/screens/auth",
         "src/navigation/RootNavigator.tsx"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "behavior-account.html": {
       "title": "Account, subscription & admin",
@@ -162,7 +162,7 @@
         "src/lib/fixture-capture-config.ts",
         "src/navigation/MainTabs.tsx"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "behavior-creator.html": {
       "title": "Creator account",
@@ -171,7 +171,7 @@
         "src/components/YouTubeConnectCard.tsx",
         "src/components/PlatformLinksCard.tsx"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     },
     "behavior-meal-lifecycle.html": {
       "title": "Meal lifecycle & ingredients",
@@ -182,7 +182,7 @@
         "src/lib/normalizeIngredients.ts",
         "src/lib/consolidateIngredients.ts"
       ],
-      "readAt": "75b716d"
+      "readAt": "ab699fb"
     }
   }
 }
