@@ -26,6 +26,13 @@ navigates rather than re-writing the same URL (a re-open fired no load event at 
 phase waits on one), and a review screen opens on the first candidate that is actually in stock.
 Both affect every store equally &mdash; neither is a store's own behaviour.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #ef4444;padding-left:14px">
+<p><b>2026-09-04 &mdash; no rail store could show its sign-in page.</b> The login step skipped its
+navigation whenever the WebView was "on the store's domain", and a rail parks on
+<code>robots.txt</code>, which is. H-E-B, the fifteen Albertsons banners, ALDI, Wegmans and Walmart
+all presented a blank page under "Log in". Fixed in <code>lib/login-page.ts</code>; see the
+cart-engine map.</p>
+</div>
 </header>
 
 <div class="notes" style="margin-top:0">

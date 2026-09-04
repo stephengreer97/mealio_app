@@ -25,6 +25,24 @@ cannot be added on a review, so preselecting one gave two disabled buttons whose
 about the quantity &mdash; and setting a quantity removed even that. The disabled state now says why,
 stock before quantity. See <code>lib/review-selection.ts</code>.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #ef4444;padding-left:14px">
+<h3>2026-09-04 &mdash; the sign-in screen, and where the repair may not go</h3>
+<p><b>ONE DOOR TO THE LOGIN STEP.</b> There were five routes to it, each deciding for itself whether
+to navigate first, and the two a RAIL store actually takes navigated nowhere &mdash; they set the
+step and left the WebView on <code>robots.txt</code>. On the device that was the words "Log into your
+H-E-B account once and Mealio won't ask again" over a blank white page, with nothing to type into.
+Every rail store parks on the quiet page, so it was every rail store. All five routes now go through
+<code>surfaceLogin()</code>, which asks <code>canSignInHere</code> (<code>lib/login-page.ts</code>):
+navigate to the store's login URL unless the page on screen is one you could sign in ON. The skip
+still exists for the store whose check opened a sign-in menu &mdash; it just asks the right
+question.</p>
+<p><b>THE SESSION REPAIR STOPS AT THE LOGIN STEP.</b> It navigates, and there the page it would
+navigate away from is a form with the user's typing in it &mdash; and an unanswerable session is
+guaranteed, because H-E-B's sign-in is on <code>accounts.heb.com</code> and the probe is
+cross-origin. Measured: the repair pulled the user back to the storefront two seconds after handing
+them the form. The login poll covers that step instead. Same rule as
+<code>challengeMayTakeTheScreen</code>: a run may be interrupted, a person may not.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>running</b> — the bubble spins</span>
