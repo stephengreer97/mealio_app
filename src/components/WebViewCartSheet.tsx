@@ -128,7 +128,12 @@ interface SearchResult {
      *  line — measured on Wegmans, whose API returns 200 for a quantity change
      *  and changes nothing. Reaching review is the honest outcome: the user can
      *  set the quantity themselves, where an "added" that added nothing lies. */
-    | 'line_already_present';
+    | 'line_already_present'
+    /** The store refused the write and the run had already retried it once, so
+     *  the reason is whatever the store last said. Stephen's rule: any problem
+     *  adding an item is a review, so this card exists rather than a line on the
+     *  done screen the user can do nothing with. */
+    | 'add_refused';
   isChoose: boolean; // true = choose-product flow (no searchTerm yet); false = review unmatched (searchTerm set but no match)
 }
 
@@ -2601,13 +2606,64 @@ export default function WebViewCartSheet({
     // manualCandidates reads the failed names and there were none — for an item
     // the run had just tried twice and not got.
     const stillMissing: { name: string; success: false; reason: string }[] = [];
-    netResultsRef.current.forEach((r) => {
+    // A PROBLEM ADDING SOMETHING IS A REVIEW, not a line on the done screen.
+    //
+    // Stephen, 2026-09-04: "Ideally if there is any problem adding something to
+    // the cart, then that item should go to review. An exception of course is
+    // the one I just gave you - too many in cart already."
+    //
+    // The reconcile already routes its DEFINITE failures there. What did not was
+    // this path: an item it thought it could fix, retried, and still could not
+    // get. Those went into the failed list and out onto the done screen as
+    // "Could not add: X" — the one place the user can do nothing about it. His
+    // Morton Salt did exactly that: retried into the identical refusal a second
+    // later, then reported as unaddable with no alternatives offered.
+    //
+    // A cap is the stated exception, and the right one: no other product answers
+    // "you already have fifteen of these", so a review screen would be asking
+    // the user to solve a problem that is not about the product.
+    const KNOWN_REVIEW_REASONS = new Set<string>([
+      'out_of_stock', 'no_results', 'low_confidence', 'needs_weight',
+      'needs_preference', 'search_unanswered', 'line_already_present',
+    ]);
+    const toReview: number[] = [];
+    netResultsRef.current.forEach((r, idx) => {
       if (!r.success) {
         stillMissing.push({
           name: r.productName || '', success: false, reason: r.reason || 'top_up_failed',
         });
+        if (r.reason !== 'quantity_limit_reached') toReview.push(idx);
       }
     });
+    // Built the same way the reconcile builds its own review cards, from the
+    // same candidate maps, so the screen cannot tell where a card came from.
+    for (const idx of toReview) {
+      const item = activeItemsRef.current[idx];
+      if (!item) continue;
+      const term = item.searchTerm || item.ingredientName;
+      const already = searchResultsRef.current.some((r) => r.term === term);
+      if (already) continue;
+      const res = netResultsRef.current.get(idx);
+      const card: SearchResult = {
+        term,
+        candidates: res?.candidates ?? [],
+        mealIngredients: item.mealIngredients,
+        unit: item.unit,
+        measure: item.measure,
+        // Whatever the store last said, kept where the screen already knows how
+        // to explain it; anything else it does not recognise reads as a plain
+        // refusal rather than a wrong explanation.
+        reason: KNOWN_REVIEW_REASONS.has(String(res?.reason))
+          ? (res!.reason as SearchResult['reason']) : 'add_refused',
+        isChoose: false,
+      };
+      searchResultsRef.current = [...searchResultsRef.current, card];
+    }
+    if (toReview.length > 0) {
+      setSearchResults(searchResultsRef.current);
+      console.log(`[Cart ${ts()}]`, 'network top-up:', toReview.length,
+        'still unadded → review rather than the done screen');
+    }
     // ADDED to what the reconcile already confirmed, not replacing it: these are
     // the units it found short, and the pass that confirmed the rest still holds.
     addResultsRef.current = [...addResultsRef.current, ...landed, ...stillMissing];
@@ -6734,6 +6790,12 @@ export default function WebViewCartSheet({
                 )}
                 {!isChoose && currentReview.reason === 'needs_weight' && (
                   <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.brand, marginBottom: 6 }}>⚖ Sold by weight — choose how much to add</Text>
+                )}
+                {/* The store refused this write twice and did not say anything
+                    the screen above can explain. Naming a cause we do not have
+                    would be worse than saying what happened. */}
+                {!isChoose && currentReview.reason === 'add_refused' && (
+                  <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginBottom: 6 }}>⚠ {storeName} would not add this — pick another</Text>
                 )}
                 {/* Searched for */}
                 <View style={styles.searchedBox} onLayout={preview.onAnchorLayout}>

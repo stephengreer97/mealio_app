@@ -37,8 +37,18 @@ import type { NetworkRail } from './network-rail';
  * navigation landed on the homepage.
  */
 const CART_READ_FN = `
+  // maximumOrderQuantity IS ON THE CART'S OWN PRODUCT, and H-E-B's storefront
+  // selects it there: fragment CartItemFragment on CartItem { ... product { ...
+  // maximumOrderQuantity ... } }, read out of its own bundle.
+  //
+  // It is the answer to the one question this rail could not ask. The search
+  // returns the cap, but a run whose products are ALREADY CHOSEN skips the
+  // search entirely -- "12 of 14 already chosen - writing those without
+  // searching" -- so every one of those items reached the write with no cap and
+  // no way to know it was already at one.
   var CART = 'query CartLines { cartV2 { __typename'
-    + ' ... on Cart { id items { id quantity estimatedWeight product { id fullDisplayName }'
+    + ' ... on Cart { id items { id quantity estimatedWeight'
+    + '   product { id fullDisplayName maximumOrderQuantity }'
     + '   sku { id customerFriendlySize } } }'
     + ' ... on CartError { code title message } } }';
 
@@ -670,6 +680,24 @@ ${CART_READ_FN}
     return 'mutation cartItemsV2(' + params.join(', ') + ') {' + fields.join('') + ' }';
   }
 
+  /**
+   * The store's per-product cap, as the CART reports it.
+   *
+   * Per product, not per line: a product holding several preference lines has
+   * one cap between them, which is what makes the clamp's held-vs-cap
+   * comparison meaningful.
+   */
+  var capFromCart = function (lines, pid) {
+    if (!lines) return null;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      if (!l || !l.product || String(l.product.id) !== String(pid)) continue;
+      var m = l.product.maximumOrderQuantity;
+      if (typeof m === 'number' && m > 0) return m;
+    }
+    return null;
+  };
+
   // Summed across every line for the product, because one product can hold
   // several lines keyed by preference — and reported with the COUNT, because the
   // write sets ONE line and cannot address a product that holds more than one.
@@ -753,6 +781,18 @@ ${CART_READ_FN}
         // change and report success, which is an under-add dressed as a win. So
         // a cap already reached is reported as its own reason instead.
         var cap = (typeof it.maxOrderQuantity === 'number' && it.maxOrderQuantity > 0) ? it.maxOrderQuantity : null;
+        // THE CART'S OWN ANSWER, when the search never gave us one.
+        //
+        // Stephen's run, 2026-09-04: Morton Salt, cart holding 15, write for 16
+        // refused. The product had been chosen on a previous run, so this run
+        // never searched it and carried no cap -- and without a cap the clamp
+        // above cannot fire, so the store's refusal came back as a bare error
+        // and the item was reported unaddable with no explanation he could act
+        // on. The cart read has known the cap all along; nothing asked it.
+        if (cap == null) {
+          var cartCap = capFromCart(before, it.productId);
+          if (cartCap != null) cap = cartCap;
+        }
         if (cap != null && want > cap) {
           if (base >= cap) { report(it, false, 'quantity_limit_reached', 'cart already holds ' + base + ' of ' + cap); continue; }
           want = cap;

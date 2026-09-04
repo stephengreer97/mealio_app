@@ -175,6 +175,20 @@ async function runOneItem({ addSucceeds }: { addSucceeds: boolean }) {
     });
     post({ type: 'NET_ADD_DONE', wrote: 1, count: 1, cartBefore: [], cartAfter: [] });
   }
+  // AND THE ITEM IS NOW IN REVIEW, not on the done screen (2026-09-04).
+  //
+  // Stephen's rule: "if there is any problem adding something to the cart, then
+  // that item should go to review" — so a write the store refused twice is a
+  // card the user can act on, and the run does not FINISH until they have. The
+  // terminal row this file guards is emitted at 'done', which is now on the far
+  // side of that decision. Skipping is the shortest honest way through it.
+  if (!addSucceeds) {
+    act(() => { jest.advanceTimersByTime(1_000); });
+    const review = view.queryByText(/review \d+ ingredient/i);
+    if (review) act(() => { fireEvent.press(review); });
+    const skip = view.queryByText(/skip this ingredient/i);
+    if (skip) act(() => { fireEvent.press(skip); });
+  }
   act(() => { jest.advanceTimersByTime(30_000); });
   // The terminal rows land in a LATER batch than the per-item ones: the run
   // emits run_summary and reconcile after the closing cart snapshot, then calls
@@ -337,6 +351,20 @@ describe('a run that fails more than one way', () => {
     post({ type: 'NET_ADD_RESULT', idx: 1, name: 'Tortillas', success: false, productId: 'pTortillas', skuId: 'sTortillas', reason: 'cart_not_incremented' });
     // The reconcile pass has its own fixed deadline, not the rail's.
     act(() => { jest.advanceTimersByTime(50_000); });
+    // AND THE THREE ARE NOW IN REVIEW (2026-09-04) — a write the store refused
+    // is a card the user can act on, so the run does not finish until they
+    // have. Skipping each is the shortest honest way to the terminal row this
+    // file guards; the codes it asserts were recorded during the run and are
+    // unaffected by what the user then decides.
+    act(() => { jest.advanceTimersByTime(1_000); });
+    const review = view.queryByText(/review \d+ ingredient/i);
+    if (review) act(() => { fireEvent.press(review); });
+    for (let i = 0; i < 3; i++) {
+      const skip = view.queryByText(/skip this ingredient/i);
+      if (!skip) break;
+      act(() => { fireEvent.press(skip); });
+    }
+    act(() => { jest.advanceTimersByTime(30_000); });
     await act(async () => {});
     view.unmount();
     await act(async () => {});
