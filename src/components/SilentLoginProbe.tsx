@@ -7,9 +7,6 @@ import { getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-sc
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
 import { WEBVIEW_FINGERPRINT_SHIM } from '../lib/webview-fingerprint-shim';
 import {
-  getCartPageUrl,
-  buildCartPageCountScript,
-  buildOpenCartScript,
   CartItem,
 } from '../lib/webview-scripts/cart-count';
 
@@ -121,9 +118,10 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
   // the live before-snapshot does. If the store has no usable cart method we
   // still report logged-in (just without a baseline).
   const startCartCapture = useCallback(() => {
-    const cartUrl = getCartPageUrl(storeId);
-    const click = buildOpenCartScript(storeId);
-    const countScript = buildCartPageCountScript(storeId);
+    const cartPage = scripts?.cartPage;
+    const cartUrl = cartPage?.url ?? null;
+    const click = cartPage?.openScript ?? null;
+    const countScript = cartPage?.countScript ?? null;
     phaseRef.current = 'cart';
     cartInjectionsRef.current = 0;
     armTimeout(CART_TIMEOUT_MS, () => {
@@ -266,7 +264,7 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
         return;
       }
       // Cart page has loaded — count it.
-      const countScript = buildCartPageCountScript(storeId);
+      const countScript = scripts.cartPage?.countScript ?? null;
       if (countScript) {
         cartInjectionsRef.current += 1;
         // The URL is the diagnostic that was missing. Without it the log cannot

@@ -45,7 +45,7 @@ jest.mock('react-native-webview', () => {
 });
 
 import SilentLoginProbe from '../../src/components/SilentLoginProbe';
-import { buildCartPageCountScript, getCartPageUrl } from '../../src/lib/webview-scripts/cart-count';
+import { getStoreScripts } from '../../src/lib/webview-scripts';
 
 /** Albertsons-family banner: the family that actually does the SSO bounce. */
 // STORE is WALMART, and it used to be 'acme' — an Albertsons banner.
@@ -61,15 +61,19 @@ import { buildCartPageCountScript, getCartPageUrl } from '../../src/lib/webview-
 // nothing. Amazon Fresh is the last store without a rail, and the reason is
 // written down: its search returns a rendered grid and no structured payload.
 const STORE = 'amazon';
-const CART_URL = getCartPageUrl(STORE)!;
+// Amazon reaches its cart by CLICKING, not by URL, so there is no cart URL to
+// read — this is just a plausible page for the load events below to carry. It
+// used to come from a shared table keyed by store id; the store owns its own
+// cart reader now (StoreScripts.cartPage).
+const CART_URL = 'https://www.amazon.com/cart';
 const SSO_URL = 'https://www.acmemarkets.com/bin/safeway/unified/sso/authorize?code=abc123';
 
 const injected = (): string[] => (globalThis as any).__injected;
 const webviewProps = (): any => (globalThis as any).__webviewProps;
 
-/** True when `js` is the Albertsons cart-page COUNT script, not the login check. */
+/** True when `js` is this store's cart-page COUNT script, not the login check. */
 function isCountScript(js: string): boolean {
-  return js === buildCartPageCountScript(STORE);
+  return js === getStoreScripts(STORE)!.cartPage!.countScript;
 }
 
 beforeEach(() => {

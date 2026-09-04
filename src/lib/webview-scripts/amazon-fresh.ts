@@ -53,6 +53,73 @@ function buildCheckLoginScript(): string {
 }
 
 
+const AMAZON_CART_PAGE_SCRIPT = `(async function() {
+  function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+  function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
+  function lineItemCards() {
+    return Array.prototype.slice.call(
+      document.querySelectorAll('div.sc-list-item[data-quantity]')
+    );
+  }
+  // Poll for the expanded Fresh cart's line-item cards to render.
+  var cards = [];
+  for (var i = 0; i < 25; i++) {
+    cards = lineItemCards();
+    if (cards.length > 0) break;
+    await wait(200);
+  }
+  // No line items: we're on the cart-of-carts page. Expand the Fresh cart once
+  // (guard against navigation loops), then let onLoadEnd re-inject this script.
+  if (cards.length === 0) {
+    var expand = document.querySelector(
+      'a[href*="cart_expand_link_fresh"], a[href*="/cart/localmarket"]'
+    );
+    if (expand && !window.__mealioFreshExpanded) {
+      window.__mealioFreshExpanded = true;
+      var href = expand.getAttribute('href') || '';
+      try { expand.click(); } catch (e) {}
+      // Fall back to a hard navigation if the click didn't move us.
+      if (href) { window.location.href = href; }
+      return;
+    }
+  }
+  var count = 0;
+  var items = [];
+  var seen = {};
+  for (var c = 0; c < cards.length; c++) {
+    var card = cards[c];
+    var id = card.getAttribute('data-itemid') || ('idx' + c);
+    if (seen[id]) continue;
+    seen[id] = true;
+    var del = card.querySelector('[aria-label^="Delete "]');
+    var al = del ? (del.getAttribute('aria-label') || '') : '';
+    var name = norm(al.replace(/^Delete\\s+/i, ''));
+    if (!name) continue;
+    var qty = parseInt(card.getAttribute('data-quantity'), 10);
+    if (!qty || isNaN(qty)) qty = 1;
+    count += qty;
+    items.push({ name: name, qty: qty });
+  }
+  // Report the URL we actually counted on so the sheet can cache it and hit the
+  // expanded Fresh cart directly for the after-snapshot (skipping the cart-icon
+  // → cart-of-carts → expand-link hops).
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'CART_COUNT', count: count, items: items, url: location.href }));
+})(); true;`;
+
+const AMAZON_OPEN_CART_SCRIPT = `(function() {
+  var icon = document.querySelector('#nav-button-cart')
+    || document.querySelector('a[href*="navm_hdr_cart"]');
+  if (!icon) {
+    var badge = document.querySelector('#nav-cart-count');
+    if (badge && badge.closest) icon = badge.closest('a');
+  }
+  if (icon) {
+    var href = icon.getAttribute('href') || '';
+    try { icon.click(); } catch (e) {}
+    if (href) { window.location.href = href; }
+  }
+})(); true;`;
+
 export function getScripts() {
   const cfg = storeConfig(SELECTOR_KEY);
   return {
@@ -72,5 +139,16 @@ export function getScripts() {
       searchUrlFor(SELECTOR_KEY, term,
         'https://www.amazon.com/s?k=' + encodeURIComponent(term) + '&i=amazonfresh'),
     cacheBustNav: cfg.cacheBustNav,
+    // HOW THIS STORE READS ITS OWN CART, since it has no rail to ask.
+    //
+    // No URL: /cart 302s to a signed-in-only interstitial often enough that
+    // navigating there is unreliable, so the header cart icon is clicked and the
+    // count is read on whatever page that lands on. The two scripts moved here
+    // from cart-count.ts on 2026-09-04 — a shared file is the wrong home for one
+    // store's page reader, and this is now the only store with one.
+    cartPage: {
+      openScript: AMAZON_OPEN_CART_SCRIPT,
+      countScript: AMAZON_CART_PAGE_SCRIPT,
+    },
   };
 }

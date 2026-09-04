@@ -52,5 +52,35 @@ export function getScripts() {
     reinjectLoginCheckOnNav: true,
     checkLoginScript: CHECK_LOGIN_SCRIPT,
     getSearchUrl: (term: string) => MOCK_STORE_URL + '/search?q=' + encodeURIComponent(term),
+    // Deterministic DOM, so no hydration race and no page-identity guard: this
+    // store is a fixture we serve ourselves. Moved here from cart-count.ts on
+    // 2026-09-04 with Amazon Fresh's.
+    cartPage: {
+      url: MOCK_STORE_URL + '/cart',
+      countScript: MOCKSTORE_CART_PAGE_SCRIPT,
+    },
   };
 }
+
+const MOCKSTORE_CART_PAGE_SCRIPT = `(async function() {
+  function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+  function norm(s) { return (s || '').trim().replace(/\\s+/g, ' '); }
+  var lines = [];
+  for (var i = 0; i < 20; i++) {
+    lines = Array.prototype.slice.call(document.querySelectorAll('.mock-cart-line'));
+    if (lines.length > 0 || document.querySelector('#mock-cart-lines[data-count="0"]')) break;
+    await wait(150);
+  }
+  var count = 0, items = [];
+  for (var j = 0; j < lines.length; j++) {
+    var nmEl = lines[j].querySelector('.mock-cart-name');
+    var nm = nmEl ? norm(nmEl.textContent) : '';
+    if (!nm) continue;
+    var qEl = lines[j].querySelector('.mock-cart-qty');
+    var q = parseInt(qEl ? norm(qEl.textContent) : '0', 10);
+    if (isNaN(q) || q < 1) q = 1;
+    count += q;
+    items.push({ name: nm, qty: q });
+  }
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'CART_COUNT', count: count, items: items }));
+})(); true;`;

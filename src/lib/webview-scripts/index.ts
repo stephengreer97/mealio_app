@@ -73,6 +73,24 @@ export interface StoreScripts {
    *  stores whose anti-bot flags that synthetic query (ALDI) — navTo then uses
    *  the clean URL + a forced reload() instead. */
   cacheBustNav?: boolean;
+  /**
+   * HOW THIS STORE READS ITS OWN CART, for a store that has to read a page to
+   * do it.
+   *
+   * Absent on every store with a rail, which asks the store's API instead and
+   * needs no page at all. Present on exactly two: Amazon Fresh, which has no
+   * rail, and the mock store. Each carries its own reader in its own file — this
+   * used to be a table of six in cart-count.ts, which every store imports, and
+   * four of those six entries had been unreachable since their rails shipped.
+   *
+   * `url` navigates; `openScript` clicks its way there for a store whose cart
+   * URL is unreliable. One or the other, then `countScript` posts the CART_COUNT.
+   */
+  cartPage?: {
+    url?: string;
+    openScript?: string;
+    countScript: string;
+  };
 }
 
 // Worker composition lived here, and the selector-health probe that wrapped

@@ -29,11 +29,6 @@ import {
   getInstacartSearchUrl,
 } from '../../../src/lib/webview-scripts/instacart';
 import { getStoreScripts } from '../../../src/lib/webview-scripts';
-import {
-  buildCartCountScript,
-  buildCartPageCountScript,
-  buildOpenCartScript,
-} from '../../../src/lib/webview-scripts/cart-count';
 import { __resetAutomationConfigForTests } from '../../../src/lib/automation-config';
 import { BUNDLED_AUTOMATION_CONFIG } from '../../../src/lib/automation-config/schema';
 
@@ -132,14 +127,14 @@ describe('tenant registry', () => {
     }
   });
 
-  it('every tenant can read the header cart badge', () => {
-    // The other half of the probe: buildCartCountScript reads the header badge
-    // for the before/after snapshot. Its EXTRACTORS map is per-store, so a
-    // tenant with no entry silently returns null — which callers must treat as
-    // "count unknown, skip validation", taking the silent-miss check offline
-    // for that banner without saying so.
+  it('and needs no page of any kind to do it', () => {
+    // The header-badge reader that used to be the other half of this lived in
+    // cart-count.ts, keyed by store, and was one of six entries a tenant had to
+    // remember to appear in. It is gone with the rest of the page reading: a
+    // tenant on this platform reads its cart with a request, and a tenant that
+    // somehow acquired a cartPage would be reading a storefront again.
     for (const id of INSTACART_STORE_IDS) {
-      expect(`${id}: ${!!buildCartCountScript(id)}`).toBe(`${id}: true`);
+      expect(`${id}: ${!!getStoreScripts(id)!.cartPage}`).toBe(`${id}: false`);
     }
   });
 
@@ -148,17 +143,15 @@ describe('tenant registry', () => {
     // the only tenant, so they cannot catch the regression on their own. Add a
     // second tenant for the length of this test and re-ask: a hardcoded banner
     // check fails here, registry dispatch passes. This is the generalisation
-    // MEAL-20 is about — the cart side panel and the header badge belong to
-    // Instacart Storefront, not to ALDI.
+    // MEAL-20 is about — reading a cart belongs to Instacart Storefront, not
+    // to ALDI.
     const id = SYNTHETIC.storeId;
     expect(INSTACART_TENANTS[id]).toBeUndefined();   // don't clobber a real one
     INSTACART_TENANTS[id] = SYNTHETIC;
     try {
       expect(getNetworkRail(id)).not.toBeNull();
-      expect(buildCartCountScript(id)).not.toBeNull();
-      // Same platform, same rail and same badge: byte-for-byte what ALDI gets.
+      // Same platform, same rail: byte-for-byte what ALDI gets.
       expect(getNetworkRail(id)!.cartRead()).toBe(getNetworkRail('aldi')!.cartRead());
-      expect(buildCartCountScript(id)).toBe(buildCartCountScript('aldi'));
     } finally {
       delete INSTACART_TENANTS[id];
     }

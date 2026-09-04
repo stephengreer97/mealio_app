@@ -56,7 +56,7 @@ import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
-import { buildCartCountScript, getCartPageUrl, buildCartPageCountScript, buildOpenCartScript, diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { HebAddConfirmation, confirmDetail } from '../lib/webview-scripts/heb-cart-query';
 import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
@@ -1054,6 +1054,19 @@ export default function WebViewCartSheet({
   const netRail = useCallback(() => getNetworkRail(lockedStoreIdRef.current), []);
 
   /**
+   * Can this store's cart be read at all — by its rail, or by its own page
+   * reader?
+   *
+   * The done screen waits on an after-probe only for a store that has one. This
+   * used to ask `buildCartPageCountScript(storeId)`, which answered yes for six
+   * stores from a table in shared code; four of those six had stopped using it
+   * when their rails shipped, and the seventh store to be added would have had
+   * to remember to appear in it.
+   */
+  const canReadCart = (storeId: string | null): boolean =>
+    !!getNetworkRail(storeId) || !!(storeId && getStoreScripts(storeId)?.cartPage);
+
+  /**
    * How this store answers "who is signed in": its rail's session probe, or the
    * store's own check when it has no rail.
    *
@@ -1706,9 +1719,10 @@ export default function WebViewCartSheet({
       webviewRef.current?.injectJavaScript(railForCart.cartRead());
       return;
     }
-    const cartPageScript = buildCartPageCountScript(sid);
-    const cartPageUrl = getCartPageUrl(sid) ?? capturedCartUrlRef.current;
-    const openCartScript = buildOpenCartScript(sid);
+    const cartPage = scriptsRef.current?.cartPage;
+    const cartPageScript = cartPage?.countScript ?? null;
+    const cartPageUrl = cartPage?.url ?? capturedCartUrlRef.current;
+    const openCartScript = cartPage?.openScript ?? null;
     if (cartPageScript) {
       if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
       cartRowsTimeoutRef.current = setTimeout(() => { cartRowsTimeoutRef.current = null; setCartRowsTimedOut(true); }, CART_ROWS_TIMEOUT_MS);
@@ -1737,14 +1751,12 @@ export default function WebViewCartSheet({
       }
       return;
     }
-    const countScript = buildCartCountScript(sid);
-    if (!countScript) {
-      if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
-      if (phase === 'reconcile') { parallelReconcileArmedRef.current = false; setStep('done'); }
-      return;
-    }
-    cartCountPendingRef.current = phase;
-    webviewRef.current?.injectJavaScript(countScript);
+    // Nothing can read this store's cart: no rail, and no page reader either.
+    // The run finishes without a verdict rather than inventing one — a count
+    // nobody read is the input that produced "170 items Mealio did not intend
+    // to add".
+    if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
+    if (phase === 'reconcile') { parallelReconcileArmedRef.current = false; setStep('done'); }
   }, [setStep, storeName, setWebviewUri]);
 
   const finishParallelAdd = useCallback((resultsByIdx: Map<number, AddResult>) => {
@@ -3651,7 +3663,7 @@ export default function WebViewCartSheet({
       console.log(`[Cart ${ts()}]`, 'snapshotBefore: using PREWARMED baseline count=', prewarmed.count, 'lines=', prewarmed.items.length);
       cartCountBeforeRef.current = prewarmed.count;
       cartItemsBeforeRef.current = prewarmed.items;
-      if (prewarmed.url && !getCartPageUrl(probeStoreId)) capturedCartUrlRef.current = prewarmed.url;
+      if (prewarmed.url && !scriptsRef.current?.cartPage?.url) capturedCartUrlRef.current = prewarmed.url;
       beginSearchFlow();
       return;
     }
@@ -3685,9 +3697,12 @@ export default function WebViewCartSheet({
       }
       return;
     }
-    const cartPageScript = buildCartPageCountScript(probeStoreId);
-    const cartPageUrl = getCartPageUrl(probeStoreId);     // HEB / Albertsons: direct URL
-    const openCartScript = buildOpenCartScript(probeStoreId); // Amazon: click the cart icon
+    // The store's own page reader, for a store with no rail. See
+    // StoreScripts.cartPage — today that is Amazon Fresh and the mock store.
+    const cartPage = scriptsRef.current?.cartPage;
+    const cartPageScript = cartPage?.countScript ?? null;
+    const cartPageUrl = cartPage?.url ?? null;
+    const openCartScript = cartPage?.openScript ?? null;
     console.log(`[Cart ${ts()}]`, 'snapshotBefore: storeId=', probeStoreId, 'cartUrl=', !!cartPageUrl, 'cartClick=', !!openCartScript, 'activeLen=', activeItemsRef.current.length);
     if (cartPageScript && (cartPageUrl || openCartScript)) {
       cartCountPendingRef.current = 'before';
@@ -3710,11 +3725,8 @@ export default function WebViewCartSheet({
       if (cartPageUrl) setWebviewUri(cartPageUrl + '?_t=' + Date.now());
       else webviewRef.current?.injectJavaScript(openCartScript!);
     } else {
-      const countScript = buildCartCountScript(probeStoreId);
-      if (countScript) {
-        cartCountPendingRef.current = 'before';
-        webviewRef.current?.injectJavaScript(countScript);
-      }
+      // No rail and no page reader: this store's cart cannot be read, so the run
+      // starts without a baseline rather than with a made-up one.
       beginSearchFlow();
     }
   }, [beginSearchFlow, loginPrewarm]);
@@ -4031,7 +4043,7 @@ export default function WebViewCartSheet({
       // is a navigation the count script itself triggered (Amazon: cart icon →
       // cart-of-carts → Fresh expand link). Re-inject the count script so it
       // runs on the freshly-loaded page (the expanded Fresh cart).
-      const cartPageScript = buildCartPageCountScript(lockedStoreIdRef.current);
+      const cartPageScript = scriptsRef.current?.cartPage?.countScript;
       if (cartPageScript) {
         console.log(`[Cart ${ts()}]`, 'onLoadEnd cart probe navigated — re-injecting count script');
         webviewRef.current?.injectJavaScript(cartPageScript);
@@ -4476,9 +4488,9 @@ export default function WebViewCartSheet({
             cartCountBeforeRef.current = count;
             cartItemsBeforeRef.current = Array.isArray(msg.items) ? msg.items : [];
             // Cache the cart URL the before-probe counted on (click-path stores
-            // only — URL stores already have a direct getCartPageUrl). The
+            // only — a store with cartPage.url already has a direct one). The
             // after-probe hits it directly instead of re-walking the click chain.
-            if (typeof msg.url === 'string' && msg.url && !getCartPageUrl(lockedStoreIdRef.current)) {
+            if (typeof msg.url === 'string' && msg.url && !scriptsRef.current?.cartPage?.url) {
               capturedCartUrlRef.current = msg.url;
             }
             // Cart-page probe: the before-count was gated in front of the search,
@@ -7199,7 +7211,7 @@ export default function WebViewCartSheet({
                 </View>
               )}
 
-              {!cartResultRows && !cartRowsTimedOut && buildCartPageCountScript(lockedStoreId) && (manualUsedRef.current ? cartCountBeforeRef.current != null : shouldProbeAfterRun({ addsAttempted: addsAttemptedRef.current, hasBaseline: cartCountBeforeRef.current != null })) ? (
+              {!cartResultRows && !cartRowsTimedOut && canReadCart(lockedStoreId) && (manualUsedRef.current ? cartCountBeforeRef.current != null : shouldProbeAfterRun({ addsAttempted: addsAttemptedRef.current, hasBaseline: cartCountBeforeRef.current != null })) ? (
                 // Cart-page store (or inline side-panel store like ALDI) with a
                 // baseline: the after-probe is reading the cart. Show a loading
                 // state instead of the plain list so the breakdown doesn't flash
