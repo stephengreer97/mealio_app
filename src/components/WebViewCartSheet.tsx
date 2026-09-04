@@ -62,6 +62,7 @@ import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecover
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { sameProductBarSize, scoreMatch } from '../lib/webview-scripts/_scoring';
 import { challengeMayTakeTheScreen } from '../lib/cart-challenge';
+import { canSignInHere } from '../lib/login-page';
 import { firstAddableIdx, reviewUnaddableReason } from '../lib/review-selection';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 
@@ -3130,11 +3131,16 @@ export default function WebViewCartSheet({
       loginCheckActiveRef.current = false;
       // Mirror the LOGIN_STATUS:false branch: show the webview so the user
       // can log in (or see whatever the store is actually displaying).
-      const alreadyOnStore = lastLoadEndUrlRef.current &&
-        lastLoadEndUrlRef.current.includes(scriptsRef.current!.domain);
+      // NOT "is this the store's domain" — see canSignInHere. The rail parks on
+      // robots.txt, which passes that test and is a blank text file.
+      const canSignInOnThisPage = canSignInHere({
+        url: lastLoadEndUrlRef.current,
+        domain: scriptsRef.current!.domain,
+        railUrl: scriptsRef.current!.railUrl,
+      });
       setStep('login');
       lastLoadEndUrlRef.current = '';
-      if (!alreadyOnStore) {
+      if (!canSignInOnThisPage) {
         setWebviewUri(scriptsRef.current!.loginUrl);
       }
     }, LOGIN_CHECK_TIMEOUT_MS);
@@ -4487,15 +4493,19 @@ export default function WebViewCartSheet({
             console.log(`[Cart ${ts()}]`, 'LOGIN_STATUS true: storeId=', lockedStoreIdRef.current, 'activeLen=', activeItemsRef.current.length);
             snapshotBeforeAndBeginSearch();
           } else if (stepRef.current !== 'login') {
-            // First transition to login — show the webview for the user to log in.
-            // Only navigate if the webview isn't already on the store's domain.
-            // For stores where the check script already opened a sign-in UI
-            // (e.g. hamburger menu), navigating away would lose that state.
-            const alreadyOnStore = lastLoadEndUrlRef.current &&
-              lastLoadEndUrlRef.current.includes(scriptsRef.current!.domain);
+            // First transition to login — show the webview for the user to log
+            // in. Navigate unless the page they are already looking at is one
+            // they could sign in ON: a store whose check opened a sign-in UI
+            // would lose it, and the rail's quiet page has nothing to lose and
+            // nothing to offer. See canSignInHere for what that cost.
+            const canSignInOnThisPage = canSignInHere({
+              url: lastLoadEndUrlRef.current,
+              domain: scriptsRef.current!.domain,
+              railUrl: scriptsRef.current!.railUrl,
+            });
             setStep('login');
             lastLoadEndUrlRef.current = '';
-            if (!alreadyOnStore) {
+            if (!canSignInOnThisPage) {
               setWebviewUri(scriptsRef.current!.loginUrl);
             }
           }
