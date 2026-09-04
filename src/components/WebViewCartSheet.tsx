@@ -830,17 +830,30 @@ export default function WebViewCartSheet({
   const loginCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const LOGIN_CHECK_TIMEOUT_MS = cfgTimeouts.loginCheckMs;
   /**
-   * HOW MANY TIMES TO LET THE SITE FIX ITS OWN SESSION before asking the user.
+   * HOW LONG TO LET THE SITE FIX ITS OWN SESSION before asking the user.
    *
    * A rail parks on a quiet page so the storefront's bundles cannot slow its
    * requests down. The cost of that is a session the site has not bootstrapped,
-   * and the cure is one visit to the real storefront. Three asks — the visit,
-   * then two more while its scripts settle — is about four seconds, well inside
-   * the login check's own timeout, which is what catches the store that never
-   * answers at all.
+   * and the cure is one visit to the real storefront — where the site signs the
+   * user back in from their cookies and, on Wegmans, MSAL mints a fresh token
+   * pair.
+   *
+   * A WINDOW, not a count of attempts, and that is the whole lesson of the
+   * 2026-09-04 device run. The first version allowed three asks: the storefront
+   * load fired two of them by itself through the onLoadEnd re-injection, both
+   * inside 900ms, and the third went 1.5s later. All three were spent 3.4
+   * seconds in, on a page whose MSAL took NINETEEN seconds to produce a token.
+   * The run then sat out the login-check timeout, showed a sign-in screen to a
+   * signed-in user, and answered `cartCapable: true` one second after that.
+   *
+   * Thirty seconds is a CEILING and costs nothing when it is not needed — the
+   * moment any usable answer arrives the run proceeds. It is only ever reached
+   * by a session we KNOW belongs to a signed-in user (their account list is
+   * right there) whose token has aged out; a genuinely signed-out user answers
+   * `loggedIn: false` on the first ask and goes straight to sign-in.
    */
-  const SESSION_REPAIR_ATTEMPTS = 3;
-  const SESSION_REPAIR_WAIT_MS = 1_500;
+  const SESSION_REPAIR_WINDOW_MS = 30_000;
+  const SESSION_REPAIR_ASK_EVERY_MS = 2_000;
   // Tracks which search idx to resume from after a robot/captcha challenge
   // (Walmart redirects to /blocked when it suspects automation; user has to
   // press-and-hold to verify). -1 when no challenge in progress.
@@ -1087,8 +1100,12 @@ export default function WebViewCartSheet({
     const rail = getNetworkRail(lockedStoreIdRef.current);
     return rail ? rail.sessionScript() : (scriptsRef.current?.checkLoginScript ?? null);
   }, []);
-  /** Repair passes spent this run — see SESSION_REPAIR_ATTEMPTS. */
-  const netSessionRepairsRef = useRef(0);
+  /** When the repair window opened this run, 0 if it has not — see
+   *  SESSION_REPAIR_WINDOW_MS. */
+  const netSessionRepairFromRef = useRef(0);
+  /** One re-ask in flight at a time; the storefront's own load events post
+   *  answers of their own and would otherwise burn the window in a second. */
+  const netSessionRepairAskRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const netCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
   // The term list of the live search phase, kept so it can be re-asked if the
   // page navigates out from under the script. netSearchInjectsRef caps that:
@@ -3049,6 +3066,9 @@ export default function WebViewCartSheet({
 
   // ── Start flow ──────────────────────────────────────────────────────────
 
+  /** armLoginCheckTimeout, for the message handler, which is defined below it
+   *  and must not carry it as a dependency. */
+  const armLoginCheckTimeoutRef = useRef<() => void>(() => {});
   const armLoginCheckTimeout = useCallback(() => {
     if (loginCheckTimeoutRef.current) clearTimeout(loginCheckTimeoutRef.current);
     loginCheckTimeoutRef.current = setTimeout(() => {
@@ -3074,6 +3094,7 @@ export default function WebViewCartSheet({
       }
     }, LOGIN_CHECK_TIMEOUT_MS);
   }, []);
+  armLoginCheckTimeoutRef.current = armLoginCheckTimeout;
 
   /**
    * ASK THE STORE WHETHER WE ARE SIGNED IN, on the lightest page that can answer.
@@ -3157,7 +3178,8 @@ export default function WebViewCartSheet({
       setWebviewUri(scriptsRef.current!.loginUrl);
       return;
     }
-    netSessionRepairsRef.current = 0;
+    netSessionRepairFromRef.current = 0;
+    if (netSessionRepairAskRef.current) { clearTimeout(netSessionRepairAskRef.current); netSessionRepairAskRef.current = null; }
     setStep('login_check');
     setSearchingLabel('Checking login…');
     loadQueueRef.current = [check];
@@ -5165,27 +5187,41 @@ export default function WebViewCartSheet({
               // Bounded, because a store that cannot answer twice is not going
               // to answer the third time, and the login check's own timeout is
               // the backstop that hands the user the storefront.
-              if (netSessionRepairsRef.current < SESSION_REPAIR_ATTEMPTS) {
-                const attempt = ++netSessionRepairsRef.current;
+              const now = Date.now();
+              if (netSessionRepairFromRef.current === 0) {
+                netSessionRepairFromRef.current = now;
                 console.log(`[Cart ${ts()}]`, 'network session inconclusive —', msg.why,
-                  `— asking the site to fix it (attempt ${attempt}/${SESSION_REPAIR_ATTEMPTS})`);
-                if (attempt === 1) {
-                  // The storefront, not the quiet page: its own JavaScript is
-                  // the whole point of going there.
-                  navToRef.current(scriptsRef.current!.storeUrl);
-                } else {
-                  // Already there; give the site's bootstrap another moment and
-                  // ask again rather than reloading it out from under itself.
-                  setTimeout(() => {
+                  '— loading the storefront so the site can fix it');
+                // The storefront, not the quiet page: its own JavaScript is the
+                // whole point of going there.
+                navToRef.current(scriptsRef.current!.storeUrl);
+                // The login check's deadline is for a store that never answers.
+                // This store is answering — it is answering "not yet" — so the
+                // deadline is pushed back rather than allowed to drop a
+                // signed-in user on a sign-in screen while the site works.
+                armLoginCheckTimeoutRef.current();
+                return;
+              }
+              if (now - netSessionRepairFromRef.current < SESSION_REPAIR_WINDOW_MS) {
+                armLoginCheckTimeoutRef.current();
+                // One pending ask, however many answers arrive. The storefront
+                // load posts several by itself.
+                if (!netSessionRepairAskRef.current) {
+                  netSessionRepairAskRef.current = setTimeout(() => {
+                    netSessionRepairAskRef.current = null;
                     if (stepRef.current !== 'login_check') return;
                     const again = loginCheckScript();
-                    if (again) webviewRef.current?.injectJavaScript(again);
-                  }, SESSION_REPAIR_WAIT_MS);
+                    if (again) {
+                      console.log(`[Cart ${ts()}]`, 'network session: asking again —',
+                        Math.round((Date.now() - netSessionRepairFromRef.current) / 1000), 's into the repair window');
+                      webviewRef.current?.injectJavaScript(again);
+                    }
+                  }, SESSION_REPAIR_ASK_EVERY_MS);
                 }
                 return;
               }
-              console.log(`[Cart ${ts()}]`, 'network session still inconclusive after',
-                netSessionRepairsRef.current, 'repair attempts — leaving it to the login check timeout');
+              console.log(`[Cart ${ts()}]`, 'network session still inconclusive after the whole',
+                SESSION_REPAIR_WINDOW_MS, 'ms repair window — handing the store to the user');
               return;
             }
             // SIGNED IN IS NOT THE SAME AS READY TO RUN, and this branch does
