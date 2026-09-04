@@ -11,7 +11,6 @@ import {
   WEBVIEW_STORE_IDS,
   isSupportedStore,
 } from '../../src/constants/stores';
-import { MOCK_STORE_ENABLED } from '../../src/lib/webview-scripts/mockstore';
 
 // The loader's rules, all inherited from src/lib/automation-config for the same
 // reasons stated there:
@@ -261,36 +260,18 @@ describe('a store this build has no code for', () => {
   });
 });
 
-// The mock store is the one id whose capability is conditional: it sits in
-// WEBVIEW_STORE_IDS unconditionally (selectorHealth derives its coverage from
-// that set) but is only appended to BUNDLED_STORES in a dev/e2e build. The
-// server deliberately publishes no row for it, so the only thing that could put
-// "Mock Store" in a production picker is this client — which makes both halves
-// worth pinning.
-describe('the dev mock store', () => {
-  it('is capable exactly where the build includes it, and nowhere else', () => {
-    expect(isSupportedStore('mockstore')).toBe(MOCK_STORE_ENABLED);
-  });
-
-  it('is added by a catalog row only where the build already allows it', async () => {
-    await loadStoreCatalog(async () => ({
-      version: 3, stores: [{ id: 'mockstore', name: 'Mock Store', color: '#0a7d4b' }],
-    }));
-    expect(ids().includes('mockstore')).toBe(MOCK_STORE_ENABLED);
-  });
-
-  it('is not removed by a catalog that does not mention it', async () => {
-    // The conditional push happens at module load, and the merge layers over
-    // the result rather than replacing it — so Maestro's e2e store survives a
-    // fetch, which is the case that breaks if the merge is ever made wholesale.
-    const before = ids().includes('mockstore');
-    await loadStoreCatalog(async () => ({
-      version: 3, stores: [{ id: 'heb', name: 'H-E-B Plus!', color: '#dd0031' }],
-    }));
-    expect(ids().includes('mockstore')).toBe(before);
-    expect(before).toBe(MOCK_STORE_ENABLED);
-  });
-});
+// The dev mock store was pinned here — capable exactly where the build included
+// it, added by a catalog row only where the build already allowed it, and never
+// removed by a catalog that did not mention it.
+//
+// It is deleted with the store itself (2026-09-04). Its Maestro flows drove a
+// DOM login, a DOM search and a parallel add pool, none of which exist any
+// more, so what they exercised had already stopped being how the app works.
+//
+// The property the first of those tests really guarded — a remote catalog row
+// cannot make this build capable of a store it has no code for — is still
+// asserted just below, on a store id the server could name and the binary has
+// never heard of.
 
 describe('a store this build DOES have code for', () => {
   // Every capable store is already bundled in this build, so there is no id that

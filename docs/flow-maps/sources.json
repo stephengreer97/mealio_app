@@ -80,15 +80,6 @@
       ],
       "readAt": "b4e518b"
     },
-    "store-mockstore.html": {
-      "title": "Mock Store",
-      "sources": [
-        "src/lib/webview-scripts/mockstore.ts",
-        "src/lib/webview-scripts/index.ts",
-        "src/constants/stores.ts"
-      ],
-      "readAt": "b4e518b"
-    },
     "behavior-cart-engine.html": {
       "title": "The cart engine",
       "sources": [

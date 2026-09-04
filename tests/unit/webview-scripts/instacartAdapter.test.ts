@@ -74,7 +74,11 @@ describe('the tenant seam is complete', () => {
     // click, the in-page search, the fused search-and-add, the pool worker, and
     // finally (2026-09-04) the login check that opened the hamburger menu and
     // read its text. The tenant's storefront GraphQL answers all of it.
-    expect(getInstacartScripts(SYNTHETIC).checkLoginScript).toBeUndefined();
+    //
+    // Asserted on the KEYS, because StoreScripts no longer has a
+    // checkLoginScript field at all to be undefined — no store in the build
+    // provides one.
+    expect(Object.keys(getInstacartScripts(SYNTHETIC))).not.toContain('checkLoginScript');
   });
 
   it("isSearchUrl matches this tenant's store pages and not another's", () => {
@@ -130,11 +134,12 @@ describe('tenant registry', () => {
   it('and needs no page of any kind to do it', () => {
     // The header-badge reader that used to be the other half of this lived in
     // cart-count.ts, keyed by store, and was one of six entries a tenant had to
-    // remember to appear in. It is gone with the rest of the page reading: a
-    // tenant on this platform reads its cart with a request, and a tenant that
-    // somehow acquired a cartPage would be reading a storefront again.
+    // remember to appear in. It is gone with the rest of the page reading, and
+    // so is the per-store cartPage field that replaced it — every store reads
+    // its cart with a request now, so there is no page-reading shape left for a
+    // tenant to acquire.
     for (const id of INSTACART_STORE_IDS) {
-      expect(`${id}: ${!!getStoreScripts(id)!.cartPage}`).toBe(`${id}: false`);
+      expect(Object.keys(getStoreScripts(id)!)).not.toContain('cartPage');
     }
   });
 

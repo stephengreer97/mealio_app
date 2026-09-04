@@ -87,8 +87,8 @@ export const FIXTURE_CONTEXT_OPTIONS = {
  *
  * `--host-resolver-rules=MAP * ~NOTFOUND` refuses at the resolver instead, which is
  * below all three holes at once: a preconnect, a WebSocket and a service worker all
- * have to resolve a name first, and none of them can. `EXCLUDE localhost` keeps the
- * mock store (tests/mock-store) reachable when it is served — but only by NAME.
+ * have to resolve a name first, and none of them can. `EXCLUDE localhost` keeps a locally
+ * served page reachable — but only by NAME.
  * `MAP * ~NOTFOUND` clobbers IP literals and a name EXCLUDE does not cover them, so
  * each loopback spelling needs its own clause (MEAL-149). Without them
  * `http://127.0.0.1:PORT/` failed `ERR_NAME_NOT_RESOLVED` while `http://localhost:PORT/`
@@ -196,8 +196,8 @@ export async function installResourceBlocking(context: BrowserContext): Promise<
     if (type === 'script' || type === 'stylesheet' || type === 'font' || type === 'image' || type === 'media') {
       return route.abort();
     }
-    // Local URLs are allowed through: a fixture run reaches nothing else, but the
-    // mock store (tests/mock-store) is served on localhost when it is served.
+    // Local URLs are allowed through: a fixture run reaches nothing else, and a
+    // locally served page is the one thing that legitimately resolves.
     if (isLocalUrl(route.request().url())) {
       return route.continue();
     }

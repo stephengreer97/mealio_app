@@ -21,8 +21,6 @@
 // longer an invariant — the server can name a store this build has no code for.
 // isSupportedStore() below is where that case is decided.
 
-import { MOCK_STORE_ENABLED } from '../lib/webview-scripts/mockstore';
-
 export interface Store {
   id: string;
   name: string;
@@ -47,7 +45,6 @@ export const WEBVIEW_STORE_IDS = new Set([
   'albertsons', 'safeway', 'vons', 'jewel_osco', 'shaws', 'acme',
   'tom_thumb', 'randalls', 'pavilions', 'star_market', 'haggen',
   'carrs', 'kings', 'balduccis', 'united',
-  'mockstore',   // dev/test only — deterministic store for Maestro e2e
 ]);
 
 export function isWebViewStore(storeId: string): boolean {
@@ -65,15 +62,8 @@ export function isWebViewStore(storeId: string): boolean {
  * Reversing that decision is deleting the filter in getStores(); it is not
  * spread across the call sites, on purpose, because it is on Stephen's list to
  * revisit.
- *
- * `mockstore` is special-cased for the same reason it is appended to
- * BUNDLED_STORES conditionally: it lives in WEBVIEW_STORE_IDS unconditionally
- * (selectorHealth derives its coverage from that set and must keep seeing it),
- * so without this line a remote row named `mockstore` would surface the dev
- * store in a production build.
  */
 export function isSupportedStore(storeId: string): boolean {
-  if (storeId === 'mockstore') return MOCK_STORE_ENABLED;
   return isKrogerBrand(storeId) || isWebViewStore(storeId);
 }
 
@@ -119,10 +109,3 @@ export const BUNDLED_STORES: Store[] = [
   { id: 'walmart',        name: 'Walmart',             color: '#0053E2' },
   { id: 'wegmans',        name: 'Wegmans',             color: '#000000' },
 ];
-
-// Dev/e2e only: surface the deterministic mock store in the store list so
-// Maestro can save a meal at it and run the full add-to-cart flow. Excluded from
-// production builds (the e2e flag is unset there).
-if (MOCK_STORE_ENABLED) {
-  BUNDLED_STORES.push({ id: 'mockstore', name: 'Mock Store', color: '#0a7d4b' });
-}

@@ -334,8 +334,9 @@ export function diffCartItems(beforeRaw: CartItem[], afterRaw: CartItem[]): Cart
 // both call sites (the cart sheet's triggerCartProbe and the prewarm probe's
 // startCartCapture) check for a rail first and return, so none of this had been
 // reachable for them since the rails shipped. The two that still read a page —
-// Amazon Fresh, which has no rail, and the mock store — carry their own reader
-// on StoreScripts.cartPage, next to the URLs it belongs with.
+// Amazon Fresh and the mock store — briefly carried their own reader on
+// StoreScripts.cartPage, and then went themselves the same day, taking the last
+// page-reading cart path in the app with them.
 //
 // What is left in this file is arithmetic: comparing two carts, matching a
 // reported name to a cart line, and deciding what a diff means. None of it knows

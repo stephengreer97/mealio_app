@@ -5,7 +5,6 @@ import { getScripts as getWalmartScripts } from './walmart';
 import { getScripts as getAlbertsonsScripts, ALBERTSONS_FAMILY_IDS } from './albertsons';
 import { getInstacartScriptsFor, INSTACART_STORE_IDS } from './instacart';
 import { getScripts as getWegmansScripts } from './wegmans';
-import { getScripts as getMockStoreScripts, MOCK_STORE_ENABLED } from './mockstore';
 import { isStoreEnabled } from '../automation-config';
 
 export interface StoreScripts {
@@ -49,18 +48,12 @@ export interface StoreScripts {
    *  Needed for stores whose login detection relies on a background poll that
    *  dies when the page reloads after the user signs in (e.g. Albertsons). */
   reinjectLoginCheckOnNav?: boolean;
-  /**
-   * Injected to check if the user is signed in. Posts LOGIN_STATUS.
-   *
-   * OPTIONAL, and absent on every store that has a network rail: there, the
-   * rail's own session probe is the answer, and a second opinion read off the
-   * page is how a signed-in user gets shown a sign-in wall.
-   *
-   * Nothing in production carries one any more: Amazon Fresh was the last, and
-   * it was dropped with the store on 2026-09-04. The mock store keeps one
-   * because it is a fixture we serve ourselves.
-   */
-  checkLoginScript?: string;
+  // checkLoginScript lived here: a page-reading answer to "who is signed in".
+  //
+  // Nothing provides one. Amazon Fresh carried the last real store's on
+  // 2026-09-04 and the mock store's went with the store itself. Every store is
+  // answered by its rail's session probe, which asks the store rather than its
+  // markup.
   /**
    * Where to send the USER to finish a term by hand.
    *
@@ -74,26 +67,12 @@ export interface StoreScripts {
    *  stores whose anti-bot flags that synthetic query (ALDI) — navTo then uses
    *  the clean URL + a forced reload() instead. */
   cacheBustNav?: boolean;
-  /**
-   * HOW THIS STORE READS ITS OWN CART, for a store that has to read a page to
-   * do it.
-   *
-   * Absent on every store with a rail, which asks the store's API instead and
-   * needs no page at all. Present on exactly one: the mock store, a dev fixture
-   * we serve ourselves. It used to be a table of six in cart-count.ts, which
-   * every store imports, and four of those six entries had been unreachable
-   * since their rails shipped.
-   *
-   * `url` navigates there; `countScript` then posts the CART_COUNT.
-   *
-   * `openScript` — click your way to the cart, for a store whose cart URL is
-   * unreliable — went with Amazon Fresh on 2026-09-04. It was the only store
-   * that ever had one.
-   */
-  cartPage?: {
-    url: string;
-    countScript: string;
-  };
+  // cartPage lived here: navigate to the cart and count what is rendered.
+  //
+  // Nothing provides one either. Every store reads its cart with a request now,
+  // through NetworkRail.cartRead — no navigation, and an answer that can be
+  // checked. This was a table of six in cart-count.ts before it was a per-store
+  // field, and four of those six had been unreachable since their rails shipped.
 }
 
 // Worker composition lived here, and the selector-health probe that wrapped
@@ -127,9 +106,6 @@ export function getStoreScripts(storeId: string): StoreScripts | null {
     case 'heb':     return getHebScripts();
     case 'walmart': return getWalmartScripts();
     case 'wegmans': return getWegmansScripts();
-    // Dev/e2e only: the deterministic mock store for Maestro. Returns null in
-    // production (flag unset) so it can never be reached even if a meal carries it.
-    case 'mockstore':      return MOCK_STORE_ENABLED ? getMockStoreScripts() : null;
     default:
       if (ALBERTSONS_FAMILY_IDS.includes(storeId)) {
         return getAlbertsonsScripts(storeId);

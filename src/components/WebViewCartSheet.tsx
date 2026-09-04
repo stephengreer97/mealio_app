@@ -367,7 +367,7 @@ export default function WebViewCartSheet({
   const lockedStoreIdRef = useRef(storeId);
   const storeColor = useStores().find((s) => s.id === lockedStoreId)?.color ?? '#dd0031';
   // May be null if a meal ever carries a non-WebView store id (e.g. a
-  // Kroger-family store handled by the web integration, or mockstore in prod).
+  // Kroger-family store, which the web integration handles).
   // Consumers guard against null and the sheet closes gracefully on open rather
   // than crashing on a non-null-asserted `.storeUrl`.
   const scripts = useMemo(() => getStoreScripts(lockedStoreId), [lockedStoreId]);
@@ -1088,8 +1088,7 @@ export default function WebViewCartSheet({
    * when their rails shipped, and the seventh store to be added would have had
    * to remember to appear in it.
    */
-  const canReadCart = (storeId: string | null): boolean =>
-    !!getNetworkRail(storeId) || !!(storeId && getStoreScripts(storeId)?.cartPage);
+  const canReadCart = (storeId: string | null): boolean => !!getNetworkRail(storeId);
 
   /**
    * How this store answers "who is signed in": its rail's session probe, or the
@@ -1109,7 +1108,7 @@ export default function WebViewCartSheet({
    */
   const loginCheckScript = useCallback((): string | null => {
     const rail = getNetworkRail(lockedStoreIdRef.current);
-    return rail ? rail.sessionScript() : (scriptsRef.current?.checkLoginScript ?? null);
+    return rail ? rail.sessionScript() : null;
   }, []);
   /** When the repair window opened this run, 0 if it has not — see
    *  SESSION_REPAIR_WINDOW_MS. */
@@ -1740,38 +1739,13 @@ export default function WebViewCartSheet({
       webviewRef.current?.injectJavaScript(railForCart.cartRead());
       return;
     }
-    const cartPage = scriptsRef.current?.cartPage;
-    const cartPageScript = cartPage?.countScript ?? null;
-    const cartPageUrl = cartPage?.url ?? capturedCartUrlRef.current;
-    if (cartPageScript) {
-      if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
-      cartRowsTimeoutRef.current = setTimeout(() => { cartRowsTimeoutRef.current = null; setCartRowsTimedOut(true); }, CART_ROWS_TIMEOUT_MS);
-    }
-    if (cartProbeResultTimeoutRef.current) clearTimeout(cartProbeResultTimeoutRef.current);
-    cartProbeResultTimeoutRef.current = setTimeout(() => {
-      cartProbeResultTimeoutRef.current = null;
-      console.log(`[Cart ${ts()}]`, 'cart probe timeout — no CART_COUNT for', phase);
-      cartCountPendingRef.current = null;
-      if (phase === 'reconcile') {
-        parallelReconcileArmedRef.current = false;
-        setCartUnverified(unverifiedCartMessage(storeName));
-        setStep('done');
-      }
-    }, CART_PROBE_RESULT_TIMEOUT_MS);
-    if (cartPageScript && cartPageUrl) {
-      cartCountPendingRef.current = phase;
-      cartProbeBeginSearchRef.current = false;
-      loadQueueRef.current = [cartPageScript];
-      lastLoadEndUrlRef.current = '';
-      expectedNavUrlRef.current = '';
-      setWebviewUri(cartPageUrl + (cartPageUrl.includes('?') ? '&' : '?') + '_t=' + Date.now());
-      return;
-    }
-    // Nothing can read this store's cart: no rail, and no page reader either.
+    // NO RAIL, NO CART. The navigate-to-the-cart-page fallback that stood here
+    // went with the last store that used it (the mock store, 2026-09-04).
+    //
     // The run finishes without a verdict rather than inventing one — a count
     // nobody read is the input that produced "170 items Mealio did not intend
     // to add".
-    if (cartProbeResultTimeoutRef.current) { clearTimeout(cartProbeResultTimeoutRef.current); cartProbeResultTimeoutRef.current = null; }
+    console.log(`[Cart ${ts()}]`, 'cart probe: no rail for', sid, '— finishing without a cart verdict');
     if (phase === 'reconcile') { parallelReconcileArmedRef.current = false; setStep('done'); }
   }, [setStep, storeName, setWebviewUri]);
 
@@ -2769,9 +2743,10 @@ export default function WebViewCartSheet({
       // the parallel pool must see the right store from the first tick).
       const openStoreId = storeId;
       const openScripts = getStoreScripts(openStoreId);
-      // A non-WebView store id (Kroger-family web integration, or mockstore in
-      // prod) has no scripts. There's nothing this sheet can automate, so close
-      // gracefully instead of crashing on openScripts.storeUrl below.
+      // A non-WebView store id — the Kroger family, which the web integration
+      // handles, or one this binary has no code for — has no scripts. There is
+      // nothing this sheet can automate, so it closes gracefully instead of
+      // crashing on openScripts.storeUrl below.
       if (!openScripts) {
         console.warn(`[Cart ${ts()}]`, 'no WebView scripts for store=', openStoreId, '— closing sheet');
         onClose();
@@ -3866,7 +3841,6 @@ export default function WebViewCartSheet({
       console.log(`[Cart ${ts()}]`, 'snapshotBefore: using PREWARMED baseline count=', prewarmed.count, 'lines=', prewarmed.items.length);
       cartCountBeforeRef.current = prewarmed.count;
       cartItemsBeforeRef.current = prewarmed.items;
-      if (prewarmed.url && !scriptsRef.current?.cartPage?.url) capturedCartUrlRef.current = prewarmed.url;
       beginSearchFlow();
       return;
     }
@@ -3900,34 +3874,11 @@ export default function WebViewCartSheet({
       }
       return;
     }
-    // The store's own page reader, for a store with no rail. See
-    // StoreScripts.cartPage — today that is the mock store alone.
-    const cartPage = scriptsRef.current?.cartPage;
-    const cartPageScript = cartPage?.countScript ?? null;
-    const cartPageUrl = cartPage?.url ?? null;
-    console.log(`[Cart ${ts()}]`, 'snapshotBefore: storeId=', probeStoreId, 'cartUrl=', !!cartPageUrl, 'activeLen=', activeItemsRef.current.length);
-    if (cartPageScript && cartPageUrl) {
-      cartCountPendingRef.current = 'before';
-      cartProbeBeginSearchRef.current = true;
-      loadQueueRef.current = [cartPageScript];
-      lastLoadEndUrlRef.current = '';
-      expectedNavUrlRef.current = '';
-      if (cartProbeTimeoutRef.current) clearTimeout(cartProbeTimeoutRef.current);
-      cartProbeTimeoutRef.current = setTimeout(() => {
-        cartProbeTimeoutRef.current = null;
-        if (!cartProbeBeginSearchRef.current) return; // before-count already resumed it
-        console.log(`[Cart ${ts()}]`, 'cart before-probe timed out — starting search without a baseline');
-        cartProbeBeginSearchRef.current = false;
-        cartCountPendingRef.current = null;
-        loadQueueRef.current = [];
-        beginSearchFlow();
-      }, CART_PROBE_TIMEOUT_MS);
-      setWebviewUri(cartPageUrl + '?_t=' + Date.now());
-    } else {
-      // No rail and no page reader: this store's cart cannot be read, so the run
-      // starts without a baseline rather than with a made-up one.
-      beginSearchFlow();
-    }
+    // NO RAIL, NO BASELINE. The navigate-to-the-cart-page branch that stood
+    // here went with the last store that used it (the mock store, 2026-09-04),
+    // and the run starts without a baseline rather than with a made-up one.
+    console.log(`[Cart ${ts()}]`, 'snapshotBefore: no rail for', probeStoreId, '— starting search without a baseline');
+    beginSearchFlow();
   }, [beginSearchFlow, loginPrewarm]);
   snapshotBeforeRef.current = snapshotBeforeNow;
   snapshotBeforeAndBeginSearchRef.current = snapshotBeforeAndBeginSearch;
@@ -4248,18 +4199,6 @@ export default function WebViewCartSheet({
       // The page moved while the search was running in it. Anything still
       // unanswered died with the old document — ask again in the new one.
       netResumeSearchAfterNavRef.current();
-    } else if (cartCountPendingRef.current) {
-      // A cart probe is mid-flight and the queue is already drained — this load
-      // is a navigation the count script itself triggered (Amazon: cart icon →
-      // cart-of-carts → Fresh expand link). Re-inject the count script so it
-      // runs on the freshly-loaded page (the expanded Fresh cart).
-      const cartPageScript = scriptsRef.current?.cartPage?.countScript;
-      if (cartPageScript) {
-        console.log(`[Cart ${ts()}]`, 'onLoadEnd cart probe navigated — re-injecting count script');
-        webviewRef.current?.injectJavaScript(cartPageScript);
-      } else {
-        console.log(`[Cart ${ts()}]`, 'onLoadEnd queue empty, no inject');
-      }
     } else {
       console.log(`[Cart ${ts()}]`, 'onLoadEnd queue empty, no inject');
     }
@@ -4676,12 +4615,6 @@ export default function WebViewCartSheet({
           if (phase === 'before') {
             cartCountBeforeRef.current = count;
             cartItemsBeforeRef.current = Array.isArray(msg.items) ? msg.items : [];
-            // Cache the cart URL the before-probe counted on (click-path stores
-            // only — a store with cartPage.url already has a direct one). The
-            // after-probe hits it directly instead of re-walking the click chain.
-            if (typeof msg.url === 'string' && msg.url && !scriptsRef.current?.cartPage?.url) {
-              capturedCartUrlRef.current = msg.url;
-            }
             // Cart-page probe: the before-count was gated in front of the search,
             // so kick off the search now (once).
             if (cartProbeBeginSearchRef.current) {

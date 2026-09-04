@@ -42,7 +42,6 @@ jest.mock('../../src/lib/api', () => ({
 import StoreSelectorSheet from '../../src/components/StoreSelectorSheet';
 import { loadStoreCatalog, getStores, __resetStoreCatalogForTests } from '../../src/lib/store-catalog';
 import { WEBVIEW_STORE_IDS } from '../../src/constants/stores';
-import { MOCK_STORE_ENABLED } from '../../src/lib/webview-scripts/mockstore';
 
 const PUBLIX = { id: 'publix', name: 'Publix', color: '#008542' };
 /** First store alphabetically, so it is always inside the FlatList's window. */
@@ -114,17 +113,9 @@ describe('the store picker', () => {
     expect(r.queryByText('Publix')).toBeNull();
   });
 
-  it('keeps the dev mock store, which the server deliberately never publishes', async () => {
-    // This project runs with __DEV__ true, so the conditional push at the bottom
-    // of constants/stores.ts has happened and Maestro's e2e store is bundled.
-    // The merge layers over that rather than replacing it, so a fetch must not
-    // take it away. Asserted here rather than in the node project because that
-    // one has MOCK_STORE_ENABLED false and cannot see this case at all.
-    expect(MOCK_STORE_ENABLED).toBe(true);
-    expect(getStores().some((s) => s.id === 'mockstore')).toBe(true);
-    await loadStoreCatalog(async () => ({ version: 3, stores: [{ id: 'heb', name: 'H-E-B Plus!', color: '#dd0031' }] }));
-    expect(getStores().some((s) => s.id === 'mockstore')).toBe(true);
-  });
+  // The dev mock store's survival across a fetch was pinned here. It went with
+  // the store on 2026-09-04; the merge-does-not-replace property it depended on
+  // is covered by the bundled-list assertions above and below.
 
   it('keeps the bundled list when the payload is malformed', async () => {
     await loadStoreCatalog(async () => ({ version: 3, stores: 'not a list' }));

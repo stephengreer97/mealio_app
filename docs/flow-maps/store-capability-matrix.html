@@ -17,8 +17,10 @@
 with two ways to answer "who is signed in" has no way to tell you which answer you got. A session
 that cannot answer now asks the SITE &mdash; one load of the real storefront, then the same probe
 again on that page, for up to 30s &mdash; and only hands the user a sign-in screen if that fails.
-Since Amazon Fresh was removed on 2026-09-04 there is no exception left: every store in the
-catalogue has a rail, and no production store reads a page to answer anything.</p>
+Since Amazon Fresh and the mock store were removed on 2026-09-04 there is no exception left:
+every store in the catalogue has a rail, and nothing in the app reads a page to answer anything.
+<code>checkLoginScript</code> and <code>cartPage</code> are gone from StoreScripts entirely &mdash;
+no store provides either.</p>
 </div>
 <div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
 <p><b>2026-09-04.</b> Two engine-wide fixes found by driving the Pixel: the sheet's open now
@@ -116,9 +118,6 @@ itself. Neither is a selector and neither is on the add path.</p>
     <tr><td><b>Kroger family</b></td><td><code>kroger</code><br/><i>declared, no table &mdash; and never needs one</i></td>
         <td><b>15</b></td><td>&mdash; <i>no scripts to disable</i></td>
         <td>REST via <code>lib/api.ts</code></td><td>n/a</td></tr>
-    <tr><td><b>Mock Store</b></td><td>&mdash;</td><td>1</td><td><code>mockstore</code></td>
-        <td><code>mockstore.ts</code></td><td><b>no</b> &mdash; deliberately: a deterministic
-        fixture store has no drift to catch</td></tr>
   </table>
 
   <h2>2 &middot; How a run is shaped</h2>
