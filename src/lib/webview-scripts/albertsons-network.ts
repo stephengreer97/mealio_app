@@ -1326,6 +1326,10 @@ ${ALB_PRELUDE}
     lines.push({ itemId: pl.id, qty: pl.want });
   }
 
+  // Lines this write created or grew that the store came back and flagged
+  // unavailable. Collected during verification, undone in one request after it.
+  var undo = [];
+
   if (planned.length > 0) {
     var body = JSON.stringify({
       preferenceList: [{ cartCategory: '1P_WINE' }],
@@ -1377,9 +1381,20 @@ ${ALB_PRELUDE}
         var avail = (row.isAvailable === undefined || row.isAvailable === null)
           ? null : !!row.isAvailable;
         if (avail === false) {
-          for (var e2 = 0; e2 < mem.length; e2++) {
-            report(mem[e2], false, 'out_of_stock', 'the store added it but marked it unavailable');
-          }
+          // AND TAKE IT BACK OUT. Stephen, 2026-09-04: "if something is
+          // unavailable, it should be considered the same as out of stock. Even
+          // though we are allowed to add it, it should not stay in the cart."
+          //
+          // This store ACCEPTS the write and flags the line, so refusing to
+          // report success is not enough — the line is really there, and the
+          // user is then sent to pick a substitute for something already sitting
+          // in their basket. Pick one and they have both.
+          //
+          // BACK TO WHAT THE CART HELD BEFORE, never to zero blindly. pq.held is
+          // this run's own baseline, so a line the USER already had is restored
+          // to their quantity and one we created goes to 0. We undo our own
+          // write and nothing else — the same rule the write itself follows.
+          undo.push({ itemId: pq.id, qty: pq.held, members: mem });
           continue;
         }
         var got = Number(row.qty);
@@ -1394,6 +1409,68 @@ ${ALB_PRELUDE}
         for (var e4 = 0; e4 < mem.length; e4++) report(mem[e4], true, null, null, pq.want);
       }
     }
+  }
+
+  // ── Undo the lines the store flagged unavailable ────────────────────────────
+  //
+  // ONE request for all of them, the same batch endpoint the write uses — the
+  // cart is one document and N read-modify-writes against it lose each other.
+  //
+  // WHAT THIS CANNOT DO IS HARM. It restores each line to the quantity the cart
+  // held before this run, so the worst case if the store ignores a quantity of
+  // zero is the line staying exactly where it is today. The response carries the
+  // whole cart, so the outcome is READ rather than assumed, and every item says
+  // in its own detail whether the line went.
+  if (undo.length > 0) {
+    var undoLines = [], undoOk = false, undoWhy = 'no_response';
+    for (var d0 = 0; d0 < undo.length; d0++) {
+      undoLines.push({ itemId: undo[d0].itemId, qty: undo[d0].qty });
+    }
+    var uCtl = new AbortController();
+    var uTo = setTimeout(function () { uCtl.abort(); }, 15000);
+    var ur = null;
+    try {
+      ur = await fetch(__albCartUrl(), {
+        method: 'POST', credentials: 'include', headers: __albCartHeaders(A.cartKey),
+        body: JSON.stringify({
+          preferenceList: [{ cartCategory: '1P_WINE' }],
+          cartItemsList: undoLines,
+          cartCategory: 'abs'
+        }),
+        signal: uCtl.signal
+      });
+      clearTimeout(uTo);
+      undoWhy = 'status ' + ur.status;
+    } catch (e) { clearTimeout(uTo); }
+    var uAfter = {};
+    if (ur && ur.status === 200) {
+      try {
+        var uj = await ur.json();
+        var ul = ((uj.carts || [])[0] || {}).cartItemsList || [];
+        for (var u1 = 0; u1 < ul.length; u1++) uAfter[String(ul[u1].itemId)] = Number(ul[u1].qty);
+        undoOk = true;
+      } catch (e) { undoWhy = 'unparseable'; }
+    }
+    for (var d1 = 0; d1 < undo.length; d1++) {
+      var uItem = undo[d1];
+      // The cart's own answer, not ours: absent means removed, and a number
+      // means the line is still there holding that many.
+      var left = Object.prototype.hasOwnProperty.call(uAfter, uItem.itemId)
+        ? uAfter[uItem.itemId] : 0;
+      var gone = undoOk && left <= uItem.qty;
+      base.lines[uItem.itemId] = left;
+      var why = gone
+        ? (uItem.qty > 0
+            ? 'the store marked it unavailable; put back to the ' + uItem.qty + ' you already had'
+            : 'the store marked it unavailable; taken back out of your cart')
+        : 'the store marked it unavailable and would not let go of the line ('
+            + (undoOk ? 'cart still holds ' + left : undoWhy) + ')';
+      for (var d2 = 0; d2 < uItem.members.length; d2++) {
+        report(uItem.members[d2], false, 'out_of_stock', why);
+      }
+    }
+    post({ type: 'NET_UNDO_DONE', count: undo.length,
+           removed: undoLines.length, ok: undoOk, why: undoOk ? null : undoWhy });
   }
 
   var afterCart = await __albReadCart(10000);

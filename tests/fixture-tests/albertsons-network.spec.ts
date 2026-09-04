@@ -955,8 +955,15 @@ describe('an out-of-stock item the store accepts anyway', () => {
       '    if (String(url).indexOf("/cart/customer/") !== -1) {',
       '      return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body()); } });',
       '    }',
-      '    var line = JSON.parse(init.body).cartItemsList[0];',
-      '    window.__lines[line.itemId] = line.qty;',
+      // EVERY line in the batch, and a qty of 0 REMOVES — which is what the
+      // store's own stepper does when you take the last one out. The undo is
+      // checked against this, and against a store that will not let go (see
+      // "says so honestly" below).
+      '    var sent = JSON.parse(init.body).cartItemsList || [];',
+      '    for (var i = 0; i < sent.length; i++) {',
+      '      if (Number(sent[i].qty) <= 0) delete window.__lines[sent[i].itemId];',
+      '      else window.__lines[sent[i].itemId] = sent[i].qty;',
+      '    }',
       '    return Promise.resolve({ status: 200, json: function () { return Promise.resolve(body()); } });',
       '  };',
       '})(); true;',
@@ -975,6 +982,92 @@ describe('an out-of-stock item the store accepts anyway', () => {
     const done = await runner.waitForMessage('NET_ADD_DONE', 20_000);
     // The write happened — it is in the cart — but the run does not claim it.
     expect(done.wrote).toBe(0);
+  });
+
+  itWithFixture('logged-in-home.html', 'is taken back out of the cart', async (runner) => {
+    // Stephen, 2026-09-04: "if something is unavailable, it should be considered
+    // the same as out of stock. Even though we are allowed to add it, it should
+    // not stay in the cart."
+    //
+    // Refusing to CLAIM the add is not enough, because the line is really there:
+    // the user is then sent to pick a substitute for something already sitting
+    // in their basket, and picking one leaves them with both.
+    await runner.inject(albStub());
+    await runner.inject(cartStubWithAvailability(false));
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(
+      [{ idx: 0, productId: '184040105', quantity: 1, name: 'Mist Winter Pine - Each' }])!);
+
+    const undo = await runner.waitForMessage('NET_UNDO_DONE', 20_000);
+    expect(undo.ok).toBe(true);
+    expect(undo.count).toBe(1);
+    await runner.waitForMessage('NET_ADD_DONE', 20_000);
+    // The cart itself, not our claim about it.
+    const lines = await runner.page.evaluate('JSON.stringify(window.__lines)');
+    expect(JSON.parse(String(lines))).toEqual({});
+  });
+
+  itWithFixture('logged-in-home.html', 'and the user still gets to choose an alternative', async (runner) => {
+    // Removing it must not quietly drop the ingredient. out_of_stock is a
+    // definitive failure, which is what routes the item to the review screen
+    // with the ingredient-name candidates.
+    await runner.inject(albStub());
+    await runner.inject(cartStubWithAvailability(false));
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(
+      [{ idx: 0, productId: '184040105', quantity: 1, name: 'Mist Winter Pine - Each' }])!);
+    await runner.waitForMessage('NET_UNDO_DONE', 20_000);
+    const results = runner.messagesOfType('NET_ADD_RESULT') as Array<Record<string, unknown>>;
+    const last = results[results.length - 1];
+    expect(last.success).toBe(false);
+    expect(last.reason).toBe('out_of_stock');
+    // And it says what happened to the line, because "could not add" alone
+    // would leave the user wondering what is in their cart.
+    expect(String(last.detail)).toMatch(/taken back out of your cart/);
+  });
+
+  itWithFixture('logged-in-home.html', 'never takes back more than this run put in', async (runner) => {
+    // THE LINE THAT MATTERS. If the user already had two of something and this
+    // run added one, the undo restores THEIR two — it does not empty the line.
+    // We undo our own write and nothing else.
+    await runner.inject(albStub());
+    await runner.inject(cartStubWithAvailability(false));
+    await runner.inject('window.__lines = { "184040105": 2 }; true;');
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(
+      [{ idx: 0, productId: '184040105', quantity: 1, name: 'Mist Winter Pine - Each' }])!);
+    await runner.waitForMessage('NET_UNDO_DONE', 20_000);
+    const lines = JSON.parse(String(await runner.page.evaluate('JSON.stringify(window.__lines)')));
+    expect(lines['184040105']).toBe(2);
+  });
+
+  itWithFixture('logged-in-home.html', 'says so honestly when the store will not let go', async (runner) => {
+    // The measurement this could not make: whether a quantity of zero really
+    // removes a line at this store. If it does not, the outcome is exactly
+    // today's behaviour — the line stays — and the user is TOLD that rather
+    // than left to find it. The response carries the whole cart, so this is
+    // read, never assumed.
+    await runner.inject(albStub());
+    await runner.inject(cartStubWithAvailability(false));
+    await runner.inject([
+      '(function () {',
+      '  var prior = window.fetch;',
+      '  window.fetch = function (url, init) {',
+      '    var isWrite = init && init.body && String(init.body).indexOf("cartItemsList") !== -1;',
+      '    var sent = isWrite ? (JSON.parse(init.body).cartItemsList || []) : [];',
+      '    var zeroing = sent.length > 0 && Number(sent[0].qty) <= 0;',
+      '    if (!zeroing) return prior.apply(window, arguments);',
+      '    return Promise.resolve({ status: 200, json: function () {',
+      '      return Promise.resolve({ carts: [{ cartItemsList: [',
+      '        { itemId: "184040105", qty: 1, name: "Mist Winter Pine - Each", isAvailable: false }',
+      '      ] }] }); } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+    await runner.inject(buildAlbertsonsNetworkAddBatchScript(
+      [{ idx: 0, productId: '184040105', quantity: 1, name: 'Mist Winter Pine - Each' }])!);
+    await runner.waitForMessage('NET_UNDO_DONE', 20_000);
+    const results = runner.messagesOfType('NET_ADD_RESULT') as Array<Record<string, unknown>>;
+    const last = results[results.length - 1];
+    expect(last.reason).toBe('out_of_stock');
+    expect(String(last.detail)).toMatch(/would not let go/);
   });
 
   itWithFixture('logged-in-home.html', 'an available line is still a success', async (runner) => {
