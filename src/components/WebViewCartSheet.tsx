@@ -1239,6 +1239,10 @@ export default function WebViewCartSheet({
   const navToRef = useRef<(url: string) => void>(() => {});
   /** startLoginCheck, for the entry points defined above it. */
   const startLoginCheckRef = useRef<() => void>(() => {});
+  /** One challenge per run. A second means solving it did not help. */
+  const netChallengeShownRef = useRef(false);
+  /** netSurfaceChallenge, for the callbacks defined above it. */
+  const netSurfaceChallengeRef = useRef<() => boolean>(() => false);
   /**
    * IS THE WEBVIEW ACTUALLY ON THE STORE?
    *
@@ -2762,6 +2766,7 @@ export default function WebViewCartSheet({
       isCustomSearchRef.current = false;
       cartProbeBeginSearchRef.current = false;
       cartReadPendingNavRef.current = false;
+      netChallengeShownRef.current = false;
       cartCountBeforeRef.current = null;
       robotChallengeResumeIdxRef.current = -1;
       consecutiveTimeoutsRef.current = 0;
@@ -3118,6 +3123,46 @@ export default function WebViewCartSheet({
    * sheet already opened, so for the common case this now navigates nowhere at
    * all and the answer arrives on the load that was already in flight.
    */
+  /**
+   * A RAIL SAW A BOT CHALLENGE. Put it in front of the user.
+   *
+   * The robot_challenge step already existed, and it is the right screen: the
+   * user completes the verification, the page navigates off /blocked, and
+   * onLoadEnd restarts the run from the session. But it only ever fired on a
+   * NAVIGATION to a blocked URL — which is the DOM era's shape. A rail's fetch
+   * never navigates, so a store that answered 412 and "Robot or human?" reached
+   * none of it and the run just handed over.
+   *
+   * Navigating to the store is also the FIX, not merely the prompt. MEASURED on
+   * Walmart 2026-09-03: a challenged session did not recover in forty minutes of
+   * waiting, and more fetches dug it in deeper — a fetch never runs the bot
+   * vendor's own JavaScript, which is what issues a fresh decision cookie. One
+   * real page load cleared it instantly. So this often costs the user nothing:
+   * the page loads clean, onLoadEnd sees a normal URL, and the run resumes.
+   *
+   * Returns false when it has already been tried this run, because a second
+   * challenge means solving the first did not help and the honest move is to
+   * hand the user the storefront.
+   */
+  const netSurfaceChallenge = useCallback(() => {
+    if (netChallengeShownRef.current) return false;
+    netChallengeShownRef.current = true;
+    if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+    netActiveRef.current = false;
+    netPhaseRef.current = 'idle';
+    robotChallengeResumeIdxRef.current = -1;
+    lastLoadEndUrlRef.current = '';
+    console.log(`[Cart ${ts()}]`, 'network run: the store challenged us — showing it to the user');
+    // waf_block is the taxonomy's own word for a challenge or robot wall, and
+    // the funnel reads it as "the store refused us" rather than as a match or a
+    // write that went wrong.
+    tel().record('search', 'error', { code: 'waf_block', detail: { via: 'rail' } });
+    setStep('robot_challenge');
+    navToRef.current(scriptsRef.current!.storeUrl);
+    return true;
+  }, [setStep]);
+  netSurfaceChallengeRef.current = netSurfaceChallenge;
+
   const startLoginCheck = useCallback(() => {
     setStep('login_check');
     setSearchingLabel('Checking login…');
@@ -3723,6 +3768,7 @@ export default function WebViewCartSheet({
     // baseline is taken, and only then does the search flow begin.
     if (cartReadPendingNavRef.current) {
       cartReadPendingNavRef.current = false;
+      netChallengeShownRef.current = false;
       // RECORD THIS LANDING BEFORE RETURNING.
       //
       // `lastLoadEndUrlRef` is written per-branch in this handler, and that is
@@ -5324,8 +5370,12 @@ export default function WebViewCartSheet({
           // never looked. Handing over puts them in front of the storefront,
           // which is the one place the run can still be finished.
           if ((msg as { blocked?: boolean }).blocked) {
+            // Show it rather than surrender to it. Only if that has not already
+            // been tried this run — a second block means the first fix did not
+            // take, and then the user is better off with the storefront.
+            if (netSurfaceChallengeRef.current()) return;
             if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
-            console.log(`[Cart ${ts()}]`, 'network run: the store blocked the search — handing over');
+            console.log(`[Cart ${ts()}]`, 'network run: blocked again after the challenge — handing over');
             netHandOverToUser('search_blocked');
             return;
           }
