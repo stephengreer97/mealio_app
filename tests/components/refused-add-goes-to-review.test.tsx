@@ -204,8 +204,15 @@ describe('an item the store would not add', () => {
   it('carries the candidates the search already found, so there is something to pick', async () => {
     const view = await refusedTwice('cart_not_incremented');
     act(() => { fireEvent.press(view.getByText(/review \d+ ingredient/i)); });
-    // The product the run matched is on the screen to choose from.
-    expect(view.queryAllByText(/Sour Cream/i).length).toBeGreaterThan(0);
+    // NOT "the name appears somewhere" — the screen prints "You searched for
+    // Sour Cream" whatever happens, and asserting that passed while every card
+    // was being built with an empty candidate list. The button is the proof: it
+    // is enabled only once a candidate is selected and a quantity is set.
+    const plus = view.queryAllByText('+');
+    expect(plus.length).toBeGreaterThan(0);
+    act(() => { fireEvent.press(plus[0]); });
+    expect(view.queryByText(/add to cart only/i)).toBeTruthy();
+    expect(view.queryByText(/set a quantity above/i)).toBeNull();
   });
 
   it('by the top-up route as well as the first refusal', async () => {

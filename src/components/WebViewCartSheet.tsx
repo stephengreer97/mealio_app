@@ -2650,9 +2650,26 @@ export default function WebViewCartSheet({
       const already = searchResultsRef.current.some((r) => r.term === term);
       if (already) continue;
       const res = netResultsRef.current.get(idx);
+      // FROM THE SEARCH, not from the add result.
+      //
+      // The NET_ADD_RESULT handler stores `candidates: []` on every row it
+      // writes — always has — so reading them off the add gave every one of
+      // these cards an EMPTY list: "pick another" with nothing to pick, which
+      // is the dead end this whole rule exists to remove.
+      //
+      // Found because a loop test could not press a button that was never
+      // enabled. The test that was meant to cover it asserted the product name
+      // appeared on screen and passed on the "You searched for" header.
+      //
+      // netCandidatesRef is what the review screen is fed from everywhere else:
+      // the store's own results keyed by the term they were searched for, plus
+      // the ingredient-name search that fires when a stored product id fails.
+      const found = netCandidatesRef.current.get(term)
+        ?? netFallbackCandidatesRef.current.get(item.ingredientName)
+        ?? [];
       const card: SearchResult = {
         term,
-        candidates: res?.candidates ?? [],
+        candidates: found,
         mealIngredients: item.mealIngredients,
         unit: item.unit,
         measure: item.measure,
