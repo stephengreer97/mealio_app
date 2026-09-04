@@ -204,15 +204,18 @@ describe('an item the store would not add', () => {
   it('carries the candidates the search already found, so there is something to pick', async () => {
     const view = await refusedTwice('cart_not_incremented');
     act(() => { fireEvent.press(view.getByText(/review \d+ ingredient/i)); });
-    // NOT "the name appears somewhere" — the screen prints "You searched for
-    // Sour Cream" whatever happens, and asserting that passed while every card
-    // was being built with an empty candidate list. The button is the proof: it
-    // is enabled only once a candidate is selected and a quantity is set.
-    const plus = view.queryAllByText('+');
-    expect(plus.length).toBeGreaterThan(0);
-    act(() => { fireEvent.press(plus[0]); });
-    expect(view.queryByText(/add to cart only/i)).toBeTruthy();
-    expect(view.queryByText(/set a quantity above/i)).toBeNull();
+    // NOT "the name appears somewhere", and not "the + exists" either — the
+    // screen prints "You searched for Sour Cream" and renders the quantity
+    // stepper whatever happens, and BOTH of those assertions passed while every
+    // card was being built with an empty candidate list.
+    //
+    // The proof has to be an action that only works with a candidate: the add
+    // is gated on one being selected, so pressing it LEAVES the review screen
+    // only if there was something to pick.
+    expect(view.queryByText(/pick a substitute/i)).toBeTruthy();
+    act(() => { fireEvent.press(view.queryAllByText('+')[0]); });
+    act(() => { fireEvent.press(view.getByText(/add to cart only/i)); });
+    expect(view.queryByText(/pick a substitute/i)).toBeNull();
   });
 
   it('by the top-up route as well as the first refusal', async () => {
@@ -237,20 +240,23 @@ describe('and the review fires once, not in a loop', () => {
   // in every respect but who chose it — so it finishes through the same
   // netFinalize that now routes a failed top-up back to review.
   //
-  // Without a guard that is a loop: pick a substitute, the store refuses it,
-  // the sheet offers the review again, and the only way out is to skip. The
-  // user has already been given the choice this run has to offer, so a failure
-  // there lands on the done screen.
+  // Unguarded that is a loop: pick a substitute, the store refuses it, the
+  // sheet offers the review again, and the only way out is to skip. The user
+  // has already been given the choice this run has to offer, so a failure there
+  // lands on the done screen.
+  //
+  // TWO LOCKS, and this kills the pair rather than either: netReviewAddRef says
+  // the top-up in flight is a review pick, and the card a failure would add
+  // carries the item's own term, which is already in the queue. Removing one
+  // leaves the other holding; removing both re-opens the review.
   it('a substitute the store also refuses does not re-open the review', async () => {
     const view = await shortThenRefused('cart_not_incremented');
     act(() => { fireEvent.press(view.getByText(/review \d+ ingredient/i)); });
-    // Pick the candidate the search found, with a quantity.
-    const plus = view.queryAllByText('+')[0];
-    expect(plus).toBeTruthy();
-    act(() => { fireEvent.press(plus); });
-    const addOnly = view.queryByText(/add to cart only/i);
-    expect(addOnly).toBeTruthy();
-    act(() => { fireEvent.press(addOnly!); });
+    // Pick the candidate the search found, with a quantity. Leaving the review
+    // screen is what proves the pick took — see the candidates test above.
+    act(() => { fireEvent.press(view.queryAllByText('+')[0]); });
+    act(() => { fireEvent.press(view.getByText(/add to cart only/i)); });
+    expect(view.queryByText(/pick a substitute/i)).toBeNull();
     // The store refuses the substitute too.
     act(() => {
       view.getAllByTestId('mock-webview')[0].props.onMessage({

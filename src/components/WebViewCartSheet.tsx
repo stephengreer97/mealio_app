@@ -3555,12 +3555,17 @@ export default function WebViewCartSheet({
         netTopUpRef.current = new Map([[idx, item as unknown as ConsolidatedIngredient]]);
         // THE USER HAS ALREADY REVIEWED THIS ONE. A review pick is shaped as a
         // top-up because that is what it is, and it finishes through the same
-        // netFinalize — which now routes a failed top-up back to review. Without
-        // this flag that is a LOOP: pick a substitute, the store refuses it, the
+        // netFinalize — which now routes a failed top-up back to review. That is
+        // the shape of a LOOP: pick a substitute, the store refuses it, the
         // sheet offers the review again, and the only way out is to skip.
         //
-        // A failure here lands on the done screen instead, which is the honest
-        // end: the user has already been given the choice this run has to offer.
+        // The SECOND of two locks, and measured as such: with this removed the
+        // loop still does not happen, because the card the failure would add
+        // carries the item's own term and one with that term is already in the
+        // queue. Remove BOTH and the loop appears. This one is kept because it
+        // says the thing directly — the user has already been given the choice
+        // this run has to offer — where the other is a consequence of how terms
+        // happen to be keyed.
         netReviewAddRef.current = true;
         netResultsRef.current = new Map();
         netWriteFanoutRef.current = new Map();
