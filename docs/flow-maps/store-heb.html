@@ -20,6 +20,12 @@ rather than a second opinion read off a page.</p>
 store's add cannot be checked. It used to be <code>lockedStoreId !== 'heb'</code> written into the
 cart engine &mdash; one store's rule in the code path all five run through.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<p><b>2026-09-04.</b> Nothing H-E-B-specific changed. Two engine-wide fixes touch every store
+here: the sheet's open navigates instead of re-writing the URL it already had (a second open fired no
+onLoadEnd, so the session and cart phases waited out their budgets), and a review screen preselects
+the first in-stock candidate. See the cart-engine map.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b> — the state machine</span>
