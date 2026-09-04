@@ -87,6 +87,9 @@ const SESSIONS: Record<string, Record<string, unknown>> = {
   safeway: { type: 'ALB_SESSION', ok: true, loggedIn: true, storeId: '1234', shoppingContext: 'DELIVERY' },
 };
 
+/** What onIngredientChosen was handed, per run. */
+const chosen: Array<Record<string, unknown>> = [];
+
 function chooseRun(storeId: string, storeName: string, names: string[]) {
   // Both rails on. H-E-B additionally needs cartSkuConfirm, which is what makes
   // its write verifiable; Albertsons verifies from the write's own response.
@@ -103,6 +106,11 @@ function chooseRun(storeId: string, storeName: string, names: string[]) {
       storeId={storeId}
       storeName={storeName}
       onClose={() => {}}
+      onIngredientChosen={((_name: string, _mealIds: string[], productName: string,
+        _q: unknown, _d: unknown, _w: unknown, _ws: unknown,
+        storeProduct?: Record<string, unknown> | null) => {
+        chosen.push({ productName, storeProduct: storeProduct ?? null });
+      }) as never}
     />,
   );
   const post = (payload: Record<string, unknown>) => act(() => {
@@ -159,5 +167,42 @@ describe('Choose Products runs on the rail', () => {
       />,
     );
     expect(view.queryByText('Daisy Sour Cream')).toBeNull();
+  });
+});
+
+describe('choosing a product saves the store id THERE AND THEN', () => {
+  // Stephen, 2026-09-03: "do we save the sku during choose products too? Or
+  // only after the first add? This question is for all stores."
+  //
+  // At choose time, before anything is written. That is what makes the next run
+  // skip the search for that row — which matters twice over on Walmart, whose
+  // bot defence answers a burst of searches with a challenge.
+  //
+  // The other two paths, for the record:
+  //   · an exact auto-match is saved AFTER its write lands (onIngredientIdentified)
+  //   · the review screen's "Add to Cart Only" saves NOTHING, on purpose —
+  //     "only" means do not remember this
+  beforeEach(() => { chosen.length = 0; });
+
+  it.each([
+    ['heb', 'H-E-B'],
+    ['safeway', 'Safeway'],
+  ])('%s saves the id at choose time', (storeId, storeName) => {
+    const view = chooseRun(storeId, storeName, ['Daisy Sour Cream']);
+    // Pick the candidate, set a quantity, then commit. The commit button reads
+    // "Save" on the last row, which a one-ingredient meal always is.
+    act(() => { fireEvent.press(view.getByText('Daisy Sour Cream')); });
+    const plus = view.queryAllByText('+')[0];
+    if (plus) act(() => { fireEvent.press(plus); });
+    act(() => { fireEvent.press(view.getByText(/^Save$/)); });
+    // Whatever the button is called, the persist carries the store's own id.
+    const withProduct = chosen.find((c) => c.storeProduct);
+    expect(withProduct).toBeTruthy();
+    const sp = withProduct!.storeProduct as Record<string, unknown>;
+    expect(sp.upc).toBe('pDaisy Sour Cream');
+    // The SKU rides along wherever the store gives one. H-E-B addresses a cart
+    // line BY sku and refuses to build a write without it, so an entry that
+    // dropped it would be unusable there — which is the bug this pins.
+    expect(sp.sku).toBe('sDaisy Sour Cream');
   });
 });
