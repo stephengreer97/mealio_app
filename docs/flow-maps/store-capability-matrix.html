@@ -38,6 +38,21 @@ cart-engine map.</p>
 an item whose write was accepted and flagged unavailable used to be reported as "Mealio didn't intend
 to add". See the reconcile map.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<h3>2026-09-04 &mdash; unavailable is out of stock, everywhere</h3>
+<p><b>H-E-B</b> refuses the write and says why. The mutation had always selected the error
+<code>code</code> and nothing read it, so an out-of-stock refusal was filed as a generic
+<code>error_arm</code> &mdash; not a definitive failure, so it went to RETRY, hit the same wall, and
+was reported as unaddable with no review card. It now reports <code>out_of_stock</code>, which routes
+to review with alternatives.</p>
+<p><b>Albertsons</b> does the opposite: it ACCEPTS the write and flags the line unavailable. Refusing
+to claim the add left a real line in the basket, so the user was picking a substitute for something
+they already had. The write now undoes those lines in one follow-up request, back to the quantity the
+cart held BEFORE the run &mdash; never blindly to zero, so a line the user already had is restored to
+theirs.</p>
+<p>Both end in the same place: the ingredient goes to review with candidates, and the cart is left as
+if the item had never been addable.</p>
+</div>
 </header>
 
 <div class="notes" style="margin-top:0">

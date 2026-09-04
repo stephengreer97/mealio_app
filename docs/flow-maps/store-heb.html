@@ -38,6 +38,14 @@ map for the rules.</p>
 <p><b>2026-09-04.</b> Nothing H-E-B-specific: the over-add fix is engine-wide (found on
 Albertsons). See the reconcile map.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<p><b>2026-09-04 &mdash; an unavailable refusal is out of stock.</b> The add mutation has always
+selected <code>code</code> on both error arms and nothing read it, so H-E-B saying "This item is out
+of stock. Try searching for a different item." arrived as a generic <code>error_arm</code>: not
+definitive, so the reconcile RETRIED it into the same wall and the run reported it unaddable with no
+review card. Codes matching OUT_OF_STOCK / UNAVAILABLE now report <code>out_of_stock</code>; a
+refusal that is not about availability (a cap, an alcohol limit) still does not.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b> — the state machine</span>

@@ -20,6 +20,15 @@ answer asks the SITE to fix itself (one load of the real storefront) rather than
 second opinion. The rail itself moved from <code>network-rail.ts</code> into
 <code>albertsons-network.ts</code>.</p>
 </div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<p><b>2026-09-04 &mdash; the unavailable line is undone.</b> This platform accepts a write for an
+out-of-stock product and flags the line <code>isAvailable: false</code>; the rail refused to claim
+the add but the line stayed in the cart. It is now taken back out in one follow-up POST to the same
+batch endpoint, restored to the quantity held before the run. UNMEASURED, and the code is built for
+it: whether <code>qty: 0</code> truly removes a line here has not been proven against the live store
+(the device session had expired), so the response's own cart is read and the user is told plainly if
+the store would not let go.</p>
+</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Sheet step</b></span>
