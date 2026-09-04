@@ -2654,10 +2654,21 @@ export default function WebViewCartSheet({
   // that synthetic query), use the CLEAN URL instead: if it's already the
   // current source, force a reload(); otherwise set it. Either way clear the
   // dedup so the next onLoadEnd re-injects.
+  /** Makes every cache-busted navigation a genuinely new URL — see navTo. */
+  const navSeqRef = useRef(0);
   const navTo = useCallback((baseUrl: string) => {
     const s = getStoreScripts(lockedStoreIdRef.current);
     if (s?.cacheBustNav !== false) {
-      setWebviewUri(baseUrl + (baseUrl.includes('?') ? '&' : '?') + '_t=' + Date.now());
+      // STRICTLY INCREASING, not just Date.now(). The point of this navigation
+      // is that the URL differs from the one the WebView already holds — that
+      // is what makes it navigate and fire onLoadEnd — and two navigations
+      // inside the same millisecond produce the same timestamp and therefore no
+      // navigation at all. Rare on a device and certain under fake timers, and
+      // in both cases the failure is silent: the run waits out its whole budget
+      // for a load event that is never coming.
+      navSeqRef.current += 1;
+      const bust = `${Date.now()}.${navSeqRef.current}`;
+      setWebviewUri(baseUrl + (baseUrl.includes('?') ? '&' : '?') + '_t=' + bust);
       return;
     }
     lastLoadEndUrlRef.current = '';
@@ -2770,7 +2781,31 @@ export default function WebViewCartSheet({
       const landing = (getNetworkRail(lockedStoreIdRef.current)
         && scriptsRef.current!.railUrl) || scriptsRef.current!.storeUrl;
       console.log(`[Cart ${ts()}]`, 'initial webviewUri=', landing);
-      setWebviewUri(landing);
+      // THROUGH navTo, NOT setWebviewUri, AND THAT IS THE WHOLE FIX.
+      //
+      // setWebviewUri writes the same string it already held whenever the sheet
+      // is re-opened for the same store — which is the normal case, since this
+      // component is mounted at app root and outlives every run. React re-renders
+      // with an identical source.uri, the WebView does not navigate, and NO
+      // onLoadEnd fires. The line below then forgets that we are on the store,
+      // so onStorePage() answers false and stays false forever.
+      //
+      // Everything downstream waits on that load event:
+      //
+      //   MEASURED, Wegmans, 2026-09-04, second open of the session:
+      //     10:10:38  prewarm known logged in -> straight to snapshot
+      //     10:10:53  network before-probe timed out - no baseline   (15s)
+      //     10:11:08  network run: handing over to the user, session_timeout
+      //   and not one onLoadEnd in between. Thirty seconds of "Checking your
+      //   cart", then two manual searches handed to a user whose session was
+      //   perfectly good.
+      //
+      // That is Stephen's "I am immediately being taken to Add it Yourself",
+      // reproduced: it needs a SECOND open, which is why every first-run test
+      // and every fixture missed it. navTo guarantees a load event either way —
+      // a cache-buster makes the URL genuinely new, and a store that refuses
+      // cache-busters (ALDI) gets an explicit reload().
+      navTo(landing);
       loadQueueRef.current = [];
       lastLoadEndUrlRef.current = '';
       expectedNavUrlRef.current = '';
