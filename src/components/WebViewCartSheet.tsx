@@ -62,6 +62,7 @@ import { HebAddConfirmation, confirmDetail } from '../lib/webview-scripts/heb-ca
 import { auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { sameProductBarSize, scoreMatch } from '../lib/webview-scripts/_scoring';
+import { challengeMayTakeTheScreen } from '../lib/cart-challenge';
 import {
 } from '../lib/webview-scripts/heb-network-search';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
@@ -3145,7 +3146,20 @@ export default function WebViewCartSheet({
    * hand the user the storefront.
    */
   const netSurfaceChallenge = useCallback(() => {
-    if (netChallengeShownRef.current) return false;
+    // NOT OVER A SCREEN THE USER IS USING — see challengeMayTakeTheScreen, which
+    // is where the rule lives and where it is pinned.
+    //
+    // MEASURED, Stephen's device, 2026-09-03: he was on the Albertsons review
+    // screen with two items to place when this fired for a Walmart run and
+    // swapped the screen for a verification. Those two items were never added.
+    // "The reconciliation items didn't get added. Seems like they weren't even
+    // searched or attempted to be added" — because the screen holding them was
+    // gone before he could finish.
+    if (!challengeMayTakeTheScreen(stepRef.current, netChallengeShownRef.current)) {
+      console.log(`[Cart ${ts()}]`, 'network run: blocked, but not taking the screen from',
+        stepRef.current);
+      return false;
+    }
     netChallengeShownRef.current = true;
     if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
     netActiveRef.current = false;
@@ -3836,6 +3850,15 @@ export default function WebViewCartSheet({
       // user taps "Try again".
       if (blockReasonRef.current) return;
       if (!onBlockedPage) {
+        // ...and only for the store this sheet is actually running. The sheet
+        // outlives a run (it is mounted at app root), so a challenge raised for
+        // one store can clear long after the user has opened another — and
+        // restarting then would run the wrong store's meal.
+        const s2 = scriptsRef.current;
+        if (s2 && s2.domain && !url.includes(s2.domain)) {
+          console.log(`[Cart ${ts()}]`, 'challenge cleared on a page for another store — not restarting');
+          return;
+        }
         // The challenge cleared. There is no sequential page walk to resume any
         // more, so the run restarts from the top — the rail re-reads the session
         // and the cart, which is what a run needs after being interrupted.
