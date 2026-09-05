@@ -294,7 +294,9 @@ flowchart LR
     S2 -->|"choose run"| C2(["netFinishChoose()<br/><i>the Choose Products screen.<br/>reached from BOTH ends of the search:<br/>the batch coming back, and the shortcut<br/>taken when the prewarm already answered<br/>every term</i>"])
 
     ASSIST --> A1["one search URL per ingredient"]
-    A1 --> A2(["the user adds, taps Next"])
+    A1 --> A2(["the user adds, then Back or Next.<br/><i>Back was Skip until 2026-09-05 — Skip called the<br/>same function as Next and the flag that told them<br/>apart only reached a console.log. Back is disabled<br/>on the first item, and going back does not un-see<br/>an item: 'handled' means the user was walked past<br/>it, and the cart decides what landed</i>"])
+    A2 -.->|"once the VISIBLE page has landed"| WARM(["warm the page the next tap wants.<br/><i>ONE hidden WebView, in the direction of travel —<br/>the page behind you is warm already from having just<br/>been on it. Inert: no onMessage, no injection, so<br/>nothing of ours runs on a page the user is driving</i>"])
+    WARM --- WARMWHY{{"It has to fetch the EXACT url the tap will navigate to.<br/>navTo appends a cache-buster, so warming the base url warmed<br/>?q=limes while Next went to ?q=limes&amp;_t=&lt;timestamp&gt; — two<br/>cache entries, a page nobody ever asked for, and a feature that<br/>did nothing while looking like it worked. The buster is built<br/>once and the tap reuses the warmed string.<br/><br/>Off with flags.manualPrefetch, the one lever in that section."}}
 
     S1 -.->|"CANNOT ANSWER<br/>(not the same as signed out)"| REPAIR(["<b>ask the site to fix itself</b><br/><i>load the real storefront — the rail sits on a<br/>quiet page precisely because it runs none of<br/>the site's JavaScript, which is also why an<br/>unbootstrapped session stays that way. then<br/>re-ask on that page every 2s for up to 30s,<br/>ONE ask pending however many answers arrive,<br/>with the login-check deadline re-armed each<br/>time. no DOM check behind it since 2026-09-04</i>"])
     REPAIR --> S1
@@ -317,6 +319,7 @@ flowchart LR
     classDef good fill:#14532d,stroke:#22c55e,color:#fff
     class NET,CHOOSE,S1,S2,S3,C1 net
     class ASSIST,A1 good
+    class WARM net
     class RERUN net
     class FIN good
   </pre>
