@@ -83,6 +83,7 @@ jest.mock('../../src/lib/automation-config', () => {
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 import { enableRail, postToSheet, SESSION_OK, cartCount } from './helpers/railRun';
+import { recordPrewarmRequest, clearPrewarmRequests } from '../../src/lib/prewarm-requests';
 
 type Batch = { runId: string; steps: Array<Record<string, any>> };
 const batches = () => ((globalThis as any).__batches ?? []) as Batch[];
@@ -92,7 +93,7 @@ const requestRows = () => uploaded().filter((r) => r.detail?.via === 'request');
 
 beforeAll(() => { jest.useFakeTimers(); });
 afterAll(() => { jest.useRealTimers(); });
-beforeEach(() => { (globalThis as any).__batches = []; });
+beforeEach(() => { (globalThis as any).__batches = []; clearPrewarmRequests(); });
 
 const ing = (n: string) => ({
   ingredientName: n, searchTerm: n, productQty: 1, qty: 1, unit: 'qty', measure: null,
@@ -187,5 +188,34 @@ describe('a request that reported itself reaches the upload', () => {
     // failed.
     expect(requestRows()).toHaveLength(1);
     expect(requestRows()[0].itemIndex).toBeUndefined();
+  });
+});
+
+describe("the prewarm's searches are the run's searches", () => {
+  it('records rows the PREWARM produced before the run started', async () => {
+    // MEASURED ON THE PIXEL. A run whose searches were prewarmed produced six
+    // request rows and not one was a `search`: SilentSearchProbe has its own
+    // WebView and its own onMessage, and that handler had never heard of
+    // NET_REQUEST. The dashboard showed session, cart_read and add and looked
+    // complete.
+    recordPrewarmRequest({
+      storeId: 'heb', phase: 'search', op: 'productSearchPageV2',
+      status: 503, why: 'http', attempts: 3, ms: 1800,
+    });
+    await runWith([]);
+    const row = requestRows().find((r) => r.httpStatus === 503);
+    expect(row).toBeTruthy();
+    expect(row!.phase).toBe('search');
+    expect(row!.attempts).toBe(3);
+  });
+
+  it('does not record them twice when a run reruns', async () => {
+    // startNetworkRun is what a whole-run retry calls, so a read-not-drain here
+    // would count every prewarmed request again for every rerun.
+    recordPrewarmRequest({
+      storeId: 'heb', phase: 'search', op: 'x', status: 200, why: null, attempts: 1, ms: 10,
+    });
+    await runWith([]);
+    expect(requestRows().filter((r) => r.detail?.op === 'x')).toHaveLength(1);
   });
 });

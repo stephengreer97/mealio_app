@@ -66,6 +66,7 @@ import { canSignInHere, signedOutIsFinal } from '../lib/login-page';
 import { decideHandover, MAX_RUN_RETRIES } from '../lib/handover';
 import { firstAddableIdx, reviewUnaddableReason } from '../lib/review-selection';
 import { qtyDisplay, qtyIsTheOnlyBlocker } from '../lib/qty-prompt';
+import { drainPrewarmRequests } from '../lib/prewarm-requests';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -1871,6 +1872,45 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     return () => clearTimeout(t);
   }, [netRunning, netCounted, step]);
 
+  /** startNetworkRun is defined above recordRequestRow; this is the seam. */
+  const recordRequestRowRef = useRef<(rq: {
+    phase?: string | null; op?: string | null; status?: number | null;
+    why?: string | null; attempts?: number | null; ms?: number | null;
+  }) => void>(() => {});
+
+  /**
+   * One request's row, from wherever it was made. MEAL-219.
+   *
+   * Two callers: the run's own WebView, and the PREWARM's — whose searches are
+   * still the run's searches. Found on the Pixel: a run whose searches were
+   * prewarmed reported session, cart_read and add rows and no search rows at
+   * all, because SilentSearchProbe has its own handler and it had never heard
+   * of NET_REQUEST. It looked like a complete breakdown.
+   */
+  const recordRequestRow = useCallback((rq: {
+    phase?: string | null; op?: string | null; status?: number | null;
+    why?: string | null; attempts?: number | null; ms?: number | null;
+  }) => {
+    const common = {
+      phase: (rq.phase ?? undefined) as StepPhase | undefined,
+      httpStatus: typeof rq.status === 'number' ? rq.status : undefined,
+      attempts: typeof rq.attempts === 'number' ? rq.attempts : undefined,
+      rail: railConfigKey(lockedStoreIdRef.current),
+      durationMs: typeof rq.ms === 'number' ? rq.ms : undefined,
+      detail: { op: rq.op ?? null, why: rq.why ?? null, via: 'request' },
+    };
+    // Split rather than a ternary on the outcome: the overloads require a code
+    // on a failing row and refuse one on an ok row, which is the rule worth
+    // keeping — a failure with no code is a row the dashboard can count and
+    // cannot explain.
+    if (rq.why) {
+      tel().record('search', 'error', { ...common, code: requestFailureCode(rq.status ?? null, rq.why) });
+    } else {
+      tel().record('search', 'ok', common);
+    }
+  }, []);
+  recordRequestRowRef.current = recordRequestRow;
+
   /** Whole-run retries spent this run. Reset by beginSearchFlow, not by a rerun. */
   const netRunRetriesRef = useRef(0);
   /** startNetworkRun is defined below; the handover reaches it through here. */
@@ -2665,6 +2705,12 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
 
   /** Phase 1. Who is signed in, which store, pickup or delivery. */
   const startNetworkRun = useCallback(() => {
+    // THE PREWARM'S REQUESTS ARE THIS RUN'S REQUESTS. Drained rather than read:
+    // a row recorded twice is a request that never happened, and the retry-rate
+    // denominator would be the first thing to go quietly wrong.
+    for (const rq of drainPrewarmRequests(lockedStoreIdRef.current ?? '')) {
+      recordRequestRowRef.current(rq);
+    }
     netActiveRef.current = true;
     netRunRef.current = true;
     netMatchedRef.current = new Map();
@@ -5931,28 +5977,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         // existing ones, because the funnel's step names describe a DOM run that
         // no longer happens. The phase is the thing worth grouping on now.
         if (msg.type === 'NET_REQUEST') {
-          const rq = msg as { phase?: string; op?: string; status?: number | null;
-                              why?: string | null; attempts?: number; ms?: number };
-          const common = {
-            phase: rq.phase as StepPhase | undefined,
-            httpStatus: typeof rq.status === 'number' ? rq.status : undefined,
-            attempts: typeof rq.attempts === 'number' ? rq.attempts : undefined,
-            rail: railConfigKey(lockedStoreIdRef.current),
-            durationMs: typeof rq.ms === 'number' ? rq.ms : undefined,
-            detail: { op: rq.op ?? null, why: rq.why ?? null, via: 'request' },
-          };
-          // Split rather than a ternary on the outcome: the overloads require a
-          // code on a failing row and refuse one on an ok row, which is the rule
-          // worth keeping — a failure with no code is a row the dashboard can
-          // count and cannot explain.
-          if (rq.why) {
-            tel().record('search', 'error', {
-              ...common,
-              code: requestFailureCode(rq.status ?? null, rq.why),
-            });
-          } else {
-            tel().record('search', 'ok', common);
-          }
+          recordRequestRow(msg as Parameters<typeof recordRequestRow>[0]);
           return;
         }
         if (msg.type === 'NET_ADD_RESULT') {

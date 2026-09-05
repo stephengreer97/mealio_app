@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import WebView, { WebViewMessageEvent } from 'react-native-webview';
 import { getStoreScripts } from '../lib/webview-scripts';
+import { recordPrewarmRequest } from '../lib/prewarm-requests';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
 import { getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
@@ -104,6 +105,25 @@ export default function SilentSearchProbe({ storeId, terms, onCandidates, onDone
     if (doneRef.current || !rail) return;
     try {
       const msg = JSON.parse(e.nativeEvent.data);
+      // MEAL-219. The prewarm's searches are still the run's searches, and their
+      // statuses were being dropped here: this probe has its own WebView and its
+      // own handler, and the handler had never heard of NET_REQUEST. A run whose
+      // searches were prewarmed reported session, cart_read and add rows and no
+      // search rows at all, which looked like a complete breakdown.
+      //
+      // Buffered rather than recorded, because telemetry is keyed to a run and
+      // the prewarm deliberately happens before there is one.
+      if (msg?.type === 'NET_REQUEST') {
+        recordPrewarmRequest({
+          storeId,
+          phase: msg.phase ?? null, op: msg.op ?? null,
+          status: typeof msg.status === 'number' ? msg.status : null,
+          why: msg.why ?? null,
+          attempts: typeof msg.attempts === 'number' ? msg.attempts : null,
+          ms: typeof msg.ms === 'number' ? msg.ms : null,
+        });
+        return;
+      }
       if (msg?.type && NETWORK_SESSION_MESSAGE_TYPES.includes(msg.type)) {
         if (searchStartedRef.current) return;
         // No fallback to the DOM check here, and none wanted: this probe has no
