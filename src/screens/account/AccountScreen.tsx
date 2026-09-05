@@ -28,6 +28,7 @@ import Purchases, { type PurchasesPackage } from 'react-native-purchases';
 import * as WebBrowser from 'expo-web-browser';
 import { Creator, Meal } from '../../types';
 import Card from '../../components/ui/Card';
+import NotificationSettingsSheet from '../../components/NotificationSettingsSheet';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import CookieManager from '@react-native-cookies/cookies';
@@ -78,6 +79,7 @@ export default function AccountScreen() {
   // Notifications (MEAL-88)
   const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
+  const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
 
   useEffect(() => {
     loadFollowing();
@@ -758,6 +760,19 @@ export default function AccountScreen() {
               onPress={handleTogglePush}
               loading={pushBusy}
             />
+            {/* MEAL-217. Only while they are ON: choosing WHICH notifications
+                to receive is a question that means nothing to someone who
+                receives none, and offering it there would be a screen full of
+                switches that change nothing. */}
+            {pushStatus === 'on' && (
+              <TouchableOpacity
+                onPress={() => setNotifSettingsOpen(true)}
+                testID="open-notification-settings"
+                style={{ paddingVertical: 12 }}
+              >
+                <Text style={styles.linkRow}>Choose what we notify you about →</Text>
+              </TouchableOpacity>
+            )}
           </Card>
         )}
 
@@ -953,6 +968,11 @@ export default function AccountScreen() {
             </View>
           </View>
         </Modal>
+
+        <NotificationSettingsSheet
+          visible={notifSettingsOpen}
+          onClose={() => setNotifSettingsOpen(false)}
+        />
       </KeyboardAwareScrollView>
     </SafeAreaView>
   );
@@ -1076,6 +1096,7 @@ const styles = StyleSheet.create({
   storeLogoutHint: { fontSize: 12, color: Colors.text3, fontFamily: 'Inter_400Regular', marginTop: 6, marginBottom: 4, textAlign: 'center' },
   signOutBtn: { marginTop: 8 },
   krogerDesc: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2, marginBottom: 10, lineHeight: 19 },
+  linkRow: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.brand },
   pushDesc: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2, marginBottom: 10, lineHeight: 19 },
   krogerBrandNote: {
     backgroundColor: Colors.surface,

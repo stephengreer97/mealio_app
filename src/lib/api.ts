@@ -245,6 +245,25 @@ export const account = {
     }),
   deleteAccount: () =>
     request<void>('/api/account/delete', { method: 'DELETE' }),
+
+  // MEAL-217. The CATALOGUE comes from the server alongside the values, so the
+  // screen renders whatever Mealio currently sends rather than a list baked
+  // into a build that may be months old: a category added server-side reaches
+  // every installed app, and one removed stops being offered instead of leaving
+  // a switch that controls nothing.
+  notificationPrefs: () =>
+    request<{
+      prefs: Record<string, boolean>;
+      categories: Array<{ id: string; label: string; description: string }>;
+    }>('/api/account/notification-prefs'),
+
+  // Only the switch that changed. The server merges, so two toggles in quick
+  // succession cannot have the second revert the first.
+  setNotificationPref: (patch: Record<string, boolean>) =>
+    request<{ ok: true; prefs: Record<string, boolean> }>('/api/account/notification-prefs', {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
 };
 
 // Broadcast
