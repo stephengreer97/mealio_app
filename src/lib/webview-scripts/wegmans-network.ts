@@ -283,7 +283,7 @@ ${RETRY_FN}
             'x-algolia-application-id': '${ALGOLIA_APP}', 'x-algolia-api-key': '${ALGOLIA_KEY}' },
           body: JSON.stringify({ requests: reqs }),
         });
-      });
+      }, { phase: 'search', op: 'algolia-batch' });
       if (!fr.ok && !fr.res) throw (fr.error || new Error('no_response'));
       var r = fr.res;
       // text() then parse, like every other call here: a response shim that
@@ -687,8 +687,13 @@ ${RETRY_FN}
 
   // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
   // _retry.ts for which failures earn a second ask and why a timeout does not.
+  // The commerce API is the CART side of this rail; Algolia is the search side
+  // and reports itself separately. A write is anything with a body (MEAL-219).
   WG.commerce = function (path, tok, init, budgetMs) {
-    return __mealioRetry(function () { return WG.commerceAttempt(path, tok, init, budgetMs); });
+    var phase = (init && init.body) ? 'add' : 'cart_read';
+    return __mealioRetry(
+      function () { return WG.commerceAttempt(path, tok, init, budgetMs); },
+      { phase: phase, op: String(path || '').split('?')[0].slice(0, 60) });
   };
   WG.commerceAttempt = async function (path, tok, init, budgetMs) {
     var ctl = new AbortController();
@@ -846,7 +851,8 @@ ${WEG_PRELUDE}
   // WG.commerce covered the cart and left the search one-shot -- found by
   // enumerating every fetch site in the emitted scripts rather than by reading.
   var search = function (term) {
-    return __mealioRetry(function () { return searchAttempt(term); });
+    return __mealioRetry(function () { return searchAttempt(term); },
+      { phase: 'search', op: 'algolia-query' });
   };
   var searchAttempt = async function (term) {
     var url = '${ALGOLIA_HOST}/1/indexes/${ALGOLIA_INDEX}/query'

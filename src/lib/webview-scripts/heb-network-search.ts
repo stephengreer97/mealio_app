@@ -54,7 +54,7 @@ const CART_READ_FN = `
     + ' ... on CartError { code title message } } }';
 
   var readCart = async function () {
-    var r = await __hebGql('CartLines', CART, {}, 8000);
+    var r = await __hebGql('CartLines', CART, {}, 8000, 'cart_read');
     if (!r.ok) return null;
     try {
       var c = r.data.cartV2;
@@ -144,8 +144,20 @@ ${RETRY_FN}
       }
     })();
   }
-  function __hebGql(op, query, variables, timeoutMs) {
-    return __mealioRetry(function () { return __hebGqlAttempt(op, query, variables, timeoutMs); });
+  // PHASE IS AN ARGUMENT, NOT A LOOKUP. The first version mapped operation
+  // name -> phase inside this prelude, which every H-E-B script includes -- so
+  // the cart read and the add scripts started carrying the session probe's
+  // operation name, and a test that counts session probes by searching for that
+  // name went from 0 to 1.
+  //
+  // NAMING AN OPERATION IN SHARED SCRIPT TEXT PUTS IT IN EVERY SCRIPT THAT
+  // SHARES IT, comments included -- the second version of this comment quoted
+  // the name while explaining the problem and reproduced it exactly. The caller
+  // already knows what it is asking for, so it passes the phase.
+  function __hebGql(op, query, variables, timeoutMs, phase) {
+    return __mealioRetry(
+      function () { return __hebGqlAttempt(op, query, variables, timeoutMs); },
+      { phase: phase || 'session', op: op });
   }
 `;
 
@@ -182,7 +194,7 @@ ${GQL_FN}
   var sess = await __hebGql('SessionContext',
     'query SessionContext { cartV2 { __typename'
     + ' ... on Cart { id fulfillment { selectionState curbsideFulfillmentMode store { id name } } }'
-    + ' ... on CartError { code title message } } }', {}, 8000);
+    + ' ... on CartError { code title message } } }', {}, 8000, 'session');
   var storeId = null, storeName = null, mode = null;
   if (sess.ok) {
     try {
@@ -413,7 +425,7 @@ ${CANDIDATE_HELPERS}
       includeOutOfStock: true,
       pageSize: ${pageSize},
     },
-  }, 9000);
+  }, 9000, 'search');
   if (!res.ok) { fail(res.why, res.detail || (res.status ? 'status ' + res.status : null)); return; }
 
   var page = null;
@@ -485,7 +497,7 @@ ${CANDIDATE_HELPERS}
         includeOutOfStock: true,
         pageSize: ${pageSize},
       },
-    }, 9000);
+    }, 9000, 'search');
     if (!res.ok) {
       post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term,
              why: res.why, detail: res.detail || (res.status ? 'status ' + res.status : null) });
@@ -933,12 +945,12 @@ ${CART_READ_FN}
       }
     }
     var bres = await __hebGql('cartItemsV2', buildBatchDoc(planned.length), vmap,
-      9000 + planned.length * 1500);
+      9000 + planned.length * 1500, 'add');
     if (!bres.ok) {
       post({ type: 'NET_ADD_BATCH_FELL_BACK', count: planned.length, why: bres.why || null });
       for (var fb = 0; fb < planned.length; fb++) {
         var pf = planned[fb];
-        var r1 = await __hebGql('cartItemV2', ADD, pf.vars, 9000);
+        var r1 = await __hebGql('cartItemV2', ADD, pf.vars, 9000, 'add');
         applyOne(pf, r1.ok ? r1.data : null, r1.ok ? null : (r1.why || 'network'), r1.detail || null);
       }
     } else {
@@ -981,7 +993,7 @@ ${CART_READ_FN}
           var vars2 = { productId: String(m2.it.productId), skuId: String(m2.it.skuId),
                         quantity: m2.want };
           if (m2.it.purchasePreferenceId) vars2.purchasePreferenceId = String(m2.it.purchasePreferenceId);
-          await __hebGql('cartItemV2', ADD, vars2, 9000);
+          await __hebGql('cartItemV2', ADD, vars2, 9000, 'add');
         } catch (e) {}
       }
       after = await readCart();

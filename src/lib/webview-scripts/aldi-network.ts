@@ -171,8 +171,13 @@ ${RETRY_FN}
   // ---- one GraphQL call --------------------------------------------------
   // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
   // _retry.ts for which failures earn a second ask and why a timeout does not.
-  IC.gql = function (name, variables, budgetMs) {
-    return __mealioRetry(function () { return IC.gqlAttempt(name, variables, budgetMs); });
+  // PHASE IS AN ARGUMENT, for the same reason it is on the other rails: a
+  // name -> phase map belongs to no single script, so putting one here would
+  // copy every operation name into all of them.
+  IC.gql = function (name, variables, budgetMs, phase) {
+    return __mealioRetry(
+      function () { return IC.gqlAttempt(name, variables, budgetMs); },
+      { phase: phase || 'session', op: name });
   };
   IC.gqlAttempt = async function (name, variables, budgetMs) {
     var hash = (IC.ops && IC.ops[name]) || null;
@@ -322,7 +327,7 @@ ${IC_PRELUDE}
   var post = function (o) { o.type = 'ALDI_SESSION'; IC.post(o); };
   try {
     await IC.ensureOps(${seed}, 15000);
-    var carts = await IC.gql('ActiveCarts', {}, 12000);
+    var carts = await IC.gql('ActiveCarts', {}, 12000, 'cart_read');
     if (!carts.ok) {
       // Cannot answer. NOT a signed-out user -- saying so would wall one, which
       // is the mistake this project has made three times.
@@ -466,7 +471,7 @@ ${IC_PRELUDE}
     if (!zone) {
       var probe = await IC.gql('AsyncItemSearch', {
         query: TERMS[0], shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}', searchSource: 'search',
-      }, REQ_MS);
+      }, REQ_MS, 'search');
       var pids = [];
       try { pids = probe.data.itemSearch.itemResultList.itemIds || []; } catch (e) {}
       if (pids.length) {
@@ -490,7 +495,7 @@ ${IC_PRELUDE}
       var term = TERMS[t];
       var r = await IC.gql('Search', {
         query: term, shopId: SHOP, zoneId: zone, postalCode: '${PLACEHOLDER_POSTAL}',
-      }, REQ_MS);
+      }, REQ_MS, 'search');
       if (!r.ok) {
         post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: r.why,
                status: r.status || null, ms: r.ms || null, code: r.code || null, detail: r.detail || null });
@@ -545,7 +550,7 @@ ${IC_PRELUDE}
                 why: 'no_shop' });
       return;
     }
-    var carts = await IC.gql('ActiveCarts', {}, 12000);
+    var carts = await IC.gql('ActiveCarts', {}, 12000, 'cart_read');
     if (!carts.ok) {
       IC.post({ type: 'CART_COUNT', count: null, source: 'network', reason: 'rail_read_failed',
                 why: carts.why, detail: carts.detail || null });
@@ -555,7 +560,7 @@ ${IC_PRELUDE}
     try { list = carts.data.userCarts.carts || []; } catch (e) {}
     if (!list.length) { IC.post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' }); return; }
     var cartId = String(list[0].id);
-    var items = await IC.gql('CartItems', { id: cartId, shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000);
+    var items = await IC.gql('CartItems', { id: cartId, shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000, 'cart_read');
     if (!items.ok) {
       IC.post({ type: 'CART_COUNT', count: null, source: 'network', reason: 'rail_read_failed',
                 why: items.why, detail: items.detail || null });
@@ -697,13 +702,13 @@ ${IC_PRELUDE}
       } catch (e) {}
     }
     if (!SHOP) return null;
-    var carts = await IC.gql('ActiveCarts', {}, 12000);
+    var carts = await IC.gql('ActiveCarts', {}, 12000, 'cart_read');
     if (!carts.ok) return null;
     var list = [];
     try { list = carts.data.userCarts.carts || []; } catch (e) {}
     if (!list.length) return null;
     var cartId = String(list[0].id);
-    var items = await IC.gql('CartItems', { id: cartId, shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000);
+    var items = await IC.gql('CartItems', { id: cartId, shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000, 'cart_read');
     // A CART THAT COULD NOT BE READ IS NOT AN EMPTY CART.
     //
     // This used to fall through and return an empty held map, which on a store
@@ -769,7 +774,7 @@ ${IC_PRELUDE}
 
     if (!updates.length) { post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0 }); return; }
 
-    var res = await IC.gql('UpdateCartItemsMutation', { cartItemUpdates: updates }, 25000);
+    var res = await IC.gql('UpdateCartItemsMutation', { cartItemUpdates: updates }, 25000, 'add');
     if (!res.ok) {
       for (var f = 0; f < planned.length; f++) report(planned[f].it, false, 'write_refused', res.why + (res.detail ? ': ' + res.detail : ''));
       post({ type: 'NET_ADD_DONE', count: ITEMS.length, wrote: 0, why: res.why });

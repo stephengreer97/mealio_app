@@ -505,7 +505,7 @@ ${RETRY_FN}
             credentials: 'include', headers: __albCartHeaders(kk), signal: ctl.signal
           }).then(function (res) { clearTimeout(to); return res; },
                   function (e) { clearTimeout(to); throw e; });
-        });
+        }, { phase: 'cart_read', op: 'cart' });
         if (!fr.ok && !fr.res) throw (fr.error || new Error('no_response'));
         var r = fr.res;
         A.lastReadMs = Date.now() - t0;
@@ -951,7 +951,8 @@ ${albSearchUrlExpr(pageSize, storeId)}
   // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
   // _retry.ts for which failures earn a second ask and why a timeout does not.
   function attempt(term, variant) {
-    return __mealioRetry(function () { return searchAttempt(term, variant); });
+    return __mealioRetry(function () { return searchAttempt(term, variant); },
+      { phase: 'search', op: 'search:' + variant });
   }
   async function searchAttempt(term, variant) {
     var ctl = new AbortController();
@@ -1368,7 +1369,7 @@ ${ALB_PRELUDE}
         headers: __albCartHeaders(A.cartKey), body: body, signal: ctl.signal
       }).then(function (res) { clearTimeout(to); return res; },
               function (e) { clearTimeout(to); throw e; });
-    });
+    }, { phase: 'add', op: 'cart-write' });
     var r = (fr && fr.res) || null;
     if (!r) {
       // The write is idempotent, so an unanswered request is genuinely unknown
@@ -1493,7 +1494,7 @@ ${ALB_PRELUDE}
             signal: ctl.signal
           }).then(function (res) { clearTimeout(to); return res; },
                   function (e) { clearTimeout(to); throw e; });
-        });
+        }, { phase: 'add', op: 'cart-undo' });
         if (!fr.ok && !fr.res) throw (fr.error || new Error('no_response'));
         var r = fr.res;
         if (r.status !== 200) { undoOk = false; undoWhy = method + ' status ' + r.status; return; }

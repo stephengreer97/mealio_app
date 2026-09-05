@@ -431,8 +431,56 @@ export interface StepRecord {
    *  retry subset and restarts the index, so rows from the top-up reuse low
    *  indexes for different items. Group by `detail.path` before comparing. */
   itemIndex?: number;
+  /**
+   * THE STORE'S OWN ANSWER, as a number. MEAL-219.
+   *
+   * Every rail computes this -- it is what the retry policy decides on -- and
+   * until now it was computed, used, and dropped at the WebView boundary. The
+   * one status that reached the server did so smuggled inside a reason STRING
+   * ("http-403"), so the single most queryable fact about a run had to be
+   * parsed out of prose.
+   *
+   * A column and not a detail key, because the questions worth asking are
+   * "which stores are 5xx-ing this week" and "did the 429s stop after the
+   * backoff shipped", and neither is answerable against unindexed jsonb.
+   */
+  httpStatus?: number;
+  /**
+   * WHICH PART OF THE RUN this row belongs to: session, search, add, cart_read.
+   *
+   * `step` cannot answer this any more. It was named for the DOM era -- one of
+   * its values is literally `add_click` -- and the network rail's four phases
+   * do not map onto it. A failure in the session read and a failure writing the
+   * cart both arrive as `confirm`/`match_rejected` today.
+   */
+  phase?: StepPhase;
+  /**
+   * How many times the request was ASKED, total. 1 means it worked first time.
+   *
+   * From the retry policy (webview-scripts/_retry.ts), which already counts
+   * this and puts it on the result as `retries`. Distinct from the old
+   * `detail.attempt`, which only the deleted click path ever set -- and which
+   * the admin tab's "First-click confirm" tile still reads, making it
+   * mathematically identical to Confirm rate for every live store.
+   */
+  attempts?: number;
+  /**
+   * Which rail answered. Not the same as store_id: fifteen Albertsons banners
+   * and every Instacart tenant share one implementation, and a rail-level
+   * regression shows up as fifteen unrelated store problems without this.
+   */
+  rail?: string;
   detail?: Record<string, unknown>;
 }
+
+/**
+ * The four things a network run actually does, in order.
+ *
+ * Deliberately NOT derived from StepName. That list is the DOM funnel's and is
+ * kept for the rows already stored under it; this one describes the rail.
+ */
+export const STEP_PHASES = ['session', 'search', 'add', 'cart_read'] as const;
+export type StepPhase = (typeof STEP_PHASES)[number];
 
 export type UploadFn = (batch: {
   runId: string;
@@ -490,7 +538,16 @@ export function sanitizeDetail(detail: unknown): Record<string, unknown> | undef
   return keys > 0 ? out : undefined;
 }
 
-type RecordExtra = { durationMs?: number; itemIndex?: number; detail?: Record<string, unknown> };
+type RecordExtra = {
+  durationMs?: number;
+  itemIndex?: number;
+  /** See StepRecord for why each of these is a column and not a detail key. */
+  httpStatus?: number;
+  phase?: StepPhase;
+  attempts?: number;
+  rail?: string;
+  detail?: Record<string, unknown>;
+};
 
 /** Settle function returned by startTimer. Same code-on-failure rule as record. */
 export interface StepSettle {
@@ -544,6 +601,23 @@ export class AutomationTelemetry {
       if (typeof extra.itemIndex === 'number' && Number.isFinite(extra.itemIndex)) {
         record.itemIndex = Math.trunc(extra.itemIndex);
       }
+      // A status of 0 is not a status. The rails use null/undefined for "no
+      // response at all", and letting a 0 through would be counted as a real
+      // answer by every query that groups on this.
+      if (typeof extra.httpStatus === 'number' && Number.isFinite(extra.httpStatus)
+          && extra.httpStatus > 0) {
+        record.httpStatus = Math.trunc(extra.httpStatus);
+      }
+      if (extra.phase && (STEP_PHASES as readonly string[]).includes(extra.phase)) {
+        record.phase = extra.phase;
+      }
+      // Clamped rather than trusted: attempts comes from a script running in a
+      // page we do not control, and an unbounded integer here would be stored
+      // and charted.
+      if (typeof extra.attempts === 'number' && Number.isFinite(extra.attempts) && extra.attempts >= 1) {
+        record.attempts = Math.min(99, Math.trunc(extra.attempts));
+      }
+      if (typeof extra.rail === 'string' && extra.rail) record.rail = extra.rail.slice(0, 40);
       const detail = sanitizeDetail(extra.detail);
       if (detail) record.detail = detail;
 

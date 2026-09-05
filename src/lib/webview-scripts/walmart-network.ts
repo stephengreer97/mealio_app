@@ -143,8 +143,14 @@ ${RETRY_FN}
 
   // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
   // _retry.ts for which failures earn a second ask and why a timeout does not.
-  WM.gql = function (domain, op, kind, hash, variables, budgetMs) {
-    return __mealioRetry(function () { return WM.gqlAttempt(domain, op, kind, hash, variables, budgetMs); });
+  // PHASE IS AN ARGUMENT. A name -> phase map here would put every operation
+  // name into this prelude, and the prelude is in every script this rail emits
+  // -- which is how a test counting H-E-B session probes by operation name went
+  // from 0 to 1. The caller knows what it is asking for.
+  WM.gql = function (domain, op, kind, hash, variables, budgetMs, phase) {
+    return __mealioRetry(
+      function () { return WM.gqlAttempt(domain, op, kind, hash, variables, budgetMs); },
+      { phase: phase || 'session', op: op });
   };
   WM.gqlAttempt = async function (domain, op, kind, hash, variables, budgetMs) {
     var ctl = new AbortController();
@@ -208,7 +214,8 @@ ${RETRY_FN}
    * where the server-rendered page calls the same list .items.
    */
   WM.searchOp = async function (term, budgetMs) {
-    var out = await __mealioRetry(function () { return WM.searchOpAttempt(term, budgetMs); });
+    var out = await __mealioRetry(function () { return WM.searchOpAttempt(term, budgetMs); },
+      { phase: 'search', op: 'Search' });
     // THE CONTRACT IS UNCHANGED: null still means "cannot be used, fall back to
     // the page", and blocked is still the one failure the caller reads. The
     // attempt below now names its transient failures so the policy can see
@@ -256,7 +263,8 @@ ${RETRY_FN}
   };
 
   WM.searchPage = function (term, budgetMs) {
-    return __mealioRetry(function () { return WM.searchPageAttempt(term, budgetMs); });
+    return __mealioRetry(function () { return WM.searchPageAttempt(term, budgetMs); },
+      { phase: 'search', op: 'search-html' });
   };
   // ONE ATTEMPT. The HTML fallback is the LAST thing standing between a term
   // and the review screen, so a 5xx here costs the item outright.
@@ -447,7 +455,7 @@ ${WM_PRELUDE}
       input: { cartId: m.cartId, strategy: 'MERGE', enableLiquorBox: true,
                enableCartSplitClarity: false, features: [] },
       detailed: false
-    }, 20000);
+    }, 20000, 'cart_read');
     if (!r.ok) {
       WM.post({ type: 'CART_COUNT', count: null, source: 'network', reason: 'rail_read_failed',
                 why: r.why, status: r.status || null });
@@ -562,7 +570,7 @@ ${WM_PRELUDE}
       input: { cartId: cartId, strategy: 'MERGE', enableLiquorBox: true,
                enableCartSplitClarity: false, features: [] },
       detailed: false
-    }, 20000);
+    }, 20000, 'cart_read');
     if (!r.ok) return null;
     var lines = [];
     try { lines = r.data.mergeAndGetCart.lineItems || []; } catch (e) { return null; }
@@ -633,7 +641,7 @@ ${WM_PRELUDE}
       getDetailedAccesspoint: false,
       input: { cartId: m.cartId, items: list, enableLiquorBox: true,
                skipPolicyCheck: false, enableCartSplitClarity: false, features: [] }
-    }, 25000);
+    }, 25000, 'add');
     if (!res.ok) {
       for (var f = 0; f < planned.length; f++) report(planned[f].it, false,
         res.why === 'blocked' ? 'blocked' : 'write_refused',

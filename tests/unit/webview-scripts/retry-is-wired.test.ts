@@ -6,6 +6,7 @@
 // actually injects and checks the transport is wrapped there.
 import { getNetworkRail } from '../../../src/lib/webview-scripts/network-rail';
 import { RETRY_FN } from '../../../src/lib/webview-scripts/_retry';
+import { STEP_PHASES } from '../../../src/lib/automation-telemetry';
 
 /**
  * The script with the helper's own text removed.
@@ -92,9 +93,74 @@ describe('every rail sends its requests through the retry policy', () => {
     expect(`${storeId} wraps a transport: ${defined > 0}`).toBe(`${storeId} wraps a transport: true`);
   });
 
+  it.each(RAILS)('%s tells the engine which phase every request belongs to', (storeId) => {
+    // MEAL-219. A request that reports no phase is a status with nowhere to go:
+    // the dashboard's whole point is "which PART of the run is 5xx-ing", and a
+    // null phase lands in a bucket that answers nothing. Every retry entry point
+    // must therefore be given one, and the only way to be sure is to count them.
+    for (const [label, script] of scriptsFor(storeId)) {
+      const own = railOwnCode(script);
+      const entries = own.match(/__mealio(?:Fetch)?Retry\(/g) ?? [];
+      // Every entry point passes an options object, and every options object
+      // names a phase. Counting both catches the one that was added without.
+      const phased = own.match(/\{\s*phase:/g) ?? [];
+      expect(`${storeId}/${label}: ${phased.length}/${entries.length} phased`)
+        .toBe(`${storeId}/${label}: ${entries.length}/${entries.length} phased`);
+    }
+  });
+
+  it.each(RAILS)('%s only uses phases the engine knows', (storeId) => {
+    // A typo here is invisible: the row still uploads, the dashboard still
+    // renders, and the phase silently drops out at the sanitiser.
+    for (const [, script] of scriptsFor(storeId)) {
+      for (const m of railOwnCode(script).matchAll(/phase:\s*'([a-z_]+)'/g)) {
+        expect(STEP_PHASES).toContain(m[1]);
+      }
+    }
+  });
+
   it.each(RAILS)('%s leaves no unresolved interpolation behind', (storeId) => {
     for (const [label, s] of scriptsFor(storeId)) {
       expect(`${storeId}/${label}`).toBe(s.includes('${') ? '' : `${storeId}/${label}`);
+    }
+  });
+});
+
+// A NAME IN A SHARED PRELUDE IS IN EVERY SCRIPT THAT SHARES IT.
+//
+// MEAL-219 added a phase to every request and the first attempt derived it from
+// a name -> phase map placed in each rail's prelude. The prelude is included by
+// every script that rail emits, so the cart read and the add scripts started
+// carrying the SESSION probe's operation name, and a component test counting
+// session probes by searching for that name went from 0 to 1.
+//
+// It then happened a second time in the COMMENT explaining the first, which is
+// the reason this is a test and not a note: reviewing for it does not work.
+describe('a shared prelude names no operation', () => {
+  /**
+   * An operation belongs to ONE script. If its name appears in a script that
+   * does not perform it, the name is in shared text.
+   *
+   * Checked per rail against its own session operations, because those are the
+   * ones every test in the repo keys on to count login probes.
+   */
+  const SESSION_ONLY: Record<string, string[]> = {
+    heb: ['myPreferredStore', 'SessionContext'],
+    walmart: ['MergeAndGetCart'],
+    // ALDI is deliberately absent. Its session, cart-read and add builders all
+    // genuinely call ActiveCarts -- it is the only way to learn the cart id on
+    // that platform -- so "in every script" is the truth there rather than a
+    // leak, and asserting otherwise would be a test that has to be wrong.
+  };
+
+  it.each(Object.keys(SESSION_ONLY))('%s keeps its operation names out of the prelude', (storeId) => {
+    const scripts = scriptsFor(storeId);
+    for (const name of SESSION_ONLY[storeId]) {
+      // The script that performs it may name it. Every OTHER script must not,
+      // and "every other" is what a prelude would break.
+      const carrying = scripts.filter(([, s]) => s.includes(name)).map(([l]) => l);
+      expect(`${storeId}/${name} appears in ${carrying.length} script(s)`)
+        .not.toBe(`${storeId}/${name} appears in ${scripts.length} script(s)`);
     }
   });
 });

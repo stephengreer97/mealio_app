@@ -96,3 +96,4 @@ describe('the injected scripts survive being injected', () => {
     }
   });
 });
+

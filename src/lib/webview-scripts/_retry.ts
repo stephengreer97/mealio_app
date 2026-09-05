@@ -150,6 +150,37 @@ export const RETRY_FN = `
       });
     }, opts);
   }
+  // EVERY REQUEST REPORTS ITSELF. MEAL-219.
+  //
+  // Stephen, 2026-09-05: "it should be much easier to collect data since it all
+  // traces back to http codes." It does, and this is the one place every rail's
+  // requests already meet, so the status is emitted HERE rather than threaded
+  // through five rails' report functions to the item they happened to belong
+  // to. Attributing a status to an ITEM would also be wrong under concurrency:
+  // H-E-B writes three at a time, and the last status seen is not the status of
+  // the item currently being reported.
+  //
+  // Posted, not returned, because most callers do not want it and the ones that
+  // do already have it. A failure to post must never break a request, hence the
+  // swallow: telemetry is not allowed to cost an add.
+  function __mealioReport(phase, op, res, attempts, ms) {
+    try {
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'NET_REQUEST',
+        phase: phase || null,
+        op: op || null,
+        status: (res && typeof res.status === 'number') ? res.status : null,
+        // NO OK FIELD. why is null exactly when the request succeeded, so an ok
+        // would be redundant -- and storeIsolation.test.ts refuses that field
+        // anywhere in a rail script, because posting a result under it instead
+        // of success is a bug Albertsons actually shipped: the engine read
+        // undefined and called every successful add a failure.
+        why: (res && !res.ok && res.why) ? String(res.why).slice(0, 40) : null,
+        attempts: attempts,
+        ms: ms,
+      }));
+    } catch (e) {}
+  }
   function __mealioRetry(attemptFn, opts) {
     opts = opts || {};
     var attempts = opts.attempts || ${RETRY_ATTEMPTS};
@@ -157,10 +188,13 @@ export const RETRY_FN = `
     var startedAt = Date.now();
     return (async function () {
       var last = null;
+      var tries = 0;
       for (var i = 1; i <= attempts; i++) {
+        tries = i;
         last = await attemptFn(i);
         if (last && last.ok) {
           if (i > 1) { try { last.retries = i - 1; } catch (e) {} }
+          __mealioReport(opts.phase, opts.op, last, tries, Date.now() - startedAt);
           return last;
         }
         if (i >= attempts) break;
@@ -172,6 +206,7 @@ export const RETRY_FN = `
         await new Promise(function (r) { setTimeout(r, delay); });
       }
       if (last && typeof last === 'object') { try { last.retries = last.retries || 0; } catch (e) {} }
+      __mealioReport(opts.phase, opts.op, last, tries, Date.now() - startedAt);
       return last;
     })();
   }
