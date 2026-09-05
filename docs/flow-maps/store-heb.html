@@ -117,7 +117,7 @@ flowchart TD
     ROUTE -->|"H-E-B's only path"| NETR["<b>network</b><br/>ask the store's own API"]
     ROUTE -->|"all items need a product"| PS["<b>networkChoose</b><br/>same rail, search only"]
 
-    NOTE{{"presearch, parallelAdd, parallelSearch and serial<br/>were the other four branches. All of them clicked<br/>through the storefront; all were deleted 2026-09-01.<br/>H-E-B has a rail, so it never falls back to one —<br/>a rail that cannot answer hands over to the USER."}}
+    NOTE{{"presearch, parallelAdd, parallelSearch and serial<br/>were the other four branches. All of them clicked<br/>through the storefront; all were deleted 2026-09-01.<br/>H-E-B has a rail, so it never falls back to one —<br/>a rail that cannot answer reruns ONCE, then offers<br/>whatever it found for review, and only hands the<br/>store to the user when it holds nothing at all.<br/>See decideHandover in the cart-engine map."}}
 
     subgraph PERITEM ["2 · Per item, over the rail"]
         WORKER["search by request<br/><code>productSearchPageV2</code> — no page load"]
@@ -241,8 +241,10 @@ flowchart TD
     A(["beginSearchFlow &mdash; strategy 'network'"]) --> S1
 
     S1["<b>1 &middot; session</b><br/>myPreferredStore &rarr; is there a user?<br/>SessionContext &rarr; store + pickup/delivery"]
+    GQL{{"every request here goes through __hebGql,<br/>which is __hebGqlAttempt under the shared retry policy:<br/>a 5xx, a 429 or a dropped connection is asked twice more,<br/>400ms then 800ms. A TIMEOUT is not — it already spent<br/>its budget, and a second write of an ambiguous one<br/>is how you buy two of something."}}
+    S1 --- GQL
     S1 -->|"no user"| LOGIN(["login step &mdash; this IS the login gate"])
-    S1 -->|"cannot answer"| POOL(["hand the whole run to the pool"])
+    S1 -->|"cannot answer"| DEAD(["decideHandover: rerun once,<br/>else review, else the user.<br/><i>the pool this used to name was<br/>deleted 2026-09-01</i>"])
     S1 --> S2
 
     S2["<b>2 &middot; search</b><br/>every term, 3 at a time, one script<br/><b>the WebView never navigates</b>"]

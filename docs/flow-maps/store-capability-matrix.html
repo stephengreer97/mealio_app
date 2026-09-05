@@ -221,6 +221,47 @@ a fast path now, not a gate: either signal routes the item to review.</p>
   anything from the selector table. One test asserts that &mdash; if even it stops being true,
   the feature is watching nothing and should be deleted rather than left running.</p>
 
+  <h2>3b &middot; Which requests get asked again</h2>
+  <p>One policy, in <code>webview-scripts/_retry.ts</code>, and every rail goes through it:
+  a 5xx, a 429, a fetch that threw or a body that was not JSON is asked twice more
+  (400&nbsp;ms, then 800&nbsp;ms) inside a 5&nbsp;s buffer. A <b>timeout is not retried</b> —
+  it already spent its whole budget, and on the add path a second write of an ambiguous one is
+  how you buy two of something. That exclusion is also what makes this nearly free: every
+  retriable failure is a fast one.</p>
+  <table class="src">
+    <tr><th>Store</th><th>What goes through the policy</th><th>Left alone, and why</th></tr>
+    <tr><td><b>H-E-B</b></td>
+        <td>Everything. One transport, <code>__hebGql</code>, and session, search, cart read
+        and add all use it.</td>
+        <td>&mdash;</td></tr>
+    <tr><td><b>Albertsons family</b></td>
+        <td>Search, the cart read, the add write, and the undo of an unavailable line
+        &mdash; the undo is a cart write, and a 5xx there used to leave an unbuyable line
+        sitting in the cart blocking checkout.</td>
+        <td>The user-info and API-key fetches. Both are session bootstrap: a failure fails
+        the session, which the run-level retry reruns, and the key fetch already walks a
+        ladder of candidates.</td></tr>
+    <tr><td><b>ALDI</b> / Instacart</td>
+        <td><code>IC.gql</code>, which is search, cart read and add.</td>
+        <td>The operation-hash manifest (tries several URLs itself) and the shop-id fetch
+        (falls back to the document).</td></tr>
+    <tr><td><b>Wegmans</b></td>
+        <td>The commerce API (cart), <b>and the Algolia search</b>, and the batch
+        sku enrichment.</td>
+        <td>Store lookup and endpoint discovery, both cached; the token refresh, which the
+        session repair already re-asks every 2&nbsp;s for 30&nbsp;s.</td></tr>
+    <tr><td><b>Walmart</b></td>
+        <td><code>WM.gql</code>, <b>the search operation</b>, and the HTML search fallback
+        &mdash; the fallback is the last thing between a term and the review screen.</td>
+        <td>&mdash;</td></tr>
+  </table>
+  <p><b>Wrapping each rail's "transport" was not enough, and looked like it was.</b>
+  Wegmans' search is Algolia while <code>WG.commerce</code> is the cart, and Walmart's search
+  builds its own URL rather than going through <code>WM.gql</code>, so on two stores the
+  hottest path stayed one-shot with a green test suite.
+  <code>every-fetch-is-accounted-for.test.ts</code> now counts every <code>fetch(</code> in
+  every emitted script and requires each to be behind the policy or on the named list above.</p>
+
   <h2>4 &middot; Cart deep links</h2>
   <table class="src">
     <tr><th>Store</th><th><code>appScheme</code></th><th>Note</th></tr>

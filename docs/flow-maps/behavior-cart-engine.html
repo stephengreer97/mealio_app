@@ -302,12 +302,22 @@ flowchart LR
     REPAIR --- REPAIRWHY{{"Budgeted in TIME, not in asks. The first version allowed three asks:<br/>the storefront's own load events spent two of them inside 900ms, on a<br/>Wegmans page whose MSAL took NINETEEN seconds to mint a token. The repair<br/>was over 3.4s in, the login check timed out, and a signed-in user was shown<br/>a sign-in screen one second before their store said they were signed in.<br/>Measured on the Pixel, 2026-09-04."}}
     S2 -.->|"any row that reaches review"| REV(["that item &rarr; review,<br/><i>and asked again by INGREDIENT name —<br/>EVERY unmatched row, not only the empty<br/>ones. merged with what the product-name<br/>search found, deduped by product id,<br/>ranked against the ingredient</i>"])
     REV --- REVWHY{{"Near-variants used to be treated as the better offer, and they are —<br/>while the product still exists. When it does not they are other sizes<br/>of a discontinued line, and a row with two poor ones is no better<br/>served than a row with none. It only LOOKS better served.<br/>Merged rather than swapped: swapping was safe only while this ran<br/>for rows that had nothing to lose."}}
-    S3 -.->|"no cart baseline"| ASSIST
+    S1 -.->|"dead end"| DEAD
+    S2 -.->|"dead end"| DEAD
+    S3 -.->|"no cart baseline"| DEAD
+    DEAD{{"decideHandover<br/><i>is there anything better than the store?</i>"}}
+    DEAD -->|"we already found products<br/>the user could pick"| REV
+    DEAD -->|"nothing found, the failure was<br/>transient, and the allowance is unspent"| RERUN(["<b>rerun the whole run</b>, once<br/><i>1.2s later. session and search only —<br/>NEVER the add phase, where a fresh<br/>baseline over a half-landed write<br/>buys two of something</i>"])
+    RERUN --> S1
+    DEAD -->|"we can at least say<br/>WHAT went wrong"| REV
+    DEAD -->|"none of the above"| ASSIST
+    DEAD --- DEADWHY{{"Stephen, 2026-09-04: the assisted step may only appear once every retry has failed.<br/>It was the answer to eleven different questions instead — every dead end called the same<br/>function — so a run that had found products for twelve of fourteen items and then lost its<br/>session handed the user all fourteen terms and threw the twelve away.<br/><br/>Review OUTRANKS the rerun, because a rerun clears the candidate maps: retrying a search<br/>timeout that had already found twelve products destroys the twelve to go looking for fourteen."}}
 
     classDef net fill:#1e3a8a,stroke:#3b82f6,color:#fff
     classDef good fill:#14532d,stroke:#22c55e,color:#fff
     class NET,CHOOSE,S1,S2,S3,C1 net
     class ASSIST,A1 good
+    class RERUN net
     class FIN good
   </pre>
   <p><b>It funnels into <code>finishParallelAdd</code></b>, which is what the add pool
@@ -322,6 +332,41 @@ flowchart LR
   <p>Both switches are required together. Searching over the network and then
   <i>clicking</i> to add would load no page for search and then one per item
   anyway &mdash; slower than either path alone.</p>
+
+  <h2>What gets asked again</h2>
+  <p>Two layers, and they answer different questions. Underneath, a single REQUEST that
+  failed; above it, a whole RUN that got nowhere.</p>
+  <table>
+    <tr><th>Layer</th><th>Retried</th><th>Never retried</th></tr>
+    <tr>
+      <td><b>one request</b><br/><code>webview-scripts/_retry.ts</code></td>
+      <td>5xx, 429, a fetch that threw, a body that was not JSON.<br/>
+          Twice, 400&nbsp;ms then 800&nbsp;ms (1200/2400 for a 429), inside a
+          5&nbsp;s buffer measured from the first attempt.</td>
+      <td>A <b>timeout</b> — it already spent its whole budget, and on the add path a
+          second write of an ambiguous one is how you buy two of something.<br/>
+          The anti-bot wall, which self-heals in 71–84&nbsp;s and belongs to the
+          challenge screen.<br/>
+          Any answer the store actually gave: a 400, a 404, a GraphQL error,
+          out&nbsp;of&nbsp;stock.</td>
+    </tr>
+    <tr>
+      <td><b>the whole run</b><br/><code>lib/handover.ts</code></td>
+      <td>Once, for a session or search dead end, and only when the run holds
+          nothing worth showing.</td>
+      <td>The add phase, ever. <code>no_rail</code> and an unbuildable script,
+          which will fail the same way twice.</td>
+    </tr>
+  </table>
+  <p><b>Excluding timeouts is what makes the request layer nearly free.</b> Every retriable
+  failure is a FAST failure — a 500 comes back immediately — so two retries cost the backoff
+  and not the budget: 1.8&nbsp;s, not 24&nbsp;s.</p>
+  <p>Wrapping each rail's "transport" was not enough and looked like it was.
+  Wegmans' SEARCH is Algolia while <code>WG.commerce</code> is the cart, and Walmart's
+  search builds its own URL rather than going through <code>WM.gql</code> — so on two
+  stores the hottest path stayed one-shot. <code>every-fetch-is-accounted-for.test.ts</code>
+  now counts every <code>fetch(</code> in every emitted script and requires each to be behind
+  the policy or on a named list with a reason.</p>
 
   <h2>Why <code>spaSearch</code> exists at all</h2>
   <p>An SPA storefront changes its URL via <code>pushState</code> and fires
