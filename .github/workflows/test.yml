@@ -60,31 +60,26 @@ jobs:
           # matrix rather than the unit job.
           - name: runner
             spec: tests/fixture-runners/runScript.test.ts
-          - name: wegmans
-            spec: tests/fixture-tests/wegmans.spec.ts
           - name: heb
-            spec: tests/fixture-tests/heb.spec.ts
-          - name: walmart
-            spec: tests/fixture-tests/walmart.spec.ts
+            spec: tests/fixture-tests/heb-network-search.spec.ts
           - name: albertsons
-            spec: tests/fixture-tests/albertsons.spec.ts
+            spec: tests/fixture-tests/albertsons-network.spec.ts
           - name: aldi
-            spec: tests/fixture-tests/aldi.spec.ts
-          - name: amazon-fresh
-            spec: tests/fixture-tests/amazon-fresh.spec.ts
-          - name: cart-count
-            spec: tests/fixture-tests/cart-count.spec.ts
-          - name: parallel-workers
-            spec: tests/fixture-tests/parallel-workers.spec.ts
-          # MEAL-30. Compares every store's selectors against the committed shape
-          # baseline. Runs on every push like the rest of this matrix, so a
-          # recapture PR carries its own drift report — but the alert this ticket
-          # is really about arrives when a SCHEDULED recapture lands, and that
-          # recapture cannot run here: it needs a residential IP (see MEAL-7 and
-          # the runner contract in tests/fixtures/README.md). This job checks
-          # fixtures; it never fetches a store.
-          - name: selector-drift
-            spec: tests/fixture-tests/selector-drift.spec.ts
+            spec: tests/fixture-tests/aldi-network.spec.ts
+          - name: wegmans
+            spec: tests/fixture-tests/wegmans-network.spec.ts
+          - name: walmart
+            spec: tests/fixture-tests/walmart-network.spec.ts
+          - name: blank-page-recovery
+            spec: tests/fixture-tests/blank-page-recovery.spec.ts
+          # EVERY ENTRY HERE NAMES A FILE THAT EXISTS, and the step below fails
+          # loudly if one stops existing. This matrix spent weeks red because it
+          # did not: three specs went with DOM automation (selector-drift,
+          # parallel-workers, cart-count), one went with Amazon Fresh, and the
+          # five store specs were RENAMED to *-network.spec.ts. `npx jest` on a
+          # path matching nothing exits 1 with "no tests found", which reads as
+          # a test failure -- so nine jobs failed on every push and the signal
+          # was worth nothing.
     steps:
       - uses: actions/checkout@v4
 
@@ -117,7 +112,16 @@ jobs:
         run: npx playwright install-deps chromium
 
       - name: Fixture tests for ${{ matrix.name }}
-        run: npx jest ${{ matrix.spec }} --ci
+        run: |
+          # SAY WHICH FILE IS MISSING. `npx jest <path>` on a path matching
+          # nothing exits 1 with "no tests found", which reads as a test failure
+          # and sent everyone looking at the wrong thing. A matrix entry pointing
+          # at a renamed or deleted spec is a WORKFLOW bug and should say so.
+          if [ ! -f "${{ matrix.spec }}" ]; then
+            echo "::error::${{ matrix.spec }} does not exist -- a matrix entry in this workflow names a spec that has been renamed or deleted."
+            exit 1
+          fi
+          npx jest "${{ matrix.spec }}" --ci
 
   typecheck:
     name: TypeScript typecheck
