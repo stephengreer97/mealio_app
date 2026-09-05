@@ -87,51 +87,43 @@ export function getAlbertsonsCartPageUrl(storeId: string): string {
 }
 
 /**
- * Trim a saved product name to its first 5 words for the manual-mode search URL.
+ * The manual-mode search URL for a saved product name.
  *
- * THE ORIGINAL REASON FOR THIS IS NOT TRUE. MEAL-208 measured it on the device,
- * twice, against both paths — the pgmsearch operation the rail uses and the
- * rendered /shop/search-results.html page — and Albertsons never once refused a
- * long query and never once returned zero for one:
+ * IT NO LONGER TRIMS, and the 5-word cap it used to apply was never a store
+ * limit. MEAL-208 measured that on the device, twice, against both paths -- the
+ * pgmsearch operation the rail uses and the rendered
+ * /shop/search-results.html page:
  *
- *   13-word real title   200, appCode [GR200#A-CT: 200] [PP: 200] [SD200],
- *                        4 results, the exact product first
- *   22 words / 124 chars 200, 1 result
- *   341 words / 2000 ch  200, 1 result
- *   ~2500+ characters    431 then 414 from the gateway — a URL-length limit,
- *                        nothing to do with the search
+ *   13-word real title    200, healthy appCode, 4 results, exact product FIRST
+ *   22 words / 124 chars  200, 1 result
+ *   341 words / 2000 ch   200, 1 result
+ *   ~2500+ characters     431 then 414 from the gateway -- a URL-length limit,
+ *                         nothing to do with search
  *
- * The rendered page agreed tile for tile. So there is no word limit and no
- * character limit to protect against here, and the size suffix this comment
- * claimed was fatal ("Signature SELECT Rice Basmati - 32 Oz", 7 words) returns
- * 32 matches with that product on top.
+ * The rendered page agreed tile for tile, and the size suffix the old comment
+ * called fatal ("Signature SELECT Rice Basmati - 32 Oz") returns 32 matches
+ * with that product on top.
  *
- * AND THE CONTROL, because "never returned zero" is worth nothing without it:
+ * AND THE CONTROL, because "never returned zero" is worth nothing without one:
  * this search cannot return zero. "zzqxwvtplkj" answers with 2 products,
- * "purple monkey dishwasher scaffolding tuesday" with 495. The engine always
- * falls back to something. So an empty result is not a failure mode at
- * Albertsons at any query length — its only failure mode is the HTTP 200 with
- * primaryProducts.appCode 400 from MEAL-207, and not one of those appeared in
- * roughly sixty requests across the sweep, at any length.
+ * "purple monkey dishwasher scaffolding tuesday" with 495. So "a full title
+ * returns zero results" -- the observation the cap was built on (43b4f83) -- is
+ * not something this store can produce.
  *
- * WHAT THE TRUNCATION STILL DOES. Its only remaining consumer is
- * `getSearchUrl`, and `getSearchUrl`'s only consumer is manual mode — the
- * hand-over where a person is shown the store's own search page and adds the
- * item themselves. The network rail (albertsons-network.ts) sends the full term
- * and always has, so nothing about automated matching passes through here.
+ * Its only consumer was `getSearchUrl`, whose only consumer is manual mode: the
+ * hand-over where a person is shown the store's own search page. The network
+ * rail sends the full term and always has, so no automated matching ever passed
+ * through here.
  *
- * That makes 5 a readability choice for a human, not a store limit, and the
- * trade runs the other way from what the comment assumed: a full title finds
- * the exact item when the store stocks it and almost nothing when it does not
- * (measured: "PERDUE SIMPLY SMART ORGANIC Gluten Free Breaded Chicken Breast
- * Tenders - 22 Oz" -> 1 loosely-related tile, vs 8 tiles at 5 words). Whether a
- * person handed a search box wants the exact name or a broader one is Stephen's
- * call, so the behaviour is left exactly as it shipped and only the reasoning
- * is corrected.
+ * Stephen's call, 2026-09-05: send the whole name. A person handed a search box
+ * for an item they chose is looking for THAT item, and the full title puts it
+ * first when the store stocks it. Kept as a function rather than inlined so the
+ * URL builder has one place to change if that judgement ever moves.
  */
 export function albertsonsSearchQuery(name: string): string {
-  return (name || '').trim().split(/\s+/).slice(0, 5).join(' ');
+  return (name || '').trim();
 }
+
 // The login check lived here: 420 lines that read the account menu's rendered
 // name, watched for a sign-in popup, and latched a verdict per JS context.
 //
