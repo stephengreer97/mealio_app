@@ -1845,13 +1845,19 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
    * a dead end after is not something to review.
    */
   const netHandoverCards = useCallback((): SearchResult[] => {
-    const added = new Set(addResultsRef.current.filter((a) => a.success).map((a) => a.name));
     const existing = searchResultsRef.current;
     const carded = new Set(existing.map((c) => c.term));
     const out: SearchResult[] = [...existing];
-    for (const item of activeItemsRef.current) {
+    activeItemsRef.current.forEach((item, idx) => {
+      // BY INDEX, NOT BY NAME. The first version matched addResultsRef entries
+      // -- which carry the PRODUCT name the store sold -- against the item's
+      // INGREDIENT name, so "sour cream" never matched "Sour Cream" and an item
+      // that had already landed was offered for review anyway. netResults is
+      // keyed by the same index the add batch used, and an index cannot
+      // disagree with itself about capitalisation.
+      if (netResultsRef.current.get(idx)?.success === true) return;
       const term = item.searchTerm || item.ingredientName;
-      if (!term || carded.has(term) || added.has(item.ingredientName)) continue;
+      if (!term || carded.has(term)) return;
       // WAS THIS ITEM ACTUALLY ASKED ABOUT?
       //
       // `has` and not `get`, and the difference is the whole gate. An item the
@@ -1865,7 +1871,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         ? netCandidatesRef.current.get(term)! : null;
       const byName = netFallbackCandidatesRef.current.has(item.ingredientName)
         ? netFallbackCandidatesRef.current.get(item.ingredientName)! : null;
-      if (byTerm === null && byName === null) continue;
+      if (byTerm === null && byName === null) return;
       const found = (byTerm && byTerm.length ? byTerm : byName) ?? [];
       out.push({
         term,
@@ -1880,7 +1886,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         reason: found.length === 0 ? 'no_results' : 'low_confidence',
         isChoose: false,
       });
-    }
+    });
     return out;
   }, []);
 
@@ -4947,6 +4953,32 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
               setAddedNames(wins.map((w) => w.name));
               setFailedItems(lost.map((l) => l.name));
               reconcileFinalizedRef.current = true;
+              // AN UNREADABLE CART DOES NOT MAKE AN UNMATCHED ITEM UNREVIEWABLE.
+              //
+              // MEASURED, Walmart, 2026-09-04. The cart read answered 412 -- one
+              // of that store's anti-bot statuses, and transient: the same run a
+              // minute later read the cart fine. Four items the SEARCH had
+              // already failed to match were then printed on the done screen as
+              // "could not be added" text with nothing to press, when the very
+              // same four went to review on the run that could read the cart.
+              //
+              // Their reasons never depended on the cart. The cart decides what
+              // LANDED; it has no say over an item that was never written. So the
+              // failures route to review exactly as they would have, and the
+              // unverified banner still stands for the ones that WERE written --
+              // those stay out of review, because re-offering an item that
+              // plausibly did land is how the user buys it twice.
+              const unverifiedCards = netHandoverCards();
+              if (unverifiedCards.length > 0) {
+                const canPick = unverifiedCards.filter((c) => c.candidates.length > 0).length;
+                console.log(`[Cart ${ts()}]`, 'cart unreadable:', unverifiedCards.length,
+                  'unmatched → review anyway (pickable=', canPick, ')');
+                searchResultsRef.current = unverifiedCards;
+                setSearchResults(unverifiedCards);
+                setReviewIdx(0);
+                setStep(canPick > 0 ? 'review' : 'searchResult');
+                return;
+              }
               setStep('done');
               return;
             }

@@ -179,6 +179,22 @@ beforeEach(() => {
  * reconcile answer is the variable under test: one with `items` gives the diff a
  * cart to compare, one without is the MEAL-152 refusal.
  */
+/**
+ * Walk the review the run now shows, so the assertions about the DONE screen
+ * still reach it. Tolerant of both shapes: an item with candidates gets the
+ * pick screen, one without gets the "Items Not Added" summary.
+ */
+async function skipPastReview(view: ReturnType<typeof render>) {
+  for (let i = 0; i < 4; i++) {
+    const skip = view.queryByText(/skip this ingredient/i)
+      ?? view.queryByText(/review \d+ ingredient/i);
+    if (!skip) break;
+    await act(async () => { fireEvent.press(skip); });
+    act(() => { jest.advanceTimersByTime(1_000); });
+  }
+  act(() => { jest.advanceTimersByTime(2_000); });
+}
+
 async function runToReconcile(
   answer: Record<string, unknown>,
   workerSucceeded = true,
@@ -265,10 +281,18 @@ describe('reconcile that cannot read the cart (MEAL-190)', () => {
     // done screen — the run most in need of the warning, since it has neither a
     // cart reading nor a success to point at. Covered separately because
     // deleting the nothing-added banner leaves the other tests green.
+    //
+    // SINCE 2026-09-04 THE REVIEW COMES FIRST. An unreadable cart no longer
+    // makes an unmatched item unreviewable — measured on Walmart, where a
+    // transient 412 printed four items on the done screen as text with nothing
+    // to press while the same four went to review on the next run. So the
+    // banner is DEFERRED rather than dropped, and skipping past the review is
+    // what proves it survived.
     const view = await runToReconcile(
       { type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: 'https://www.heb.com/' },
       false,
     );
+    await skipPastReview(view);
     expect(view.queryByText(/couldn't verify your h-e-b cart/i)).toBeTruthy();
   });
 
@@ -324,10 +348,14 @@ describe('the outcome an unverifiable run reports (MEAL-190)', () => {
     // a worse thing to say about itself than "we could not check". Moving
     // `unverified` ahead of the zero-added test would relabel every failed run at
     // a store whose cart page redirects.
-    await runToReconcile(
+    const view = await runToReconcile(
       { type: 'CART_COUNT', count: null, reason: 'not_cart_page', url: 'https://www.heb.com/' },
       false,
     );
+    // The run now finishes on the far side of the review, not at the reconcile.
+    // What is pinned here is unchanged: the ORDERING inside the outcome
+    // expression, where "added nothing" outranks "could not check".
+    await skipPastReview(view);
     expect(completedRun()).toMatchObject({ itemsAdded: 0, outcome: 'failed' });
   });
 });
