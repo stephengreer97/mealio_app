@@ -94,14 +94,14 @@ const CART_READ_FN = `
 /**
  * Shared transport. Same endpoint, headers and credentials as the cart rail.
  *
- * `__hebGqlOnce` is one attempt; `__hebGql` is that attempt under the shared
+ * `__hebGqlAttempt` is one attempt; `__hebGql` is that attempt under the shared
  * retry policy, so a 500 or a dropped connection is asked again twice before it
  * becomes an answer. See _retry.ts for which failures qualify and why a
  * timeout deliberately does not.
  */
 const GQL_FN = `
 ${RETRY_FN}
-  function __hebGqlOnce(op, query, variables, timeoutMs) {
+  function __hebGqlAttempt(op, query, variables, timeoutMs) {
     var ctl = null;
     try { ctl = new AbortController(); } catch (e) { ctl = null; }
     var timer = null;
@@ -145,7 +145,7 @@ ${RETRY_FN}
     })();
   }
   function __hebGql(op, query, variables, timeoutMs) {
-    return __mealioRetry(function () { return __hebGqlOnce(op, query, variables, timeoutMs); });
+    return __mealioRetry(function () { return __hebGqlAttempt(op, query, variables, timeoutMs); });
   }
 `;
 

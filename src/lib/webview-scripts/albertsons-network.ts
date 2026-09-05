@@ -951,9 +951,9 @@ ${albSearchUrlExpr(pageSize, storeId)}
   // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
   // _retry.ts for which failures earn a second ask and why a timeout does not.
   function attempt(term, variant) {
-    return __mealioRetry(function () { return attemptOnce(term, variant); });
+    return __mealioRetry(function () { return searchAttempt(term, variant); });
   }
-  async function attemptOnce(term, variant) {
+  async function searchAttempt(term, variant) {
     var ctl = new AbortController();
     // The FIRST request of a batch gets the longer budget: measured cold at the
     // full 15s while the document was provably healthy, and sub-second after.

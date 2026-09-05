@@ -144,9 +144,9 @@ ${RETRY_FN}
   // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
   // _retry.ts for which failures earn a second ask and why a timeout does not.
   WM.gql = function (domain, op, kind, hash, variables, budgetMs) {
-    return __mealioRetry(function () { return WM.gqlOnce(domain, op, kind, hash, variables, budgetMs); });
+    return __mealioRetry(function () { return WM.gqlAttempt(domain, op, kind, hash, variables, budgetMs); });
   };
-  WM.gqlOnce = async function (domain, op, kind, hash, variables, budgetMs) {
+  WM.gqlAttempt = async function (domain, op, kind, hash, variables, budgetMs) {
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 20000);
     var t0 = Date.now();

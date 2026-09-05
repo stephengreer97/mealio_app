@@ -681,9 +681,9 @@ ${RETRY_FN}
   // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
   // _retry.ts for which failures earn a second ask and why a timeout does not.
   WG.commerce = function (path, tok, init, budgetMs) {
-    return __mealioRetry(function () { return WG.commerceOnce(path, tok, init, budgetMs); });
+    return __mealioRetry(function () { return WG.commerceAttempt(path, tok, init, budgetMs); });
   };
-  WG.commerceOnce = async function (path, tok, init, budgetMs) {
+  WG.commerceAttempt = async function (path, tok, init, budgetMs) {
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 15000);
     var t0 = Date.now();

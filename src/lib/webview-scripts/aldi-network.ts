@@ -172,9 +172,9 @@ ${RETRY_FN}
   // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
   // _retry.ts for which failures earn a second ask and why a timeout does not.
   IC.gql = function (name, variables, budgetMs) {
-    return __mealioRetry(function () { return IC.gqlOnce(name, variables, budgetMs); });
+    return __mealioRetry(function () { return IC.gqlAttempt(name, variables, budgetMs); });
   };
-  IC.gqlOnce = async function (name, variables, budgetMs) {
+  IC.gqlAttempt = async function (name, variables, budgetMs) {
     var hash = (IC.ops && IC.ops[name]) || null;
     if (!hash) return { ok: false, why: 'no_hash', op: name };
     var ctl = new AbortController();
