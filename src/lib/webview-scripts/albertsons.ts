@@ -86,9 +86,49 @@ export function getAlbertsonsCartPageUrl(storeId: string): string {
   return `https://www.${domain}${ALBERTSONS_CART_PATH}`;
 }
 
-/** Albertsons over-constrains on long queries — a full product title (esp. the
- *  size suffix) returns zero results. Search with the first 5 words only; the
- *  scorer still matches candidates against the full saved name for precision. */
+/**
+ * Trim a saved product name to its first 5 words for the manual-mode search URL.
+ *
+ * THE ORIGINAL REASON FOR THIS IS NOT TRUE. MEAL-208 measured it on the device,
+ * twice, against both paths — the pgmsearch operation the rail uses and the
+ * rendered /shop/search-results.html page — and Albertsons never once refused a
+ * long query and never once returned zero for one:
+ *
+ *   13-word real title   200, appCode [GR200#A-CT: 200] [PP: 200] [SD200],
+ *                        4 results, the exact product first
+ *   22 words / 124 chars 200, 1 result
+ *   341 words / 2000 ch  200, 1 result
+ *   ~2500+ characters    431 then 414 from the gateway — a URL-length limit,
+ *                        nothing to do with the search
+ *
+ * The rendered page agreed tile for tile. So there is no word limit and no
+ * character limit to protect against here, and the size suffix this comment
+ * claimed was fatal ("Signature SELECT Rice Basmati - 32 Oz", 7 words) returns
+ * 32 matches with that product on top.
+ *
+ * AND THE CONTROL, because "never returned zero" is worth nothing without it:
+ * this search cannot return zero. "zzqxwvtplkj" answers with 2 products,
+ * "purple monkey dishwasher scaffolding tuesday" with 495. The engine always
+ * falls back to something. So an empty result is not a failure mode at
+ * Albertsons at any query length — its only failure mode is the HTTP 200 with
+ * primaryProducts.appCode 400 from MEAL-207, and not one of those appeared in
+ * roughly sixty requests across the sweep, at any length.
+ *
+ * WHAT THE TRUNCATION STILL DOES. Its only remaining consumer is
+ * `getSearchUrl`, and `getSearchUrl`'s only consumer is manual mode — the
+ * hand-over where a person is shown the store's own search page and adds the
+ * item themselves. The network rail (albertsons-network.ts) sends the full term
+ * and always has, so nothing about automated matching passes through here.
+ *
+ * That makes 5 a readability choice for a human, not a store limit, and the
+ * trade runs the other way from what the comment assumed: a full title finds
+ * the exact item when the store stocks it and almost nothing when it does not
+ * (measured: "PERDUE SIMPLY SMART ORGANIC Gluten Free Breaded Chicken Breast
+ * Tenders - 22 Oz" -> 1 loosely-related tile, vs 8 tiles at 5 words). Whether a
+ * person handed a search box wants the exact name or a broader one is Stephen's
+ * call, so the behaviour is left exactly as it shipped and only the reasoning
+ * is corrected.
+ */
 export function albertsonsSearchQuery(name: string): string {
   return (name || '').trim().split(/\s+/).slice(0, 5).join(' ');
 }
