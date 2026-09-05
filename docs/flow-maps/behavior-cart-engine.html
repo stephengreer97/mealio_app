@@ -290,6 +290,9 @@ flowchart LR
     PRE(["prewarmed answers<br/><i>from the qty screen, and from<br/>My Meals before that</i>"]) -.->|"seeded, so a<br/>prewarmed term is<br/>never in the batch"| S2
     S2 --> S3["<b>3 · add</b><br/>one write per matched item<br/>quantity = what the cart holds + asked"]
     S3 --> FIN(["finishParallelAdd()<br/><i>reconcile, verdict, done</i>"])
+    FIN -.->|"the cart read failed —<br/>count: null"| UNREAD(["still review what never landed.<br/><i>the unverified banner waits on the done screen,<br/>which is on the FAR SIDE of the review. items that<br/>WERE written stay out of it — re-offering one that<br/>plausibly landed is how you buy two</i>"])
+    UNREAD --> REV
+    UNREAD --- UNREADWHY{{"MEASURED, Walmart, 2026-09-04. The reconcile read answered 412 — one<br/>of that store's anti-bot statuses, and transient: the same run a minute<br/>later read the cart fine. Four items the SEARCH had already failed to<br/>match were printed on the done screen as text with nothing to press,<br/>while the very same four went to review on the run that could read it.<br/><br/>Their reasons never depended on the cart. The cart decides what LANDED;<br/>it has no say over an item that was never written."}}
 
     S2 -->|"choose run"| C2(["netFinishChoose()<br/><i>the Choose Products screen.<br/>reached from BOTH ends of the search:<br/>the batch coming back, and the shortcut<br/>taken when the prewarm already answered<br/>every term</i>"])
 
@@ -319,7 +322,7 @@ flowchart LR
     classDef good fill:#14532d,stroke:#22c55e,color:#fff
     class NET,CHOOSE,S1,S2,S3,C1 net
     class ASSIST,A1 good
-    class WARM net
+    class WARM,UNREAD net
     class RERUN net
     class FIN good
   </pre>
