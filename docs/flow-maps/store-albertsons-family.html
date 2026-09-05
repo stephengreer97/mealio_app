@@ -160,11 +160,21 @@ flowchart TD
   path is written once, as <code>ALBERTSONS_CART_PATH</code>, because two copies of a path is how
   one goes stale without the other noticing.</p>
 
-  <h2>Search the first five words, match the full name</h2>
-  <p>Albertsons over-constrains on long queries — a full product title, especially with its size
-  suffix, returns zero results. <code>albertsonsSearchQuery</code> sends the first five words only;
-  the matcher still compares candidates against the complete saved name, so precision is not traded
-  away for recall.</p>
+  <h2>Send the whole name &mdash; the five-word cap was never a store limit</h2>
+  <p>This section used to say Albertsons over-constrains on long queries and that a full product
+  title returns zero results. <b>MEAL-208 measured it and neither is true.</b> On the device,
+  against a live store and both search paths, a 13-word title returns the exact product FIRST, 341
+  words still answers 200, and the only thing that ever refuses is the gateway's URL-length limit at
+  roughly 2,500 characters.</p>
+  <p><b>The control is what makes that mean something:</b> this search cannot return zero.
+  <code>zzqxwvtplkj</code> answers with 2 products and a nonsense phrase with 495 &mdash; the engine
+  always falls back to something. So &ldquo;a full title returns zero results&rdquo;, the single
+  observation the cap was built on, is not a result this store can produce.</p>
+  <p>It also only ever affected MANUAL MODE. <code>albertsonsSearchQuery</code> feeds
+  <code>getSearchUrl</code>, whose only consumer is the hand-over where a person is shown the
+  store's own search page; the network rail sends the full term and always has. Removed 2026-09-05
+  (Stephen's call): someone handed a search box for an item they chose now sees that item first,
+  rather than eight loosely-related tiles.</p>
 
   <h2>Why the login check is this elaborate</h2>
   <p>The storefront bounces through an SSO <code>authorize</code> URL and straight back, ~5&nbsp;s,
