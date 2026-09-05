@@ -12,18 +12,39 @@ import { BUNDLED_AUTOMATION_CONFIG } from '../../src/lib/automation-config/schem
 // controls, which is the exact failure MEAL-32 was about — the difference being
 // that this time the read is gone on purpose and so is the flag.
 //
-// What is still worth testing is that the section itself behaves: it is empty,
-// and a push aimed at a flag that no longer exists is refused rather than
-// silently accepted.
+// The section has one tenant again since 2026-09-05: `manualPrefetch`, the kill
+// switch for warming the next page of the Add It Yourself pass. It earns the
+// slot on MEAL-32's own terms -- it is READ, through
+// decisions.shouldWarmManualPage, and `every declared flag reaches a decision`
+// covers it generically next door. It is a lever rather than a constant because
+// it is the one thing here that fetches a store page the user did not ask for.
+//
+// What is still worth testing is that the section behaves: what ships, and that
+// a push aimed at a flag that no longer exists is refused rather than silently
+// accepted.
 
-describe('flags after the DOM removal', () => {
-  it('ships no flags at all', () => {
-    expect(BUNDLED_AUTOMATION_CONFIG.flags).toEqual({});
+const SHIPPED_FLAGS = { manualPrefetch: true };
+
+describe('the flags section', () => {
+  it('ships exactly what is declared', () => {
+    expect(BUNDLED_AUTOMATION_CONFIG.flags).toEqual(SHIPPED_FLAGS);
   });
 
-  it('merges to empty with no override, and says nothing is wrong', () => {
+  it('defaults the warm-up ON, because undefined must not turn it off', () => {
+    // A device holding a config from before the flag existed has no key here.
+    // Reading that as "off" would silently withdraw a shipped behaviour.
+    expect(BUNDLED_AUTOMATION_CONFIG.flags.manualPrefetch).toBe(true);
+  });
+
+  it('merges to the shipped set with no override, and says nothing is wrong', () => {
     const { config, warnings } = mergeAutomationConfig({});
-    expect(config.flags).toEqual({});
+    expect(config.flags).toEqual(SHIPPED_FLAGS);
+    expect(warnings).toEqual([]);
+  });
+
+  it('accepts a push that turns the warm-up off', () => {
+    const { config, warnings } = mergeAutomationConfig({ flags: { manualPrefetch: false } });
+    expect(config.flags.manualPrefetch).toBe(false);
     expect(warnings).toEqual([]);
   });
 
@@ -33,7 +54,7 @@ describe('flags after the DOM removal', () => {
     const { config, warnings } = mergeAutomationConfig({
       flags: { parallelAdd: false, addCommitJitterMs: 1_500 } as Record<string, unknown>,
     });
-    expect(config.flags).toEqual({});
+    expect(config.flags).toEqual(SHIPPED_FLAGS);
     expect(warnings.length).toBeGreaterThan(0);
     expect(warnings.join(' ')).toContain('parallelAdd');
   });

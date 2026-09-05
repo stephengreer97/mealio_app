@@ -94,6 +94,7 @@ jest.mock('../../src/lib/automation-config', () => {
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 import { enableRail, disableRail, SESSION_OK } from './helpers/railRun';
+import { __applyAutomationConfigForTests } from '../../src/lib/automation-config';
 
 const chosen = (name: string) => ({
   ingredientName: name, searchTerm: name, productQty: 1, qty: 1, unit: 'qty', measure: null,
@@ -199,8 +200,18 @@ async function runToDone(asked: string[], landed: string[]) {
  * over to when it can neither add an item nor offer anything to review. That is
  * the route these tests take now, and it exercises the same screen.
  */
+/**
+ * Config applied AFTER disableRail, which resets it.
+ *
+ * Setting a flag before assistedRun looks like it works and does not: the reset
+ * inside wipes it, and the test then asserts the default behaviour while
+ * claiming to assert the override.
+ */
+let extraConfig: Record<string, unknown> | null = null;
+
 function assistedRun(...names: string[]) {
   disableRail();
+  if (extraConfig) __applyAutomationConfigForTests(extraConfig as never);
   const view = render(
     <WebViewCartSheet
       visible
@@ -224,7 +235,7 @@ function assistedRun(...names: string[]) {
 }
 
 beforeEach(() => { jest.useFakeTimers(); mockInjectSpy.mockClear(); });
-afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
+afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); extraConfig = null; });
 
 describe('the done screen never offers to hand over the store', () => {
   // Stephen, 2026-09-02: "get rid of the add it myself button from the end cart
@@ -302,22 +313,22 @@ describe('walking the list', () => {
   });
 });
 
-describe('skipping an item', () => {
-  // The "not offered again" half of this went with the done-screen offer: there
-  // is no second offer left to re-present a walked item on. What still matters —
-  // and is what a user actually does — is that Skip moves on rather than ending
-  // the pass.
+describe('walking the list', () => {
+  // These were the Skip tests. Skip called the same function as Next with a
+  // flag that only ever reached a console.log -- two buttons doing one thing --
+  // so it went, and Back took its place. What they were actually asserting
+  // (moving on, and finishing at the end) is unchanged and still asserted.
   it('carries on to the next item rather than ending the pass', () => {
     const view = assistedRun('tortillas', 'limes');
-    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
     expect(view.queryByTestId('manual-bar')).toBeTruthy();
     expect(view.queryByText(/add it yourself \(2 of 2\)/i)).toBeTruthy();
   });
 
   it('reaches the done screen after the last one', () => {
     const view = assistedRun('tortillas', 'limes');
-    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });
-    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
     expect(view.queryByTestId('manual-bar')).toBeNull();
   });
 });
@@ -436,7 +447,7 @@ describe('coming back from a manual pass', () => {
 });
 
 describe('state does not leak into the next run', () => {
-  it('forgets a Skip when the sheet re-opens', () => {
+  it('forgets a walked item when the sheet re-opens', () => {
     // Under the shipping !FEATURE_BACKGROUND_CART mount this component is not
     // remounted between runs — it is hidden and shown. So this drives ONE
     // instance through two runs via the `visible` prop. Rendering a second
@@ -464,10 +475,10 @@ describe('state does not leak into the next run', () => {
     };
 
     drive();
-    // Both items are handed over; skip the first and finish on the second.
+    // Both items are handed over; walk past both.
     expect(view.queryByText(/add it yourself \(1 of 2\)/i)).toBeTruthy();
-    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });
-    act(() => { fireEvent.press(view.getByTestId('manual-skip')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
     act(() => { jest.advanceTimersByTime(2_000); });
     expect(view.queryByTestId('manual-bar')).toBeNull();
 
@@ -556,4 +567,146 @@ describe('handing over when the rail cannot finish', () => {
     }
   });
 
+});
+
+// ---------------------------------------------------------------------------
+// Back, and the warm-up. Stephen, 2026-09-05: "there should be a back and next
+// button. Clicking next should do a URL search for the next product in the
+// list. Back should do the previous product... We could even maybe have a
+// little bit of looking ahead and back so that when a user clicks next or back,
+// the page is already loaded."
+// ---------------------------------------------------------------------------
+
+/** The visible WebView is the first one; the warm-up carries its own testID. */
+const shownUrl = (view: ReturnType<typeof render>) =>
+  String(view.getAllByTestId('mock-webview')[0].props.source?.uri ?? '');
+const warmedUrl = (view: ReturnType<typeof render>) =>
+  String(view.queryByTestId('manual-prefetch')?.props?.source?.uri ?? '');
+/** The manual step deliberately never injects, so the load is the only signal. */
+const pageLoaded = (view: ReturnType<typeof render>) => act(() => {
+  view.getAllByTestId('mock-webview')[0].props.onLoadEnd({
+    nativeEvent: { url: shownUrl(view) },
+  });
+});
+
+describe('going back', () => {
+  it('returns to the previous item', () => {
+    const view = assistedRun('tortillas', 'limes');
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    expect(view.queryByText(/add it yourself \(2 of 2\)/i)).toBeTruthy();
+    act(() => { fireEvent.press(view.getByTestId('manual-back')); });
+    expect(view.queryByText(/add it yourself \(1 of 2\)/i)).toBeTruthy();
+    expect(view.queryByText(/tortillas/i)).toBeTruthy();
+  });
+
+  it('searches the store for the previous item, not just relabels the bar', () => {
+    // The bar reading "tortillas" over a page still showing limes is the whole
+    // failure mode here, and a title-only assertion passes straight through it.
+    const view = assistedRun('tortillas', 'limes');
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    expect(shownUrl(view)).toMatch(/limes/i);
+    act(() => { fireEvent.press(view.getByTestId('manual-back')); });
+    expect(shownUrl(view)).toMatch(/tortillas/i);
+  });
+
+  it('is disabled on the first item', () => {
+    // THIS is what keeps index -1 unreachable, so it is the assertion that
+    // matters. manualStep also refuses a negative index, but nothing can call
+    // it with one while this holds, and a test that pressed the disabled button
+    // to "prove" the guard proved nothing: fireEvent.press does not reach
+    // onPress on a disabled Touchable, and a mutant deleting the guard survived
+    // it. The guard stays as belt-and-braces for a future caller that is not
+    // this button; the cover for today is here.
+    const view = assistedRun('tortillas', 'limes');
+    expect(view.getByTestId('manual-back').props.accessibilityState?.disabled).toBe(true);
+    act(() => { fireEvent.press(view.getByTestId('manual-back')); });
+    expect(view.queryByTestId('manual-bar')).toBeTruthy();
+    expect(view.queryByText(/add it yourself \(1 of 2\)/i)).toBeTruthy();
+  });
+
+  it('does not un-see an item you went back past', () => {
+    // `handled` records that the user was WALKED PAST an item. Going back to
+    // look again does not undo that -- the cart decides what landed.
+    const view = assistedRun('tortillas', 'limes');
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-back')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    expect(view.queryByTestId('manual-bar')).toBeNull();
+  });
+});
+
+describe('the page for the next tap is already loading', () => {
+  it('warms nothing until the page the user is looking at has landed', () => {
+    // Warming while the visible page is still loading spends the bandwidth the
+    // user is waiting on, which is the opposite of the point.
+    const view = assistedRun('tortillas', 'limes');
+    expect(view.queryByTestId('manual-prefetch')).toBeNull();
+  });
+
+  it('warms the NEXT item once the visible page has landed', () => {
+    const view = assistedRun('tortillas', 'limes');
+    pageLoaded(view);
+    expect(warmedUrl(view)).toMatch(/limes/i);
+  });
+
+  it('warms the PREVIOUS item after a Back, because that is where you are heading', () => {
+    // One hidden WebView, not two: it follows the direction of travel. A user
+    // who just went back is far more likely to go back again.
+    const view = assistedRun('tortillas', 'limes', 'salsa');
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });   // on limes
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });   // on salsa
+    act(() => { fireEvent.press(view.getByTestId('manual-back')); });   // back to limes
+    pageLoaded(view);
+    expect(warmedUrl(view)).toMatch(/tortillas/i);
+  });
+
+  it('warms nothing at the end of the list', () => {
+    const view = assistedRun('tortillas', 'limes');
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    pageLoaded(view);
+    expect(view.queryByTestId('manual-prefetch')).toBeNull();
+  });
+
+  it('warms the page the visible WebView will actually be sent to', () => {
+    // Warming a URL that differs from the one Next navigates to warms nothing
+    // and looks identical from here -- both would be non-empty strings.
+    const view = assistedRun('tortillas', 'limes');
+    pageLoaded(view);
+    const warmed = warmedUrl(view);
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    expect(shownUrl(view)).toBe(warmed);
+  });
+
+  it('does not outlive the pass', () => {
+    // A hidden WebView left mounted on the done screen would go on fetching a
+    // store page for a pass the user has finished -- invisible, and the kind of
+    // thing that is only ever found by someone reading a traffic log.
+    const view = assistedRun('tortillas', 'limes');
+    pageLoaded(view);
+    expect(view.queryByTestId('manual-prefetch')).toBeTruthy();
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    expect(view.queryByTestId('manual-bar')).toBeNull();
+    expect(view.queryByTestId('manual-prefetch')).toBeNull();
+  });
+
+  it('still injects nothing into the page the user is driving', () => {
+    // The warm-up is a state change, not an injection. The safety property is
+    // the one thing in this file that must not regress for a convenience.
+    const view = assistedRun('tortillas', 'limes');
+    mockInjectSpy.mockClear();
+    pageLoaded(view);
+    expect(mockInjectSpy).not.toHaveBeenCalled();
+  });
+
+  it('can be turned off remotely without breaking the pass', () => {
+    extraConfig = { flags: { manualPrefetch: false } };
+    const view = assistedRun('tortillas', 'limes');
+    pageLoaded(view);
+    expect(view.queryByTestId('manual-prefetch')).toBeNull();
+    // ...and Next still works, just without the head start.
+    act(() => { fireEvent.press(view.getByTestId('manual-next')); });
+    expect(shownUrl(view)).toMatch(/limes/i);
+  });
 });

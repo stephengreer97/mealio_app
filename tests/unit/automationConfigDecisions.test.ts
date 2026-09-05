@@ -35,6 +35,7 @@
 
 import {
   chooseAddStrategy,
+  shouldWarmManualPage,
   type AddStrategy,
 } from '../../src/lib/automation-config/decisions';
 import { BUNDLED_AUTOMATION_CONFIG } from '../../src/lib/automation-config/schema';
@@ -133,6 +134,11 @@ describe('every declared flag reaches a decision', () => {
   /** Everything the decisions answer, for one set of flags. */
   const observe = (flags: Record<string, unknown>) => JSON.stringify({
     strategy: strategyCases().map((c) => chooseAddStrategy(c)),
+    // A decision that DOES read its flags, unlike chooseAddStrategy, whose
+    // inputs are capabilities rather than levers. Every decision belongs in
+    // here as it arrives, or the invariant quietly narrows to "reaches
+    // chooseAddStrategy" and the next flag gets an exemption it should not need.
+    warmManualPage: shouldWarmManualPage(flags as { manualPrefetch?: boolean }),
   });
 
   /** A value for this flag that differs from the bundled one. */

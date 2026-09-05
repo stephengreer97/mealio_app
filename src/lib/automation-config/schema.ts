@@ -234,8 +234,19 @@ export interface TimeoutConfig {
  *
  * The shape stays so a future lever has somewhere to live.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
-export interface FlagConfig {}
+export interface FlagConfig {
+  /**
+   * Warm the NEXT page of the Add It Yourself pass in a hidden WebView.
+   *
+   * Defaults ON. It is a lever rather than a constant because it is the one
+   * piece of this app that fetches a store page the user did not ask for, and
+   * the store cannot tell that apart from a script until it looks at the
+   * timing. If a WAF ever reacts to it -- Walmart is the one with a posture --
+   * this turns it off everywhere without a release, and the pass keeps working
+   * exactly as before, just without the head start.
+   */
+  manualPrefetch?: boolean;
+}
 
 export interface TelemetryConfig {
   enabled: boolean;
@@ -278,7 +289,7 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
     parallelWorkerMs: 20_000,
     consecutiveTimeoutBlock: 2,
   },
-  flags: {},
+  flags: { manualPrefetch: true },
   telemetry: {
     enabled: true,
     sampleRate: 1,

@@ -114,3 +114,25 @@ export function chooseAddStrategy(input: AddStrategyInput): AddStrategy {
 // 2026-09-01 along with every route that clicked a storefront. Nothing sizes a
 // pool any more: a run is a rail or it is the user.
 
+
+/**
+ * Should the Add It Yourself pass warm the page the next tap will want?
+ *
+ * Stephen, 2026-09-05: "We could even maybe have a little bit of looking ahead
+ * and back so that when a user clicks next or back, the page is already
+ * loaded." The answer is yes by default, and this exists so it can be made no
+ * from a config push.
+ *
+ * It lives HERE and not at the call site because a flag read straight out of
+ * the config in a component is invisible to the invariant next door: a flag is
+ * only real when a decision answers differently for it, and the decisions are
+ * what that test observes. Reading it in WebViewCartSheet worked perfectly and
+ * failed `every declared flag reaches a decision`, which was right to fail --
+ * the flag was a lever the architecture could not see.
+ *
+ * The default is ON, and `undefined` means on: a config that predates the flag
+ * must not silently turn a shipped behaviour off.
+ */
+export function shouldWarmManualPage(flags: { manualPrefetch?: boolean }): boolean {
+  return flags.manualPrefetch !== false;
+}

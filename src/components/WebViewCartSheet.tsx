@@ -51,7 +51,7 @@ import { isChooseRun as isChooseRunItems } from '../lib/chooseRun';
 import { ingredientWeight, weightLabelLb } from '../lib/weightDisplay';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
 import { FEATURE_PARALLEL_ADD } from '../constants/features';
-import { chooseAddStrategy } from '../lib/automation-config/decisions';
+import { chooseAddStrategy, shouldWarmManualPage } from '../lib/automation-config/decisions';
 import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
@@ -1436,6 +1436,25 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   // list the user is handed cannot drift from the list they were just shown.
   const [manualQueue, setManualQueue] = useState<string[]>([]);
   const [manualIdx, setManualIdx] = useState(0);
+  /**
+   * The page being warmed for the NEXT tap, or null.
+   *
+   * Stephen, 2026-09-05: "We could even maybe have a little bit of looking
+   * ahead and back so that when a user clicks next or back, the page is already
+   * loaded." One hidden WebView, not two: it warms whichever neighbour the user
+   * is heading TOWARDS, because people carry on the way they were going, and
+   * the one behind them is warm already from having just been on it.
+   */
+  const [manualPrefetchUri, setManualPrefetchUri] = useState<string | null>(null);
+  /** Which way the last tap went. Next until told otherwise. */
+  const manualDirRef = useRef<1 | -1>(1);
+  /** The index that was warmed and the EXACT url it was warmed at. */
+  const manualWarmRef = useRef<{ idx: number; uri: string } | null>(null);
+  /** onLoadEnd is a stable callback and cannot read the state above. */
+  const manualQueueRef = useRef<string[]>([]);
+  manualQueueRef.current = manualQueue;
+  const manualIdxRef = useRef(0);
+  manualIdxRef.current = manualIdx;
   // Every item the user has been walked past, by Skip or by Next. Not just the
   // skipped ones: measured on a device, finishing a pass left the offer reading
   // "Add the 2 remaining items myself" for the two items the user had just
@@ -2825,6 +2844,26 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   // dedup so the next onLoadEnd re-injects.
   /** Makes every cache-busted navigation a genuinely new URL — see navTo. */
   const navSeqRef = useRef(0);
+  /**
+   * The exact URL a cache-busting navigation would use, built ONCE.
+   *
+   * Split out because the Add It Yourself warm-up has to fetch the very string
+   * the visible WebView will later be sent to. Building it twice produces two
+   * timestamps, two URLs and two cache entries -- the warm-up then downloads a
+   * page nobody ever asks for, and the feature does exactly nothing while
+   * looking like it works. Caught by a test comparing the two strings; a test
+   * that only checked the warm-up was non-empty would have passed.
+   */
+  const bustUrl = useCallback((baseUrl: string) => {
+    // STRICTLY INCREASING, not just Date.now(). See navTo below.
+    navSeqRef.current += 1;
+    const bust = `${Date.now()}.${navSeqRef.current}`;
+    return baseUrl + (baseUrl.includes('?') ? '&' : '?') + '_t=' + bust;
+  }, []);
+
+  /** Navigate to a URL that has already been through bustUrl. */
+  const navToPrepared = useCallback((uri: string) => { setWebviewUri(uri); }, []);
+
   const navTo = useCallback((baseUrl: string) => {
     const s = getStoreScripts(lockedStoreIdRef.current);
     if (s?.cacheBustNav !== false) {
@@ -2835,9 +2874,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       // navigation at all. Rare on a device and certain under fake timers, and
       // in both cases the failure is silent: the run waits out its whole budget
       // for a load event that is never coming.
-      navSeqRef.current += 1;
-      const bust = `${Date.now()}.${navSeqRef.current}`;
-      setWebviewUri(baseUrl + (baseUrl.includes('?') ? '&' : '?') + '_t=' + bust);
+      setWebviewUri(bustUrl(baseUrl));
       return;
     }
     lastLoadEndUrlRef.current = '';
@@ -2846,7 +2883,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     } else {
       setWebviewUri(baseUrl);
     }
-  }, []);
+  }, [bustUrl]);
   navToRef.current = navTo;
 
   useEffect(() => { webviewUriRef.current = webviewUri; }, [webviewUri]);
@@ -4050,6 +4087,10 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     // property failed immediately.
     if (stepRef.current === 'manual') {
       console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url, 'manual mode — no injection');
+      // A state change, NOT an injection: the safety property that nothing of
+      // ours runs on a page the user is driving still holds, and there is a
+      // test on it.
+      queueManualPrefetchRef.current();
       return;
     }
     if (cartReadPendingNavRef.current) {
@@ -4452,6 +4493,9 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     manualCartSnapshotRef.current = cartItemsLatestRef.current;
     setManualQueue(terms);
     setManualIdx(0);
+    manualDirRef.current = 1;
+    manualWarmRef.current = null;
+    setManualPrefetchUri(null);
     setManualHandled([]);
     manualHandledRef.current = [];
     // Drop the previous cart read AND the verdict built from it. The done screen
@@ -4482,23 +4526,76 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   //
   // Tracked as the user advances rather than set to the whole queue up front, so
   // closing the sheet halfway does not mark the unseen tail as handled.
-  const advanceManual = useCallback((skipped: boolean) => {
+  const manualStep = useCallback((delta: 1 | -1) => {
     const cur = manualQueue[manualIdx];
     if (cur) {
       if (!manualHandledRef.current.includes(cur)) manualHandledRef.current = [...manualHandledRef.current, cur];
       setManualHandled((prev) => (prev.includes(cur) ? prev : [...prev, cur]));
     }
-    const nextIdx = manualIdx + 1;
+    // BACK DOES NOT UN-SEE AN ITEM. `handled` records that the user was walked
+    // past it, and going back to look again does not undo that; the cart is
+    // what says whether anything landed, settled by the re-probe on the way to
+    // 'done'. Marking above the branch rather than inside it is what keeps that
+    // true in both directions.
+    manualDirRef.current = delta;
+    const nextIdx = manualIdx + delta;
+    // Back from the first item is not a thing to do -- the button is disabled
+    // there -- but a double tap can still arrive.
+    if (nextIdx < 0) return;
     const nextTerm = manualQueue[nextIdx];
     const nextUrl = nextTerm != null ? manualSearchUrlFor(nextTerm) : null;
     if (!nextUrl) {
-      console.log(`[Cart ${ts()}]`, 'manual mode: finished at', nextIdx, 'of', manualQueue.length, 'handled=', manualHandledRef.current, 'lastWasSkip=', skipped);
+      console.log(`[Cart ${ts()}]`, 'manual mode: finished at', nextIdx, 'of', manualQueue.length,
+        'handled=', manualHandledRef.current);
+      manualWarmRef.current = null;
+      setManualPrefetchUri(null);
       setStep('done');
       return;
     }
     setManualIdx(nextIdx);
+    // THE WARMED URL, not a freshly built one. A new build gets a new
+    // cache-buster and therefore a different URL, which is a cache MISS against
+    // the page we just spent bandwidth fetching.
+    const warm = manualWarmRef.current;
+    if (warm && warm.idx === nextIdx) {
+      manualWarmRef.current = null;
+      navToPrepared(warm.uri);
+      return;
+    }
     navTo(nextUrl);
-  }, [manualQueue, manualIdx, manualSearchUrlFor, navTo, setStep]);
+  }, [manualQueue, manualIdx, manualSearchUrlFor, navTo, navToPrepared, setStep]);
+
+  /**
+   * Warm the page the next tap will want.
+   *
+   * Called when the VISIBLE page has finished loading, so the page the user is
+   * looking at never competes with one they cannot see. One step only, in the
+   * direction they are travelling -- that is the same number of requests a
+   * person tapping Next produces, just moved earlier, which is the whole reason
+   * this is defensible to a store watching its traffic.
+   */
+  const queueManualPrefetch = useCallback(() => {
+    if (!shouldWarmManualPage(getAutomationConfig().flags)) return;
+    const idx = manualIdxRef.current + manualDirRef.current;
+    const term = idx >= 0 ? manualQueueRef.current[idx] : undefined;
+    const base = term != null ? manualSearchUrlFor(term) : null;
+    if (!base) {
+      // Either end of the list, which is not a fault -- there is simply nothing
+      // ahead to warm.
+      manualWarmRef.current = null;
+      setManualPrefetchUri(null);
+      return;
+    }
+    // Built here and kept, so the tap that follows navigates to this same
+    // string rather than to a second one that happens to look like it.
+    const scripts = getStoreScripts(lockedStoreIdRef.current);
+    const uri = scripts?.cacheBustNav !== false ? bustUrl(base) : base;
+    manualWarmRef.current = { idx, uri };
+    setManualPrefetchUri(uri);
+    console.log(`[Cart ${ts()}]`, 'manual mode: warming', term);
+  }, [manualSearchUrlFor, bustUrl]);
+  const queueManualPrefetchRef = useRef<() => void>(() => {});
+  queueManualPrefetchRef.current = queueManualPrefetch;
 
   /**
    * The whole run, handed to the user.
@@ -6600,16 +6697,20 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                 {' '}{storeName} page below and add it yourself, then tap Next.
               </Text>
               <View style={styles.manualBtnRow}>
+                {/* Was Skip, which called the same function as Next with a flag
+                    that only ever reached a console.log -- two buttons doing
+                    one thing. Back is the one that was missing. */}
                 <TouchableOpacity
-                  style={[styles.retryBtn, styles.manualBtn]}
-                  onPress={() => advanceManual(true)}
-                  testID="manual-skip"
+                  style={[styles.retryBtn, styles.manualBtn, manualIdx === 0 && styles.manualBtnDisabled]}
+                  onPress={() => manualStep(-1)}
+                  disabled={manualIdx === 0}
+                  testID="manual-back"
                 >
-                  <Text style={styles.retryBtnText}>Skip</Text>
+                  <Text style={[styles.retryBtnText, manualIdx === 0 && styles.manualBtnTextDisabled]}>Back</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.retryBtn, styles.manualBtn, { backgroundColor: storeColor, borderColor: storeColor }]}
-                  onPress={() => advanceManual(false)}
+                  onPress={() => manualStep(1)}
                   testID="manual-next"
                 >
                   <Text style={[styles.retryBtnText, { color: '#fff' }]}>
@@ -6632,6 +6733,36 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                   />
                 </View>
               )}
+            </View>
+          ) : null}
+
+          {/* THE WARM-UP WEBVIEW.
+              Rendered only during the Add It Yourself pass, and only for the
+              one page the next tap will want. It shares this app's cookie jar
+              and user agent with the visible WebView, so what it warms is the
+              same page the user is about to be shown -- a different UA would
+              fetch a different page and warm nothing.
+              Deliberately inert: no onMessage, no injection, no navigation
+              handling. It exists to put bytes in the HTTP cache and nothing
+              else, and it must never be able to act on what it loads. */}
+          {step === 'manual' && manualPrefetchUri ? (
+            <View style={styles.webviewHidden} pointerEvents="none">
+              <WebView
+                key="manual-prefetch"
+                testID="manual-prefetch"
+                source={{ uri: manualPrefetchUri }}
+                style={{ width: 2, height: 2 }}
+                javaScriptEnabled
+                domStorageEnabled
+                sharedCookiesEnabled
+                thirdPartyCookiesEnabled
+                userAgent={getStoreWebViewUA()}
+                onShouldStartLoadWithRequest={(request) => (
+                  request.url.startsWith('http://')
+                  || request.url.startsWith('https://')
+                  || request.url.startsWith('about:')
+                )}
+              />
             </View>
           ) : null}
 
@@ -7819,6 +7950,10 @@ const styles = StyleSheet.create({
   },
   manualBtnRow: { flexDirection: 'row', gap: 8, alignSelf: 'stretch' },
   manualBtn: { flex: 1, alignItems: 'center' },
+  // Back on the first item has nowhere to go. Dimmed rather than hidden, so the
+  // row does not reflow under the user's thumb on the second tap.
+  manualBtnDisabled: { opacity: 0.4 },
+  manualBtnTextDisabled: { color: Colors.text3 },
   retryBtn: {
     alignSelf: 'flex-start',
     marginHorizontal: 16,
