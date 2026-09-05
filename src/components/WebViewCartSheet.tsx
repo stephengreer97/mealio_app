@@ -13,6 +13,7 @@ import {
   Animated,
   Easing,
   AccessibilityInfo,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
@@ -608,6 +609,43 @@ export default function WebViewCartSheet({
   useEffect(() => () => {
     automationGenRef.current += 1;
     endRun();
+  }, []);
+
+  // FLUSH WHAT IS ALREADY BUFFERED WHEN THE APP GOES TO BACKGROUND (MEAL-161).
+  //
+  // MEAL-5 made the terminal row ship on every path, so a killed run still has
+  // its start and its end. What it did not fix is the MIDDLE: without this,
+  // being backgrounded and then killed by the OS loses up to one flush interval
+  // of already-recorded steps.
+  //
+  // That is worse than losing the whole run. A funnel showing a complete run
+  // with holes in it reads as steps that FAILED rather than as data that never
+  // arrived, and a partial funnel is worse than an absent one because it looks
+  // like evidence. The per-run sampling roll exists to prevent exactly that
+  // misreading.
+  //
+  // FLUSH, NEVER DISPOSE. A backgrounded run may come back and carry on, so
+  // this must not end anything: no terminal row, no timers cleared, no buffer
+  // wiped. `flush()` takes what is buffered, leaves the recorder live, and
+  // re-queues the batch itself if the upload fails. Steps recorded after this
+  // land in the emptied buffer and ship normally.
+  //
+  // MEAL-5 deliberately did NOT add a listener for the terminal row and that
+  // call was endorsed in review: a backgrounded run may resume, a killed app
+  // cannot emit anyway, and `runConcern` already catches stale started rows.
+  // This ticket is only about the rows that already exist.
+  //
+  // 'background' only. iOS also emits 'inactive' for a notification pull-down
+  // or the app switcher preview, which is not a run in danger, and it precedes
+  // 'background' anyway when the app really does leave.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'background') return;
+      // Unconditional: a no-op recorder is not sampled, so flush() returns on
+      // its first line. No need for the caller to know which one it holds.
+      void telemetryRef.current.flush().catch(() => {});
+    });
+    return () => sub.remove();
   }, []);
 
   // Step: qty
