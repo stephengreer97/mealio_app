@@ -162,6 +162,27 @@ flowchart TD
   the case RevenueCat does not know about at all: a Stripe or web-only subscriber, who gets the
   billing portal in an in-app browser sheet rather than a hand-off to the system browser.</p>
 
+  <h2>Notifications: one grant, and a choice inside it</h2>
+  <p>The Account card's switch is the OS-level one. Turning it off revokes the
+  device token server-side, so sends stop &mdash; that half has always worked.
+  What did not exist until MEAL-217 (2026-09-05) was any way to say yes to one
+  KIND of notification and no to another, and it did not exist because
+  <b>nothing was ever sent</b>: <code>sendPushToUsers</code> had no production
+  callers, and the admin broadcast wrote an in-app banner rather than a push.</p>
+  <p>Per-category choices live in <code>user_profiles.notification_prefs</code>
+  (jsonb), and <b>absent means ON</b> &mdash; every account predates the column,
+  so reading a missing preference as off would ship the feature to nobody while
+  looking like a broken sender. The master switch is stored separately from the
+  per-category flags rather than by writing false into all of them, so turning
+  it back on restores what the user chose instead of flattening it.</p>
+  <p>The settings sheet is offered only while notifications are ON, and its
+  category list comes from the SERVER with the values &mdash; a list baked into
+  the app goes stale the moment a build ships, and a creator-only category is
+  not offered to someone who is not a creator. Every product send should go
+  through <code>sendPushToCategory</code>, which is the layer that asks for
+  consent; <code>sendPushToUsers</code> knows about devices, and a device grant
+  is not the same thing as wanting this.</p>
+
   <h2>Two cookie clears, not one</h2>
   <p><code>CookieManager.clearAll</code> is called with both <code>true</code> and
   <code>false</code>. On iOS those are two different jars — WKWebView's own store and the shared
