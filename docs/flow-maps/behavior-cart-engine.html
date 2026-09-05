@@ -365,6 +365,16 @@ flowchart LR
   probes by that name went from 0 to 1. Naming an operation in shared script
   text puts it in every script that shares it, comments included.</p>
 
+  <p><b>The prewarm's requests are the run's requests.</b> SilentSearchProbe has
+  its own WebView and its own <code>onMessage</code>, which had never heard of
+  <code>NET_REQUEST</code> &mdash; so any request the search prewarm made was
+  computed, posted and dropped, and the prewarm is where the search phase
+  happens whenever it has done its job. They cannot be recorded where they
+  happen (telemetry is keyed to a run; the prewarm deliberately precedes one),
+  so they are buffered and DRAINED when the run starts. Drained, not read:
+  <code>startNetworkRun</code> is also what a whole-run retry calls, and a
+  re-read would count every prewarmed request again on every rerun.</p>
+
   <h2>What gets asked again</h2>
   <p>Two layers, and they answer different questions. Underneath, a single REQUEST that
   failed; above it, a whole RUN that got nowhere.</p>
