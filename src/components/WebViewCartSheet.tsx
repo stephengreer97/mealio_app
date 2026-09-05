@@ -7104,9 +7104,34 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                     </TouchableOpacity>
                       );
                     })()}
-                    <Text style={styles.qtyNum} testID={`qty-num-${i}`}>
-                      {(() => { const w = ingredientWeight(it); return w ? weightLabelLb(w.lb) : it.productQty; })()}
-                    </Text>
+                    {(() => {
+                      // A COUNT AND A WEIGHT ARE DIFFERENT WIDTHS (MEAL-179).
+                      // This column was 20px, which is right for "1" and "12"
+                      // and far too narrow for "0.75 lb": with nothing stopping
+                      // it the label wrapped to "0.7" / "5" / "lb", three lines
+                      // in a row sized for one. The string was never the
+                      // problem, the column was.
+                      //
+                      // Widened only for the weight case, so a list of counts
+                      // does not lose 36px of ingredient name to a column that
+                      // never needs it. 56px holds the longest label this can
+                      // produce: `weightLabelLb` is two decimals at most, so
+                      // "12.25 lb" is the worst case at this font size.
+                      //
+                      // numberOfLines is the guard rather than the fix. If a
+                      // longer unit ever arrives it truncates on one line,
+                      // which is a legible wrong instead of a three-line row.
+                      const w = ingredientWeight(it);
+                      return (
+                        <Text
+                          style={[styles.qtyNum, !!w && styles.qtyNumWeight]}
+                          numberOfLines={1}
+                          testID={`qty-num-${i}`}
+                        >
+                          {w ? weightLabelLb(w.lb) : it.productQty}
+                        </Text>
+                      );
+                    })()}
                     <TouchableOpacity
                       onPress={() => updateQty(i, 1)}
                       disabled={!boxChecked}
@@ -8212,6 +8237,8 @@ const styles = StyleSheet.create({
   },
   qtyBtnText: { fontSize: 14, color: Colors.text2, lineHeight: 18 },
   qtyNum: { width: 20, textAlign: 'center', fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2, flexShrink: 0 },
+  /** Sold by weight: "0.75 lb" needs room a count does not. See MEAL-179. */
+  qtyNumWeight: { width: 56 },
   checkbox: {
     width: 20,
     height: 20,
