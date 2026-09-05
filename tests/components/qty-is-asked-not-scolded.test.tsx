@@ -220,3 +220,26 @@ describe('once a quantity is set', () => {
   });
 });
 
+
+describe('when something OTHER than the quantity is missing', () => {
+  it('does not flash the stepper, because the stepper is not the problem', async () => {
+    // Selecting "Other" with nothing typed leaves the run blocked on the TEXT,
+    // not on the quantity. Flashing the stepper here would point the user at
+    // the wrong control, which is worse than saying nothing — so the button
+    // goes back to being properly disabled.
+    //
+    // This is the case a mutant survived: with `otherwiseReady` forced true,
+    // every other test in this file still passed, because the choose flow
+    // pre-selects a candidate and the quantity really is the only blocker there.
+    const view = await atReview();
+    act(() => { fireEvent.press(view.getByText(/other — type a product name/i)); });
+
+    const btn = view.getByTestId('review-primary');
+    expect(btn.props.accessibilityState?.disabled).toBe(true);
+
+    const before = JSON.stringify(stepper(view)!.props.style);
+    act(() => { fireEvent.press(btn); });
+    act(() => { jest.advanceTimersByTime(300); });
+    expect(JSON.stringify(stepper(view)!.props.style)).toBe(before);
+  });
+});
