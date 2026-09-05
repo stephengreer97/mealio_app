@@ -91,7 +91,8 @@ flowchart TD
 flowchart TD
     ST(["a step happens in the engine"]) --> SAMP{"<code>telemetry.enabled</code><br/>and inside <code>sampleRate</code>?"}
     SAMP -->|no| DROP(["dropped"])
-    SAMP -->|yes| ROW["build a row:<br/><b>step</b> · <b>outcome</b> · <b>code</b> · ms · store"]
+    SAMP -->|yes| ROW["build a row:<br/><b>step</b> · <b>outcome</b> · <b>code</b> · ms · store<br/>+ since MEAL-219: <b>httpStatus</b> · <b>phase</b> · <b>attempts</b> · <b>rail</b>"]
+    ROW --- REQWHY{{"EVERY REQUEST NOW REPORTS ITSELF, from the shared retry helper —<br/>the one place all five rails' requests already meet. Before this the<br/>status was computed, used by the retry policy, and dropped at the<br/>WebView boundary: 25 telemetry calls in the cart engine and not one<br/>carried one. The only status that reached the server was smuggled<br/>inside a reason string as &quot;http-403&quot;.<br/><br/>NOT attributed to an item, deliberately. H-E-B writes three at a time,<br/>so the request in flight is not the item being reported.<br/><br/>Successes are recorded too, or a status histogram has no denominator.<br/><br/>PHASE is session | search | add | cart_read, and it exists because<br/>`step` cannot answer it: that vocabulary was named for the DOM era and<br/>one of its values is literally add_click."}}
     ROW --> SEQ["assign <code>seq</code> client-side"]
     SEQ --> WHYSEQ{{"batches upload out of order and many rows share a<br/>millisecond, so ordering cannot come from the timestamp.<br/><code>seq</code> is also the idempotency key the server dedupes on."}}
     SEQ --> BUF["bounded buffer"]

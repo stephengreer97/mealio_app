@@ -339,6 +339,21 @@ flowchart LR
   <i>clicking</i> to add would load no page for search and then one per item
   anyway &mdash; slower than either path alone.</p>
 
+  <h2>What every request now reports</h2>
+  <p>Since MEAL-219 the retry helper posts a <code>NET_REQUEST</code> for every
+  request any rail makes, and the engine turns it into a telemetry row carrying
+  <b>httpStatus</b>, <b>phase</b>, <b>attempts</b> and <b>rail</b> as columns.
+  It is emitted from the helper rather than from each rail's per-item report
+  because that is the one place all five rails meet &mdash; and because
+  attributing a status to an ITEM is wrong under concurrency: H-E-B writes three
+  at a time, so the request in flight is not the item being reported.</p>
+  <p><b>Phase is an argument, not a lookup.</b> The first version derived it from
+  a name&nbsp;&rarr;&nbsp;phase map inside each rail's prelude, and a prelude is
+  in every script that rail emits &mdash; so the cart-read and add scripts began
+  carrying the session probe's operation name, and a test counting session
+  probes by that name went from 0 to 1. Naming an operation in shared script
+  text puts it in every script that shares it, comments included.</p>
+
   <h2>What gets asked again</h2>
   <p>Two layers, and they answer different questions. Underneath, a single REQUEST that
   failed; above it, a whole RUN that got nowhere.</p>
