@@ -126,7 +126,7 @@ flowchart TD
 
     CMP --> FIND{"findings"}
     FIND -->|"got = 0"| ABS["<b>'Mealio could not add X'</b><br/><i>never 'X is not in your cart' —<br/>the comparison measures what this<br/>RUN added; the user may already<br/>have had it, and telling them<br/>otherwise sends them to buy a second</i>"]
-    FIND -->|"0 &lt; got &lt; expected"| SHORT["'N items came up short —<br/>X (1 of 2) — which a store<br/>limit can cause'"]
+    FIND -->|"0 &lt; got &lt; expected"| SHORT["'N items came up short<br/>(X (1 of 2)), which a store<br/>limit can cause'"]
     FIND -->|"units nothing intended"| EXTRA["'your cart has N items<br/>Mealio did not add'"]
     FIND -->|"nothing wrong, but items<br/>the run CALLED failed are<br/>sitting in the cart"| REC["'everything you asked for is<br/>there — no need to add it again'<br/><i>never 'we added them': a recovery is<br/>a name match against a row, enough to<br/>say the row is there and not enough<br/>to claim this run put it there</i>"]
     FIND -->|"nothing at all"| NONE(["no message"])
