@@ -139,7 +139,6 @@
       "title": "Account, subscription & admin",
       "sources": [
         "src/screens/account/AccountScreen.tsx",
-        "src/screens/admin/AdminScreen.tsx",
         "src/lib/purchases.ts",
         "src/lib/fixture-capture-config.ts",
         "src/navigation/MainTabs.tsx"

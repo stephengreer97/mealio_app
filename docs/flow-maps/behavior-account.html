@@ -6,11 +6,13 @@
 <div class="topbar"><a class="back" href="index.html">&larr; All flow maps</a>
   <span class="crumb">Behaviors &rsaquo; <b>Account, subscription &amp; admin</b></span></div>
 <header>
-  <h1>Account, subscription, and the admin tab</h1>
+  <h1>Account and subscription</h1>
   <div class="sub">Read off <code>screens/account/AccountScreen.tsx</code>,
-  <code>lib/purchases.ts</code>, <code>navigation/MainTabs.tsx</code> and
-  <code>screens/admin/AdminScreen.tsx</code>. Three purchase stores, two sign-out scopes, and one
-  tab that only exists for two people.</div>
+  <code>lib/purchases.ts</code> and <code>navigation/MainTabs.tsx</code>. Three purchase stores and
+  two sign-out scopes. <b>The Admin tab is gone</b> (2026-09-05): its only content was fixture
+  capture, a WebView that read <code>outerHTML</code> and posted it to a dev server, and no rail has
+  read markup since 2026-09-01. Browser-based capture in
+  <code>tests/fixture-runners/capture-fixtures.ts</code> replaces it.</div>
 <div class="wrap" style="border-left:4px solid #ef4444;padding-left:14px">
 <p><b>2026-09-04 &mdash; Amazon Fresh is gone.</b> It was the last store with no network rail, so it
 could only search and hand the user the page to add from. Removed from the catalogue rather than
@@ -35,9 +37,6 @@ flowchart TD
     TABS --> T4{"<code>isCreator</code>?"}
     T4 -->|yes| CR["<b>Creator</b><br/>badge = <code>waiting</code> drafts"]
     T4 -->|no| NOCR(["no Creator tab"])
-    TABS --> T5{"<code>isAdmin</code><br/><i>= !!user.isAdmin</i>"}
-    T5 -->|yes| AD["<b>Admin</b>"]
-    T5 -->|no| NOAD(["no Admin tab"])
     TABS --> T6["Help"]
 
     CR --> BADGE{{"the <b>count</b>, never a dot —<br/>'10' says set an evening aside,<br/>'1' says two-minute job;<br/>a dot says the same thing to both.<br/><br/><b>undefined, not 0</b> — React Navigation<br/>renders a 0 badge as a visible zero,<br/>which reads as a broken counter"}}
