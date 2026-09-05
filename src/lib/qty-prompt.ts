@@ -19,8 +19,13 @@
 // button with no quantity set and the stepper flashes. An alert that answers
 // something you did is the only kind that carries meaning.
 
-/** The stepper shows a dash until a quantity has actually been chosen. */
-export const UNSET_QTY_LABEL = '—';
+// A QUESTION MARK, not a dash. The glyph has one job: say "you have not told
+// me yet" without looking like a value. A dash does that too, but Stephen's
+// standing rule is that an em dash never appears in text a user reads, and a
+// lone em dash standing in for a number is still text a user reads. `?` is
+// also the more direct reading of the state: the app does not know the answer.
+/** The stepper shows this until a quantity has actually been chosen. */
+export const UNSET_QTY_LABEL = '?';
 
 /**
  * What the stepper renders for a quantity.

@@ -185,7 +185,7 @@ describe('TagPicker — saying what the limit is', () => {
     );
 
     expect(getByTestId('tag-picker-count').props.children).toBe(
-      'That is 5 tags. A meal takes at most 3 — deselect 2.',
+      'That is 5 tags. A meal takes at most 3. Deselect 2.',
     );
   });
 

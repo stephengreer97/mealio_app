@@ -74,7 +74,7 @@ export default function SignupScreen({ navigation }: Props) {
           </TouchableOpacity>
 
           <Text style={styles.title}>Create account</Text>
-          <Text style={styles.subtitle}>Start saving meals today — free forever.</Text>
+          <Text style={styles.subtitle}>Start saving meals today. Free forever.</Text>
 
           <View style={styles.row}>
             <View style={{ flex: 1, marginRight: 8 }}>

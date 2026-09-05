@@ -260,7 +260,7 @@ describe('where a choose run leaves you (WebView store)', () => {
     // The exact promise, so this fails if either the copy or the behaviour
     // moves away from the other.
     expect(
-      await r.findByText(/you are back at your meals — with the button now offering/),
+      await r.findByText(/you are back at your meals, with the button now offering/),
     ).toBeTruthy();
     expect(r.getByText(/add them all to your H-E-B cart/)).toBeTruthy();
 

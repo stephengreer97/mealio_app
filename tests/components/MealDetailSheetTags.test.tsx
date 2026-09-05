@@ -114,7 +114,7 @@ describe('MealDetailSheet — the edit form caps tags', () => {
     const r = openEditor(['Mexican', 'No Cook', 'Vegan', 'Healthy', 'Snack']);
 
     expect(r.getByTestId('tag-picker-count').props.children).toBe(
-      'That is 5 tags. A meal takes at most 3 — deselect 2.',
+      'That is 5 tags. A meal takes at most 3. Deselect 2.',
     );
   });
 

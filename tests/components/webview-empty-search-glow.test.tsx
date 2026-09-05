@@ -120,7 +120,7 @@ const candidate = (name: string, over: Record<string, unknown> = {}) => ({
 describe('the "type a product name" row glows when a search found nothing', () => {
   it('glows when there is nothing to choose from', async () => {
     const view = await runToReview([]);
-    expect(view.queryByText(/other — type a product name/i)).toBeTruthy();
+    expect(view.queryByText(/other: type a product name/i)).toBeTruthy();
     expect(view.queryByTestId('custom-row-glow')).toBeTruthy();
   });
 
@@ -128,7 +128,7 @@ describe('the "type a product name" row glows when a search found nothing', () =
     // With something to choose, the row is the fallback, not the answer — a glow
     // here would point away from the products the user should be looking at.
     const view = await runToReview([candidate('Some Other Brand Cream')]);
-    expect(view.queryByText(/other — type a product name/i)).toBeTruthy();
+    expect(view.queryByText(/other: type a product name/i)).toBeTruthy();
     expect(view.queryByTestId('custom-row-glow')).toBeNull();
   });
 

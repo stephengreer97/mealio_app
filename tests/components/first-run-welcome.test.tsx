@@ -122,7 +122,7 @@ describe('the pitch says what mealio_central says', () => {
     );
     expect(PITCH_STEPS[2].body).toBe('Every ingredient is added to your cart at that store.');
     expect(PITCH_NOTHING_ORDERED).toBe(
-      'Nothing is ordered — the items land in your own cart at your own store, and '
+      'Nothing is ordered. The items land in your own cart at your own store, and '
       + 'you check out there.',
     );
     expect(PITCH_FREE_TIER).toBe('Free for up to three saved meals.');
@@ -134,7 +134,7 @@ describe('the pitch says what mealio_central says', () => {
     // shows exactly what the build in front of you supports, and is therefore
     // true read from either surface.
     expect(PITCH_STEPS[1].body).toBe(
-      "Mealio supports most major grocery retailers — you'll see the full list when you pick yours.",
+      "Mealio supports most major grocery retailers. You'll see the full list when you pick yours.",
     );
     // No brand may creep back in: a named store in a three-step introduction is
     // a promise that has to be re-checked on every surface that renders it.

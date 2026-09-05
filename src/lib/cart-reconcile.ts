@@ -1613,7 +1613,7 @@ export function buildCartVerdict(input: {
   }
   if (partial.length > 0) {
     const detail = partial.map((s) => `${s.name} (${s.got} of ${s.expected})`).join(', ');
-    clauses.push(`${partial.length} item${partial.length === 1 ? '' : 's'} came up short — ${detail} — which a store limit can cause`);
+    clauses.push(`${partial.length} item${partial.length === 1 ? '' : 's'} came up short (${detail}), which a store limit can cause`);
     summaries.push(`${partial.length} item${partial.length === 1 ? '' : 's'} came up short, which a store limit can cause`);
     details.push(`Came up short: ${detail}`);
   }
@@ -1651,11 +1651,11 @@ export function buildCartVerdict(input: {
   // which declined to promote recoveries into the added count for this reason).
   if (clauses.length === 0 && findings.recovered.length > 0) {
     const names = joinNames(findings.recovered.map((r) => r.cartName || r.name));
-    const okTitle = `We checked your ${storeName} cart and everything you asked for is there — no need to add ${findings.recovered.length === 1 ? 'it' : 'them'} again.`;
+    const okTitle = `We checked your ${storeName} cart and everything you asked for is there. No need to add ${findings.recovered.length === 1 ? 'it' : 'them'} again.`;
     return {
       notAdded: [],
       cartBacked: true,
-      message: `We checked your ${storeName} cart and everything you asked for is there, including ${names} — no need to add ${findings.recovered.length === 1 ? 'it' : 'them'} again.`,
+      message: `We checked your ${storeName} cart and everything you asked for is there, including ${names}. No need to add ${findings.recovered.length === 1 ? 'it' : 'them'} again.`,
       title: okTitle,
       detail: `Already there: ${names}`,
     };

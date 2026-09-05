@@ -656,11 +656,11 @@ export default function AccountScreen() {
           {!krogerConnected ? (
             <View>
               <Text style={styles.krogerDesc}>
-                Connect your Kroger account to add meal ingredients directly to your cart — no extension needed. Works with Kroger, Ralphs, Fred Meyer, King Soopers, Harris Teeter, and more.
+                Connect your Kroger account to add meal ingredients directly to your cart, with no extension needed. Works with Kroger, Ralphs, Fred Meyer, King Soopers, Harris Teeter, and more.
               </Text>
               <View style={styles.krogerBrandNote}>
                 <Text style={styles.krogerBrandNoteText}>
-                  Shop at King Soopers, Fred Meyer, Ralphs, or Harris Teeter? These stores use Kroger's login system — you may see a Kroger sign-in screen, which is normal.
+                  Shop at King Soopers, Fred Meyer, Ralphs, or Harris Teeter? These stores use Kroger's login system, so you may see a Kroger sign-in screen. That is normal.
                 </Text>
               </View>
               <Button
@@ -675,7 +675,7 @@ export default function AccountScreen() {
               <View style={styles.krogerConnectedBadge}>
                 <Text style={styles.krogerConnectedTitle}>Connected</Text>
                 {Object.keys(krogerLocations).length === 0 ? (
-                  <Text style={styles.krogerConnectedDesc}>No stores selected — search below to add one.</Text>
+                  <Text style={styles.krogerConnectedDesc}>No stores selected. Search below to add one.</Text>
                 ) : (
                   Object.entries(krogerLocations).map(([sid, loc]) => (
                     <Text key={sid} style={styles.krogerConnectedDesc}>

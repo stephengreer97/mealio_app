@@ -324,7 +324,7 @@ function overAddLabel(o: OverAdd): string {
 // Deliberately not the cart-check wording. Those messages report something the
 // cart SAID; this one reports that there is nothing to report.
 function unverifiedCartMessage(storeName: string): string {
-  return `Couldn't verify your ${storeName} cart — please double-check it.`;
+  return `Couldn't verify your ${storeName} cart. Please double-check it.`;
 }
 
 // onHttpError fires for subresources too (images, XHR, assets). Only a top-level
@@ -1868,7 +1868,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   const netRunning = step === 'login_check' || step === 'searching' || step === 'adding';
   useEffect(() => {
     if (!netRunning) { setNetNote(null); return; }
-    const t = setTimeout(() => setNetNote('Still working — this one is taking longer than usual'), 12_000);
+    const t = setTimeout(() => setNetNote('Still working. This one is taking longer than usual'), 12_000);
     return () => clearTimeout(t);
   }, [netRunning, netCounted, step]);
 
@@ -6635,9 +6635,9 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       case 'no_results':
         return `${store} had no match for this`;
       case 'low_confidence':
-        return 'No exact match — pick the right product';
+        return 'No exact match: pick the right product';
       case 'needs_weight':
-        return 'Sold by weight — choose an amount';
+        return 'Sold by weight: choose an amount';
       case 'needs_preference':
         return 'Needs a choice, like thickness or ripeness';
       case 'quantity_limit_reached':
@@ -6812,7 +6812,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                 {blockReason === 'no_store' ? (
                   <>
                     Choose a {storeName} store in the browser below, then tap Try again.
-                    {' '}Mealio needs to know which one you shop at — prices and what is in
+                    {' '}Mealio needs to know which one you shop at. Prices and what is in
                     stock are different at every store.
                   </>
                 ) : (
@@ -7247,13 +7247,13 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                   <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginBottom: 6 }}>⚠ {storeName} didn't answer our search for this</Text>
                 )}
                 {!isChoose && currentReview.reason === 'needs_weight' && (
-                  <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.brand, marginBottom: 6 }}>⚖ Sold by weight — choose how much to add</Text>
+                  <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.brand, marginBottom: 6 }}>⚖ Sold by weight: choose how much to add</Text>
                 )}
                 {/* The store refused this write twice and did not say anything
                     the screen above can explain. Naming a cause we do not have
                     would be worse than saying what happened. */}
                 {!isChoose && currentReview.reason === 'add_refused' && (
-                  <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginBottom: 6 }}>⚠ {storeName} would not add this — pick another</Text>
+                  <Text style={{ fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginBottom: 6 }}>⚠ {storeName} would not add this. Pick another.</Text>
                 )}
                 {/* Searched for */}
                 <View style={styles.searchedBox} onLayout={preview.onAnchorLayout}>
@@ -7379,7 +7379,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                     activeOpacity={0.7}
                   >
                     <Text style={[styles.suggText, { color: selectedSuggIdx === 'custom' ? Colors.text1 : Colors.text3 }]}>
-                      {customSuggestions.length > 0 ? 'Try a different search…' : 'Other — type a product name…'}
+                      {customSuggestions.length > 0 ? 'Try a different search…' : 'Other: type a product name…'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -7501,7 +7501,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                       </View>
                       {chooseQty > 2 && !isWeightCandidate && (
                         <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#92400e', backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fbbf24', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 }}>
-                          ⚠ {chooseQty} is a lot — does this come in a multipack or bulk size?
+                          ⚠ {chooseQty} is a lot. Does this come in a multipack or bulk size?
                         </Text>
                       )}
                       {/* The standing red hint is gone (MEAL-218). It was on
@@ -7740,7 +7740,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                             const why = unaddedReasonText(failureReasonFor(n), storeName);
                             return (
                               <Text key={n} style={[styles.doneSub, { color: '#b45309' }]} testID="done-failed-row">
-                                {why ? `${n} — ${why}` : `${n} — could not be added`}
+                                {why ? `${n}: ${why}` : `${n}: could not be added`}
                               </Text>
                             );
                           })}
@@ -7827,7 +7827,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                   </Text>
                   <Text style={styles.skippedBannerBody} numberOfLines={4}>
                     {capReached.map((c) => c.name).join(', ')}
-                    {' — '}your cart already holds as many as {storeName} allows per order, so we
+                    {': '}your cart already holds as many as {storeName} allows per order, so we
                     did not add more.
                   </Text>
                 </View>
@@ -7852,7 +7852,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                   </Text>
                   <Text style={styles.skippedBannerBody} numberOfLines={4}>
                     {unverified.map((u) => `${u.term} (cart has "${u.cartName}")`).join(', ')}
-                    {' — '}charged by weight, so we cannot tell whether the amount there covers your
+                    {': '}charged by weight, so we cannot tell whether the amount there covers your
                     meal. We did not add any more.
                   </Text>
                 </View>

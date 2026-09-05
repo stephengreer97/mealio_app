@@ -78,12 +78,12 @@ const FAQ_SECTIONS: { title: string; items: FAQItem[] }[] = [
       {
         question: 'I forgot my password. What do I do?',
         answer:
-          'On the sign-in screen, tap "Forgot password?". Enter your email and we\'ll send a reset link. The link opens on mealio.co — reset there, then sign back in.',
+          'On the sign-in screen, tap "Forgot password?". Enter your email and we\'ll send a reset link. The link opens on mealio.co. Reset there, then sign back in.',
       },
       {
         question: 'How do I verify my email?',
         answer:
-          'After signing up, check your inbox for a verification email. Click the link — it opens mealio.co. Once verified, return to the app and sign in.',
+          'After signing up, check your inbox for a verification email. Click the link. It opens mealio.co. Once verified, return to the app and sign in.',
       },
     ],
   },

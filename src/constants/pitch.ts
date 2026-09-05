@@ -70,7 +70,7 @@ export const PITCH_STEPS: ReadonlyArray<{ title: string; body: string }> = [
     // what this build supports. `PITCH_STORES` still enumerates them for the
     // surfaces where someone has gone looking.
     title: 'Pick the store you shop at',
-    body: 'Mealio supports most major grocery retailers — you\'ll see the full list when you pick yours.',
+    body: 'Mealio supports most major grocery retailers. You\'ll see the full list when you pick yours.',
   },
   {
     title: 'Mealio fills your cart',
@@ -84,7 +84,7 @@ export const PITCH_STEPS: ReadonlyArray<{ title: string; body: string }> = [
  * otherwise leaves instead of asking.
  */
 export const PITCH_NOTHING_ORDERED =
-  'Nothing is ordered — the items land in your own cart at your own store, and '
+  'Nothing is ordered. The items land in your own cart at your own store, and '
   + 'you check out there.';
 
 /** What it costs, in the same words as the web `/about` and `/pricing`. */

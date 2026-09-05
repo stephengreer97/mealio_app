@@ -564,7 +564,7 @@ export default function CreatorPortalScreen({ route, navigation }: { route?: Por
               {/* Ingredient naming hint */}
               <View style={styles.ingredientHint}>
                 <Text style={styles.hintText}>
-                  Name each ingredient as it would appear in a grocery store search — specific enough to find the right product, but generic enough to work across stores.
+                  Name each ingredient as it would appear in a grocery store search. Specific enough to find the right product, but generic enough to work across stores.
                 </Text>
                 <Text style={styles.hintExamples}>
                   <Text style={styles.hintGood}>✓ Good: </Text>

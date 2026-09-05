@@ -249,7 +249,7 @@ export function CartJobProvider({ children }: { children: React.ReactNode }) {
             <Text style={styles.noticeTitle}>Keep Mealio open</Text>
             <Text style={styles.noticeBody}>
               Mealio is adding your items in the background. Please stay in the app
-              until the progress ring finishes — leaving will pause it.
+              until the progress ring finishes. Leaving will pause it.
             </Text>
             <TouchableOpacity
               style={[styles.noticeBtn, { backgroundColor: storeColor }]}

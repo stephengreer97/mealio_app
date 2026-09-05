@@ -146,7 +146,7 @@ describe('the Items Not Added gate explains each item', () => {
     // This one IS fixable by choosing, and the sentence has to say so — it is
     // the opposite instruction from the out-of-stock case.
     const view = await runToGate(['sour cream'], () => [candidate('Some Other Brand Cream')]);
-    expect(view.queryByText(/no exact match — pick the right product/i)).toBeTruthy();
+    expect(view.queryByText(/no exact match: pick the right product/i)).toBeTruthy();
   });
 
   it('drops the blanket guess once every item can say why', async () => {

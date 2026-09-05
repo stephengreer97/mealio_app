@@ -89,7 +89,7 @@ export default function BugReportSheet({ visible, onClose, currentRoute }: Props
           <Text style={styles.label}>What went wrong?</Text>
           <TextInput
             style={styles.input}
-            placeholder="Describe the problem — what you were doing and what happened."
+            placeholder="Describe the problem. What were you doing, and what happened?"
             placeholderTextColor={Colors.text3}
             value={description}
             onChangeText={setDescription}
@@ -102,7 +102,7 @@ export default function BugReportSheet({ visible, onClose, currentRoute }: Props
           <View style={styles.notice}>
             <Ionicons name="shield-checkmark-outline" size={16} color={Colors.text3} />
             <Text style={styles.noticeText}>
-              To help us debug, recent diagnostic logs from this session are attached — including
+              To help us debug, recent diagnostic logs from this session are attached, including
               the meals and items involved. Your password, login tokens, and email are never
               included.
             </Text>

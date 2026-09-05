@@ -814,7 +814,7 @@ export default function KrogerCartReviewSheet({
                       { color: selectedSuggIdx === 'custom' ? Colors.text1 : Colors.text3 },
                     ]}
                   >
-                    {customSuggestions.length > 0 ? 'Try a different search…' : 'Other — type a product name…'}
+                    {customSuggestions.length > 0 ? 'Try a different search…' : 'Other: type a product name…'}
                   </Text>
                 </TouchableOpacity>
                 {selectedSuggIdx === 'custom' && (

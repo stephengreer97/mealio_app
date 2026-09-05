@@ -97,7 +97,7 @@ export default function TagPicker({
         testID="tag-picker-count"
       >
         {over > 0
-          ? `That is ${selected.length} tags. A meal takes at most ${max} — deselect ${over}.`
+          ? `That is ${selected.length} tags. A meal takes at most ${max}. Deselect ${over}.`
           : `${selected.length} of ${max} chosen`}
       </Text>
       <ScrollView style={styles.scroll} nestedScrollEnabled showsVerticalScrollIndicator={false}>

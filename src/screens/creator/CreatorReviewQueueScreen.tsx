@@ -268,7 +268,7 @@ export default function CreatorReviewQueueScreen({ onClose, draftId }: { onClose
       if (!mountedRef.current) return;
       setDrafts((prev) => (prev ?? []).map((d) => (d.id === id ? { ...d, ...saved } : d)));
       setEditing(null);
-      setMessage({ kind: 'ok', text: 'Saved. It’s still waiting on you — editing doesn’t publish it.' });
+      setMessage({ kind: 'ok', text: 'Saved. It’s still waiting on you, and editing doesn’t publish it.' });
     } catch (err: any) {
       if (mountedRef.current) setMessage({ kind: 'bad', text: err?.message || 'Those edits couldn’t be saved.' });
     } finally {
@@ -393,7 +393,7 @@ export default function CreatorReviewQueueScreen({ onClose, draftId }: { onClose
             <Button label="Save edits" onPress={() => saveEdit(current.id, editing)} disabled={busy} />
             <Button label="Cancel" variant="ghost" size="sm" onPress={() => setEditing(null)} disabled={busy} style={{ marginTop: 8 }} />
             <Text style={styles.footnote}>
-              Saving doesn’t publish it. It stays here, and every field you change drops our check of it — we can’t
+              Saving doesn’t publish it. It stays here, and every field you change drops our check of it. We can’t
               vouch for a value we didn’t read.
             </Text>
           </View>
@@ -511,7 +511,7 @@ export default function CreatorReviewQueueScreen({ onClose, draftId }: { onClose
         )}
 
         <Text style={styles.footnote} testID="queue-actions-note">
-          Approving publishes it to Discover under your name. “Not this one” declines it — we won’t offer that recipe
+          Approving publishes it to Discover under your name. “Not this one” declines it. We won’t offer that recipe
           again, and it won’t come back the next time we check your posts. Skipping decides nothing.
         </Text>
         </>

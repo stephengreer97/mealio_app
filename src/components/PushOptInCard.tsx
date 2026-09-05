@@ -72,7 +72,7 @@ export default function PushOptInCard() {
       </View>
       <Text style={styles.body}>
         Turn on notifications and we'll tell you when one of your recipes is imported and waiting for
-        your review — instead of you having to check the portal.
+        your review, instead of you having to check the portal.
       </Text>
       <View style={styles.actions}>
         <Button label="Not now" variant="ghost" size="sm" onPress={handleDismiss} />

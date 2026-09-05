@@ -62,7 +62,7 @@ export function reviewUnaddableReason(
   storeName: string,
 ): string | null {
   if (candidate?.outOfStock) {
-    return `Out of stock at ${storeName} — pick another product below, or skip this ingredient.`;
+    return `Out of stock at ${storeName}. Pick another product below, or skip this ingredient.`;
   }
   if (candidate && totalQty === 0) return 'Set a quantity above to add this to your cart.';
   return null;

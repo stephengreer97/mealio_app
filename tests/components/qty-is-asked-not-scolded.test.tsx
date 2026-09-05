@@ -94,6 +94,10 @@ jest.mock('../../src/lib/automation-config', () => {
 });
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+// The unset glyph is imported rather than typed out, so this suite keeps
+// testing the BEHAVIOUR (unset does not look like a value) rather than pinning
+// which character says so.
+import { UNSET_QTY_LABEL } from '../../src/lib/qty-prompt';
 import {
   enableRail, postToSheet, SESSION_OK, cartCount, searchResult, searchDone, candidate,
 } from './helpers/railRun';
@@ -144,9 +148,9 @@ const stepper = (view: ReturnType<typeof render>) =>
   view.queryByTestId('qty-stepper-m1') ?? view.queryByTestId('qty-stepper-choose');
 
 describe('arriving at the review screen', () => {
-  it('shows a dash rather than a zero', async () => {
+  it('shows the unset placeholder rather than a zero', async () => {
     const view = await atReview();
-    expect(view.queryByText('—')).toBeTruthy();
+    expect(view.queryByText(UNSET_QTY_LABEL)).toBeTruthy();
   });
 
   it('says nothing in red before the user has done anything', async () => {
@@ -210,7 +214,7 @@ describe('once a quantity is set', () => {
   it('shows the number instead of the dash', async () => {
     const view = await atReview();
     act(() => { fireEvent.press(view.getAllByText('+')[0]); });
-    expect(view.queryByText('—')).toBeNull();
+    expect(view.queryByText(UNSET_QTY_LABEL)).toBeNull();
   });
 
   it('stops offering to choose a quantity', async () => {
@@ -232,7 +236,7 @@ describe('when something OTHER than the quantity is missing', () => {
     // every other test in this file still passed, because the choose flow
     // pre-selects a candidate and the quantity really is the only blocker there.
     const view = await atReview();
-    act(() => { fireEvent.press(view.getByText(/other — type a product name/i)); });
+    act(() => { fireEvent.press(view.getByText(/other: type a product name/i)); });
 
     const btn = view.getByTestId('review-primary');
     expect(btn.props.accessibilityState?.disabled).toBe(true);

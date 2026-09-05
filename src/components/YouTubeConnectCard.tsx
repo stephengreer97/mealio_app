@@ -161,7 +161,7 @@ export default function YouTubeConnectCard({ openWeb }: Props) {
    */
   const consentLocked = !consent && (!hasConnection || !status.canWriteDescriptions);
   const lockReason = !hasConnection
-    ? 'Connect your channel before turning this on — there is nothing to write to yet.'
+    ? 'Connect your channel before turning this on. There is nothing to write to yet.'
     : 'This connection was made without permission to edit descriptions. Reconnect YouTube if you want to allow it.';
 
   return (
@@ -193,7 +193,7 @@ export default function YouTubeConnectCard({ openWeb }: Props) {
 
       <Text style={styles.blurb}>
         {needsConnect
-          ? 'Connecting lets Mealio read your videos’ titles and descriptions — and their captions, which YouTube only shares with the channel owner — so a recipe can be imported from a video instead of typed out again.'
+          ? 'Connecting lets Mealio read your videos’ titles and descriptions, plus their captions (which YouTube only shares with the channel owner), so a recipe can be imported from a video instead of typed out again.'
           : 'Mealio can read this channel’s videos to import recipes from them.'}
       </Text>
 
@@ -231,7 +231,7 @@ export default function YouTubeConnectCard({ openWeb }: Props) {
           <Text style={styles.hint}>
             Google will not show its permission screen inside an app, so connecting opens mealio.co/creator in your
             browser and finishes there. Google asks to manage your YouTube account; Mealio uses it to read your
-            videos, and — only if the setting above is on — to add a link to a description.
+            videos, and (only if the setting above is on) to add a link to a description.
           </Text>
         </View>
       )}

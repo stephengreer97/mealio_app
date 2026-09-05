@@ -153,7 +153,7 @@ export default function CreatorApplyScreen() {
               error={errors.handle}
             />
             <Text style={styles.handleWarning}>
-              ⚠ Permanent — this is your referral link and can&apos;t be changed after you apply.
+              ⚠ Permanent: this is your referral link and can&apos;t be changed after you apply.
             </Text>
             {handle.trim() !== '' && (
               <Text style={styles.handlePreview}>mealio.co/{handle.trim()}</Text>

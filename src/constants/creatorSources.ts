@@ -150,7 +150,7 @@ export function checkPlatformLink(source: PlatformSource, raw: string): LinkChec
     if (pattern && pattern.test(host)) {
       return {
         ok: false,
-        error: `That is a link to ${SOURCE_LABELS[other]} — put it in the ${SOURCE_LABELS[other]} box. The website field is for your own site.`,
+        error: `That is a link to ${SOURCE_LABELS[other]}. Put it in the ${SOURCE_LABELS[other]} box. The website field is for your own site.`,
       };
     }
   }

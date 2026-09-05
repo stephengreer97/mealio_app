@@ -368,7 +368,7 @@ export default function ProductChooserSheet({
                 </View>
                 {productQty > 2 && (
                   <Text style={styles.qtyWarning}>
-                    ⚠ {productQty} is a lot for one item — does this come in a multipack or bulk size?
+                    ⚠ {productQty} is a lot for one item. Does this come in a multipack or bulk size?
                   </Text>
                 )}
               </View>

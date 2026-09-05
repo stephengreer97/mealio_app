@@ -137,7 +137,7 @@ export default function PlatformLinksCard({ creator, onSaved }: Props) {
 
   const polledNotice = polled
     ? `Mealio is importing your recipes from your ${SOURCE_LABELS[polled]}. Moved, renamed or finished with it? ` +
-      "Change or clear it here and we'll pause the import — it's the one we publish from under your name, so it " +
+      "Change or clear it here and we'll pause the import. It's the one we publish from under your name, so it " +
       'gets a look before anything starts again.'
     : null;
 
@@ -186,7 +186,7 @@ export default function PlatformLinksCard({ creator, onSaved }: Props) {
             </View>
 
             <Text style={styles.blurb}>
-              Add or change these any time. Adding a link never starts anything on its own — leave a box empty to
+              Add or change these any time. Adding a link never starts anything on its own. Leave a box empty to
               remove that link.
             </Text>
 

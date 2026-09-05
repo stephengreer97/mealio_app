@@ -91,7 +91,7 @@ export default function ChooseProductsIntroSheet({
               <Ionicons name="flag-outline" size={18} color={Colors.text2} style={styles.pointIcon} />
               <Text style={styles.pointText}>
                 <Text style={styles.pointLead}>At the end, </Text>
-                your picks are saved and you are back at your meals — with the button now offering
+                your picks are saved and you are back at your meals, with the button now offering
                 to add them all to your {storeName} cart.
               </Text>
             </View>
