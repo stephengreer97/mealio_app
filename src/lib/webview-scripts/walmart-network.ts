@@ -208,6 +208,17 @@ ${RETRY_FN}
    * where the server-rendered page calls the same list .items.
    */
   WM.searchOp = async function (term, budgetMs) {
+    var out = await __mealioRetry(function () { return WM.searchOpAttempt(term, budgetMs); });
+    // THE CONTRACT IS UNCHANGED: null still means "cannot be used, fall back to
+    // the page", and blocked is still the one failure the caller reads. The
+    // attempt below now names its transient failures so the policy can see
+    // them, and this folds everything else back to null.
+    if (!out || out.ok || out.why === 'blocked') return out || null;
+    return null;
+  };
+  // ONE ATTEMPT. Walmart's search does NOT go through WM.gql -- it builds its
+  // own URL -- so wrapping the transport left the search one-shot.
+  WM.searchOpAttempt = async function (term, budgetMs) {
     var vars;
     try {
       vars = JSON.parse(String(WM.SEARCH_VARS).split('__TERM__').join(
@@ -223,10 +234,13 @@ ${RETRY_FN}
         { credentials: 'include', signal: ctl.signal, headers: WM.headers('Search', 'query') });
       clearTimeout(to);
       txt = await r.text();
-    } catch (e) { clearTimeout(to); return null; }
+    } catch (e) {
+      clearTimeout(to);
+      return { ok: false, why: 'no_response', aborted: !!(e && e.name === 'AbortError') };
+    }
     var ms = Date.now() - t0;
     if (WM.blockedStatus(r.status)) return { ok: false, why: 'blocked', status: r.status, ms: ms };
-    if (r.status < 200 || r.status >= 300) return null;
+    if (r.status < 200 || r.status >= 300) return { ok: false, why: 'http', status: r.status, ms: ms };
     var j;
     try { j = JSON.parse(txt); } catch (e) { return null; }
     var stacks = null;
@@ -241,7 +255,12 @@ ${RETRY_FN}
     return { ok: true, items: items, ms: ms, bytes: txt.length, via: 'op' };
   };
 
-  WM.searchPage = async function (term, budgetMs) {
+  WM.searchPage = function (term, budgetMs) {
+    return __mealioRetry(function () { return WM.searchPageAttempt(term, budgetMs); });
+  };
+  // ONE ATTEMPT. The HTML fallback is the LAST thing standing between a term
+  // and the review screen, so a 5xx here costs the item outright.
+  WM.searchPageAttempt = async function (term, budgetMs) {
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 20000);
     var t0 = Date.now();
@@ -254,7 +273,7 @@ ${RETRY_FN}
       html = await r.text();
     } catch (e) {
       clearTimeout(to);
-      return { ok: false, why: 'no_response', ms: Date.now() - t0 };
+      return { ok: false, why: 'no_response', aborted: !!(e && e.name === 'AbortError'), ms: Date.now() - t0 };
     }
     var ms = Date.now() - t0;
     if (WM.blockedStatus(r.status)) return { ok: false, why: 'blocked', status: r.status, ms: ms };

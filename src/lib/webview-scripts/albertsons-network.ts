@@ -1475,19 +1475,27 @@ ${ALB_PRELUDE}
     var undoCall = async function (method, rows) {
       var lines = [];
       for (var i = 0; i < rows.length; i++) lines.push({ itemId: rows[i].itemId, qty: rows[i].qty });
-      var ctl = new AbortController();
-      var to = setTimeout(function () { ctl.abort(); }, 15000);
       try {
-        var r = await fetch(__albCartUrl(), {
-          method: method, credentials: 'include', headers: __albCartHeaders(A.cartKey),
-          body: JSON.stringify({
-            preferenceList: [{ cartCategory: '1P_WINE' }],
-            cartItemsList: lines,
-            cartCategory: 'abs'
-          }),
-          signal: ctl.signal
+        // The undo is a cart WRITE and it is absolute like the add, so a retry
+        // cannot double anything. Leaving it one-shot meant a 5xx here left an
+        // unavailable line sitting in the cart blocking checkout -- the exact
+        // thing the undo exists to prevent.
+        var fr = await __mealioFetchRetry(function () {
+          var ctl = new AbortController();
+          var to = setTimeout(function () { ctl.abort(); }, 15000);
+          return fetch(__albCartUrl(), {
+            method: method, credentials: 'include', headers: __albCartHeaders(A.cartKey),
+            body: JSON.stringify({
+              preferenceList: [{ cartCategory: '1P_WINE' }],
+              cartItemsList: lines,
+              cartCategory: 'abs'
+            }),
+            signal: ctl.signal
+          }).then(function (res) { clearTimeout(to); return res; },
+                  function (e) { clearTimeout(to); throw e; });
         });
-        clearTimeout(to);
+        if (!fr.ok && !fr.res) throw (fr.error || new Error('no_response'));
+        var r = fr.res;
         if (r.status !== 200) { undoOk = false; undoWhy = method + ' status ' + r.status; return; }
         var j = await r.json();
         var ul = ((j.carts || [])[0] || {}).cartItemsList || [];
@@ -1496,7 +1504,6 @@ ${ALB_PRELUDE}
         for (var u1 = 0; u1 < ul.length; u1++) uAfter[String(ul[u1].itemId)] = Number(ul[u1].qty);
         sawCart = true;
       } catch (e) {
-        clearTimeout(to);
         undoOk = false;
         undoWhy = method + ' ' + String(e).slice(0, 60);
       }

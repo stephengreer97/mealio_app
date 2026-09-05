@@ -273,12 +273,19 @@ ${RETRY_FN}
         filters: 'objectID:"' + storeNo + '-' + skus[i] + '"', hitsPerPage: 1 });
     }
     try {
-      var r = await fetch('${ALGOLIA_URL}', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json',
-          'x-algolia-application-id': '${ALGOLIA_APP}', 'x-algolia-api-key': '${ALGOLIA_KEY}' },
-        body: JSON.stringify({ requests: reqs }),
+      // ONE REQUEST FOR THE WHOLE BATCH, so a 5xx here costs every sku's detail
+      // at once rather than one item's -- which makes this the cheapest retry
+      // in the file and the most expensive one to have left out.
+      var fr = await __mealioFetchRetry(function () {
+        return fetch('${ALGOLIA_URL}', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json',
+            'x-algolia-application-id': '${ALGOLIA_APP}', 'x-algolia-api-key': '${ALGOLIA_KEY}' },
+          body: JSON.stringify({ requests: reqs }),
+        });
       });
+      if (!fr.ok && !fr.res) throw (fr.error || new Error('no_response'));
+      var r = fr.res;
       // text() then parse, like every other call here: a response shim that
       // implements text() but not json() is the difference between a working
       // batch and an empty one, and this file already standardises on text().
@@ -835,7 +842,13 @@ ${WEG_PRELUDE}
   var HITS = ${opts.hitsPerPage ?? 24};
   var post = WG.post;
 
-  var search = async function (term) {
+  // ONE ATTEMPT. Wegmans' SEARCH is Algolia, not the commerce API, so wrapping
+  // WG.commerce covered the cart and left the search one-shot -- found by
+  // enumerating every fetch site in the emitted scripts rather than by reading.
+  var search = function (term) {
+    return __mealioRetry(function () { return searchAttempt(term); });
+  };
+  var searchAttempt = async function (term) {
     var url = '${ALGOLIA_HOST}/1/indexes/${ALGOLIA_INDEX}/query'
       + '?x-algolia-api-key=${ALGOLIA_KEY}&x-algolia-application-id=${ALGOLIA_APP}';
     var body = { query: term, hitsPerPage: HITS };
@@ -849,7 +862,10 @@ ${WEG_PRELUDE}
                              body: JSON.stringify(body), signal: ctl.signal });
       clearTimeout(to);
       txt = await r.text();
-    } catch (e) { clearTimeout(to); return { ok: false, why: 'no_response', ms: Date.now() - t0 }; }
+    } catch (e) {
+      clearTimeout(to);
+      return { ok: false, why: 'no_response', aborted: !!(e && e.name === 'AbortError'), ms: Date.now() - t0 };
+    }
     var ms = Date.now() - t0;
     if (r.status !== 200) return { ok: false, why: 'http', status: r.status, ms: ms,
                                    detail: String(txt || '').slice(0, 160) };
