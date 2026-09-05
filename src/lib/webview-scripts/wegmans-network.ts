@@ -1,4 +1,5 @@
 import type { NetworkRail } from './network-rail';
+import { RETRY_FN } from './_retry';
 // Wegmans over the network.
 //
 // Researched 2026-09-02/03 against a live signed-in session on the device; see
@@ -68,6 +69,7 @@ const STORE_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  * Both have broken this build before, three times each.
  */
 const WEG_PRELUDE = `
+${RETRY_FN}
   var WG = window.__mealioWeg = window.__mealioWeg || {};
   WG.post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
@@ -676,7 +678,12 @@ const WEG_PRELUDE = `
     return path + (path.indexOf('?') >= 0 ? '&' : '?') + 'api-version=' + v;
   };
 
-  WG.commerce = async function (path, tok, init, budgetMs) {
+  // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
+  // _retry.ts for which failures earn a second ask and why a timeout does not.
+  WG.commerce = function (path, tok, init, budgetMs) {
+    return __mealioRetry(function () { return WG.commerceOnce(path, tok, init, budgetMs); });
+  };
+  WG.commerceOnce = async function (path, tok, init, budgetMs) {
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 15000);
     var t0 = Date.now();
@@ -691,7 +698,7 @@ const WEG_PRELUDE = `
       txt = await r.text();
     } catch (e) {
       clearTimeout(to);
-      return { ok: false, why: 'no_response', ms: Date.now() - t0 };
+      return { ok: false, why: 'no_response', aborted: !!(e && e.name === 'AbortError'), ms: Date.now() - t0 };
     }
     var ms = Date.now() - t0;
     // A 401 means the token we cached is spent. Drop it so the next run looks

@@ -1,4 +1,5 @@
 import type { NetworkRail } from './network-rail';
+import { RETRY_FN } from './_retry';
 // Albertsons network rail — search and add over the store's own REST API.
 //
 // The shape of this file mirrors heb-network-search.ts on purpose: same message
@@ -70,6 +71,7 @@ export const ALB_CART_CUSTOMER_PATH = '/abs/pub/erums/cartservice/api/v2/cart/cu
  * one cart read per run and cannot go stale.
  */
 const ALB_PRELUDE = `
+${RETRY_FN}
   var A = window.__mealioAlb = window.__mealioAlb || {};
 
   function __albCfg() {
@@ -488,15 +490,24 @@ const ALB_PRELUDE = `
     var keys = A.cartKey ? [A.cartKey] : __albKeyCandidates();
     var lastStatus = null;
     for (var i = 0; i < keys.length; i++) {
-      var ctl = new AbortController();
-      var to = setTimeout(function () { ctl.abort(); }, budgetMs || 12000);
       var t0 = Date.now();
       try {
-        var r = await fetch(__albCartReadUrl(), {
-          method: 'POST', body: '{}',
-          credentials: 'include', headers: __albCartHeaders(keys[i]), signal: ctl.signal
+        // The outer loop tries a different KEY; this retries the same key
+        // against a store that broke. Different failures, so they compose
+        // rather than stand in for each other -- a 503 used to burn a key
+        // candidate and then report the wrong reason.
+        var kk = keys[i];
+        var fr = await __mealioFetchRetry(function () {
+          var ctl = new AbortController();
+          var to = setTimeout(function () { ctl.abort(); }, budgetMs || 12000);
+          return fetch(__albCartReadUrl(), {
+            method: 'POST', body: '{}',
+            credentials: 'include', headers: __albCartHeaders(kk), signal: ctl.signal
+          }).then(function (res) { clearTimeout(to); return res; },
+                  function (e) { clearTimeout(to); throw e; });
         });
-        clearTimeout(to);
+        if (!fr.ok && !fr.res) throw (fr.error || new Error('no_response'));
+        var r = fr.res;
         A.lastReadMs = Date.now() - t0;
         A.lastReadTry = i + 1;
         lastStatus = r.status;
@@ -937,7 +948,12 @@ ${albSearchUrlExpr(pageSize, storeId)}
   var VARIANTS = ['site', 'plain'];
   var winner = null;
 
-  async function attempt(term, variant) {
+  // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
+  // _retry.ts for which failures earn a second ask and why a timeout does not.
+  function attempt(term, variant) {
+    return __mealioRetry(function () { return attemptOnce(term, variant); });
+  }
+  async function attemptOnce(term, variant) {
     var ctl = new AbortController();
     // The FIRST request of a batch gets the longer budget: measured cold at the
     // full 15s while the document was provably healthy, and sub-second after.
@@ -965,7 +981,7 @@ ${albSearchUrlExpr(pageSize, storeId)}
     } catch (e) {
       clearTimeout(to);
       beat.doing = 'idle';
-      return { why: 'no_response', url: url, ms: Date.now() - t0 };
+      return { why: 'no_response', aborted: !!(e && e.name === 'AbortError'), url: url, ms: Date.now() - t0 };
     }
     var ms = Date.now() - t0;
     if (r.status !== 200) {
@@ -1336,19 +1352,25 @@ ${ALB_PRELUDE}
       cartItemsList: lines,
       cartCategory: 'abs'
     });
-    var ctl = new AbortController();
-    // Scaled: one request carrying twenty items is not the same wait as one
-    // carrying one.
-    var to = setTimeout(function () { ctl.abort(); }, 15000 + planned.length * 1500);
-    var r = null;
-    try {
-      r = await fetch(__albCartUrl(), {
+    // THE WRITE SETS QUANTITIES, IT DOES NOT INCREMENT THEM -- measured, and
+    // the reason the undo path can restore a line by POSTing its old qty. That
+    // is what makes retrying this safe: a second write of the same body cannot
+    // add a second time, so a 5xx or a dropped connection is worth asking again
+    // rather than surrendering the whole batch. Each attempt builds its own
+    // controller because a retry cannot reuse a signal that already fired.
+    var fr = await __mealioFetchRetry(function () {
+      var ctl = new AbortController();
+      // Scaled: one request carrying twenty items is not the same wait as one
+      // carrying one.
+      var to = setTimeout(function () { ctl.abort(); }, 15000 + planned.length * 1500);
+      return fetch(__albCartUrl(), {
         method: 'POST', credentials: 'include',
         headers: __albCartHeaders(A.cartKey), body: body, signal: ctl.signal
-      });
-      clearTimeout(to);
-    } catch (e) {
-      clearTimeout(to);
+      }).then(function (res) { clearTimeout(to); return res; },
+              function (e) { clearTimeout(to); throw e; });
+    });
+    var r = (fr && fr.res) || null;
+    if (!r) {
       // The write is idempotent, so an unanswered request is genuinely unknown
       // rather than known-bad. Reconcile decides, not this script.
       for (var u0 = 0; u0 < planned.length; u0++) {

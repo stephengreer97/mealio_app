@@ -1,4 +1,5 @@
 import type { NetworkRail } from './network-rail';
+import { RETRY_FN } from './_retry';
 /**
  * H-E-B search over the network, instead of loading a results page (MEAL-202).
  *
@@ -90,9 +91,17 @@ const CART_READ_FN = `
   };
 `;
 
-/** Shared transport. Same endpoint, headers and credentials as the cart rail. */
+/**
+ * Shared transport. Same endpoint, headers and credentials as the cart rail.
+ *
+ * `__hebGqlOnce` is one attempt; `__hebGql` is that attempt under the shared
+ * retry policy, so a 500 or a dropped connection is asked again twice before it
+ * becomes an answer. See _retry.ts for which failures qualify and why a
+ * timeout deliberately does not.
+ */
 const GQL_FN = `
-  function __hebGql(op, query, variables, timeoutMs) {
+${RETRY_FN}
+  function __hebGqlOnce(op, query, variables, timeoutMs) {
     var ctl = null;
     try { ctl = new AbortController(); } catch (e) { ctl = null; }
     var timer = null;
@@ -134,6 +143,9 @@ const GQL_FN = `
         return { ok: false, why: isAbort ? 'timeout' : 'network', detail: String(e).slice(0, 120) };
       }
     })();
+  }
+  function __hebGql(op, query, variables, timeoutMs) {
+    return __mealioRetry(function () { return __hebGqlOnce(op, query, variables, timeoutMs); });
   }
 `;
 

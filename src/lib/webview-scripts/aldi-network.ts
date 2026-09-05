@@ -23,6 +23,7 @@
 // unknown.
 import { INSTACART_TENANTS } from './instacart';
 import type { NetworkRail } from './network-rail';
+import { RETRY_FN } from './_retry';
 
 /** Where the harvested operation map is cached, and for how long. */
 const OPS_CACHE_KEY = '__mealio_ic_ops_v1';
@@ -85,6 +86,7 @@ function tenantOrigin(storeId: string): string {
  * times each.
  */
 const IC_PRELUDE = `
+${RETRY_FN}
   var IC = window.__mealioIC = window.__mealioIC || {};
   IC.post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
@@ -167,7 +169,12 @@ const IC_PRELUDE = `
   };
 
   // ---- one GraphQL call --------------------------------------------------
-  IC.gql = async function (name, variables, budgetMs) {
+  // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
+  // _retry.ts for which failures earn a second ask and why a timeout does not.
+  IC.gql = function (name, variables, budgetMs) {
+    return __mealioRetry(function () { return IC.gqlOnce(name, variables, budgetMs); });
+  };
+  IC.gqlOnce = async function (name, variables, budgetMs) {
     var hash = (IC.ops && IC.ops[name]) || null;
     if (!hash) return { ok: false, why: 'no_hash', op: name };
     var ctl = new AbortController();
@@ -187,7 +194,7 @@ const IC_PRELUDE = `
       txt = await r.text();
     } catch (e) {
       clearTimeout(to);
-      return { ok: false, why: 'no_response', op: name, ms: Date.now() - t0 };
+      return { ok: false, why: 'no_response', aborted: !!(e && e.name === 'AbortError'), op: name, ms: Date.now() - t0 };
     }
     var ms = Date.now() - t0;
     if (r.status !== 200) return { ok: false, why: 'http', status: r.status, op: name, ms: ms,

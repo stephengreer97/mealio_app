@@ -63,6 +63,7 @@ import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfi
 import { sameProductBarSize, scoreMatch } from '../lib/webview-scripts/_scoring';
 import { challengeMayTakeTheScreen } from '../lib/cart-challenge';
 import { canSignInHere, signedOutIsFinal } from '../lib/login-page';
+import { decideHandover, MAX_RUN_RETRIES } from '../lib/handover';
 import { firstAddableIdx, reviewUnaddableReason } from '../lib/review-selection';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 
@@ -863,7 +864,16 @@ export default function WebViewCartSheet({
    * right there) whose token has aged out; a genuinely signed-out user answers
    * `loggedIn: false` on the first ask and goes straight to sign-in.
    */
-  const SESSION_REPAIR_WINDOW_MS = 30_000;
+  /**
+ * How long to wait before rerunning a run that hit a transient dead end.
+ *
+ * A beat rather than an instant retry: the usual cause is a page that was not
+ * ready to be asked, and rerunning into the same unready page just spends the
+ * one retry there is.
+ */
+const RUN_RETRY_DELAY_MS = 1_200;
+
+const SESSION_REPAIR_WINDOW_MS = 30_000;
   const SESSION_REPAIR_ASK_EVERY_MS = 2_000;
   // Tracks which search idx to resume from after a robot/captcha challenge
   // (Walmart redirects to /blocked when it suspects automation; user has to
@@ -1798,6 +1808,63 @@ export default function WebViewCartSheet({
     return () => clearTimeout(t);
   }, [netRunning, netCounted, step]);
 
+  /** Whole-run retries spent this run. Reset by beginSearchFlow, not by a rerun. */
+  const netRunRetriesRef = useRef(0);
+  /** startNetworkRun is defined below; the handover reaches it through here. */
+  const startNetworkRunRef = useRef<() => void>(() => {});
+
+  /**
+   * What the run learned, as review cards.
+   *
+   * The review screen is fed from netCandidatesRef everywhere else -- see the
+   * top-up path, and the bug it was written for: cards built from the add
+   * result carried zero candidates, so both buttons were dead and the only way
+   * anyone found out was a loop test that could not press a button that was
+   * never enabled. This uses the same two maps for the same reason.
+   *
+   * Items already in the cart are left out. An item the run added and then hit
+   * a dead end after is not something to review.
+   */
+  const netHandoverCards = useCallback((): SearchResult[] => {
+    const added = new Set(addResultsRef.current.filter((a) => a.success).map((a) => a.name));
+    const existing = searchResultsRef.current;
+    const carded = new Set(existing.map((c) => c.term));
+    const out: SearchResult[] = [...existing];
+    for (const item of activeItemsRef.current) {
+      const term = item.searchTerm || item.ingredientName;
+      if (!term || carded.has(term) || added.has(item.ingredientName)) continue;
+      // WAS THIS ITEM ACTUALLY ASKED ABOUT?
+      //
+      // `has` and not `get`, and the difference is the whole gate. An item the
+      // store answered with nothing is a fact worth a card; an item the run
+      // never got as far as asking about is not, and carding it anyway made
+      // every dead end look informative -- which made assisted unreachable and
+      // put fourteen blank cards in front of a user whose session died before
+      // the first search. Measured: a session failure produced cards=1 with
+      // reviewable=0 on a run that had asked nothing.
+      const byTerm = netCandidatesRef.current.has(term)
+        ? netCandidatesRef.current.get(term)! : null;
+      const byName = netFallbackCandidatesRef.current.has(item.ingredientName)
+        ? netFallbackCandidatesRef.current.get(item.ingredientName)! : null;
+      if (byTerm === null && byName === null) continue;
+      const found = (byTerm && byTerm.length ? byTerm : byName) ?? [];
+      out.push({
+        term,
+        candidates: found,
+        mealIngredients: item.mealIngredients,
+        unit: item.unit,
+        measure: item.measure,
+        // The same rule the choose flow uses: candidates mean "we found these
+        // and could not pick for you", none mean "the store had none". Not
+        // 'search_unanswered', which claims we never asked, and not
+        // 'add_refused', which claims a write we never attempted.
+        reason: found.length === 0 ? 'no_results' : 'low_confidence',
+        isChoose: false,
+      });
+    }
+    return out;
+  }, []);
+
   /**
    * Give up on the rail and hand the run to the user.
    *
@@ -1811,6 +1878,59 @@ export default function WebViewCartSheet({
     netActiveRef.current = false;
     netPhaseRef.current = 'idle';
     if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+
+    // BEFORE HANDING ANYTHING OVER, ask whether there is anything better.
+    //
+    // Stephen, 2026-09-04: "I want to change the do it yourself logic to only
+    // ever appear if these retries all fail. That should be the only scenario a
+    // user ever sees the do it yourself logic." Every dead end used to arrive
+    // straight here, so a run that had found products for twelve of fourteen
+    // items and then lost its session handed the user all fourteen terms and
+    // threw the twelve away. decideHandover in lib/handover.ts owns the choice;
+    // this builds the two facts it needs.
+    const cards = netHandoverCards();
+    const reviewable = cards.filter((c) => c.candidates.length > 0).length;
+    const decision = decideHandover({
+      why,
+      runRetriesUsed: netRunRetriesRef.current,
+      maxRunRetries: MAX_RUN_RETRIES,
+      reviewableCount: reviewable,
+      // A card with no candidates still says WHY, which is more than the
+      // store's search box says.
+      informativeCount: cards.length - reviewable,
+    });
+    console.log(`[Cart ${ts()}]`, 'network run: dead end —', why,
+      '| cards=', cards.length, 'reviewable=', reviewable,
+      'runRetries=', netRunRetriesRef.current, '→', decision);
+
+    if (decision === 'retry_run') {
+      netRunRetriesRef.current += 1;
+      tel().record('search', 'error', { detail: { phase: 'network_run_retry', why }, code: 'match_rejected' });
+      setNetNote(null);
+      setSearchingLabel('Trying again…');
+      // A beat, not a busy loop. The usual cause is a page that was not ready,
+      // and giving it nothing but a rerun is how the second attempt fails for
+      // the same reason as the first.
+      setTimeout(() => { startNetworkRunRef.current(); }, RUN_RETRY_DELAY_MS);
+      return;
+    }
+
+    if (decision === 'review') {
+      searchResultsRef.current = cards;
+      setSearchResults(cards);
+      setReviewIdx(0);
+      tel().record('search', 'error', { detail: { phase: 'network_handover_review', why, cards: cards.length },
+        code: 'match_rejected' });
+      // TWO DIFFERENT SCREENS BEHIND ONE WORD. 'review' is the one that lets
+      // the user PICK; 'searchResult' is the "Items Not Added" summary, which
+      // shows a list and offers nothing to press. Routing everything to the
+      // summary put a run that had found a product on the screen that cannot
+      // offer it -- caught by a test looking for the product name and finding
+      // the summary header instead.
+      setStep(reviewable > 0 ? 'review' : 'searchResult');
+      return;
+    }
+
     console.log(`[Cart ${ts()}]`, 'network run: handing over to the user —', why);
     // SAY WHAT IS ACTUALLY HAPPENING. "Taking a slower route" and "still
     // working" were true when this fell back to the page-driven pool, which did
@@ -3752,11 +3872,16 @@ export default function WebViewCartSheet({
       'store=', lockedStoreIdRef.current, 'strategy=', strategy);
     if (strategy === 'network' || strategy === 'networkChoose') {
       netChooseOnlyRef.current = strategy === 'networkChoose';
+      // A FRESH run, so a fresh allowance. Reset here and not in startNetworkRun
+      // itself, which is what a retry calls -- resetting there would make the
+      // one retry infinite.
+      netRunRetriesRef.current = 0;
       startNetworkRun();
       return;
     }
     startAssistedModeRef.current();
   }, [startNetworkRun]);
+  startNetworkRunRef.current = startNetworkRun;
 
   // Snapshot the cart BEFORE any adds, then start the search. For cart-page
   // stores (HEB, Albertsons family) navigate to the cart URL, count there, and

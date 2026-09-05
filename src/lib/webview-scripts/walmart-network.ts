@@ -1,4 +1,5 @@
 import type { NetworkRail } from './network-rail';
+import { RETRY_FN } from './_retry';
 /**
  * Walmart, over the network.
  *
@@ -53,6 +54,7 @@ const SEARCH_VARS_TEMPLATE = '{"id":"","dealsId":"","query":"__TERM__","nudgeCon
 const CART_MAP_KEY = 'glassCartIdMap';
 
 const WM_PRELUDE = `
+${RETRY_FN}
   var WM = window.__mealioWM = window.__mealioWM || {};
   WM.post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
@@ -139,7 +141,12 @@ const WM_PRELUDE = `
       || head.indexOf('Access Denied') >= 0;
   };
 
-  WM.gql = async function (domain, op, kind, hash, variables, budgetMs) {
+  // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
+  // _retry.ts for which failures earn a second ask and why a timeout does not.
+  WM.gql = function (domain, op, kind, hash, variables, budgetMs) {
+    return __mealioRetry(function () { return WM.gqlOnce(domain, op, kind, hash, variables, budgetMs); });
+  };
+  WM.gqlOnce = async function (domain, op, kind, hash, variables, budgetMs) {
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 20000);
     var t0 = Date.now();
@@ -153,7 +160,7 @@ const WM_PRELUDE = `
       txt = await r.text();
     } catch (e) {
       clearTimeout(to);
-      return { ok: false, why: 'no_response', ms: Date.now() - t0 };
+      return { ok: false, why: 'no_response', aborted: !!(e && e.name === 'AbortError'), ms: Date.now() - t0 };
     }
     var ms = Date.now() - t0;
     // 418 and 429 are the anti-bot answers, and they are NOT the same as a

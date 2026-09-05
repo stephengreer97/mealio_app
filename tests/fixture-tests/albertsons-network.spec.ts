@@ -19,6 +19,7 @@ import {
   buildAlbertsonsCartReadScript,
 } from '../../src/lib/webview-scripts/albertsons-network';
 import { storeFixtures } from './_helpers';
+import { RETRY_ATTEMPTS } from '../../src/lib/webview-scripts/_retry';
 
 const { itWithFixture } = storeFixtures('albertsons');
 
@@ -805,9 +806,17 @@ describe('when a search service refuses a term', () => {
     expect(light.length).toBe(3);
   });
 
-  itWithFixture('logged-in-home.html', 'does NOT fall back when the store is having a bad minute', async (runner) => {
-    // A 5xx or a timeout is not a refusal, and asking the other service to meet
-    // the same wall costs a second request per term for nothing.
+  itWithFixture('logged-in-home.html', 'retries a bad minute without falling back to the other service', async (runner) => {
+    // Two rules meeting, and they pull opposite ways.
+    //
+    // A 5xx is not a refusal, so asking the OTHER service to meet the same wall
+    // costs a request per term for nothing. But it is also not an answer, so
+    // asking the SAME service again is worth doing -- Stephen, 2026-09-04: "If
+    // we get a 5xx we should rety a couple times with some buffer."
+    //
+    // This is the retry policy measured through the real script in a real
+    // browser rather than through the predicate on its own; the count below is
+    // the only place the two are checked to be the same thing.
     await runner.inject(albStub());
     await runner.inject(searchStub({}, { status: 503 }));
     await runner.inject(buildAlbertsonsNetworkSearchBatchScript(['avocado'], { storeId: '161' })!);
@@ -815,7 +824,13 @@ describe('when a search service refuses a term', () => {
     expect(msg.why).toBe('http');
     await runner.inject(urlsProbe);
     const seen = await runner.waitForMessage('PROBE', 10_000);
-    expect(seen.urls.filter((u: string) => u.indexOf('search/products') !== -1).length).toBe(1);
+    // NOT indexOf('search/products'): the heavy path ENDS in search/products
+    // too, so that matched both services and read three attempts at one of them
+    // as one attempt at each.
+    const heavy = seen.urls.filter((u: string) => u.indexOf('pgmsearch') !== -1);
+    const light = seen.urls.filter((u: string) => u.indexOf('/xapi/search/products') !== -1);
+    expect(heavy.length).toBe(RETRY_ATTEMPTS);
+    expect(light.length).toBe(0);
   });
 
   itWithFixture('logged-in-home.html', 'a failure names BOTH services, not just the first', async (runner) => {
