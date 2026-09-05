@@ -16,7 +16,16 @@
 // a rule that lists what to SKIP fails loudly on anything new, which is the
 // error worth having. Each exclusion is named and justified rather than being a
 // path glob someone can widen without noticing.
+//
+// THE RULE IS ABOUT PUNCTUATION, NOT ABOUT THE CHARACTER. Stephen, on the first
+// pass of this sweep: "You can put those two emdashes back." A lone em dash in
+// a numeric field is not punctuating a sentence, it is the VALUE -- "no value
+// yet" is what a dash has meant in a table for longer than this app has
+// existed. So a string that is nothing but the glyph is allowed, and a string
+// that uses one to join two clauses is not. That line is the whole rule, and it
+// is narrow enough to check: `text.trim() === '—'` and nothing else.
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as ts from 'typescript';
 
@@ -65,6 +74,39 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/**
+ * A string that IS the dash rather than one that contains it.
+ *
+ * `UNSET_QTY_LABEL` is the only one in this repo today: the stepper renders it
+ * until a quantity has been chosen, so that `0` cannot be mistaken for a number
+ * somebody picked. That is the dash being used as a value, which the rule was
+ * never about.
+ *
+ * Deliberately this strict. Not "starts with a dash", not "is short" -- a
+ * string with any other character in it is a sentence, and a sentence with an
+ * em dash in it is exactly what this file exists to find.
+ */
+function isGlyphNotPunctuation(text: string): boolean {
+  return text.trim() === EM_DASH;
+}
+
+/**
+ * Prose that contains the glyph because it is ABOUT the glyph.
+ *
+ * Nothing in this repo needs it today. It is here because the website carries
+ * the same check against the same rule, and two copies of a rule that differ
+ * are worse than one copy that is slightly larger than it has to be: the next
+ * person to hit this on either side should find the same answer.
+ *
+ * Quoting is the tell. A dash used as PUNCTUATION is never wrapped in quote
+ * marks; a dash being NAMED almost always is. A sentence that quotes one AND
+ * uses one still fails, which is the right answer.
+ */
+function isQuotedGlyph(text: string): boolean {
+  const withoutQuoted = text.replace(/[\u201c\u2018"']\s*\u2014\s*[\u201d\u2019"']/g, '');
+  return !withoutQuoted.includes(EM_DASH);
+}
+
 const STRING_KINDS = new Set<ts.SyntaxKind>([
   ts.SyntaxKind.StringLiteral,
   ts.SyntaxKind.JsxText,
@@ -84,7 +126,8 @@ function offenders(file: string): string[] {
 
   const visit = (n: ts.Node): void => {
     const text = (n as ts.LiteralLikeNode).text;
-    if (STRING_KINDS.has(n.kind) && typeof text === 'string' && text.includes(EM_DASH)) {
+    if (STRING_KINDS.has(n.kind) && typeof text === 'string' && text.includes(EM_DASH)
+        && !isGlyphNotPunctuation(text) && !isQuotedGlyph(text)) {
       // Walk out to the nearest call to see whether this is a logging sink.
       let p: ts.Node | undefined = n.parent;
       let logged = false;
@@ -128,6 +171,45 @@ describe('no em dash in user-facing text', () => {
     // emitted script TEXT, which is the case the exclusion actually exists for.
     const reported = withEmDash.filter((f) => offenders(path.join(known, f)).length > 0);
     expect(reported.length).toBeGreaterThan(0);
+  });
+
+  it('allows the glyph and still catches a sentence, so the exception is not a hole', () => {
+    // The exception exists for one shape: a string that IS the dash. Written as
+    // a fixture rather than asserted against the live source, because what has
+    // to hold is the RULE, and a repo that happens to have no offending string
+    // in it today would make an assertion about the source pass either way.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'emdash-'));
+    const fixture = path.join(dir, 'fixture.ts');
+    try {
+      fs.writeFileSync(fixture, [
+        "export const UNSET = '\u2014';",                       // the value: allowed
+        "export const PADDED = '  \u2014  ';",                  // still just the value
+        "export const PROSE = 'No stores selected \u2014 search below.';",
+        "export const SHORT = '\u2014 deselect';",              // short, but a sentence
+      ].join('\n'));
+      const found = offenders(fixture);
+      expect(found.join('\n')).toContain('No stores selected');
+      expect(found.join('\n')).toContain('deselect');
+      expect(found).toHaveLength(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('allows a QUOTED glyph, and still fails a sentence that also uses one', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'emdash-'));
+    const fixture = path.join(dir, 'fixture.ts');
+    try {
+      fs.writeFileSync(fixture, [
+        "export const A = 'The \u201c\u2014\u201d means no quantity yet.';",
+        "export const B = 'A \u201c\u2014\u201d means none \u2014 tap + to start.';",
+      ].join('\n'));
+      const found = offenders(fixture);
+      expect(found).toHaveLength(1);
+      expect(found[0]).toContain('tap + to start');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('finds none', () => {

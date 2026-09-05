@@ -19,13 +19,14 @@
 // button with no quantity set and the stepper flashes. An alert that answers
 // something you did is the only kind that carries meaning.
 
-// A QUESTION MARK, not a dash. The glyph has one job: say "you have not told
-// me yet" without looking like a value. A dash does that too, but Stephen's
-// standing rule is that an em dash never appears in text a user reads, and a
-// lone em dash standing in for a number is still text a user reads. `?` is
-// also the more direct reading of the state: the app does not know the answer.
-/** The stepper shows this until a quantity has actually been chosen. */
-export const UNSET_QTY_LABEL = '?';
+// A DASH, and it survived the em-dash sweep on purpose (MEAL-224). Stephen's
+// rule is about PUNCTUATION in text a user reads; this character is not
+// punctuating a sentence, it is the value in a numeric field. "No value yet" is
+// what a dash means in a table and has meant for longer than this app, and the
+// alternatives tested worse: `?` reads as a question being asked, and an empty
+// cell reads as a rendering fault.
+/** The stepper shows a dash until a quantity has actually been chosen. */
+export const UNSET_QTY_LABEL = '—';
 
 /**
  * What the stepper renders for a quantity.
