@@ -96,8 +96,9 @@ flowchart TD
     ROW --> SEQ["assign <code>seq</code> client-side"]
     SEQ --> WHYSEQ{{"batches upload out of order and many rows share a<br/>millisecond, so ordering cannot come from the timestamp.<br/><code>seq</code> is also the idempotency key the server dedupes on."}}
     SEQ --> BUF["bounded buffer"]
-    BUF --> FLUSH{"<code>batchSize</code> reached, or<br/><code>flushIntervalMs</code> elapsed?"}
+    BUF --> FLUSH{"<code>batchSize</code> reached,<br/><code>flushIntervalMs</code> elapsed,<br/>or the app went to <b>background</b>?"}
     FLUSH -->|yes| UP["fire-and-forget upload,<br/>short timeout"]
+    FLUSH --- BGWHY{{"THE BACKGROUND TRIGGER IS MEAL-161, and it flushes without ENDING<br/>anything. MEAL-5 made the terminal row ship on every path, so a killed<br/>run keeps its start and its end; what was lost was the MIDDLE, up to one<br/>flushInterval of rows that had already been recorded.<br/><br/>That is worse than losing the whole run. The funnel then shows a<br/>COMPLETE run with holes in it, and a hole reads as a step that FAILED<br/>rather than as data that never arrived.<br/><br/>flush(), never dispose(): a backgrounded run may come back and carry on,<br/>so no terminal row, no timers cleared, no buffer wiped. 'background'<br/>only, since iOS also emits 'inactive' for a notification pull-down."}}
     UP --> SWALLOW{{"<b>every entry point swallows its own errors.</b><br/>Losing telemetry is always preferable to<br/>disturbing an add-to-cart."}}
 
     subgraph STEPS ["the steps"]
