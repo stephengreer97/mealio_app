@@ -65,7 +65,7 @@ flowchart TD
 
     subgraph PERITEM ["Per item"]
         NAV["navigate<br/><code>/shop/search-results.html?q=…</code>"]
-        NAV --> TRIM{{"<b>albertsonsSearchQuery</b><br/>first 5 words ONLY"}}
+        NAV --> TRIM{{"<b>albertsonsSearchQuery</b><br/>the WHOLE name — MEAL-208 measured<br/>that the 5-word cap guarded nothing,<br/>and it only ever fed manual mode"}}
         TRIM --> CARDS["poll for cards"]
         CARDS --> MATCH{"exact match against<br/>the FULL saved name?"}
         MATCH -->|no| TOREVIEW(["queue for review"])
