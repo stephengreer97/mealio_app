@@ -24,6 +24,17 @@ cache-buster is strictly increasing so two navigations in one millisecond still 
 cannot be added on a review, so preselecting one gave two disabled buttons whose only explanation was
 about the quantity &mdash; and setting a quantity removed even that. The disabled state now says why,
 stock before quantity. See <code>lib/review-selection.ts</code>.</p>
+<p><b>The quantity is ASKED FOR, not demanded in advance</b> (MEAL-218, 2026-09-05). The label, the
+number and a hint line all used to be red the moment the screen opened, so the colour said the same
+thing whether or not anything was wrong &mdash; which is how it came to mean nothing, and how the
+button beside it came to read as broken rather than blocked. Now: an unset quantity renders as a
+DASH (a <code>0</code> looks like a value someone chose), nothing is red on arrival, and pressing the
+button with no quantity set flashes the <i>stepper</i> &mdash; around the control to press, not
+around the number. The button therefore stays PRESSABLE while it refuses, which is load-bearing
+rather than cosmetic: a disabled Touchable never receives <code>onPress</code>, so it can neither
+answer the user nor be tested. Only when the quantity is the <i>only</i> blocker; if no product is
+picked either, flashing the stepper would point at the wrong control. See
+<code>lib/qty-prompt.ts</code>.</p>
 </div>
 <div class="wrap" style="border-left:4px solid #ef4444;padding-left:14px">
 <h3>2026-09-04 &mdash; the sign-in screen, and where the repair may not go</h3>
