@@ -65,6 +65,7 @@ import { challengeMayTakeTheScreen } from '../lib/cart-challenge';
 import { canSignInHere, signedOutIsFinal } from '../lib/login-page';
 import { decideHandover, MAX_RUN_RETRIES } from '../lib/handover';
 import { firstAddableIdx, reviewUnaddableReason } from '../lib/review-selection';
+import { qtyDisplay, qtyIsTheOnlyBlocker } from '../lib/qty-prompt';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -1385,6 +1386,49 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     const sub = AccessibilityInfo.addEventListener?.('reduceMotionChanged', (on) => setReduceMotion(!!on));
     return () => { alive = false; sub?.remove?.(); };
   }, []);
+
+  /**
+   * MEAL-218. The flash that answers a press, rather than red that greets you.
+   *
+   * Stephen: "Instead of red text, how about a red glow around the qty #?" The
+   * glow is right; what makes it work is that it is not on until the user asks
+   * for something they cannot have yet. Everything used to be red on arrival --
+   * label, number and hint -- so the colour said the same thing whether or not
+   * anything was wrong, which is how it came to mean nothing.
+   *
+   * Around the STEPPER, not the number: the thing to press is the +.
+   */
+  const qtyFlashAnim = useRef(new Animated.Value(0)).current;
+  const flashQty = useCallback(() => {
+    qtyFlashAnim.stopAnimation();
+    if (reduceMotion) {
+      // Still unmistakable, just still. Fading it out on a timer rather than
+      // leaving it lit keeps it an answer rather than decoration.
+      qtyFlashAnim.setValue(1);
+      setTimeout(() => qtyFlashAnim.setValue(0), 1_400);
+      return;
+    }
+    qtyFlashAnim.setValue(0);
+    Animated.sequence([
+      Animated.timing(qtyFlashAnim, { toValue: 1, duration: 140, easing: Easing.out(Easing.quad), useNativeDriver: false }),
+      Animated.timing(qtyFlashAnim, { toValue: 0.35, duration: 180, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+      Animated.timing(qtyFlashAnim, { toValue: 1, duration: 140, easing: Easing.out(Easing.quad), useNativeDriver: false }),
+      Animated.timing(qtyFlashAnim, { toValue: 0, duration: 700, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+    ]).start();
+  }, [qtyFlashAnim, reduceMotion]);
+  /** The stepper's border while the flash is running. */
+  const qtyFlashBorder = qtyFlashAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['rgba(239,68,68,0)', 'rgba(239,68,68,1)'],
+  });
+  const qtyFlashBg = qtyFlashAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['rgba(239,68,68,0)', 'rgba(239,68,68,0.10)'],
+  });
+  // Cleared whenever the user moves to another item, so a flash cannot follow
+  // them onto a screen where it means nothing.
+  useEffect(() => { qtyFlashAnim.setValue(0); }, [reviewIdx, qtyFlashAnim]);
+
 
   /**
    * True while the review screen is showing an item with nothing to choose from.
@@ -7135,6 +7179,17 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
           // WHY the add is disabled, said out loud. Stock before quantity: a
           // quantity is something the reader can fix.
           const unaddableReason = reviewUnaddableReason(candidate, totalQty, storeName);
+          // THE QUANTITY IS THE ONLY BLOCKER, so the button stays pressable and
+          // refuses instead (MEAL-218). A disabled button cannot answer a press
+          // -- fireEvent.press does not even reach onPress on one -- and an
+          // answer is the whole mechanism: the alert has to be a REPLY to
+          // something the user did, or it is decoration they learn to ignore.
+          const qtyOnlyBlocker = qtyIsTheOnlyBlocker({
+            otherwiseReady: !customSearching && selectedSuggIdx !== 'custom'
+              && candidate != null && (isChoose || !candidate.outOfStock)
+              && (!needsPref || selectedPreference != null),
+            qty: isChoose ? chooseQty : totalQty,
+          });
           const canAdd = !customSearching && (
             selectedSuggIdx === 'custom'
               ? customText.trim().length > 0
@@ -7351,10 +7406,20 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                   const qtyRequired = qty === 0;
                   return (
                     <View key={mi.mealId} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: qtyRequired ? '#ef4444' : Colors.text2, flex: 1 }} numberOfLines={1}>
+                      {/* NEUTRAL ON ARRIVAL (MEAL-218). `qtyRequired` used to
+                          paint this red the moment the screen opened, before the
+                          user had done anything wrong. */}
+                      <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text2, flex: 1 }} numberOfLines={1}>
                         {showMealName ? mi.mealName : 'Qty to add to cart'}
                       </Text>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <Animated.View
+                        testID={`qty-stepper-${mi.mealId}`}
+                        style={{
+                          flexDirection: 'row', alignItems: 'center', gap: 12,
+                          borderWidth: 1, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2,
+                          borderColor: qtyFlashBorder, backgroundColor: qtyFlashBg,
+                        }}
+                      >
                         <TouchableOpacity
                           onPress={() => adjustReviewMealQty(reviewIdx, mi.mealId, -1)}
                           disabled={qty === 0}
@@ -7362,13 +7427,15 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                         >
                           <Text style={styles.qtyBtnText}>−</Text>
                         </TouchableOpacity>
-                        <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: qtyRequired ? '#ef4444' : Colors.text1, minWidth: 36, textAlign: 'center' }}>
-                          {isWeightCandidate ? weightLabel(qty) : qty}
+                        {/* A DASH, NOT A ZERO. "0" reads as a quantity someone
+                            chose; the dash says nothing has been chosen yet. */}
+                        <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: qtyRequired ? Colors.text3 : Colors.text1, minWidth: 36, textAlign: 'center' }}>
+                          {qtyDisplay(qty, isWeightCandidate ? weightLabel(qty) : null)}
                         </Text>
                         <TouchableOpacity onPress={() => { if (!isWeightCandidate || qty < maxWeightSteps) adjustReviewMealQty(reviewIdx, mi.mealId, 1); }} style={styles.qtyBtn}>
                           <Text style={styles.qtyBtnText}>+</Text>
                         </TouchableOpacity>
-                      </View>
+                      </Animated.View>
                     </View>
                   );
                 })}
@@ -7381,10 +7448,17 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                   <>
                     <View style={{ borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 12, gap: 6 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Text style={{ fontSize: 13, fontFamily: 'Inter_500Medium', color: chooseQty === 0 ? '#ef4444' : Colors.text2 }}>
+                        <Text style={{ fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text2 }}>
                           Qty for this meal
                         </Text>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <Animated.View
+                          testID="qty-stepper-choose"
+                          style={{
+                            flexDirection: 'row', alignItems: 'center', gap: 10,
+                            borderWidth: 1, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2,
+                            borderColor: qtyFlashBorder, backgroundColor: qtyFlashBg,
+                          }}
+                        >
                           <TouchableOpacity
                             onPress={() => setChooseQty((q) => Math.max(0, q - 1))}
                             disabled={chooseQty <= 0}
@@ -7392,22 +7466,24 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                           >
                             <Text style={styles.qtyBtnText}>−</Text>
                           </TouchableOpacity>
-                          <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: chooseQty === 0 ? '#ef4444' : Colors.text1, minWidth: 20, textAlign: 'center' }}>
-                            {isWeightCandidate ? weightLabel(chooseQty) : chooseQty}
+                          <Text style={{ fontSize: 14, fontFamily: 'Inter_600SemiBold', color: chooseQty === 0 ? Colors.text3 : Colors.text1, minWidth: 20, textAlign: 'center' }}>
+                            {qtyDisplay(chooseQty, isWeightCandidate ? weightLabel(chooseQty) : null)}
                           </Text>
                           <TouchableOpacity onPress={() => setChooseQty((q) => Math.min(q + 1, maxWeightSteps))} style={styles.qtyBtn}>
                             <Text style={styles.qtyBtnText}>+</Text>
                           </TouchableOpacity>
-                        </View>
+                        </Animated.View>
                       </View>
                       {chooseQty > 2 && !isWeightCandidate && (
                         <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#92400e', backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fbbf24', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 }}>
                           ⚠ {chooseQty} is a lot — does this come in a multipack or bulk size?
                         </Text>
                       )}
-                      {chooseQty === 0 && typeof selectedSuggIdx === 'number' && (
-                        <Text style={styles.qtyHint}>Set how many this meal needs.</Text>
-                      )}
+                      {/* The standing red hint is gone (MEAL-218). It was on
+                          from the moment the screen opened, which is what taught
+                          people to read red here as decoration. The stepper
+                          flashes when the button is pressed instead, and the
+                          button's own label already says Choose Quantity. */}
                     </View>
                     <View style={{ flexDirection: 'row', gap: 8 }}>
                       <TouchableOpacity
@@ -7418,9 +7494,14 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                         <Text style={styles.skipBtnText}>← Back</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
-                        onPress={() => handleReviewDecision('choose')}
-                        disabled={!canAdd || customSearching}
-                        style={[styles.primaryBtn, { flex: 1, backgroundColor: storeColor }, (!canAdd || customSearching) && { opacity: 0.4 }]}
+                        onPress={() => { if (qtyOnlyBlocker) { flashQty(); return; } handleReviewDecision('choose'); }}
+                        disabled={(!canAdd && !qtyOnlyBlocker) || customSearching}
+                        testID="review-primary"
+                        style={[styles.primaryBtn, { flex: 1, backgroundColor: storeColor },
+                                ((!canAdd && !qtyOnlyBlocker) || customSearching) && { opacity: 0.4 },
+                                // Dimmed while it refuses, so it does not look
+                                // ready -- but still pressable, so it can say why.
+                                qtyOnlyBlocker && { opacity: 0.55 }]}
                       >
                         <Text style={styles.primaryBtnText}>
                           {customSearching
