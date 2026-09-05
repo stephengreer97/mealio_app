@@ -17,7 +17,7 @@
 // only in a `useFocusEffect` with no deps, and the tab B lands on is the tab A
 // left open, so it never refocuses: A's saved meals are still rendered.
 // DiscoverScreen's saved-meal map and free-tier count have the same shape, and
-// CreatorPortalScreen and AdminScreen load once on mount and never reload.
+// CreatorPortalScreen loads once on mount and never reloads.
 //
 // The fix keys the tab tree on the account id, so the whole thing remounts and
 // every screen refetches through the load path it already has. What is pinned

@@ -10,7 +10,6 @@ import MyMealsScreen from '../screens/mymeals/MyMealsScreen';
 import AccountScreen from '../screens/account/AccountScreen';
 import CreatorPortalScreen from '../screens/creator/CreatorPortalScreen';
 import HelpScreen from '../screens/help/HelpScreen';
-import AdminScreen from '../screens/admin/AdminScreen';
 import BroadcastBanner from '../components/BroadcastBanner';
 
 export type MainTabsParamList = {
@@ -27,14 +26,13 @@ export type MainTabsParamList = {
    * it — the tap named a specific recipe.
    */
   Creator: { openQueue?: boolean; draftId?: string } | undefined;
-  Admin: undefined;
   Help: undefined;
 };
 
 const Tab = createBottomTabNavigator<MainTabsParamList>();
 
 export default function MainTabs() {
-  const { isCreator, isAdmin } = useAuth();
+  const { isCreator } = useAuth();
   // How many drafts are waiting. A badge and nothing else — see
   // CreatorDraftsContext for why nothing here interrupts.
   const { waiting } = useCreatorDrafts();
@@ -57,7 +55,6 @@ export default function MainTabs() {
           else if (route.name === 'MyMeals') iconName = focused ? 'restaurant' : 'restaurant-outline';
           else if (route.name === 'Account') iconName = focused ? 'person' : 'person-outline';
           else if (route.name === 'Creator') iconName = focused ? 'star' : 'star-outline';
-          else if (route.name === 'Admin') iconName = focused ? 'construct' : 'construct-outline';
           else if (route.name === 'Help') iconName = focused ? 'help-circle' : 'help-circle-outline';
           return <Ionicons name={iconName} size={size} color={color} />;
         },
@@ -96,13 +93,6 @@ export default function MainTabs() {
             tabBarBadge: waiting > 0 ? (waiting > 99 ? '99+' : waiting) : undefined,
             tabBarBadgeStyle: { backgroundColor: Colors.brand, fontSize: 10 },
           }}
-        />
-      )}
-      {isAdmin && (
-        <Tab.Screen
-          name="Admin"
-          component={AdminScreen}
-          options={{ tabBarLabel: 'Admin' }}
         />
       )}
       <Tab.Screen

@@ -41,7 +41,7 @@ export type PushPermission = 'granted' | 'denied' | 'undetermined';
  *   blocked     denied at the OS level; only Settings can undo it
  *   unsupported no remote push in this build (Expo Go)
  */
-export type PushStatus = 'on' | 'off' | 'blocked' | 'unsupported';
+export type PushStatus = 'on' | 'off' | 'blocked' | 'unsupported' | 'unregistered';
 
 /**
  * Remote push needs a development/production build plus APNs and FCM
@@ -197,7 +197,13 @@ export async function getPushStatus(): Promise<PushStatus> {
   if (!supportsRemotePush()) return 'unsupported';
   const permission = await getPermission();
   if (permission === 'denied') return 'blocked';
-  if (permission === 'granted' && !(await isOptedOut())) return 'on';
+  if (permission === 'granted' && !(await isOptedOut())) {
+    // Opted in and allowed, but is this device actually reachable? A stored
+    // token is the only evidence that registration ever succeeded, and without
+    // it "on" is a claim nothing can honour.
+    const token = await SecureStore.getItemAsync(TOKEN_KEY).catch(() => null);
+    return token ? 'on' : 'unregistered';
+  }
   return 'off';
 }
 
@@ -207,9 +213,10 @@ export async function getPushStatus(): Promise<PushStatus> {
  */
 export async function enablePush(): Promise<PushStatus> {
   await SecureStore.deleteItemAsync(OPT_OUT_KEY).catch(() => {});
-  const permission = await requestAndRegister();
-  if (permission === 'granted') return 'on';
-  return permission === 'denied' ? 'blocked' : 'off';
+  const outcome = await requestAndRegister();
+  if (outcome === 'granted') return 'on';
+  if (outcome === 'unregistered') return 'unregistered';
+  return outcome === 'denied' ? 'blocked' : 'off';
 }
 
 /**
@@ -235,7 +242,19 @@ export async function disablePush(): Promise<void> {
  * Returns the resulting permission state so the caller can show the "you'll
  * need to enable this in Settings" path without a second round trip.
  */
-export async function requestAndRegister(): Promise<PushPermission> {
+/**
+ * The outcome of asking. `granted` means the DEVICE IS REGISTERED, not merely
+ * that the OS said yes.
+ *
+ * The distinction is the whole point. This used to return 'granted' off the
+ * permission alone, so a build with no FCM credentials showed "Push
+ * notifications are on" over a server that had never heard of the device and
+ * never would. Permission is one of three things that have to be true; a token
+ * and a live server row are the others.
+ */
+export type RegisterOutcome = PushPermission | 'unregistered';
+
+export async function requestAndRegister(): Promise<RegisterOutcome> {
   if (!supportsRemotePush()) return 'denied';
 
   let status: PushPermission;
@@ -249,8 +268,15 @@ export async function requestAndRegister(): Promise<PushPermission> {
 
   await configureAndroidChannel();
   const token = await fetchExpoToken();
-  if (token) await registerToken(token);
-  return 'granted';
+  // NO TOKEN MEANS NOTHING CAN ARRIVE, whatever the OS said.
+  //
+  // MEASURED on the Pixel, 2026-09-05: getExpoPushTokenAsync threw
+  // "Default FirebaseApp is not initialized in this process" -- the build
+  // carries no FCM credentials -- and the screen still said notifications were
+  // on. Reporting success off the permission is how a feature looks enabled to
+  // the one person who could tell it is not.
+  if (!token) return 'unregistered';
+  return (await registerToken(token)) ? 'granted' : 'unregistered';
 }
 
 /**

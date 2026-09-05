@@ -126,8 +126,23 @@ describe('getPushStatus', () => {
     await expect(getPushStatus()).resolves.toBe('unsupported');
   });
 
-  it('reports on when permission is granted and the user has not opted out', async () => {
+  it('reports on when permission is granted, not opted out, AND a token is stored', async () => {
+    // The stored token is the third condition and it used to be missing.
+    // Permission is the OS saying yes; a token is this device being reachable.
+    secureStore[TOKEN_KEY] = 'ExponentPushToken[abc]';
     await expect(getPushStatus()).resolves.toBe('on');
+  });
+
+  it('reports unregistered when allowed and opted in but no token was ever obtained', async () => {
+    // MEASURED on the Pixel, 2026-09-05: getExpoPushTokenAsync threw "Default
+    // FirebaseApp is not initialized" because the build carries no FCM
+    // credentials, and the Account screen said "Push notifications are on" over
+    // a server that had never heard of the device and never would.
+    //
+    // A stored token is the only evidence registration ever succeeded, so
+    // without one "on" is a claim nothing can honour.
+    delete secureStore[TOKEN_KEY];
+    await expect(getPushStatus()).resolves.toBe('unregistered');
   });
 
   it('reports blocked when the OS denied it — only Settings can undo that', async () => {

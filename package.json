@@ -14,7 +14,6 @@
     "match-harness": "tsx tests/match-harness/score.ts",
     "match-harness:build": "tsx tests/match-harness/build-corpus.ts",
     "capture": "tsx tests/fixture-runners/capture-fixtures.ts",
-    "capture:server": "tsx tests/fixture-runners/capture-server.ts",
     "flow-maps": "node scripts/check-flow-maps.js",
     "flow-maps:bless": "node scripts/bless-flow-maps.js",
     "postinstall": "patch-package"

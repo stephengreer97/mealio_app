@@ -153,7 +153,7 @@ export default function RootNavigator() {
     // only in a `useFocusEffect` with no deps and DiscoverScreen's saved map and
     // meal count are the same shape, so B — whose tab did not change and
     // therefore never refocuses — is looking at A's saved meals and A's
-    // groceries. CreatorPortalScreen and AdminScreen load once on mount and
+    // groceries. CreatorPortalScreen loads once on mount and
     // never reload at all.
     //
     // Keying the tree on the account id makes that structural instead of

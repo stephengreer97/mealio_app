@@ -2,7 +2,10 @@
 //
 // Shared between:
 //   - tests/fixture-runners/capture-fixtures.ts   (Node Playwright capture)
-//   - mobile app's admin FixtureCaptureSheet      (real iOS WebView capture)
+//   - (removed 2026-09-05) the app's admin FixtureCaptureSheet, which captured
+//     a real WebView's outerHTML. It went with the Admin tab: it existed to
+//     grab MARKUP, and no rail reads markup any more. tests/fixture-runners/
+//     capture-fixtures.ts captures from a real browser and is the way now.
 //
 // Keep this module dependency-free (no React Native imports, no Playwright
 // imports) so both runtimes can pull it in cleanly.

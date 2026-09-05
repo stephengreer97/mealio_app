@@ -745,15 +745,24 @@ export default function AccountScreen() {
             <Text style={styles.cardTitle}>Notifications</Text>
             <Text style={styles.pushDesc}>
               {pushStatus === 'on'
-                ? "Push notifications are on. We'll only use them for things that need you — never marketing."
+                ? "Push notifications are on. We'll only use them for things that need you, never marketing."
+                : pushStatus === 'unregistered'
+                // SAY THAT IT DID NOT WORK. This state used to render as "on":
+                // the OS had said yes, no token could be obtained, and the
+                // screen claimed success over a server that had never heard of
+                // the device. Naming it is the difference between a user
+                // waiting for notifications that cannot come and a user who
+                // knows to try again.
+                ? "We could not finish turning these on for this device. Everything else works; you'll get emails instead. Try again, and if it keeps failing this build may be missing its notification setup."
                 : pushStatus === 'blocked'
                 ? 'Notifications are turned off for Mealio in your device settings. Everything still works; you just get emails instead.'
-                : "Get notified when something needs your attention. Everything works without them — you'll get emails instead."}
+                : "Get notified when something needs your attention. Everything works without them, and you'll get emails instead."}
             </Text>
             <Button
               label={
                 pushStatus === 'on' ? 'Turn Off Notifications'
                 : pushStatus === 'blocked' ? 'Open Settings'
+                : pushStatus === 'unregistered' ? 'Try Again'
                 : 'Turn On Notifications'
               }
               variant="secondary"

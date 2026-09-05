@@ -50,7 +50,7 @@ jest.mock('../../src/screens/mymeals/MyMealsScreen', () => () => null);
 jest.mock('../../src/screens/account/AccountScreen', () => () => null);
 jest.mock('../../src/screens/creator/CreatorPortalScreen', () => () => null);
 jest.mock('../../src/screens/help/HelpScreen', () => () => null);
-jest.mock('../../src/screens/admin/AdminScreen', () => () => null);
+
 jest.mock('../../src/components/BroadcastBanner', () => () => null);
 
 const mockAuth = { isCreator: true, isAdmin: false };
