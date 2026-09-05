@@ -959,3 +959,40 @@ export function recordPoolAddOutcome(tel: AutomationTelemetry, out: PoolAddOutco
     });
   } catch { /* telemetry must never throw into the engine */ }
 }
+
+/**
+ * The failure code for a request that reported itself (MEAL-219).
+ *
+ * A code is required on every failing row, and for a request the honest answer
+ * is whatever the store actually said. This is the mapping, in one place,
+ * rather than each rail guessing.
+ *
+ * IT IS DELIBERATELY COARSE, and the reason is worth writing down. The existing
+ * taxonomy has nine codes for a DOM run, and eighteen distinct network reasons
+ * already collapse into `match_rejected` — a store that 500s and a store whose
+ * catalogue lacks the item arrive as the same bar on the dashboard. Adding a
+ * tenth code would not fix that; the FIX is the `httpStatus` column, which is
+ * exact and groupable. So this maps to the nearest existing code purely to
+ * satisfy the "failing rows carry a code" rule, and the real answer lives in
+ * the status beside it.
+ *
+ * Append-only, like the rest: stored rows carry these as raw strings forever.
+ */
+export function requestFailureCode(
+  status: number | null | undefined,
+  why: string | null | undefined,
+): StepFailureCode {
+  // The wall. 403/429 are how every store in the catalogue says "not you", and
+  // 412/418 are Walmart's. Named first because nothing after a block is
+  // evidence of anything.
+  if (status === 403 || status === 429 || status === 412 || status === 418) return 'waf_block';
+  if (why === 'blocked') return 'waf_block';
+  if (status === 401) return 'auth_required';
+  // The request already spent its whole budget. Distinct from a store that
+  // answered badly, and the one failure the retry policy deliberately declines.
+  if (why === 'timeout' || (why === 'no_response' && !status)) return 'timeout';
+  // Everything else — 5xx, 4xx, an unparseable body — is the store failing to
+  // answer usefully. `confirm_failed` is the closest existing code that does
+  // not claim we picked the wrong product.
+  return 'confirm_failed';
+}

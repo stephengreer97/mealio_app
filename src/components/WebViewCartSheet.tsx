@@ -55,7 +55,7 @@ import { chooseAddStrategy, shouldWarmManualPage } from '../lib/automation-confi
 import Constants from 'expo-constants';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
-import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode } from '../lib/automation-telemetry';
+import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode, requestFailureCode, type StepPhase } from '../lib/automation-telemetry';
 import { diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { AddConfirmation, confirmDetail } from '../lib/cart-confirmation';
 import { attemptedFailureNames, auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
@@ -5873,6 +5873,42 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
             netFailedTermsRef.current.size, 'failed');
           if (netChooseOnlyRef.current) { netFinishChooseRef.current(); return; }
           netStartAdds();
+          return;
+        }
+        // ONE ROW PER REQUEST. MEAL-219.
+        //
+        // Posted by the shared retry helper, so every rail emits these without
+        // knowing it and a new rail gets them for free. Deliberately NOT tied to
+        // an item: under concurrency the request in flight is not the item being
+        // reported, and a status attributed to the wrong item is worse than no
+        // status at all.
+        //
+        // Recorded on its own step name rather than folded into the funnel's
+        // existing ones, because the funnel's step names describe a DOM run that
+        // no longer happens. The phase is the thing worth grouping on now.
+        if (msg.type === 'NET_REQUEST') {
+          const rq = msg as { phase?: string; op?: string; status?: number | null;
+                              why?: string | null; attempts?: number; ms?: number };
+          const common = {
+            phase: rq.phase as StepPhase | undefined,
+            httpStatus: typeof rq.status === 'number' ? rq.status : undefined,
+            attempts: typeof rq.attempts === 'number' ? rq.attempts : undefined,
+            rail: railConfigKey(lockedStoreIdRef.current),
+            durationMs: typeof rq.ms === 'number' ? rq.ms : undefined,
+            detail: { op: rq.op ?? null, why: rq.why ?? null, via: 'request' },
+          };
+          // Split rather than a ternary on the outcome: the overloads require a
+          // code on a failing row and refuse one on an ok row, which is the rule
+          // worth keeping — a failure with no code is a row the dashboard can
+          // count and cannot explain.
+          if (rq.why) {
+            tel().record('search', 'error', {
+              ...common,
+              code: requestFailureCode(rq.status ?? null, rq.why),
+            });
+          } else {
+            tel().record('search', 'ok', common);
+          }
           return;
         }
         if (msg.type === 'NET_ADD_RESULT') {
