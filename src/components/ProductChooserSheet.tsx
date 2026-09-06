@@ -18,7 +18,7 @@ import { Colors, Radius } from '../constants/colors';
 import { Meal } from '../types';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
 import { withStoreProduct, withoutStoreProducts } from '../lib/storeProducts';
-import { withPrep } from '../lib/formatMeasurement';
+import { ingredientAmount, withPrep } from '../lib/formatMeasurement';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
 
 type Step = 'searching' | 'picking' | 'saving' | 'done';
@@ -291,15 +291,21 @@ export default function ProductChooserSheet({
                 <Text style={styles.searchedName}>{(() => {
                   const ing = unchosenIngredients[pickIdx];
                   if (!ing) return current.ingredientName;
-                  // WITH THE PREPARATION (MEAL-102). This is the same "X calls
-                  // for …" sentence WebViewCartSheet renders, and that one has
-                  // carried prep since MEAL-102 while this one did not. It
-                  // matters most exactly here: choosing between a whole onion
-                  // and a bag of diced onion is easier when the line says which
-                  // the recipe asked for.
-                  const line = (!ing.unit || ing.unit === 'qty')
-                    ? ((ing.qty ?? 1) > 1 ? `${ing.ingredientName}, ${ing.qty}` : ing.ingredientName)
-                    : `${ing.ingredientName}, ${ing.measure ?? ing.qty ?? ''} ${ing.unit}`.replace(/\s+/g, ' ').trim();
+                  // THE SAME SENTENCE WebViewCartSheet RENDERS, built the same
+                  // way (MEAL-102). This screen used to hand-roll its own
+                  // amount format, which is how it drifted: it read `qty` and
+                  // ignored `measure`, so a row measured "2" with unit `qty`
+                  // showed a bare "Onion" while the cart sheet showed "2"; it
+                  // never singularised, so a one-cup row read "1 cups"; and it
+                  // printed "1 cloves" for a row that never stated an amount,
+                  // which is a quantity nobody wrote, spelled wrong.
+                  //
+                  // `ingredientAmount` is the one definition of that format and
+                  // `withPrep` the one definition of how a preparation joins a
+                  // line. Two screens with one string between them cannot
+                  // disagree if neither owns the string.
+                  const amount = ingredientAmount(ing);
+                  const line = amount ? `${ing.ingredientName}, ${amount}` : ing.ingredientName;
                   return withPrep(line, ing.prep);
                 })()}</Text>
               </View>

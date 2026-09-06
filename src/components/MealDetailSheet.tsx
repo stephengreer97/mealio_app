@@ -417,6 +417,7 @@ export default function MealDetailSheet({
                     <TouchableOpacity
                       style={[styles.collapsibleHeader, { marginTop: 8 }]}
                       onPress={() => setEditProductsExpanded((v) => !v)}
+                      testID="edit-products-toggle"
                     >
                       <Text style={styles.fieldLabel}>Products ({namedIngredients.length})</Text>
                       <Feather
@@ -427,7 +428,16 @@ export default function MealDetailSheet({
                     </TouchableOpacity>
                     {editProductsExpanded && namedIngredients.map(({ ing, origIdx }) => (
                       <View key={origIdx} style={[styles.productRow, { flexDirection: 'column', alignItems: 'stretch', gap: 6 }]}>
-                        <Text style={styles.productLabel} numberOfLines={1}>{ing.ingredientName}</Text>
+                        {/* WITH THE PREPARATION (MEAL-102). This label's whole
+                            job is saying WHICH row you are editing, and a meal
+                            with "onion, finely diced" and "onion, sliced" drew
+                            two rows both reading "Onion". The preparation is
+                            the only thing that tells them apart, and each of
+                            those rows has its own search-term input, so picking
+                            the wrong one is silent. */}
+                        <Text style={styles.productLabel} numberOfLines={1}>
+                          {withPrep(ing.ingredientName, ing.prep)}
+                        </Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
                           <TextInput
                             style={[styles.productSearchTermInput, { flex: 1 }]}
@@ -609,6 +619,7 @@ export default function MealDetailSheet({
                       <TouchableOpacity
                         style={styles.collapsibleHeader}
                         onPress={() => setProductsExpanded((v) => !v)}
+                        testID="products-toggle"
                       >
                         <Text style={styles.sectionLabel}>Products ({namedIngredients.length})</Text>
                         <Feather
@@ -619,8 +630,11 @@ export default function MealDetailSheet({
                       </TouchableOpacity>
                       {productsExpanded && namedIngredients.map((ing, i) => (
                         <View key={i} style={[styles.productRow, { flexDirection: 'column', alignItems: 'stretch', gap: 2 }]}>
+                          {/* The same identifying label as the editable list
+                              above, so two lists on one screen cannot disagree
+                              about how a row is named. */}
                           <Text style={styles.productRowLabel} numberOfLines={1}>
-                            {ing.ingredientName ?? ing.productName ?? ''}
+                            {withPrep(ing.ingredientName ?? ing.productName ?? '', ing.prep)}
                           </Text>
                           {ing.searchTerm ? (
                             <>

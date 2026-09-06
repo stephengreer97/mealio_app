@@ -109,3 +109,34 @@ describe('the line that says what the recipe asked for', () => {
     expect(JSON.stringify(sent)).not.toMatch(/finely diced/i);
   });
 });
+
+// ── The formatter the chooser used to hand-roll ─────────────────────────────
+//
+// The prep was the visible half of the divergence. Underneath it, this screen
+// had a SECOND amount formatter that disagreed with `ingredientAmount` in three
+// ways, and the first of them lost data on screen.
+describe('the amount, now from the shared formatter', () => {
+  it('shows a measure on a countable row, which the old formatter dropped', async () => {
+    // `{ qty: 1, unit: 'qty', measure: '2' }` rendered a bare "Onion" here and
+    // "2" in the cart sheet. The old code read `qty` and never looked at
+    // `measure`, so the amount the recipe actually stated vanished.
+    const view = renderChooser([ing({ measure: '2' })]);
+    await waitFor(() => expect(view.queryByText('Onion, 2')).toBeTruthy());
+  });
+
+  it('singularises a unit at an amount of one', async () => {
+    // Units are stored plural, and `unitLabel` singularises at 1. The old
+    // formatter interpolated the raw unit, so a one-cup row read "1 cups".
+    const view = renderChooser([ing({ ingredientName: 'Flour', unit: 'cups', measure: '1' })]);
+    await waitFor(() => expect(view.queryByText('Flour, 1 cup')).toBeTruthy());
+  });
+
+  it('does not invent a "1" for a unit the recipe never counted', async () => {
+    // "a clove of garlic" has a unit and never had an amount. The old
+    // formatter printed "1 cloves": a quantity nobody wrote, spelled wrong.
+    // `ingredientAmount` prints the unit alone, and this screen now agrees with
+    // every other one about that.
+    const view = renderChooser([ing({ ingredientName: 'Garlic', unit: 'cloves' })]);
+    await waitFor(() => expect(view.queryByText('Garlic, clove')).toBeTruthy());
+  });
+});
