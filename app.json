@@ -22,6 +22,7 @@
     },
     "android": {
       "package": "co.mealio.app",
+    "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#DD0031",
         "foregroundImage": "./assets/android-icon-foreground.png",

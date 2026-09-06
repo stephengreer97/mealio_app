@@ -69,6 +69,18 @@ logs/
 # Google Play service-account key for `eas submit` — never commit.
 google-play-service-account.json
 
+# FCM v1 service-account key (MEAL-225) — never commit. This is the one that can
+# SEND to every device we have a token for, and Firebase downloads it with a
+# generated name like `mealio-app-firebase-adminsdk-abc12-0123456789.json`, so
+# the pattern matters more than any one filename.
+#
+# NOT the same file as `google-services.json`, which IS committed and belongs in
+# the repo: that one carries the project and app ids that ship inside every APK
+# anyway, and EAS needs it present at build time. Confusing the two is the whole
+# reason both are named here.
+*firebase-adminsdk*.json
+firebase-service-account*.json
+
 # Test infrastructure — never commit these.
 # NOTE: git does not support inline comments in .gitignore. A trailing
 # comment becomes part of the pattern and the rule silently fails to match.
