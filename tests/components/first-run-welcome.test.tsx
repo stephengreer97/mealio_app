@@ -77,7 +77,12 @@ jest.mock('../../src/context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', tier: 'paid' }, refreshUser: jest.fn() }),
 }));
 jest.mock('../../src/lib/api', () => ({
-  presetMeals: { list: jest.fn(async () => ({ meals: [], hasMore: false })) },
+  presetMeals: {
+    list: jest.fn(async () => ({ meals: [], hasMore: false, matched: 0 })),
+    // The filter sheet's suggestions come from the server now, so a mock
+    // without this makes DiscoverScreen throw on mount.
+    facets: jest.fn(async () => ({ tags: [], authors: [] })),
+  },
   creators: { featured: jest.fn(async () => []) },
   meals: { list: jest.fn(async () => []) },
 }));

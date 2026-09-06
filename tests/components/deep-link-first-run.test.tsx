@@ -119,6 +119,7 @@ jest.mock('../../src/context/AuthContext', () => ({
 const mockGetPreset = jest.fn();
 jest.mock('../../src/lib/api', () => ({
   presetMeals: {
+    facets: jest.fn(async () => ({ tags: [], authors: [] })),
     list: jest.fn(async () => ({ meals: [], hasMore: false })),
     getById: (...a: unknown[]) => mockGetPreset(...a),
   },

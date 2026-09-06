@@ -38,13 +38,23 @@ interface FilterSheetProps {
   visible: boolean;
   initial: FilterValues;
   authorSuggestions?: string[];
+  /** Tags in use beyond the fixed vocabulary, from the server's facets. */
+  extraTags?: string[];
   onClose: () => void;
   onApply: (filters: FilterValues) => void;
 }
 
-export default function FilterSheet({ visible, initial, authorSuggestions = [], onClose, onApply }: FilterSheetProps) {
+export default function FilterSheet({ visible, initial, authorSuggestions = [], extraTags = [], onClose, onApply }: FilterSheetProps) {
   const [tags, setTags] = useState<string[]>(initial.tags);
   const [tagSearch, setTagSearch] = useState('');
+  // The fixed vocabulary plus every tag actually IN USE, which the server
+  // reports over the whole catalogue. A creator can publish a tag outside
+  // ALL_TAGS, and before this there was no way to filter by one from the app:
+  // it was not in the list and the list is the only way to select one.
+  const allTags = React.useMemo(
+    () => [...new Set([...ALL_TAGS, ...extraTags])],
+    [extraTags],
+  );
   const [difficulty, setDifficulty] = useState<number[]>(initial.difficulty);
   const [sort, setSort] = useState(initial.sort);
   const [authors, setAuthors] = useState<string[]>(initial.authors);
@@ -105,8 +115,8 @@ export default function FilterSheet({ visible, initial, authorSuggestions = [], 
   }
 
   const filteredTags = tagSearch.trim()
-    ? ALL_TAGS.filter((t) => t.toLowerCase().includes(tagSearch.toLowerCase()))
-    : ALL_TAGS;
+    ? allTags.filter((t) => t.toLowerCase().includes(tagSearch.toLowerCase()))
+    : allTags;
 
   const authorSuggFiltered = authorSuggestions.filter(
     (a) => authorInput.trim() && a.toLowerCase().includes(authorInput.toLowerCase()) && !authors.includes(a)

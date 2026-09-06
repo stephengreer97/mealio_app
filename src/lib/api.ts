@@ -377,6 +377,19 @@ export const presetMeals = {
     }));
   },
 
+  /**
+   * What the filter sheet can offer, over the WHOLE catalogue.
+   *
+   * The author list used to be built from the meals already loaded, so someone
+   * whose meals sat on page 4 was never suggested. The filter itself is free
+   * text and worked if you typed the name, which is why this degraded quietly
+   * instead of failing.
+   */
+  facets: () =>
+    request<{ tags: string[]; authors: string[] }>(
+      '/api/preset-meals/facets', { method: 'GET' },
+    ).then((r) => ({ tags: r.tags ?? [], authors: r.authors ?? [] })),
+
   getById: (id: string) =>
     request<{ meal: any }>(`/api/preset-meals/${id}`, { method: 'GET' })
       .then((r) => mapPresetMeal(r.meal)),

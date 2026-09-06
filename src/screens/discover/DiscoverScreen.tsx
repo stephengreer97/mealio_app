@@ -92,6 +92,18 @@ export default function DiscoverScreen() {
   // The search box reaches the server now, so it is debounced: typing
   // "chicken" is one request rather than seven, and 300ms still feels like the
   // list is following you.
+  const [facets, setFacets] = useState<{ tags: string[]; authors: string[] }>({ tags: [], authors: [] });
+  // Once. Facets come off the same 10-minute cached catalogue the feeds read
+  // and change only when a creator publishes, so refetching per segment would
+  // ask the same question again.
+  useEffect(() => {
+    let cancelled = false;
+    presetMealsApi.facets()
+      .then((f) => { if (!cancelled) setFacets(f); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   const [debouncedSearch, setDebouncedSearch] = useState('');
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(searchQuery), 300);
@@ -269,9 +281,11 @@ export default function DiscoverScreen() {
   const savedMeals = filteredMeals.filter((m) => !!savedMap[m.id]);
   const displayMeals = hasMore ? unsavedMeals : [...unsavedMeals, ...savedMeals];
 
-  const authorSuggestions = [...new Set(
-    meals.flatMap((m) => [m.author, m.creatorName]).filter((a): a is string => Boolean(a))
-  )];
+  // FROM THE SERVER, over the whole catalogue, not from the meals this screen
+  // happens to be holding. Someone whose meals sit on page 4 was never
+  // suggested; the filter is free text so typing the name still worked, which
+  // is why nobody would report it.
+  const authorSuggestions = facets.authors;
 
   // One card per item + numColumns={2} so FlatList can virtualize rows, instead
   // of manual index%2 pairing (which forced every item through renderItem).
@@ -412,6 +426,7 @@ export default function DiscoverScreen() {
         visible={filterVisible}
         initial={filters}
         authorSuggestions={authorSuggestions}
+        extraTags={facets.tags}
         onClose={() => setFilterVisible(false)}
         onApply={handleApplyFilters}
       />

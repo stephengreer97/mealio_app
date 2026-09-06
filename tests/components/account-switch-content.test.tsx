@@ -202,6 +202,7 @@ jest.mock('../../src/lib/api', () => ({
     delete: jest.fn(),
   },
   presetMeals: {
+    facets: jest.fn(async () => ({ tags: [], authors: [] })),
     list: (...a: unknown[]) => mockPresetList(...a),
     getById: jest.fn(),
   },
