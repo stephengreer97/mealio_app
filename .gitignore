@@ -81,6 +81,18 @@ google-play-service-account.json
 *firebase-adminsdk*.json
 firebase-service-account*.json
 
+# google-services.json — OUT of the repo, and the reasoning is worth keeping.
+#
+# Google documents the Android API key inside it as safe to embed, and that is
+# true: it ships in every APK and anyone can extract it. But this repository is
+# PUBLIC, GitHub's scanner flags it on every push, and an alert nobody can
+# action is how a real one comes to be ignored. It reaches EAS as a file-type
+# secret (`GOOGLE_SERVICES_JSON`) instead; app.config.js reads that path.
+#
+# It is still not the secret one. That is the *firebase-adminsdk* pattern above,
+# which can push to every device we hold a token for.
+google-services.json
+
 # Test infrastructure — never commit these.
 # NOTE: git does not support inline comments in .gitignore. A trailing
 # comment becomes part of the pattern and the rule silently fails to match.
