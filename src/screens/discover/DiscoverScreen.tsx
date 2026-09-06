@@ -89,10 +89,19 @@ export default function DiscoverScreen() {
   const welcomeChecked = React.useRef(false);
   const deepLinkBusy = useDeepLinkBusy();
 
+  // The search box reaches the server now, so it is debounced: typing
+  // "chicken" is one request rather than seven, and 300ms still feels like the
+  // list is following you.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
   useEffect(() => {
     setLoading(true);
     loadData(0, true);
-  }, [segment, filters]);
+  }, [segment, filters, debouncedSearch]);
 
   useEffect(() => {
     if (loading || welcomeChecked.current) return;
@@ -173,8 +182,16 @@ export default function DiscoverScreen() {
         presetMealsApi.list({
           limit: LIMIT,
           offset,
-          tags: filters.tags,
           sort: SEGMENT_SORT[segment],
+          // ALL of them, not just tags. These used to be applied below over the
+          // meals already loaded, so a filter meant "among the ones we happen
+          // to be holding" and scrolling revealed more matches.
+          tags: filters.tags,
+          difficulty: filters.difficulty,
+          authors: filters.authors,
+          ingredients: filters.ingredients,
+          excludeIngredients: filters.excludeIngredients,
+          q: debouncedSearch,
         }),
         featuredCreators.length === 0 ? creatorsApi.featured() : Promise.resolve(null),
       ]);
@@ -238,28 +255,16 @@ export default function DiscoverScreen() {
     filters.excludeIngredients.length > 0,
   ].filter(Boolean).length;
 
-  // Client-side filters
-  const filteredMeals = meals.filter((m) => {
-    const q = searchQuery.trim().toLowerCase();
-    if (q && !(m.name.toLowerCase().includes(q) || (m.creatorName ?? m.author ?? '').toLowerCase().includes(q))) return false;
-    if (filters.tags.length > 0 && !filters.tags.some((t) => m.tags?.includes(t))) return false;
-    if (filters.difficulty.length > 0 && !filters.difficulty.includes(m.difficulty ?? -1)) return false;
-    if (filters.authors.length > 0) {
-      const mAuthor = (m.creatorName ?? m.author ?? '').toLowerCase();
-      if (!filters.authors.some((a) => mAuthor.includes(a.toLowerCase()))) return false;
-    }
-    if (filters.ingredients.length > 0) {
-      const names = m.ingredients.map((i) => i.ingredientName.toLowerCase());
-      if (!filters.ingredients.every((ing) => names.some((n) => n.includes(ing)))) return false;
-    }
-    if (filters.excludeIngredients.length > 0) {
-      const names = m.ingredients.map((i) => i.ingredientName.toLowerCase());
-      if (filters.excludeIngredients.some((ex) => names.some((n) => n.includes(ex)))) return false;
-    }
-    return true;
-  });
+  // NO CLIENT-SIDE FILTERING. Every rule that narrows the catalogue runs on the
+  // server now, before the rows are cut into pages, because that is the only
+  // place all of them are visible at once. Re-applying them here would be
+  // harmless today and a second definition to drift tomorrow, and the drift is
+  // invisible: both sides look right on their own.
+  //
+  // Saved-vs-unsaved stays, and is not a filter. It is a reordering of what came
+  // back, from this device's own state that the server has no reason to know.
+  const filteredMeals = meals;
 
-  // Saved meals are held back until all pages are loaded so they always appear at the very end
   const unsavedMeals = filteredMeals.filter((m) => !savedMap[m.id]);
   const savedMeals = filteredMeals.filter((m) => !!savedMap[m.id]);
   const displayMeals = hasMore ? unsavedMeals : [...unsavedMeals, ...savedMeals];

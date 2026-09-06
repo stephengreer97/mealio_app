@@ -332,23 +332,48 @@ export const meals = {
 
 // Preset Meals
 export const presetMeals = {
-  list: (params: { limit?: number; offset?: number; tags?: string[]; difficulty?: string; sort?: string }) => {
+  /**
+   * EVERY FILTER GOES UP, and that is the point of this shape.
+   *
+   * They used to be applied on the phone over the meals already loaded, 20 at a
+   * time, so "vegetarian" meant "vegetarian among the ones we happen to be
+   * holding". Anything that narrows a set has to run before the set is cut into
+   * pages, which means it has to run on the server.
+   */
+  list: (params: {
+    limit?: number;
+    offset?: number;
+    sort?: string;
+    tags?: string[];
+    difficulty?: number[];
+    authors?: string[];
+    ingredients?: string[];
+    excludeIngredients?: string[];
+    q?: string;
+  }) => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.offset) query.set('offset', String(params.offset));
     if (params.tags?.length) query.set('tags', params.tags.join(','));
-    if (params.difficulty) query.set('difficulty', params.difficulty);
+    if (params.difficulty?.length) query.set('difficulty', params.difficulty.join(','));
+    if (params.authors?.length) query.set('authors', params.authors.join(','));
+    if (params.ingredients?.length) query.set('ingredients', params.ingredients.join(','));
+    if (params.excludeIngredients?.length) query.set('excludeIngredients', params.excludeIngredients.join(','));
+    if (params.q?.trim()) query.set('q', params.q.trim());
     // "following" uses a separate param; "new" uses sort=new; default is trending
     if (params.sort === 'following') {
       query.set('followed', 'true');
     } else if (params.sort === 'newest') {
       query.set('sort', 'new');
     }
-    return request<{ presetMeals: any[]; hasMore: boolean }>(
+    return request<{ presetMeals: any[]; hasMore: boolean; matched?: number }>(
       `/api/preset-meals?${query}`, { method: 'GET' }
     ).then((r) => ({
       meals: (r.presetMeals ?? []).map(mapPresetMeal),
       hasMore: r.hasMore ?? false,
+      // How many matched across the WHOLE catalogue, not how many came back in
+      // this page. Absent from an older server, so callers must tolerate null.
+      matched: r.matched ?? null,
     }));
   },
 
