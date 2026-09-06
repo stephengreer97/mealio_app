@@ -159,10 +159,6 @@ export default function NotificationSettingsSheet({
               </View>
             ))}
 
-            <Text style={styles.footnote}>
-              Turning a notification off here stops Mealio sending it. Your phone&apos;s own
-              settings can switch them all off too.
-            </Text>
           </ScrollView>
         )}
       </SafeAreaView>
@@ -198,5 +194,4 @@ const styles = StyleSheet.create({
     backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fbbf24',
     borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 8,
   },
-  footnote: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, marginTop: 20, lineHeight: 17 },
 });
