@@ -45,6 +45,7 @@ import PhotoPicker from '../../components/PhotoPicker';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import TagPicker from '../../components/TagPicker';
+import { useBottomSheetLift } from '../../lib/useKeyboardHeight';
 
 const FREE_LIMIT = 3;
 
@@ -206,6 +207,10 @@ export default function MyMealsScreen() {
   const [tagSearch, setTagSearch] = useState('');
   const [storePickerVisible, setStorePickerVisible] = useState(false);
   const [storeSearch, setStoreSearch] = useState('');
+  // The picker is a bottom-anchored overlay, so the keyboard used to open
+  // straight over the results its own search box was filtering. See
+  // `useBottomSheetLift` for why this is two values and not just a lift.
+  const pickerLift = useBottomSheetLift();
   const [saving, setSaving] = useState(false);
   const [photoPreview, setPhotoPreview] = useState('');
   const [photoUrl, setPhotoUrl] = useState('');
@@ -1221,7 +1226,7 @@ export default function MyMealsScreen() {
             {storePickerVisible && (
               <View style={styles.pickerOverlay}>
                 <TouchableOpacity style={styles.pickerBackdrop} onPress={() => setStorePickerVisible(false)} />
-                <View style={styles.pickerSheet}>
+                <View style={[styles.pickerSheet, pickerLift]}>
                   <View style={styles.pickerHeader}>
                     <Text style={styles.pickerTitle}>Select Store</Text>
                     <TouchableOpacity onPress={() => setStorePickerVisible(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>

@@ -27,6 +27,7 @@ import PhotoPicker from './PhotoPicker';
 import TagPicker from './TagPicker';
 import { useStores } from '../lib/store-catalog/useStores';
 import { withoutStoreProducts } from '../lib/storeProducts';
+import { useBottomSheetLift } from '../lib/useKeyboardHeight';
 
 interface MealDetailSheetProps {
   visible: boolean;
@@ -104,6 +105,10 @@ export default function MealDetailSheet({
   const [editStoreId, setEditStoreId] = useState('');
   const [storePickerVisible, setStorePickerVisible] = useState(false);
   const [storeSearch, setStoreSearch] = useState('');
+  // The picker is a bottom-anchored overlay, so the keyboard used to open
+  // straight over the results its own search box was filtering. See
+  // `useBottomSheetLift` for why this is two values and not just a lift.
+  const pickerLift = useBottomSheetLift();
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [author, setAuthor] = useState('');
   const [story, setStory] = useState('');
@@ -501,7 +506,7 @@ export default function MealDetailSheet({
               {storePickerVisible && (
                 <View style={styles.pickerOverlay}>
                   <TouchableOpacity style={styles.pickerBackdrop} onPress={() => setStorePickerVisible(false)} />
-                  <View style={styles.pickerSheet}>
+                  <View style={[styles.pickerSheet, pickerLift]}>
                     <View style={styles.pickerHeader}>
                       <Text style={styles.pickerTitle}>Select Store</Text>
                       <TouchableOpacity onPress={() => setStorePickerVisible(false)}>
