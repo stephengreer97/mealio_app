@@ -124,3 +124,53 @@ describe('the master switch', () => {
     expect(view.getByTestId('notif-toggle-broadcast').props.disabled).toBe(false);
   });
 });
+
+// ── When this device cannot receive anything ────────────────────────────────
+//
+// Stephen: "are we expecting the notifications page in Account settings to have
+// nothing in it?" No. Every account has at least "News from Mealio". What was
+// happening is that the LINK to this sheet was gated on `pushStatus === 'on'`,
+// and his device is `unregistered` -- the OS said yes and no token could be
+// obtained, because the build has no FCM credentials.
+//
+// `unregistered` is not a preference, it is a FAILURE. Gating on `on` alone
+// meant every Android user, on every build without FCM, could not see this
+// feature at all: not their categories, not what they had chosen, not that it
+// exists. The choices are per ACCOUNT, they store fine, and they apply the
+// moment a token arrives, so hiding it bought nothing but invisibility.
+//
+// It does have to SAY so, though, or it is a screen of switches that silently
+// do nothing on the device you are holding.
+describe('a device that cannot receive yet', () => {
+  const openUndeliverable = async () => {
+    mockGetPrefs.mockResolvedValue({ prefs: {}, categories: CATEGORIES });
+    const view = render(<NotificationSettingsSheet visible onClose={() => {}} deliverable={false} />);
+    await waitFor(() => expect(view.queryByTestId('notif-loading')).toBeNull());
+    return view;
+  };
+
+  it('says nothing will reach it', async () => {
+    const view = await openUndeliverable();
+    expect(view.queryByTestId('notif-undeliverable')).toBeTruthy();
+  });
+
+  it('still shows the categories, because the choices are per account', async () => {
+    const view = await openUndeliverable();
+    expect(view.queryByTestId(`notif-row-${CATEGORIES[0].id}`)).toBeTruthy();
+  });
+
+  it('still lets them be changed, so a choice made now applies later', async () => {
+    const view = await openUndeliverable();
+    await act(async () => {
+      fireEvent(view.getByTestId(`notif-toggle-${CATEGORIES[0].id}`), 'valueChange', false);
+    });
+    expect(mockSetPref).toHaveBeenCalledWith({ [CATEGORIES[0].id]: false });
+  });
+
+  it('says NOTHING of the sort when the device is fine', async () => {
+    // The notice has to be absent in the normal case, or it is permanent
+    // furniture that everyone learns to ignore.
+    const view = await open({}, CATEGORIES);
+    expect(view.queryByTestId('notif-undeliverable')).toBeNull();
+  });
+});

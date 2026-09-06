@@ -24,8 +24,22 @@ import { account } from '../lib/api';
 type Category = { id: string; label: string; description: string };
 
 export default function NotificationSettingsSheet({
-  visible, onClose,
-}: { visible: boolean; onClose: () => void }) {
+  visible, onClose, deliverable = true,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  /**
+   * Can this device actually receive a push right now?
+   *
+   * False when registration failed -- the OS said yes and no token could be
+   * obtained, which on Android means the build has no FCM credentials. The
+   * screen is still worth opening in that state: the choices are per ACCOUNT,
+   * they store fine, and they apply the moment a token exists. But it has to
+   * say so, or it is a screen of switches that silently do nothing on the
+   * device you are holding.
+   */
+  deliverable?: boolean;
+}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -110,6 +124,14 @@ export default function NotificationSettingsSheet({
 
             <View style={styles.divider} />
 
+            {!deliverable && (
+              <Text style={styles.notice} testID="notif-undeliverable">
+                This device cannot receive notifications yet, so nothing here will
+                reach it. Your choices are saved to your account and apply as soon
+                as it can.
+              </Text>
+            )}
+
             {categories.length === 0 && !error && (
               // Honest rather than an empty screen. It is also the true state
               // for an account with nothing to receive.
@@ -165,6 +187,12 @@ const styles = StyleSheet.create({
   rowDesc: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text3, marginTop: 2 },
   dimmed: { opacity: 0.45 },
   divider: { height: 1, backgroundColor: Colors.border, marginVertical: 6 },
+  notice: {
+    fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2,
+    backgroundColor: '#f0f6ff', borderWidth: 1, borderColor: '#c8dcf8',
+    borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10,
+    marginBottom: 10, lineHeight: 18,
+  },
   error: {
     fontSize: 13, fontFamily: 'Inter_500Medium', color: '#b45309',
     backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fbbf24',

@@ -769,11 +769,21 @@ export default function AccountScreen() {
               onPress={handleTogglePush}
               loading={pushBusy}
             />
-            {/* MEAL-217. Only while they are ON: choosing WHICH notifications
-                to receive is a question that means nothing to someone who
-                receives none, and offering it there would be a screen full of
-                switches that change nothing. */}
-            {pushStatus === 'on' && (
+            {/* MEAL-217. Hidden while notifications are OFF: choosing which to
+                receive means nothing to someone who receives none, and it would
+                be a screen of switches that change nothing.
+                
+                SHOWN WHEN REGISTRATION FAILED, and that distinction is the
+                point. `unregistered` is not a preference, it is a failure: the
+                user asked for notifications and the device could not get a
+                token. Gating on `on` alone meant that every Android user, on
+                every build without FCM credentials, could not see this feature
+                at all -- not their categories, not what they had chosen, not
+                that the feature exists. Their choices still store fine and
+                apply the moment a token arrives, so the only thing hiding it
+                bought was invisibility. The sheet says the device cannot
+                receive yet, so nobody is misled about what the switches do. */}
+            {(pushStatus === 'on' || pushStatus === 'unregistered') && (
               <TouchableOpacity
                 onPress={() => setNotifSettingsOpen(true)}
                 testID="open-notification-settings"
@@ -979,6 +989,7 @@ export default function AccountScreen() {
         </Modal>
 
         <NotificationSettingsSheet
+          deliverable={pushStatus === 'on'}
           visible={notifSettingsOpen}
           onClose={() => setNotifSettingsOpen(false)}
         />
