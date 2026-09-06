@@ -23,9 +23,10 @@
 flowchart TD
     D["<b>Discover</b><br/>GET /api/preset-meals"] --> SORT{"sort"}
     SORT -->|"default"| TR["<b>trending</b><br/><i>server-side RPC, cached 10 min,<br/>tag <code>trending-meals</code></i>"]
-    SORT -->|"<code>sort=new</code>"| NW["<b>new</b> — DB direct, no cache"]
-    SORT -->|"<code>followed=true</code>"| FL["<b>following</b> — DB direct, no cache"]
-    D -->|"filters"| F["tags · difficulty · limit/offset"]
+    SORT -->|"<code>sort=new</code>"| NW["<b>new</b> — cached catalogue, newest first"]
+    SORT -->|"<code>followed=true</code>"| FL["<b>following</b> — cached catalogue,<br/>scoped in memory to followed creators"]
+    D -->|"filters, ALL server-side"| F["tags · difficulty · authors ·<br/>ingredients · excludeIngredients · q<br/><i>applied BEFORE limit/offset</i>"]
+    F --- FWHY{{"FILTER THEN PAGINATE, in that order.<br/>These used to run in the browser and the app over the meals<br/>already loaded, so a filter meant 'among the 20 we happen to be<br/>holding' and scrolling revealed more matches. Only `tags` was ever<br/>sent, and on the website not even that.<br/><br/>lib/preset-meal-filters.ts is the one definition, shared by all three<br/>feeds. The clients no longer filter at all."}}
 
     TR --> CARD["a preset meal card"]
     NW --> CARD
@@ -182,11 +183,20 @@ flowchart TD
   can leak <code>qty: 0</code> from the chooser flow — which would otherwise disable the cart
   button entirely.</p>
 
-  <h2>Trending is cached; the other two sorts are not</h2>
+  <h2>All three sorts read a cached catalogue</h2>
   <p>Trending is computed by the <code>get_preset_meals_with_trending</code> RPC and cached
   server-side for 10 minutes under the tag <code>trending-meals</code>, invalidated whenever a
-  creator creates, updates or deletes a meal. "New" and "Following" query the database directly.
+  creator creates, updates or deletes a meal. "New" and "Following" used to query the database
+  directly with <code>.range()</code>, which is why they had no way to filter before paginating;
+  they now read <code>getCachedAllPresetMeals</code>, which shares that same cache and tag.
   The cache is server-side only — nothing in the app holds it.</p>
+
+  <h2>Following is scoped in memory, not with <code>.in()</code></h2>
+  <p>The old query put every followed creator id in the query string.
+  <code>creator_id=in.(…)</code> of n uuids is <code>15 + 37n</code> bytes, so a user following
+  222 creators produced an 8&nbsp;KB URI, PostgREST answered 414, supabase-js handed back
+  <code>data: null</code>, and the feed rendered empty with nothing to explain it. A Set lookup
+  over the cached catalogue has no URI to overflow.</p>
 </div>
 <script src="assets/mermaid.min.js"></script>
 <script src="assets/flow-init.js"></script>
