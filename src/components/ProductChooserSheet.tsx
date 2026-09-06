@@ -18,6 +18,7 @@ import { Colors, Radius } from '../constants/colors';
 import { Meal } from '../types';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
 import { withStoreProduct, withoutStoreProducts } from '../lib/storeProducts';
+import { withPrep } from '../lib/formatMeasurement';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
 
 type Step = 'searching' | 'picking' | 'saving' | 'done';
@@ -290,8 +291,16 @@ export default function ProductChooserSheet({
                 <Text style={styles.searchedName}>{(() => {
                   const ing = unchosenIngredients[pickIdx];
                   if (!ing) return current.ingredientName;
-                  if (!ing.unit || ing.unit === 'qty') return (ing.qty ?? 1) > 1 ? `${ing.ingredientName}, ${ing.qty}` : ing.ingredientName;
-                  return `${ing.ingredientName}, ${ing.measure ?? ing.qty ?? ''} ${ing.unit}`.replace(/\s+/g, ' ').trim();
+                  // WITH THE PREPARATION (MEAL-102). This is the same "X calls
+                  // for …" sentence WebViewCartSheet renders, and that one has
+                  // carried prep since MEAL-102 while this one did not. It
+                  // matters most exactly here: choosing between a whole onion
+                  // and a bag of diced onion is easier when the line says which
+                  // the recipe asked for.
+                  const line = (!ing.unit || ing.unit === 'qty')
+                    ? ((ing.qty ?? 1) > 1 ? `${ing.ingredientName}, ${ing.qty}` : ing.ingredientName)
+                    : `${ing.ingredientName}, ${ing.measure ?? ing.qty ?? ''} ${ing.unit}`.replace(/\s+/g, ' ').trim();
+                  return withPrep(line, ing.prep);
                 })()}</Text>
               </View>
               <Text style={styles.sectionLabel}>
