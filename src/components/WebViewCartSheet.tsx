@@ -8195,7 +8195,28 @@ const styles = StyleSheet.create({
   // Chromium throttles. This is the wrapper during qty -- which is exactly when
   // the search prewarm is working -- so hiding it that way cost the prewarm a
   // 28-second freeze and the run then WAITED on it.
-  webviewHidden: { position: 'absolute', top: 0, left: 0, width: 2, height: 2, opacity: 0.01, pointerEvents: 'none' as const },
+  // HIDDEN, BUT AT A REAL PHONE VIEWPORT. This was 2x2, and 2x2 is what
+  // Stephen saw as store pages "opening very zoomed in".
+  //
+  // MEASURED on the Pixel, 2026-09-07, from inside the page itself:
+  //
+  //   viewport { screen: 412, inner: 7, outer: 2, visual: 2, dpr: 2.625 }
+  //
+  // screen.width is right; the LAYOUT viewport is two pixels. The main WebView
+  // collapses to this style during the qty step, which is exactly when the
+  // search prewarm loads the storefront into it -- so the page lays out for a
+  // 2px window, and when the login step then shows the same WebView full size
+  // the page is already laid out and renders enormous. Chrome on the same
+  // device renders the identical page normally, which is what isolated this to
+  // our WebView rather than to the stores.
+  //
+  // It made the sign-in pages unusable rather than merely ugly: on Albertsons
+  // the account menu opened off-screen entirely.
+  //
+  // The fix is the one presearchOffscreen below already uses for the same
+  // reason -- a real viewport, moved off-screen rather than shrunk. Offscreen
+  // costs nothing; 2x2 costs the layout.
+  webviewHidden: { position: 'absolute', top: 0, left: 0, width: 414, height: 896, opacity: 0, transform: [{ translateX: 100000 }], pointerEvents: 'none' as const },
   // A parked pre-search worker while it's not being shown live: kept at a real
   // 414×896 viewport (so the results page paints and can be added into) but
   // pushed far offscreen and out of flow so it neither shows nor disturbs the
@@ -8233,8 +8254,20 @@ const styles = StyleSheet.create({
   // So the layer stays DRAWN: two pixels in the corner at 1% opacity, under the
   // animation. Invisible to the user, alive to Chromium. The rail is on
   // robots.txt doing pure fetches, so it has no use for a viewport.
+  //
+  // AND A REAL VIEWPORT WHILE IT IS DRAWN. "The rail has no use for a viewport"
+  // was true of the rail and false of what happens next: the moment the verdict
+  // is signed-out, this same WebView is handed to the USER at full size, with
+  // whatever it loaded while it was two pixels wide already laid out for two
+  // pixels. That is what Stephen saw as pages "opening very zoomed in", and on
+  // Albertsons it put the account menu off-screen entirely.
+  //
+  // Staying drawn is what keeps Chromium's timers alive, and opacity 0.01 is
+  // what makes it invisible -- neither of those needs it to be SMALL. So it
+  // keeps the 414x896 phone viewport every other offscreen surface in this file
+  // uses, at the same 1% opacity, over the animation it no longer obscures.
   hiddenLayer: {
-    position: 'absolute', left: 0, top: 0, width: 2, height: 2,
+    position: 'absolute', left: 0, top: 0, width: 414, height: 896,
     opacity: 0.01,
   },
   gridWrap: {

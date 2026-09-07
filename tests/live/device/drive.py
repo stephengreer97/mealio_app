@@ -178,3 +178,68 @@ def tap_xy(x, y):
     a viewer shows.
     """
     sh('adb', 'shell', 'input', 'tap', str(int(x)), str(int(y)))
+
+def sign_in(email_xy, pass_xy, submit_xy, c, settle=1.5, tab=True):
+    """Type an email and password into a store's form and submit.
+
+    TAB BETWEEN THE FIELDS, not a second tap. Focusing the email field raises
+    the keyboard, and on every form so far the keyboard then covers the password
+    field -- so the tap meant for the password lands on a key instead and only
+    the email is ever filled. TAB is where the form says the next field is.
+
+    The keyboard is dismissed with BACK (keyevent 4, not 111) before the submit
+    tap, because with it up the tap lands on the keyboard.
+    """
+    tap_xy(*email_xy); time.sleep(settle)
+    type_text(c['email']); time.sleep(settle)
+    if tab:
+        sh('adb', 'shell', 'input', 'keyevent', '61')
+    else:
+        tap_xy(*pass_xy)
+    time.sleep(settle)
+    type_text(c['password']); time.sleep(settle)
+    sh('adb', 'shell', 'input', 'keyevent', '4'); time.sleep(settle)
+    mark = log_mark()
+    tap_xy(*submit_xy)
+    return mark
+
+def clear_field(xy, n=90):
+    """Empty a text field.
+
+    MOVE_END first: a bare run of backspaces deletes from wherever the caret
+    happened to land, which on a tap into the middle of an existing value leaves
+    a prefix behind -- "ail.com stephen..." was a real one, and the form then
+    rejected it as an invalid address rather than failing in any obvious way.
+    """
+    tap_xy(*xy); time.sleep(1)
+    sh('adb', 'shell', 'input', 'keyevent', '123')      # MOVE_END
+    for _ in range(n):
+        sh('adb', 'shell', 'input', 'keyevent', '67')   # DEL
+    time.sleep(0.5)
+
+def dismiss_google_save():
+    """Decline Google Password Manager's offer to store what we just typed.
+
+    It appears after every store sign-in and covers the page. Declined rather
+    than accepted: these are Stephen's real credentials and a test run has no
+    business copying them into another store.
+    """
+    n = find('Not now')
+    if n:
+        tap(n)
+        time.sleep(1.5)
+        return True
+    return False
+
+def signed_in_rerun(chip):
+    """Scenario 3: close the sheet, start the same run again, and report what
+    the app decided. A pass is 'known logged in' with no login step at all."""
+    tap_xy(1007, 196); time.sleep(4)
+    n = find(chip, exact=True)
+    if n: tap(n); time.sleep(3)
+    tap_id('meal-card', timeout=25); time.sleep(2)
+    mark = log_mark()
+    tap_id('floating-add-to-cart', timeout=25); time.sleep(2)
+    tap_xy(539, 2113)
+    line, dt = log_wait(mark, r'known logged in|Sign in to continue|surfacing login|said logged out', 90)
+    return line, dt, log_since(mark, r'prewarm:|step= login|searching')

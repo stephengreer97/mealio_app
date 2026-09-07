@@ -659,6 +659,25 @@ ${icPrelude()}
       shoppingContext: 'delivery',
       shopTries: shopTries,
       shopFrom: shopTries.length ? shopTries[0].from : null,
+      // WHAT THE PAGE THINKS IT IS BEING RENDERED INTO.
+      //
+      // Stephen reported store pages opening "very zoomed in", and it is real
+      // and cross-store: measured on ALDI and Albertsons, while Chrome on the
+      // same device renders the identical page at normal mobile scale. That
+      // isolates it to our WebView rather than the sites, and these five
+      // numbers say which knob is wrong -- a layout viewport far narrower than
+      // the device is what makes everything render oversized.
+      viewport: (function () {
+        try {
+          return {
+            inner: window.innerWidth, outer: window.outerWidth,
+            screen: (window.screen || {}).width || null,
+            dpr: window.devicePixelRatio,
+            visual: window.visualViewport ? Math.round(window.visualViewport.width) : null,
+            scale: window.visualViewport ? window.visualViewport.scale : null,
+          };
+        } catch (e) { return null; }
+      })(),
       ms: carts.ms,
       harvested: IC.harvested || 0,
       source: 'activeCarts',
