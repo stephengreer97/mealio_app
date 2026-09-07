@@ -15,7 +15,7 @@ import { ALBERTSONS_RAIL } from './albertsons-network';
 import { INSTACART_RAIL } from './aldi-network';
 import { WEGMANS_RAIL } from './wegmans-network';
 import { ALBERTSONS_FAMILY_IDS } from './albertsons';
-import { isInstacartStore } from './instacart';
+import { isInstacartStore, INSTACART_TENANTS } from './instacart';
 
 /** What the session probe has to establish before a run can start. */
 export interface NetworkSession {
@@ -224,6 +224,24 @@ export function railConfigKey(storeId: string | null | undefined): string {
   if (!storeId) return '';
   if ((ALBERTSONS_FAMILY_IDS as readonly string[]).includes(storeId)) return 'albertsons';
   return storeId;
+}
+
+/**
+ * Has this store's rail been MEASURED against it, or is it only plumbed?
+ *
+ * Everything is proven except an Instacart banner registered with
+ * `proven: false` — a storefront whose origin and slug are confirmed but whose
+ * persisted GraphQL queries nobody has verified. See INSTACART_TENANTS.
+ *
+ * The one place it changes behaviour is a session probe that CANNOT ANSWER. On
+ * a proven store that means something broke and handing the user off is right.
+ * On a pending one it is the expected first result, and the remedy and the
+ * measurement are the same act: show them the storefront so they can sign in.
+ */
+export function isProvenStore(storeId: string | null | undefined): boolean {
+  if (!storeId) return true;
+  const tenant = INSTACART_TENANTS[storeId];
+  return tenant ? tenant.proven !== false : true;
 }
 
 export function getNetworkRail(storeId: string | null | undefined): NetworkRail | null {

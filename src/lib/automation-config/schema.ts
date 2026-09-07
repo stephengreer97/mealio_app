@@ -438,10 +438,17 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
     // Same knobs as ALDI: serial search and no cache-buster. Those were tuned
     // against ALDI's anti-bot and are a guess here, which is one more thing the
     // first signed-in session will tell us.
-    publix: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true },
-    sprouts: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true },
-    the_fresh_market: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true },
-    costco_sameday: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true },
+    //
+    // networkSearch AND networkAdd ARE ON, and leaving them off was a real bug
+    // rather than caution. Without them the run never enters the rail at all:
+    // it finds no DOM scripts either, and lands on "add it yourself" having
+    // learned nothing — which is exactly what the first Publix run did. A
+    // banner that cannot reach its own session probe cannot tell you whether
+    // its session probe works.
+    publix: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
+    sprouts: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
+    the_fresh_market: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
+    costco_sameday: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
     aldi: {
       enabled: true,
       platform: 'instacart',

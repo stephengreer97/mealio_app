@@ -34,7 +34,7 @@ import { getStores } from '../lib/store-catalog';
 import { useStores } from '../lib/store-catalog/useStores';
 import { buildBlankPageRecoveryScript } from '../lib/webview-scripts/blank-page-recovery';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
-import { getNetworkRail, railConfigKey, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
+import { getNetworkRail, railConfigKey, isProvenStore, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
 import { planSearchResume } from '../lib/webview-scripts/resume-search';
 import CartRunAnimation from './CartRunAnimation';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
@@ -5876,6 +5876,33 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
           console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));
           if (!msg.ok) {
             if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+            // A PROBE THAT CANNOT ANSWER IS NOT A SIGNED-OUT USER, and on a
+            // store whose rail has been measured, that means something broke:
+            // handing over is right.
+            //
+            // ON A PENDING BANNER IT IS THE EXPECTED FIRST RESULT (MEAL-220).
+            // The rail seeds ALDI's operation hashes and harvests the rest from
+            // the page; a storefront nobody has signed into yet may hand back
+            // no hashes at all, and `ok: false` is what that looks like. There
+            // is nothing to hand over ABOUT yet -- no search ran, no product was
+            // found -- so "add it yourself" is not the last resort here, it is
+            // giving up before the obvious next step. Show them the storefront:
+            // signing in is both the remedy if they were merely signed out and
+            // the measurement if the banner is genuinely different.
+            if (!isProvenStore(lockedStoreIdRef.current)) {
+              // Recorded either way. The reason is the whole point of running
+              // this, and surfacing a login screen must not swallow it.
+              telemetryRef.current.record('login_check', 'error', {
+                phase: 'session',
+                code: requestFailureCode(msg.status ?? null, msg.why),
+                detail: { why: msg.why ?? null, harvested: msg.harvested ?? null, pendingTenant: true },
+              });
+              console.log(`[Cart ${ts()}]`, 'network run: pending banner could not answer, surfacing login', JSON.stringify(msg));
+              netActiveRef.current = false;
+              netPhaseRef.current = 'idle';
+              surfaceLoginRef.current();
+              return;
+            }
             netHandOverToUser('session_' + (msg.why || 'failed'));
             return;
           }
