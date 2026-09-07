@@ -190,7 +190,7 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
       const rail = getNetworkRail(storeId);
       if (rail) {
         console.log('[Prewarm] probe', storeId, 'onLoadEnd (login) — asking over the network');
-        webviewRef.current?.injectJavaScript(rail.sessionScript());
+        webviewRef.current?.injectJavaScript(rail.sessionScript(storeId));
       }
     }
     // THE CART-PAGE BRANCH LIVED HERE, and it is gone with the last store that

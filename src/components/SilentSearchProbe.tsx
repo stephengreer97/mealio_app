@@ -98,7 +98,7 @@ export default function SilentSearchProbe({ storeId, terms, onCandidates, onDone
     if (!timeoutRef.current) {
       armTimeout(rail.budgets.sessionMs, () => finish('no session'));
     }
-    webviewRef.current?.injectJavaScript(rail.sessionScript());
+    webviewRef.current?.injectJavaScript(rail.sessionScript(storeId));
   }, [rail, storeId, armTimeout, finish]);
 
   const onMessage = useCallback((e: WebViewMessageEvent) => {
