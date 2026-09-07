@@ -118,3 +118,45 @@ export function sweepOldGenerationsJs(bases: string[]): string {
   } catch (e) {}
 })();`;
 }
+
+/**
+ * JS that deletes a STORE'S OWN cache keys once per sign-out generation.
+ *
+ * Different from sweepOldGenerationsJs, which orphans keys WE wrote. These are
+ * keys the store wrote, that we only read -- so they cannot be stamped without
+ * breaking the read, and they must not be deleted on every run either, because
+ * the store depends on them in normal use.
+ *
+ * They still have to go exactly once after a sign-out. Walmart keeps
+ * "glassCartIdMap" in localStorage, and its `isGuest` flag is the ONLY thing
+ * the rail's login check reads. localStorage survives CookieManager.clearAll,
+ * so after signing out of every grocery store the stale map still said
+ * isGuest:false and the probe reported a signed-out user as SIGNED IN --
+ * measured on the Pixel, 2026-09-07, on the one store whose login had not been
+ * driven yet.
+ *
+ * That is the direction that matters: a signed-out user waved through gets a
+ * run pointed at a guest cart they will never see again.
+ *
+ * A marker key records the generation this last ran for, so the deletion
+ * happens on the first run after a sign-out and never again until the next one.
+ */
+export function sweepForeignKeysOnceJs(keys: string[]): string {
+  const marker = '__mealio_foreign_swept';
+  // NOTHING TO CLEAR BEFORE THE FIRST SIGN-OUT. At generation zero the button
+  // has never been pressed, so a store's own cache is simply its cache and
+  // deleting it would be us breaking the storefront for no reason -- on every
+  // fresh install, once. Same rule sweepOldGenerationsJs follows.
+  if (currentEpoch() === 0) return '';
+  return `(function () {
+  try {
+    var gen = ${JSON.stringify(String(currentEpoch()))};
+    if (localStorage.getItem(${JSON.stringify(marker)}) === gen) return;
+    var keys = ${JSON.stringify(keys)};
+    for (var i = 0; i < keys.length; i++) {
+      try { localStorage.removeItem(keys[i]); } catch (e) {}
+    }
+    localStorage.setItem(${JSON.stringify(marker)}, gen);
+  } catch (e) {}
+})();`;
+}

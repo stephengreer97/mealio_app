@@ -198,7 +198,7 @@ def sign_in(email_xy, pass_xy, submit_xy, c, settle=1.5, tab=True):
         tap_xy(*pass_xy)
     time.sleep(settle)
     type_text(c['password']); time.sleep(settle)
-    sh('adb', 'shell', 'input', 'keyevent', '4'); time.sleep(settle)
+    hide_keyboard(); time.sleep(settle)
     mark = log_mark()
     tap_xy(*submit_xy)
     return mark
@@ -243,3 +243,20 @@ def signed_in_rerun(chip):
     tap_xy(539, 2113)
     line, dt = log_wait(mark, r'known logged in|Sign in to continue|surfacing login|said logged out', 90)
     return line, dt, log_since(mark, r'prewarm:|step= login|searching')
+
+def keyboard_up():
+    out = sh('adb', 'shell', 'dumpsys', 'input_method')
+    return 'mInputShown=true' in out
+
+def hide_keyboard():
+    """BACK, but only when the keyboard is actually up.
+
+    Pressing BACK with the keyboard already down closes the whole cart sheet and
+    throws the sign-in away. That cost two Albertsons attempts before it was
+    worth a check rather than a habit.
+    """
+    if keyboard_up():
+        sh('adb', 'shell', 'input', 'keyevent', '4')
+        time.sleep(1.2)
+        return True
+    return False

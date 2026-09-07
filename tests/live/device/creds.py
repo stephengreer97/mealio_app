@@ -17,6 +17,29 @@ def _blocks():
         if lines:
             yield lines
 
+def _repair_domain(email, others):
+    """Complete a domain that is missing its TLD.
+
+    Two entries in the file read "...@gmail" where the other six read
+    "...@gmail.com". The store rejects it as an invalid address, which looks
+    exactly like a typing bug in the harness and cost a run to tell apart.
+
+    Only ever completes from ANOTHER ENTRY IN THE SAME FILE with the identical
+    local part -- it does not invent a domain, and it leaves anything it cannot
+    corroborate untouched so a genuinely different address is never rewritten.
+    """
+    if not email or '@' not in email:
+        return email, False
+    loc, _, dom = email.partition('@')
+    if '.' in dom:
+        return email, False
+    for other in others:
+        oloc, _, odom = (other or '').partition('@')
+        if oloc == loc and odom.startswith(dom + '.'):
+            return loc + '@' + odom, True
+    return email, False
+
+
 def for_store(name):
     """{'store', 'email', 'password', 'note'} for a store, matched loosely so
     'aldi' finds 'ALDI' and 'heb' finds 'HEB'."""
@@ -30,6 +53,15 @@ def for_store(name):
                     out['email'] = l
                 elif l is not out.get('note') and 'password' not in out and '@' not in l:
                     out['password'] = l
+            allmails = []
+            for other in _blocks():
+                for l in other[1:]:
+                    if '@' in l:
+                        allmails.append(l)
+            fixed, did = _repair_domain(out.get('email', ''), allmails)
+            if did:
+                out['email'] = fixed
+                out['email_repaired'] = True
             return out
     return None
 
@@ -42,7 +74,7 @@ def describe(name):
         c['store'],
         ('yes(%d)' % len(c['email'])) if c.get('email') else 'no',
         ('yes(%d)' % len(c['password'])) if c.get('password') else 'no',
-        c.get('note', '')[:44])
+        (('REPAIRED domain; ' if c.get('email_repaired') else '') + c.get('note', ''))[:60])
 
 if __name__ == '__main__':
     for s in ['HEB', 'Albertsons', 'Kroger', 'Amazon Fresh', 'ALDI', 'Walmart', 'Wegmans', 'Publix']:

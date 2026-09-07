@@ -1,5 +1,6 @@
 import type { NetworkRail } from './network-rail';
 import { RETRY_FN } from './_retry';
+import { sweepForeignKeysOnceJs } from '../store-session-epoch';
 /**
  * Walmart, over the network.
  *
@@ -53,7 +54,17 @@ const SEARCH_VARS_TEMPLATE = '{"id":"","dealsId":"","query":"__TERM__","nudgeCon
 /** Cart identity and login state, both in one localStorage key. */
 const CART_MAP_KEY = 'glassCartIdMap';
 
-const WM_PRELUDE = `
+/**
+ * A FUNCTION, not a constant: the sign-out sweep below is stamped with the
+ * current generation, which a module-scope literal would freeze at import.
+ */
+const wmPrelude = () => `
+// SIGN-OUT HAS TO REACH glassCartIdMap. It is Walmart's key and we only read
+// it -- but what we read out of it is isGuest, which is the whole of this
+// rail's login check, and localStorage outlives the cookie clear. A stale map
+// therefore reported a signed-out user as signed in. Cleared once per sign-out;
+// the storefront rebuilds it on the next visit.
+${sweepForeignKeysOnceJs(['glassCartIdMap'])}
 ${RETRY_FN}
   var WM = window.__mealioWM = window.__mealioWM || {};
   WM.post = function (o) {
@@ -421,7 +432,7 @@ export interface WalmartAddItem {
 /** Who is signed in, and which cart. No network at all. */
 export function buildWalmartSessionScript(): string {
   return `(async function () {
-${WM_PRELUDE}
+${wmPrelude()}
   try {
     var m = WM.cartMap();
     if (!m || !m.cartId) {
@@ -443,7 +454,7 @@ ${WM_PRELUDE}
 /** Read the cart. One call, no page load. */
 export function buildWalmartCartReadScript(): string {
   return `(async function () {
-${WM_PRELUDE}
+${wmPrelude()}
   try {
     var m = WM.cartMap();
     if (!m || !m.cartId) {
@@ -491,7 +502,7 @@ ${WM_PRELUDE}
 export function buildWalmartNetworkSearchBatchScript(terms: string[]): string | null {
   if (!terms.length) return null;
   return `(async function () {
-${WM_PRELUDE}
+${wmPrelude()}
   var TERMS = ${JSON.stringify(terms)};
   var post = WM.post;
   try {
@@ -547,7 +558,7 @@ export function buildWalmartNetworkAddBatchScript(
   const writable = items.filter((i) => !!i.productId);
   if (!writable.length) return null;
   return `(async function () {
-${WM_PRELUDE}
+${wmPrelude()}
   var ITEMS = ${JSON.stringify(writable)};
   var ABSOLUTE = ${JSON.stringify(opts.absoluteQty ?? null)};
   var post = WM.post;

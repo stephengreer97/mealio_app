@@ -208,3 +208,71 @@ describe('sweeping old generations', () => {
     expect(store['__mealio_weg_tok_v1']).toBe('live');
   });
 });
+
+// ── A STORE'S OWN KEY, CLEARED ONCE ─────────────────────────────────────────
+//
+// Walmart keeps glassCartIdMap in localStorage and its isGuest flag is the
+// WHOLE of that rail's login check. localStorage outlives CookieManager
+// .clearAll, so after signing out of every grocery store the stale map still
+// said isGuest:false and the probe reported a signed-out user as SIGNED IN.
+// Measured on the Pixel 2026-09-07, on the last store whose login had not been
+// driven yet -- which is why it survived every earlier pass.
+//
+// It cannot be stamped like our own keys: we do not write it, and renaming it
+// would break the read it exists for. So it is deleted, exactly once per
+// sign-out.
+describe('clearing a store’s own cache after a sign-out', () => {
+  const { sweepForeignKeysOnceJs } = require('../../src/lib/store-session-epoch');
+
+  function run(js: string, store: Record<string, string>) {
+    const localStorage = {
+      get length() { return Object.keys(store).length; },
+      key: (i: number) => Object.keys(store)[i] ?? null,
+      getItem: (k: string) => (k in store ? store[k] : null),
+      setItem: (k: string, v: string) => { store[k] = v; },
+      removeItem: (k: string) => { delete store[k]; },
+    };
+    // eslint-disable-next-line no-new-func
+    if (js) new Function('localStorage', js)(localStorage);
+  }
+
+  it('does nothing at all before the first sign-out', async () => {
+    // A fresh install has nothing to clear, and clearing would break the
+    // storefront once for no reason.
+    await loadEpoch();
+    expect(sweepForeignKeysOnceJs(['glassCartIdMap'])).toBe('');
+  });
+
+  it('clears the key on the first run after a sign-out', async () => {
+    await loadEpoch();
+    await bumpEpoch();
+    const store: Record<string, string> = { glassCartIdMap: '{"isGuest":false}', other: 'keep' };
+    run(sweepForeignKeysOnceJs(['glassCartIdMap']), store);
+    expect(store.glassCartIdMap).toBeUndefined();
+    expect(store.other).toBe('keep');
+  });
+
+  it('leaves it alone on every run after that', async () => {
+    // The store rebuilds the map immediately, and deleting it on every run
+    // would throw away the cart identity mid-session.
+    await loadEpoch();
+    await bumpEpoch();
+    const store: Record<string, string> = { glassCartIdMap: 'old' };
+    const js = sweepForeignKeysOnceJs(['glassCartIdMap']);
+    run(js, store);
+    store.glassCartIdMap = 'rebuilt by the storefront';
+    run(js, store);
+    expect(store.glassCartIdMap).toBe('rebuilt by the storefront');
+  });
+
+  it('clears again after the NEXT sign-out', async () => {
+    await loadEpoch();
+    await bumpEpoch();
+    const store: Record<string, string> = { glassCartIdMap: 'a' };
+    run(sweepForeignKeysOnceJs(['glassCartIdMap']), store);
+    store.glassCartIdMap = 'rebuilt';
+    await bumpEpoch();
+    run(sweepForeignKeysOnceJs(['glassCartIdMap']), store);
+    expect(store.glassCartIdMap).toBeUndefined();
+  });
+});
