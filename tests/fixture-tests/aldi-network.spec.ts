@@ -42,6 +42,9 @@ function gqlStub(opts: {
   details?: unknown;
   fail?: string;
   failCode?: string;
+  /** The carts the signed-in ACCOUNT holds, across retailers. Defaults to one
+   *  ALDI cart, which is every case that existed before a second banner. */
+  carts?: Array<{ id: string; itemCount: number; slug: string; retailerId?: string }>;
 } = {}) {
   const cart = opts.cart ?? {};
   const ids = opts.searchIds ?? ['items_23898-1', 'items_23898-2'];
@@ -99,8 +102,11 @@ function gqlStub(opts: {
     '        { errors: [{ message: "nope", extensions: { code: FAILCODE } }] })); } });',
     '    }',
     '    if (body.operationName === "ActiveCarts") {',
-    '      data = { userCarts: { carts: [{ id: "16636288909", itemCount: 0,',
-    '        retailer: { id: "12", name: "ALDI", slug: "aldi" } }] } };',
+    '      data = { userCarts: { carts: ' + JSON.stringify(
+        (opts.carts ?? [{ id: '16636288909', itemCount: 0, slug: 'aldi', retailerId: '12' }])
+          .map((c) => ({ id: c.id, itemCount: c.itemCount,
+                         retailer: { id: c.retailerId ?? '12', name: c.slug, slug: c.slug } })),
+      ) + ' } };',
     '    } else if (body.operationName === "CartItems") {',
     '      data = { userCart: { id: "16636288909", cartItemCollection: { cartItems: cartLines() } } };',
     '    } else if (body.operationName === "AsyncItemSearch") {',
@@ -417,4 +423,52 @@ describe('the add reads the cart it is writing to', () => {
     const writes = await runner.page.evaluate('window.__writes') as unknown[];
     expect(writes).toHaveLength(0);
   }, AT_ALDI);
+});
+
+// ── ONE ACCOUNT, SEVERAL RETAILERS ──────────────────────────────────────────
+//
+// Stephen, after Publix reached the rail: "I'm not actually sure if I'm logged
+// in though. Do all instacart stores share a login?"
+//
+// The cookies do not — each banner is its own domain. But ActiveCarts is an
+// ACCOUNT-level query: it answers with every cart the signed-in Instacart
+// account holds, across retailers, which is why the session probe has always
+// matched on retailer.slug.
+//
+// The cart READ and the cart WRITE did not match. Both took the first entry.
+// With ALDI as the only tenant that was invisible — the only cart an ALDI
+// account could hold was an ALDI cart. With a second banner it is reading, and
+// then writing, somebody else's cart.
+describe('a cart belongs to a retailer', () => {
+  itWithFixture('storefront.html', 'the session probe ignores another retailer\'s cart', async (runner) => {
+    // The account holds an ALDI cart and nothing at Publix.
+    await runner.inject(gqlStub({ carts: [{ id: 'cart-aldi-1', itemCount: 4, slug: 'aldi' }] }));
+    await runner.inject(buildAldiSessionScript('publix'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.ok).toBe(true);
+    // Signed out is the WRONG-BUT-SAFE answer: it shows a login screen rather
+    // than pointing a run at a cart the user was never shopping.
+    expect(msg.loggedIn).toBe(false);
+    expect(msg.cartId ?? null).toBeNull();
+  });
+
+  itWithFixture('storefront.html', 'and takes its own when it is there', async (runner) => {
+    await runner.inject(gqlStub({ carts: [
+      { id: 'cart-aldi-1', itemCount: 4, slug: 'aldi' },
+      { id: 'cart-publix-9', itemCount: 2, slug: 'publix', retailerId: '77' },
+    ] }));
+    await runner.inject(buildAldiSessionScript('publix'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.loggedIn).toBe(true);
+    // The Publix cart, not the first one in the list.
+    expect(msg.cartId).toBe('cart-publix-9');
+  });
+
+  itWithFixture('storefront.html', 'ALDI is unchanged, which is what makes this safe to ship', async (runner) => {
+    await runner.inject(gqlStub());
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.loggedIn).toBe(true);
+    expect(msg.cartId).toBe('16636288909');
+  });
 });

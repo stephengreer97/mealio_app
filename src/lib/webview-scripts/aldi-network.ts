@@ -317,6 +317,30 @@ ${RETRY_FN}
     }
     return tries;
   };
+
+// The signed-in user's cart AT THIS RETAILER, or null.
+//
+// ActiveCarts is an ACCOUNT-level query: it answers with every cart the
+// signed-in Instacart account holds, across retailers. The session probe has
+// always matched on retailer.slug for exactly that reason. The cart READ and
+// the cart WRITE did not -- both took the first entry -- and with one tenant
+// that was invisible, because the only cart an ALDI account could have was an
+// ALDI cart.
+//
+// With a second banner it stops being invisible and becomes the worst class of
+// bug this project has: reading, and then WRITING, somebody else's cart.
+// "Exact match in the add path, no exceptions" is the standing rule, and a cart
+// is the most exact thing in it.
+//
+// No backticks anywhere above. This comment lives INSIDE a template literal,
+// and one backtick here ends the literal early and stops the module compiling.
+function pickCartFor(list, slug) {
+  for (var i = 0; i < list.length; i++) {
+    var rt = list[i].retailer || {};
+    if (String(rt.slug || '') === slug) return list[i];
+  }
+  return null;
+}
 `;
 
 /** The session probe: who is signed in, and which cart is theirs. */
@@ -338,12 +362,13 @@ ${IC_PRELUDE}
     var uc = (carts.data && carts.data.userCarts) || null;
     var list = (uc && uc.carts) || [];
     if (!uc) { post({ ok: true, loggedIn: false, source: 'activeCarts' }); return; }
-    var mine = null;
-    for (var i = 0; i < list.length; i++) {
-      var rt = list[i].retailer || {};
-      if (String(rt.slug || '') === '${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}') { mine = list[i]; break; }
-    }
-    if (!mine && list.length) mine = list[0];
+    // NO FALLBACK TO list[0]. It used to take any cart when this retailer's was
+    // missing, which on a single-tenant rail could only ever be ALDI's own and
+    // on a second banner is somebody else's. A user signed in with carts
+    // elsewhere and none here now reads as signed out, which shows them the
+    // login screen: the wrong-but-safe answer, rather than a run pointed at
+    // another retailer's cart.
+    var mine = pickCartFor(list, '${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}');
     var shopTries = await IC.findShopId('${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}', 20000);
     // THE SHOP ID IS NOT THE RETAILER ID, and confusing them searches the wrong
     // catalogue. The retailer is ALDI-the-chain (12). The shop is the branch the
@@ -558,8 +583,10 @@ ${IC_PRELUDE}
     }
     var list = [];
     try { list = carts.data.userCarts.carts || []; } catch (e) {}
-    if (!list.length) { IC.post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' }); return; }
-    var cartId = String(list[0].id);
+    // THIS RETAILER'S CART, not the first one the account happens to hold.
+    var mineCart = pickCartFor(list, '${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}');
+    if (!mineCart) { IC.post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' }); return; }
+    var cartId = String(mineCart.id);
     var items = await IC.gql('CartItems', { id: cartId, shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000, 'cart_read');
     if (!items.ok) {
       IC.post({ type: 'CART_COUNT', count: null, source: 'network', reason: 'rail_read_failed',
@@ -706,8 +733,12 @@ ${IC_PRELUDE}
     if (!carts.ok) return null;
     var list = [];
     try { list = carts.data.userCarts.carts || []; } catch (e) {}
-    if (!list.length) return null;
-    var cartId = String(list[0].id);
+    // THIS RETAILER'S CART. Same reason as the read above, and this one is on
+    // the WRITE path's before-snapshot: getting it wrong reconciles the add
+    // against a cart the user was never shopping.
+    var mineCart = pickCartFor(list, '${opts.slug ?? 'aldi'}');
+    if (!mineCart) return null;
+    var cartId = String(mineCart.id);
     var items = await IC.gql('CartItems', { id: cartId, shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000, 'cart_read');
     // A CART THAT COULD NOT BE READ IS NOT AN EMPTY CART.
     //
