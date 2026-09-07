@@ -442,27 +442,32 @@ ${IC_PRELUDE}
     var who = await IC.gql('CurrentUser', {}, 8000, 'session');
     var acct = (function () {
       var out = { answered: !!who.ok, status: who.status || null, keys: [],
-                  userPresent: false, userIdLen: 0, path: null };
+                  cuKeys: [], idLen: 0, emailPresent: false, namePresent: false,
+                  cuNull: null };
       if (!who.ok || !who.data) return out;
       try {
         out.keys = Object.keys(who.data);
-        // Breadth-first, shallow. An id under a user-ish key is the signal; the
-        // VALUE of that id never leaves the page, only its length.
-        var q = [{ v: who.data, p: '' }], seen = 0;
-        while (q.length && seen < 40) {
-          var cur = q.shift(); seen++;
-          if (!cur.v || typeof cur.v !== 'object') continue;
-          var k = Object.keys(cur.v);
-          for (var i = 0; i < k.length; i++) {
-            var key = k[i], val = cur.v[key], path = cur.p ? cur.p + '.' + key : key;
-            if (/^(id|uuid|userId)$/i.test(key) && (typeof val === 'string' || typeof val === 'number')
-                && /user|viewer|account|me/i.test(cur.p || '')) {
-              out.userPresent = true;
-              out.userIdLen = String(val).length;
-              out.path = cur.p;
-            }
-            if (val && typeof val === 'object' && path.split('.').length < 4) q.push({ v: val, p: path });
-          }
+        // NOW SHAPE-AWARE, because the shape came back measured rather than
+        // imagined: CurrentUser answers { currentUser: { ... } }.
+        //
+        // The first version of this walked the response for any id under a
+        // user-ish path and found one -- at currentUser.viewSection.avatarImage.
+        // That is an AVATAR IMAGE id, and it reported userPresent: true on the
+        // strength of it. A picture is not a person; a signed-out visitor is
+        // served a default avatar like everyone else. So the walk was answering
+        // a question about image assets and I was reading it as authentication.
+        //
+        // What goes on the wire now is the SHAPE of currentUser: whether it is
+        // null, which of its own keys exist, and the LENGTH of its id. An
+        // account id, an email and a name are none of a log file's business, so
+        // the first is measured and the other two are reduced to booleans.
+        var cu = who.data.currentUser;
+        out.cuNull = cu === null;
+        if (cu && typeof cu === 'object') {
+          out.cuKeys = Object.keys(cu);
+          if (cu.id != null) out.idLen = String(cu.id).length;
+          out.emailPresent = !!cu.email;
+          out.namePresent = !!(cu.firstName || cu.name || cu.lastName);
         }
       } catch (e) {}
       return out;
@@ -1075,6 +1080,8 @@ function railTenantId(storeId: string | null | undefined): string {
 
 export const INSTACART_RAIL: NetworkRail = {
   sessionMessageType: 'ALDI_SESSION',
+  // robots.txt cannot answer this one. The ops live in the storefront bundle.
+  sessionNeedsStorefront: true,
   // THE TENANT, not a default -- and it is no longer quietly turned into one.
   // Dropping it here is what made Publix report a signed-in user as signed out:
   // the probe matched carts against ALDI's slug. `?? 'aldi'` stood here and did

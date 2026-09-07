@@ -32,6 +32,7 @@ import {
   buildAldiSessionScript,
   buildAldiCartReadScript,
 } from '../../../src/lib/webview-scripts/aldi-network';
+import { getNetworkRail } from '../../../src/lib/webview-scripts/network-rail';
 
 const TENANTS = Object.entries(INSTACART_TENANTS);
 
@@ -110,5 +111,37 @@ describe('the Instacart rail, across every registered tenant', () => {
         expect(String((e as Error).message)).toContain('aldi');
       }
     });
+  });
+});
+
+// ── THE QUIET PAGE CANNOT ANSWER THIS ONE ───────────────────────────────────
+//
+// Stephen, 2026-09-07: "I just ran a search product for ALDI and it asked me to
+// sign in but upon checking, I was already signed in."
+//
+// One run on his device, six seconds apart, same account:
+//
+//   11:52:46  robots.txt  -> ActiveCarts 401, harvested 0, "signed out"
+//   11:52:54  storefront  -> ActiveCarts 200, harvested 6, SIGNED IN
+//
+// The 401 was about which page the WebView was parked on, not about him. Rails
+// park the login check on robots.txt so their requests are not queued behind
+// the store's bundles, and for a cookie-borne session that is free. Instacart's
+// operation hashes live IN that bundle, so from robots.txt the probe has
+// nothing to ask with -- harvested 0 -- and reports the failure as "signed out".
+describe('which page the login check parks on', () => {
+  it('sends the Instacart rail to the storefront, not the quiet page', () => {
+    expect(INSTACART_RAIL.sessionNeedsStorefront).toBe(true);
+  });
+
+  it('leaves every other rail on the quiet page', () => {
+    // This flag costs a storefront load, so it is opt-in per rail rather than a
+    // new default. A cookie-borne session answers the same from either page and
+    // should keep the cheap one.
+    for (const id of ['heb', 'walmart', 'wegmans', 'albertsons']) {
+      const rail = getNetworkRail(id);
+      if (!rail) continue;
+      expect(`${id}: ${!!rail.sessionNeedsStorefront}`).toBe(`${id}: false`);
+    }
   });
 });

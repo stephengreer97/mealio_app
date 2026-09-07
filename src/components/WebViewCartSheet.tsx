@@ -3638,8 +3638,13 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     setStep('login_check');
     setSearchingLabel('Checking login…');
     loadQueueRef.current = [check];
-    const rail = !!getNetworkRail(lockedStoreIdRef.current);
-    const where = (rail && scriptsRef.current!.railUrl) || scriptsRef.current!.storeUrl;
+    const rail = getNetworkRail(lockedStoreIdRef.current);
+    // THE QUIET PAGE, unless this rail cannot answer from it. Instacart's
+    // session probe reads operation hashes out of the storefront's own bundle,
+    // so on robots.txt it answers "signed out" for a signed-in user and the
+    // repair then costs a storefront load with a sign-in screen on top of it.
+    const where = (rail && !rail.sessionNeedsStorefront && scriptsRef.current!.railUrl)
+      || scriptsRef.current!.storeUrl;
     navToRef.current(where);
     armLoginCheckTimeout();
   }, [setStep, loginCheckScript, armLoginCheckTimeout, setWebviewUri]);

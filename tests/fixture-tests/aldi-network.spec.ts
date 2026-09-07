@@ -132,7 +132,8 @@ function gqlStub(opts: {
     '    } else if (body.operationName === "CurrentUser") {',
     '      data = ' + JSON.stringify(
       opts.currentUser === undefined
-        ? { currentUser: { id: 'usr_00000001', firstName: 'S' } }
+        ? { currentUser: { id: 'usr_00000001', firstName: 'NAMEVALUE',
+                           email: 'EMAILVALUE@example.com' } }
         : opts.currentUser) + ';',
     '    } else if (body.operationName === "CartItems") {',
     '      data = { userCart: { id: "16636288909", cartItemCollection: { cartItems: cartLines() } } };',
@@ -735,12 +736,21 @@ describe('being signed in, as distinct from having a cart', () => {
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     const acct = msg.acct as Record<string, unknown>;
     expect(acct.answered).toBe(true);
-    expect(acct.userPresent).toBe(true);
+    expect(acct.cuNull).toBe(false);
+    expect(acct.namePresent).toBe(true);
     // The id's LENGTH travels; the id does not, and neither does the name.
-    expect(acct.userIdLen).toBe('usr_00000001'.length);
+    expect(acct.idLen).toBe('usr_00000001'.length);
+    expect(acct.cuKeys).toEqual(['id', 'firstName', 'email']);
+    expect(acct.emailPresent).toBe(true);
+    // KEY NAMES travel, VALUES do not, and the difference is the whole design:
+    // cuKeys is how the guest rule gets settled, so it has to say which fields
+    // exist -- while the id, the name and the email behind those fields are
+    // exactly what must never reach a log file Stephen mails around.
     const wire = JSON.stringify(msg);
+    expect(acct.cuKeys).toContain('email');
     expect(wire).not.toContain('usr_00000001');
-    expect(wire).not.toContain('firstName');
+    expect(wire).not.toContain('NAMEVALUE');
+    expect(wire).not.toContain('EMAILVALUE');
   });
 
   itWithFixture('storefront.html', 'a 200 with no user does NOT wall the user yet', async (runner) => {
@@ -755,7 +765,9 @@ describe('being signed in, as distinct from having a cart', () => {
     await runner.inject(gqlStub({ currentUser: { currentUser: null } }));
     await runner.inject(buildAldiSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
-    expect((msg.acct as Record<string, unknown>).userPresent).toBe(false);
+    // cuNull is the field that would drive the strict rule, and here it is
+    // TRUE -- a guest, plainly. It still does not wall anyone yet.
+    expect((msg.acct as Record<string, unknown>).cuNull).toBe(true);
     expect(msg.loggedIn).toBe(true);
   });
 });

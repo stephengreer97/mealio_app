@@ -48,6 +48,33 @@ export interface NetworkRail {
    * serves one banner (or a family that shares an answer) and ignores it.
    */
   sessionScript(storeId?: string | null): string;
+
+  /**
+   * Does this rail's session probe need the STOREFRONT, not the quiet page?
+   *
+   * Rails park the login check on robots.txt so their requests are not queued
+   * behind the storefront's own bundles. For a rail whose session is carried by
+   * a cookie, that is free: same origin, same cookie, same answer.
+   *
+   * Instacart is not that. Its persisted-operation hashes live in the
+   * storefront's bundle, and its session is established by that bundle running.
+   * MEASURED on Stephen's device 2026-09-07, one run, six seconds apart:
+   *
+   *   11:52:46  robots.txt   -> ActiveCarts 401, harvested 0, "signed out"
+   *   11:52:54  storefront   -> ActiveCarts 200, harvested 6, SIGNED IN
+   *
+   * Same session, same account, opposite answers. The 401 was never about his
+   * account -- it was about which page the WebView happened to be sitting on.
+   *
+   * signedOutIsFinal already catches this and repairs it, and it worked here:
+   * the run recovered on its own. But the repair costs a storefront load AFTER
+   * the user has been put on the login step, so he watched a sign-in screen for
+   * eight seconds before it corrected itself -- the same complaint he made
+   * about Albertsons on 2026-09-04. Loading the storefront FIRST is not an
+   * extra load, it is the same load moved earlier, and it removes the wrong
+   * answer instead of apologising for it.
+   */
+  sessionNeedsStorefront?: boolean;
   searchBatch(terms: string[], sess: NetworkSession): string | null;
   /**
    * Read the cart and post a CART_COUNT identical to the cart PAGE's.
