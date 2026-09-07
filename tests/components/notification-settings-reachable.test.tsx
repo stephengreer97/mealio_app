@@ -88,6 +88,17 @@ jest.mock('../../src/lib/api', () => ({
   kroger: { status: jest.fn(async () => ({ connected: false })) },
 }));
 
+jest.mock('../../src/context/LoginPrewarmContext', () => ({
+  // AccountScreen calls forgetAll() when signing out of the grocery stores.
+  // The real provider imports react-native-webview, whose native module does
+  // not exist under jest, so the context is stubbed rather than the module.
+  useLoginPrewarm: () => ({
+    checkStore: () => {}, getStatus: () => 'unknown', takePrewarmedCart: () => null,
+    statusVersion: 0, setSearchTerms: () => {}, getSearchResults: () => new Map(),
+    forgetAll: jest.fn(),
+  }),
+}));
+
 import AccountScreen from '../../src/screens/account/AccountScreen';
 
 const openScreen = async (status: string) => {

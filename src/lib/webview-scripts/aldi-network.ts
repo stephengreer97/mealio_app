@@ -353,10 +353,30 @@ ${IC_PRELUDE}
     await IC.ensureOps(${seed}, 15000);
     var carts = await IC.gql('ActiveCarts', {}, 12000, 'cart_read');
     if (!carts.ok) {
-      // Cannot answer. NOT a signed-out user -- saying so would wall one, which
-      // is the mistake this project has made three times.
+      // 401 IS THE ANSWER, not a failure to answer. Measured on Stephen's
+      // device, 2026-09-07, after signing out of every store for real:
+      //
+      //   NET_REQUEST {"op":"ActiveCarts","status":401,"why":"http"}
+      //   detail: {"errors":[{"message":"Not Authenticated"}]}
+      //
+      // Treating that as "cannot answer" sent him straight to "add it
+      // yourself", which is the one screen a signed-out user has no use for --
+      // the thing he actually needed was the login page.
+      //
+      // This is also the authentication signal the last three attempts went
+      // looking for in the wrong place. The CART cannot answer it: a signed-in
+      // account has carts at retailers it has never shopped, and the earlier
+      // "signed out" runs that returned carts were a sign-out that had not
+      // fully taken. The SERVER answers it, in one status code.
+      if (carts.status === 401) {
+        post({ ok: true, loggedIn: false, source: 'activeCarts_401' });
+        return;
+      }
+      // Anything else is genuinely unanswerable -- a 5xx, a timeout, a wall.
+      // Saying "signed out" to those would wall a signed-in user, which is the
+      // mistake this project has made three times.
       post({ ok: false, why: carts.why, code: carts.code || null, detail: carts.detail || null,
-             harvested: IC.harvested || 0 });
+             status: carts.status || null, harvested: IC.harvested || 0 });
       return;
     }
     var uc = (carts.data && carts.data.userCarts) || null;

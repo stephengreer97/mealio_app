@@ -32,6 +32,7 @@ import NotificationSettingsSheet from '../../components/NotificationSettingsShee
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import CookieManager from '@react-native-cookies/cookies';
+import { useLoginPrewarm } from '../../context/LoginPrewarmContext';
 
 /** e.g. "Jul 9, 2026" */
 function formatExpiry(iso: string): string {
@@ -77,6 +78,7 @@ export default function AccountScreen() {
   const [creatorProfile, setCreatorProfile] = useState<Creator | null>(null);
 
   // Notifications (MEAL-88)
+  const prewarm = useLoginPrewarm();
   const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
   const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
@@ -511,6 +513,13 @@ export default function AccountScreen() {
               // ignored on Android.
               await CookieManager.clearAll(true);
               await CookieManager.clearAll(false);
+              // AND FORGET WHAT THOSE COOKIES USED TO SAY. The prewarm caches
+              // each store's login answer for the session, and clearing the
+              // jar does not clear the memory of it -- so the next run read
+              // "known logged in", skipped the login check, and went straight
+              // to searching for somebody who had just signed out. Measured on
+              // 2026-09-07, on a run immediately after this button.
+              prewarm.forgetAll();
               // Kroger is API/OAuth, not a WebView cookie — disconnect it
               // server-side too so "all stores" really means all.
               if (krogerConnected) {

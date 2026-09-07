@@ -43,6 +43,9 @@ function gqlStub(opts: {
   details?: unknown;
   fail?: string;
   failCode?: string;
+  /** Answer every /graphql call with this HTTP status. 401 is how Instacart
+   *  says "Not Authenticated" to a signed-out session. */
+  httpStatus?: number;
   /** The carts the signed-in ACCOUNT holds, across retailers. Defaults to one
    *  ALDI cart, which is every case that existed before a second banner. */
   carts?: Array<{ id: string; itemCount: number; slug: string; retailerId?: string }>;
@@ -94,6 +97,12 @@ function gqlStub(opts: {
     '    if (u.indexOf("/graphql") < 0) {',
     // Anything else is a bundle fetch from the harvest.
     '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve("no hashes here"); } });',
+    '    }',
+    '    var HTTPSTATUS = ' + JSON.stringify(opts.httpStatus ?? 200) + ';',
+    '    if (HTTPSTATUS !== 200) {',
+    '      return Promise.resolve({ status: HTTPSTATUS, text: function () {',
+    '        return Promise.resolve(JSON.stringify(',
+    '          { errors: [{ message: "Not Authenticated" }] })); } });',
     '    }',
     '    var body = JSON.parse(init.body);',
     '    window.__calls.push({ op: body.operationName, vars: body.variables });',
@@ -556,5 +565,46 @@ describe('the session probe is built for the store it is running on', () => {
     await runner.inject(INSTACART_RAIL.sessionScript());
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.loggedIn).toBe(true);
+  });
+});
+
+// ── 401 IS AN ANSWER, NOT A FAILURE TO ANSWER ───────────────────────────────
+//
+// Measured on Stephen's device, 2026-09-07, after signing out of every store
+// for real:
+//
+//   NET_REQUEST {"op":"ActiveCarts","status":401,"why":"http"}
+//   detail: {"errors":[{"message":"Not Authenticated"}]}
+//   network run: dead end — session_http → assisted
+//
+// He got "add it yourself", which is the one screen a signed-out user has no
+// use for. What he needed was the login page.
+//
+// This is also the authentication signal three previous attempts went looking
+// for in the wrong place. The CART cannot answer it — a signed-in account holds
+// carts at retailers it has never shopped, and the earlier "signed out" runs
+// that returned carts were a sign-out that had not fully taken. The SERVER
+// answers it, in one status code.
+describe('a signed-out session', () => {
+  itWithFixture('storefront.html', 'reads 401 as signed OUT, not as unanswerable', async (runner) => {
+    await runner.inject(gqlStub({ httpStatus: 401 }));
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    // ok:true means the probe ANSWERED. That is what routes to the login screen
+    // instead of the handover.
+    expect(msg.ok).toBe(true);
+    expect(msg.loggedIn).toBe(false);
+    expect(msg.source).toBe('activeCarts_401');
+  });
+
+  itWithFixture('storefront.html', 'still refuses to guess at a 500', async (runner) => {
+    // The distinction that keeps this safe. A server that broke is not a user
+    // who is signed out, and answering "signed out" to a 5xx would wall someone
+    // who is signed in — the mistake this project has made three times.
+    await runner.inject(gqlStub({ httpStatus: 500 }));
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.ok).toBe(false);
+    expect(msg.status).toBe(500);
   });
 });

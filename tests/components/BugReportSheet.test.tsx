@@ -69,6 +69,17 @@ jest.mock('react-native-safe-area-context', () => {
 });
 
 import * as SecureStore from 'expo-secure-store';
+jest.mock('../../src/context/LoginPrewarmContext', () => ({
+  // AccountScreen calls forgetAll() when signing out of the grocery stores.
+  // The real provider imports react-native-webview, whose native module does
+  // not exist under jest, so the context is stubbed rather than the module.
+  useLoginPrewarm: () => ({
+    checkStore: () => {}, getStatus: () => 'unknown', takePrewarmedCart: () => null,
+    statusVersion: 0, setSearchTerms: () => {}, getSearchResults: () => new Map(),
+    forgetAll: jest.fn(),
+  }),
+}));
+
 import BugReportSheet from '../../src/components/BugReportSheet';
 import { AuthProvider, useAuth } from '../../src/context/AuthContext';
 import { bugReport, auth } from '../../src/lib/api';

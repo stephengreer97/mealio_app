@@ -96,6 +96,9 @@ interface LoginPrewarmValue {
    * the same answer is good for the rest of the session.
    */
   getSearchResults: (storeId: string, terms: string[]) => Map<string, SearchCandidate[]>;
+  /** Forget every cached login answer. For signing out of the grocery stores,
+   *  whose cookies this cache is a memory of. */
+  forgetAll: () => void;
 }
 
 // Default is a working no-op so consumers rendered outside the provider (e.g.
@@ -107,6 +110,7 @@ const LoginPrewarmContext = createContext<LoginPrewarmValue>({
   statusVersion: 0,
   setSearchTerms: () => {},
   getSearchResults: () => new Map(),
+  forgetAll: () => {},
 });
 
 export function useLoginPrewarm(): LoginPrewarmValue {
@@ -459,7 +463,21 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   // equivalent window by clearing again after teardown; that is not repeated
   // here, because the payload does not warrant a second mechanism in this
   // provider. If the chain gets a fifth link, this is where it starts.
-  useSessionEnd(() => {
+  /**
+   * Forget every cached login answer.
+   *
+   * Signing out of the grocery stores clears their cookies, and this cache is
+   * the app's memory of what those cookies USED to say. Leaving it means the
+   * next run reads "prewarm: known logged in — skipping login check" and goes
+   * straight to searching for somebody who is now signed out. Measured on
+   * Stephen's device, 2026-09-07, on a run right after he signed out of
+   * everything.
+   *
+   * Same clearing as the account-switch reset below, which is why it is one
+   * function: two teardowns for one cache is how one of them gets a new ref
+   * added to it and the other does not.
+   */
+  const forgetAll = useCallback(() => {
     queueRef.current = [];
     statusRef.current.clear();
     cartRef.current.clear();
@@ -476,11 +494,13 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     searchAskedRef.current.clear();
     searchBatchRef.current = null;
     setSearchBatch(null);
-  });
+  }, []);
+
+  useSessionEnd(forgetAll);
 
   const value = useMemo<LoginPrewarmValue>(
-    () => ({ checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults }),
-    [checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults],
+    () => ({ checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll }),
+    [checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll],
   );
 
   return (

@@ -62,6 +62,17 @@ jest.mock('../../src/context/CreatorDraftsContext', () => ({
 }));
 
 import { NavigationContainer } from '@react-navigation/native';
+jest.mock('../../src/context/LoginPrewarmContext', () => ({
+  // AccountScreen calls forgetAll() when signing out of the grocery stores.
+  // The real provider imports react-native-webview, whose native module does
+  // not exist under jest, so the context is stubbed rather than the module.
+  useLoginPrewarm: () => ({
+    checkStore: () => {}, getStatus: () => 'unknown', takePrewarmedCart: () => null,
+    statusVersion: 0, setSearchTerms: () => {}, getSearchResults: () => new Map(),
+    forgetAll: jest.fn(),
+  }),
+}));
+
 import MainTabs from '../../src/navigation/MainTabs';
 
 async function mount() {
