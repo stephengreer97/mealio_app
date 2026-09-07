@@ -369,7 +369,18 @@ ${IC_PRELUDE}
       // "signed out" runs that returned carts were a sign-out that had not
       // fully taken. The SERVER answers it, in one status code.
       if (carts.status === 401) {
-        post({ ok: true, loggedIn: false, source: 'activeCarts_401' });
+        // AND DROP THE CACHED SHOP ID. It lives in localStorage, and signing
+        // out of the grocery stores clears COOKIES only -- so a shop learned
+        // while signed in outlives the session that chose it. Both of Stephen's
+        // captures reported shopFrom: "cache" with the same 8583 for that
+        // reason, which is why they could not answer whether a guest gets a
+        // shop id at all.
+        //
+        // A 401 is the one moment we know for certain the session is gone, so
+        // it is the right moment to forget what that session knew. The next run
+        // reads the page instead, and shopFrom says which happened.
+        try { localStorage.removeItem('${SHOP_CACHE_KEY}'); } catch (e) {}
+        post({ ok: true, loggedIn: false, source: 'activeCarts_401', shopCacheCleared: true });
         return;
       }
       // Anything else is genuinely unanswerable -- a 5xx, a timeout, a wall.

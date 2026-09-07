@@ -586,6 +586,33 @@ describe('the session probe is built for the store it is running on', () => {
 // that returned carts were a sign-out that had not fully taken. The SERVER
 // answers it, in one status code.
 describe('a signed-out session', () => {
+  itWithFixture('storefront.html', 'forgets the cached shop id, which outlives a cookie clear', async (runner) => {
+    // The shop id lives in localStorage; "sign out of all grocery stores"
+    // clears cookies only. So a shop learned while signed in survives the
+    // session that chose it, and both of Stephen's captures reported
+    // shopFrom: "cache" with the same value for that reason — which is exactly
+    // why they could not answer whether a guest gets a shop id at all.
+    //
+    // A 401 is the one moment the session is known to be gone, so it is the
+    // right moment to forget what that session knew.
+    await runner.inject(gqlStub({ httpStatus: 401 }));
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.shopCacheCleared).toBe(true);
+    // WHAT THIS CANNOT CHECK, said rather than implied: localStorage THROWS in
+    // the fixture runner, so the removal itself is unverifiable here — a probe
+    // reading the key back comes out as "threw" either way. The flag alone
+    // would pass on code that reports a clear and performs none, so the emitted
+    // script is checked for the removal against the real key name. That catches
+    // the two failures that actually happen: the line being dropped, and the
+    // key being renamed in one place and not the other.
+    //
+    // The removal is confirmed for real on a device, by shopFrom flipping from
+    // "cache" to a page read on the next run.
+    const emitted = buildAldiSessionScript('aldi');
+    expect(emitted).toContain("localStorage.removeItem('__mealio_ic_shop_v1')");
+  });
+
   itWithFixture('storefront.html', 'reads 401 as signed OUT, not as unanswerable', async (runner) => {
     await runner.inject(gqlStub({ httpStatus: 401 }));
     await runner.inject(buildAldiSessionScript('aldi'));
