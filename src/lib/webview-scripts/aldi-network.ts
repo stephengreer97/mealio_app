@@ -436,6 +436,20 @@ ${IC_PRELUDE}
       dataKeys: carts.data ? Object.keys(carts.data) : [],
       ucKeys: uc ? Object.keys(uc) : [],
       cartCount: list.length,
+      // THE DISCRIMINATOR WE STILL DO NOT HAVE, and the reason loggedIn keeps
+      // being wrong in one direction or the other.
+      //
+      // His own signed-OUT logs show cartCount 1 with the right retailer slug on
+      // both banners. So a guest gets a cart, the cart can NEVER be an
+      // authentication signal, and every derivation built on it is guessing.
+      //
+      // userCarts carries an id and a viewSection. If either differs between a
+      // guest and a signed-in account, that is the signal. Reported as SHAPE and
+      // presence -- ucIdLen rather than ucId -- because an account identifier is
+      // not something to print into a log file.
+      ucIdPresent: !!(uc && uc.id),
+      ucIdLen: uc && uc.id ? String(uc.id).length : 0,
+      viewSectionKeys: uc && uc.viewSection ? Object.keys(uc.viewSection) : [],
       // The engine's NetworkSession wants these two names. storeId is the SHOP.
       storeId: shopId,
       shoppingContext: 'delivery',
