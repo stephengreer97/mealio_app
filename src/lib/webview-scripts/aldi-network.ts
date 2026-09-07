@@ -391,8 +391,24 @@ ${IC_PRELUDE}
     }
     post({
       ok: true,
-      // Authenticated. Not "has shopped here before".
-      loggedIn: true,
+      // BACK TO THE CART, and the reason is worth writing down because I got
+      // this wrong twice in two days on the same six lines.
+      //
+      //   !!mine        deadlocks a signed-in user with no cart at this banner
+      //   userCarts     lets a SIGNED-OUT user through: Stephen signed out of
+      //                 every store, ALDI went straight to searching, and the
+      //                 probe had said he was signed in
+      //
+      // The second is far worse than the first. A user who is wrongly shown a
+      // login screen is annoyed; a signed-out user waved through has a run
+      // pointed at a cart that is not theirs, or at nothing at all, and the
+      // verdict lies about it either way.
+      //
+      // So this is back to the behaviour ALDI has always had, which detects
+      // signed-out correctly. The Publix deadlock is real and is NOT fixed by
+      // guessing again: what settles it is sawSlugs and hadUserCarts below,
+      // measured on one signed-out and one signed-in session.
+      loggedIn: !!mine,
       // This retailer's cart, or null when they have not started one. Null is a
       // normal state on a first run and the add path creates the cart.
       cartId: mine ? String(mine.id) : null,
@@ -403,6 +419,11 @@ ${IC_PRELUDE}
       // guaranteed to be the same string, and on a new banner that is the
       // likeliest reason a signed-in user looks cartless.
       sawSlugs: list.map(function (c) { return (c.retailer || {}).slug || null; }),
+      // THE MEASUREMENT THAT ENDS THE GUESSING. If userCarts is present for a
+      // signed-OUT user then it is not an authentication signal and the cart
+      // has to stay the test; if it is absent, it is the signal and the
+      // deadlock has a real fix. One signed-out run answers it.
+      hadUserCarts: !!uc,
       // The engine's NetworkSession wants these two names. storeId is the SHOP.
       storeId: shopId,
       shoppingContext: 'delivery',

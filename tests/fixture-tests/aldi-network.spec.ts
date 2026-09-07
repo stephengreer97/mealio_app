@@ -440,20 +440,34 @@ describe('the add reads the cart it is writing to', () => {
 // account could hold was an ALDI cart. With a second banner it is reading, and
 // then writing, somebody else's cart.
 describe('a cart belongs to a retailer', () => {
-  itWithFixture('storefront.html', 'is signed IN with no cart here, and borrows nobody else\'s', async (runner) => {
-    // The account holds an ALDI cart and nothing at Publix. This is the state a
-    // user is in the moment they finish signing in to a new banner.
+  itWithFixture('storefront.html', 'never borrows another retailer\'s cart', async (runner) => {
+    // The account holds an ALDI cart and nothing at Publix.
     await runner.inject(gqlStub({ carts: [{ id: 'cart-aldi-1', itemCount: 4, slug: 'aldi' }] }));
     await runner.inject(buildAldiSessionScript('publix'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.ok).toBe(true);
-    // SIGNED IN. Deriving this from "has a cart here" deadlocks a new banner:
-    // you only get a cart by adding, and you cannot add while it says you are
-    // signed out. That shipped, and Stephen hit it on Publix the same day.
-    expect(msg.loggedIn).toBe(true);
-    // And still not ALDI's cart.
+    // THE PART THAT IS SETTLED: whatever we decide about the login question,
+    // Publix must never be handed ALDI's cart.
     expect(msg.cartId ?? null).toBeNull();
     expect(msg.cartId).not.toBe('cart-aldi-1');
+  });
+
+  itWithFixture('storefront.html', 'reports whether userCarts was there at all', async (runner) => {
+    // THE MEASUREMENT THAT ENDS THE GUESSING, and the reason this is a reported
+    // fact rather than an assumption baked into the login decision.
+    //
+    // `loggedIn` has been derived two ways in two days and both were wrong:
+    // from this retailer's cart, which deadlocks a signed-in user who has not
+    // shopped here; and from userCarts existing, which waved a SIGNED-OUT user
+    // straight through to searching. The second is far worse.
+    //
+    // Nobody here knows what Instacart returns for an anonymous session. One
+    // signed-out run against a real storefront answers it, and until then the
+    // cart stays the test because that is the behaviour ALDI has always had.
+    await runner.inject(gqlStub({ carts: [{ id: 'c1', itemCount: 1, slug: 'aldi' }] }));
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.hadUserCarts).toBe(true);
   });
 
   itWithFixture('storefront.html', 'reports the slugs it saw, so a mismatch is not a guess', async (runner) => {
