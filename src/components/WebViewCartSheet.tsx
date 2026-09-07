@@ -64,7 +64,7 @@ import { attemptedFailureNames, auditCartAfterRun, buildCartVerdict, dropExplain
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
 import { sameProductBarSize, scoreMatch } from '../lib/webview-scripts/_scoring';
 import { challengeMayTakeTheScreen } from '../lib/cart-challenge';
-import { canSignInHere, signedOutIsFinal } from '../lib/login-page';
+import { canSignInHere, signedOutIsFinal, loginProbeUrl } from '../lib/login-page';
 import { decideHandover, MAX_RUN_RETRIES } from '../lib/handover';
 import { firstAddableIdx, reviewUnaddableReason } from '../lib/review-selection';
 import { qtyDisplay, qtyIsTheOnlyBlocker } from '../lib/qty-prompt';
@@ -3233,8 +3233,29 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         // and the whole login check run again from cold.
         const pre = loginPrewarm.getStatus(openStoreId);
         if (pre === 'loggedOut') {
-          console.log(`[Cart ${ts()}]`, 'prewarm: known logged out — surfacing login directly');
-          surfaceLoginDirect();
+          // AND THE SIGNED-OUT ARM IS CHECKED TOO, which it was not until now.
+          //
+          // The comment above says this branch had "only the loggedOut arm" and
+          // describes fixing the loggedIn one. The half that was left is what
+          // Stephen hit: "when we are logged in, we are seeing the login prompt
+          // from mealio for a couple seconds before it realizes."
+          //
+          // handleStartSearch stopped trusting a prewarm loggedOut on
+          // 2026-09-02, for his Albertsons report, in these words:
+          //
+          //     positive signal we are NOT logged in -> show the webview
+          //     positive signal we ARE logged in     -> continue with the add
+          //     no signal                            -> show the webview
+          //
+          // A prewarm verdict is not that first line. It is one probe's answer,
+          // taken early, from a WebView built for speed -- and for an Instacart
+          // banner it was taken on robots.txt, where the rail provably cannot
+          // answer at all. So this now does what the other entry point does:
+          // fall through to the sheet's own check, which asks the storefront and
+          // reads the store's own guest flag. A genuinely signed-out user
+          // reaches the same screen a fraction of a second later.
+          console.log(`[Cart ${ts()}]`, 'prewarm: said logged out — checking for ourselves before surfacing login');
+          startLoginCheckRef.current();
         } else if (pre === 'loggedIn') {
           console.log(`[Cart ${ts()}]`, 'prewarm: known logged in — skipping login check, going straight to snapshot');
           snapshotBeforeAndBeginSearchRef.current();
@@ -3638,50 +3659,30 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     setStep('login_check');
     setSearchingLabel('Checking login…');
     loadQueueRef.current = [check];
-    const rail = getNetworkRail(lockedStoreIdRef.current);
-    // THE QUIET PAGE, unless this rail cannot answer from it. Instacart's
-    // session probe reads operation hashes out of the storefront's own bundle,
-    // so on robots.txt it answers "signed out" for a signed-in user and the
-    // repair then costs a storefront load with a sign-in screen on top of it.
-    const where = (rail && !rail.sessionNeedsStorefront && scriptsRef.current!.railUrl)
-      || scriptsRef.current!.storeUrl;
+    // Shared with the silent prewarm probe -- see loginProbeUrl. Written out
+    // twice, it was fixed once, and the prewarm went on answering from a page
+    // the Instacart rail cannot read.
+    const where = loginProbeUrl(scriptsRef.current!, getNetworkRail(lockedStoreIdRef.current));
     navToRef.current(where);
     armLoginCheckTimeout();
   }, [setStep, loginCheckScript, armLoginCheckTimeout, setWebviewUri]);
   startLoginCheckRef.current = startLoginCheck;
 
-  // Skip the login_check round-trip and jump straight to the login webview.
-  // Used when the silent pre-warm already told us the user is logged OUT of this
-  // store, so we surface the sign-in prompt immediately instead of loading the
-  // store page just to discover they're logged out. If the pre-warm was stale
-  // and they're actually signed in, the store redirects off the login URL and
-  // the 'login'-step onLoadEnd re-injects the check, which resumes automatically.
-  const surfaceLoginDirect = useCallback(() => {
-    // Funnel: the run stops at the login gate without ever running a login_check,
-    // so without this row it would disappear from the funnel between the tap and
-    // the first search.
-    //
-    // `ok`, not a failure, and this is the model all three logged-out paths use:
-    // the OUTCOME describes whether we determined the login state, and
-    // `isLoggedIn` in the detail says what we determined. Recording this one as
-    // `error`/`auth_required` while the mainline LOGIN_STATUS answer below
-    // records `ok` would split one real-world condition — user is signed out,
-    // login WebView shown — across two outcomes, and would leave
-    // `auth_required` counting only the paths that lose the race.
-    //
-    // Known limit: this fires from two call sites and only one of them has a
-    // recorder yet. The auto-start path inside the `[visible]` effect runs in
-    // the same commit phase as mount, while the recorder is installed in the
-    // `.then()` of `logAutomationStart` — so a prewarm row from there is
-    // dropped by the no-op recorder. Fixing that means queueing pre-runId
-    // steps, which is its own change; until then `source: 'prewarm'` undercounts
-    // and must not be read as a total.
-    tel().record('login_check', 'ok', {
-      detail: { isLoggedIn: false, source: 'prewarm' },
-    });
-    setSearchingLabel('Sign in to continue');
-    surfaceLoginRef.current();
-  }, []);
+  // surfaceLoginDirect STOOD HERE and is gone (2026-09-07).
+  //
+  // It jumped straight to the login WebView on the prewarm's word, skipping the
+  // login check entirely. Both of its call sites have been converted to run the
+  // check first: handleStartSearch on 2026-09-02 after Stephen's Albertsons
+  // report, and the auto-start path today after the same complaint about ALDI
+  // and Publix -- "the webview should not open until mealio is 100% sure we are
+  // not logged in".
+  //
+  // The function is not kept for a future caller, because a future caller is
+  // exactly the bug: anything that opens the sign-in screen without a live
+  // check reintroduces the flash. The telemetry model it documented is still
+  // the one in use everywhere below -- the OUTCOME says whether we determined
+  // the login state, and `isLoggedIn` in the detail says what we determined, so
+  // a signed-out user is an `ok` determination rather than an `error`.
 
   // Kick off pre-search parking while the user is still on the qty screen: the
   // silent pre-warm says they're logged in, the store supports parallel workers,
@@ -4330,7 +4331,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         // Funnel: a redirect to the store's sign-in page IS the answer the check
         // script never got to post — so it is a successful determination, not a
         // failed check, and it records `ok` like the LOGIN_STATUS path. See the
-        // note on `surfaceLoginDirect`: outcome says whether we found out,
+        // telemetry note above handleStartSearch: outcome says whether we found out,
         // `isLoggedIn` says what we found out.
         tel().record('login_check', 'ok', {
           detail: { isLoggedIn: false, source: 'login_redirect' },

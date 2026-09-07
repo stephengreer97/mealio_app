@@ -98,3 +98,29 @@ export function signedOutIsFinal({ url, railUrl }: SignInPageInput): boolean {
   // startsWith, because every navigation carries a ?_t= cache-buster.
   return !url.startsWith(railUrl);
 }
+
+/**
+ * Which page a login probe should load for this store.
+ *
+ * Rails park on a quiet page -- robots.txt -- so their requests are not queued
+ * behind the storefront's own bundles, and for a cookie-borne session that is
+ * free: same origin, same cookie, same answer.
+ *
+ * It is not free for Instacart. Its persisted-operation hashes live IN the
+ * storefront bundle, so from robots.txt the probe has nothing to ask with and
+ * reports a signed-in user as SIGNED OUT. Measured on Stephen's device
+ * 2026-09-07, one run, six seconds apart: robots.txt gave harvested 0 and a
+ * 401; the storefront gave harvested 6 and a live session.
+ *
+ * Shared by the cart sheet's login check and the silent prewarm probe. They had
+ * this choice written out separately, which is why fixing the first one left
+ * the second still mounting on robots.txt and publishing a wrong verdict for
+ * the whole session.
+ */
+export function loginProbeUrl(
+  { railUrl, storeUrl }: { railUrl?: string | null; storeUrl: string },
+  rail?: { sessionNeedsStorefront?: boolean } | null,
+): string {
+  if (rail?.sessionNeedsStorefront) return storeUrl;
+  return railUrl || storeUrl;
+}

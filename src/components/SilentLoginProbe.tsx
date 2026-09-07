@@ -4,6 +4,7 @@ import WebView, { WebViewMessageEvent } from 'react-native-webview';
 import { getStoreScripts } from '../lib/webview-scripts';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
 import { getNetworkRail, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
+import { loginProbeUrl } from '../lib/login-page';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
 import { WEBVIEW_FINGERPRINT_SHIM } from '../lib/webview-fingerprint-shim';
 import {
@@ -81,7 +82,13 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
   // store's own endpoints and reads no DOM, so the storefront homepage is pure
   // cost. Measured 2026-09-02: a 1-second interval fired 47 SECONDS late in a
   // document sitting on the homepage, and 2.3 s late on the quiet one.
-  const probeUrl = scripts ? (scripts.railUrl || scripts.storeUrl) : 'about:blank';
+  //
+  // EXCEPT WHERE THE RAIL CANNOT ANSWER FROM IT. Instacart's persisted-operation
+  // hashes live in the storefront's bundle, so on robots.txt this probe has
+  // nothing to ask with and reports a signed-in user as signed out -- which is
+  // then published as the prewarm's verdict for the whole session. Same flag,
+  // same reason, as the cart sheet's own login check.
+  const probeUrl = scripts ? loginProbeUrl(scripts, getNetworkRail(storeId)) : 'about:blank';
   const [uri, setUri] = useState(probeUrl);
 
   const beforeContent = Platform.OS === 'android' ? WEBVIEW_FINGERPRINT_SHIM : undefined;
