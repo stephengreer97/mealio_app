@@ -419,11 +419,23 @@ ${IC_PRELUDE}
       // guaranteed to be the same string, and on a new banner that is the
       // likeliest reason a signed-in user looks cartless.
       sawSlugs: list.map(function (c) { return (c.retailer || {}).slug || null; }),
-      // THE MEASUREMENT THAT ENDS THE GUESSING. If userCarts is present for a
-      // signed-OUT user then it is not an authentication signal and the cart
-      // has to stay the test; if it is absent, it is the signal and the
-      // deadlock has a real fix. One signed-out run answers it.
+      // THE MEASUREMENT THAT ENDS THE GUESSING. Three facts, names only, never
+      // values -- enough to tell what this response can and cannot answer.
+      //
+      // The cart is a BAD PROXY for authentication and the two banners fail it
+      // in opposite directions: ALDI has a real cart from past use, so it reads
+      // signed in whether or not the session survived; Publix has never had a
+      // cart, so it reads signed out whether or not the user just signed in.
+      // Neither is detection. Both are the same root cause.
+      //
+      // What would fix it is a field that names the USER. dataKeys and ucKeys
+      // say whether this response carries one, and that is a question nobody
+      // here can answer from the outside -- which is precisely why I have
+      // guessed wrong at it twice.
       hadUserCarts: !!uc,
+      dataKeys: carts.data ? Object.keys(carts.data) : [],
+      ucKeys: uc ? Object.keys(uc) : [],
+      cartCount: list.length,
       // The engine's NetworkSession wants these two names. storeId is the SHOP.
       storeId: shopId,
       shoppingContext: 'delivery',

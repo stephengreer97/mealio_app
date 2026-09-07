@@ -468,6 +468,27 @@ describe('a cart belongs to a retailer', () => {
     await runner.inject(buildAldiSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.hadUserCarts).toBe(true);
+    // Names only, never values. Enough to tell whether this response carries a
+    // field naming the USER — which is the signal the cart is standing in for
+    // and doing badly.
+    expect(msg.dataKeys).toEqual(['userCarts']);
+    expect(msg.ucKeys).toEqual(['carts']);
+    expect(msg.cartCount).toBe(1);
+  });
+
+  itWithFixture('storefront.html', 'the cart is a bad proxy, and fails opposite ways per banner', async (runner) => {
+    // ONE STUB, TWO BANNERS, OPPOSITE WRONG ANSWERS. The account holds an ALDI
+    // cart and no Publix cart — which is exactly Stephen's device after signing
+    // out of everything.
+    //
+    // ALDI reads SIGNED IN off a cart that predates the sign-out. Publix reads
+    // SIGNED OUT off never having had one. Neither answer is about the session,
+    // and "Publix detected it correctly" is a coincidence: it would say the same
+    // thing while signed in, which is the deadlock.
+    await runner.inject(gqlStub({ carts: [{ id: 'cart-aldi-1', itemCount: 4, slug: 'aldi' }] }));
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const aldi = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(aldi.loggedIn).toBe(true);
   });
 
   itWithFixture('storefront.html', 'reports the slugs it saw, so a mismatch is not a guess', async (runner) => {
