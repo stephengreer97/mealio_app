@@ -608,3 +608,38 @@ describe('a signed-out session', () => {
     expect(msg.status).toBe(500);
   });
 });
+
+// ── WHAT ActiveCarts CANNOT ANSWER ──────────────────────────────────────────
+//
+// Measured on Stephen's device, 2026-09-07, SIGNED OUT with a guest cart:
+//
+//   ucIdPresent: true      ucIdLen: 8
+//   ucKeys:          ["id","viewSection","carts","__typename"]
+//   viewSectionKeys: ["id","itemCountString","__typename"]
+//   loggedIn: true   <-- wrong
+//
+// A guest gets a userCarts object, an id, a viewSection and a cart. There is no
+// user field anywhere in the response. So this query cannot answer the login
+// question, and four attempts to derive it from the cart failed because the
+// answer was never in there.
+//
+// 401 is a real signal but a partial one: it only appears on a COLD session.
+// Loading any storefront page mints a guest session, after which the same call
+// returns 200 with a cart — which is exactly what happened between his 08:59
+// and 09:14 runs, the assisted handover having navigated to the search page in
+// between. The cart id changed, which is how that is known rather than guessed.
+describe('what the session response can and cannot tell us', () => {
+  itWithFixture('storefront.html', 'reports cookie NAMES and never values', async (runner) => {
+    // The last candidate discriminator. A session cookie's name is enough to
+    // tell a signed-in session from a guest; its value IS the session and does
+    // not belong in a log file.
+    await runner.inject(gqlStub());
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(Array.isArray(msg.cookieNames)).toBe(true);
+    // Whatever the fixture's cookies are, no entry may carry a value.
+    for (const name of msg.cookieNames as string[]) {
+      expect(name).not.toContain('=');
+    }
+  });
+});

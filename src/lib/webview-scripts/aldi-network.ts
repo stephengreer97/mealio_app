@@ -467,6 +467,22 @@ ${IC_PRELUDE}
       // guest and a signed-in account, that is the signal. Reported as SHAPE and
       // presence -- ucIdLen rather than ucId -- because an account identifier is
       // not something to print into a log file.
+      // COOKIE NAMES, NEVER VALUES. The last candidate signal.
+      //
+      // Measured signed OUT on 2026-09-07: ActiveCarts carries no user field at
+      // all -- userCarts has an id (8 chars) and a viewSection holding only an
+      // item count, and a GUEST gets all of it. So that response cannot answer
+      // the login question, which is now settled rather than suspected.
+      //
+      // A session cookie is the last thing that can differ, and its NAME is
+      // enough to tell. The value is the session itself and never goes in a log.
+      cookieNames: (function () {
+        try {
+          return document.cookie.split(';')
+            .map(function (c) { return c.split('=')[0].trim(); })
+            .filter(Boolean).sort();
+        } catch (e) { return []; }
+      })(),
       ucIdPresent: !!(uc && uc.id),
       ucIdLen: uc && uc.id ? String(uc.id).length : 0,
       viewSectionKeys: uc && uc.viewSection ? Object.keys(uc.viewSection) : [],
