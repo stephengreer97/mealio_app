@@ -440,15 +440,31 @@ describe('the add reads the cart it is writing to', () => {
 // account could hold was an ALDI cart. With a second banner it is reading, and
 // then writing, somebody else's cart.
 describe('a cart belongs to a retailer', () => {
-  itWithFixture('storefront.html', 'the session probe ignores another retailer\'s cart', async (runner) => {
-    // The account holds an ALDI cart and nothing at Publix.
+  itWithFixture('storefront.html', 'is signed IN with no cart here, and borrows nobody else\'s', async (runner) => {
+    // The account holds an ALDI cart and nothing at Publix. This is the state a
+    // user is in the moment they finish signing in to a new banner.
     await runner.inject(gqlStub({ carts: [{ id: 'cart-aldi-1', itemCount: 4, slug: 'aldi' }] }));
     await runner.inject(buildAldiSessionScript('publix'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.ok).toBe(true);
-    // Signed out is the WRONG-BUT-SAFE answer: it shows a login screen rather
-    // than pointing a run at a cart the user was never shopping.
-    expect(msg.loggedIn).toBe(false);
+    // SIGNED IN. Deriving this from "has a cart here" deadlocks a new banner:
+    // you only get a cart by adding, and you cannot add while it says you are
+    // signed out. That shipped, and Stephen hit it on Publix the same day.
+    expect(msg.loggedIn).toBe(true);
+    // And still not ALDI's cart.
+    expect(msg.cartId ?? null).toBeNull();
+    expect(msg.cartId).not.toBe('cart-aldi-1');
+  });
+
+  itWithFixture('storefront.html', 'reports the slugs it saw, so a mismatch is not a guess', async (runner) => {
+    // The URL segment and the GraphQL retailer.slug are not guaranteed to be
+    // the same string. On a new banner that is the likeliest reason a signed-in
+    // user looks cartless, and without this the only way to find out is to
+    // guess and ship again.
+    await runner.inject(gqlStub({ carts: [{ id: 'c1', itemCount: 1, slug: 'publix-delivery' }] }));
+    await runner.inject(buildAldiSessionScript('publix'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.sawSlugs).toEqual(['publix-delivery']);
     expect(msg.cartId ?? null).toBeNull();
   });
 

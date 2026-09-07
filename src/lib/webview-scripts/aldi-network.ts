@@ -362,12 +362,15 @@ ${IC_PRELUDE}
     var uc = (carts.data && carts.data.userCarts) || null;
     var list = (uc && uc.carts) || [];
     if (!uc) { post({ ok: true, loggedIn: false, source: 'activeCarts' }); return; }
-    // NO FALLBACK TO list[0]. It used to take any cart when this retailer's was
-    // missing, which on a single-tenant rail could only ever be ALDI's own and
-    // on a second banner is somebody else's. A user signed in with carts
-    // elsewhere and none here now reads as signed out, which shows them the
-    // login screen: the wrong-but-safe answer, rather than a run pointed at
-    // another retailer's cart.
+    // BEING SIGNED IN AND HAVING A CART HERE ARE DIFFERENT FACTS, and yesterday
+    // I merged them. The fallback to list[0] had to go -- it borrowed another
+    // retailer's cart -- but I then derived loggedIn from this retailer's cart
+    // too, which DEADLOCKS a new banner: you only get a cart by adding, and you
+    // cannot add because it says you are signed out. Stephen hit it on Publix
+    // within a day, signed in, and was shown the login screen forever.
+    //
+    // userCarts answering at all is the authentication fact. The cart is a
+    // separate question and its honest answer here is often "none yet".
     var mine = pickCartFor(list, '${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}');
     var shopTries = await IC.findShopId('${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}', 20000);
     // THE SHOP ID IS NOT THE RETAILER ID, and confusing them searches the wrong
@@ -388,10 +391,18 @@ ${IC_PRELUDE}
     }
     post({
       ok: true,
-      loggedIn: !!mine,
+      // Authenticated. Not "has shopped here before".
+      loggedIn: true,
+      // This retailer's cart, or null when they have not started one. Null is a
+      // normal state on a first run and the add path creates the cart.
       cartId: mine ? String(mine.id) : null,
       itemCount: mine ? mine.itemCount : null,
       retailerId: mine && mine.retailer ? String(mine.retailer.id) : null,
+      // WHAT THE ACCOUNT ACTUALLY HELD, so a slug that does not match stops
+      // being a guess. The URL segment and the GraphQL retailer.slug are not
+      // guaranteed to be the same string, and on a new banner that is the
+      // likeliest reason a signed-in user looks cartless.
+      sawSlugs: list.map(function (c) { return (c.retailer || {}).slug || null; }),
       // The engine's NetworkSession wants these two names. storeId is the SHOP.
       storeId: shopId,
       shoppingContext: 'delivery',
