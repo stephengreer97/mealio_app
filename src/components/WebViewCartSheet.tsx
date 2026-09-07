@@ -4494,8 +4494,29 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         // verdict here no matter what the other two do — and this verdict starts
         // the run, so it is the one that can begin an automation underneath a
         // user who has not signed in yet.
-        // Through the shared asker, so it carries the same tag and the same
-        // one-at-a-time rule as the timer's questions.
+        // AN ASK THAT WAS IN FLIGHT WHEN THE PAGE MOVED IS DEAD, NOT SLOW.
+        //
+        // It was injected into the previous document. That document is gone, so
+        // nothing is left to run it and no answer is ever coming -- but the
+        // one-at-a-time rule could not tell the difference and declined to ask
+        // again, and the poll then sat out the full answer timeout. Measured on
+        // Stephen's Publix sign-in:
+        //
+        //   13:56:30.240  ask #1 (timer)
+        //   13:56:33.401  onLoadEnd storefront, step= login
+        //   13:56:33.409  page loaded while an ask was already out
+        //   13:56:42.252  ask #1 never answered in 12000 ms - asking again
+        //
+        // Twelve seconds of silence at the front of every sign-in, waiting on a
+        // reply from a destroyed context. Stephen: "it took a very long time
+        // after logging into publix for Mealio to recognize I was logged in".
+        //
+        // So the load RELEASES the outstanding ask before asking. This costs no
+        // reliability: the released ask could not have answered, and the fresh
+        // one runs in the document that just loaded, which is the only one that
+        // can. The timeout stays for the genuinely dropped request it was
+        // written for -- an ask that goes quiet with no navigation at all.
+        releaseAskKilledByNavRef.current();
         if (!askWhoIsSignedInRef.current('page loaded: ' + url.slice(0, 60))) {
           console.log(`[Cart ${ts()}]`, '[login-poll] page loaded while an ask was already out — not asking twice');
         }
@@ -4813,6 +4834,23 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loginCheckScript]);
   const askWhoIsSignedInRef = useRef(askWhoIsSignedIn);
+  /**
+   * Free the poll after a navigation destroyed whatever it was waiting on.
+   *
+   * Only ever called from a completed page load. It does not answer the
+   * question or guess at it -- it just stops the poll waiting on a context that
+   * no longer exists, so the next ask can go into the document that does.
+   */
+  const releaseAskKilledByNav = useCallback(() => {
+    if (!loginPollBusyRef.current) return;
+    if (loginPollFreeRef.current) { clearTimeout(loginPollFreeRef.current); loginPollFreeRef.current = null; }
+    loginPollBusyRef.current = false;
+    console.log(`[Cart ${ts()}]`, '[login-poll] the page moved under ask #' + loginPollSeqRef.current
+      + ' — that context is gone, asking the new one');
+  }, []);
+  const releaseAskKilledByNavRef = useRef(releaseAskKilledByNav);
+  releaseAskKilledByNavRef.current = releaseAskKilledByNav;
+
   askWhoIsSignedInRef.current = askWhoIsSignedIn;
 
   /**

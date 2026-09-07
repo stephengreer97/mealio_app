@@ -137,3 +137,74 @@ describe('the sign-out button keeps calling it', () => {
     expect(src).toContain("from '../../lib/store-session-epoch-storage'");
   });
 });
+
+// ── THE SAME BUG, WORSE, ON ANOTHER STORE ───────────────────────────────────
+//
+// Stephen: "any of these bugs you [found], would they affect any other store?"
+//
+// Yes, and the worst instance was not the one that prompted the question. The
+// Wegmans rail caches a bearer token AND a refresh token in the store origin's
+// localStorage, and posts grant_type=refresh_token to mint new access tokens
+// from the cached refresh token for up to 24 hours. CookieManager.clearAll
+// never touches localStorage, so "sign out of all grocery stores" left Wegmans
+// able to mint fresh sessions.
+//
+// A stale shop id can be orphaned and forgotten about. A live refresh token
+// cannot, so those keys are swept rather than merely stamped.
+describe('sweeping old generations', () => {
+  const { sweepOldGenerationsJs } = require('../../src/lib/store-session-epoch');
+
+  it('names the current key as one to KEEP, not one to remove', async () => {
+    await loadEpoch();
+    await bumpEpoch();
+    const js = sweepOldGenerationsJs(['__mealio_weg_tok_v1']);
+    expect(js).toContain('__mealio_weg_tok_v1_g1');
+    // The base name appears too -- it is what old entries are matched against.
+    expect(js).toContain('__mealio_weg_tok_v1');
+  });
+
+  it('emits something that runs, and removes only what it should', async () => {
+    await loadEpoch();
+    await bumpEpoch();
+    const store: Record<string, string> = {
+      '__mealio_weg_tok_v1': 'OLD-BEARER',           // pre-epoch, must go
+      '__mealio_weg_tok_v1_g1': 'CURRENT',           // current, must stay
+      '__mealio_weg_rt_v1_g0': 'OLDER-REFRESH',      // an older generation
+      'glassCartIdMap': "WALMART'S OWN",             // not ours, must stay
+      'unrelated': 'keep me',
+    };
+    const localStorage = {
+      get length() { return Object.keys(store).length; },
+      key: (i: number) => Object.keys(store)[i] ?? null,
+      removeItem: (k: string) => { delete store[k]; },
+    };
+    // eslint-disable-next-line no-new-func
+    new Function('localStorage', sweepOldGenerationsJs(
+      ['__mealio_weg_tok_v1', '__mealio_weg_rt_v1'],
+    ))(localStorage);
+
+    expect(Object.keys(store).sort()).toEqual(
+      ['__mealio_weg_tok_v1_g1', 'glassCartIdMap', 'unrelated'].sort());
+  });
+
+  it('leaves a store its OWN keys, which we only read', async () => {
+    // Walmart's cart map is Walmart's key, not ours. Stamping or sweeping it
+    // would break the read rather than protect anything.
+    await loadEpoch();
+    const js = sweepOldGenerationsJs(['__mealio_ic_shop_v1']);
+    expect(js).not.toContain('glassCartIdMap');
+  });
+
+  it('is a no-op at generation zero, so an upgrade deletes nothing', async () => {
+    await loadEpoch();
+    const store: Record<string, string> = { '__mealio_weg_tok_v1': 'live' };
+    const localStorage = {
+      get length() { return Object.keys(store).length; },
+      key: (i: number) => Object.keys(store)[i] ?? null,
+      removeItem: (k: string) => { delete store[k]; },
+    };
+    // eslint-disable-next-line no-new-func
+    new Function('localStorage', sweepOldGenerationsJs(['__mealio_weg_tok_v1']))(localStorage);
+    expect(store['__mealio_weg_tok_v1']).toBe('live');
+  });
+});

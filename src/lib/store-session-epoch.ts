@@ -81,3 +81,40 @@ export function setEpoch(n: number): void {
 export function resetEpochValue(): void {
   cached = 0;
 }
+
+/**
+ * JS that deletes any PREVIOUS generation of the given cache keys.
+ *
+ * Stamping the key orphans the old entry, which is enough for a stale shop id:
+ * nothing can read it, and the browser evicts it eventually. It is NOT enough
+ * for a credential. The Wegmans rail caches a bearer token and a refresh token
+ * in the store page's localStorage, and a refresh token can mint fresh access
+ * tokens for as long as it lives -- so leaving one on disk after the user asked
+ * to be signed out is the wrong shape of "handled", however unreadable it is to
+ * our own code.
+ *
+ * Deleting needs a page, and at sign-out there is no WebView open. So the
+ * deletion happens at the first moment there IS one: the rail's own scripts run
+ * this in their prelude, on the store's origin, where localStorage is reachable.
+ * A user who signs out and never returns to that store leaves an orphan behind;
+ * a user who returns has it removed before anything else runs.
+ *
+ * Emitted as a string rather than executed here because it has to run INSIDE
+ * the WebView -- this module has no access to the page's localStorage.
+ */
+export function sweepOldGenerationsJs(bases: string[]): string {
+  const keep = JSON.stringify(bases.map((b) => epochKey(b)));
+  const all = JSON.stringify(bases);
+  return `(function () {
+  try {
+    var keep = ${keep}, bases = ${all};
+    for (var i = localStorage.length - 1; i >= 0; i--) {
+      var k = localStorage.key(i);
+      if (!k || keep.indexOf(k) !== -1) continue;
+      for (var b = 0; b < bases.length; b++) {
+        if (k === bases[b] || k.indexOf(bases[b] + '_g') === 0) { localStorage.removeItem(k); break; }
+      }
+    }
+  } catch (e) {}
+})();`;
+}

@@ -1,5 +1,6 @@
 import type { NetworkRail } from './network-rail';
 import { RETRY_FN } from './_retry';
+import { epochKey, sweepOldGenerationsJs } from '../store-session-epoch';
 // Albertsons network rail — search and add over the store's own REST API.
 //
 // The shape of this file mirrors heb-network-search.ts on purpose: same message
@@ -70,7 +71,15 @@ export const ALB_CART_CUSTOMER_PATH = '/abs/pub/erums/cartservice/api/v2/cart/cu
  * one fails with a 401 that looks exactly like a logged-out user. Probing costs
  * one cart read per run and cannot go stale.
  */
-const ALB_PRELUDE = `
+/**
+ * A FUNCTION, not a constant: KEY_CACHE below carries the sign-out generation,
+ * and a module-scope template literal would freeze it at import time.
+ */
+const albPrelude = () => `
+// Sign-out reaches this rail's cached API keys too. They are app credentials
+// rather than the user's, so this is tidiness rather than the Wegmans case --
+// but a key cached under a session the user ended should not outlive it.
+${sweepOldGenerationsJs(['__mealio_alb_keys_v1'])}
 ${RETRY_FN}
   var A = window.__mealioAlb = window.__mealioAlb || {};
 
@@ -284,7 +293,7 @@ ${RETRY_FN}
   // bounds how stale a cached key can be, and __albReadCart clears the cache
   // when every candidate is refused, so a rotation self-heals on the next run
   // instead of failing closed until someone notices.
-  var KEY_CACHE = '__mealio_alb_keys_v1';
+  var KEY_CACHE = '${epochKey('__mealio_alb_keys_v1')}';
   var KEY_CACHE_MAX_AGE = 12 * 60 * 60 * 1000;   // twelve hours
 
   function __albCachedKeys() {
@@ -576,7 +585,7 @@ ${RETRY_FN}
  */
 export function buildAlbertsonsSessionScript(): string {
   return `(async function () {
-${ALB_PRELUDE}
+${albPrelude()}
   var post = function (o) {
     o.type = 'ALB_SESSION';
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
@@ -841,7 +850,7 @@ function albSearchUrlExpr(pageSize: number, storeId: number): string {
  */
 export function buildAlbertsonsCartReadScript(): string {
   return `(async function () {
-${ALB_PRELUDE}
+${albPrelude()}
   var post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
@@ -906,7 +915,7 @@ export function buildAlbertsonsNetworkSearchBatchScript(
   // the bottleneck.
   const concurrency = Math.max(1, Math.min(opts.concurrency ?? 3, 4));
   return `(async function () {
-${ALB_PRELUDE}
+${albPrelude()}
 ${ALB_CANDIDATE_HELPERS}
 ${albSearchUrlExpr(pageSize, storeId)}
   var TERMS = ${JSON.stringify(terms)};
@@ -1222,7 +1231,7 @@ export function buildAlbertsonsNetworkAddBatchScript(
   // returns. A store that dislikes concurrent cart writes will say so there.
   const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 1, 4));
   return `(async function () {
-${ALB_PRELUDE}
+${albPrelude()}
   var ITEMS = ${JSON.stringify(usable)};
   var post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}

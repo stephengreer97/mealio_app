@@ -24,7 +24,7 @@
 import { INSTACART_TENANTS, type InstacartTenant } from './instacart';
 import type { NetworkRail } from './network-rail';
 import { RETRY_FN } from './_retry';
-import { epochKey } from '../store-session-epoch';
+import { epochKey, sweepOldGenerationsJs } from '../store-session-epoch';
 
 // ALL THREE ARE STAMPED WITH THE SIGN-OUT GENERATION at the point they are
 // interpolated into a script -- see epochKey and store-session-epoch. Cookies
@@ -146,6 +146,10 @@ function tenant(storeId: string): InstacartTenant {
  * observable; asserting on epochKey() alone would have passed throughout.
  */
 const icPrelude = () => `
+// The shop and the zone were chosen by a session the user may have ended. The
+// stamp already makes them unreadable; this removes them the next time we are
+// on the origin, so orphans do not accumulate across sign-outs.
+${sweepOldGenerationsJs([OPS_CACHE_KEY, SHOP_CACHE_KEY, ZONE_CACHE_KEY])}
 ${RETRY_FN}
   var IC = window.__mealioIC = window.__mealioIC || {};
   IC.post = function (o) {

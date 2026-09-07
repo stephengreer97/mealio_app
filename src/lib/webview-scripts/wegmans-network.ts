@@ -1,5 +1,6 @@
 import type { NetworkRail } from './network-rail';
 import { RETRY_FN } from './_retry';
+import { epochKey, sweepOldGenerationsJs } from '../store-session-epoch';
 // Wegmans over the network.
 //
 // Researched 2026-09-02/03 against a live signed-in session on the device; see
@@ -68,7 +69,20 @@ const STORE_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  * carries this to the WebView; a single backslash is eaten before it arrives.
  * Both have broken this build before, three times each.
  */
-const WEG_PRELUDE = `
+/**
+ * A FUNCTION, not a constant: the cache keys inside carry the sign-out
+ * generation, and a module-scope template literal would freeze them at the
+ * generation that happened to be loaded at import time.
+ */
+const wegPrelude = () => `
+// SIGN-OUT REACHES THIS RAIL'S CREDENTIALS, which the cookie jar never could.
+// A bearer AND a refresh token live in this origin's localStorage, and a
+// refresh token mints new sessions for as long as it survives -- so the stamp
+// alone is not enough here and the old generation is deleted outright.
+${sweepOldGenerationsJs([
+  '__mealio_weg_storekey_v1', '__mealio_weg_rt_v1', '__mealio_weg_oidc_v1',
+  '__mealio_weg_tok_v1', '__mealio_weg_store_v1',
+])}
 ${RETRY_FN}
   var WG = window.__mealioWeg = window.__mealioWeg || {};
   WG.post = function (o) {
@@ -102,7 +116,7 @@ ${RETRY_FN}
   // nobody can debug later.
   WG.cachedStore = function () {
     try {
-      var raw = localStorage.getItem('${STORE_CACHE_KEY}');
+      var raw = localStorage.getItem('${epochKey(STORE_CACHE_KEY)}');
       if (!raw) return null;
       var j = JSON.parse(raw);
       if (!j || !j.v || !j.at) return null;
@@ -226,7 +240,7 @@ ${RETRY_FN}
   WG.storeKey = async function (storeNo) {
     if (!storeNo) return null;
     try {
-      var c = JSON.parse(localStorage.getItem('${STORE_KEY_CACHE}') || 'null');
+      var c = JSON.parse(localStorage.getItem('${epochKey(STORE_KEY_CACHE)}') || 'null');
       if (c && c.n === String(storeNo) && Date.now() - c.at < 86400000) return c.v;
     } catch (e) {}
     try {
@@ -235,7 +249,7 @@ ${RETRY_FN}
       var list = JSON.parse(await r.text());
       for (var i = 0; i < list.length; i++) {
         if (String(list[i].storeNumber) === String(storeNo) && list[i].key) {
-          try { localStorage.setItem('${STORE_KEY_CACHE}', JSON.stringify({ n: String(storeNo), v: String(list[i].key), at: Date.now() })); } catch (e) {}
+          try { localStorage.setItem('${epochKey(STORE_KEY_CACHE)}', JSON.stringify({ n: String(storeNo), v: String(list[i].key), at: Date.now() })); } catch (e) {}
           return String(list[i].key);
         }
       }
@@ -374,7 +388,7 @@ ${RETRY_FN}
       var sv = v == null ? null : String(v);
       if (sv && /^[0-9]{1,4}$/.test(sv)) {
         tries.push({ from: 'cart', v: sv, ms: rc.ms });
-        try { localStorage.setItem('${STORE_CACHE_KEY}', JSON.stringify({ v: sv, at: Date.now() })); } catch (e) {}
+        try { localStorage.setItem('${epochKey(STORE_CACHE_KEY)}', JSON.stringify({ v: sv, at: Date.now() })); } catch (e) {}
         return tries;
       }
       tries.push({ from: 'cart', v: null, ms: rc.ms });
@@ -387,7 +401,7 @@ ${RETRY_FN}
     if (!r.ok) { tries.push({ from: 'customer', v: null, why: r.why }); return tries; }
     var n = WG.storeFromCustomer(r.data);
     tries.push({ from: 'customer', v: n, ms: r.ms });
-    if (n) { try { localStorage.setItem('${STORE_CACHE_KEY}', JSON.stringify({ v: n, at: Date.now() })); } catch (e) {} }
+    if (n) { try { localStorage.setItem('${epochKey(STORE_CACHE_KEY)}', JSON.stringify({ v: n, at: Date.now() })); } catch (e) {} }
     return tries;
   };
 
@@ -398,7 +412,7 @@ ${RETRY_FN}
   // after it. A run that gets none of them still searches at full speed.
   WG.cachedToken = function () {
     try {
-      var raw = localStorage.getItem('${TOKEN_CACHE_KEY}');
+      var raw = localStorage.getItem('${epochKey(TOKEN_CACHE_KEY)}');
       if (!raw) return null;
       var j = JSON.parse(raw);
       if (!j || !j.t) return null;
@@ -419,11 +433,11 @@ ${RETRY_FN}
         exp = JSON.parse(atob(pad)).exp || null;
       }
     } catch (e) {}
-    try { localStorage.setItem('${TOKEN_CACHE_KEY}', JSON.stringify({ t: tok, exp: exp, at: Date.now() })); } catch (e) {}
+    try { localStorage.setItem('${epochKey(TOKEN_CACHE_KEY)}', JSON.stringify({ t: tok, exp: exp, at: Date.now() })); } catch (e) {}
     return exp;
   };
   WG.forgetToken = function () {
-    try { localStorage.removeItem('${TOKEN_CACHE_KEY}'); } catch (e) {}
+    try { localStorage.removeItem('${epochKey(TOKEN_CACHE_KEY)}'); } catch (e) {}
   };
 
   // Watch for the site's own commerce call and take the header off it.
@@ -524,7 +538,7 @@ ${RETRY_FN}
   /** The B2C token endpoint, from the authority's own public discovery doc. */
   WG.tokenEndpoint = async function (env, realm, policy) {
     try {
-      var c = JSON.parse(localStorage.getItem('${ENDPOINT_CACHE}') || 'null');
+      var c = JSON.parse(localStorage.getItem('${epochKey(ENDPOINT_CACHE)}') || 'null');
       if (c && c.v && Date.now() - c.at < 604800000) return c.v;
     } catch (e) {}
     if (!env || !realm || !policy) return null;
@@ -533,7 +547,7 @@ ${RETRY_FN}
       var r = await fetch(url);
       var j = JSON.parse(await r.text());
       if (j && j.token_endpoint) {
-        try { localStorage.setItem('${ENDPOINT_CACHE}', JSON.stringify({ v: j.token_endpoint, at: Date.now() })); } catch (e) {}
+        try { localStorage.setItem('${epochKey(ENDPOINT_CACHE)}', JSON.stringify({ v: j.token_endpoint, at: Date.now() })); } catch (e) {}
         return j.token_endpoint;
       }
     } catch (e) {}
@@ -553,7 +567,7 @@ ${RETRY_FN}
     var creds = WG.msalCreds ? WG.msalCreds : await WG.readMsalCreds();
     var rt = null;
     try {
-      var mine = JSON.parse(localStorage.getItem('${REFRESH_CACHE}') || 'null');
+      var mine = JSON.parse(localStorage.getItem('${epochKey(REFRESH_CACHE)}') || 'null');
       if (mine && mine.v && Date.now() - mine.at < 86400000) rt = mine.v;
     } catch (e) {}
     if (!rt) rt = creds.refresh;
@@ -571,7 +585,7 @@ ${RETRY_FN}
       if (!j || !j.access_token) return null;
       WG.cacheToken(j.access_token);
       if (j.refresh_token) {
-        try { localStorage.setItem('${REFRESH_CACHE}', JSON.stringify({ v: j.refresh_token, at: Date.now() })); } catch (e) {}
+        try { localStorage.setItem('${epochKey(REFRESH_CACHE)}', JSON.stringify({ v: j.refresh_token, at: Date.now() })); } catch (e) {}
       }
       return j.access_token;
     } catch (e) { return null; }
@@ -734,7 +748,7 @@ ${RETRY_FN}
  */
 export function buildWegmansSessionScript(): string {
   return `(async function () {
-${WEG_PRELUDE}
+${wegPrelude()}
   var post = function (o) { o.type = 'WEGMANS_SESSION'; WG.post(o); };
   try {
     WG.watchForToken();
@@ -840,7 +854,7 @@ export function buildWegmansNetworkSearchBatchScript(
   // shops, so a product chosen from one would add the wrong thing next run.
   if (!opts.storeNumber) return null;
   return `(async function () {
-${WEG_PRELUDE}
+${wegPrelude()}
   var TERMS = ${JSON.stringify(terms)};
   var STORE = ${JSON.stringify(opts.storeNumber)};
   var REQ_MS = ${opts.requestMs ?? 12000};
@@ -952,7 +966,7 @@ ${WEG_PRELUDE}
 /** Read the cart. Needs the bearer; says so plainly when it has none. */
 export function buildWegmansCartReadScript(): string {
   return `(async function () {
-${WEG_PRELUDE}
+${wegPrelude()}
   try {
     WG.watchForToken();
     var tok = await WG.token();
@@ -1050,7 +1064,7 @@ export function buildWegmansNetworkAddBatchScript(
   const writable = items.filter((i) => !!i.productId);
   if (!writable.length) return null;
   return `(async function () {
-${WEG_PRELUDE}
+${wegPrelude()}
   var ITEMS = ${JSON.stringify(writable)};
   var KNOWN = ${JSON.stringify(opts.knownLines ?? null)};
   var ABSOLUTE = ${JSON.stringify(opts.absoluteQty ?? null)};
