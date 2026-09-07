@@ -39,6 +39,9 @@ module.exports = {
       displayName: 'components',
       preset: 'jest-expo',
       rootDir: '.',
+      // Native modules that cannot exist under jest, stubbed once. See the file
+      // for why this is central rather than per-suite.
+      setupFiles: ['<rootDir>/tests/setup/native-modules.js'],
       testMatch: ['<rootDir>/tests/components/**/*.test.tsx', '<rootDir>/tests/components/**/*.test.ts'],
       // jest-expo configures its own transformer for RN modules; we don't
       // need to widen transformIgnorePatterns further here unless we hit a

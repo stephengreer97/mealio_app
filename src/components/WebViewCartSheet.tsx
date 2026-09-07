@@ -54,6 +54,7 @@ import { useDraggablePreview } from '../lib/useDraggablePreview';
 import { FEATURE_PARALLEL_ADD } from '../constants/features';
 import { chooseAddStrategy, shouldWarmManualPage } from '../lib/automation-config/decisions';
 import Constants from 'expo-constants';
+import CookieManager from '@react-native-cookies/cookies';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode, requestFailureCode, type StepPhase } from '../lib/automation-telemetry';
@@ -5874,6 +5875,26 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
           if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
           if (netSessionSettledRef.current) return;
           console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));
+          // NATIVE COOKIE NAMES, DEV ONLY, NAMES NEVER VALUES.
+          //
+          // Measured 2026-09-07: nothing in the ActiveCarts response tells a
+          // guest from a signed-in user -- ucId is 8 characters either way and
+          // viewSection holds only an item count -- and `document.cookie` shows
+          // no auth cookie at all, because an auth cookie is HttpOnly and
+          // invisible to JavaScript by design.
+          //
+          // The native cookie store CAN see HttpOnly. This logs which names
+          // exist for the store's origin so a signed-out and a signed-in run
+          // can be diffed, which is the last untried place the signal can be.
+          // A name is enough to identify it; the value IS the session.
+          if (__DEV__) {
+            const origin = scriptsRef.current?.storeUrl;
+            if (origin) {
+              CookieManager.get(origin, true)
+                .then((jar) => console.log(`[Cart ${ts()}]`, 'native cookie names', JSON.stringify(Object.keys(jar).sort())))
+                .catch(() => {});
+            }
+          }
           if (!msg.ok) {
             if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
             // A PROBE THAT CANNOT ANSWER IS NOT A SIGNED-OUT USER, and on a
