@@ -41,6 +41,12 @@ export function isKrogerBrand(storeId: string): boolean {
 // Stores supported via in-app WebView cart automation
 export const WEBVIEW_STORE_IDS = new Set([
   'heb', 'walmart', 'aldi', 'wegmans',
+  // Instacart Storefront banners sharing ALDI's rail. The scripts for these
+  // genuinely ship in this binary, which is the only thing this set asserts.
+  // Whether a banner ANSWERS the rail is a different question, held by
+  // `proven` in webview-scripts/instacart.ts and by the server catalog: none of
+  // these four is in BUNDLED_STORES or has a catalog row, so none is offered.
+  'publix', 'sprouts', 'the_fresh_market', 'costco_sameday',
   // Albertsons family — all use the same platform
   'albertsons', 'safeway', 'vons', 'jewel_osco', 'shaws', 'acme',
   'tom_thumb', 'randalls', 'pavilions', 'star_market', 'haggen',

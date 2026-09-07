@@ -233,11 +233,16 @@ describe('a malformed payload', () => {
 // purpose: the server can name a store whose automation scripts are not in this
 // binary. There is no existing case to observe, so both sides are pinned here.
 describe('a store this build has no code for', () => {
-  const NO_CODE = { id: 'publix', name: 'Publix', color: '#008542' };
+  // A DELIBERATELY FICTIONAL ID. This used to be 'publix', and the day Publix
+  // was registered as an Instacart tenant these tests started asserting the
+  // opposite of what they meant: the build DID have code for it, so it reached
+  // the picker exactly as intended, and four suites failed. A placeholder that
+  // names a real retailer is a placeholder waiting to become true.
+  const NO_CODE = { id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542' };
 
   it('does not reach the picker', async () => {
     await loadStoreCatalog(async () => ({ version: 3, stores: [NO_CODE] }));
-    expect(byId('publix')).toBeUndefined();
+    expect(byId('zz_not_a_real_store')).toBeUndefined();
     expect(ids()).toEqual(BUNDLED_STORES.map((s) => s.id));
   });
 
@@ -255,7 +260,7 @@ describe('a store this build has no code for', () => {
       version: 3,
       stores: [NO_CODE, { id: 'heb', name: 'H-E-B Plus!', color: '#dd0031' }],
     }));
-    expect(byId('publix')).toBeUndefined();
+    expect(byId('zz_not_a_real_store')).toBeUndefined();
     expect(byId('heb')!.name).toBe('H-E-B Plus!');
   });
 });
@@ -279,34 +284,34 @@ describe('a store this build DOES have code for', () => {
   // is precisely what the release that adds an adapter does, so doing it here
   // reproduces the real acceptance path: the code lands in one release, and the
   // store is switched on later by a database row, with no second release.
-  const NEW_STORE = { id: 'publix', name: 'Publix', color: '#008542' };
+  const NEW_STORE = { id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542' };
 
   beforeEach(() => { WEBVIEW_STORE_IDS.add(NEW_STORE.id); });
   afterEach(() => { WEBVIEW_STORE_IDS.delete(NEW_STORE.id); });
 
   it('appears with no release once the catalog names it', async () => {
     await loadStoreCatalog(async () => ({ version: 3, stores: [NEW_STORE] }));
-    expect(byId('publix')).toEqual(NEW_STORE);
+    expect(byId('zz_not_a_real_store')).toEqual(NEW_STORE);
     expect(ids()).toHaveLength(BUNDLED_STORES.length + 1);
   });
 
   it('survives a restart offline, from the cache', async () => {
     const { cache, state } = fakeCache();
     await loadStoreCatalog(async () => ({ version: 3, stores: [NEW_STORE] }), cache);
-    expect(byId('publix')).toBeDefined();
+    expect(byId('zz_not_a_real_store')).toBeDefined();
 
     // Cold start, no network: only the cache answers.
     __resetStoreCatalogForTests();
-    expect(byId('publix')).toBeUndefined();
+    expect(byId('zz_not_a_real_store')).toBeUndefined();
     await loadStoreCatalog(async () => { throw new Error('offline'); }, {
       read: async () => state.value,
       write: cache.write,
     });
-    expect(byId('publix')).toEqual(NEW_STORE);
+    expect(byId('zz_not_a_real_store')).toEqual(NEW_STORE);
   });
 
   it('arrives with the neutral colour rather than not at all when the colour is bad', async () => {
     await loadStoreCatalog(async () => ({ version: 3, stores: [{ ...NEW_STORE, color: 'green' }] }));
-    expect(byId('publix')!.name).toBe('Publix');
+    expect(byId('zz_not_a_real_store')!.name).toBe('Not A Real Store');
   });
 });

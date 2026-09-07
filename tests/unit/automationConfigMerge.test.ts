@@ -292,9 +292,9 @@ describe('mergeAutomationConfig', () => {
       // The point of the field: pre-stage a banner so it inherits the platform
       // table before the release that adds its adapter.
       const { config, warnings } = mergeAutomationConfig({
-        stores: { publix: { platform: 'instacart' } },
+        stores: { zz_not_a_real_store: { platform: 'instacart' } },
       });
-      expect(config.stores.publix).toEqual({ platform: 'instacart' });
+      expect(config.stores.zz_not_a_real_store).toEqual({ platform: 'instacart' });
       expect(warnings).toEqual([]);
     });
   });

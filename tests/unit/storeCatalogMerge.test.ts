@@ -46,16 +46,16 @@ describe('what the bundled list guarantees', () => {
 
   it('is not mutated by a merge', () => {
     const before = JSON.stringify(BUNDLED_STORES);
-    mergeStoreCatalog([{ id: 'heb', name: 'Renamed', color: '#123456' }, { id: 'publix', name: 'Publix', color: '#008542' }]);
+    mergeStoreCatalog([{ id: 'heb', name: 'Renamed', color: '#123456' }, { id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542' }]);
     expect(JSON.stringify(BUNDLED_STORES)).toBe(before);
   });
 });
 
 describe('adding a store', () => {
   it('appends an entry the bundle does not have', () => {
-    const { stores, warnings } = mergeStoreCatalog([{ id: 'publix', name: 'Publix', color: '#008542' }]);
+    const { stores, warnings } = mergeStoreCatalog([{ id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542' }]);
     expect(warnings).toEqual([]);
-    expect(byId(stores, 'publix')).toEqual({ id: 'publix', name: 'Publix', color: '#008542' });
+    expect(byId(stores, 'zz_not_a_real_store')).toEqual({ id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542' });
     expect(stores).toHaveLength(BUNDLED_STORES.length + 1);
     // Appended, so nothing that indexes the bundled order shifts under it.
     expect(ids(stores).slice(0, BUNDLED_STORES.length)).toEqual(bundledIds());
@@ -64,9 +64,9 @@ describe('adding a store', () => {
   it('accepts both the bare array and the { stores: [...] } envelope', () => {
     // The server half is being built in parallel; tolerating both shapes means
     // the two halves do not have to ship together.
-    const entry = { id: 'publix', name: 'Publix', color: '#008542' };
+    const entry = { id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542' };
     for (const payload of [[entry], { stores: [entry] }, { version: 4, stores: [entry] }]) {
-      expect(byId(mergeStoreCatalog(payload).stores, 'publix')).toEqual(entry);
+      expect(byId(mergeStoreCatalog(payload).stores, 'zz_not_a_real_store')).toEqual(entry);
     }
   });
 });
@@ -100,10 +100,10 @@ describe('a bad id', () => {
   ])('drops the entry: %s', (_label, id) => {
     const { stores, warnings } = mergeStoreCatalog([
       { id, name: 'Sneaky', color: '#000000' },
-      { id: 'publix', name: 'Publix', color: '#008542' },
+      { id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542' },
     ]);
     expect(stores).toHaveLength(BUNDLED_STORES.length + 1);
-    expect(byId(stores, 'publix')).toBeDefined();       // the good neighbour survives
+    expect(byId(stores, 'zz_not_a_real_store')).toBeDefined();       // the good neighbour survives
     expect(warnings).toHaveLength(1);
   });
 
@@ -122,11 +122,11 @@ describe('a bad id', () => {
 describe('a duplicate id inside one payload', () => {
   it('keeps the FIRST occurrence and warns', () => {
     const { stores, warnings } = mergeStoreCatalog([
-      { id: 'publix', name: 'Publix', color: '#008542' },
-      { id: 'publix', name: 'Publix (impostor)', color: '#ff0000' },
+      { id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542' },
+      { id: 'zz_not_a_real_store', name: 'Publix (impostor)', color: '#ff0000' },
     ]);
-    expect(byId(stores, 'publix')!.name).toBe('Publix');
-    expect(stores.filter((s) => s.id === 'publix')).toHaveLength(1);
+    expect(byId(stores, 'zz_not_a_real_store')!.name).toBe('Not A Real Store');
+    expect(stores.filter((s) => s.id === 'zz_not_a_real_store')).toHaveLength(1);
     expect(warnings.join()).toContain('duplicate id');
   });
 
@@ -150,15 +150,15 @@ describe('a bad name — identity is required, so the entry goes', () => {
     ['a control character', 'Pub\u0007lix'],
     ['a line separator', 'Publix\u2028Free'],
   ])('drops the entry: %s', (_label, name) => {
-    const { stores, warnings } = mergeStoreCatalog([{ id: 'publix', name, color: '#008542' }]);
-    expect(byId(stores, 'publix')).toBeUndefined();
+    const { stores, warnings } = mergeStoreCatalog([{ id: 'zz_not_a_real_store', name, color: '#008542' }]);
+    expect(byId(stores, 'zz_not_a_real_store')).toBeUndefined();
     expect(stores).toEqual(BUNDLED_STORES);
     expect(warnings).toHaveLength(1);
   });
 
   it('trims a name that is otherwise fine', () => {
-    const { stores } = mergeStoreCatalog([{ id: 'publix', name: '  Publix  ', color: '#008542' }]);
-    expect(byId(stores, 'publix')!.name).toBe('Publix');
+    const { stores } = mergeStoreCatalog([{ id: 'zz_not_a_real_store', name: '  Not A Real Store  ', color: '#008542' }]);
+    expect(byId(stores, 'zz_not_a_real_store')!.name).toBe('Not A Real Store');
   });
 });
 
@@ -211,25 +211,25 @@ describe('a bad colour on a store with no history — decoration degrades', () =
     ['four digits', '#0085'],
     ['a JS expression', '#000; background: url(x)'],
   ])('keeps the store with the neutral fallback: %s', (_label, color) => {
-    const { stores, warnings } = mergeStoreCatalog([{ id: 'publix', name: 'Publix', color }]);
-    expect(byId(stores, 'publix')).toEqual({ id: 'publix', name: 'Publix', color: FALLBACK_STORE_COLOR });
+    const { stores, warnings } = mergeStoreCatalog([{ id: 'zz_not_a_real_store', name: 'Not A Real Store', color }]);
+    expect(byId(stores, 'zz_not_a_real_store')).toEqual({ id: 'zz_not_a_real_store', name: 'Not A Real Store', color: FALLBACK_STORE_COLOR });
     expect(warnings).toHaveLength(1);
   });
 
   it('accepts #rgb as well as #rrggbb', () => {
     const { stores, warnings } = mergeStoreCatalog([
-      { id: 'publix', name: 'Publix', color: '#0f0' },
+      { id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#0f0' },
       { id: 'wawa', name: 'Wawa', color: '#008542' },
     ]);
     expect(warnings).toEqual([]);
-    expect(byId(stores, 'publix')!.color).toBe('#0f0');
+    expect(byId(stores, 'zz_not_a_real_store')!.color).toBe('#0f0');
   });
 
   it('every colour that reaches the app is a hex literal RN can parse', () => {
     // The reason this is validated and not passed through: `color` lands on
     // `backgroundColor`, where an unparseable string is a render-time throw.
     const { stores } = mergeStoreCatalog([
-      { id: 'publix', name: 'Publix', color: 'chartreuse' },
+      { id: 'zz_not_a_real_store', name: 'Not A Real Store', color: 'chartreuse' },
       { id: 'wawa', name: 'Wawa', color: '#008542' },
     ]);
     for (const s of stores) expect(s.color).toMatch(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
@@ -240,13 +240,13 @@ describe('a malformed entry does not cost its neighbours', () => {
   it('keeps the good rows around junk ones', () => {
     const { stores, warnings } = mergeStoreCatalog([
       null,
-      'publix',
+      'zz_not_a_real_store',
       [],
-      { id: 'publix', name: 'Publix', color: '#008542' },
+      { id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542' },
       { name: 'No Id', color: '#000000' },
       { id: 'wawa', name: 'Wawa', color: '#c8102e' },
     ]);
-    expect(ids(stores)).toEqual([...bundledIds(), 'publix', 'wawa']);
+    expect(ids(stores)).toEqual([...bundledIds(), 'zz_not_a_real_store', 'wawa']);
     expect(warnings).toHaveLength(4);
   });
 
@@ -277,20 +277,20 @@ describe('a malformed entry does not cost its neighbours', () => {
     // The descriptive columns are nullable, and nothing may depend on any of
     // them being present — or on their being absent, which is the same rule.
     const { stores, warnings } = mergeStoreCatalog([{
-      id: 'publix', name: 'Publix', color: '#008542',
-      slug: 'publix', bannerGroup: null, platform: null, host: null, servingArea: null,
+      id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542',
+      slug: 'zz_not_a_real_store', bannerGroup: null, platform: null, host: null, servingArea: null,
     }]);
     expect(warnings).toEqual([]);
-    expect(byId(stores, 'publix')).toEqual({ id: 'publix', name: 'Publix', color: '#008542' });
+    expect(byId(stores, 'zz_not_a_real_store')).toEqual({ id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542' });
   });
 
   it('ignores extra fields a newer server publishes', () => {
     // Forward compatibility: an older app must not choke on a column it has
     // never heard of, and must not carry it into the app either.
     const { stores, warnings } = mergeStoreCatalog([
-      { id: 'publix', name: 'Publix', color: '#008542', region: 'FL', enabled: true },
+      { id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542', region: 'FL', enabled: true },
     ]);
-    expect(byId(stores, 'publix')).toEqual({ id: 'publix', name: 'Publix', color: '#008542' });
+    expect(byId(stores, 'zz_not_a_real_store')).toEqual({ id: 'zz_not_a_real_store', name: 'Not A Real Store', color: '#008542' });
     expect(warnings).toEqual([]);
   });
 });
@@ -314,9 +314,9 @@ describe('the limits, at exactly their limit', () => {
 
   it('accepts a name of exactly MAX_NAME_LENGTH characters', () => {
     const name = 'N'.repeat(60);
-    const { stores, warnings } = mergeStoreCatalog([{ id: 'publix', name, color: '#008542' }]);
+    const { stores, warnings } = mergeStoreCatalog([{ id: 'zz_not_a_real_store', name, color: '#008542' }]);
     expect(warnings).toEqual([]);
-    expect(byId(stores, 'publix')!.name).toBe(name);
+    expect(byId(stores, 'zz_not_a_real_store')!.name).toBe(name);
   });
 
   it('accepts an id of exactly the longest permitted length', () => {

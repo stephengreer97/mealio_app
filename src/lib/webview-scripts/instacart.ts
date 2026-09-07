@@ -51,6 +51,23 @@ export interface InstacartTenant {
   domain: string;
   /** Compiled-in default for the one runtime knob left. Remote config overrides it. */
   cacheBustNav?: boolean;
+  /**
+   * Has this banner been MEASURED end to end, or is it only plumbed?
+   *
+   * Until now being in this map meant "this works", and the fixture guard in
+   * instacartAdapter.test.ts enforced it. That left nowhere to put a banner we
+   * can open a WebView at but have not proven, which is exactly the state a new
+   * tenant is in before anyone has an account on it -- and being able to open
+   * the WebView is how you GET the account.
+   *
+   * `proven: true`  the four MEAL-220 measurements pass and fixtures exist.
+   * `proven: false` the origin and slug are confirmed and the scripts will run,
+   *                 but whether the storefront answers the same persisted
+   *                 queries is unknown. Not offered to anyone: a pending tenant
+   *                 must be absent from BUNDLED_STORES and from the server
+   *                 catalog, which is what actually keeps it off the picker.
+   */
+  proven?: boolean;
 }
 
 /** The `{origin}/store/{slug}/s?k=` prefix every search URL is built from. */
@@ -117,8 +134,68 @@ export const INSTACART_TENANTS: Record<string, InstacartTenant> = {
     slug: 'aldi',
     domain: 'aldi.us',
     cacheBustNav: false,
+    proven: true,
+  },
+
+  // ── PENDING: plumbed so a WebView can be opened, not yet proven ────────────
+  //
+  // Every origin and slug below is MEASURED, not guessed: each answers 200 on
+  // `/store/{slug}/` and serves the Instacart Storefront app (2026-09-06). That
+  // is the only one of MEAL-220's four checks that can be done without an
+  // account.
+  //
+  // WHAT IS UNKNOWN is whether these storefronts answer the same PERSISTED
+  // QUERIES. The rail carries no query text, only an operation name and a
+  // sha256 hash harvested at runtime, so a banner can serve an identical URL
+  // and still have nothing the rail can call. `no_hash` is already a
+  // first-class failure reason for precisely this.
+  //
+  // THEY ARE NOT OFFERED TO ANYONE. A store reaches the picker only when the
+  // SERVER CATALOG names it, and none of these has a row. Being here means the
+  // scripts exist so that, once a row is added, the WebView opens at the
+  // storefront and somebody can sign in -- which is the step that unblocks
+  // every remaining measurement.
+  publix: {
+    storeId: 'publix',
+    origin: 'https://delivery.publix.com',
+    slug: 'publix',
+    domain: 'delivery.publix.com',
+    cacheBustNav: false,
+    proven: false,
+  },
+  sprouts: {
+    storeId: 'sprouts',
+    origin: 'https://shop.sprouts.com',
+    // `sprouts`, NOT `sprouts-farmers-market`. The longer form 404s.
+    slug: 'sprouts',
+    domain: 'shop.sprouts.com',
+    cacheBustNav: false,
+    proven: false,
+  },
+  the_fresh_market: {
+    storeId: 'the_fresh_market',
+    origin: 'https://shop.thefreshmarket.com',
+    slug: 'the-fresh-market',
+    domain: 'shop.thefreshmarket.com',
+    cacheBustNav: false,
+    proven: false,
+  },
+  costco_sameday: {
+    storeId: 'costco_sameday',
+    origin: 'https://sameday.costco.com',
+    slug: 'costco',
+    domain: 'sameday.costco.com',
+    cacheBustNav: false,
+    // CARRIES A RISK THE OTHERS DO NOT: Costco Same-Day is membership-gated, so
+    // a session can be signed in and still be refused a cart. Check that first
+    // on this banner rather than last.
+    proven: false,
   },
 };
+
+/** Banners measured end to end. The rest are plumbed, not supported. */
+export const PROVEN_INSTACART_STORE_IDS: string[] =
+  Object.values(INSTACART_TENANTS).filter((t) => t.proven).map((t) => t.storeId);
 
 /** Store ids served by this adapter. Snapshotted at module load. */
 export const INSTACART_STORE_IDS: string[] = Object.keys(INSTACART_TENANTS);

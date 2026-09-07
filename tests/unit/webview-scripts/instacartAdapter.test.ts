@@ -23,12 +23,14 @@ import { getNetworkRail } from '../../../src/lib/webview-scripts/network-rail';
 import {
   INSTACART_TENANTS,
   INSTACART_STORE_IDS,
+  PROVEN_INSTACART_STORE_IDS,
   InstacartTenant,
   getInstacartScripts,
   getInstacartScriptsFor,
   getInstacartSearchUrl,
 } from '../../../src/lib/webview-scripts/instacart';
 import { getStoreScripts } from '../../../src/lib/webview-scripts';
+import { BUNDLED_STORES } from '../../../src/constants/stores';
 import { __resetAutomationConfigForTests } from '../../../src/lib/automation-config';
 import { BUNDLED_AUTOMATION_CONFIG } from '../../../src/lib/automation-config/schema';
 
@@ -165,16 +167,38 @@ describe('tenant registry', () => {
     expect(Object.keys(INSTACART_TENANTS)).toEqual(INSTACART_STORE_IDS);
   });
 
-  it('every tenant has captured fixtures behind it', () => {
-    // The guard rail on this ticket's whole premise. Instacart serving the same
-    // URL contract to several banners does not mean it serves them the same DOM,
-    // and every selector in the adapter was read off ALDI. A tenant registered
-    // without fixtures is an untested guess pretending to be a supported store —
-    // capture it (`npm run capture -- <storeId>`) before adding it here.
-    for (const id of INSTACART_STORE_IDS) {
+  it('every PROVEN tenant has captured fixtures behind it', () => {
+    // The guard rail on this ticket's whole premise, unchanged in force and
+    // narrowed in scope. Instacart serving the same URL contract to several
+    // banners does not mean it serves them the same DOM, and every selector in
+    // the adapter was read off ALDI. A tenant CLAIMED AS WORKING without
+    // fixtures is an untested guess pretending to be a supported store —
+    // capture it (`npm run capture -- <storeId>`) before marking it proven.
+    for (const id of PROVEN_INSTACART_STORE_IDS) {
       const dir = path.resolve(__dirname, '..', '..', 'fixtures', id);
       const has = fs.existsSync(dir) && fs.readdirSync(dir).some((f) => f.endsWith('.html'));
       expect(`${id}: ${has}`).toBe(`${id}: true`);
+    }
+  });
+
+  it('a PENDING tenant is offered to nobody', () => {
+    // The other half, and the reason narrowing the check above is safe rather
+    // than a loophole. A pending banner exists so a WebView can be opened at it
+    // and somebody can sign in; it must not reach a picker on the way. The
+    // bundled catalog is the offline fallback, so a name here would offer the
+    // store to every user with no network before anyone had proven anything.
+    const pending = Object.values(INSTACART_TENANTS).filter((t) => !t.proven).map((t) => t.storeId);
+    expect(pending.length).toBeGreaterThan(0);
+    const bundled = new Set(BUNDLED_STORES.map((s) => s.id));
+    for (const id of pending) expect(`${id} bundled: ${bundled.has(id)}`).toBe(`${id} bundled: false`);
+  });
+
+  it('but a pending tenant DOES get scripts, or it could never be signed into', () => {
+    // The whole point of the pending state. Withholding the scripts would mean
+    // the WebView never opens, which means nobody can log in, which means the
+    // measurements can never be taken — the deadlock this state exists to break.
+    for (const id of Object.keys(INSTACART_TENANTS)) {
+      expect(`${id}: ${getStoreScripts(id) !== null}`).toBe(`${id}: true`);
     }
   });
 });

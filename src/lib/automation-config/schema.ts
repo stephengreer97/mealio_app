@@ -425,6 +425,23 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
     // Each Instacart banner still gets its OWN entry here, because they are
     // separate retailers: each is kill-switched and tuned alone, and each can
     // override any inherited selector by naming it under `selectors` below.
+    // The pending Instacart banners (MEAL-220). ENABLED, and that is deliberate
+    // rather than optimistic: `enabled: false` makes getStoreScripts return
+    // null, so the WebView would never open and nobody could sign in — the
+    // deadlock the `proven: false` state exists to break.
+    //
+    // What keeps them off everyone's picker is the SERVER CATALOG, which names
+    // none of them. These entries are the remote kill switch, so a banner that
+    // misbehaves after a catalog row is added can be turned off in a config
+    // push rather than a release.
+    //
+    // Same knobs as ALDI: serial search and no cache-buster. Those were tuned
+    // against ALDI's anti-bot and are a guess here, which is one more thing the
+    // first signed-in session will tell us.
+    publix: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true },
+    sprouts: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true },
+    the_fresh_market: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true },
+    costco_sameday: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true },
     aldi: {
       enabled: true,
       platform: 'instacart',
