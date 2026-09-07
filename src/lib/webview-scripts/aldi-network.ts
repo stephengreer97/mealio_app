@@ -59,6 +59,22 @@ export const ALDI_SEED_OPS: Record<string, string> = {
   // call rather than two anyway.
   // ($id, $shopId, $postalCode) -> the cart lines. MEASURED 306ms.
   CartItems: '60fa63eb1afba0204993af2a7ea12e057f0ae2677e71753fc05d5a9c5b4adb6c',
+  // WHO THE USER IS -- the field the cart could never carry.
+  //
+  // Stephen, 2026-09-07: "you can be a guest in instacart sites but store is
+  // still required. The problem is we need to make the user be logged in so
+  // that they can view their cart when they leave mealio."
+  //
+  // That is the whole requirement, and it is stricter than "does the automation
+  // work". A guest run WORKS: it gets a shop, it gets a cart, it adds. The
+  // items land in an anonymous cart the user cannot open from their own
+  // account, so a run that looks like a success delivers nothing. Failing is
+  // better than that, and being right is better than both.
+  //
+  // Not guessed. Read out of the storefront's own persisted-operation manifest
+  // in tests/.chrome-profile/aldi -- 1585 operations, name to sha256, the same
+  // table ActiveCarts' hash came from.
+  CurrentUser: '7bdaa54dc2bc33ff8bb66af35da45efc94b2d1eb21ac53841cc214cdd6cc852a',
   // ($cartItemUpdates: [CartsCartItemUpdate!]!) where the input is
   // { itemId: ID!, quantity: Float! }. A LIST -- bulk add is one call.
   UpdateCartItemsMutation: 'a88cb16f9d30ef225e487baf6eda6851786440e74ffe73d66908ac2ab8b227a7',
@@ -414,6 +430,48 @@ ${IC_PRELUDE}
              status: carts.status || null, harvested: IC.harvested || 0 });
       return;
     }
+    // ASK WHO THE USER IS, now that there is an operation that can say.
+    //
+    // Shape-agnostic on purpose. The manifest gives the name and the hash but
+    // persisted queries strip the query TEXT, so the response's field names are
+    // not knowable from here -- and inventing them is how the last three
+    // regressions started. So this walks the response for an object carrying an
+    // id, and reports what it walked past. One run on a guest and one signed in
+    // pins the shape down; until then the code below only ever DOWNGRADES a
+    // verdict, never upgrades one.
+    var who = await IC.gql('CurrentUser', {}, 8000, 'session');
+    var acct = (function () {
+      var out = { answered: !!who.ok, status: who.status || null, keys: [],
+                  userPresent: false, userIdLen: 0, path: null };
+      if (!who.ok || !who.data) return out;
+      try {
+        out.keys = Object.keys(who.data);
+        // Breadth-first, shallow. An id under a user-ish key is the signal; the
+        // VALUE of that id never leaves the page, only its length.
+        var q = [{ v: who.data, p: '' }], seen = 0;
+        while (q.length && seen < 40) {
+          var cur = q.shift(); seen++;
+          if (!cur.v || typeof cur.v !== 'object') continue;
+          var k = Object.keys(cur.v);
+          for (var i = 0; i < k.length; i++) {
+            var key = k[i], val = cur.v[key], path = cur.p ? cur.p + '.' + key : key;
+            if (/^(id|uuid|userId)$/i.test(key) && (typeof val === 'string' || typeof val === 'number')
+                && /user|viewer|account|me/i.test(cur.p || '')) {
+              out.userPresent = true;
+              out.userIdLen = String(val).length;
+              out.path = cur.p;
+            }
+            if (val && typeof val === 'object' && path.split('.').length < 4) q.push({ v: val, p: path });
+          }
+        }
+      } catch (e) {}
+      return out;
+    })();
+
+    // 401 from an account query means the account is not there. Unlike the
+    // cart, this one cannot be true for a guest.
+    var acctDenied = who.status === 401;
+
     var uc = (carts.data && carts.data.userCarts) || null;
     var list = (uc && uc.carts) || [];
     if (!uc) { post({ ok: true, loggedIn: false, source: 'activeCarts' }); return; }
@@ -463,7 +521,29 @@ ${IC_PRELUDE}
       // signed-out correctly. The Publix deadlock is real and is NOT fixed by
       // guessing again: what settles it is sawSlugs and hadUserCarts below,
       // measured on one signed-out and one signed-in session.
-      loggedIn: !!mine,
+      // THE CART SAYS "there is a basket". IT NEVER SAID "there is a user",
+      // and Stephen named the consequence exactly: a guest gets a shop and a
+      // cart, adds fine, and then cannot see any of it from their own account
+      // once they leave Mealio. A run like that reports success and delivers
+      // nothing, which is strictly worse than refusing.
+      //
+      // So the cart is now a NECESSARY condition, not a sufficient one, and
+      // CurrentUser answering 401 overrides it outright. That direction is
+      // deliberate and one-way: a 401 from an account query is unambiguous, so
+      // it can only ever turn a "signed in" into a "signed out".
+      //
+      // WHAT IT DOES NOT YET DO is the reverse -- treat a 200 with no user
+      // field as a guest -- even though that is the rule Stephen's requirement
+      // ultimately wants. The response shape is unmeasured, my walk below is a
+      // heuristic, and if the heuristic simply fails to find a user then EVERY
+      // store walls its users, including the one banner that works today. That
+      // is the fourth regression in this exact spot and I am not shipping it on
+      // an assumption. acct below reports the shape; one capture on a guest and
+      // one signed in settles it, and then this flips with evidence behind it.
+      loggedIn: !!mine && !acctDenied,
+      // Names and lengths, never values. An account id is not log material.
+      acct: acct,
+      acctDenied: acctDenied,
       // This retailer's cart, or null when they have not started one. Null is a
       // normal state on a first run and the add path creates the cart.
       cartId: mine ? String(mine.id) : null,

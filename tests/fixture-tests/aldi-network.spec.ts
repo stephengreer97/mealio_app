@@ -46,6 +46,12 @@ function gqlStub(opts: {
   /** Answer every /graphql call with this HTTP status. 401 is how Instacart
    *  says "Not Authenticated" to a signed-out session. */
   httpStatus?: number;
+  /** Status per operation, for the case the blanket one cannot express: a
+   *  healthy cart AND a denied account, which is exactly what a guest is. */
+  opStatus?: Record<string, number>;
+  /** What CurrentUser returns on 200. `null` models a guest that the server
+   *  answers politely rather than with a 401. */
+  currentUser?: unknown;
   /** The carts the signed-in ACCOUNT holds, across retailers. Defaults to one
    *  ALDI cart, which is every case that existed before a second banner. */
   carts?: Array<{ id: string; itemCount: number; slug: string; retailerId?: string }>;
@@ -106,6 +112,12 @@ function gqlStub(opts: {
     '    }',
     '    var body = JSON.parse(init.body);',
     '    window.__calls.push({ op: body.operationName, vars: body.variables });',
+    '    var OPSTATUS = ' + JSON.stringify(opts.opStatus ?? {}) + ';',
+    '    if (OPSTATUS[body.operationName]) {',
+    '      return Promise.resolve({ status: OPSTATUS[body.operationName], text: function () {',
+    '        return Promise.resolve(JSON.stringify(',
+    '          { errors: [{ message: "Not Authenticated" }] })); } });',
+    '    }',
     '    var data = null;',
     '    if (FAIL && body.operationName === FAIL) {',
     '      return Promise.resolve({ status: 200, text: function () { return Promise.resolve(JSON.stringify(',
@@ -117,6 +129,11 @@ function gqlStub(opts: {
           .map((c) => ({ id: c.id, itemCount: c.itemCount,
                          retailer: { id: c.retailerId ?? '12', name: c.slug, slug: c.slug } })),
       ) + ' } };',
+    '    } else if (body.operationName === "CurrentUser") {',
+    '      data = ' + JSON.stringify(
+      opts.currentUser === undefined
+        ? { currentUser: { id: 'usr_00000001', firstName: 'S' } }
+        : opts.currentUser) + ';',
     '    } else if (body.operationName === "CartItems") {',
     '      data = { userCart: { id: "16636288909", cartItemCollection: { cartItems: cartLines() } } };',
     '    } else if (body.operationName === "AsyncItemSearch") {',
@@ -674,5 +691,71 @@ describe('what the session response can and cannot tell us', () => {
     for (const name of msg.cookieNames as string[]) {
       expect(name).not.toContain('=');
     }
+  });
+});
+
+// ── A GUEST IS NOT A USER ───────────────────────────────────────────────────
+//
+// Stephen, 2026-09-07: "you can be a guest in instacart sites but store is
+// still required. The problem is we need to make the user be logged in so that
+// they can view their cart when they leave mealio."
+//
+// That reframes what login detection is FOR. It is not a precondition the
+// automation needs in order to function -- the automation functions fine as a
+// guest, which is the trap. It is a precondition the USER needs, because items
+// added to a guest cart are unreachable from their account the moment they
+// leave the app. A guest run is a silent no-op wearing a success message.
+describe('being signed in, as distinct from having a cart', () => {
+  itWithFixture('storefront.html', 'a cart plus a denied account reads SIGNED OUT', async (runner) => {
+    // The case the old rule could not express. ActiveCarts is perfectly happy
+    // and returns this retailer's cart, so `!!mine` alone says signed in --
+    // and the account query says there is nobody there.
+    await runner.inject(gqlStub({ opStatus: { CurrentUser: 401 } }));
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.ok).toBe(true);
+    expect(msg.acctDenied).toBe(true);
+    expect(msg.loggedIn).toBe(false);
+  });
+
+  itWithFixture('storefront.html', 'a cart plus a live account still reads signed in', async (runner) => {
+    // The other direction, which matters just as much: the new check must not
+    // wall the one banner that has always worked. ALDI with a real session is
+    // the regression this file exists to prevent.
+    await runner.inject(gqlStub());
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.loggedIn).toBe(true);
+    expect(msg.acctDenied).toBe(false);
+  });
+
+  itWithFixture('storefront.html', 'reports the account SHAPE, and no account values', async (runner) => {
+    await runner.inject(gqlStub());
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    const acct = msg.acct as Record<string, unknown>;
+    expect(acct.answered).toBe(true);
+    expect(acct.userPresent).toBe(true);
+    // The id's LENGTH travels; the id does not, and neither does the name.
+    expect(acct.userIdLen).toBe('usr_00000001'.length);
+    const wire = JSON.stringify(msg);
+    expect(wire).not.toContain('usr_00000001');
+    expect(wire).not.toContain('firstName');
+  });
+
+  itWithFixture('storefront.html', 'a 200 with no user does NOT wall the user yet', async (runner) => {
+    // Deliberate, and the most important assertion here. This is the shape a
+    // polite guest response would have, and the rule Stephen's requirement
+    // eventually wants is "no user means guest". It is not switched on: the
+    // response shape is unmeasured, the walk that reads it is a heuristic, and
+    // a heuristic that merely FAILS TO FIND a user would wall every signed-in
+    // user on every banner. That is the same class of mistake as the three
+    // regressions before it, so it waits for one guest capture and one
+    // signed-in capture rather than shipping on an assumption.
+    await runner.inject(gqlStub({ currentUser: { currentUser: null } }));
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect((msg.acct as Record<string, unknown>).userPresent).toBe(false);
+    expect(msg.loggedIn).toBe(true);
   });
 });
