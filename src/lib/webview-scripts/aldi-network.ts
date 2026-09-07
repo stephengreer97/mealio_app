@@ -463,7 +463,7 @@ ${icPrelude()}
     var acct = (function () {
       var out = { answered: !!who.ok, status: who.status || null, keys: [],
                   cuKeys: [], idLen: 0, emailPresent: false, namePresent: false,
-                  cuNull: null };
+                  cuNull: null, guest: null, ordersCount: null };
       if (!who.ok || !who.data) return out;
       try {
         out.keys = Object.keys(who.data);
@@ -488,6 +488,22 @@ ${icPrelude()}
           if (cu.id != null) out.idLen = String(cu.id).length;
           out.emailPresent = !!cu.email;
           out.namePresent = !!(cu.firstName || cu.name || cu.lastName);
+          // THE STORE'S OWN ANSWER, and it was there the whole time.
+          //
+          // currentUser carries a boolean literally named guest. Every signal
+          // this project has tried to derive -- a cart existing, a shop id, an
+          // avatar image, a 401 from a cold page -- was an attempt to infer
+          // something Instacart states outright. Read out of Stephen's capture
+          // on 2026-09-07:
+          //
+          //   cuKeys: [firstName, lastName, fullName, email, id, GUEST, admin,
+          //            ordersCount, ...]
+          //
+          // Typeof-checked rather than coerced, so a missing field stays null
+          // and reads as "did not say" instead of as "not a guest".
+          out.guest = typeof cu.guest === 'boolean' ? cu.guest : null;
+          // Corroboration, and free. A guest has placed no orders.
+          out.ordersCount = typeof cu.ordersCount === 'number' ? cu.ordersCount : null;
         }
       } catch (e) {}
       return out;
@@ -496,6 +512,13 @@ ${icPrelude()}
     // 401 from an account query means the account is not there. Unlike the
     // cart, this one cannot be true for a guest.
     var acctDenied = who.status === 401;
+    // A GUEST IS NOT SIGNED IN, said by the store rather than guessed by us.
+    //
+    // === true ON PURPOSE. A missing or non-boolean guest must never wall
+    // anyone: this only ever turns a "signed in" into a "signed out", exactly
+    // like acctDenied, so a banner that does not carry the field behaves the
+    // way it does today rather than the way I hope it does.
+    var acctGuest = acct.guest === true;
 
     var uc = (carts.data && carts.data.userCarts) || null;
     var list = (uc && uc.carts) || [];
@@ -565,10 +588,11 @@ ${icPrelude()}
       // is the fourth regression in this exact spot and I am not shipping it on
       // an assumption. acct below reports the shape; one capture on a guest and
       // one signed in settles it, and then this flips with evidence behind it.
-      loggedIn: !!mine && !acctDenied,
+      loggedIn: !!mine && !acctDenied && !acctGuest,
       // Names and lengths, never values. An account id is not log material.
       acct: acct,
       acctDenied: acctDenied,
+      acctGuest: acctGuest,
       // This retailer's cart, or null when they have not started one. Null is a
       // normal state on a first run and the add path creates the cart.
       cartId: mine ? String(mine.id) : null,

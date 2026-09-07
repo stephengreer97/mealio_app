@@ -133,7 +133,8 @@ function gqlStub(opts: {
     '      data = ' + JSON.stringify(
       opts.currentUser === undefined
         ? { currentUser: { id: 'usr_00000001', firstName: 'NAMEVALUE',
-                           email: 'EMAILVALUE@example.com' } }
+                           email: 'EMAILVALUE@example.com',
+                           guest: false, ordersCount: 3 } }
         : opts.currentUser) + ';',
     '    } else if (body.operationName === "CartItems") {',
     '      data = { userCart: { id: "16636288909", cartItemCollection: { cartItems: cartLines() } } };',
@@ -740,7 +741,7 @@ describe('being signed in, as distinct from having a cart', () => {
     expect(acct.namePresent).toBe(true);
     // The id's LENGTH travels; the id does not, and neither does the name.
     expect(acct.idLen).toBe('usr_00000001'.length);
-    expect(acct.cuKeys).toEqual(['id', 'firstName', 'email']);
+    expect(acct.cuKeys).toEqual(['id', 'firstName', 'email', 'guest', 'ordersCount']);
     expect(acct.emailPresent).toBe(true);
     // KEY NAMES travel, VALUES do not, and the difference is the whole design:
     // cuKeys is how the guest rule gets settled, so it has to say which fields
@@ -768,6 +769,66 @@ describe('being signed in, as distinct from having a cart', () => {
     // cuNull is the field that would drive the strict rule, and here it is
     // TRUE -- a guest, plainly. It still does not wall anyone yet.
     expect((msg.acct as Record<string, unknown>).cuNull).toBe(true);
+    expect(msg.loggedIn).toBe(true);
+  });
+});
+
+// ── THE STORE SAYS IT OUTRIGHT ──────────────────────────────────────────────
+//
+// Stephen, after signing out: "we are still not getting prompted to login for
+// aldi". His capture carried the answer in a field nobody had read:
+//
+//   cuKeys: [firstName, lastName, fullName, email, id, GUEST, admin,
+//            ordersCount, businessOrganizationOptional, ...]
+//
+// currentUser has a boolean named guest. Every signal this project tried to
+// derive -- a cart existing, a shop id, an avatar image, a 401 from a cold
+// page -- was an attempt to infer something Instacart states plainly.
+describe('the guest flag', () => {
+  itWithFixture('storefront.html', 'a guest is signed out, cart or no cart', async (runner) => {
+    // The case that has been wrong since the beginning: ActiveCarts is happy,
+    // a cart for this retailer exists, and the shopper is nobody.
+    await runner.inject(gqlStub({ currentUser: { currentUser: {
+      id: 'guest_1', guest: true, ordersCount: 0 } } }));
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect((msg.acct as Record<string, unknown>).guest).toBe(true);
+    expect(msg.acctGuest).toBe(true);
+    expect(msg.loggedIn).toBe(false);
+  });
+
+  itWithFixture('storefront.html', 'a real account with a cart is signed in', async (runner) => {
+    await runner.inject(gqlStub());
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect((msg.acct as Record<string, unknown>).guest).toBe(false);
+    expect((msg.acct as Record<string, unknown>).ordersCount).toBe(3);
+    expect(msg.loggedIn).toBe(true);
+  });
+
+  itWithFixture('storefront.html', 'a MISSING guest field walls nobody', async (runner) => {
+    // The safety direction, and the reason this ships at all. A banner whose
+    // currentUser does not carry the field must behave exactly as it does
+    // today. Reading a missing field as falsy would be fine here by luck; the
+    // danger is the opposite reflex -- treating "did not say" as "guest" --
+    // which would wall every user of every tenant that words it differently.
+    await runner.inject(gqlStub({ currentUser: { currentUser: { id: 'u1' } } }));
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect((msg.acct as Record<string, unknown>).guest).toBeNull();
+    expect(msg.acctGuest).toBe(false);
+    expect(msg.loggedIn).toBe(true);
+  });
+
+  itWithFixture('storefront.html', 'a non-boolean guest is "did not say", not "no"', async (runner) => {
+    // typeof-checked rather than coerced. A string "false" is truthy and would
+    // wall a signed-in user; a string "true" is not a boolean and must not be
+    // trusted to wall one either.
+    await runner.inject(gqlStub({ currentUser: { currentUser: {
+      id: 'u1', guest: 'false' } } }));
+    await runner.inject(buildAldiSessionScript('aldi'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect((msg.acct as Record<string, unknown>).guest).toBeNull();
     expect(msg.loggedIn).toBe(true);
   });
 });
