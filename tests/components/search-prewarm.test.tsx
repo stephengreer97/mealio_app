@@ -81,6 +81,7 @@ jest.mock('../../src/context/LoginPrewarmContext', () => {
       takePrewarmedCart: () => null,
       noteSignedOut: () => {},
       setSearchTerms: () => {},
+      noteLiveVerdict: () => {},
       getSearchResults: (_storeId: string, terms: string[]) => {
         const have = (global as any).__earlyAnswers as Map<string, unknown[]>;
         const out = new Map<string, unknown[]>();

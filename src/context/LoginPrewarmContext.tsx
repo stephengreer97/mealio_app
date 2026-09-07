@@ -99,6 +99,21 @@ interface LoginPrewarmValue {
   /** Forget every cached login answer. For signing out of the grocery stores,
    *  whose cookies this cache is a memory of. */
   forgetAll: () => void;
+  /**
+   * Correct the cached verdict from a LIVE answer the cart sheet just got.
+   *
+   * The prewarm probe is one early answer and it goes stale the moment the user
+   * signs in, because signing in happens inside the CART SHEET and nothing told
+   * the cache about it. Measured on the Pixel, 2026-09-07: signed in at
+   * 15:26:27, ran again at 15:32:45, and the prewarm still said loggedOut. The
+   * run recovered -- it checks rather than trusting that verdict now -- but it
+   * paid a 6.2s storefront load to re-learn what the previous run had already
+   * proven.
+   *
+   * The sheet's verdict is strictly better evidence than the probe's: later, and
+   * from the page the run is actually using. So it writes back.
+   */
+  noteLiveVerdict: (storeId: string, isLoggedIn: boolean) => void;
 }
 
 // Default is a working no-op so consumers rendered outside the provider (e.g.
@@ -111,6 +126,7 @@ const LoginPrewarmContext = createContext<LoginPrewarmValue>({
   setSearchTerms: () => {},
   getSearchResults: () => new Map(),
   forgetAll: () => {},
+  noteLiveVerdict: () => {},
 });
 
 export function useLoginPrewarm(): LoginPrewarmValue {
@@ -399,6 +415,16 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     setStatusVersion((v) => v + 1);
   }, []);
 
+  /** See noteLiveVerdict in LoginPrewarmValue. */
+  const noteLiveVerdict = useCallback((storeId: string, isLoggedIn: boolean) => {
+    const next = isLoggedIn ? 'loggedIn' : 'loggedOut';
+    if (statusRef.current.get(storeId) === next) return;
+    console.log('[Prewarm] live verdict from the cart sheet', storeId, '→', next,
+      '(was', statusRef.current.get(storeId) ?? 'unknown', ')');
+    statusRef.current.set(storeId, next);
+    setStatusVersion((v) => v + 1);
+  }, []);
+
   const handleResult = useCallback(
     (storeId: string, isLoggedIn: boolean, cart?: PrewarmedCart) => {
       if (isLoggedIn && cart) cartRef.current.set(storeId, cart);
@@ -499,8 +525,8 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   useSessionEnd(forgetAll);
 
   const value = useMemo<LoginPrewarmValue>(
-    () => ({ checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll }),
-    [checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll],
+    () => ({ checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll, noteLiveVerdict }),
+    [checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll, noteLiveVerdict],
   );
 
   return (

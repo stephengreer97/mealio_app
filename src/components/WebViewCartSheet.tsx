@@ -5848,6 +5848,16 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
             // network at all, missed the 25 s deadline by 1.4 s, and dropped 20
             // items into the page-driven pool — the "taking a slower route"
             // screen he sat in front of for minutes.
+            // TELL THE PREWARM WHAT WE JUST LEARNED. Its probe answered early
+            // and from a colder page; this answer is later and from the page the
+            // run is using, so it is the better of the two. Without this the
+            // cache kept saying loggedOut after the user signed in HERE, and
+            // every later run paid a storefront load to re-learn it.
+            // Optional-called: the interface requires it, but a dozen test
+            // doubles build this context by hand and a missing method would
+            // throw HERE, in the middle of the verdict handler, taking the
+            // navigation below down with it rather than failing visibly.
+            if (msg.ok) loginPrewarm.noteLiveVerdict?.(lockedStoreIdRef.current, !!msg.loggedIn);
             if (msg.loggedIn && msg.storeId && msg.shoppingContext) {
               netSessionRef.current = {
                 storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext),

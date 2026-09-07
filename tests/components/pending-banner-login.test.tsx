@@ -83,6 +83,7 @@ jest.mock('../../src/context/LoginPrewarmContext', () => {
     useLoginPrewarm: () => ({
       checkStore: () => {}, getStatus: () => 'unknown', takePrewarmedCart: () => null,
       statusVersion: 1, setSearchTerms: () => {}, getSearchResults: () => new Map(),
+      noteLiveVerdict: () => {},
     }),
   };
 });

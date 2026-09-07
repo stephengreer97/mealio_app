@@ -93,6 +93,7 @@ jest.mock('../../src/context/LoginPrewarmContext', () => {
       takePrewarmedCart: () => null,
       setSearchTerms: () => {},
       getSearchResults: () => new Map(),
+      noteLiveVerdict: () => {},
     }),
   };
 });

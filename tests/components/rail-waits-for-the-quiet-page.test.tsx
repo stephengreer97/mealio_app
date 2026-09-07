@@ -89,6 +89,7 @@ jest.mock('../../src/context/LoginPrewarmContext', () => ({
     getStatus: () => 'loggedIn',
     takePrewarmedCart: () => mockPrewarmedCart,
     getSearchResults: () => mockPrewarmedSearch,
+    noteLiveVerdict: () => {},
     setSearchTerms: () => {},
     checkStore: () => {},
     statusVersion: 0,
