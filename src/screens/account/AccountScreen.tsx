@@ -33,6 +33,7 @@ import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import CookieManager from '@react-native-cookies/cookies';
 import { useLoginPrewarm } from '../../context/LoginPrewarmContext';
+import { bumpEpoch } from '../../lib/store-session-epoch-storage';
 
 /** e.g. "Jul 9, 2026" */
 function formatExpiry(iso: string): string {
@@ -520,6 +521,15 @@ export default function AccountScreen() {
               // to searching for somebody who had just signed out. Measured on
               // 2026-09-07, on a run immediately after this button.
               prewarm.forgetAll();
+              // AND ORPHAN WHAT THE COOKIE JAR DOES NOT COVER. The rail caches
+              // the shop and the delivery zone in the store page's
+              // localStorage, which is a different store from the cookie jar
+              // and survives clearAll untouched -- so a run right after this
+              // button was still pointed at the branch the signed-in session
+              // had chosen (shopFrom "cache", same shop id, across a sign-out).
+              // Bumping the generation changes every rail cache key at once,
+              // with no WebView to open and no page to load.
+              await bumpEpoch();
               // Kroger is API/OAuth, not a WebView cookie — disconnect it
               // server-side too so "all stores" really means all.
               if (krogerConnected) {

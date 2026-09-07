@@ -23,6 +23,7 @@ import WebViewVersionProbe from './src/components/WebViewVersionProbe';
 import FingerprintProbe from './src/components/FingerprintProbe';
 import PushRegistrar from './src/components/PushRegistrar';
 import { configureNotificationHandler } from './src/lib/push';
+import { loadEpoch } from './src/lib/store-session-epoch-storage';
 import AutomationConfigLoader from './src/components/AutomationConfigLoader';
 import StoreCatalogLoader from './src/components/StoreCatalogLoader';
 
@@ -36,6 +37,16 @@ installConsoleCapture();
 // be set before any listener can fire, so it runs at module scope like the log
 // capture above rather than in an effect.
 configureNotificationHandler();
+
+// Read the sign-out generation into memory before any run can build a script.
+//
+// The rail's cache keys are stamped with it synchronously, so it has to be in
+// place first; a run that started before this resolved would read generation
+// zero and see caches the user had already signed away. Fire-and-forget on
+// purpose -- it is one keychain read, it happens while the splash screen is
+// still up, and a failure reads as generation zero, which is the pre-existing
+// key and the safe direction.
+void loadEpoch();
 
 export default function App() {
   const [fontsLoaded] = useFonts({

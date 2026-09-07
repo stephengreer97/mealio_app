@@ -24,7 +24,19 @@
 import { INSTACART_TENANTS, type InstacartTenant } from './instacart';
 import type { NetworkRail } from './network-rail';
 import { RETRY_FN } from './_retry';
+import { epochKey } from '../store-session-epoch';
 
+// ALL THREE ARE STAMPED WITH THE SIGN-OUT GENERATION at the point they are
+// interpolated into a script -- see epochKey and store-session-epoch. Cookies
+// and localStorage are different stores, so "sign out of all grocery stores"
+// cleared the jar and left the shop and zone the signed-in session had chosen
+// sitting in the page's localStorage, which is why Stephen's runs kept
+// reporting shopFrom "cache" with the same shop id across a sign-out.
+//
+// The ops cache is stamped too, though its contents are public query hashes and
+// harmless to keep. It costs one re-harvest after a sign-out (measured at 6
+// operations) and it means there is no second rule to remember: everything the
+// rail writes into a store's localStorage is orphaned by the button.
 /** Where the harvested operation map is cached, and for how long. */
 const OPS_CACHE_KEY = '__mealio_ic_ops_v1';
 const OPS_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
@@ -125,7 +137,15 @@ function tenant(storeId: string): InstacartTenant {
  * eaten before it ever arrives -- both have broken this build before, three
  * times each.
  */
-const IC_PRELUDE = `
+/**
+ * A FUNCTION, not a constant, because the cache keys inside it carry the
+ * sign-out generation. As a module-scope template literal this was evaluated
+ * once at import, which froze every key at generation zero -- so the sign-out
+ * bumped a number that no injected script ever read. Caught by the test that
+ * asserts the EMITTED script changes, which is the only place the difference is
+ * observable; asserting on epochKey() alone would have passed throughout.
+ */
+const icPrelude = () => `
 ${RETRY_FN}
   var IC = window.__mealioIC = window.__mealioIC || {};
   IC.post = function (o) {
@@ -135,7 +155,7 @@ ${RETRY_FN}
   // ---- the operation map -------------------------------------------------
   IC.cachedOps = function () {
     try {
-      var raw = localStorage.getItem('${OPS_CACHE_KEY}');
+      var raw = localStorage.getItem('${epochKey(OPS_CACHE_KEY)}');
       if (!raw) return null;
       var j = JSON.parse(raw);
       if (!j || !j.at || !j.ops) return null;
@@ -144,10 +164,10 @@ ${RETRY_FN}
     } catch (e) { return null; }
   };
   IC.cacheOps = function (ops) {
-    try { localStorage.setItem('${OPS_CACHE_KEY}', JSON.stringify({ at: Date.now(), ops: ops })); } catch (e) {}
+    try { localStorage.setItem('${epochKey(OPS_CACHE_KEY)}', JSON.stringify({ at: Date.now(), ops: ops })); } catch (e) {}
   };
   IC.forgetOps = function () {
-    try { localStorage.removeItem('${OPS_CACHE_KEY}'); } catch (e) {}
+    try { localStorage.removeItem('${epochKey(OPS_CACHE_KEY)}'); } catch (e) {}
     IC.ops = null;
   };
 
@@ -281,7 +301,7 @@ ${RETRY_FN}
   // fact discovered by guessing is one nobody can debug later.
   IC.cachedShop = function () {
     try {
-      var raw = localStorage.getItem('${SHOP_CACHE_KEY}');
+      var raw = localStorage.getItem('${epochKey(SHOP_CACHE_KEY)}');
       if (!raw) return null;
       var j = JSON.parse(raw);
       if (!j || !j.v || !j.at) return null;
@@ -353,7 +373,7 @@ ${RETRY_FN}
     var first = null;
     for (var i = 0; i < tries.length; i++) if (tries[i].v) { first = tries[i].v; break; }
     if (first) {
-      try { localStorage.setItem('${SHOP_CACHE_KEY}', JSON.stringify({ v: first, at: Date.now() })); } catch (e) {}
+      try { localStorage.setItem('${epochKey(SHOP_CACHE_KEY)}', JSON.stringify({ v: first, at: Date.now() })); } catch (e) {}
     }
     return tries;
   };
@@ -387,7 +407,7 @@ function pickCartFor(list, slug) {
 export function buildAldiSessionScript(storeId = 'aldi'): string {
   const seed = JSON.stringify(ALDI_SEED_OPS);
   return `(async function () {
-${IC_PRELUDE}
+${icPrelude()}
   var post = function (o) { o.type = 'ALDI_SESSION'; IC.post(o); };
   try {
     await IC.ensureOps(${seed}, 15000);
@@ -419,7 +439,7 @@ ${IC_PRELUDE}
         // A 401 is the one moment we know for certain the session is gone, so
         // it is the right moment to forget what that session knew. The next run
         // reads the page instead, and shopFrom says which happened.
-        try { localStorage.removeItem('${SHOP_CACHE_KEY}'); } catch (e) {}
+        try { localStorage.removeItem('${epochKey(SHOP_CACHE_KEY)}'); } catch (e) {}
         post({ ok: true, loggedIn: false, source: 'activeCarts_401', shopCacheCleared: true });
         return;
       }
@@ -648,7 +668,7 @@ export function buildAldiNetworkSearchBatchScript(
   if (!opts.shopId) return null;
   const seed = JSON.stringify(ALDI_SEED_OPS);
   return `(async function () {
-${IC_PRELUDE}
+${icPrelude()}
   var TERMS = ${JSON.stringify(terms)};
   var SHOP = ${JSON.stringify(opts.shopId)};
   var REQ_MS = ${opts.requestMs ?? 15000};
@@ -700,7 +720,7 @@ ${IC_PRELUDE}
     var zone = null;
     var cachedZone = null;
     try {
-      var rawZ = localStorage.getItem('${ZONE_CACHE_KEY}');
+      var rawZ = localStorage.getItem('${epochKey(ZONE_CACHE_KEY)}');
       if (rawZ) {
         var jz = JSON.parse(rawZ);
         if (jz && jz.v && Date.now() - jz.at < ${OPS_CACHE_MAX_AGE_MS}) cachedZone = String(jz.v);
@@ -719,7 +739,7 @@ ${IC_PRELUDE}
         var dash = f.indexOf('-');
         if (us >= 0 && dash > us) zone = f.slice(us + 1, dash);
       }
-      if (zone) { try { localStorage.setItem('${ZONE_CACHE_KEY}', JSON.stringify({ v: zone, at: Date.now() })); } catch (e) {} }
+      if (zone) { try { localStorage.setItem('${epochKey(ZONE_CACHE_KEY)}', JSON.stringify({ v: zone, at: Date.now() })); } catch (e) {} }
     }
     post({ type: 'IC_SEARCH_SHAPE', source: 'network', zone: zone, zoneFrom: cachedZone ? 'cache' : 'probe' });
     if (!zone) {
@@ -770,7 +790,7 @@ export function buildAldiCartReadScript(
   const storeId = opts.storeId ?? 'aldi';
   const seed = JSON.stringify(ALDI_SEED_OPS);
   return `(async function () {
-${IC_PRELUDE}
+${icPrelude()}
   var SHOP = ${JSON.stringify(opts.shopId ?? null)};
   try {
     await IC.ensureOps(${seed}, 15000);
@@ -896,7 +916,7 @@ export function buildAldiNetworkAddBatchScript(
   if (!writable.length) return null;
   const seed = JSON.stringify(ALDI_SEED_OPS);
   return `(async function () {
-${IC_PRELUDE}
+${icPrelude()}
   var ITEMS = ${JSON.stringify(writable)};
   var SHOP = ${JSON.stringify(opts.shopId ?? null)};
   var KNOWN = ${JSON.stringify(opts.knownLines ?? null)};
