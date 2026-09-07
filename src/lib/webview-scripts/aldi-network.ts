@@ -892,7 +892,9 @@ ${IC_PRELUDE}
  */
 export const INSTACART_RAIL: NetworkRail = {
   sessionMessageType: 'ALDI_SESSION',
-  sessionScript: () => buildAldiSessionScript(),
+  // THE TENANT, not a default. Dropping it here is what made Publix report a
+  // signed-in user as signed out: the probe matched carts against ALDI's slug.
+  sessionScript: (storeId) => buildAldiSessionScript(storeId ?? 'aldi'),
   searchBatch: (terms, sess) =>
     buildAldiNetworkSearchBatchScript(terms, {
       shopId: sess.storeId,

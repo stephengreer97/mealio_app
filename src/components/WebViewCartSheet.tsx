@@ -1158,7 +1158,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
    */
   const loginCheckScript = useCallback((): string | null => {
     const rail = getNetworkRail(lockedStoreIdRef.current);
-    return rail ? rail.sessionScript() : null;
+    return rail ? rail.sessionScript(lockedStoreIdRef.current) : null;
   }, []);
   /** When the repair window opened this run, 0 if it has not — see
    *  SESSION_REPAIR_WINDOW_MS. */
@@ -2814,7 +2814,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     // the quiet page lands, and the budget armed just above is what bounds the
     // wait rather than an answer we cannot trust.
     if (onStorePage()) {
-      webviewRef.current?.injectJavaScript(rail.sessionScript());
+      webviewRef.current?.injectJavaScript(rail.sessionScript(lockedStoreIdRef.current));
     } else {
       console.log(`[Cart ${ts()}]`, 'network run: not on the store yet —',
         'waiting for the quiet page instead of asking about:blank');
@@ -4008,7 +4008,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     console.log(`[Cart ${ts()}]`, 'search prewarm: asking the session for', missing.length, 'terms');
     // A session probe that never answers is the commoner of the two silences.
     netPrewarmArm(rail.budgets.sessionMs, 'the session never answered');
-    webviewRef.current?.injectJavaScript(rail.sessionScript());
+    webviewRef.current?.injectJavaScript(rail.sessionScript(lockedStoreIdRef.current));
   }, [netSeedFromEarlyPrewarm, netPrewarmArm, netPrewarmSettle]);
 
   const beginSearchFlow = useCallback(() => {
@@ -4258,7 +4258,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       lastLoadEndUrlRef.current = url;
       console.log(`[Cart ${ts()}]`, 'network run: re-reading the session on', url.slice(0, 60));
       const railForSession = getNetworkRail(lockedStoreIdRef.current);
-      if (railForSession) webviewRef.current?.injectJavaScript(railForSession.sessionScript());
+      if (railForSession) webviewRef.current?.injectJavaScript(railForSession.sessionScript(lockedStoreIdRef.current));
       return;
     }
     // Walmart anti-bot redirect: /blocked?url=<encoded original>. We surface

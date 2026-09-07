@@ -37,7 +37,17 @@ export interface NetworkAddItem {
 export interface NetworkRail {
   /** The message type this store's session probe posts back. */
   sessionMessageType: string;
-  sessionScript(): string;
+  /**
+   * The session probe, for THIS store.
+   *
+   * The argument exists because a rail can serve several banners and the probe
+   * has to know which one it is standing on. The Instacart rail matches the
+   * signed-in account's carts by `retailer.slug`, and with no store id it
+   * defaulted to ALDI's — so on Publix it hunted for an ALDI cart among Publix
+   * carts, found none, and reported the user signed out. Every other rail
+   * serves one banner (or a family that shares an answer) and ignores it.
+   */
+  sessionScript(storeId?: string | null): string;
   searchBatch(terms: string[], sess: NetworkSession): string | null;
   /**
    * Read the cart and post a CART_COUNT identical to the cart PAGE's.

@@ -19,6 +19,7 @@
 // run for twelve hours.
 
 import {
+  INSTACART_RAIL,
   buildAldiSessionScript,
   buildAldiNetworkSearchBatchScript,
   buildAldiCartReadScript,
@@ -521,5 +522,39 @@ describe('a cart belongs to a retailer', () => {
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.loggedIn).toBe(true);
     expect(msg.cartId).toBe('16636288909');
+  });
+});
+
+// ── THE RAIL MUST BE TOLD WHICH BANNER IT IS ON ─────────────────────────────
+//
+// From Stephen's device, 2026-09-06, a Publix run:
+//
+//   {"cartCount":1,"sawSlugs":["publix"],"cartId":null,"loggedIn":false,...}
+//
+// It FOUND a Publix cart and reported the user signed out. `sessionScript()`
+// took no arguments, so INSTACART_RAIL built the probe with the default store
+// id — ALDI — and the probe matched carts against ALDI's slug. On Publix that
+// matches nothing, however signed in you are.
+//
+// Every "login detection" symptom on Publix traces here. Not persisted queries,
+// not authentication semantics: a defaulted parameter.
+describe('the session probe is built for the store it is running on', () => {
+  itWithFixture('storefront.html', 'matches Publix carts on a Publix run', async (runner) => {
+    await runner.inject(gqlStub({ carts: [{ id: 'cart-publix-1', itemCount: 0, slug: 'publix', retailerId: '77' }] }));
+    await runner.inject(INSTACART_RAIL.sessionScript('publix'));
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    // The exact line from the device, inverted.
+    expect(msg.sawSlugs).toEqual(['publix']);
+    expect(msg.loggedIn).toBe(true);
+    expect(msg.cartId).toBe('cart-publix-1');
+  });
+
+  itWithFixture('storefront.html', 'still defaults to ALDI when told nothing', async (runner) => {
+    // The default is what made this invisible for a year with one tenant, so it
+    // stays — but it is now a fallback rather than the only behaviour.
+    await runner.inject(gqlStub());
+    await runner.inject(INSTACART_RAIL.sessionScript());
+    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
+    expect(msg.loggedIn).toBe(true);
   });
 });
