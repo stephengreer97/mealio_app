@@ -49,3 +49,34 @@ Run in order; each leaves the state the next one needs.
 - Store login forms re-render and clear the password field. Re-type and submit
   with `keyevent 66` rather than tapping the button.
 - The My Meals chip row lists only stores with saved meals.
+
+## Results, 2026-09-07
+
+All four scenarios, driven on a Pixel 6 against real accounts.
+
+| store      | signed-out prompts | sign-in noticed | no flash | sign-out works |
+|------------|--------------------|-----------------|----------|----------------|
+| ALDI       | yes                | 1.66s           | yes      | yes            |
+| Wegmans    | yes                | 1.6s            | yes      | yes (B2C said so) |
+| H-E-B      | yes                | 0.52s           | yes      | yes            |
+| Albertsons | yes                | 0.28s           | yes      | yes            |
+| Walmart    | yes                | 0.05s           | yes      | yes (after the fix) |
+| Publix     | yes                | 0.42s           | yes      | yes            |
+
+Kroger has no WebView login (OAuth, its own Connect flow). Amazon Fresh is not a
+selectable store -- it was removed on 2026-09-04; the root CLAUDE.md still lists
+it.
+
+## More gotchas, earned
+
+- `input text` is ASYNCHRONOUS. A screenshot taken right after can show an empty
+  field, and typing again because of that DOUBLES the value. Wait ~4s, and never
+  re-type on the strength of a screenshot alone.
+- Clearing a field needs MOVE_END first, or backspaces eat from the caret and
+  leave a prefix ("ail.com ...") the store rejects as invalid.
+- Walmart, Albertsons and H-E-B all offer a code-to-phone as the DEFAULT sign-in
+  method. Pick the password (or email-code) radio explicitly.
+- Publix is email-code only. Read it from Gmail: the six digits are in the
+  SUBJECT ("703666 is your Publix verification code"), so the thread list alone
+  is enough and the body never needs opening.
+- Decline Google's "save password" prompt; it appears after every store.
