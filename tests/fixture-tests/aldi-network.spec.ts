@@ -558,13 +558,19 @@ describe('the session probe is built for the store it is running on', () => {
     expect(msg.cartId).toBe('cart-publix-1');
   });
 
-  itWithFixture('storefront.html', 'still defaults to ALDI when told nothing', async (runner) => {
-    // The default is what made this invisible for a year with one tenant, so it
-    // stays — but it is now a fallback rather than the only behaviour.
-    await runner.inject(gqlStub());
-    await runner.inject(INSTACART_RAIL.sessionScript());
-    const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
-    expect(msg.loggedIn).toBe(true);
+  it('refuses to run at all when told nothing, rather than defaulting to ALDI', () => {
+    // This test used to assert the opposite, and its comment argued for it:
+    // "the default is what made this invisible for a year with one tenant, so
+    // it stays". That reasoning was backwards. The default was not a survival
+    // of the single-tenant era that happened to be harmless, it was the
+    // mechanism of the regression. sessionScript() took no argument, the id
+    // arrived undefined, the fallback turned that into a real-looking tenant,
+    // and a Publix run matched Publix carts against ALDI's slug and told
+    // Stephen he was signed out while he was signed in.
+    //
+    // A guess that is right four times in five is worse than a refusal, because
+    // the fifth is silent and lands in the wrong basket.
+    expect(() => INSTACART_RAIL.sessionScript()).toThrow(/no store id/i);
   });
 });
 

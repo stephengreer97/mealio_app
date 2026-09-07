@@ -66,7 +66,7 @@ describe('network rail resolution', () => {
 
   it('builds a session script for each rail', () => {
     for (const id of ['heb', 'albertsons']) {
-      const src = getNetworkRail(id)!.sessionScript();
+      const src = getNetworkRail(id)!.sessionScript(id);
       expect(typeof src).toBe('string');
       expect(src.length).toBeGreaterThan(100);
       // Injected scripts must end truthy or react-native-webview warns.

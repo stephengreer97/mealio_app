@@ -29,8 +29,8 @@ function scriptsFor(storeId: string): Array<[string, string]> {
   const rail = getNetworkRail(storeId)!;
   const sess = { storeId: '1', shoppingContext: 'pickup' };
   const out: Array<[string, string | null]> = [
-    ['sessionScript', rail.sessionScript()],
-    ['cartRead', rail.cartRead()],
+    ['sessionScript', rail.sessionScript(storeId)],
+    ['cartRead', rail.cartRead(storeId)],
     ['searchBatch', rail.searchBatch(['sour cream', 'tortillas'], sess)],
     ['addBatch', rail.addBatch([
       { idx: 0, productId: 'p1', skuId: 's1', quantity: 2, name: 'Sour Cream' },
@@ -92,7 +92,7 @@ describe('the injected scripts survive being injected', () => {
     for (const id of RAIL_STORES) {
       const rail = getNetworkRail(id)!;
       expect(NETWORK_SESSION_MESSAGE_TYPES).toContain(rail.sessionMessageType);
-      expect(rail.sessionScript().length).toBeGreaterThan(100);
+      expect(rail.sessionScript(id).length).toBeGreaterThan(100);
     }
   });
 });

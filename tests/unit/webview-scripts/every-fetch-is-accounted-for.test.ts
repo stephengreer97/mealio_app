@@ -49,9 +49,9 @@ function railCode(storeId: string): string {
   const rail = getNetworkRail(storeId)!;
   const cfg = { storeId: '161', shoppingContext: 'pickup' } as never;
   return [
-    rail.sessionScript(),
+    rail.sessionScript(storeId),
     rail.searchBatch(['milk'], cfg)!,
-    rail.cartRead(),
+    rail.cartRead(storeId),
     rail.addBatch([{ idx: 0, productId: 'p1', skuId: 's1', quantity: 1, name: 'Milk' }], {})!,
   ].join('\n').split(RETRY_FN).join('');
 }

@@ -57,7 +57,19 @@ export interface NetworkRail {
    * searching eighteen items -- and it is what put the wrong breakdown on the
    * done screen when the navigation landed somewhere that was not the cart.
    */
-  cartRead(): string;
+  /**
+   * Read the cart with one request from the page we are already on.
+   *
+   * TAKES THE STORE ID for the same reason sessionScript does. A multi-tenant
+   * rail cannot know which banner it is running for, and Instacart's cart query
+   * is ACCOUNT-level -- it returns carts across every retailer -- so the answer
+   * has to be filtered by the tenant's slug. Without the id, all four non-ALDI
+   * Instacart banners matched against ALDI's slug, found no cart of their own,
+   * and reported no rows: their before-snapshot was permanently missing.
+   *
+   * Single-tenant rails ignore the argument.
+   */
+  cartRead(storeId?: string | null): string;
   /**
    * `opts.knownLines` is the cart the sheet has ALREADY read, as
    * { itemId: qty }.

@@ -1849,7 +1849,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       }, cfgTimeouts.cartProbeResultMs);
       cartCountPendingRef.current = phase;
       console.log(`[Cart ${ts()}]`, 'cart probe over the network —', phase, 'no page load');
-      webviewRef.current?.injectJavaScript(railForCart.cartRead());
+      webviewRef.current?.injectJavaScript(railForCart.cartRead(lockedStoreIdRef.current));
       return;
     }
     // NO RAIL, NO CART. The navigate-to-the-cart-page fallback that stood here
@@ -4164,7 +4164,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       // that reconciles against no baseline is its own bug.
       if (onStorePage()) {
         console.log(`[Cart ${ts()}]`, 'snapshotBefore: reading the cart over the network, no page load');
-        webviewRef.current?.injectJavaScript(railForBefore.cartRead());
+        webviewRef.current?.injectJavaScript(railForBefore.cartRead(lockedStoreIdRef.current));
       } else {
         console.log(`[Cart ${ts()}]`, 'snapshotBefore: not on the store yet — reading the cart when it lands');
         cartReadPendingNavRef.current = true;
@@ -4248,7 +4248,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       lastLoadEndUrlRef.current = url;
       console.log(`[Cart ${ts()}]`, 'snapshotBefore: the store landed — reading the cart now');
       const railForPending = getNetworkRail(lockedStoreIdRef.current);
-      if (railForPending) webviewRef.current?.injectJavaScript(railForPending.cartRead());
+      if (railForPending) webviewRef.current?.injectJavaScript(railForPending.cartRead(lockedStoreIdRef.current));
       return;
     }
     // A network run waiting on its session: the injection at run start can land

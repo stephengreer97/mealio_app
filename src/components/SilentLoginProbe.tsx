@@ -136,7 +136,7 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
     const rail = getNetworkRail(storeId);
     if (rail) {
       console.log('[Prewarm] probe', storeId, 'cart capture: over the network, no page load');
-      webviewRef.current?.injectJavaScript(rail.cartRead());
+      webviewRef.current?.injectJavaScript(rail.cartRead(storeId));
       return;
     }
     console.log('[Prewarm] probe', storeId, 'no rail — reporting logged-in without a baseline');

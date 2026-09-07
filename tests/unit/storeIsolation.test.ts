@@ -140,8 +140,8 @@ describe('every rail answers every question the engine asks', () => {
   it.each(ONE_PER_RAIL)('%s builds a script for every phase', (id) => {
     const rail = getNetworkRail(id)!;
     const sess = { storeId: '1', shoppingContext: 'pickup' };
-    expect(typeof rail.sessionScript()).toBe('string');
-    expect(typeof rail.cartRead()).toBe('string');
+    expect(typeof rail.sessionScript(id)).toBe('string');
+    expect(typeof rail.cartRead(id)).toBe('string');
     expect(typeof rail.searchBatch(['milk'], sess)).toBe('string');
     expect(typeof rail.addBatch(
       [{ idx: 0, productId: 'p1', skuId: 's1', quantity: 1, name: 'Milk' }])).toBe('string');
@@ -154,7 +154,7 @@ describe('every rail answers every question the engine asks', () => {
     // repeatedly, including inside comments.
     const rail = getNetworkRail(id)!;
     const sess = { storeId: '1', shoppingContext: 'pickup' };
-    const scripts = [rail.sessionScript(), rail.cartRead(),
+    const scripts = [rail.sessionScript(id), rail.cartRead(id),
                      rail.searchBatch(['milk'], sess) ?? '',
                      rail.addBatch([{ idx: 0, productId: 'p', skuId: 's', quantity: 1, name: 'M' }]) ?? ''];
     for (const src of scripts) {

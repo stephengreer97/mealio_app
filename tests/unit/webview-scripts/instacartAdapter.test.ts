@@ -129,7 +129,7 @@ describe('tenant registry', () => {
       // return. The invariant is unchanged and still worth having, so it asks
       // the thing that does the reading.
       const rail = getNetworkRail(id);
-      expect(`${id}: ${!!rail && !!rail.cartRead()}`).toBe(`${id}: true`);
+      expect(`${id}: ${!!rail && !!rail.cartRead(id)}`).toBe(`${id}: true`);
     }
   });
 
@@ -157,8 +157,15 @@ describe('tenant registry', () => {
     INSTACART_TENANTS[id] = SYNTHETIC;
     try {
       expect(getNetworkRail(id)).not.toBeNull();
-      // Same platform, same rail: byte-for-byte what ALDI gets.
-      expect(getNetworkRail(id)!.cartRead()).toBe(getNetworkRail('aldi')!.cartRead());
+      // Same platform, same rail OBJECT -- and deliberately NOT the same
+      // script. This used to assert the two were byte-for-byte identical, which
+      // read as proof of generalisation and was actually the bug written down:
+      // Instacart's cart query is account-level and returns carts for every
+      // retailer, so a script identical to ALDI's filters a second tenant's
+      // carts by ALDI's slug, matches nothing, and reports an empty cart.
+      expect(getNetworkRail(id)).toBe(getNetworkRail('aldi'));
+      expect(getNetworkRail(id)!.cartRead(id)).not.toBe(getNetworkRail('aldi')!.cartRead('aldi'));
+      expect(getNetworkRail(id)!.cartRead(id)).toContain(`'${SYNTHETIC.slug}'`);
     } finally {
       delete INSTACART_TENANTS[id];
     }

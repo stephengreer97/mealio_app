@@ -34,9 +34,9 @@ function scriptsFor(storeId: string): Array<[string, string]> {
   const push = (label: string, s: string | null | undefined) => {
     if (typeof s === 'string' && s.length) out.push([label, s]);
   };
-  push('session', rail.sessionScript());
+  push('session', rail.sessionScript(storeId));
   push('searchBatch', rail.searchBatch(['milk'], cfg));
-  push('cartRead', rail.cartRead());
+  push('cartRead', rail.cartRead(storeId));
   push('addBatch', rail.addBatch(
     [{ idx: 0, productId: 'p1', skuId: 's1', quantity: 1, name: 'Milk' }], {}));
   // All four, every rail. A try/catch here, or a builder quietly returning

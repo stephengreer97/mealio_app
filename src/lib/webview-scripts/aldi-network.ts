@@ -21,7 +21,7 @@
 // the same problem the Albertsons APIM key has, and it takes the same answer:
 // harvest, cache, and forget the cache the moment the store says a hash is
 // unknown.
-import { INSTACART_TENANTS } from './instacart';
+import { INSTACART_TENANTS, type InstacartTenant } from './instacart';
 import type { NetworkRail } from './network-rail';
 import { RETRY_FN } from './_retry';
 
@@ -71,9 +71,33 @@ export const ALDI_SEED_OPS: Record<string, string> = {
  */
 const PLACEHOLDER_POSTAL = '00000';
 
-function tenantOrigin(storeId: string): string {
+/**
+ * Resolve a tenant, or refuse. There used to be a silent `|| { slug: 'aldi' }`
+ * at every call site, and it was not a harmless default -- it was the bug.
+ *
+ * getNetworkRail only dispatches here for ids already in INSTACART_TENANTS, so
+ * an unknown id never arrives from routing. The only way to reach the fallback
+ * was for the store id to be DROPPED on the way in, which is exactly what
+ * happened when sessionScript() took no argument: storeId came through
+ * undefined, the fallback read "aldi", and a Publix run went hunting for an
+ * ALDI cart among Publix carts.
+ *
+ * So the failure mode the default produced is "quietly operate on the wrong
+ * store's basket", and the failure mode of throwing is "this run does not
+ * start". For a thing that WRITES TO A CART, the second is plainly the better
+ * one: a run that fails is visible and costs nothing, and a run that adds to
+ * the wrong basket is neither.
+ */
+function tenant(storeId: string): InstacartTenant {
   const t = INSTACART_TENANTS[storeId];
-  return t ? t.origin : 'https://www.aldi.us';
+  if (!t) {
+    throw new Error(
+      `aldi-network: no Instacart tenant for store id ${JSON.stringify(storeId)}. ` +
+        `Known: ${Object.keys(INSTACART_TENANTS).join(', ')}. ` +
+        'This means the store id was lost on the way in, not that the store is new.',
+    );
+  }
+  return t;
 }
 
 /**
@@ -402,8 +426,8 @@ ${IC_PRELUDE}
     //
     // userCarts answering at all is the authentication fact. The cart is a
     // separate question and its honest answer here is often "none yet".
-    var mine = pickCartFor(list, '${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}');
-    var shopTries = await IC.findShopId('${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}', 20000);
+    var mine = pickCartFor(list, '${tenant(storeId).slug}');
+    var shopTries = await IC.findShopId('${tenant(storeId).slug}', 20000);
     // THE SHOP ID IS NOT THE RETAILER ID, and confusing them searches the wrong
     // catalogue. The retailer is ALDI-the-chain (12). The shop is the branch the
     // user is shopping (8583 on this device), and it is what every search and
@@ -672,7 +696,7 @@ ${IC_PRELUDE}
     // "Variable $shopId of type ID! was provided invalid value", because null
     // was passed straight through.
     if (!SHOP) {
-      var tries = await IC.findShopId('${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}', 20000);
+      var tries = await IC.findShopId('${tenant(storeId).slug}', 20000);
       for (var ti = 0; ti < tries.length; ti++) if (tries[ti] && tries[ti].v) { SHOP = String(tries[ti].v); break; }
     }
     if (!SHOP) {
@@ -689,7 +713,7 @@ ${IC_PRELUDE}
     var list = [];
     try { list = carts.data.userCarts.carts || []; } catch (e) {}
     // THIS RETAILER'S CART, not the first one the account happens to hold.
-    var mineCart = pickCartFor(list, '${(INSTACART_TENANTS[storeId] || { slug: 'aldi' }).slug}');
+    var mineCart = pickCartFor(list, '${tenant(storeId).slug}');
     if (!mineCart) { IC.post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' }); return; }
     var cartId = String(mineCart.id);
     var items = await IC.gql('CartItems', { id: cartId, shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000, 'cart_read');
@@ -951,17 +975,38 @@ ${IC_PRELUDE}
  * here. That is the same reasoning railConfigKey uses for the fifteen
  * Albertsons banners.
  */
+/**
+ * The rail boundary. The ALDI-named builders keep their `= 'aldi'` defaults --
+ * they are the ALDI builders and a bare call in a test means ALDI -- but the
+ * LIVE path must never reach them with nothing, because "nothing" is precisely
+ * the shape the Publix regression arrived in. So the id is required here, where
+ * every real run passes through, and defaulted there, where only tests do.
+ */
+function railTenantId(storeId: string | null | undefined): string {
+  if (!storeId) {
+    throw new Error(
+      'aldi-network: the Instacart rail was invoked with no store id. The rail is ' +
+        'multi-tenant and its cart query is account-level, so without the id it ' +
+        'cannot tell which banner it is running for.',
+    );
+  }
+  return tenant(storeId).storeId;
+}
+
 export const INSTACART_RAIL: NetworkRail = {
   sessionMessageType: 'ALDI_SESSION',
-  // THE TENANT, not a default. Dropping it here is what made Publix report a
-  // signed-in user as signed out: the probe matched carts against ALDI's slug.
-  sessionScript: (storeId) => buildAldiSessionScript(storeId ?? 'aldi'),
+  // THE TENANT, not a default -- and it is no longer quietly turned into one.
+  // Dropping it here is what made Publix report a signed-in user as signed out:
+  // the probe matched carts against ALDI's slug. `?? 'aldi'` stood here and did
+  // not prevent that, it PRODUCED it, so tenant() now refuses an id it does not
+  // know instead of guessing ALDI.
+  sessionScript: (storeId) => buildAldiSessionScript(railTenantId(storeId)),
   searchBatch: (terms, sess) =>
     buildAldiNetworkSearchBatchScript(terms, {
       shopId: sess.storeId,
       requestMs: INSTACART_RAIL.budgets.searchRequestMs,
     }),
-  cartRead: () => buildAldiCartReadScript(),
+  cartRead: (storeId) => buildAldiCartReadScript({ storeId: railTenantId(storeId) }),
   addBatch: (items, opts) =>
     buildAldiNetworkAddBatchScript(
       items.map((i) => ({ idx: i.idx, productId: i.productId, quantity: i.quantity, name: i.name })),
