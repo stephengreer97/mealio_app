@@ -449,6 +449,11 @@ export const BUNDLED_AUTOMATION_CONFIG: AutomationConfig = {
     sprouts: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
     the_fresh_market: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
     costco_sameday: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
+    price_chopper: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
+    bristol_farms: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
+    save_mart: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
+    gelsons: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
+    dierbergs: { enabled: true, platform: 'instacart', forceSerialSearch: true, cacheBustNav: false, spaSearch: true, networkSearch: true, networkAdd: true },
     aldi: {
       enabled: true,
       platform: 'instacart',

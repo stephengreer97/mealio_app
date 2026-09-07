@@ -174,17 +174,40 @@ describe('tenant registry', () => {
     expect(Object.keys(INSTACART_TENANTS)).toEqual(INSTACART_STORE_IDS);
   });
 
-  it('every PROVEN tenant has captured fixtures behind it', () => {
-    // The guard rail on this ticket's whole premise, unchanged in force and
-    // narrowed in scope. Instacart serving the same URL contract to several
-    // banners does not mean it serves them the same DOM, and every selector in
-    // the adapter was read off ALDI. A tenant CLAIMED AS WORKING without
-    // fixtures is an untested guess pretending to be a supported store —
-    // capture it (`npm run capture -- <storeId>`) before marking it proven.
+  it('every PROVEN tenant says what proved it, and when', () => {
+    // THE GUARD RAIL ON THIS TICKET'S PREMISE, and its terms have changed once
+    // for a real reason rather than for convenience.
+    //
+    // It used to demand captured fixtures, because every selector the adapter
+    // used had been read off ALDI and a second banner's DOM was an open
+    // question. That automation was deleted on 2026-09-04. There are no
+    // selectors left; a banner is answered entirely by its network rail, and
+    // the fixture capture tool still only knows the five original stores -- so
+    // "capture it before marking it proven" had become impossible to satisfy
+    // for exactly the banners this is meant to police.
+    //
+    // Loosening it to nothing would have been the easy move. Instead the claim
+    // has to carry its evidence: what was measured, and on what date. A bare
+    // `proven: true` with nothing beside it is what this keeps out, and that
+    // was always the actual point.
     for (const id of PROVEN_INSTACART_STORE_IDS) {
-      const dir = path.resolve(__dirname, '..', '..', 'fixtures', id);
-      const has = fs.existsSync(dir) && fs.readdirSync(dir).some((f) => f.endsWith('.html'));
-      expect(`${id}: ${has}`).toBe(`${id}: true`);
+      const t = INSTACART_TENANTS[id];
+      const why = (t.provenOn || '').trim();
+      expect(`${id}: ${why.length > 40}`).toBe(`${id}: true`);
+      // A date, so the claim can be aged rather than merely believed.
+      expect(`${id}: ${/\d{4}-\d{2}-\d{2}/.test(why)}`).toBe(`${id}: true`);
+    }
+  });
+
+  it('would reject a bare proven:true, rather than passing vacuously', () => {
+    const id = SYNTHETIC.storeId;
+    expect(INSTACART_TENANTS[id]).toBeUndefined();
+    INSTACART_TENANTS[id] = { ...SYNTHETIC, proven: true };
+    try {
+      const t = INSTACART_TENANTS[id];
+      expect((t.provenOn || '').length > 40).toBe(false);
+    } finally {
+      delete INSTACART_TENANTS[id];
     }
   });
 

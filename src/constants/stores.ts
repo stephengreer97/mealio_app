@@ -47,6 +47,10 @@ export const WEBVIEW_STORE_IDS = new Set([
   // `proven` in webview-scripts/instacart.ts and by the server catalog: none of
   // these four is in BUNDLED_STORES or has a catalog row, so none is offered.
   'publix', 'sprouts', 'the_fresh_market', 'costco_sameday',
+  // Added 2026-09-07. Each origin was checked for the platform's signature and
+  // its slug read out of its own storefront links -- see INSTACART_TENANTS,
+  // where the slugs and the chains that are NOT on this platform are recorded.
+  'price_chopper', 'bristol_farms', 'save_mart', 'gelsons', 'dierbergs',
   // Albertsons family — all use the same platform
   'albertsons', 'safeway', 'vons', 'jewel_osco', 'shaws', 'acme',
   'tom_thumb', 'randalls', 'pavilions', 'star_market', 'haggen',

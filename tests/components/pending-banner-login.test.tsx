@@ -100,6 +100,7 @@ const chosen = (name: string) => ({
 const MEALS = [{ id: 'm1', name: 'Tacos', ingredients: [chosen('sour cream')] }] as never;
 
 import { isProvenStore } from '../../src/lib/webview-scripts/network-rail';
+import { INSTACART_TENANTS } from '../../src/lib/webview-scripts/instacart';
 import { __applyAutomationConfigForTests } from '../../src/lib/automation-config';
 
 /** Start a run on a store, land on its quiet page, then answer the probe. */
@@ -133,11 +134,21 @@ const onAssistedScreen = (view: { queryByTestId: (id: string) => unknown }) =>
   !!view.queryByTestId('manual-bar');
 
 describe('which stores are proven', () => {
-  it('ALDI is, the four new banners are not', () => {
+  it('follows the registry rather than a list written here', () => {
+    // This listed four banner ids by hand and went stale the moment Publix was
+    // driven and six more were added. The invariant was never "these four are
+    // unproven" -- it is "isProvenStore agrees with the registry" -- so it now
+    // reads the registry, and a banner added tomorrow is covered without anyone
+    // remembering to edit this file.
     expect(isProvenStore('aldi')).toBe(true);
     expect(isProvenStore('heb')).toBe(true);
-    for (const id of ['publix', 'sprouts', 'the_fresh_market', 'costco_sameday']) {
-      expect(`${id}: ${isProvenStore(id)}`).toBe(`${id}: false`);
+    const pending = Object.values(INSTACART_TENANTS).filter((t) => !t.proven);
+    expect(pending.length).toBeGreaterThan(0);
+    for (const t of pending) {
+      expect(`${t.storeId}: ${isProvenStore(t.storeId)}`).toBe(`${t.storeId}: false`);
+    }
+    for (const t of Object.values(INSTACART_TENANTS).filter((x) => x.proven)) {
+      expect(`${t.storeId}: ${isProvenStore(t.storeId)}`).toBe(`${t.storeId}: true`);
     }
   });
 

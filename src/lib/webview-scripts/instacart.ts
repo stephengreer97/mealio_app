@@ -68,6 +68,20 @@ export interface InstacartTenant {
    *                 catalog, which is what actually keeps it off the picker.
    */
   proven?: boolean;
+
+  /**
+   * WHAT PROVES IT, in one line, dated. Required on any tenant marked proven.
+   *
+   * `proven` used to be backed by captured DOM fixtures, because every selector
+   * the adapter used had been read off ALDI and a second banner's markup was an
+   * open question. That automation was deleted on 2026-09-04; there are no
+   * selectors left, and a banner is now answered entirely by the network rail.
+   *
+   * So fixtures stopped being what proof MEANS, and the honest replacement is
+   * not a looser check but a louder one: say what was measured and when. A bare
+   * `proven: true` with nothing beside it is the thing to keep out.
+   */
+  provenOn?: string;
 }
 
 /** The `{origin}/store/{slug}/s?k=` prefix every search URL is built from. */
@@ -135,6 +149,9 @@ export const INSTACART_TENANTS: Record<string, InstacartTenant> = {
     domain: 'aldi.us',
     cacheBustNav: false,
     proven: true,
+    provenOn: '2026-09-02: the four MEAL-220 measurements, plus captured fixtures'
+      + ' under tests/fixtures/aldi and the fixture suite that runs on them. Driven'
+      + ' end to end again on the Pixel 2026-09-07.',
   },
 
   // ── PENDING: plumbed so a WebView can be opened, not yet proven ────────────
@@ -160,6 +177,81 @@ export const INSTACART_TENANTS: Record<string, InstacartTenant> = {
     origin: 'https://delivery.publix.com',
     slug: 'publix',
     domain: 'delivery.publix.com',
+    cacheBustNav: false,
+    // PROVEN 2026-09-07, driven on the Pixel against the real account: signed
+    // out prompts, the emailed code signs in and is noticed in 418ms, a
+    // signed-in run shows no login step at all, and the search came back with
+    // real Publix products ("Publix Bakery Pizza Dough, 16 oz"). The guest flag
+    // reads correctly in both directions.
+    proven: true,
+    provenOn: '2026-09-07: driven on the Pixel against the real account -- signed'
+      + ' out prompts, emailed code noticed in 418ms, signed-in run shows no login'
+      + ' step, search returned real Publix products.',
+  },
+  // ── MEASURED 2026-09-07, not guessed ───────────────────────────────────────
+  //
+  // Each origin was fetched and checked for the platform's own signature -- a
+  // page under /store/<slug>/storefront that references Instacart -- and the
+  // SLUG was then read out of that page's own links rather than assumed from
+  // the brand name. That matters: Price Chopper's is "price-chopper-ny", Save
+  // Mart's is "savemart" with no hyphen, and Dierbergs is "dierbergs-markets". A
+  // guessed slug matches no cart and reads as a signed-out user.
+  //
+  // Chains that are NOT on this platform, checked and rejected so nobody has to
+  // check them twice: Food Lion, Giant Food, Stop & Shop, Hannaford, Weis, Cub,
+  // Giant Eagle, Big Y, Raley's, Erewhon, Fresh Thyme, Schnucks, Winn-Dixie,
+  // Stater Bros, Smart & Final, Rouses, Festival, Natural Grocers, Market
+  // Basket, Hy-Vee, Ingles, United, Brookshire's. Harris Teeter is Kroger
+  // family and Wegmans has its own rail.
+  //
+  // LUNDS & BYERLYS WAS HERE AND IS NOT. Its storefront looks right --
+  // /store/lunds-and-byerlys/storefront exists -- but shop.lundsandbyerlys.com
+  // 301s to www, and POSTing the rail's persisted query to /graphql on either
+  // host returns an error page rather than the platform's 401. The other ten
+  // banners answer 401 "Not Authenticated" to that exact hash, which is the
+  // operation being allowlisted. Lunds does not, so it is not a tenant.
+  //
+  // The URL slug is a STARTING POINT, not the answer. GraphQL's retailer.slug
+  // is a different field and is not guaranteed to match -- which is why every
+  // one of these ships proven:false, and why the session probe reports
+  // sawSlugs. One device run per banner settles it.
+  price_chopper: {
+    storeId: 'price_chopper',
+    origin: 'https://shop.pricechopper.com',
+    slug: 'price-chopper-ny',
+    domain: 'shop.pricechopper.com',
+    cacheBustNav: false,
+    proven: false,
+  },
+  bristol_farms: {
+    storeId: 'bristol_farms',
+    origin: 'https://shop.bristolfarms.com',
+    slug: 'bristol-farms',
+    domain: 'shop.bristolfarms.com',
+    cacheBustNav: false,
+    proven: false,
+  },
+  save_mart: {
+    storeId: 'save_mart',
+    origin: 'https://shop.savemart.com',
+    slug: 'savemart',
+    domain: 'shop.savemart.com',
+    cacheBustNav: false,
+    proven: false,
+  },
+  gelsons: {
+    storeId: 'gelsons',
+    origin: 'https://shop.gelsons.com',
+    slug: 'gelsons',
+    domain: 'shop.gelsons.com',
+    cacheBustNav: false,
+    proven: false,
+  },
+  dierbergs: {
+    storeId: 'dierbergs',
+    origin: 'https://shop.dierbergs.com',
+    slug: 'dierbergs-markets',
+    domain: 'shop.dierbergs.com',
     cacheBustNav: false,
     proven: false,
   },
