@@ -110,3 +110,8 @@ TODO-DONE.md
 
 # Playwright MCP scratch output — page snapshots written during debugging.
 .playwright-mcp/
+
+# Device screenshots from the live login harness. They are photographs of a
+# real signed-in phone: store account emails, and — when a keystroke lands in
+# the wrong field — a password in plaintext. Never in the repo.
+tests/live/device/_shots/
