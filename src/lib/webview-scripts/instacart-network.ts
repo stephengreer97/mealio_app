@@ -1145,6 +1145,74 @@ function railTenantId(storeId: string | null | undefined): string {
   return tenant(storeId).storeId;
 }
 
+/**
+ * MEAL-7. Empty the cart, for the canary's cleanup step.
+ *
+ * SAFE HERE BECAUSE THE SEMANTICS ARE MEASURED. UpdateCartItemsMutation SETS a
+ * line rather than adding to it -- measured against the real store 2026-09-03,
+ * where a line holding 1 was written to 2 and read back as 2, not 3 -- so
+ * writing quantity 0 removes it. On a rail where the write ADDS, the same call
+ * would be a silent no-op, which is why this exists on this rail and not as a
+ * generic helper.
+ *
+ * Reads the cart first rather than trusting a caller's list: the canary clears
+ * whatever is THERE, including anything a previous failed run left behind, which
+ * is the entire point of cleaning up.
+ */
+export function buildInstacartClearCartScript(storeId: string): string {
+  const seed = JSON.stringify(INSTACART_SEED_OPS);
+  return `(async function () {
+${icPrelude()}
+  var post = function (o) { o.type = 'CART_CLEARED'; IC.post(o); };
+  try {
+    await IC.ensureOps(${seed}, 15000);
+    var carts = await IC.gql('ActiveCarts', {}, 12000, 'cart_read');
+    if (!carts.ok) { post({ ok: false, why: carts.why || 'no_carts' }); return; }
+    var list = (carts.data && carts.data.userCarts && carts.data.userCarts.carts) || [];
+    var mine = pickCartFor(list, '${tenant(storeId).slug}');
+    if (!mine) { post({ ok: true, cleared: 0, why: 'no_cart' }); return; }
+
+    var shopTries = await IC.findShopId('${tenant(storeId).slug}', 20000);
+    var shopId = null;
+    for (var si = 0; si < shopTries.length; si++) {
+      if (shopTries[si] && shopTries[si].v) { shopId = String(shopTries[si].v); break; }
+    }
+
+    var items = await IC.gql('CartItems',
+      { id: String(mine.id), shopId: shopId, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000, 'cart_read');
+    if (!items.ok) { post({ ok: false, why: items.why || 'cart_unreadable' }); return; }
+    var lines = [];
+    try { lines = items.data.userCart.cartItemCollection.cartItems || []; } catch (e) { lines = []; }
+    if (!lines.length) { post({ ok: true, cleared: 0, why: 'already_empty' }); return; }
+
+    // The ITEM id, not the line id. They are different id spaces and the
+    // mutation takes the former -- getting this backwards is what made an
+    // earlier version of the add path key its held-quantity map on ids no
+    // search result could ever match.
+    var updates = [];
+    for (var i = 0; i < lines.length; i++) {
+      var bp = lines[i].basketProduct || null;
+      var itemId = bp && bp.itemId ? String(bp.itemId) : null;
+      if (itemId) updates.push({ itemId: itemId, quantity: 0 });
+    }
+    if (!updates.length) { post({ ok: false, why: 'no_item_ids', lines: lines.length }); return; }
+
+    var wrote = await IC.gql('UpdateCartItemsMutation', { cartItemUpdates: updates }, 20000, 'add');
+    if (!wrote.ok) { post({ ok: false, why: wrote.why || 'write_refused', asked: updates.length }); return; }
+
+    // THE CART DECIDES, never the write's own report. Same rule the add path
+    // follows: re-read and count what is actually left.
+    var after = await IC.gql('CartItems',
+      { id: String(mine.id), shopId: shopId, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000, 'cart_read');
+    var left = null;
+    try { left = (after.data.userCart.cartItemCollection.cartItems || []).length; } catch (e) {}
+    post({ ok: left === 0, cleared: updates.length, left: left });
+  } catch (e) {
+    post({ ok: false, why: 'threw', detail: String(e).slice(0, 160) });
+  }
+})(); true;`;
+}
+
 export const INSTACART_RAIL: NetworkRail = {
   // THE WIRE NAME STAYS 'ALDI_SESSION' (MEAL-20).
   //
@@ -1169,6 +1237,7 @@ export const INSTACART_RAIL: NetworkRail = {
       requestMs: INSTACART_RAIL.budgets.searchRequestMs,
     }),
   cartRead: (storeId) => buildInstacartCartReadScript({ storeId: railTenantId(storeId) }),
+  clearCart: (storeId) => buildInstacartClearCartScript(railTenantId(storeId)),
   addBatch: (items, opts) =>
     buildInstacartAddBatchScript(
       items.map((i) => ({ idx: i.idx, productId: i.productId, quantity: i.quantity, name: i.name })),

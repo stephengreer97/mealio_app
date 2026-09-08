@@ -12,7 +12,7 @@
 // 2 when the run could not be found at all -- which is a rig problem and must
 // never be reported as a store failure.
 import { readFileSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 const [storeId, sinceISO, plansFile = 'tests/live/device/canary-plans.json'] = process.argv.slice(2);
 if (!storeId || !sinceISO) {
@@ -48,6 +48,29 @@ const steps = await (await fetch(
 
 // One terminal row per item, emitted at reconcile. Anything else is a step on
 // the way there and is not what the expectation table is about.
+// A RUN THAT NEVER FINISHED HAS NOT MEASURED ANYTHING.
+//
+// Scored naively, an unfinished run reads as "every line silently dropped" --
+// the loudest possible failure for causes that are usually the most boring:
+// a canary meal whose products have never been chosen sends every line to the
+// review screen and stops there, and so does a run someone closed.
+//
+// run_summary is the terminal row: exactly one per finished run. Its ABSENCE is
+// the signal, and it is a better one than looking for kind 'choose', because it
+// also catches an abandoned run, a crash, and a device that went to sleep
+// mid-run. Reported like not_signed_in: the rig is not ready, and the store has
+// not been measured either way.
+const finished = steps.some((s) => s.step === 'run_summary');
+if (!finished) {
+  console.log(JSON.stringify({
+    ran: false, reason: 'run_incomplete', storeId, runId: run.id, steps: steps.length,
+    detail: 'the run never reached a terminal row. The usual cause is a canary meal '
+      + 'with no chosen products: every line goes to the review screen and stops '
+      + 'there. Choose products once for this meal and the canary can run.',
+  }, null, 2));
+  process.exit(2);
+}
+
 const observations = steps
   .filter((s) => s.detail && (s.detail.terminal === 'added' || s.detail.terminal === 'review'))
   .map((s) => ({
@@ -57,9 +80,29 @@ const observations = steps
   }))
   .filter((o) => o.item);
 
-let plans = [];
-try { plans = JSON.parse(readFileSync(plansFile, 'utf8')).filter((p) => !p._comment || p.storeId); } catch { /* none */ }
-const plan = plans.find((p) => p.storeId === storeId);
+// THE PLAN COMES FROM THE DATABASE, not a file. The two curated lines are typed
+// into the admin panel, so a file would be a second source of truth that goes
+// stale the moment someone edits a text box -- which is exactly what happened
+// the first time this ran.
+const planRows = await (await fetch(
+  `${U}/rest/v1/canary_plans?store_id=eq.${encodeURIComponent(storeId)}&select=*`,
+  { headers: H })).json();
+
+const cfg = Array.isArray(planRows) && planRows[0] ? planRows[0] : null;
+
+/** Built by the same library the panel and the tests use, never re-implemented. */
+function planFrom(row) {
+  const arg = JSON.stringify({
+    storeId: row.store_id,
+    mealName: row.meal_name,
+    outOfStockItem: row.out_of_stock_item,
+    unmatchedItem: row.unmatched_item,
+  });
+  const out = execFileSync('npx', ['tsx', 'scripts/_canary-plan.ts', arg], { encoding: 'utf8' });
+  return JSON.parse(out.trim().split('\n').pop());
+}
+
+const plan = cfg && cfg.enabled !== false ? planFrom(cfg) : null;
 
 if (!plan) {
   console.log(JSON.stringify({
@@ -71,11 +114,10 @@ if (!plan) {
 
 // Score with the same library the unit tests exercise, rather than a second
 // implementation that could disagree with them.
-const scored = JSON.parse(execSync(
-  `npx tsx -e "import {scoreCanaryRun} from './src/lib/canary-expectations';`
-  + ` const plan=${JSON.stringify(JSON.stringify(plan))}; const obs=${JSON.stringify(JSON.stringify(observations))};`
-  + ` console.log(JSON.stringify(scoreCanaryRun(JSON.parse(plan), JSON.parse(obs))))"`,
-  { encoding: 'utf8' }).trim().split('\n').pop());
+const scored = JSON.parse(
+  execFileSync('npx', ['tsx', 'scripts/_canary-score.ts',
+    JSON.stringify(plan), JSON.stringify(observations)],
+    { encoding: 'utf8' }).trim().split('\n').pop());
 
 console.log(`canary ${storeId} — run ${run.id}`);
 for (const l of scored.lines) {

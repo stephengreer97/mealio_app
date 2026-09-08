@@ -97,6 +97,21 @@ export interface NetworkRail {
    * Single-tenant rails ignore the argument.
    */
   cartRead(storeId?: string | null): string;
+
+  /**
+   * Empty the cart. MEAL-7's canary cleanup.
+   *
+   * OPTIONAL, AND A RAIL THAT CANNOT DO IT SAFELY MUST NOT DEFINE IT. Emptying a
+   * cart means writing to a real basket, and the correct call differs by rail in
+   * ways that are MEASURED rather than guessable: Instacart's write SETS a line,
+   * so quantity 0 removes it, while Wegmans' endpoint adds a line and does
+   * nothing to one that already exists, so the same call there is a silent
+   * no-op that would report success.
+   *
+   * Absent means the canary reports cleanup as unsupported for that store, which
+   * is honest. A wrong guess writes to someone's groceries.
+   */
+  clearCart?(storeId?: string | null): string | null;
   /**
    * `opts.knownLines` is the cart the sheet has ALREADY read, as
    * { itemId: qty }.

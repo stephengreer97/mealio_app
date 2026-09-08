@@ -150,16 +150,40 @@ def cart_count(timeout_s=60):
     return None
 
 
-def cleanup(store_chip):
-    """Empty the test cart. A canary that leaves state behind poisons its own
-    next run, so FAILING THIS IS A CANARY FAILURE -- it is just not evidence
-    about the store's automation, which is why it is reported separately.
+def cleanup(store_id):
+    """Empty the test cart, where the rail can do it safely.
 
-    Not yet automated per store: emptying a cart is a different flow at every
-    banner and doing it wrong writes to a real basket. Reported honestly as
-    not-done rather than silently skipped.
+    A canary that leaves state behind poisons its own next run, so failing this
+    is a CANARY failure -- it is just not evidence about the store's automation,
+    which is why it is reported separately from the scored lines.
+
+    NOT EVERY RAIL CAN. `clearCart` is optional on the rail interface and a rail
+    whose removal semantics have not been measured does not define it: Instacart
+    SETS a line so quantity 0 removes it, while Wegmans' endpoint adds a line and
+    does nothing to an existing one, so the same call there would return 200,
+    change nothing, and report success. Unsupported is reported as unsupported.
     """
-    return (False, 'cleanup not implemented for this store')
+    supported = subprocess.run(
+        ['npx', 'tsx', '-e',
+         "import {getNetworkRail} from './src/lib/webview-scripts/network-rail';"
+         f" const r = getNetworkRail({store_id!r});"
+         " console.log(r && typeof r.clearCart === 'function' ? 'yes' : 'no')"],
+        capture_output=True, text=True, timeout=120,
+        cwd=os.path.join(os.path.dirname(__file__), '..', '..', '..', 'mealio_app'),
+    ).stdout.strip().splitlines()[-1:] or ['no']
+    if supported[0] != 'yes':
+        return (None, 'this rail has no measured way to empty a cart')
+
+    # The script runs in the cart sheet's WebView, so the sheet has to be open on
+    # this store. Driven the same way a run is: nothing here reaches past the UI.
+    mark = drive.log_mark()
+    drive.tap_xy(539, 2100)
+    time.sleep(2)
+    drive.tap_xy(539, 2113)
+    line, _ = drive.log_wait(mark, r'CART_CLEARED', 90)
+    if not line:
+        return (False, 'no CART_CLEARED came back')
+    return ('"ok": true' in line or "'ok': true" in line, line.strip()[-120:])
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -204,7 +228,7 @@ def main():
         # The combination run: two meals at once.
         entry['windows']['combination'] = run_once('combination')
 
-        cleaned, detail = cleanup(chip)
+        cleaned, detail = cleanup(store)
         entry['cleanup'] = {'ok': cleaned, 'detail': detail}
         out['results'].append(entry)
 
