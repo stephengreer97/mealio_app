@@ -3524,7 +3524,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       // login state is exactly what we failed to determine — the fallback shows
       // the login webview, but that's a guess, not a finding.
       tel().record('login_check', 'timeout', {
-        durationMs: LOGIN_CHECK_TIMEOUT_MS, code: 'timeout',
+        phase: 'session', durationMs: LOGIN_CHECK_TIMEOUT_MS, code: 'timeout',
       });
       loginCheckActiveRef.current = false;
       // Mirror the LOGIN_STATUS:false branch: show the webview so the user
@@ -4334,6 +4334,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         // telemetry note above handleStartSearch: outcome says whether we found out,
         // `isLoggedIn` says what we found out.
         tel().record('login_check', 'ok', {
+          phase: 'session',
           detail: { isLoggedIn: false, source: 'login_redirect' },
         });
         if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
@@ -4982,7 +4983,10 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
           // Funnel: the login gate is the first place a run can silently stall.
           // Recorded on the RESULT (not at injection) because the recorder only
           // exists once the server has issued a runId.
-          tel().record('login_check', 'ok', { detail: { isLoggedIn: !!msg.isLoggedIn, source: 'status' } });
+          tel().record('login_check', 'ok', {
+            phase: 'session',
+            detail: { isLoggedIn: !!msg.isLoggedIn, source: 'status' },
+          });
           loginCheckActiveRef.current = false;
           if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
           if (msg.isLoggedIn) {
@@ -5834,8 +5838,19 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
               console.log(`[Cart ${ts()}]`, 'login answered early — waiting for the store to finish before starting');
               return;
             }
+            // MEAL-219: the network facts the rail already computed, as columns.
+            // This is the login gate's success row and it was the largest single
+            // hole -- 114 of 300 recent rows were login_check carrying no status,
+            // no phase, no attempts and no rail, while every search row carried
+            // all four. The message has them; it was just being dropped here.
             tel().record('login_check', 'ok', {
-              detail: { isLoggedIn: !!msg.loggedIn, source: 'network_session' },
+              phase: 'session',
+              httpStatus: typeof msg.status === 'number' ? msg.status : undefined,
+              durationMs: typeof msg.ms === 'number' ? msg.ms : undefined,
+              attempts: typeof msg.attempts === 'number' ? msg.attempts : undefined,
+              rail: lockedStoreIdRef.current ? netRail()?.sessionMessageType : undefined,
+              detail: { isLoggedIn: !!msg.loggedIn, source: 'network_session',
+                        harvested: msg.harvested ?? null },
             });
             loginCheckActiveRef.current = false;
             if (loginCheckTimeoutRef.current) { clearTimeout(loginCheckTimeoutRef.current); loginCheckTimeoutRef.current = null; }
@@ -5969,6 +5984,12 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
               // this, and surfacing a login screen must not swallow it.
               telemetryRef.current.record('login_check', 'error', {
                 phase: 'session',
+                // The code is DERIVED from the status; storing only the code threw
+                // away the fact it was derived from, so a 500 and a 503 and an
+                // unparseable body all arrived as one bar.
+                httpStatus: typeof msg.status === 'number' ? msg.status : undefined,
+                attempts: typeof msg.attempts === 'number' ? msg.attempts : undefined,
+                rail: netRail()?.sessionMessageType,
                 code: requestFailureCode(msg.status ?? null, msg.why),
                 detail: { why: msg.why ?? null, harvested: msg.harvested ?? null, pendingTenant: true },
               });

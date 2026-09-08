@@ -22,7 +22,16 @@ export type StepName =
   | 'login_check'   // did we determine login state, and was the user signed in
   | 'search'        // search navigation + results render
   | 'candidates'    // how many products the extractor found
-  | 'add_click'     // the add button was actually clicked
+  // NOTHING CLICKS, AND THE NAME STAYS. (MEAL-219)
+  //
+  // This is the moment an add is DISPATCHED -- over the rail, as a request. The
+  // DOM automation that gave it its name was deleted on 2026-09-01.
+  //
+  // It keeps the name because it is the DENOMINATOR of confirmRate, and this
+  // string is stored raw on every row ever written. Renaming it would split that
+  // metric at the rename and silently halve the history on both sides, which is
+  // a worse outcome than a name that reads oddly. Read it as "add dispatched".
+  | 'add_click'     // an add was dispatched (historically: the button was clicked)
   | 'confirm'       // evidence the item landed (per-card qty, badge, network)
   | 'reconcile'     // the post-run cart diff and what it corrected
   | 'blocked'       // WAF / robot wall
@@ -97,6 +106,16 @@ export type StepOutcome =
  * because rows carrying it already exist from when the extension emitted it.
  */
 export const STEP_FAILURE_CODES = [
+  // NO LONGER EMITTED, KEPT FOR THE ROWS THAT CARRY IT. (MEAL-219)
+  //
+  // selector_miss and nav_failed are DOM-era: one meant the page was not the
+  // shape we expected, the other that it never loaded. Nothing in the app emits
+  // either any more -- grep says so -- because there are no selectors and the
+  // rail does not navigate to search. They stay in the list because removing a
+  // code orphans every historical row carrying it, and they stay in
+  // FAILURE_CODE_SEVERITY for the same reason.
+  //
+  // Their network successors are op_not_found and store_error, appended below.
   'selector_miss',
   'waf_block',
   'auth_required',
@@ -107,6 +126,25 @@ export const STEP_FAILURE_CODES = [
   'nav_failed',
   // Appended, and append-only — see above. MEAL-29.
   'out_of_stock',
+  // MEAL-219. THE RAIL SPEAKS HTTP AND THIS LIST DID NOT.
+  //
+  // `confirm_failed` had become the catch-all for every network fact that was
+  // not a block, an auth failure or a timeout: 5xx, an unparseable body, a
+  // rotated persisted-query hash. Its own comment in requestFailureCode admitted
+  // it -- "the closest existing code that does not claim we picked the wrong
+  // product" -- which is an argument for a new code, not for that one.
+  //
+  // It matters because these three have different owners. A 5xx is the store
+  // being down and nobody's bug; a bad body is a shape change and ours to chase;
+  // a missing hash is a rotation and the thing MEAL-117 exists to catch. Under
+  // one bar they were indistinguishable, and the bar was labelled as a matching
+  // problem, which none of them are.
+  //
+  // Appended rather than substituted: every row already carrying confirm_failed
+  // keeps its meaning, and the split starts from today forward.
+  'store_error',      // the store answered, and the answer was a failure (5xx)
+  'bad_response',     // answered 2xx with something we could not read
+  'op_not_found',     // a persisted query hash the store no longer allow-lists
 ] as const;
 
 export type StepFailureCode = (typeof STEP_FAILURE_CODES)[number];
@@ -158,8 +196,21 @@ export type StepFailureCode = (typeof STEP_FAILURE_CODES)[number];
 const FAILURE_CODE_SEVERITY = [
   'waf_block',
   'auth_required',
+  // MEAL-219. Ranked HIGH, above the matching codes, for the same reason
+  // waf_block is: each explains everything that failed after it.
+  //
+  //   op_not_found  the operation is gone. Nothing using it can work, and the
+  //                 misses that follow are consequences, not findings. This is
+  //                 the network's selector_miss and it sits beside it.
+  //   store_error   the store is down. Same shape of argument as nav_failed.
+  'op_not_found',
+  'store_error',
   'nav_failed',
   'selector_miss',
+  // Answered, but unreadable. Below the three above because it is OUR shape
+  // problem rather than a condition that made the run impossible, and above
+  // matching because a body we cannot read is not a product we judged wrongly.
+  'bad_response',
   'timeout',
   'no_candidates',
   'out_of_stock',
@@ -991,8 +1042,17 @@ export function requestFailureCode(
   // The request already spent its whole budget. Distinct from a store that
   // answered badly, and the one failure the retry policy deliberately declines.
   if (why === 'timeout' || (why === 'no_response' && !status)) return 'timeout';
-  // Everything else — 5xx, 4xx, an unparseable body — is the store failing to
-  // answer usefully. `confirm_failed` is the closest existing code that does
-  // not claim we picked the wrong product.
+  // A hash the store no longer allow-lists. This is a ROTATION, not a failure of
+  // ours, and it is the exact event MEAL-117's drift guard is meant to catch --
+  // so it gets its own code rather than hiding inside a generic one.
+  if (why === 'no_hash' || why === 'persisted_query_not_found') return 'op_not_found';
+  // The store answered and the answer was a failure. Nobody's bug but theirs,
+  // and a spike in it is an outage rather than drift.
+  if (typeof status === 'number' && status >= 500) return 'store_error';
+  // A 2xx we could not read is a SHAPE change and ours to chase. Distinct from
+  // both of the above, and it used to be indistinguishable from either.
+  if (why === 'bad_json' || why === 'parse' || why === 'shape') return 'bad_response';
+  // Everything left is a 4xx that is not auth and not a block. Kept on
+  // confirm_failed so that code's history is not split for the residue.
   return 'confirm_failed';
 }

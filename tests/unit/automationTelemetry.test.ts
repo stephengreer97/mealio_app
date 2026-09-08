@@ -10,6 +10,7 @@ import {
   sanitizeDetail,
   StepRecord,
   STEP_FAILURE_CODES,
+  requestFailureCode,
 } from '../../src/lib/automation-telemetry';
 import type { StepFailureCode } from '../../src/lib/automation-telemetry';
 
@@ -258,12 +259,34 @@ describe('failure codes', () => {
   // the file reads, NOT because anything consumes the position: no consumer does.
   // (The order that IS load-bearing is FAILURE_CODE_SEVERITY's, asserted below by
   // the tests that check which code headlines a run.)
-  it('exposes exactly the nine codes, out_of_stock among them', () => {
+  it('exposes exactly the twelve codes, the network three appended last', () => {
     expect([...STEP_FAILURE_CODES]).toEqual([
       'selector_miss', 'waf_block', 'auth_required', 'no_candidates',
       'match_rejected', 'confirm_failed', 'timeout', 'nav_failed',
       'out_of_stock',
+      // MEAL-219. Appended, never substituted: confirm_failed had been the
+      // catch-all for every network fact that was not a block, an auth failure
+      // or a timeout, so a store that 500s, a body we could not parse and a
+      // rotated persisted-query hash all arrived as one bar labelled as a
+      // MATCHING problem. They have three different owners.
+      'store_error', 'bad_response', 'op_not_found',
     ]);
+  });
+
+  it('routes each network fact to its own code rather than confirm_failed', () => {
+    // The split, asserted on the mapping rather than on the list. Before this,
+    // every one of these returned confirm_failed.
+    expect(requestFailureCode(503, 'http')).toBe('store_error');
+    expect(requestFailureCode(500, 'http')).toBe('store_error');
+    expect(requestFailureCode(200, 'bad_json')).toBe('bad_response');
+    expect(requestFailureCode(200, 'no_hash')).toBe('op_not_found');
+    expect(requestFailureCode(null, 'persisted_query_not_found')).toBe('op_not_found');
+    // Unchanged, and deliberately so: the ones that already had a home keep it,
+    // and the 4xx residue stays on confirm_failed so its history is not split.
+    expect(requestFailureCode(403, 'http')).toBe('waf_block');
+    expect(requestFailureCode(401, 'http')).toBe('auth_required');
+    expect(requestFailureCode(null, 'timeout')).toBe('timeout');
+    expect(requestFailureCode(404, 'http')).toBe('confirm_failed');
   });
 
   it('maps the reasons this table was written against', () => {
