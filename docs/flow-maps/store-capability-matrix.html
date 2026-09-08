@@ -84,14 +84,28 @@ a real cart, with a <code>limit</code> so the first attempt touches ONE line.</p
       <td>measured</td></tr>
   <tr><td><b>Albertsons family</b></td><td><code>DELETE</code> &mdash; a 0 answers 400, see above</td>
       <td>measured</td></tr>
-  <tr><td><b>Wegmans</b></td><td><code>lineItems [{id, quantity: 0}]</code> &mdash; the line id is
-      what turns the write from an insert into an update</td>
-      <td><b>UNVERIFIED</b> &mdash; its cart was empty at every attempt</td></tr>
+  <tr><td><b>Wegmans</b></td><td>no known removal call</td>
+      <td><b>REFUSED</b> &mdash; a 0 answers 500 where the same body with a 1
+      succeeds; DELETE is not a route. The rail exposes no <code>clearCart</code>.</td></tr>
   <tr><td><b>Kroger family</b></td><td colspan="2">n/a &mdash; web integration, not a WebView rail</td></tr>
 </table>
-<p>Walmart, H-E-B and Instacart all remove on a zero and Albertsons does not, which is the whole
-reason each is measured rather than inferred from the others &mdash; and why Wegmans is marked
-unproven instead of counted with the three it resembles.</p>
+<p>Walmart, H-E-B and Instacart all remove on a zero; Albertsons and Wegmans do not. That is the
+whole reason each is measured rather than inferred from the others.</p>
+<p><b>The Wegmans measurement, with its control</b> &mdash; quantity 1 answered 200 and moved the line
+from 4 to 1, quantity 4 moved it back, quantity 0 answered 500, and DELETE got no response at all.
+The control is what makes the 500 a property of the store rather than a broken script. Two of my own
+errors were corrected on the way: a cart line here is a commercetools line and cannot be sent back as
+a write line (that is a 400), so the payload is rebuilt from the catalogue row via
+<code>WG.lineItemFor</code> the way the add builds it; and the envelope had dropped
+<code>storeNumber</code> and <code>fulfillmentType</code>.</p>
+<p><b>And a reading bug that was not one store's.</b> The Wegmans clear unwrapped the cart with a
+hand-rolled <code>carts[0]</code> instead of <code>WG.groceryCart</code>, found no lines on the raw
+envelope, and reported an 18-line cart as <code>already_empty</code> with <code>ok: true</code>.
+Three of the five clears turned an unreadable response into an empty array and then into success, and
+two computed what was left by reaching through <code>|| {}</code> and <code>|| []</code> to a
+<code>.length</code>, which is 0 &mdash; and 0 means cleared. Those failed OPEN. They now fail closed,
+and a test holds every rail with a <code>clearCart</code> to naming an unreadable cart separately from
+an empty one.</p>
 </div>
 <div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
 <p><b>2026-09-04 &mdash; which stores need a store chosen.</b> H-E-B, the Albertsons family, ALDI and
