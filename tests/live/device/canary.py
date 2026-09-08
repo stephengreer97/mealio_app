@@ -3,27 +3,31 @@
 
 Runs the REAL shipped app -- the real WebView cart engine, the real automation
 config, the real telemetry -- on home broadband, because that is the code path
-users are actually on. Fixture tests go stale silently and a green fixture suite
+users are actually on. Fixture tests go stale silently, and a green fixture suite
 against a changed site reads as safety while being the opposite.
 
 WHAT THIS FILE DOES AND DOES NOT DO
 -----------------------------------
-It drives the device and OBSERVES. It does not decide whether a run passed:
-scoring belongs to src/lib/canary-expectations.ts, which is pure, unit tested,
-and shared with anything else that wants to read a canary. This file emits
-observations as JSON and a scorer turns them into a verdict.
+It drives the device and records WHEN it did so. It does not observe outcomes and
+it does not score: observations come from the run's own telemetry (structured,
+server-side, and already carrying MEAL-219's vocabulary) and scoring lives in
+src/lib/canary-expectations.ts, which is pure and unit tested.
 
-That split is deliberate. A runner that scores its own results is a runner whose
-scoring can only be tested by running it against a live store.
+An earlier version of this file tried to parse outcomes out of the device log.
+That does not work: the log names an item differently depending which line you
+catch it on -- the ingredient in a search failure, the PRODUCT in the review
+list -- so a plan written in ingredient names could never be matched against it.
+The parsing was removed rather than left half-working.
 
 PREFLIGHT IS NOT OPTIONAL
 -------------------------
-The device must be awake, unlocked, connected, running the app, and signed in per
-store. Any of those missing reports CANARY DID NOT RUN with a reason -- never a
-store failure. An unplugged night that reads as a red store trains everyone to
+The device must be awake, unlocked, connected, running the app, and signed in to
+the store. Any of those missing reports CANARY DID NOT RUN with a reason -- never
+a store failure. An unplugged night that reads as a red store trains everyone to
 ignore the colour, which costs more than the missed run.
 """
-import json, os, subprocess, sys, time
+import json, os, random, subprocess, sys, time
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
 import drive  # noqa: E402
@@ -35,27 +39,29 @@ def sh(*a, t=30):
     return subprocess.run(a, capture_output=True, text=True, timeout=t).stdout
 
 
+def now_iso():
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+# ── Preflight ───────────────────────────────────────────────────────────────
+
 def preflight():
     """Everything that must be true before a result means anything.
 
-    Returns None when the rig is ready, or a (reason, detail) pair naming what
-    is wrong. The reasons match CanarySkipReason in canary-expectations.ts.
+    Returns None when the rig is ready, or (reason, detail). The reasons match
+    CanarySkipReason in canary-expectations.ts.
     """
-    devices = [l for l in sh('adb', 'devices').splitlines()[1:] if '\tdevice' in l]
-    if not devices:
+    if not [l for l in sh('adb', 'devices').splitlines()[1:] if '\tdevice' in l]:
         return ('device_offline', 'adb lists no device in state "device"')
 
-    # Locked or asleep: a tap on a lock screen is not a canary run.
     power = sh('adb', 'shell', 'dumpsys', 'power')
     if 'mWakefulness=Asleep' in power or 'mWakefulness=Dozing' in power:
         return ('device_locked', 'screen is asleep')
-    win = sh('adb', 'shell', 'dumpsys', 'window')
-    if 'mDreamingLockscreen=true' in win:
+    if 'mDreamingLockscreen=true' in sh('adb', 'shell', 'dumpsys', 'window'):
         return ('device_locked', 'lock screen is showing')
 
     if PKG not in sh('adb', 'shell', 'pm', 'list', 'packages'):
         return ('app_not_installed', f'{PKG} is not installed')
-
     return None
 
 
@@ -63,104 +69,149 @@ def signed_in(store_chip, timeout_s=90):
     """Ask the app whether it is signed in to this store, before running.
 
     Store sessions expire, and a canary that drives a run against a signed-out
-    store measures the login screen. It is a RIG problem, not a store failure --
-    the automation is fine and nobody has told it otherwise.
+    store measures the login screen. That is a RIG problem: the automation is
+    fine and nobody has told it otherwise.
 
-    The prewarm's verdict is trustworthy for this now: since 2026-09-07 it reads
-    the store's own `guest` flag rather than inferring a session from a cart, so
-    "signed in" means signed in rather than "has a basket".
+    The prewarm's verdict is trustworthy for this since 2026-09-07, when it
+    started reading the store's own `guest` flag rather than inferring a session
+    from a cart.
     """
     mark = drive.log_mark()
     chip = drive.find(store_chip, exact=True)
     if not chip:
+        # The chip row is horizontally scrollable and shows about four at a time.
+        for _ in range(6):
+            drive.sh('adb', 'shell', 'input', 'swipe', '950', '280', '150', '280', '500')
+            time.sleep(1.2)
+            chip = drive.find(store_chip, exact=True)
+            if chip:
+                break
+    if not chip:
         return (False, f'no store chip for {store_chip}')
     drive.tap(chip)
-    # THREE ANSWERS, NOT ONE. The prewarm probes, OR reports a cached verdict
-    # ("checkStore skip aldi - already loggedOut"), OR declines because the store
-    # has no WebView rail at all (Kroger). The first version of this waited for a
-    # probe line and read the cached answer as "never answered", which would have
-    # reported a perfectly healthy signed-out store as a broken rig.
-    line, _ = drive.log_wait(
-        mark, r'probe .*(finishing|result)|checkStore skip', timeout_s)
+    # THREE ANSWERS, NOT ONE: probed, cached ("checkStore skip ... already
+    # loggedOut"), or no rail at all (Kroger). The first version waited only for
+    # a probe line and read a cached verdict as "never answered", which would
+    # have reported a healthy signed-out store as a broken rig.
+    line, _ = drive.log_wait(mark, r'probe .*(finishing|result)|checkStore skip', timeout_s)
     if not line:
         return (False, 'the prewarm never answered')
     if 'not a WebView store' in line:
         return (False, 'no WebView rail for this store (Kroger family)')
-    if 'loggedIn= true' in line or 'loggedIn' in line and 'loggedOut' not in line:
+    if 'loggedIn= true' in line or ('loggedIn' in line and 'loggedOut' not in line):
         return (True, 'signed in')
     return (False, line.strip()[-90:])
 
 
-def observe_run(store_id, meal_name, timeout_s=240):
-    """Drive one store's canary meal and read what happened to each line.
+# ── The run shapes ──────────────────────────────────────────────────────────
 
-    Reads the app's own log rather than the screen. The screen shows a summary;
-    the log names every item and the reason it ended where it did, which is what
-    an expectation table needs.
-    """
-    mark = drive.log_mark()
-    obs, notes = [], []
-
-    # The run is driven by the same steps a person takes, because a harness that
-    # calls a function directly proves nothing about reachability.
-    drive.tap_id('tab-mymeals', timeout=30)
-    time.sleep(2)
-    chip = drive.find(store_id, exact=True)
-    if not chip:
-        for _ in range(6):
-            drive.sh('adb', 'shell', 'input', 'swipe', '950', '280', '150', '280', '500')
-            time.sleep(1.2)
-            chip = drive.find(store_id, exact=True)
-            if chip:
-                break
-    if not chip:
-        return None, [('not_signed_in', f'no store chip for {store_id}')]
-    drive.tap(chip)
-    time.sleep(2.5)
-
-    drive.tap_xy(275, 600)          # select the meal card
-    time.sleep(2)
-    drive.tap_xy(539, 2100)         # the floating action
+def _start_run(select_extra_meal=False):
+    """Select the canary meal (and optionally a second) and start the run."""
+    drive.tap_xy(275, 600)                      # the first meal card
+    time.sleep(1.5)
+    if select_extra_meal:
+        # The combination run: two meals in one add, which exercises the merge
+        # a single-meal run never reaches.
+        drive.tap_xy(800, 600)
+        time.sleep(1.5)
+    drive.tap_xy(539, 2100)                     # the floating action
     time.sleep(3)
-    drive.tap_xy(539, 2113)         # confirm on the qty sheet
+    drive.tap_xy(539, 2113)                     # confirm on the qty sheet
 
-    end = time.time() + timeout_s
+
+def run_once(shape='single', settle_s=240):
+    """Drive one run and return when it finalizes. Records the window."""
+    since = now_iso()
+    mark = drive.log_mark()
+    _start_run(select_extra_meal=(shape == 'combination'))
+    end = time.time() + settle_s
     while time.time() < end:
         lines = drive.log_since(mark)
-        if any('run complete' in l or 'reconcile:' in l or 'dead end' in l for l in lines):
+        if any(('reconcile:' in l) or ('dead end' in l) or ('run complete' in l) for l in lines):
             break
         time.sleep(3)
+    return since
 
-    for line in drive.log_since(mark):
-        # cart verdicts and reconcile rows name the per-item outcome.
-        if 'reconcile:' in line:
-            notes.append(line.strip()[:400])
-    return obs, notes
 
+def cart_count(timeout_s=60):
+    """The cart's line count, read from the app's own CART_COUNT message.
+
+    Used by the repeat run, which asserts the cart GROWS. Adds land on top
+    (2026-09-01), so a second run doubling is correct and idempotency would be
+    the regression.
+    """
+    for line in reversed(drive.log_since(0)):
+        if 'CART_COUNT' in line and 'count' in line:
+            try:
+                seg = line[line.index('{'):]
+                return json.loads(seg[:seg.index('}') + 1]).get('count')
+            except Exception:
+                continue
+    return None
+
+
+def cleanup(store_chip):
+    """Empty the test cart. A canary that leaves state behind poisons its own
+    next run, so FAILING THIS IS A CANARY FAILURE -- it is just not evidence
+    about the store's automation, which is why it is reported separately.
+
+    Not yet automated per store: emptying a cart is a different flow at every
+    banner and doing it wrong writes to a real basket. Reported honestly as
+    not-done rather than silently skipped.
+    """
+    return (False, 'cleanup not implemented for this store')
+
+
+# ── Main ────────────────────────────────────────────────────────────────────
 
 def main():
-    out = {'startedAt': time.strftime('%Y-%m-%dT%H:%M:%S'), 'results': []}
+    out = {'startedAt': now_iso(), 'results': []}
+
     problem = preflight()
     if problem:
         reason, detail = problem
-        out['ran'] = False
-        out['reason'] = reason
-        out['detail'] = detail
+        out.update({'ran': False, 'reason': reason, 'detail': detail})
         print(json.dumps(out, indent=2))
         # Exit 0: the canary not running is not a store failure, and a non-zero
-        # exit here would page someone about an unplugged phone.
+        # exit would page someone about an unplugged phone.
         return 0
 
     out['ran'] = True
     plan_path = os.path.join(os.path.dirname(__file__), 'canary-plans.json')
     plans = json.load(open(plan_path)) if os.path.exists(plan_path) else []
-    for plan in plans:
-        obs, notes = observe_run(plan['storeChip'], plan['mealName'])
-        out['results'].append({
-            'storeId': plan['storeId'],
-            'observations': obs or [],
-            'notes': notes,
-        })
+
+    for plan in [p for p in plans if p.get('storeId')]:
+        store, chip = plan['storeId'], plan.get('storeChip', plan['storeId'])
+        drive.restart_app()
+        time.sleep(8)
+        drive.tap_id('tab-mymeals', timeout=40)
+        time.sleep(2)
+
+        ok, why = signed_in(chip)
+        if not ok:
+            out['results'].append({'storeId': store, 'ran': False,
+                                   'skipReason': 'not_signed_in', 'detail': why})
+            continue
+
+        entry = {'storeId': store, 'ran': True, 'windows': {}}
+        entry['windows']['single'] = run_once('single')
+        before = cart_count()
+
+        # The repeat run: same meals again, against a non-empty cart.
+        entry['windows']['repeat'] = run_once('single')
+        entry['cart'] = {'before': before, 'after': cart_count()}
+
+        # The combination run: two meals at once.
+        entry['windows']['combination'] = run_once('combination')
+
+        cleaned, detail = cleanup(chip)
+        entry['cleanup'] = {'ok': cleaned, 'detail': detail}
+        out['results'].append(entry)
+
+        # STAGGERED AND JITTERED between stores. Originally a WAF mitigation and
+        # still worth it; now it is also just one device serialising many stores.
+        time.sleep(30 + random.randint(0, 60))
+
     print(json.dumps(out, indent=2))
     return 0
 

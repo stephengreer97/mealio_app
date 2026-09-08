@@ -192,3 +192,94 @@ export function isRigProblem(reason: CanarySkipReason): boolean {
     || reason === 'app_not_installed'
     || reason === 'not_signed_in';
 }
+
+// ── Building a plan from what an admin typed ────────────────────────────────
+//
+// The two hardest lines to curate are the ones that must FAIL: an item the store
+// genuinely has out of stock, and one that returns candidates none of which
+// should match. Both are store-specific and both go stale as shelves change, so
+// they are not code -- they are two text boxes per store in the admin panel.
+//
+// AN EMPTY BOX SKIPS THAT BRANCH. That is the whole point of the design: a
+// canary that demands curation before it runs at all does not run, and a canary
+// that invents a plausible-looking out-of-stock item tests nothing while
+// reporting confidently.
+
+/** What an admin typed for one store. Either field may be blank. */
+export interface CanaryStoreConfig {
+  storeId: string;
+  mealName: string;
+  /** An item this store genuinely does not have in stock. */
+  outOfStockItem?: string | null;
+  /** An item that returns candidates, none of which should be good enough. */
+  unmatchedItem?: string | null;
+}
+
+/**
+ * The lines every store gets, regardless of curation.
+ *
+ * `alwaysAdded` and `alwaysWeight` are deliberately generic: milk and bananas
+ * exist at every grocer in the catalogue, and a canary line that needs curating
+ * to work at all belongs in the two boxes rather than here.
+ */
+export const UNIVERSAL_LINES = {
+  added: 'Whole milk',
+  byWeight: 'Bananas',
+  /** Nothing on earth matches this, so it needs no curation and never goes stale. */
+  noCandidates: 'Nonexistent unobtainium 9000',
+} as const;
+
+export function buildPlanFromConfig(cfg: CanaryStoreConfig): CanaryStorePlan {
+  const items: CanaryExpectation[] = [
+    {
+      item: UNIVERSAL_LINES.added,
+      why: 'plain in-stock item: should match and confirm',
+      expect: { outcome: 'added' },
+    },
+    {
+      item: UNIVERSAL_LINES.byWeight,
+      why: 'sold by weight: confirmed by presence, never by quantity',
+      expect: { outcome: 'added_by_weight' },
+    },
+    {
+      item: UNIVERSAL_LINES.noCandidates,
+      why: 'nothing should match: proves the search reports empty rather than guessing',
+      expect: { outcome: 'failed', code: 'no_candidates' },
+    },
+  ];
+
+  // Curated, and only if someone curated it. A blank box is a branch we are
+  // honestly not testing, which is better than a branch we are pretending to.
+  const oos = (cfg.outOfStockItem ?? '').trim();
+  if (oos) {
+    items.push({
+      item: oos,
+      why: 'out of stock: proves out_of_stock is not laundered into a match failure',
+      expect: { outcome: 'failed', code: 'out_of_stock' },
+    });
+  }
+  const unmatched = (cfg.unmatchedItem ?? '').trim();
+  if (unmatched) {
+    items.push({
+      item: unmatched,
+      why: 'candidates, none good enough: proves the scorer refuses rather than settles',
+      expect: { outcome: 'review' },
+    });
+  }
+
+  return { storeId: cfg.storeId, mealName: cfg.mealName, items };
+}
+
+/** Which branches this store is actually covering, for the panel to show. */
+export function planCoverage(plan: CanaryStorePlan): {
+  covered: string[]; skipped: string[];
+} {
+  const has = (o: string) => plan.items.some((i) => i.expect.outcome === o
+    || ('code' in i.expect && i.expect.code === o));
+  const covered: string[] = [];
+  const skipped: string[] = [];
+  (has('out_of_stock') ? covered : skipped).push('out of stock');
+  (has('review') ? covered : skipped).push('no good match');
+  covered.push('adds', 'by weight', 'not found');
+  return { covered, skipped };
+}

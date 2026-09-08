@@ -131,3 +131,61 @@ describe('isRigProblem', () => {
     expect(isRigProblem('cleanup_failed')).toBe(false);
   });
 });
+
+describe('building a plan from what an admin typed', () => {
+  const { buildPlanFromConfig, planCoverage, UNIVERSAL_LINES } =
+    require('../../src/lib/canary-expectations');
+
+  it('gives every store the three lines that need no curation', () => {
+    const p = buildPlanFromConfig({ storeId: 'heb', mealName: 'Canary' });
+    expect(p.items.map((i: any) => i.item)).toEqual([
+      UNIVERSAL_LINES.added, UNIVERSAL_LINES.byWeight, UNIVERSAL_LINES.noCandidates,
+    ]);
+  });
+
+  it('SKIPS the curated branches when the boxes are empty', () => {
+    // A canary that demands curation before it runs at all does not run. Three
+    // covered branches beat five that never execute.
+    const p = buildPlanFromConfig({ storeId: 'heb', mealName: 'Canary' });
+    expect(p.items).toHaveLength(3);
+    expect(planCoverage(p).skipped).toEqual(['out of stock', 'no good match']);
+  });
+
+  it('adds the out-of-stock line once someone curates it', () => {
+    const p = buildPlanFromConfig({
+      storeId: 'heb', mealName: 'Canary', outOfStockItem: 'Some discontinued thing',
+    });
+    const line = p.items.find((i: any) => i.item === 'Some discontinued thing');
+    expect(line.expect).toEqual({ outcome: 'failed', code: 'out_of_stock' });
+    expect(planCoverage(p).skipped).toEqual(['no good match']);
+  });
+
+  it('adds the no-good-match line, and does not demand a code for it', () => {
+    // Stores word this differently and the canary must not go red when one
+    // rewords it. The expectation is "ends at review", full stop.
+    const p = buildPlanFromConfig({
+      storeId: 'heb', mealName: 'Canary', unmatchedItem: 'Ambiguous thing',
+    });
+    const line = p.items.find((i: any) => i.item === 'Ambiguous thing');
+    expect(line.expect).toEqual({ outcome: 'review' });
+  });
+
+  it('treats whitespace as empty, because a text box collects it', () => {
+    const p = buildPlanFromConfig({
+      storeId: 'heb', mealName: 'Canary', outOfStockItem: '   ', unmatchedItem: '\n',
+    });
+    expect(p.items).toHaveLength(3);
+  });
+
+  it('scores a skipped-branch plan without inventing the missing lines', () => {
+    // The run only reports what the plan asked for, so a store with empty boxes
+    // passes on three lines rather than failing on two it never ran.
+    const p = buildPlanFromConfig({ storeId: 'heb', mealName: 'Canary' });
+    const r = scoreCanaryRun(p, [
+      { item: UNIVERSAL_LINES.added, outcome: 'added' },
+      { item: UNIVERSAL_LINES.byWeight, outcome: 'added_by_weight' },
+      { item: UNIVERSAL_LINES.noCandidates, outcome: 'failed', code: 'no_candidates' },
+    ]);
+    expect(r.passed).toBe(true);
+  });
+});
