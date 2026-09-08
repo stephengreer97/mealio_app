@@ -1,0 +1,46 @@
+[
+  {
+    "_comment": [
+      "MEAL-7 curated canary plans. CURATED DATA, NOT CODE -- these are expected",
+      "to need upkeep as stores restock and relist, and that maintenance is the",
+      "price of the canary meaning anything.",
+      "",
+      "Each meal is built so ONE run walks every branch the cart engine has. The",
+      "items that are supposed to FAIL are the point: a plan where everything",
+      "succeeds tests only the happy path, which is the path least likely to",
+      "break silently.",
+      "",
+      "Copy to canary-plans.json and fill in real items per store."
+    ],
+    "storeId": "heb",
+    "storeChip": "H-E-B",
+    "mealName": "Canary",
+    "items": [
+      {
+        "item": "Whole milk",
+        "why": "plain in-stock item: should match and confirm",
+        "expect": { "outcome": "added" }
+      },
+      {
+        "item": "Bananas",
+        "why": "sold by weight: confirmed by PRESENCE, never by quantity (isWeightPriced)",
+        "expect": { "outcome": "added_by_weight" }
+      },
+      {
+        "item": "<pick something genuinely out of stock here>",
+        "why": "out of stock: proves out_of_stock is not laundered into a match failure",
+        "expect": { "outcome": "failed", "code": "out_of_stock" }
+      },
+      {
+        "item": "Nonexistent unobtainium 9000",
+        "why": "no candidates at all: proves the search reports empty rather than guessing",
+        "expect": { "outcome": "failed", "code": "no_candidates" }
+      },
+      {
+        "item": "<something that returns candidates but none good enough>",
+        "why": "candidates, none matching: proves the scorer REFUSES rather than settles",
+        "expect": { "outcome": "review" }
+      }
+    ]
+  }
+]
