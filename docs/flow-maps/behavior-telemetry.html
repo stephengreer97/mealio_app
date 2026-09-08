@@ -92,7 +92,7 @@ flowchart TD
     ST(["a step happens in the engine"]) --> SAMP{"<code>telemetry.enabled</code><br/>and inside <code>sampleRate</code>?"}
     SAMP -->|no| DROP(["dropped"])
     SAMP -->|yes| ROW["build a row:<br/><b>step</b> · <b>outcome</b> · <b>code</b> · ms · store<br/>+ since MEAL-219: <b>httpStatus</b> · <b>phase</b> · <b>attempts</b> · <b>rail</b>"]
-    ROW --- REQWHY{{"EVERY REQUEST NOW REPORTS ITSELF, from the shared retry helper —<br/>the one place all five rails' requests already meet. Before this the<br/>status was computed, used by the retry policy, and dropped at the<br/>WebView boundary: 25 telemetry calls in the cart engine and not one<br/>carried one. The only status that reached the server was smuggled<br/>inside a reason string as &quot;http-403&quot;.<br/><br/>NOT attributed to an item, deliberately. H-E-B writes three at a time,<br/>so the request in flight is not the item being reported.<br/><br/>Successes are recorded too, or a status histogram has no denominator.<br/><br/>PHASE is session | search | add | cart_read, and it exists because<br/>`step` cannot answer it: that vocabulary was named for the DOM era and<br/>one of its values is literally add_click."}}
+    ROW --- REQWHY{{"EVERY REQUEST NOW REPORTS ITSELF, from the shared retry helper —<br/>the one place all five rails' requests already meet. Before this the<br/>status was computed, used by the retry policy, and dropped at the<br/>WebView boundary: 25 telemetry calls in the cart engine and not one<br/>carried one. The only status that reached the server was smuggled<br/>inside a reason string as &quot;http-403&quot;.<br/><br/>NOT attributed to an item, deliberately. H-E-B writes three at a time,<br/>so the request in flight is not the item being reported.<br/><br/>Successes are recorded too, or a status histogram has no denominator.<br/><br/>PHASE is session | search | add | cart_read, and it exists because<br/>`step` cannot answer it: that vocabulary was named for the DOM era and<br/>one of its values is literally add_click — a name kept, because it is the DENOMINATOR of confirmRate and renaming it would split that metric's history at the rename."}}
     ROW --> SEQ["assign <code>seq</code> client-side"]
     SEQ --> WHYSEQ{{"batches upload out of order and many rows share a<br/>millisecond, so ordering cannot come from the timestamp.<br/><code>seq</code> is also the idempotency key the server dedupes on."}}
     SEQ --> BUF["bounded buffer"]
@@ -108,18 +108,28 @@ flowchart TD
     end
 
     subgraph CODES ["failure codes — each names a FIX FAMILY"]
-        F1["<b>selector_miss</b> &rarr; selector config / healing"]
         F2["<b>waf_block</b> &rarr; backoff, fingerprint, handoff"]
         F3["<b>auth_required</b> &rarr; pre-warm, session"]
         F4["<b>no_candidates</b> &rarr; search / matching"]
         F5["<b>match_rejected</b> &rarr; scoring"]
         F6["<b>confirm_failed</b> &rarr; the confirmation rail"]
         F7["<b>timeout</b> &rarr; timeouts, perf"]
-        F8["<b>nav_failed</b> &rarr; URL / routing"]
         F9["<b>out_of_stock</b> &rarr; <b>nothing. not our failure.</b>"]
     end
 
+    subgraph NETCODES ["appended for the rail (MEAL-219) — three owners, not one"]
+        N1["<b>store_error</b> &rarr; the store 5xx'd. <b>an outage, not our bug</b>"]
+        N2["<b>bad_response</b> &rarr; 2xx we could not read. <b>a shape change, ours</b>"]
+        N3["<b>op_not_found</b> &rarr; a persisted hash they stopped allow-listing.<br/><b>a rotation — this is what MEAL-117 watches for</b>"]
+    end
+
+    subgraph LEGACY ["kept for the rows that carry them — EMITTED BY NOTHING"]
+        L1["<b>selector_miss</b> — there are no selectors"]
+        L2["<b>nav_failed</b> — the rail does not navigate to search"]
+    end
+
     ROW --> CODES
+    ROW --> NETCODES
     HEAD{{"a row's own <code>code</code> is the most <b>EXPLANATORY</b> of the run's<br/>codes (FAILURE_CODE_SEVERITY), not the most frequent.<br/><code>failureCodes</code> on run_summary carries the distribution —<br/>a STRING like 'confirm_failed:3,waf_block:1', because<br/>sanitizeDetail drops nested values."}}
     CODES -.-> HEAD
 
@@ -144,6 +154,12 @@ flowchart TD
       per-item cap is already met by what the cart holds, so there is nothing this run can add. Not
       a confirmation failure (nothing was attempted) and not a scoring one (the product matched
       exactly) &mdash; the store is declining on stock policy.</li>
+    <li><b><code>bad_json</code> / <code>shape</code></b> &rarr; <code>bad_response</code> (MEAL-219).
+    A 2xx we could not read is OUR shape problem, and it used to be
+    indistinguishable from a store outage because both returned
+    <code>confirm_failed</code>. <code>requestFailureCode</code>'s own comment admitted
+    it: "the closest existing code that does not claim we picked the wrong
+    product" — which is an argument for a new code, not for that one.</li>
     <li><b><code>unexpected_shape</code></b> &rarr; <code>confirm_failed</code>. The store answered
       and the answer was not a shape we know: the contract moved, or a field we depend on is gone.</li>
   </ul>
