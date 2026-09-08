@@ -1469,6 +1469,71 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   // them onto a screen where it means nothing.
   useEffect(() => { qtyFlashAnim.setValue(0); }, [reviewIdx, qtyFlashAnim]);
 
+  /**
+   * MEAL-218, second half. The glow that says "there is something here".
+   *
+   * Stephen: "I want to see if we can add a glow or something visually enticing
+   * to the eye for the small qty section at the bottom. I'm worried users will
+   * glance over it."
+   *
+   * A DIFFERENT SIGNAL FROM THE FLASH ABOVE, and deliberately not the same
+   * colour. The flash is red and answers a press the user cannot have yet; this
+   * breathes in the BRAND colour and only says "look here". If both were red the
+   * screen would be back where this ticket started -- a colour that is already
+   * on when you arrive, which cannot then mean you did something wrong.
+   *
+   * It runs only while the quantity is unset, and stops the moment it is set,
+   * because an animation that never ends stops being noticed and starts being
+   * noise. The flash wins while it is running: an answer to a press outranks an
+   * invitation to make one.
+   */
+  const qtyIdleAnim = useRef(new Animated.Value(0)).current;
+
+  // Driven by the STEP, not by the quantity. The quantities are derived during
+  // render (getReviewMealQtys), so gating the loop on them would mean setting
+  // state from a render path -- and each row decides for itself whether to WEAR
+  // the glow, which is the part that actually has to be per-quantity. A looping
+  // animated value that nothing is bound to costs nothing.
+  const qtyGlowOn = step === 'review';
+
+  useEffect(() => {
+    qtyIdleAnim.stopAnimation();
+    if (!qtyGlowOn) { qtyIdleAnim.setValue(0); return; }
+    if (reduceMotion) {
+      // Still visible, just still. A steady ring is the honest version of a
+      // pulse for someone who has asked the system not to animate.
+      qtyIdleAnim.setValue(0.55);
+      return;
+    }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(qtyIdleAnim, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+      Animated.timing(qtyIdleAnim, { toValue: 0.15, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+    ]));
+    loop.start();
+    return () => { loop.stop(); };
+  }, [qtyGlowOn, reduceMotion, qtyIdleAnim]);
+
+  /**
+   * AMBER, NOT RED, and the distinction is the whole ticket.
+   *
+   * The first version of this glow used the brand colour. The brand colour is
+   * #DD0031 -- rgb(221, 0, 49) -- which is a red, and a red that greets you is
+   * precisely what MEAL-218 removed: a colour already on when you arrive cannot
+   * then mean you did something wrong. Caught by this ticket's own test, which
+   * asserts the stepper is unlit on arrival.
+   *
+   * So the invitation gets its own colour. Amber says "look here" without
+   * claiming anything is broken, and it cannot be confused with the red flash
+   * firing two lines below it.
+   */
+  const qtyIdleBorder = qtyIdleAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['rgba(245,158,11,0.25)', 'rgba(245,158,11,0.85)'],
+  });
+  const qtyIdleBg = qtyIdleAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['rgba(245,158,11,0.00)', 'rgba(245,158,11,0.10)'],
+  });
 
   /**
    * True while the review screen is showing an item with nothing to choose from.
@@ -7653,6 +7718,21 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                       <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text2, flex: 1 }} numberOfLines={1}>
                         {showMealName ? mi.mealName : 'Qty to add to cart'}
                       </Text>
+                      {/* THE GLOW WEARS OFF WHEN THE JOB IS DONE (MEAL-218).
+                          While the quantity is unset the stepper breathes in the
+                          brand colour, so the eye lands on the one control that
+                          still needs a decision. The moment it is set, the glow
+                          goes: an animation that never ends stops being noticed.
+                          The red flash still overrides it -- an answer to a press
+                          outranks an invitation to make one. */}
+                      <Animated.View
+                        testID={`qty-glow-${mi.mealId}`}
+                        style={{
+                          borderWidth: qtyRequired ? 2 : 0, borderRadius: 13, padding: qtyRequired ? 1 : 0,
+                          borderColor: qtyRequired ? qtyIdleBorder : 'transparent',
+                          backgroundColor: qtyRequired ? qtyIdleBg : 'transparent',
+                        }}
+                      >
                       <Animated.View
                         testID={`qty-stepper-${mi.mealId}`}
                         style={{
@@ -7677,6 +7757,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                           <Text style={styles.qtyBtnText}>+</Text>
                         </TouchableOpacity>
                       </Animated.View>
+                      </Animated.View>
                     </View>
                   );
                 })}
@@ -7693,10 +7774,23 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                           Qty for this meal
                         </Text>
                         <Animated.View
+                          testID="qty-glow-choose"
+                          style={{
+                            borderWidth: chooseQty === 0 ? 2 : 0, borderRadius: 13,
+                            padding: chooseQty === 0 ? 1 : 0,
+                            borderColor: chooseQty === 0 ? qtyIdleBorder : 'transparent',
+                            backgroundColor: chooseQty === 0 ? qtyIdleBg : 'transparent',
+                          }}
+                        >
+                        <Animated.View
                           testID="qty-stepper-choose"
                           style={{
                             flexDirection: 'row', alignItems: 'center', gap: 10,
                             borderWidth: 1, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2,
+                            // The RING outside carries the amber invitation; this
+                            // border stays the red flash. Two elements because
+                            // they fire at the same moment and one border cannot
+                            // show both.
                             borderColor: qtyFlashBorder, backgroundColor: qtyFlashBg,
                           }}
                         >
@@ -7713,6 +7807,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                           <TouchableOpacity onPress={() => setChooseQty((q) => Math.min(q + 1, maxWeightSteps))} style={styles.qtyBtn}>
                             <Text style={styles.qtyBtnText}>+</Text>
                           </TouchableOpacity>
+                        </Animated.View>
                         </Animated.View>
                       </View>
                       {chooseQty > 2 && !isWeightCandidate && (
