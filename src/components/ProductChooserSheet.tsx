@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,9 @@ import {
   TextInput,
   ActivityIndicator,
   Pressable,
+  Animated,
+  Easing,
+  AccessibilityInfo,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import FloatingPreviewImage from './FloatingPreviewImage';
@@ -18,6 +21,7 @@ import { Colors, Radius } from '../constants/colors';
 import { Meal } from '../types';
 import { kroger as krogerApi, meals as mealsApi } from '../lib/api';
 import { withStoreProduct, withoutStoreProducts } from '../lib/storeProducts';
+import { qtyDisplay } from '../lib/qty-prompt';
 import { ingredientAmount, withPrep } from '../lib/formatMeasurement';
 import { useDraggablePreview } from '../lib/useDraggablePreview';
 
@@ -80,6 +84,41 @@ export default function ProductChooserSheet({
   visible, meal, locationId, storeName, storeColor, onClose, onMealUpdated,
 }: Props) {
   const [step, setStep] = useState<Step>('searching');
+
+  /**
+   * MEAL-218's amber ring, mirrored from WebViewCartSheet.
+   *
+   * Amber and not red on purpose: red is the error colour, and a red that is
+   * already on when you arrive cannot then mean you did something wrong -- which
+   * is the whole finding this ticket started from. This screen kept the red
+   * greeting for a fortnight after the sheet lost it, because the fix was made
+   * in one component rather than in a shared one.
+   */
+  const qtyIdleAnim = useRef(new Animated.Value(0)).current;
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled?.().then((on) => { if (alive) setReduceMotion(!!on); }).catch(() => {});
+    const sub = AccessibilityInfo.addEventListener?.('reduceMotionChanged', (on) => setReduceMotion(!!on));
+    return () => { alive = false; sub?.remove?.(); };
+  }, []);
+  useEffect(() => {
+    qtyIdleAnim.stopAnimation();
+    if (!visible) { qtyIdleAnim.setValue(0); return; }
+    if (reduceMotion) { qtyIdleAnim.setValue(0.55); return; }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(qtyIdleAnim, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+      Animated.timing(qtyIdleAnim, { toValue: 0.15, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+    ]));
+    loop.start();
+    return () => { loop.stop(); };
+  }, [visible, reduceMotion, qtyIdleAnim]);
+  const qtyIdleBorder = qtyIdleAnim.interpolate({
+    inputRange: [0, 1], outputRange: ['rgba(245,158,11,0.25)', 'rgba(245,158,11,0.85)'],
+  });
+  const qtyIdleBg = qtyIdleAnim.interpolate({
+    inputRange: [0, 1], outputRange: ['rgba(245,158,11,0.00)', 'rgba(245,158,11,0.10)'],
+  });
   const [error, setError] = useState('');
   const [results, setResults] = useState<Array<{ ingredientName: string; suggestions: Suggestion[] }>>([]);
   const [pickIdx, setPickIdx] = useState(0);
@@ -366,7 +405,24 @@ export default function ProductChooserSheet({
             <View style={styles.footer}>
               <View style={styles.qtySection}>
                 <View style={styles.qtyRow}>
-                  <Text style={[styles.qtyLabel, productQty === 0 && { color: '#ef4444' }]}>Qty for this meal</Text>
+                  {/* MEAL-218, and this screen never got it. The fix landed in
+                      WebViewCartSheet and stopped there, so the chooser still
+                      greeted everyone in red: the label red, the number red, and
+                      a literal "0" that reads as a quantity someone chose rather
+                      than one nobody has set. Same three changes as the sheet --
+                      neutral label, a dash instead of a zero, and an amber ring
+                      that invites rather than accuses. */}
+                  <Text style={styles.qtyLabel}>Qty for this meal</Text>
+                  <Animated.View
+                    testID="chooser-qty-glow"
+                    style={{
+                      borderWidth: productQty === 0 ? 2 : 0,
+                      borderRadius: 13,
+                      padding: productQty === 0 ? 1 : 0,
+                      borderColor: productQty === 0 ? qtyIdleBorder : 'transparent',
+                      backgroundColor: productQty === 0 ? qtyIdleBg : 'transparent',
+                    }}
+                  >
                   <View style={styles.qtyControls}>
                     <TouchableOpacity
                       style={styles.qtyBtn}
@@ -375,11 +431,14 @@ export default function ProductChooserSheet({
                     >
                       <Text style={[styles.qtyBtnText, productQty <= 0 && { opacity: 0.3 }]}>−</Text>
                     </TouchableOpacity>
-                    <Text style={[styles.qtyNum, productQty === 0 && { color: '#ef4444' }]}>{productQty}</Text>
+                    <Text style={[styles.qtyNum, productQty === 0 && { color: Colors.text3 }]}>
+                      {qtyDisplay(productQty)}
+                    </Text>
                     <TouchableOpacity style={styles.qtyBtn} onPress={() => setProductQty((q) => q + 1)}>
                       <Text style={styles.qtyBtnText}>+</Text>
                     </TouchableOpacity>
                   </View>
+                  </Animated.View>
                 </View>
                 {productQty > 2 && (
                   <Text style={styles.qtyWarning}>
