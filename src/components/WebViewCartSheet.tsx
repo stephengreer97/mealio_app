@@ -8320,6 +8320,22 @@ const styles = StyleSheet.create({
   hiddenLayer: {
     position: 'absolute', left: 0, top: 0, width: 414, height: 896,
     opacity: 0.01,
+    // BEHIND THE ANIMATION. Stephen, on a Tom Thumb run: "I can see the
+    // robots.txt text in the top left of the mealio loading page. It is barely
+    // visible because it is white on a white background."
+    //
+    // That was mine, and it arrived with the viewport fix. This layer used to be
+    // 2x2 -- too small to read, whatever its opacity. Giving it a real 414x896
+    // viewport (so pages stop laying out two pixels wide) also made its CONTENT
+    // legible at 1% opacity, and it renders after the animation in this file, so
+    // it sat on top of it.
+    //
+    // Both properties have to hold at once: a real viewport, and invisible. The
+    // opacity is what Chromium needs to keep the layer drawn and its timers
+    // running -- a 1s interval fired 34 SECONDS late when this was properly
+    // hidden -- so it cannot go to 0, and the size cannot go back. zIndex is the
+    // only one of the three that was never load-bearing.
+    zIndex: -1,
   },
   gridWrap: {
     flex: 1,
