@@ -5329,6 +5329,30 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
             // the whole set to spot units no item intended.
             reconcileIntendedRef.current = outcome.intended;
             console.log(`[Cart ${ts()}]`, 'reconcile: confirmed=', confirmed.length, 'retry=', retryItems.length, retryItems.map((i) => i.searchTerm), 'review=', reviewFailures.length, reviewFailures.map((r) => `${r.term}:${r.reason}`));
+            // MEAL-7. WHERE EACH ITEM LANDED, as rows rather than as a console line.
+            //
+            // This is the one place a run knows the per-item verdict, and until
+            // now it only said so to the console. Nothing downstream could ask
+            // "what happened to the cinnamon" -- automation_steps carries an
+            // item_index column that nothing populates, and the review names in
+            // the log line are PRODUCT names while the plan is written in
+            // INGREDIENT names, so even parsing the log could not answer it.
+            //
+            // The canary's expectation table needs exactly this: one terminal
+            // outcome per item, named the way the plan names it. It is worth
+            // having regardless -- it is the per-item half of the funnel that
+            // MEAL-219 rebuilt the run-level half of.
+            try {
+              confirmed.forEach((c, i) => tel().record('confirm', 'ok', {
+                itemIndex: i, phase: 'add',
+                detail: { terminal: 'added', item: c.name ?? null },
+              }));
+              reviewFailures.forEach((r, i) => tel().record('confirm', 'error', {
+                itemIndex: confirmed.length + i, phase: 'add',
+                code: addFailureCode(r.reason) ?? 'match_rejected',
+                detail: { terminal: 'review', item: r.term ?? null, reason: r.reason ?? null },
+              }));
+            } catch { /* telemetry must never break a run */ }
             if (routing.unverified.length > 0) {
               console.log(`[Cart ${ts()}]`, 'reconcile: COUNT ITEM ON WEIGHT ROW — neither re-adding nor confirming, reporting only',
                 routing.unverified.map((u) => `${active[u.index]?.searchTerm ?? u.index}→${u.cartName} (short ${u.shortfall})`));

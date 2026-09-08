@@ -59,6 +59,38 @@ def preflight():
     return None
 
 
+def signed_in(store_chip, timeout_s=90):
+    """Ask the app whether it is signed in to this store, before running.
+
+    Store sessions expire, and a canary that drives a run against a signed-out
+    store measures the login screen. It is a RIG problem, not a store failure --
+    the automation is fine and nobody has told it otherwise.
+
+    The prewarm's verdict is trustworthy for this now: since 2026-09-07 it reads
+    the store's own `guest` flag rather than inferring a session from a cart, so
+    "signed in" means signed in rather than "has a basket".
+    """
+    mark = drive.log_mark()
+    chip = drive.find(store_chip, exact=True)
+    if not chip:
+        return (False, f'no store chip for {store_chip}')
+    drive.tap(chip)
+    # THREE ANSWERS, NOT ONE. The prewarm probes, OR reports a cached verdict
+    # ("checkStore skip aldi - already loggedOut"), OR declines because the store
+    # has no WebView rail at all (Kroger). The first version of this waited for a
+    # probe line and read the cached answer as "never answered", which would have
+    # reported a perfectly healthy signed-out store as a broken rig.
+    line, _ = drive.log_wait(
+        mark, r'probe .*(finishing|result)|checkStore skip', timeout_s)
+    if not line:
+        return (False, 'the prewarm never answered')
+    if 'not a WebView store' in line:
+        return (False, 'no WebView rail for this store (Kroger family)')
+    if 'loggedIn= true' in line or 'loggedIn' in line and 'loggedOut' not in line:
+        return (True, 'signed in')
+    return (False, line.strip()[-90:])
+
+
 def observe_run(store_id, meal_name, timeout_s=240):
     """Drive one store's canary meal and read what happened to each line.
 
