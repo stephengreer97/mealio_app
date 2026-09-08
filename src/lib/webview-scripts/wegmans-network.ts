@@ -964,6 +964,97 @@ ${wegPrelude()}
 }
 
 /** Read the cart. Needs the bearer; says so plainly when it has none. */
+/**
+ * MEAL-7. Empty the cart, and MEASURE whether the store lets us.
+ *
+ * WHY THIS WAS NOT WRITTEN SOONER, and why the reason was wrong. The automation
+ * config records that this endpoint "ADDS A LINE and does nothing to one that
+ * already exists" -- a write of quantity 2 against a line holding 1 returned
+ * 200 and left it at 1. I read that as "removal is impossible here".
+ *
+ * It is a measurement of the ADD, not of removal, and the two differ in one
+ * field. The add path sets `li.id = lineId` when the cart already holds a line,
+ * which turns the write from an insert into an UPDATE of that line. Nobody has
+ * tried an update to quantity 0.
+ *
+ * So this is a hypothesis under test, and it is built to find out safely:
+ * `limit` keeps a first run against a real cart down to one line, the cart is
+ * re-read afterwards, and the result reports whether the line actually went --
+ * because a store that ignores the write answers 200 either way.
+ */
+export function buildWegmansClearCartScript(opts: { limit?: number } = {}): string {
+  const limit = typeof opts.limit === 'number' && opts.limit > 0 ? Math.trunc(opts.limit) : 0;
+  return `(async function () {
+${wegPrelude()}
+  var LIMIT = ${JSON.stringify(limit)};
+  var post = function (o) { o.type = 'CART_CLEARED'; WG.post(o); };
+  try {
+    var tok = await WG.token();
+    if (!tok) { post({ ok: false, why: 'no_token' }); return; }
+
+    var r = await WG.commerce('${CART_PATH}', tok, { method: 'GET' }, 15000);
+    if (!r.ok) { post({ ok: false, why: r.why || 'cart_unreadable', status: r.status || null }); return; }
+    var cart = (r.data && (r.data.carts ? r.data.carts[0] : r.data)) || {};
+    var lines = cart.lineItems || cart.items || [];
+    if (!lines.length) { post({ ok: true, cleared: 0, why: 'already_empty' }); return; }
+    if (cart.id == null || cart.version == null) { post({ ok: false, why: 'no_cart_version' }); return; }
+
+    var targets = [];
+    for (var i = 0; i < lines.length; i++) {
+      var li = lines[i] || {};
+      if (li.id == null) continue;
+      targets.push({ id: String(li.id), name: WG.lineName(li, WG.lineSku(li)),
+                     was: Number(li.quantity != null ? li.quantity : 1) });
+      if (LIMIT && targets.length >= LIMIT) break;
+    }
+    if (!targets.length) { post({ ok: false, why: 'no_line_ids' }); return; }
+
+    // THE LINE ID IS THE WHOLE POINT. Without it this endpoint inserts; with it
+    // it updates the line, which is the only shape under which a zero could
+    // ever remove anything here.
+    var payload = [];
+    for (var t = 0; t < targets.length; t++) payload.push({ id: targets[t].id, quantity: 0 });
+
+    var who = await WG.customerRef(tok);
+    var body = {
+      StoreKey: await WG.storeKey(null),
+      cartData: [{
+        cartID: cart.id,
+        cartVersion: cart.version,
+        custom: [{ name: 'orderLevelAdjustments', value: '[]' }],
+        isAlcoholic: false,
+        lineItems: payload,
+      }],
+      customerEmail: who && who.email,
+      customerID: who && who.id,
+    };
+    var w = await WG.commerce('${CART_WRITE_PATH}', tok, { method: 'POST', body: JSON.stringify(body) }, 25000);
+
+    // THE CART DECIDES. A store that ignores the write answers 200 either way.
+    var after = await WG.commerce('${CART_PATH}', tok, { method: 'GET' }, 15000);
+    var left = null, stillThere = 0;
+    if (after.ok) {
+      var c2 = (after.data && (after.data.carts ? after.data.carts[0] : after.data)) || {};
+      var l2 = c2.lineItems || c2.items || [];
+      left = l2.length;
+      for (var a = 0; a < l2.length; a++) {
+        for (var t2 = 0; t2 < targets.length; t2++) {
+          if (l2[a] && String(l2[a].id) === targets[t2].id) stillThere++;
+        }
+      }
+    }
+    post({
+      ok: stillThere === 0 && left != null, wrote: !!w.ok,
+      why: w.ok ? null : (w.why || 'write_refused'), status: w.status || null,
+      asked: targets.length, stillThere: stillThere,
+      before: lines.length, after: left, targets: targets,
+    });
+  } catch (e) {
+    post({ ok: false, why: 'threw', detail: String(e).slice(0, 160) });
+  }
+})(); true;`;
+}
+
 export function buildWegmansCartReadScript(): string {
   return `(async function () {
 ${wegPrelude()}
@@ -1306,6 +1397,7 @@ export const WEGMANS_RAIL: NetworkRail = {
       requestMs: WEGMANS_RAIL.budgets.searchRequestMs,
     }),
   cartRead: () => buildWegmansCartReadScript(),
+  clearCart: (_storeId, opts) => buildWegmansClearCartScript({ limit: opts?.limit }),
   addBatch: (items, opts) =>
     buildWegmansNetworkAddBatchScript(
       items.map((i) => ({

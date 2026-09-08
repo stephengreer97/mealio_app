@@ -18,6 +18,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors, Radius } from '../../constants/colors';
 import { resetFirstRun } from '../../lib/firstRun';
+import CartClearProbe from '../../components/CartClearProbe';
 import { useStores } from '../../lib/store-catalog/useStores';
 import { useAuth } from '../../context/AuthContext';
 import { auth as authApi, account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
@@ -63,6 +64,7 @@ export default function AccountScreen() {
 
   // Account deletion
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [clearProbe, setClearProbe] = useState<{ storeId: string; limit?: number } | null>(null);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
@@ -954,6 +956,41 @@ export default function AccountScreen() {
           >
             <Text style={styles.devResetText}>Reset first-run explainers (dev)</Text>
           </TouchableOpacity>
+        )}
+
+        {/* MEAL-7. Run a rail's cart-clear and report what the cart said.
+            `clearCart` was defined on four rails and called by nothing, so none
+            of it had ever executed -- code that has never run is a hypothesis
+            with good syntax. This is the trigger that makes it measurable.
+            Measurement mode (limit 1) so a first run against a real cart touches
+            ONE line rather than emptying it. */}
+        {__DEV__ && (
+          <>
+            <TouchableOpacity
+              onPress={() => setClearProbe({ storeId: 'walmart', limit: 1 })}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Measure cart clear: Walmart, 1 line (dev)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setClearProbe({ storeId: 'wegmans', limit: 1 })}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Measure cart clear: Wegmans, 1 line (dev)</Text>
+            </TouchableOpacity>
+          </>
+        )}
+        {__DEV__ && clearProbe && (
+          <CartClearProbe
+            key={`${clearProbe.storeId}-${clearProbe.limit ?? 0}`}
+            storeId={clearProbe.storeId}
+            limit={clearProbe.limit}
+            onDone={(r) => {
+              setClearProbe(null);
+              console.log('[CartClear]', clearProbe.storeId, JSON.stringify(r));
+              Alert.alert('Cart clear result', JSON.stringify(r, null, 1).slice(0, 700));
+            }}
+          />
         )}
 
         {/* Delete Account */}

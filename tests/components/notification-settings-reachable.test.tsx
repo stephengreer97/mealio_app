@@ -26,6 +26,23 @@ jest.mock('expo-secure-store', () => ({
   setItemAsync: jest.fn(async () => {}),
   deleteItemAsync: jest.fn(async () => {}),
 }));
+
+// AccountScreen reaches react-native-webview through the dev-only cart-clear
+// probe, and the import runs at module scope, so the native module is demanded
+// before a single line of this file executes. Nothing here renders a WebView --
+// this mock exists only so the screen can be imported at all.
+jest.mock('react-native-webview', () => {
+  const RealReact = jest.requireActual('react');
+  const RealView = jest.requireActual('react-native').View;
+  return {
+    WebView: RealReact.forwardRef((props: any, ref: any) => {
+      RealReact.useImperativeHandle(ref, () => ({
+        injectJavaScript: () => {}, stopLoading: () => {},
+      }));
+      return RealReact.createElement(RealView, props);
+    }),
+  };
+});
 jest.mock('@expo/vector-icons', () => {
   const RealReact = jest.requireActual('react');
   const RealText = jest.requireActual('react-native').Text;

@@ -70,6 +70,30 @@ the way was that one parameter. A line the run CREATED is deleted; a line the us
 back to their quantity.</p>
 </div>
 <div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
+<p><b>2026-09-08 &mdash; removal, measured per store rather than generalised.</b> Four rails carried a
+<code>clearCart</code> that nothing had ever called, so the canary's cleanup rested on four
+untested hypotheses. <code>CartClearProbe</code> (Account, <code>__DEV__</code>) now runs one, against
+a real cart, with a <code>limit</code> so the first attempt touches ONE line.</p>
+<table>
+  <tr><th>Store</th><th>How a line is removed</th><th>State</th></tr>
+  <tr><td><b>Walmart</b></td><td><code>updateItems [{offerId, quantity: 0}]</code></td>
+      <td><b>measured 2026-09-08</b> &mdash; 200, cart 20 &rarr; 19, target gone</td></tr>
+  <tr><td><b>H-E-B</b></td><td><code>cartItemV2</code> quantity 0; weight lines declined</td>
+      <td>measured</td></tr>
+  <tr><td><b>Instacart</b> (all 10 tenants)</td><td><code>{itemId, quantity: 0}</code></td>
+      <td>measured</td></tr>
+  <tr><td><b>Albertsons family</b></td><td><code>DELETE</code> &mdash; a 0 answers 400, see above</td>
+      <td>measured</td></tr>
+  <tr><td><b>Wegmans</b></td><td><code>lineItems [{id, quantity: 0}]</code> &mdash; the line id is
+      what turns the write from an insert into an update</td>
+      <td><b>UNVERIFIED</b> &mdash; its cart was empty at every attempt</td></tr>
+  <tr><td><b>Kroger family</b></td><td colspan="2">n/a &mdash; web integration, not a WebView rail</td></tr>
+</table>
+<p>Walmart, H-E-B and Instacart all remove on a zero and Albertsons does not, which is the whole
+reason each is measured rather than inferred from the others &mdash; and why Wegmans is marked
+unproven instead of counted with the three it resembles.</p>
+</div>
+<div class="wrap" style="border-left:4px solid #f59e0b;padding-left:14px">
 <p><b>2026-09-04 &mdash; which stores need a store chosen.</b> H-E-B, the Albertsons family, ALDI and
 Wegmans all do: their catalogue and prices are per branch, so a run without one is shopping something
 the user cannot buy. A session without one now surfaces the storefront and asks for it rather than

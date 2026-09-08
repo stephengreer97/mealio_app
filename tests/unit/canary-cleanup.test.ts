@@ -38,13 +38,36 @@ describe('which rails can empty a cart', () => {
     }
   });
 
-  it('Wegmans and Walmart do NOT, because nobody has measured their removal', () => {
-    // Wegmans' ADD endpoint adds a line and does nothing to one that exists, so
-    // a zero there would return 200, change nothing, and report success.
-    // Walmart's absoluteQty was never recorded at all. Both are gaps to close by
-    // MEASURING, exactly as the other three were -- not by guessing.
-    expect(getNetworkRail('wegmans')?.clearCart).toBeUndefined();
-    expect(getNetworkRail('walmart')?.clearCart).toBeUndefined();
+  it('Walmart can, measured 2026-09-08 rather than assumed', () => {
+    // One line of a real 20-line cart: 200, after 19, target gone. A zero
+    // removes here as it does on H-E-B and Instacart -- and unlike Albertsons,
+    // where the same shape answers 400 and keeps the line. Three agreeing and
+    // one not is exactly why each was measured instead of generalised.
+    expect(typeof getNetworkRail('walmart')?.clearCart).toBe('function');
+  });
+
+  it('Wegmans defines one, and it is NOT yet verified', () => {
+    // Written and wired, but never run against a non-empty cart: the Wegmans
+    // cart was empty every time it was probed, and getting one item into it
+    // kept failing on the chooser rather than on anything real.
+    //
+    // It is defined rather than withheld because the ONLY way to measure a
+    // removal is to attempt one, and `limit` makes attempting it safe. What it
+    // must not do is get treated as proven: the earlier note that this endpoint
+    // "adds a line and does nothing to one that already exists" is a
+    // measurement of the ADD, and the removal hypothesis differs from it in one
+    // field -- the line id, which turns an insert into an update.
+    //
+    // Walmart's hypothesis, in the same shape, turned out to be right. That is
+    // a reason to test this one, not to assume it.
+    const rail = getNetworkRail('wegmans');
+    expect(typeof rail?.clearCart).toBe('function');
+    const script = rail!.clearCart!('wegmans', { limit: 1 })!;
+    // The line id is the whole hypothesis, so it has to be in the payload.
+    expect(script).toContain('id: targets[t].id');
+    expect(script).toContain('quantity: 0');
+    // And it must re-read, because a store that ignores the write answers 200.
+    expect(script).toContain('stillThere');
   });
 });
 
@@ -103,6 +126,19 @@ describe('each rail clears the way ITS store actually removes things', () => {
     expect(s).toContain('cartItemsList');
     // A quantity of zero is the shape that answered 400 and kept the line.
     expect(s).not.toContain('qty: 0');
+  });
+
+  it('Walmart writes quantity 0 and re-reads to prove the line went', () => {
+    const s2 = getNetworkRail('walmart')!.clearCart!()!;
+    expect(s2).toContain('quantity: 0');
+    // A store that ignores a zero answers 200 and leaves the line, so the write
+    // reporting success proves nothing. Only the re-read does.
+    expect(s2).toContain('stillThere');
+  });
+
+  it('supports a limit, which is what made the measurement safe', () => {
+    const one = getNetworkRail('walmart')!.clearCart!('walmart', { limit: 1 })!;
+    expect(one).toContain('var LIMIT = 1');
   });
 
   it('Instacart writes quantity 0 and does NOT delete', () => {

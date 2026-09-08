@@ -111,7 +111,15 @@ export interface NetworkRail {
    * Absent means the canary reports cleanup as unsupported for that store, which
    * is honest. A wrong guess writes to someone's groceries.
    */
-  clearCart?(storeId?: string | null): string | null;
+  clearCart?(storeId?: string | null, opts?: {
+    /**
+     * Touch at most this many lines. For MEASURING a rail whose removal
+     * semantics are unrecorded, against a cart that belongs to someone: the
+     * first run answers the question with one line rather than twenty. Rails
+     * with proven semantics ignore it.
+     */
+    limit?: number;
+  }): string | null;
   /**
    * `opts.knownLines` is the cart the sheet has ALREADY read, as
    * { itemId: qty }.

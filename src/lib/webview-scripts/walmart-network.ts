@@ -452,6 +452,95 @@ ${wmPrelude()}
 }
 
 /** Read the cart. One call, no page load. */
+/**
+ * MEAL-7. Empty the cart, and MEASURE whether the store lets us.
+ *
+ * MEASURED 2026-09-08 against Stephen's real cart, one line, on the device:
+ *
+ *   updateItems [{offerId, quantity: 0}]  -> 200, before 20 lines, after 19,
+ *                                            the target gone (stillThere 0)
+ *
+ * The line removed was "Kevin's Natural Foods Cilantro Lime Chicken, 16 oz",
+ * which had held 4.
+ *
+ * So a zero REMOVES here, as it does on H-E-B and Instacart, and unlike
+ * Albertsons where the same shape answers 400 and keeps the line. That is three
+ * stores agreeing and one disagreeing, which is precisely why each was measured
+ * rather than generalised from the others.
+ *
+ * `limit` is kept. It is what made the measurement safe -- one line of somebody's
+ * real cart instead of twenty -- and it is the right tool the next time a rail's
+ * removal is unknown.
+ */
+export function buildWalmartClearCartScript(opts: { limit?: number } = {}): string {
+  const limit = typeof opts.limit === 'number' && opts.limit > 0 ? Math.trunc(opts.limit) : 0;
+  return `(async function () {
+${wmPrelude()}
+  var LIMIT = ${JSON.stringify(limit)};
+  var post = function (o) { o.type = 'CART_CLEARED'; WM.post(o); };
+  var readCart = async function (cartId) {
+    var r = await WM.gql('cartxo', 'MergeAndGetCart', 'mutation', '${OPS.MergeAndGetCart}', {
+      input: { cartId: cartId, strategy: 'MERGE', enableLiquorBox: true,
+               enableCartSplitClarity: false, features: [] },
+      detailed: false
+    }, 20000, 'cart_read');
+    if (!r.ok) return null;
+    try { return r.data.mergeAndGetCart.lineItems || []; } catch (e) { return null; }
+  };
+  try {
+    var m = WM.cartMap();
+    if (!m || !m.cartId) { post({ ok: false, why: 'no_cart_id' }); return; }
+
+    var before = await readCart(m.cartId);
+    if (!before) { post({ ok: false, why: 'cart_unreadable' }); return; }
+    if (!before.length) { post({ ok: true, cleared: 0, why: 'already_empty' }); return; }
+
+    var targets = [];
+    for (var i = 0; i < before.length; i++) {
+      var p = (before[i] || {}).product || {};
+      if (p.offerId == null) continue;
+      targets.push({ offerId: String(p.offerId), name: String(p.name || ''),
+                     was: Number(before[i].quantity) || 1 });
+      if (LIMIT && targets.length >= LIMIT) break;
+    }
+    if (!targets.length) { post({ ok: false, why: 'no_offer_ids' }); return; }
+
+    var items = [];
+    for (var t = 0; t < targets.length; t++) {
+      items.push({ offerId: targets[t].offerId, quantity: 0, usItemId: '', name: targets[t].name });
+    }
+    var w = await WM.gql('home', 'updateItems', 'mutation', '${OPS.updateItems}', {
+      input: { cartId: m.cartId, items: items, enableLiquorBox: true }
+    }, 25000, 'add');
+
+    // THE CART DECIDES. This is the measurement: a store that ignores a zero
+    // answers 200 and leaves the line, which is exactly what Albertsons does,
+    // and only a re-read can tell the two apart.
+    var after = await readCart(m.cartId);
+    var stillThere = 0;
+    if (after) {
+      for (var a = 0; a < after.length; a++) {
+        var pa = (after[a] || {}).product || {};
+        for (var t2 = 0; t2 < targets.length; t2++) {
+          if (pa.offerId != null && String(pa.offerId) === targets[t2].offerId) stillThere++;
+        }
+      }
+    }
+    post({
+      ok: stillThere === 0, wrote: w && w.ok ? true : false,
+      why: w && w.ok ? null : (w && w.why) || 'write_failed',
+      asked: targets.length, stillThere: stillThere,
+      before: before.length, after: after ? after.length : null,
+      // Named so a human reading the log knows what to restore if the
+      // hypothesis was right and this was only a measurement.
+      targets: targets,
+    });
+  } catch (e) {
+    post({ ok: false, why: 'threw', detail: String(e).slice(0, 160) });
+  }
+})(); true;`;
+}
+
 export function buildWalmartCartReadScript(): string {
   return `(async function () {
 ${wmPrelude()}
@@ -702,6 +791,7 @@ export const WALMART_RAIL: NetworkRail = {
   sessionScript: buildWalmartSessionScript,
   searchBatch: (terms) => buildWalmartNetworkSearchBatchScript(terms),
   cartRead: () => buildWalmartCartReadScript(),
+  clearCart: (_storeId, opts) => buildWalmartClearCartScript({ limit: opts?.limit }),
   addBatch: (items, opts) =>
     buildWalmartNetworkAddBatchScript(
       items.map((i) => ({ idx: i.idx, productId: i.productId, skuId: i.skuId ?? null,
