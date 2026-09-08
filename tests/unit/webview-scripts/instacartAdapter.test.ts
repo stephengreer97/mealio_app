@@ -14,7 +14,7 @@
 // The surface they cover is much smaller than it was, because the adapter is:
 // every injected script it used to build is gone, the last of them on
 // 2026-09-04. ALDI's real behaviour is covered against captured traffic in
-// tests/fixture-tests/aldi-network.spec.ts.
+// tests/fixture-tests/instacart-network.spec.ts.
 
 import * as fs from 'fs';
 import * as path from 'path';

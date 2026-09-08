@@ -3,7 +3,7 @@
 import { chromium, Page } from 'playwright';
 import { getNetworkRail } from '../../src/lib/webview-scripts/network-rail';
 import { buildWegmansCartReadScript } from '../../src/lib/webview-scripts/wegmans-network';
-import { buildAldiCartReadScript } from '../../src/lib/webview-scripts/aldi-network';
+import { buildInstacartCartReadScript } from '../../src/lib/webview-scripts/instacart-network';
 import { buildWalmartCartReadScript } from '../../src/lib/webview-scripts/walmart-network';
 
 const ALL: Record<string, unknown>[] = [];
@@ -31,7 +31,7 @@ async function collect(page: Page, script: string, want: string[], ms = 40000) {
 (async () => {
   const STORE = process.env.RAIL_STORE || 'wegmans';
   const rail = getNetworkRail(STORE)!;
-  const cartRead = STORE === 'aldi' ? buildAldiCartReadScript()
+  const cartRead = STORE === 'aldi' ? buildInstacartCartReadScript()
     : STORE === 'walmart' ? buildWalmartCartReadScript() : buildWegmansCartReadScript();
   const HOST = STORE === 'aldi' ? 'https://www.aldi.us/robots.txt'
     : STORE === 'walmart' ? 'https://www.walmart.com/robots.txt' : 'https://www.wegmans.com/robots.txt';

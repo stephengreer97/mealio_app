@@ -67,7 +67,7 @@ describe('the injected scripts survive being injected', () => {
   it('no rail source hides an escape that will be eaten', () => {
     const VALID = new Set(['n', 'r', 't', 'b', 'f', 'v', '0', 'u', 'x', '\\', '`', "'", '"', '$', '/']);
     const files = [
-      'aldi-network.ts', 'wegmans-network.ts', 'heb-network-search.ts', 'albertsons-network.ts',
+      'instacart-network.ts', 'wegmans-network.ts', 'heb-network-search.ts', 'albertsons-network.ts',
     ];
     const offenders: string[] = [];
     for (const f of files) {

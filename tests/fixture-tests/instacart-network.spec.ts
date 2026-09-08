@@ -20,11 +20,11 @@
 
 import {
   INSTACART_RAIL,
-  buildAldiSessionScript,
-  buildAldiNetworkSearchBatchScript,
-  buildAldiCartReadScript,
-  buildAldiNetworkAddBatchScript,
-} from '../../src/lib/webview-scripts/aldi-network';
+  buildInstacartSessionScript,
+  buildInstacartSearchBatchScript,
+  buildInstacartCartReadScript,
+  buildInstacartAddBatchScript,
+} from '../../src/lib/webview-scripts/instacart-network';
 import { storeFixtures } from './_helpers';
 
 const { itWithFixture } = storeFixtures('aldi');
@@ -170,7 +170,7 @@ const AT_ALDI = { url: 'https://www.aldi.us/store/aldi/storefront' };
 describe('the session probe', () => {
   itWithFixture('storefront.html', 'reports signed in, and hands back the cart it found', async (runner) => {
     await runner.inject(gqlStub());
-    await runner.inject(buildAldiSessionScript());
+    await runner.inject(buildInstacartSessionScript());
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.ok).toBe(true);
     expect(msg.loggedIn).toBe(true);
@@ -192,7 +192,7 @@ describe('the session probe', () => {
     // The mistake this project has made three times: an inconclusive check
     // reported as a negative walls a signed-in user out of their own run.
     await runner.inject(gqlStub({ fail: 'ActiveCarts', failCode: 'INTERNAL' }));
-    await runner.inject(buildAldiSessionScript());
+    await runner.inject(buildInstacartSessionScript());
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.ok).toBe(false);
     expect(msg.loggedIn).toBeUndefined();
@@ -202,7 +202,7 @@ describe('the session probe', () => {
 describe('search', () => {
   itWithFixture('storefront.html', 'produces the same candidate shape every other rail does', async (runner) => {
     await runner.inject(gqlStub());
-    await runner.inject(buildAldiNetworkSearchBatchScript(['sour cream'], { shopId: '8583' })!);
+    await runner.inject(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })!);
     const msg = await runner.waitForMessage('SEARCH_RESULT', 20_000) as Record<string, unknown>;
     const cands = msg.candidates as Array<Record<string, unknown>>;
     expect(cands.length).toBe(2);
@@ -224,7 +224,7 @@ describe('search', () => {
     // just returned, under every combination of full and bare ids and of zone
     // and shop as the zoneId. Search carries the names itself.
     await runner.inject(gqlStub());
-    await runner.inject(buildAldiNetworkSearchBatchScript(['sour cream', 'tortillas', 'limes'], { shopId: '8583' })!);
+    await runner.inject(buildInstacartSearchBatchScript(['sour cream', 'tortillas', 'limes'], { shopId: '8583' })!);
     await runner.waitForMessage('SEARCH_BATCH_DONE', 25_000);
     const calls = await runner.page.evaluate('window.__calls') as Array<{ op: string }>;
     expect(calls.filter((c) => c.op === 'Search').length).toBe(3);
@@ -237,7 +237,7 @@ describe('search', () => {
     // need one and the ids it returns CARRY it, so one cheap call buys the zone
     // rather than a hard-coded number nobody could explain.
     await runner.inject(gqlStub({ searchIds: ['items_44100-9', 'items_44100-10'] }));
-    await runner.inject(buildAldiNetworkSearchBatchScript(['sour cream'], { shopId: '8583' })!);
+    await runner.inject(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })!);
     await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
     const calls = await runner.page.evaluate('window.__calls') as Array<{ op: string; vars: Record<string, unknown> }>;
     const search = calls.find((c) => c.op === 'Search')!;
@@ -246,7 +246,7 @@ describe('search', () => {
 
   itWithFixture('storefront.html', 'a term the store refused does not take the batch with it', async (runner) => {
     await runner.inject(gqlStub({ fail: 'AsyncItemSearch' }));
-    await runner.inject(buildAldiNetworkSearchBatchScript(['sour cream'], { shopId: '8583' })!);
+    await runner.inject(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })!);
     const failed = await runner.waitForMessage('SEARCH_RESULT_FAILED', 20_000) as Record<string, unknown>;
     expect(failed.term).toBe('sour cream');
     await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
@@ -260,9 +260,9 @@ describe('the shop it is shopping', () => {
     // id searches a catalogue the user cannot buy from — every candidate would
     // be a product that is not there, which is the over-add rule wearing a
     // different hat.
-    expect(buildAldiNetworkSearchBatchScript(['sour cream'], { shopId: null })).toBeNull();
-    expect(buildAldiNetworkSearchBatchScript(['sour cream'], {})).toBeNull();
-    expect(buildAldiNetworkSearchBatchScript(['sour cream'], { shopId: '8583' })).toBeTruthy();
+    expect(buildInstacartSearchBatchScript(['sour cream'], { shopId: null })).toBeNull();
+    expect(buildInstacartSearchBatchScript(['sour cream'], {})).toBeNull();
+    expect(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })).toBeTruthy();
   });
 
   itWithFixture('storefront.html', 'reports where it looked, so a device run can say', async (runner) => {
@@ -270,7 +270,7 @@ describe('the shop it is shopping', () => {
     // probe lists its attempts rather than failing silently, so the next person
     // reads an answer instead of guessing again.
     await runner.inject(gqlStub());
-    await runner.inject(buildAldiSessionScript());
+    await runner.inject(buildInstacartSessionScript());
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(Array.isArray(msg.shopTries)).toBe(true);
     // The retailer is reported SEPARATELY, so the two can never be confused
@@ -282,7 +282,7 @@ describe('the shop it is shopping', () => {
 describe('the cart read', () => {
   itWithFixture('storefront.html', 'posts the same CART_COUNT a page read would', async (runner) => {
     await runner.inject(gqlStub({ cart: { 'items_23898-1': 2, 'items_23898-7': 1 } }));
-    await runner.inject(buildAldiCartReadScript());
+    await runner.inject(buildInstacartCartReadScript());
     const msg = await runner.waitForMessage('CART_COUNT', 20_000) as Record<string, unknown>;
     expect(msg.count).toBe(3);
     const items = msg.items as Array<Record<string, unknown>>;
@@ -297,7 +297,7 @@ describe('the cart read', () => {
     // the first the second makes every item the user already owned look like
     // something this run just added.
     await runner.inject(gqlStub({ fail: 'CartItems', failCode: 'INTERNAL' }));
-    await runner.inject(buildAldiCartReadScript());
+    await runner.inject(buildInstacartCartReadScript());
     const msg = await runner.waitForMessage('CART_COUNT', 20_000) as Record<string, unknown>;
     expect(msg.count).toBeNull();
   }, AT_ALDI);
@@ -312,7 +312,7 @@ describe('the add, and the question nobody has answered', () => {
     // difference between this store and H-E-B, whose batched add still runs
     // serially on their side at ~240ms an item.
     await runner.inject(gqlStub());
-    await runner.inject(buildAldiNetworkAddBatchScript(
+    await runner.inject(buildInstacartAddBatchScript(
       [item(0, 'items_23898-1', 2), item(1, 'items_23898-2', 1), item(2, 'items_23898-3', 3)],
     )!);
     await runner.waitForMessage('NET_ADD_DONE', 25_000);
@@ -328,7 +328,7 @@ describe('the add, and the question nobody has answered', () => {
     // the one case where the two readings disagree — so it is declined rather
     // than guessed at, and it reaches the review screen instead.
     await runner.inject(gqlStub({ cart: { 'items_23898-1': 2 } }));
-    await runner.inject(buildAldiNetworkAddBatchScript([item(0, 'items_23898-1', 1)])!);
+    await runner.inject(buildInstacartAddBatchScript([item(0, 'items_23898-1', 1)])!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
     expect(res.success).toBe(false);
     expect(res.reason).toBe('qty_semantics_unproven');
@@ -338,7 +338,7 @@ describe('the add, and the question nobody has answered', () => {
 
   itWithFixture('storefront.html', 'is correct under SET semantics', async (runner) => {
     await runner.inject(gqlStub({ setSemantics: true }));
-    await runner.inject(buildAldiNetworkAddBatchScript([item(0, 'items_23898-1', 2)])!);
+    await runner.inject(buildInstacartAddBatchScript([item(0, 'items_23898-1', 2)])!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
     expect(res.success).toBe(true);
     const lines = await runner.page.evaluate('window.__lines') as Record<string, number>;
@@ -351,7 +351,7 @@ describe('the add, and the question nobody has answered', () => {
     // only items it writes are ones where the two readings agree. A script that
     // guessed SET and was wrong would double every line.
     await runner.inject(gqlStub({ setSemantics: false }));
-    await runner.inject(buildAldiNetworkAddBatchScript([item(0, 'items_23898-1', 2)])!);
+    await runner.inject(buildInstacartAddBatchScript([item(0, 'items_23898-1', 2)])!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
     expect(res.success).toBe(true);
     const lines = await runner.page.evaluate('window.__lines') as Record<string, number>;
@@ -360,7 +360,7 @@ describe('the add, and the question nobody has answered', () => {
 
   itWithFixture('storefront.html', 'once measured, absoluteQty lifts the refusal', async (runner) => {
     await runner.inject(gqlStub({ cart: { 'items_23898-1': 2 }, setSemantics: true }));
-    await runner.inject(buildAldiNetworkAddBatchScript(
+    await runner.inject(buildInstacartAddBatchScript(
       [item(0, 'items_23898-1', 3)], { absoluteQty: true },
     )!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
@@ -390,7 +390,7 @@ describe('the add, and the question nobody has answered', () => {
       '  };',
       '})(); true;',
     ].join('\n'));
-    await runner.inject(buildAldiNetworkAddBatchScript([item(0, 'items_23898-1', 2)])!);
+    await runner.inject(buildInstacartAddBatchScript([item(0, 'items_23898-1', 2)])!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
     expect(res.success).toBe(false);
     expect(res.reason).toBe('not_in_cart_after_write');
@@ -403,7 +403,7 @@ describe('the operation hashes', () => {
     // fail every run for twelve hours; forgetting it means the next call
     // harvests again — the same trigger __albForgetKeys has.
     await runner.inject(gqlStub({ fail: 'ActiveCarts', failCode: 'PERSISTED_QUERY_NOT_FOUND' }));
-    await runner.inject(buildAldiSessionScript());
+    await runner.inject(buildInstacartSessionScript());
     const msg = await runner.waitForMessage('ALDI_SESSION', 20_000) as Record<string, unknown>;
     expect(msg.ok).toBe(false);
     expect(msg.code).toBe('PERSISTED_QUERY_NOT_FOUND');
@@ -432,7 +432,7 @@ describe('the add reads the cart it is writing to', () => {
   itWithFixture('storefront.html', 'finds the shop itself, so held quantities are real', async (runner) => {
     await runner.inject(gqlStub({ cart: { 'items_23898-1': 2 } }));
     // No shopId passed — exactly how the rail calls it.
-    await runner.inject(buildAldiNetworkAddBatchScript([item(0, 'items_23898-1', 3)], { absoluteQty: true })!);
+    await runner.inject(buildInstacartAddBatchScript([item(0, 'items_23898-1', 3)], { absoluteQty: true })!);
     await runner.waitForMessage('NET_ADD_DONE', 25_000);
     const writes = await runner.page.evaluate('window.__writes') as Array<Record<string, unknown>>;
     expect(writes).toHaveLength(1);
@@ -445,7 +445,7 @@ describe('the add reads the cart it is writing to', () => {
     // The other half: if the read fails, the run must not fall through to
     // "nothing is held" and start writing absolute quantities against it.
     await runner.inject(gqlStub({ fail: 'CartItems', failCode: 'INTERNAL' }));
-    await runner.inject(buildAldiNetworkAddBatchScript([item(0, 'items_23898-1', 3)], { absoluteQty: true })!);
+    await runner.inject(buildInstacartAddBatchScript([item(0, 'items_23898-1', 3)], { absoluteQty: true })!);
     const res = await runner.waitForMessage('NET_ADD_RESULT', 25_000) as Record<string, unknown>;
     expect(res.success).toBe(false);
     expect(res.reason).toBe('no_cart');
@@ -472,7 +472,7 @@ describe('a cart belongs to a retailer', () => {
   itWithFixture('storefront.html', 'never borrows another retailer\'s cart', async (runner) => {
     // The account holds an ALDI cart and nothing at Publix.
     await runner.inject(gqlStub({ carts: [{ id: 'cart-aldi-1', itemCount: 4, slug: 'aldi' }] }));
-    await runner.inject(buildAldiSessionScript('publix'));
+    await runner.inject(buildInstacartSessionScript('publix'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.ok).toBe(true);
     // THE PART THAT IS SETTLED: whatever we decide about the login question,
@@ -494,7 +494,7 @@ describe('a cart belongs to a retailer', () => {
     // signed-out run against a real storefront answers it, and until then the
     // cart stays the test because that is the behaviour ALDI has always had.
     await runner.inject(gqlStub({ carts: [{ id: 'c1', itemCount: 1, slug: 'aldi' }] }));
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.hadUserCarts).toBe(true);
     // Names only, never values. Enough to tell whether this response carries a
@@ -515,7 +515,7 @@ describe('a cart belongs to a retailer', () => {
     // and "Publix detected it correctly" is a coincidence: it would say the same
     // thing while signed in, which is the deadlock.
     await runner.inject(gqlStub({ carts: [{ id: 'cart-aldi-1', itemCount: 4, slug: 'aldi' }] }));
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const aldi = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(aldi.loggedIn).toBe(true);
   });
@@ -526,7 +526,7 @@ describe('a cart belongs to a retailer', () => {
     // user looks cartless, and without this the only way to find out is to
     // guess and ship again.
     await runner.inject(gqlStub({ carts: [{ id: 'c1', itemCount: 1, slug: 'publix-delivery' }] }));
-    await runner.inject(buildAldiSessionScript('publix'));
+    await runner.inject(buildInstacartSessionScript('publix'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.sawSlugs).toEqual(['publix-delivery']);
     expect(msg.cartId ?? null).toBeNull();
@@ -537,7 +537,7 @@ describe('a cart belongs to a retailer', () => {
       { id: 'cart-aldi-1', itemCount: 4, slug: 'aldi' },
       { id: 'cart-publix-9', itemCount: 2, slug: 'publix', retailerId: '77' },
     ] }));
-    await runner.inject(buildAldiSessionScript('publix'));
+    await runner.inject(buildInstacartSessionScript('publix'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.loggedIn).toBe(true);
     // The Publix cart, not the first one in the list.
@@ -546,7 +546,7 @@ describe('a cart belongs to a retailer', () => {
 
   itWithFixture('storefront.html', 'ALDI is unchanged, which is what makes this safe to ship', async (runner) => {
     await runner.inject(gqlStub());
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.loggedIn).toBe(true);
     expect(msg.cartId).toBe('16636288909');
@@ -621,7 +621,7 @@ describe('a signed-out session', () => {
     // A 401 is the one moment the session is known to be gone, so it is the
     // right moment to forget what that session knew.
     await runner.inject(gqlStub({ httpStatus: 401 }));
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.shopCacheCleared).toBe(true);
     // WHAT THIS CANNOT CHECK, said rather than implied: localStorage THROWS in
@@ -634,13 +634,13 @@ describe('a signed-out session', () => {
     //
     // The removal is confirmed for real on a device, by shopFrom flipping from
     // "cache" to a page read on the next run.
-    const emitted = buildAldiSessionScript('aldi');
+    const emitted = buildInstacartSessionScript('aldi');
     expect(emitted).toContain("localStorage.removeItem('__mealio_ic_shop_v1')");
   });
 
   itWithFixture('storefront.html', 'reads 401 as signed OUT, not as unanswerable', async (runner) => {
     await runner.inject(gqlStub({ httpStatus: 401 }));
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     // ok:true means the probe ANSWERED. That is what routes to the login screen
     // instead of the handover.
@@ -654,7 +654,7 @@ describe('a signed-out session', () => {
     // who is signed out, and answering "signed out" to a 5xx would wall someone
     // who is signed in — the mistake this project has made three times.
     await runner.inject(gqlStub({ httpStatus: 500 }));
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.ok).toBe(false);
     expect(msg.status).toBe(500);
@@ -686,7 +686,7 @@ describe('what the session response can and cannot tell us', () => {
     // tell a signed-in session from a guest; its value IS the session and does
     // not belong in a log file.
     await runner.inject(gqlStub());
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(Array.isArray(msg.cookieNames)).toBe(true);
     // Whatever the fixture's cookies are, no entry may carry a value.
@@ -713,7 +713,7 @@ describe('being signed in, as distinct from having a cart', () => {
     // and returns this retailer's cart, so `!!mine` alone says signed in --
     // and the account query says there is nobody there.
     await runner.inject(gqlStub({ opStatus: { CurrentUser: 401 } }));
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.ok).toBe(true);
     expect(msg.acctDenied).toBe(true);
@@ -725,7 +725,7 @@ describe('being signed in, as distinct from having a cart', () => {
     // wall the one banner that has always worked. ALDI with a real session is
     // the regression this file exists to prevent.
     await runner.inject(gqlStub());
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect(msg.loggedIn).toBe(true);
     expect(msg.acctDenied).toBe(false);
@@ -733,7 +733,7 @@ describe('being signed in, as distinct from having a cart', () => {
 
   itWithFixture('storefront.html', 'reports the account SHAPE, and no account values', async (runner) => {
     await runner.inject(gqlStub());
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     const acct = msg.acct as Record<string, unknown>;
     expect(acct.answered).toBe(true);
@@ -764,7 +764,7 @@ describe('being signed in, as distinct from having a cart', () => {
     // regressions before it, so it waits for one guest capture and one
     // signed-in capture rather than shipping on an assumption.
     await runner.inject(gqlStub({ currentUser: { currentUser: null } }));
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     // cuNull is the field that would drive the strict rule, and here it is
     // TRUE -- a guest, plainly. It still does not wall anyone yet.
@@ -790,7 +790,7 @@ describe('the guest flag', () => {
     // a cart for this retailer exists, and the shopper is nobody.
     await runner.inject(gqlStub({ currentUser: { currentUser: {
       id: 'guest_1', guest: true, ordersCount: 0 } } }));
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect((msg.acct as Record<string, unknown>).guest).toBe(true);
     expect(msg.acctGuest).toBe(true);
@@ -799,7 +799,7 @@ describe('the guest flag', () => {
 
   itWithFixture('storefront.html', 'a real account with a cart is signed in', async (runner) => {
     await runner.inject(gqlStub());
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect((msg.acct as Record<string, unknown>).guest).toBe(false);
     expect((msg.acct as Record<string, unknown>).ordersCount).toBe(3);
@@ -813,7 +813,7 @@ describe('the guest flag', () => {
     // danger is the opposite reflex -- treating "did not say" as "guest" --
     // which would wall every user of every tenant that words it differently.
     await runner.inject(gqlStub({ currentUser: { currentUser: { id: 'u1' } } }));
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect((msg.acct as Record<string, unknown>).guest).toBeNull();
     expect(msg.acctGuest).toBe(false);
@@ -826,7 +826,7 @@ describe('the guest flag', () => {
     // trusted to wall one either.
     await runner.inject(gqlStub({ currentUser: { currentUser: {
       id: 'u1', guest: 'false' } } }));
-    await runner.inject(buildAldiSessionScript('aldi'));
+    await runner.inject(buildInstacartSessionScript('aldi'));
     const msg = await runner.waitForMessage('ALDI_SESSION', 15_000) as Record<string, unknown>;
     expect((msg.acct as Record<string, unknown>).guest).toBeNull();
     expect(msg.loggedIn).toBe(true);

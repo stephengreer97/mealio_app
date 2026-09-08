@@ -29,9 +29,9 @@ import {
 } from '../../../src/lib/webview-scripts/instacart';
 import {
   INSTACART_RAIL,
-  buildAldiSessionScript,
-  buildAldiCartReadScript,
-} from '../../../src/lib/webview-scripts/aldi-network';
+  buildInstacartSessionScript,
+  buildInstacartCartReadScript,
+} from '../../../src/lib/webview-scripts/instacart-network';
 import { getNetworkRail } from '../../../src/lib/webview-scripts/network-rail';
 
 const TENANTS = Object.entries(INSTACART_TENANTS);
@@ -43,7 +43,7 @@ describe('the Instacart rail, across every registered tenant', () => {
 
   describe.each(TENANTS)('%s', (storeId, tenant) => {
     it('matches carts on ITS OWN slug, never ALDI’s', () => {
-      const script = buildAldiSessionScript(storeId);
+      const script = buildInstacartSessionScript(storeId);
       expect(script).toContain(`pickCartFor(list, '${tenant.slug}')`);
       if (storeId !== 'aldi') {
         // The exact regression: a Publix run hunting an ALDI cart among Publix
@@ -57,7 +57,7 @@ describe('the Instacart rail, across every registered tenant', () => {
       // non-ALDI banners filtered an account-level cart query by ALDI's slug,
       // matched nothing, and reported no rows -- a before-snapshot that was
       // permanently missing, on the path that feeds the add arithmetic.
-      const script = buildAldiCartReadScript({ storeId });
+      const script = buildInstacartCartReadScript({ storeId });
       expect(script).toContain(`'${tenant.slug}'`);
       if (storeId !== 'aldi') expect(script).not.toContain("pickCartFor(list, 'aldi')");
     });

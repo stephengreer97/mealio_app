@@ -100,7 +100,7 @@ function loginFlag(t: InstacartTenant): string {
 // matched its text against a signed-in / signed-out word list per tenant.
 //
 // Deleted 2026-09-04. The storefront's own GraphQL answers who is signed in and
-// which shop they are in, and the rail asks it (aldi-network.ts). Reading a
+// which shop they are in, and the rail asks it (instacart-network.ts). Reading a
 // menu was always a guess at a fact the API states.
 
 // cart as the judge of what landed. Nothing has called a worker since

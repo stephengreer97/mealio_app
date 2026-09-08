@@ -9,7 +9,7 @@
  * But a refusal only converts a silent wrong answer into a LOUD one, and loud
  * lands on the user. Stephen tapped the ALDI chip and got:
  *
- *   ERROR [Error: aldi-network: the Instacart rail was invoked with no store
+ *   ERROR [Error: instacart-network: the Instacart rail was invoked with no store
  *   id. ...]
  *   LOG   [Prewarm] probe aldi finishing: ERROR
  *

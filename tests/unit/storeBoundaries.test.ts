@@ -41,7 +41,7 @@ const STORE_FILES: Record<string, string[]> = {
   heb: ['heb.ts', 'heb-network-search.ts'],
   walmart: ['walmart.ts', 'walmart-network.ts'],
   albertsons: ['albertsons.ts', 'albertsons-network.ts'],
-  instacart: ['instacart.ts', 'aldi-network.ts'],
+  instacart: ['instacart.ts', 'instacart-network.ts'],
   wegmans: ['wegmans.ts', 'wegmans-network.ts'],
 };
 

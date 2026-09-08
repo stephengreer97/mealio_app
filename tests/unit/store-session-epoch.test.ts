@@ -13,7 +13,7 @@ import {
 } from '../../src/lib/store-session-epoch-storage';
 import { currentEpoch, epochKey } from '../../src/lib/store-session-epoch';
 import * as SecureStore from 'expo-secure-store';
-import { buildAldiSessionScript } from '../../src/lib/webview-scripts/aldi-network';
+import { buildInstacartSessionScript } from '../../src/lib/webview-scripts/instacart-network';
 
 jest.mock('expo-secure-store', () => {
   const mem: Record<string, string> = {};
@@ -91,11 +91,11 @@ describe('what the injected script actually carries', () => {
     // The point of the whole mechanism, asserted on the emitted script rather
     // than on the helper: the key the PAGE reads has to change.
     await loadEpoch();
-    const before = buildAldiSessionScript('aldi');
+    const before = buildInstacartSessionScript('aldi');
     expect(before).toContain("'__mealio_ic_shop_v1'");
 
     await bumpEpoch();
-    const after = buildAldiSessionScript('aldi');
+    const after = buildInstacartSessionScript('aldi');
     expect(after).toContain("'__mealio_ic_shop_v1_g1'");
     // And the old key is nowhere in it, or the page would still find the entry.
     expect(after).not.toContain("'__mealio_ic_shop_v1'");
@@ -104,10 +104,10 @@ describe('what the injected script actually carries', () => {
   it('stamps the zone and the ops cache too, not just the shop', async () => {
     await loadEpoch();
     await bumpEpoch();
-    const script = buildAldiSessionScript('aldi');
+    const script = buildInstacartSessionScript('aldi');
     expect(script).toContain('__mealio_ic_ops_v1_g1');
     // The zone cache is written by the search script, not the session one.
-    expect(buildAldiSessionScript('aldi')).not.toContain('__mealio_ic_ops_v1\'');
+    expect(buildInstacartSessionScript('aldi')).not.toContain('__mealio_ic_ops_v1\'');
   });
 });
 

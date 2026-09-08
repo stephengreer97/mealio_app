@@ -23,7 +23,7 @@ describe('the inventory covers what is actually committed', () => {
   it('registers every Instacart operation hash', () => {
     // The one that matters most: these are shared by ten banners, so an
     // unregistered rotation takes all ten out at once.
-    const committed = new Set(hashesIn('aldi-network.ts'));
+    const committed = new Set(hashesIn('instacart-network.ts'));
     const registered = new Set(
       DRIFT_INVENTORY
         .filter((e) => e.probe.kind === 'persisted_query')
@@ -34,12 +34,12 @@ describe('the inventory covers what is actually committed', () => {
   });
 
   it('finds a real number of hashes, so a broken scan cannot pass everything', () => {
-    expect(hashesIn('aldi-network.ts').length).toBeGreaterThanOrEqual(5);
+    expect(hashesIn('instacart-network.ts').length).toBeGreaterThanOrEqual(5);
   });
 
   it('would catch a hash added without registering it', () => {
     // Proves the check above is load-bearing rather than vacuously true.
-    const committed = new Set([...hashesIn('aldi-network.ts'), 'f'.repeat(64)]);
+    const committed = new Set([...hashesIn('instacart-network.ts'), 'f'.repeat(64)]);
     const registered = new Set(
       DRIFT_INVENTORY
         .filter((e) => e.probe.kind === 'persisted_query')

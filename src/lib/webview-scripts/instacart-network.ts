@@ -52,7 +52,7 @@ const ZONE_CACHE_KEY = '__mealio_ic_zone_v1';
  * first launch after an install, before anything has been harvested; the cache
  * and the harvest are what keep it working after Instacart's next deploy.
  */
-export const ALDI_SEED_OPS: Record<string, string> = {
+export const INSTACART_SEED_OPS: Record<string, string> = {
   // No arguments at all, and it returns the cart id -- session probe and cart
   // identity in one call. MEASURED 176ms.
   ActiveCarts: '839c3658a57f86c543ba367a16d0eaa648f167a1eaf20f6d80aa14165f1ee10d',
@@ -120,7 +120,7 @@ function tenant(storeId: string): InstacartTenant {
   const t = INSTACART_TENANTS[storeId];
   if (!t) {
     throw new Error(
-      `aldi-network: no Instacart tenant for store id ${JSON.stringify(storeId)}. ` +
+      `instacart-network: no Instacart tenant for store id ${JSON.stringify(storeId)}. ` +
         `Known: ${Object.keys(INSTACART_TENANTS).join(', ')}. ` +
         'This means the store id was lost on the way in, not that the store is new.',
     );
@@ -408,8 +408,8 @@ function pickCartFor(list, slug) {
 `;
 
 /** The session probe: who is signed in, and which cart is theirs. */
-export function buildAldiSessionScript(storeId = 'aldi'): string {
-  const seed = JSON.stringify(ALDI_SEED_OPS);
+export function buildInstacartSessionScript(storeId = 'aldi'): string {
+  const seed = JSON.stringify(INSTACART_SEED_OPS);
   return `(async function () {
 ${icPrelude()}
   var post = function (o) { o.type = 'ALDI_SESSION'; IC.post(o); };
@@ -700,7 +700,7 @@ ${icPrelude()}
  * than hard-code a number nobody can explain, it is READ BACK OUT of the search
  * results -- the ids carry it, so the search itself tells us what to ask with.
  */
-export function buildAldiNetworkSearchBatchScript(
+export function buildInstacartSearchBatchScript(
   terms: string[],
   opts: { shopId?: string | null; requestMs?: number } = {},
 ): string | null {
@@ -713,7 +713,7 @@ export function buildAldiNetworkSearchBatchScript(
   // the user cannot buy from, which is the over-add rule wearing a different
   // hat: every candidate would be a product that is not there.
   if (!opts.shopId) return null;
-  const seed = JSON.stringify(ALDI_SEED_OPS);
+  const seed = JSON.stringify(INSTACART_SEED_OPS);
   return `(async function () {
 ${icPrelude()}
   var TERMS = ${JSON.stringify(terms)};
@@ -831,11 +831,11 @@ ${icPrelude()}
  * the lines. A rail store must never load a page to learn what is in its own
  * cart.
  */
-export function buildAldiCartReadScript(
+export function buildInstacartCartReadScript(
   opts: { shopId?: string | null; storeId?: string } = {},
 ): string {
   const storeId = opts.storeId ?? 'aldi';
-  const seed = JSON.stringify(ALDI_SEED_OPS);
+  const seed = JSON.stringify(INSTACART_SEED_OPS);
   return `(async function () {
 ${icPrelude()}
   var SHOP = ${JSON.stringify(opts.shopId ?? null)};
@@ -947,7 +947,7 @@ export interface AldiAddItem {
  * not already hold -- and cannot corrupt a cart in the case it is unsure about.
  * `absoluteQty: true` lifts the restriction once the answer is known.
  */
-export function buildAldiNetworkAddBatchScript(
+export function buildInstacartAddBatchScript(
   items: AldiAddItem[],
   opts: {
     shopId?: string | null;
@@ -961,7 +961,7 @@ export function buildAldiNetworkAddBatchScript(
 ): string | null {
   const writable = items.filter((i) => !!i.productId);
   if (!writable.length) return null;
-  const seed = JSON.stringify(ALDI_SEED_OPS);
+  const seed = JSON.stringify(INSTACART_SEED_OPS);
   return `(async function () {
 ${icPrelude()}
   var ITEMS = ${JSON.stringify(writable)};
@@ -1137,7 +1137,7 @@ ${icPrelude()}
 function railTenantId(storeId: string | null | undefined): string {
   if (!storeId) {
     throw new Error(
-      'aldi-network: the Instacart rail was invoked with no store id. The rail is ' +
+      'instacart-network: the Instacart rail was invoked with no store id. The rail is ' +
         'multi-tenant and its cart query is account-level, so without the id it ' +
         'cannot tell which banner it is running for.',
     );
@@ -1146,6 +1146,14 @@ function railTenantId(storeId: string | null | undefined): string {
 }
 
 export const INSTACART_RAIL: NetworkRail = {
+  // THE WIRE NAME STAYS 'ALDI_SESSION' (MEAL-20).
+  //
+  // Everything else in this file was renamed off ALDI when it became the
+  // Instacart platform adapter. This one is not a name, it is a VALUE: the
+  // injected script posts it, the sheet dispatches on it, and since MEAL-219 it
+  // is written into telemetry as the `rail` column on every row. Renaming it
+  // would split that column's history at the rename for no gain a reader can
+  // see -- the same argument that kept `add_click` after the clicking stopped.
   sessionMessageType: 'ALDI_SESSION',
   // robots.txt cannot answer this one. The ops live in the storefront bundle.
   sessionNeedsStorefront: true,
@@ -1154,15 +1162,15 @@ export const INSTACART_RAIL: NetworkRail = {
   // the probe matched carts against ALDI's slug. `?? 'aldi'` stood here and did
   // not prevent that, it PRODUCED it, so tenant() now refuses an id it does not
   // know instead of guessing ALDI.
-  sessionScript: (storeId) => buildAldiSessionScript(railTenantId(storeId)),
+  sessionScript: (storeId) => buildInstacartSessionScript(railTenantId(storeId)),
   searchBatch: (terms, sess) =>
-    buildAldiNetworkSearchBatchScript(terms, {
+    buildInstacartSearchBatchScript(terms, {
       shopId: sess.storeId,
       requestMs: INSTACART_RAIL.budgets.searchRequestMs,
     }),
-  cartRead: (storeId) => buildAldiCartReadScript({ storeId: railTenantId(storeId) }),
+  cartRead: (storeId) => buildInstacartCartReadScript({ storeId: railTenantId(storeId) }),
   addBatch: (items, opts) =>
-    buildAldiNetworkAddBatchScript(
+    buildInstacartAddBatchScript(
       items.map((i) => ({ idx: i.idx, productId: i.productId, quantity: i.quantity, name: i.name })),
       {
         knownLines: opts?.knownLines ?? null,

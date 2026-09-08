@@ -71,7 +71,7 @@ const INSTACART_OPS: Array<[string, string]> = [
 export const DRIFT_INVENTORY: DriftEntry[] = [
   ...INSTACART_OPS.map(([operationName, sha256]): DriftEntry => ({
     rail: 'instacart',
-    source: 'src/lib/webview-scripts/aldi-network.ts (ALDI_SEED_OPS)',
+    source: 'src/lib/webview-scripts/instacart-network.ts (INSTACART_SEED_OPS)',
     what: `persisted query ${operationName}`,
     breaks: 10,
     probe: { kind: 'persisted_query', origin: IC, operationName, sha256 },

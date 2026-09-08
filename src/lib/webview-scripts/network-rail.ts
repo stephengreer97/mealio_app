@@ -12,7 +12,7 @@
 import { WALMART_RAIL } from './walmart-network';
 import { HEB_RAIL } from './heb-network-search';
 import { ALBERTSONS_RAIL } from './albertsons-network';
-import { INSTACART_RAIL } from './aldi-network';
+import { INSTACART_RAIL } from './instacart-network';
 import { WEGMANS_RAIL } from './wegmans-network';
 import { ALBERTSONS_FAMILY_IDS } from './albertsons';
 import { isInstacartStore, INSTACART_TENANTS } from './instacart';
