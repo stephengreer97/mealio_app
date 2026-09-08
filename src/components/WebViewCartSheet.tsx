@@ -3340,10 +3340,40 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     // run never attempted, so it re-reads regardless of the automated gate — but
     // still not without a baseline, since a diff needs something to diff against.
     const manualNeedsReread = manualUsedRef.current && cartCountBeforeRef.current != null;
-    if (!manualNeedsReread && !shouldProbeAfterRun({
-      addsAttempted: addsAttemptedRef.current,
-      hasBaseline: cartCountBeforeRef.current != null,
-    })) return;
+    const hasBaseline = cartCountBeforeRef.current != null;
+    const addsAttempted = addsAttemptedRef.current;
+    if (!manualNeedsReread && !shouldProbeAfterRun({ addsAttempted, hasBaseline })) {
+      // MEAL-11: SAY WHY, rather than returning into silence.
+      //
+      // This was a bare `return`. A run with no before-snapshot skipped the
+      // after-probe entirely -- the whole cart check offline -- and recorded
+      // nothing to say it had. That is the ticket's actual thesis: the gap is
+      // not that reconciliation is skipped, which is correct (a diff needs
+      // something to diff against), it is that the skip was invisible, so
+      // nobody could tell a run that reconciled cleanly from a run that never
+      // tried.
+      //
+      // MEAL-152 made it more frequent on purpose: a cart page that cannot
+      // prove it is the cart now reports `count: null` rather than a confident
+      // 0, which is right, and every one of those runs lost reconciliation.
+      //
+      // Recorded as `skipped` rather than a failure. Nothing went wrong -- the
+      // engine declined to guess -- and calling it an error would put a correct
+      // refusal on the failure bars. The REASON separates the two causes,
+      // because they have different fixes: no_baseline is MEAL-47's before-probe
+      // retry, and no_adds is a run that legitimately added nothing.
+      tel().record('reconcile', 'skipped', {
+        phase: 'cart_read',
+        detail: {
+          reason: !hasBaseline ? 'no_baseline' : 'no_adds',
+          addsAttempted,
+          hasBaseline,
+          manualUsed: manualUsedRef.current,
+          store: lockedStoreIdRef.current ?? null,
+        },
+      });
+      return;
+    }
     triggerCartProbe('after');
   }, [step, totalAdded, lockedStoreId, triggerCartProbe]);
 
