@@ -891,7 +891,15 @@ ${albPrelude()}
     if (!usedKey || !j) { post({ ok: false, why: 'cart_unreadable' }); return; }
 
     var cart = ((j.carts || [])[0] || j) || {};
-    var list = cart.cartItemsList || cart.cartItems || j.cartItems || [];
+    // A missing list is not an empty list. Falling back to [] here would call an
+    // unreadable cart empty and report success on it.
+    var list = cart.cartItemsList || cart.cartItems || j.cartItems || null;
+    if (!list) {
+      post({ ok: false, why: 'cart_shape_unknown',
+             topKeys: Object.keys(j || {}).slice(0, 24),
+             cartKeys: Object.keys(cart).slice(0, 24) });
+      return;
+    }
     if (!list.length) { post({ ok: true, cleared: 0, why: 'already_empty' }); return; }
 
     // The DELETE takes the ADD's body shape. Anything else is one of the 400s
@@ -913,8 +921,13 @@ ${albPrelude()}
     // THE CART DECIDES. The response carries the whole cart, so what is left is
     // READ rather than assumed -- the same rule the undo follows.
     var after = await res.json();
-    var left = (((after.carts || [])[0] || {}).cartItemsList || []).length;
-    post({ ok: left === 0, cleared: lines.length, left: left });
+    // FAIL CLOSED. Reaching for .length through a chain of || {} and || [] gives
+    // 0 for a response that could not be read at all, and 0 here means "cleared"
+    // -- so an unreadable answer would report total success.
+    var afterList = (((after || {}).carts || [])[0] || {}).cartItemsList || null;
+    var left = afterList ? afterList.length : null;
+    post({ ok: left === 0, cleared: lines.length, left: left,
+           why: left == null ? 'after_unreadable' : null });
   } catch (e) {
     post({ ok: false, why: 'threw', detail: String(e).slice(0, 160) });
   }

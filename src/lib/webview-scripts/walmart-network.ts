@@ -527,7 +527,7 @@ ${wmPrelude()}
       }
     }
     post({
-      ok: stillThere === 0, wrote: w && w.ok ? true : false,
+      ok: stillThere === 0 && !!after, wrote: w && w.ok ? true : false,
       why: w && w.ok ? null : (w && w.why) || 'write_failed',
       asked: targets.length, stillThere: stillThere,
       before: before.length, after: after ? after.length : null,

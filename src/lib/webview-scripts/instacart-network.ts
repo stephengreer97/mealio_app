@@ -1181,8 +1181,16 @@ ${icPrelude()}
     var items = await IC.gql('CartItems',
       { id: String(mine.id), shopId: shopId, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000, 'cart_read');
     if (!items.ok) { post({ ok: false, why: items.why || 'cart_unreadable' }); return; }
-    var lines = [];
-    try { lines = items.data.userCart.cartItemCollection.cartItems || []; } catch (e) { lines = []; }
+    // null, NOT []. A catch that lands on an empty array turns "I could not
+    // read the shape" into "the cart is empty" and then into ok:true -- which
+    // is exactly how a 60-item Wegmans cart got reported as already clear.
+    var lines = null;
+    try { lines = items.data.userCart.cartItemCollection.cartItems || []; } catch (e) { lines = null; }
+    if (!lines) {
+      post({ ok: false, why: 'cart_shape_unknown',
+             dataKeys: Object.keys((items.data || {})).slice(0, 24) });
+      return;
+    }
     if (!lines.length) { post({ ok: true, cleared: 0, why: 'already_empty' }); return; }
 
     // The ITEM id, not the line id. They are different id spaces and the

@@ -982,11 +982,41 @@ ${wegPrelude()}
  * re-read afterwards, and the result reports whether the line actually went --
  * because a store that ignores the write answers 200 either way.
  */
-export function buildWegmansClearCartScript(opts: { limit?: number } = {}): string {
+// MEASURED 2026-09-08, and the answer is that this does not work yet.
+//
+//   POST /lineitems, full line object, quantity 1  ->  200, line 4 -> 1
+//   POST /lineitems, full line object, quantity 4  ->  200, line 1 -> 4
+//   POST /lineitems, full line object, quantity 0  ->  500 Internal Error
+//   DELETE /lineitems, same body                   ->  no response at all
+//
+// The two writes that are not zero are the CONTROL, and they are why the 500 is
+// a finding rather than a broken script: the body is right, the line id is
+// right, the envelope is right, and the store still refuses a zero. DELETE gets
+// a bare "Failed to fetch", which on this gateway means the route does not
+// exist -- it rejects unknown routes before it adds CORS headers, which is the
+// same wall every guessed route hit when the ADD was being found.
+//
+// So Wegmans is Albertsons-shaped: a zero is not a removal here, and the real
+// removal is a different call. Finding it needs the site WATCHED removing an
+// item, the way the add route was found; the cached bundle carries no literal
+// for it. Until then the rail deliberately does NOT expose clearCart, because a
+// cleanup that cannot clean is worse than one that says it cannot.
+//
+// The knobs below are what measured this. Point the dev probe back at this
+// builder and they will measure the next hypothesis too.
+export function buildWegmansClearCartScript(
+  opts: { limit?: number; setTo?: number; method?: 'POST' | 'DELETE' } = {},
+): string {
   const limit = typeof opts.limit === 'number' && opts.limit > 0 ? Math.trunc(opts.limit) : 0;
+  // MEASUREMENT KNOBS, not production settings. The removal call here is not
+  // known yet, and the only way to tell "my body is wrong" from "a zero is
+  // refused" is to send the same body with a quantity that is not zero.
+  const setTo = typeof opts.setTo === 'number' ? Math.trunc(opts.setTo) : 0;
+  const method = opts.method === 'DELETE' ? 'DELETE' : 'POST';
   return `(async function () {
 ${wegPrelude()}
   var LIMIT = ${JSON.stringify(limit)};
+  var SET_TO = ${JSON.stringify(setTo)};
   var post = function (o) { o.type = 'CART_CLEARED'; WG.post(o); };
   try {
     var tok = await WG.token();
@@ -994,47 +1024,108 @@ ${wegPrelude()}
 
     var r = await WG.commerce('${CART_PATH}', tok, { method: 'GET' }, 15000);
     if (!r.ok) { post({ ok: false, why: r.why || 'cart_unreadable', status: r.status || null }); return; }
-    var cart = (r.data && (r.data.carts ? r.data.carts[0] : r.data)) || {};
-    var lines = cart.lineItems || cart.items || [];
+    // WG.groceryCart, NOT a hand-rolled unwrap. The lines live at
+    // data.grocery.lineItems; an earlier version of this script reached for a
+    // 'carts' array that does not exist, fell through to the raw envelope,
+    // found no lineItems on it and called a 60-item cart empty -- reporting
+    // that as ok:true. Every other reader in this file uses this helper, and a
+    // second reading of the same response is how the two disagree.
+    var cart = WG.groceryCart(r.data) || {};
+    var lines = cart.lineItems || cart.items || null;
+    if (!lines) {
+      // NOT 'already_empty'. Not finding the lines and there being no lines are
+      // different answers, and only one of them is success. Name the keys so
+      // the next shape change is read rather than guessed at.
+      post({ ok: false, why: 'cart_shape_unknown',
+             dataKeys: Object.keys(r.data || {}).slice(0, 24),
+             cartKeys: Object.keys(cart).slice(0, 24) });
+      return;
+    }
     if (!lines.length) { post({ ok: true, cleared: 0, why: 'already_empty' }); return; }
-    if (cart.id == null || cart.version == null) { post({ ok: false, why: 'no_cart_version' }); return; }
+    if (cart.id == null || cart.version == null) {
+      post({ ok: false, why: 'no_cart_version', cartKeys: Object.keys(cart).slice(0, 24) });
+      return;
+    }
+
+    // THE WRITE DOES NOT TAKE A CART LINE BACK. Measured 2026-09-08: sending
+    // {id, quantity: 0} answers 400 "The resource request is malformed".
+    //
+    // A cart line here is a commercetools line -- id, productId, variant,
+    // taxedPricePortions, lineItemMode -- and the lineitems endpoint wants the
+    // shape WG.lineItemFor builds out of a CATALOGUE row: sku, standalonePrice,
+    // distributionChannelKey, and the custom[] block. They are different shapes,
+    // so a removal cannot be assembled from the cart alone; it is built exactly
+    // the way the add builds it, with the quantity set to 0 and the line's own
+    // id attached. That id is what makes the write an update instead of an
+    // insert, and it is the only reason a zero can mean anything here.
+    var storeNo = null;
+    try { storeNo = WG.customField(cart, 'storeNumber'); } catch (e) {}
+    if (!storeNo) storeNo = WG.cachedStore();
 
     var targets = [];
     for (var i = 0; i < lines.length; i++) {
       var li = lines[i] || {};
-      if (li.id == null) continue;
-      targets.push({ id: String(li.id), name: WG.lineName(li, WG.lineSku(li)),
+      var sku = WG.lineSku(li);
+      if (li.id == null || !sku) continue;
+      targets.push({ id: String(li.id), sku: String(sku), name: WG.lineName(li, sku),
                      was: Number(li.quantity != null ? li.quantity : 1) });
       if (LIMIT && targets.length >= LIMIT) break;
     }
-    if (!targets.length) { post({ ok: false, why: 'no_line_ids' }); return; }
+    if (!targets.length) { post({ ok: false, why: 'no_line_ids', before: lines.length }); return; }
 
-    // THE LINE ID IS THE WHOLE POINT. Without it this endpoint inserts; with it
-    // it updates the line, which is the only shape under which a zero could
-    // ever remove anything here.
+    // The catalogue rows the line objects are built from -- one request for the
+    // batch, the same call the add makes.
+    var skus = [];
+    for (var s1 = 0; s1 < targets.length; s1++) skus.push(targets[s1].sku);
+    var catRows = await WG.hitsBySku(skus, storeNo);
+
     var payload = [];
-    for (var t = 0; t < targets.length; t++) payload.push({ id: targets[t].id, quantity: 0 });
+    var missing = [];
+    for (var t = 0; t < targets.length; t++) {
+      var hit = catRows[targets[t].sku];
+      if (!hit) { missing.push(targets[t].sku); continue; }
+      var li2 = WG.lineItemFor(hit, SET_TO);
+      li2.id = targets[t].id;
+      payload.push(li2);
+    }
+    if (!payload.length) {
+      post({ ok: false, why: 'no_catalogue_rows', missing: missing, before: lines.length });
+      return;
+    }
 
+    var storeKey = await WG.storeKey(storeNo);
     var who = await WG.customerRef(tok);
+    if (!storeKey || !who) {
+      post({ ok: false, why: 'write_prereq', missingPart: !storeKey ? 'store key' : 'customer ref' });
+      return;
+    }
+
+    // THE ADD's ENVELOPE, field for field. The earlier version of this dropped
+    // storeNumber and fulfillmentType and passed a null store key, which is a
+    // second way to earn the same 400.
     var body = {
-      StoreKey: await WG.storeKey(null),
+      StoreKey: storeKey,
       cartData: [{
         cartID: cart.id,
         cartVersion: cart.version,
-        custom: [{ name: 'orderLevelAdjustments', value: '[]' }],
+        custom: [
+          { name: 'orderLevelAdjustments', value: '[]' },
+          { name: 'storeNumber', value: String(storeNo) },
+          { name: 'fulfillmentType', value: 'pickup' },
+        ],
         isAlcoholic: false,
         lineItems: payload,
       }],
-      customerEmail: who && who.email,
-      customerID: who && who.id,
+      customerEmail: who.email,
+      customerID: who.id,
     };
-    var w = await WG.commerce('${CART_WRITE_PATH}', tok, { method: 'POST', body: JSON.stringify(body) }, 25000);
+    var w = await WG.commerce('${CART_WRITE_PATH}', tok, { method: '${method}', body: JSON.stringify(body) }, 25000);
 
     // THE CART DECIDES. A store that ignores the write answers 200 either way.
     var after = await WG.commerce('${CART_PATH}', tok, { method: 'GET' }, 15000);
     var left = null, stillThere = 0;
     if (after.ok) {
-      var c2 = (after.data && (after.data.carts ? after.data.carts[0] : after.data)) || {};
+      var c2 = WG.groceryCart(after.data) || {};
       var l2 = c2.lineItems || c2.items || [];
       left = l2.length;
       for (var a = 0; a < l2.length; a++) {
@@ -1046,7 +1137,11 @@ ${wegPrelude()}
     post({
       ok: stillThere === 0 && left != null, wrote: !!w.ok,
       why: w.ok ? null : (w.why || 'write_refused'), status: w.status || null,
-      asked: targets.length, stillThere: stillThere,
+      // The store's own words. A bare 400 is not a finding -- on Albertsons the
+      // same shape of refusal named one wrong parameter, and reading it was the
+      // difference between a fix and a guess.
+      detail: w.ok ? null : (w.detail || null),
+      asked: targets.length, stillThere: stillThere, setTo: SET_TO, method: '${method}',
       before: lines.length, after: left, targets: targets,
     });
   } catch (e) {
@@ -1397,7 +1492,10 @@ export const WEGMANS_RAIL: NetworkRail = {
       requestMs: WEGMANS_RAIL.budgets.searchRequestMs,
     }),
   cartRead: () => buildWegmansCartReadScript(),
-  clearCart: (_storeId, opts) => buildWegmansClearCartScript({ limit: opts?.limit }),
+  // NO clearCart. Not "not measured yet" -- measured, and refused: a quantity of
+  // 0 answers 500 where the identical body with a 1 succeeds. See the note on
+  // buildWegmansClearCartScript. The canary must not be handed a cleanup that
+  // reports failure on every run.
   addBatch: (items, opts) =>
     buildWegmansNetworkAddBatchScript(
       items.map((i) => ({

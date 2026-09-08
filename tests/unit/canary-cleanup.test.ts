@@ -9,6 +9,7 @@
  */
 import { getNetworkRail } from '../../src/lib/webview-scripts/network-rail';
 import { INSTACART_TENANTS } from '../../src/lib/webview-scripts/instacart';
+import { buildWegmansClearCartScript } from '../../src/lib/webview-scripts/wegmans-network';
 
 describe('which rails can empty a cart', () => {
   it('every Instacart tenant can, because the write SETS the line', () => {
@@ -46,28 +47,19 @@ describe('which rails can empty a cart', () => {
     expect(typeof getNetworkRail('walmart')?.clearCart).toBe('function');
   });
 
-  it('Wegmans defines one, and it is NOT yet verified', () => {
-    // Written and wired, but never run against a non-empty cart: the Wegmans
-    // cart was empty every time it was probed, and getting one item into it
-    // kept failing on the chooser rather than on anything real.
+  it('Wegmans does NOT, because a zero is REFUSED there', () => {
+    // Measured on the real cart 2026-09-08, with a control:
     //
-    // It is defined rather than withheld because the ONLY way to measure a
-    // removal is to attempt one, and `limit` makes attempting it safe. What it
-    // must not do is get treated as proven: the earlier note that this endpoint
-    // "adds a line and does nothing to one that already exists" is a
-    // measurement of the ADD, and the removal hypothesis differs from it in one
-    // field -- the line id, which turns an insert into an update.
+    //   quantity 1 -> 200, the line went 4 to 1     (the body is correct)
+    //   quantity 4 -> 200, the line went 1 back to 4 (and correct again)
+    //   quantity 0 -> 500 Internal Error
+    //   DELETE     -> no response; the route does not exist
     //
-    // Walmart's hypothesis, in the same shape, turned out to be right. That is
-    // a reason to test this one, not to assume it.
-    const rail = getNetworkRail('wegmans');
-    expect(typeof rail?.clearCart).toBe('function');
-    const script = rail!.clearCart!('wegmans', { limit: 1 })!;
-    // The line id is the whole hypothesis, so it has to be in the payload.
-    expect(script).toContain('id: targets[t].id');
-    expect(script).toContain('quantity: 0');
-    // And it must re-read, because a store that ignores the write answers 200.
-    expect(script).toContain('stillThere');
+    // So this is not "unmeasured" and not "the script is wrong". The write
+    // works; the store will not accept a zero, exactly as Albertsons does not.
+    // Wegmans' real removal is some other call, and until it is watched rather
+    // than guessed the rail must not claim a cleanup it cannot perform.
+    expect(getNetworkRail('wegmans')?.clearCart).toBeUndefined();
   });
 });
 
@@ -145,5 +137,56 @@ describe('each rail clears the way ITS store actually removes things', () => {
     const s = getNetworkRail('aldi')!.clearCart!('aldi')!;
     expect(s).toContain('quantity: 0');
     expect(s).not.toContain("method: 'DELETE'");
+  });
+});
+
+describe('an unreadable cart is never reported as a cleared one', () => {
+  // Stephen: "wegmans cart is not empty. There is something wrong with the
+  // wegmans clear cart cart read. There are over 60 items in the cart".
+  //
+  // The clear read the response with a hand-rolled unwrap that reached for a
+  // `carts` array Wegmans does not send, fell through to the raw envelope,
+  // found no lineItems on it, and posted {ok: true, why: 'already_empty'} over
+  // a cart holding sixty-odd lines. Every other reader in that file goes
+  // through WG.groceryCart, which knows the lines live under `grocery`.
+  //
+  // The unwrap was one store's bug. The SHAPE of it was not: three of the five
+  // clears turned "I could not read this" into an empty array, and an empty
+  // array into success. Two of them also computed `left` by reaching through
+  // `|| {}` and `|| []` to a `.length`, which yields 0 -- and 0 means cleared --
+  // for a response that could not be parsed at all. That is a rail reporting a
+  // full cart as emptied, which is the one answer a cleanup must never give.
+  //
+  // So the invariant is per rail, not per store: unreadable and empty are
+  // different answers, and only one of them is ok.
+  // Wegmans is absent on purpose: it has no clearCart, because a zero is
+  // refused there. See the test above.
+  const RAILS = ['heb', 'walmart', 'albertsons', 'aldi'];
+
+  it.each(RAILS)('%s names an unreadable cart separately from an empty one', (id) => {
+    const script = getNetworkRail(id)!.clearCart!(id, { limit: 1 })!;
+    expect(`${id}: ${script.includes('already_empty')}`).toBe(`${id}: true`);
+    const namesUnreadable =
+      script.includes('cart_unreadable') || script.includes('cart_shape_unknown');
+    expect(`${id}: ${namesUnreadable}`).toBe(`${id}: true`);
+  });
+
+  it.each(RAILS)('%s does not let a caught read collapse into an empty cart', (id) => {
+    const script = getNetworkRail(id)!.clearCart!(id, { limit: 1 })!;
+    // The specific line that caused this: a catch whose handler assigns [].
+    expect(`${id}: ${/catch\s*\([^)]*\)\s*\{\s*\w+\s*=\s*\[\]/.test(script)}`).toBe(`${id}: false`);
+  });
+
+  it('the Wegmans builder still unwraps the cart the way every other reader does', () => {
+    // The builder outlives its removal from the rail: it is what will measure
+    // the next hypothesis. The unwrap bug it carried is what made a cart of 18
+    // lines report as empty, so it stays covered.
+    const script = buildWegmansClearCartScript({ limit: 1 });
+    expect(script).toContain('WG.groceryCart');
+    expect(script).not.toContain('.carts ?');
+    expect(script).toContain('cart_shape_unknown');
+    // Built from the CATALOGUE row, not from the cart line: the two are
+    // different shapes, and sending the cart's own line back is the 400.
+    expect(script).toContain('WG.lineItemFor');
   });
 });
