@@ -1659,7 +1659,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         path,
         workerId,
       };
-      if (count > 0) tel().record('candidates', 'ok', { detail });
+      if (count > 0) tel().record('candidates', 'ok', { phase: 'search', detail });
       else tel().record('candidates', 'empty', { detail, code: 'no_candidates' });
     },
     [tel, takeExtractWhy],
@@ -5304,7 +5304,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
               weightRowUnverified: routing.unverified.length,
             };
             if (retryItems.length === 0 && reviewFailures.length === 0 && routing.unverified.length === 0) {
-              tel().record('reconcile', 'ok', { detail: reconcileDetail });
+              tel().record('reconcile', 'ok', { phase: 'cart_read', detail: reconcileDetail });
             } else {
               // A top-up means the cart is short of what the workers claimed —
               // that's the confirmation rail being wrong, and it outranks the
@@ -5314,7 +5314,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
               // however it is routed. With neither, the row reflects the review
               // failures, which reconcile only ever routes here for out_of_stock /
               // no_results.
-              tel().record('reconcile', 'error', {
+              tel().record('reconcile', 'error', { phase: 'cart_read',
                 detail: reconcileDetail,
                 code: retryItems.length > 0 || routing.unverified.length > 0
                   ? 'confirm_failed'
@@ -6244,7 +6244,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                 },
               );
             }
-            tel().record('confirm', 'ok', { detail: { via: 'network', name: msg.name } });
+            tel().record('confirm', 'ok', { phase: 'add', detail: { via: 'network', name: msg.name } });
           } else {
             tel().record('confirm', 'error', {
               detail: { via: 'network', name: msg.name, reason: msg.reason, note: msg.detail },
@@ -6441,12 +6441,12 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
           // 'error' with its reason — that's the row the dashboard divides by.
           const addCartDetail = confirmDetail(msg.confirm);
           if (msg.success) {
-            tel().record('confirm', 'ok', {
+            tel().record('confirm', 'ok', { phase: 'add',
               itemIndex: addingIdxRef.current, detail: { attempt: 1, path: 'sequential', ...addCartDetail },
             });
           } else {
             const failReason = String(msg.reason ?? 'unknown');
-            tel().record('confirm', 'error', {
+            tel().record('confirm', 'error', { phase: 'add',
               itemIndex: addingIdxRef.current,
               detail: { attempt: 1, reason: failReason, path: 'sequential', ...addCartDetail },
               code: addFailureCode(failReason),
