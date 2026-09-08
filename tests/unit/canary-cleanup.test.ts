@@ -21,24 +21,34 @@ describe('which rails can empty a cart', () => {
     }
   });
 
-  it('Wegmans does NOT, and that is the point', () => {
-    // Its endpoint adds a line and does nothing to one that already exists
-    // (measured, recorded in the automation config). Writing quantity 0 there
-    // would return 200, change nothing, and report success -- which is worse
-    // than not offering the operation.
-    expect(getNetworkRail('wegmans')?.clearCart).toBeUndefined();
+  it('H-E-B can, by setting a line to zero', () => {
+    // Its quantity is CART-ABSOLUTE: the mutation SETS a line rather than
+    // incrementing it, so zero removes it. Not an assumption carried over from
+    // another rail -- on Albertsons the same call answers 400 and keeps the line.
+    expect(typeof getNetworkRail('heb')?.clearCart).toBe('function');
   });
 
-  it('no rail with unmeasured removal semantics defines it', () => {
-    for (const id of ['heb', 'walmart', 'albertsons', 'safeway', 'tom_thumb']) {
-      const rail = getNetworkRail(id);
-      if (!rail) continue;
-      expect(`${id}: ${rail.clearCart === undefined}`).toBe(`${id}: true`);
+  it('the Albertsons family can, by DELETE with an add-shaped body', () => {
+    // Measured 2026-09-04 in the undo path, which tried five shapes:
+    //   qty 0 -> 400 (line stays), DELETE /items/{id} -> 404,
+    //   POST /items/delete -> 404, DELETE + {itemIds} -> 400,
+    //   DELETE + ADD-SHAPED body -> 200, line gone.
+    for (const id of ['albertsons', 'safeway', 'tom_thumb']) {
+      expect(`${id}: ${typeof getNetworkRail(id)?.clearCart}`).toBe(`${id}: function`);
     }
+  });
+
+  it('Wegmans and Walmart do NOT, because nobody has measured their removal', () => {
+    // Wegmans' ADD endpoint adds a line and does nothing to one that exists, so
+    // a zero there would return 200, change nothing, and report success.
+    // Walmart's absoluteQty was never recorded at all. Both are gaps to close by
+    // MEASURING, exactly as the other three were -- not by guessing.
+    expect(getNetworkRail('wegmans')?.clearCart).toBeUndefined();
+    expect(getNetworkRail('walmart')?.clearCart).toBeUndefined();
   });
 });
 
-describe('the clear script itself', () => {
+describe('the clear script itself (Instacart)', () => {
   const script = getNetworkRail('aldi')!.clearCart!('aldi')!;
 
   it('writes quantity 0 rather than deleting by line id', () => {
@@ -70,5 +80,34 @@ describe('the clear script itself', () => {
     const publix = getNetworkRail('publix')!.clearCart!('publix')!;
     expect(publix).toContain("'publix'");
     expect(publix).not.toContain("pickCartFor(list, 'aldi')");
+  });
+});
+
+
+describe('each rail clears the way ITS store actually removes things', () => {
+  // The point of these three: the correct call is different everywhere, and
+  // using one store's method on another is how you get a 200 that changed
+  // nothing, or a 400 that leaves the line sitting there.
+  it('H-E-B writes quantity 0 and declines weight lines', () => {
+    const s = getNetworkRail('heb')!.clearCart!()!;
+    expect(s).toContain('quantity: 0');
+    // A count line can be set back to zero; a weight line cannot be undone at
+    // all (MEAL-200), so they are reported rather than silently left behind.
+    expect(s).toContain('declined');
+    expect(s).toContain('estimatedWeight');
+  });
+
+  it('Albertsons DELETEs with the add-shaped body, never a zero', () => {
+    const s = getNetworkRail('albertsons')!.clearCart!()!;
+    expect(s).toContain("method: 'DELETE'");
+    expect(s).toContain('cartItemsList');
+    // A quantity of zero is the shape that answered 400 and kept the line.
+    expect(s).not.toContain('qty: 0');
+  });
+
+  it('Instacart writes quantity 0 and does NOT delete', () => {
+    const s = getNetworkRail('aldi')!.clearCart!('aldi')!;
+    expect(s).toContain('quantity: 0');
+    expect(s).not.toContain("method: 'DELETE'");
   });
 });

@@ -848,6 +848,79 @@ function albSearchUrlExpr(pageSize: number, storeId: number): string {
  * doing something else. Offering it alone is what lets the sheet stop navigating
  * to the cart URL for its snapshots.
  */
+/**
+ * MEAL-7. Empty the cart, for the canary's cleanup step.
+ *
+ * REUSES THE REMOVAL THIS RAIL ALREADY PROVED. The undo path measured every
+ * shape against the live store on 2026-09-04 and only one of them worked:
+ *
+ *   POST   cartItemsList [{itemId, qty: 0}]   -> 400, line still there
+ *   DELETE /cart/items/{id}                   -> 404
+ *   POST   /cart/items/delete                 -> 404
+ *   DELETE /cart/items, body {itemIds:[id]}   -> 400 OSMS-CART-0009
+ *   DELETE /cart/items, ADD-SHAPED body       -> 200, LINE GONE
+ *
+ * So a quantity of zero is NOT how this store removes anything -- it answers 400
+ * and keeps the line -- and the DELETE takes the same body the add takes. That
+ * measurement is why this rail can offer cleanup at all, and why the two rails
+ * whose removal has never been measured do not.
+ *
+ * Reads the cart first: the canary clears whatever is there, including anything
+ * a previous failed run left behind.
+ */
+export function buildAlbertsonsClearCartScript(): string {
+  return `(async function () {
+${albPrelude()}
+  var post = function (o) {
+    o.type = 'CART_CLEARED';
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
+  };
+  try {
+    // The same hydrate-then-keys dance the cart read does. A key candidate is
+    // tried in turn because the right one is not knowable up front.
+    if (!(await __albAwaitUser(12000))) { post({ ok: false, why: 'not_hydrated' }); return; }
+    await __albEnsureKeys(6000);
+    var keys = A.cartKey ? [A.cartKey] : __albKeyCandidates();
+    var usedKey = null, j = null;
+    for (var k = 0; k < keys.length; k++) {
+      var rr = await fetch(__albCartReadUrl(), {
+        method: 'POST', body: '{}', credentials: 'include', headers: __albCartHeaders(keys[k]),
+      });
+      if (rr.status === 200) { usedKey = keys[k]; j = await rr.json(); break; }
+    }
+    if (!usedKey || !j) { post({ ok: false, why: 'cart_unreadable' }); return; }
+
+    var cart = ((j.carts || [])[0] || j) || {};
+    var list = cart.cartItemsList || cart.cartItems || j.cartItems || [];
+    if (!list.length) { post({ ok: true, cleared: 0, why: 'already_empty' }); return; }
+
+    // The DELETE takes the ADD's body shape. Anything else is one of the 400s
+    // and 404s above.
+    var lines = [];
+    for (var i = 0; i < list.length; i++) {
+      lines.push({ itemId: String(list[i].itemId), qty: Number(list[i].qty) || 1 });
+    }
+    var res = await fetch(__albCartUrl(), {
+      method: 'DELETE', credentials: 'include', headers: __albCartHeaders(usedKey),
+      body: JSON.stringify({
+        preferenceList: [{ cartCategory: '1P_WINE' }],
+        cartItemsList: lines,
+        cartCategory: 'abs'
+      }),
+    });
+    if (res.status !== 200) { post({ ok: false, why: 'delete_status_' + res.status, asked: lines.length }); return; }
+
+    // THE CART DECIDES. The response carries the whole cart, so what is left is
+    // READ rather than assumed -- the same rule the undo follows.
+    var after = await res.json();
+    var left = (((after.carts || [])[0] || {}).cartItemsList || []).length;
+    post({ ok: left === 0, cleared: lines.length, left: left });
+  } catch (e) {
+    post({ ok: false, why: 'threw', detail: String(e).slice(0, 160) });
+  }
+})(); true;`;
+}
+
 export function buildAlbertsonsCartReadScript(): string {
   return `(async function () {
 ${albPrelude()}
@@ -1568,6 +1641,7 @@ export const ALBERTSONS_RAIL: NetworkRail = {
       firstRequestMs: ALBERTSONS_RAIL.budgets.searchFirstRequestMs,
     }),
   cartRead: () => buildAlbertsonsCartReadScript(),
+  clearCart: () => buildAlbertsonsClearCartScript(),
   addBatch: (items, opts) => buildAlbertsonsNetworkAddBatchScript(items, opts),
   // The cart is addressed by product id; the search returns no sku, and none is
   // needed to write.

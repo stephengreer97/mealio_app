@@ -583,6 +583,72 @@ ${CANDIDATE_HELPERS}
  * left to disagree with, which is what made the done screen's green/grey
  * breakdown wrong when the two spelled a product differently.
  */
+/**
+ * MEAL-7. Empty the cart, for the canary's cleanup step.
+ *
+ * QUANTITY ZERO WORKS HERE, and that is a measured property of this store rather
+ * than an assumption carried over from another. H-E-B's quantity is
+ * CART-ABSOLUTE -- the mutation SETS a line rather than incrementing it -- so
+ * setting a line to 0 removes it. On Albertsons the same call answers 400 and
+ * keeps the line, which is why that rail deletes instead.
+ *
+ * DECLINES WEIGHT-PRICED LINES, for the same reason the add path does: a count
+ * line can be set back to zero, a weight line cannot be undone at all
+ * (MEAL-200). They are reported rather than silently left, so a canary that
+ * cannot fully clean up says so instead of appearing to have.
+ */
+export function buildHebClearCartScript(): string {
+  return `(async function () {
+${GQL_FN}
+${CART_READ_FN}
+  var post = function (o) {
+    o.type = 'CART_CLEARED';
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
+  };
+  try {
+    // The RAW lines, not rowsOf's display rows: those carry {name, qty} for
+    // diffing against the page reader and have no ids to write against. The
+    // CartLines query already selects product.id and sku.id.
+    var lines = await readCart();
+    if (!lines) { post({ ok: false, why: 'cart_unreadable' }); return; }
+    if (!lines.length) { post({ ok: true, cleared: 0, why: 'already_empty' }); return; }
+
+    var clearable = [], declined = [];
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      var w = (l.estimatedWeight != null) ? Number(l.estimatedWeight) : null;
+      var pid = l.product && l.product.id, sid = l.sku && l.sku.id;
+      if (w != null && !isNaN(w)) { declined.push(l); continue; }
+      if (!pid || !sid) { declined.push(l); continue; }
+      clearable.push({ productId: pid, skuId: sid });
+    }
+    if (!clearable.length) {
+      post({ ok: false, cleared: 0, declined: declined.length, why: 'all_weight_priced' });
+      return;
+    }
+
+    var wrote = 0, failed = 0;
+    for (var c = 0; c < clearable.length; c++) {
+      var it = clearable[c];
+      var r = await __hebGql('cartItemV2',
+        'mutation cartItemV2($productId: String!, $skuId: String!, $quantity: Int) {'
+        + ' addItemToCartV2(productId: $productId, skuId: $skuId, quantity: $quantity) {'
+        + ' __typename ... on Cart { id } } }',
+        { productId: String(it.productId || ''), skuId: String(it.skuId || ''), quantity: 0 },
+        15000);
+      if (r && r.ok) wrote++; else failed++;
+    }
+
+    // THE CART DECIDES, never the writes' own reports.
+    var after = await readCart();
+    var left = after ? after.length : null;
+    post({ ok: left === 0, cleared: wrote, failed: failed, declined: declined.length, left: left });
+  } catch (e) {
+    post({ ok: false, why: 'threw', detail: String(e).slice(0, 160) });
+  }
+})(); true;`;
+}
+
 export function buildHebCartReadScript(): string {
   return `(async function () {
 ${GQL_FN}
@@ -1033,6 +1099,7 @@ export const HEB_RAIL: NetworkRail = {
   sessionScript: buildHebSessionScript,
   searchBatch: (terms, sess) => buildHebNetworkSearchBatchScript(terms, sess),
   cartRead: () => buildHebCartReadScript(),
+  clearCart: () => buildHebClearCartScript(),
   addBatch: (items, opts) =>
     buildHebNetworkAddBatchScript(
       // H-E-B addresses a cart line by sku, so an item without one is not
