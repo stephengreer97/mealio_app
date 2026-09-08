@@ -796,6 +796,14 @@ export const usage = {
     storeId: string;
     source: 'app';
     mealCount?: number;
+    /**
+     * MEAL-214. WHICH meals, not just how many.
+     *
+     * `mealCount` cannot answer "you have added this to your cart 8 times", and
+     * a run that has already happened can never be attributed afterwards -- so
+     * this is sent even before the read path exists, to stop losing days.
+     */
+    mealIds?: string[];
     itemsRequested?: number;
     configVersion?: number;
     appVersion?: string;

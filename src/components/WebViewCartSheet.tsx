@@ -526,6 +526,10 @@ export default function WebViewCartSheet({
             storeId,
             source: 'app',
             mealCount: meals.length,
+            // MEAL-214: the ids, so a run can be attributed to the meals it was
+            // for. Sent from the same `meals` the count is taken from, so the
+            // two can never disagree.
+            mealIds: meals.map((m) => m.id).filter(Boolean),
             // Attribute the run to the config + build that produced it, so a
             // confirm-rate regression is traceable to a specific config push.
             configVersion: getConfigVersion(),
