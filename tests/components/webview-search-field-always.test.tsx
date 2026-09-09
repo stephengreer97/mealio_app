@@ -1,10 +1,14 @@
-// A search that finds nothing leaves the user on a screen whose only useful
-// control is the one that looks least like a control: a row of placeholder text
-// under an empty list. The glow points at it.
+// The search field on the reconcile screen: always there, never announced.
 //
-// So the property under test is not "a glow exists" — it is WHEN it exists. It
-// has to be absent whenever there is something to pick, or it stops meaning
-// "this one" and becomes decoration.
+// This file used to pin a GLOW that pointed at a row of placeholder text, back
+// when the search field was hidden behind it and only offered on an empty list.
+// Stephen, 2026-09-09: get rid of the "Other: type a product name…" row, and get
+// rid of the glow. The field is simply present now, which is what makes both
+// unnecessary — a control whose job is to reveal another control is a step for
+// its own sake, and a pulse that is always able to fire is decoration.
+//
+// So the property under test is inverted and kept: the field and its button are
+// there on EVERY list, and nothing pulses at them.
 
 import { act, fireEvent, render } from '@testing-library/react-native';
 
@@ -117,25 +121,32 @@ const candidate = (name: string, over: Record<string, unknown> = {}) => ({
   productName: name, imageUrl: null, outOfStock: false, preferences: null, price: '$2', ...over,
 });
 
-describe('the "type a product name" row glows when a search found nothing', () => {
-  it('glows when there is nothing to choose from', async () => {
+describe('the search field on reconcile', () => {
+  it('is there when the store found nothing', async () => {
     const view = await runToReview([]);
-    expect(view.queryByText(/other: type a product name/i)).toBeTruthy();
-    expect(view.queryByTestId('custom-row-glow')).toBeTruthy();
+    expect(view.queryByTestId('custom-search-btn')).toBeTruthy();
   });
 
-  it('does not glow when there are products to pick', async () => {
-    // With something to choose, the row is the fallback, not the answer — a glow
-    // here would point away from the products the user should be looking at.
+  it('is there when the store DID find something', async () => {
+    // The case that made this worth changing. A search offered only on an empty
+    // list is unavailable exactly when the user disagrees with what the store
+    // found, which is most of the times they want it.
     const view = await runToReview([candidate('Some Other Brand Cream')]);
-    expect(view.queryByText(/other: type a product name/i)).toBeTruthy();
-    expect(view.queryByTestId('custom-row-glow')).toBeNull();
+    expect(view.queryByTestId('custom-search-btn')).toBeTruthy();
   });
 
-  it('does not glow for an out-of-stock product, which is still a product', async () => {
-    // The list is not empty; the user can still see what the store carries and
-    // decide. The glow is for having nothing at all.
+  it('is there for an out-of-stock product, which is still a product', async () => {
     const view = await runToReview([candidate('sour cream', { outOfStock: true })]);
-    expect(view.queryByTestId('custom-row-glow')).toBeNull();
+    expect(view.queryByTestId('custom-search-btn')).toBeTruthy();
+  });
+
+  it('never pulses, and the row that used to reveal it is gone', async () => {
+    for (const list of [[], [candidate('Some Other Brand Cream')]]) {
+      const view = await runToReview(list);
+      expect(view.queryByTestId('custom-row-glow')).toBeNull();
+      expect(view.queryByText(/other: type a product name/i)).toBeNull();
+      expect(view.queryByText(/try a different search/i)).toBeNull();
+      view.unmount();
+    }
   });
 });

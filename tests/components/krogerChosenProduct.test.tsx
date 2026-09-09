@@ -262,12 +262,15 @@ describe('Kroger reconcile with nothing found', () => {
     await waitFor(() => expect(screen.queryByTestId('kroger-custom-search-btn')).toBeTruthy());
   });
 
-  it('glows the search row, because it is the only way forward', async () => {
+  it('does not pulse at the search row', async () => {
+    // The glow is gone everywhere (Stephen, 2026-09-09). A permanent control
+    // does not need pointing at.
     const screen = await walkToEmptyReview();
-    await waitFor(() => expect(screen.queryByTestId('kroger-search-glow')).toBeTruthy());
+    await waitFor(() => expect(screen.queryByTestId('kroger-custom-search-btn')).toBeTruthy());
+    expect(screen.queryByTestId('kroger-search-glow')).toBeNull();
   });
 
-  it('leaves both off when there is something to pick', async () => {
+  it('keeps the field and its button when there IS something to pick', async () => {
     mockSearchProducts.mockResolvedValue({
       results: [{
         term: 'Sour Cream', quantity: 1, upc: null, description: null,
@@ -284,7 +287,10 @@ describe('Kroger reconcile with nothing found', () => {
     // so it is the signal that this is the populated branch. The product label
     // itself carries the size, which is not what this test is about.
     await waitFor(() => expect(screen.queryByText('Kroger suggests')).toBeTruthy());
+    // A search offered only on an empty list is unavailable exactly when the
+    // user disagrees with what the store found.
+    expect(screen.queryByTestId('kroger-custom-search-btn')).toBeTruthy();
     expect(screen.queryByTestId('kroger-search-glow')).toBeNull();
-    expect(screen.queryByTestId('kroger-custom-search-btn')).toBeNull();
+    expect(screen.queryByText(/Other: type a product name/i)).toBeNull();
   });
 });

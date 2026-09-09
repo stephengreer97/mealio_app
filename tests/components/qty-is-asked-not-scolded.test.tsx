@@ -101,6 +101,7 @@ import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 import { UNSET_QTY_LABEL } from '../../src/lib/qty-prompt';
 import {
   enableRail, postToSheet, SESSION_OK, cartCount, searchResult, searchDone, candidate,
+  type RailCandidate,
 } from './helpers/railRun';
 
 beforeAll(() => { jest.useFakeTimers(); });
@@ -118,7 +119,7 @@ const ing = (ingredientName: string, searchTerm: string) => ({
  * searches and hands the user the Choose Products screen -- the same stepper,
  * reached without driving a whole add phase first.
  */
-async function atReview() {
+async function atReview(candidates: RailCandidate[] = [candidate('Daisy Sour Cream, 16 oz')]) {
   enableRail();
   const view = render(
     <WebViewCartSheet
@@ -139,7 +140,7 @@ async function atReview() {
   post(SESSION_OK);
   post(cartCount(0, []));
   post(SESSION_OK);
-  post(searchResult('sour cream', [candidate('Daisy Sour Cream, 16 oz')]));
+  post(searchResult('sour cream', candidates));
   post(searchDone(1));
   act(() => { jest.advanceTimersByTime(1_500); });
   return view;
@@ -248,19 +249,25 @@ describe('once a quantity is set', () => {
 
 
 describe('when something OTHER than the quantity is missing', () => {
+  // This used to select "Other: type a product name…" with nothing typed, so the
+  // run was blocked on the TEXT rather than the quantity. That state cannot
+  // happen any more (2026-09-09): the row is gone, searching is an action rather
+  // than a selection, and `otherwiseReady` no longer reads `selectedSuggIdx`.
+  //
+  // The guard is kept because the mutant it caught is real — with
+  // `otherwiseReady` forced true, every other test in this file still passes,
+  // since the choose flow pre-selects a candidate and the quantity genuinely IS
+  // the only blocker there. The remaining input that can be false is the
+  // preference picker, so the case is expressed through that instead.
   it('does not flash the stepper, because the stepper is not the problem', async () => {
-    // Selecting "Other" with nothing typed leaves the run blocked on the TEXT,
-    // not on the quantity. Flashing the stepper here would point the user at
-    // the wrong control, which is worse than saying nothing — so the button
-    // goes back to being properly disabled.
-    //
-    // This is the case a mutant survived: with `otherwiseReady` forced true,
-    // every other test in this file still passed, because the choose flow
-    // pre-selects a candidate and the quantity really is the only blocker there.
-    const view = await atReview();
-    act(() => { fireEvent.press(view.getByText(/other: type a product name/i)); });
+    const view = await atReview([
+      candidate('H-E-B Ground Chuck', {
+        preferences: [{ text: '80/20', value: '80-20' }, { text: '90/10', value: '90-10' }],
+      }),
+    ]);
 
     const btn = view.getByTestId('review-primary');
+    // Blocked on the preference, so properly disabled rather than flashing.
     expect(btn.props.accessibilityState?.disabled).toBe(true);
 
     const before = JSON.stringify(stepper(view)!.props.style);
@@ -269,3 +276,4 @@ describe('when something OTHER than the quantity is missing', () => {
     expect(JSON.stringify(stepper(view)!.props.style)).toBe(before);
   });
 });
+

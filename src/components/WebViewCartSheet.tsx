@@ -700,7 +700,12 @@ export default function WebViewCartSheet({
   // Step: review
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [reviewIdx, setReviewIdx] = useState(0);
-  const [selectedSuggIdx, setSelectedSuggIdx] = useState<number | 'custom'>(0);
+  // A NUMBER, always. It used to be `number | 'custom'`, where 'custom' meant
+  // "the row that reveals the search field is selected" — a selection that was
+  // not a product, which every consumer then had to special-case. The row is
+  // gone and the field is always present, so searching is an ACTION (the button)
+  // rather than a thing that can be selected.
+  const [selectedSuggIdx, setSelectedSuggIdx] = useState<number>(0);
   const [selectedPreference, setSelectedPreference] = useState<string | null>(null);
   const [reviewMealQtys, setReviewMealQtys] = useState<Record<number, Record<string, number>>>({});
   const [pickedItems, setPickedItems] = useState<PickedItem[]>([]);
@@ -1418,17 +1423,6 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   // told: the second is not a failure of the run, and re-running will not help.
   const [capReached, setCapReached] = useState<Array<{ name: string; detail: string }>>([]);
 
-  // ── The "type a product name" row glows when a search found nothing ────────
-  //
-  // A search with no results leaves the user on a screen whose only useful
-  // control is the one that looks least like a control: a row of placeholder
-  // text under a list that is empty. The glow is there to say "this one" — it is
-  // the only thing on the screen that can move the run forward.
-  //
-  // Held here rather than in the review branch because that branch re-runs on
-  // every keystroke of the custom search; an animation started there would be
-  // restarted, and a pulse that restarts reads as a flicker.
-  const glowAnim = useRef(new Animated.Value(0)).current;
 
   const [reduceMotion, setReduceMotion] = useState(false);
   useEffect(() => {
@@ -1546,44 +1540,6 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     outputRange: ['rgba(245,158,11,0.00)', 'rgba(245,158,11,0.10)'],
   });
 
-  /**
-   * True while EITHER decision screen is showing an item with nothing to choose
-   * from.
-   *
-   * `step === 'review'` alone until 2026-09-09, which meant reconciliation
-   * glowed and Choose Products did not — the same screen, the same empty list,
-   * the same one control that can move the run forward, and the hint only on one
-   * of them. Both now.
-   *
-   * Derived from the same two inputs the screen itself reads, rather than set
-   * during its render: a setState in a render path that re-runs on every
-   * keystroke of the custom search is a re-render loop waiting to happen.
-   *
-   * `customSuggestions` is what the user's own search returned, so the glow goes
-   * out the moment they find something — it points at the control, it does not
-   * decorate it.
-   */
-  const glowCustomRow = (step === 'review' || step === 'searchResult')
-    && customSuggestions.length === 0
-    && (searchResults[reviewIdx]?.candidates.length ?? 0) === 0;
-  useEffect(() => {
-    if (!glowCustomRow || reduceMotion) {
-      glowAnim.stopAnimation();
-      // Settles at a steady, still-visible glow rather than nothing: with reduce
-      // motion on, the row should still be the thing that stands out — it just
-      // should not move.
-      glowAnim.setValue(reduceMotion && glowCustomRow ? 1 : 0);
-      return;
-    }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(glowAnim, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-        Animated.timing(glowAnim, { toValue: 0.25, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [glowCustomRow, reduceMotion, glowAnim]);
   // The pool path is declared BELOW the network path (it is the thing the
   // network path falls back to, so it reads better after it). A ref breaks the
   // cycle without reordering two hundred lines.
@@ -6710,14 +6666,10 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   }, []);
 
   const handleReviewDecision = (action: 'add' | 'update' | 'skip' | 'choose') => {
-    // If the user typed a custom search term, trigger the search instead of advancing.
-    if (action !== 'skip' && action !== 'choose' && selectedSuggIdx === 'custom') {
-      const term = customText.trim();
-      if (term) {
-        handleCustomSearch(term);
-      }
-      return;
-    }
+    // The "primary press means SEARCH, not advance" branch stood here. It was
+    // reachable only while `selectedSuggIdx === 'custom'`, and nothing selects
+    // that any more: the search button runs the search directly, so a press of
+    // the primary is never secretly a search.
 
     const newPicked = [...pickedItems];
 
@@ -7576,18 +7528,16 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
           // answer is the whole mechanism: the alert has to be a REPLY to
           // something the user did, or it is decoration they learn to ignore.
           const qtyOnlyBlocker = qtyIsTheOnlyBlocker({
-            otherwiseReady: !customSearching && selectedSuggIdx !== 'custom'
+            otherwiseReady: !customSearching
               && candidate != null && (isChoose || !candidate.outOfStock)
               && (!needsPref || selectedPreference != null),
             qty: isChoose ? chooseQty : totalQty,
           });
           const canAdd = !customSearching && (
-            selectedSuggIdx === 'custom'
-              ? customText.trim().length > 0
               // OOS is only blocked in the add-to-cart / review flow. Choose
               // Product just saves the product as the ingredient's searchTerm for
               // future runs (no cart add), so an out-of-stock pick is allowed there.
-              : candidate != null && (isChoose || !candidate.outOfStock) &&
+              candidate != null && (isChoose || !candidate.outOfStock) &&
                 (isChoose ? chooseQty > 0 : totalQty > 0) &&
                 (!needsPref || selectedPreference != null)
           );
@@ -7717,71 +7667,32 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                   );
                 })}
 
-                {/* Custom search option.
-                    When the search found NOTHING this is the only control on the
-                    screen that can move the run forward — and it is the one that
-                    looks least like a control, being placeholder text under an
-                    empty list. The glow points at it. */}
-                <View>
-                  {/* The ring used to sit here, on the row whose only job is to
-                      reveal the field. With nothing found the field now opens
-                      itself, so the glow moved down onto the field — pointing at
-                      a button that reveals something already revealed is
-                      pointing at the wrong thing. */}
-                  <TouchableOpacity
-                    onPress={() => setSelectedSuggIdx('custom')}
-                    style={[
-                      styles.suggRow,
-                      {
-                        borderColor: selectedSuggIdx === 'custom' ? storeColor : Colors.border,
-                        backgroundColor: selectedSuggIdx === 'custom' ? '#fff0f0' : Colors.surface,
-                      },
-                    ]}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.suggText, { color: selectedSuggIdx === 'custom' ? Colors.text1 : Colors.text3 }]}>
-                      {customSuggestions.length > 0 ? 'Try a different search…' : 'Other: type a product name…'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-                {(selectedSuggIdx === 'custom' || !hasCandidates) && (
-                  // OPEN ALREADY WHEN THERE IS NOTHING TO PICK.
-                  //
-                  // The field used to appear only after tapping the row above
-                  // it, which is one gratuitous step at exactly the moment the
-                  // user has nothing else to do — the search IS the screen when
-                  // the list is empty, and the button was invisible until you had
-                  // found it. Stephen, testing H-E-B: "I also don't see the
-                  // search button."
-                  //
-                  // A BUTTON BESIDE THE FIELD, the way Kroger's chooser has
-                  // always had it. Submitting was keyboard-only here — the
-                  // return key, and nothing on screen saying so — which is
-                  // invisible on a phone the moment the keyboard is dismissed,
-                  // and leaves someone who typed a name with a field that looks
-                  // like it did nothing. onSubmitEditing still works; this is
-                  // the same action made visible.
-                  <View>
-                  {/* THE GLOW, on the field. When the search found nothing this
-                      is the only control on the screen that can move the run
-                      forward, and it is the one that looks least like a control
-                      — an empty box under an empty list. */}
-                  {glowCustomRow && (
-                    <Animated.View
-                      pointerEvents="none"
-                      testID="custom-row-glow"
-                      style={[
-                        styles.customGlow,
-                        { borderColor: storeColor, shadowColor: storeColor, opacity: glowAnim },
-                      ]}
-                    />
-                  )}
-                  <View style={styles.customRow}>
+                {/*
+                  SEARCH A DIFFERENT PRODUCT. Always here, on every screen.
+                  (Stephen, 2026-09-09: "it should be the same across all stores
+                  and reconcile and choose products.")
+
+                  There used to be an "Other: type a product name…" row above
+                  this that had to be tapped before the field appeared, and the
+                  field itself only rendered with an empty list. Both are gone.
+                  The row was a control whose whole job was to reveal another
+                  control, which is a step for its own sake once the field is
+                  simply present; and a search offered only when the store found
+                  NOTHING is unavailable exactly when the user disagrees with
+                  what it DID find — which is most of the times they want it.
+
+                  The glow went with them. It existed to point at the one thing
+                  that could move a stuck run forward, back when that thing was
+                  hidden behind a row of placeholder text. A permanent control
+                  does not need pointing at, and a pulse that is always able to
+                  fire is decoration.
+
+                  The BUTTON stays, and is the point: submitting used to be the
+                  return key and nothing else, which is invisible the moment the
+                  keyboard is dismissed.
+                */}
+                <View style={styles.customRow}>
                     <TextInput
-                      // Focus follows the TAP, not the empty list. Opening a
-                      // keyboard over every no-results screen would hide the very
-                      // thing the user needs to read.
-                      autoFocus={selectedSuggIdx === 'custom'}
                       value={customText}
                       onChangeText={setCustomText}
                       placeholder="e.g. Chicken Breast Boneless"
@@ -7807,9 +7718,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                         ? <ActivityIndicator color="#fff" size="small" />
                         : <Ionicons name="search" size={16} color="#fff" />}
                     </TouchableOpacity>
-                  </View>
-                  </View>
-                )}
+                </View>
 
               </KeyboardAwareScrollView>
 
@@ -8802,21 +8711,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 6,
-  },
-  // Sits BEHIND the row and matches its box exactly, so the glow reads as the
-  // row's own edge rather than a rectangle around it. Only `opacity` animates,
-  // which keeps it on the native driver — animating a shadow or a border colour
-  // would drop to the JS thread and stutter on the scroll this lives inside.
-  customGlow: {
-    position: 'absolute',
-    top: -2, left: -2, right: -2,
-    bottom: 4,          // the row carries marginBottom: 6
-    borderRadius: 12,
-    borderWidth: 2,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.55,
-    shadowRadius: 8,
-    elevation: 6,
   },
   suggText: { fontSize: 14, fontFamily: 'Inter_400Regular', color: Colors.text1 },
   outOfStockText: { fontSize: 12, fontFamily: 'Inter_500Medium', color: '#b45309', marginTop: 2 },

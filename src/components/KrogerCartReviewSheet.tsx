@@ -254,51 +254,16 @@ export default function KrogerCartReviewSheet({
   const [reviewMealQtys, setReviewMealQtys] = useState<Record<number, Record<string, number>>>({});
 
   // Per-review selection
-  const [selectedSuggIdx, setSelectedSuggIdx] = useState<number | 'custom'>(0);
+  // A NUMBER, always. `'custom'` used to mean "the row that reveals the search
+  // field is selected" — a selection that was not a product, and the reason the
+  // primary button sometimes meant "search". Searching is an action now.
+  const [selectedSuggIdx, setSelectedSuggIdx] = useState<number>(0);
   const [customText, setCustomText] = useState('');
   const [customSearching, setCustomSearching] = useState(false);
   // Suggestions produced by a custom search (replaces currentReview.suggestions in-place)
   const [customSuggestions, setCustomSuggestions] = useState<SearchResult['suggestions']>([]);
   const [customSearchTerm, setCustomSearchTerm] = useState('');
-  const shouldShowSuggestionsRef = useRef(false);
 
-  /**
-   * THE GLOW ON THE SEARCH ROW, borrowed from WebViewCartSheet (2026-09-09).
-   *
-   * When nothing was found, the search field is the only control on this screen
-   * that can move the run forward, and it is the one that looks least like a
-   * control. Reconciliation on every other store has pointed at it for months;
-   * Kroger's did not.
-   *
-   * `searchGlowOn` is set from the render below, where the suggestion list is
-   * actually known — hence a ref plus a state mirror rather than a derived
-   * const: this component computes `hasSuggestions` per review row inside the
-   * map, not at the top.
-   */
-  const searchGlowAnim = useRef(new Animated.Value(0)).current;
-  const [searchGlowOn, setSearchGlowOn] = useState(false);
-  const [reduceMotion, setReduceMotion] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    AccessibilityInfo.isReduceMotionEnabled?.().then((on) => { if (alive) setReduceMotion(!!on); }).catch(() => {});
-    const sub = AccessibilityInfo.addEventListener?.('reduceMotionChanged', (on) => setReduceMotion(!!on));
-    return () => { alive = false; sub?.remove?.(); };
-  }, []);
-  useEffect(() => {
-    if (!searchGlowOn || reduceMotion) {
-      searchGlowAnim.stopAnimation();
-      searchGlowAnim.setValue(reduceMotion && searchGlowOn ? 1 : 0);
-      return;
-    }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(searchGlowAnim, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-        Animated.timing(searchGlowAnim, { toValue: 0.25, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [searchGlowOn, reduceMotion, searchGlowAnim]);
 
   // The product preview on the review step. This used to be a fixed, untappable
   // (`pointerEvents="none"`) 80x80 box of Kroger's own — it now runs the same
@@ -431,30 +396,35 @@ export default function KrogerCartReviewSheet({
     }
   };
 
-  const resolveCurrentSelection = async (): Promise<{ upc: string | null; name: string } | null> => {
-    shouldShowSuggestionsRef.current = false;
-    if (selectedSuggIdx === 'custom') {
-      const term = customText.trim();
-      if (!term) return null;
-      setCustomSearching(true);
-      try {
-        const data = await krogerApi.searchProducts(
-          [{ productName: term, quantity: 1 }],
-          locationId,
-        );
-        const result = data.results?.[0];
-        // Always show suggestions for custom searches — the user typed this term
-        // to review options, so never silently add even if the score is exact.
-        setCustomSuggestions(result?.suggestions ?? []);
-        setCustomSearchTerm(term);
-        setSelectedSuggIdx(0);
-        setCustomText('');
-        shouldShowSuggestionsRef.current = true;
-        return null;
-      } finally {
-        setCustomSearching(false);
-      }
+  /**
+   * Search Kroger for a name the user typed, and show what came back.
+   *
+   * ITS OWN ACTION. This used to live inside `resolveCurrentSelection`, behind
+   * `selectedSuggIdx === 'custom'` — so pressing "Add & Update" secretly meant
+   * "search" whenever the pseudo-selection was set, and the search was only
+   * reachable by first tapping a row that existed to reveal the field. The row
+   * is gone and the field is always present, so this is what the search button
+   * and the return key call, and nothing else.
+   *
+   * Never silently adds, even on an exact score: the user typed this term in
+   * order to look at the options.
+   */
+  const runCustomSearch = async () => {
+    const term = customText.trim();
+    if (!term || customSearching) return;
+    setCustomSearching(true);
+    try {
+      const data = await krogerApi.searchProducts([{ productName: term, quantity: 1 }], locationId);
+      setCustomSuggestions(data.results?.[0]?.suggestions ?? []);
+      setCustomSearchTerm(term);
+      setSelectedSuggIdx(0);
+      setCustomText('');
+    } finally {
+      setCustomSearching(false);
     }
+  };
+
+  const resolveCurrentSelection = async (): Promise<{ upc: string | null; name: string } | null> => {
     const displaySuggestions = customSuggestions.length > 0 ? customSuggestions : currentReview.suggestions;
     const s = displaySuggestions[selectedSuggIdx as number];
     return s ? { upc: s.upc, name: s.description } : null;
@@ -464,8 +434,11 @@ export default function KrogerCartReviewSheet({
     const newPicked = [...pickedItems];
 
     if (action !== 'skip') {
+      // The "a custom search just replaced the suggestions, so stay on this
+      // item" guard stood here. Searching no longer goes through this handler at
+      // all — the search button calls `runCustomSearch` directly — so a decision
+      // is only ever a decision and there is nothing to bail out of.
       const resolved = await resolveCurrentSelection();
-      if (shouldShowSuggestionsRef.current) return; // custom search showed new suggestions — stay on this item
       const mealQtys = getReviewMealQtys(reviewIdx);
       const totalQty = getReviewTotalQty(reviewIdx);
       if (resolved?.upc) {
@@ -759,13 +732,12 @@ export default function KrogerCartReviewSheet({
         {step === 'review' && currentReview && (() => {
           const displaySuggestions = customSuggestions.length > 0 ? customSuggestions : currentReview.suggestions;
           const hasSuggestions = displaySuggestions.length > 0;
-          // Mirrored into state so the animation effect can react. Guarded, or a
-          // setState on every render of a screen that re-renders on every
-          // keystroke of the custom search is a loop.
-          if (searchGlowOn !== !hasSuggestions) setSearchGlowOn(!hasSuggestions);
-          const canAdd = hasSuggestions
-            ? selectedSuggIdx !== 'custom' || customText.trim().length > 0
-            : selectedSuggIdx === 'custom' && customText.trim().length > 0;
+          // A PICKED SUGGESTION, full stop. This used to also be satisfiable by
+          // "the pseudo-selection is 'custom' and there is text in the box",
+          // which made the primary button mean two different things depending on
+          // a state the user could not see. Searching is the search button's job
+          // now, so adding is only ever adding.
+          const canAdd = hasSuggestions && typeof selectedSuggIdx === 'number';
           const mealQtys = getReviewMealQtys(reviewIdx);
           const totalQty = getReviewTotalQty(reviewIdx);
 
@@ -841,78 +813,47 @@ export default function KrogerCartReviewSheet({
                   );
                 })}
 
-                {/* Custom option */}
-                <TouchableOpacity
-                  onPress={() => setSelectedSuggIdx('custom')}
-                  style={[
-                    styles.suggRow,
-                    {
-                      borderColor: selectedSuggIdx === 'custom' ? storeColor : Colors.border,
-                      backgroundColor: selectedSuggIdx === 'custom' ? '#e8f4fb' : Colors.surface,
-                    },
-                  ]}
-                  activeOpacity={0.7}
-                >
-                  <Text
+                {/*
+                  SEARCH A DIFFERENT PRODUCT. Always here, the same as every
+                  other store and both screens (Stephen, 2026-09-09).
+
+                  The "Other: type a product name…" row stood above this and had
+                  to be tapped before the field appeared. It was also a
+                  SELECTION rather than an action — `selectedSuggIdx = 'custom'`
+                  — which is what made the primary button secretly mean "search"
+                  sometimes. The field is simply present now and the button runs
+                  the search, so neither the row nor the pseudo-selection is
+                  needed. The glow went with them: a permanent control does not
+                  need pointing at.
+                */}
+                <View style={styles.customRow}>
+                  <TextInput
+                    value={customText}
+                    onChangeText={setCustomText}
+                    placeholder="e.g. Ground Beef 80/20"
+                    placeholderTextColor={Colors.text3}
+                    style={[styles.customInput, { borderColor: storeColor }]}
+                    onSubmitEditing={runCustomSearch}
+                    returnKeyType="search"
+                    editable={!customSearching}
+                  />
+                  <TouchableOpacity
+                    testID="kroger-custom-search-btn"
+                    accessibilityRole="button"
+                    accessibilityLabel="Search"
                     style={[
-                      styles.suggText,
-                      { color: selectedSuggIdx === 'custom' ? Colors.text1 : Colors.text3 },
+                      styles.customSearchBtn,
+                      { backgroundColor: storeColor },
+                      (!customText.trim() || customSearching) && { opacity: 0.4 },
                     ]}
+                    onPress={runCustomSearch}
+                    disabled={!customText.trim() || customSearching}
                   >
-                    {customSuggestions.length > 0 ? 'Try a different search…' : 'Other: type a product name…'}
-                  </Text>
-                </TouchableOpacity>
-                {(selectedSuggIdx === 'custom' || !hasSuggestions) && (
-                  // OPEN ALREADY WHEN THERE IS NOTHING TO PICK, with a button
-                  // beside it and a ring around it. All three were missing here
-                  // and present on every other store: the field appeared only
-                  // after tapping the row above, submitting was keyboard-only,
-                  // and nothing pointed at the one control that can move the run
-                  // forward. Stephen, 2026-09-09.
-                  <View>
-                    {!hasSuggestions && (
-                      <Animated.View
-                        pointerEvents="none"
-                        testID="kroger-search-glow"
-                        style={[
-                          styles.customGlow,
-                          { borderColor: storeColor, shadowColor: storeColor, opacity: searchGlowAnim },
-                        ]}
-                      />
-                    )}
-                    <View style={styles.customRow}>
-                      <TextInput
-                        // Focus follows the TAP, not the empty list: a keyboard
-                        // over every no-results screen hides what needs reading.
-                        autoFocus={selectedSuggIdx === 'custom'}
-                        value={customText}
-                        onChangeText={setCustomText}
-                        placeholder="e.g. Ground Beef 80/20"
-                        placeholderTextColor={Colors.text3}
-                        style={[styles.customInput, { borderColor: storeColor }]}
-                        onSubmitEditing={() => { if (customText.trim()) handleReviewDecision('add'); }}
-                        returnKeyType="search"
-                        editable={!customSearching}
-                      />
-                      <TouchableOpacity
-                        testID="kroger-custom-search-btn"
-                        accessibilityRole="button"
-                        accessibilityLabel="Search"
-                        style={[
-                          styles.customSearchBtn,
-                          { backgroundColor: storeColor },
-                          (!customText.trim() || customSearching) && { opacity: 0.4 },
-                        ]}
-                        onPress={() => { if (customText.trim()) handleReviewDecision('add'); }}
-                        disabled={!customText.trim() || customSearching}
-                      >
-                        {customSearching
-                          ? <ActivityIndicator color="#fff" size="small" />
-                          : <Ionicons name="search" size={16} color="#fff" />}
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
+                    {customSearching
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Ionicons name="search" size={16} color="#fff" />}
+                  </TouchableOpacity>
+                </View>
               </ScrollView>
 
               <View style={[styles.footer, { gap: 8 }]}>
@@ -1286,17 +1227,6 @@ const styles = StyleSheet.create({
     borderRadius: Radius.button,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  /** The same ring WebViewCartSheet draws around its custom-search row. */
-  customGlow: {
-    position: 'absolute',
-    top: 4, left: -2, right: -2, bottom: 4,
-    borderRadius: 12,
-    borderWidth: 2,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.55,
-    shadowRadius: 8,
-    elevation: 6,
   },
   customInput: {
     flex: 1,

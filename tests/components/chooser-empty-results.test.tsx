@@ -113,13 +113,13 @@ describe('Kroger chooser with no results', () => {
     expect(view.queryByText('Choose Quantity')).toBeNull();
   });
 
-  it('glows the search row, because it is the only way forward', async () => {
-    // Borrowed from WebViewCartSheet: the field is the one control that can move
-    // the run on, and it is the one that looks least like a control — placeholder
-    // text under an empty list.
+  it('does not pulse at the search row', async () => {
+    // A glow briefly lived here. It existed to point at a field hidden behind a
+    // row of placeholder text; the field is permanent now, so there is nothing
+    // to point out. (Stephen, 2026-09-09: "get rid of the search text box glow.")
     const view = renderChooser([ing('Saffron')], empty);
     await waitFor(() => expect(view.queryByText('No products found')).toBeTruthy());
-    expect(view.queryByTestId('chooser-search-glow')).toBeTruthy();
+    expect(view.queryByTestId('chooser-search-glow')).toBeNull();
   });
 
   it('saves nothing for a skipped ingredient', async () => {
@@ -144,8 +144,6 @@ describe('Kroger chooser with results', () => {
     expect(view.queryByTestId('chooser-qty-glow')).toBeTruthy();
     expect(view.queryByTestId('chooser-skip')).toBeTruthy();
     expect(view.queryByText('Choose Quantity')).toBeTruthy();
-    // ...and no glow: there is something to pick, so the search row is not the
-    // thing to point at.
     expect(view.queryByTestId('chooser-search-glow')).toBeNull();
   });
 });

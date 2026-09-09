@@ -142,17 +142,6 @@ export default function ProductChooserSheet({
   const [error, setError] = useState('');
   const [results, setResults] = useState<Array<{ ingredientName: string; suggestions: Suggestion[] }>>([]);
   const [pickIdx, setPickIdx] = useState(0);
-  /**
-   * THE GLOW ON THE SEARCH ROW, borrowed from WebViewCartSheet.
-   *
-   * When the search found nothing, the search field is the only control on the
-   * screen that can move the run forward — and it is the one that looks least
-   * like a control, being placeholder text under an empty list. The glow points
-   * at it. Same 900ms in/out, same settle-at-steady behaviour under reduce
-   * motion: with motion off the row should still stand out, it just should not
-   * move.
-   */
-  const searchGlowAnim = useRef(new Animated.Value(0)).current;
 
   const [selections, setSelections] = useState<Map<string, { description: string; qty: number; upc: string | null; price?: string }>>(new Map());
   const [productQty, setProductQty] = useState(0);
@@ -173,23 +162,6 @@ export default function ProductChooserSheet({
   const current = results[pickIdx];
   const isLast = pickIdx === results.length - 1;
 
-  // Nothing found for THIS ingredient, so the search row is the way forward.
-  const glowSearchRow = !!current && current.suggestions.length === 0;
-  useEffect(() => {
-    if (!glowSearchRow || reduceMotion) {
-      searchGlowAnim.stopAnimation();
-      searchGlowAnim.setValue(reduceMotion && glowSearchRow ? 1 : 0);
-      return;
-    }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(searchGlowAnim, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-        Animated.timing(searchGlowAnim, { toValue: 0.25, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [glowSearchRow, reduceMotion, searchGlowAnim]);
 
   const selectedImageUrl: string | null = (selectedDescription && current)
     ? current.suggestions.find((s) => displayNameOf(s) === selectedDescription)?.imageUrl ?? null
@@ -483,17 +455,10 @@ export default function ProductChooserSheet({
                   </TouchableOpacity>
                 );
               })}
-              <View>
-                {glowSearchRow && (
-                  <Animated.View
-                    pointerEvents="none"
-                    testID="chooser-search-glow"
-                    style={[
-                      styles.customGlow,
-                      { borderColor: storeColor, shadowColor: storeColor, opacity: searchGlowAnim },
-                    ]}
-                  />
-                )}
+              {/* Always here, on every store and both screens. The glow that
+                  briefly lived around this is gone: it existed to point at a
+                  field hidden behind a row of placeholder text, and a permanent
+                  control does not need pointing at. */}
               <View style={styles.customRow}>
                 <TextInput
                   style={styles.customInput}
@@ -514,7 +479,6 @@ export default function ProductChooserSheet({
                     ? <ActivityIndicator color="#fff" size="small" />
                     : <Ionicons name="search" size={16} color="#fff" />}
                 </TouchableOpacity>
-              </View>
               </View>
             </ScrollView>
             <View style={styles.footer}>
@@ -725,17 +689,6 @@ const styles = StyleSheet.create({
   outOfStock: { fontSize: 11, fontFamily: 'Inter_500Medium', color: '#b45309', marginTop: 2 },
   suggPrice: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text2 },
   customRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  /** The same ring WebViewCartSheet draws around its custom-search row. */
-  customGlow: {
-    position: 'absolute',
-    top: 2, left: -2, right: -2, bottom: -2,
-    borderRadius: 12,
-    borderWidth: 2,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.55,
-    shadowRadius: 8,
-    elevation: 6,
-  },
   customInput: {
     flex: 1,
     height: 40,

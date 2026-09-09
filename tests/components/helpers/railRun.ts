@@ -67,7 +67,8 @@ export interface RailCandidate {
   outOfStock?: boolean;
   price?: string | null;
   imageUrl?: string | null;
-  preferences?: null;
+  /** H-E-B's "which cut / which size" picker. Null on almost every candidate. */
+  preferences?: Array<{ text: string; value: string }> | null;
 }
 
 export function candidate(productName: string, over: Partial<RailCandidate> = {}): RailCandidate {

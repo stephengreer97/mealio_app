@@ -203,27 +203,34 @@ describe('no results, no quantity', () => {
     expect(view.queryByTestId('custom-search-btn')).toBeTruthy();
   });
 
-  it('glows the search field in CHOOSE, not only in reconcile', () => {
-    // `glowCustomRow` was gated on `step === 'review'`, so reconciliation
-    // pointed at the field and Choose Products did not — same screen, same empty
-    // list, same one control that can move the run forward.
-    const view = chooseRun('heb', 'H-E-B', []);
-    expect(view.queryByTestId('custom-row-glow')).toBeTruthy();
+  it('offers the search when the store DID find things, not only when it found none', () => {
+    // Stephen, 2026-09-09. A search only available on an empty list is
+    // unavailable exactly when the user disagrees with what the store found —
+    // which is most of the times they want it.
+    const view = chooseRun('heb', 'H-E-B', ['Daisy Sour Cream']);
+    expect(view.queryByTestId('custom-search-btn')).toBeTruthy();
   });
 
-  it('does not open the field, or glow, when there is something to pick', () => {
-    const view = chooseRun('heb', 'H-E-B', ['Daisy Sour Cream']);
-    expect(view.queryByTestId('custom-search-btn')).toBeNull();
-    expect(view.queryByTestId('custom-row-glow')).toBeNull();
-  });
+  // Both existed to reveal and point at a field that is now simply present. A
+  // control whose job is to reveal another control is a step for its own sake,
+  // and a pulse that is always able to fire is decoration.
+  it.each([['an empty list', [] as string[]], ['a populated list', ['Daisy Sour Cream']]])(
+    'has no glow and no "Other" row on %s',
+    (_label, names) => {
+      const view = chooseRun('heb', 'H-E-B', names as string[]);
+      expect(view.queryByTestId('custom-row-glow')).toBeNull();
+      expect(view.queryByText(/Other: type a product name/i)).toBeNull();
+      expect(view.queryByText(/Try a different search/i)).toBeNull();
+    },
+  );
 
   it('leaves the way out of the screen alone', () => {
     // Hiding the buttons with the stepper would strand the run on an empty
-    // screen. Back stays, and so does the custom-search row that is the actual
-    // fix for "no products found".
+    // screen. Back stays, and so does the search field that is the actual fix
+    // for "no products found".
     const view = chooseRun('heb', 'H-E-B', []);
     expect(view.queryByText('← Back')).toBeTruthy();
-    expect(view.queryByText(/type a product name/i)).toBeTruthy();
+    expect(view.queryByTestId('custom-search-btn')).toBeTruthy();
   });
 });
 
