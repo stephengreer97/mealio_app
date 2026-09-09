@@ -42,8 +42,17 @@ const OPS_CACHE_KEY = '__mealio_ic_ops_v1';
 const OPS_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 /** Where the discovered shop id is cached. Same lifetime as the hashes. */
 const SHOP_CACHE_KEY = '__mealio_ic_shop_v1';
-/** The fulfilment zone, discovered from the ids a search returns. */
-const ZONE_CACHE_KEY = '__mealio_ic_zone_v1';
+/**
+ * The fulfilment zone, harvested from the storefront payload.
+ *
+ * v2 because v1 held the WRONG NUMBER on every install that ran before
+ * MEAL-235: the zone used to be parsed out of an item id, which is the retailer
+ * LOCATION id. Those entries have no `from` field, live for twelve hours and
+ * were renewed on every run, so simply shipping the fix left every existing
+ * device on the priceless path with telemetry claiming otherwise. A new key is
+ * what makes the fix reach a phone that has already run the app.
+ */
+const ZONE_CACHE_KEY = '__mealio_ic_zone_v2';
 
 /**
  * The operations this rail needs, with the hashes observed on 2026-09-02.
@@ -397,12 +406,18 @@ ${RETRY_FN}
    * the priceless path is visible rather than inferred.
    */
   IC.findZoneId = async function (slug, firstItemId, budgetMs) {
+    // ONLY A STOREFRONT ZONE IS EVER TRUSTED FROM THE CACHE, and an entry that
+    // does not say so is discarded rather than read. The first cut of this
+    // treated any cached value as good and labelled it 'cache:storefront' when
+    // it had no provenance -- which is precisely what a pre-MEAL-235 entry looks
+    // like. The result was a fix that measured green in a fresh browser and
+    // changed nothing on a phone that had run the app before.
     try {
       var raw = localStorage.getItem('${epochKey(ZONE_CACHE_KEY)}');
       if (raw) {
         var j = JSON.parse(raw);
-        if (j && j.v && Date.now() - j.at < ${OPS_CACHE_MAX_AGE_MS}) {
-          return { v: String(j.v), from: j.from === 'item-id' ? 'cache:item-id' : 'cache:storefront' };
+        if (j && j.v && j.from === 'storefront' && Date.now() - j.at < ${OPS_CACHE_MAX_AGE_MS}) {
+          return { v: String(j.v), from: 'cache:storefront' };
         }
       }
     } catch (e) {}
@@ -410,16 +425,17 @@ ${RETRY_FN}
     var got = await IC.fetchShopId(slug, budgetMs);
     if (got && got.zone) return { v: String(got.zone), from: 'storefront', ms: got.ms };
 
-    // Last resort. Search will work; prices will not.
+    // LAST RESORT, AND DELIBERATELY NOT CACHED. Search will work; prices will
+    // not. Writing it down would let one bad storefront read wall the store off
+    // from prices for twelve hours and re-arm itself on the next run, which is
+    // the trap the v1 key fell into. Un-cached, the very next batch tries the
+    // storefront again.
     var f = String(firstItemId || '');
     var us = f.indexOf('_');
     var dash = f.indexOf('-');
     if (us >= 0 && dash > us) {
       var guess = f.slice(us + 1, dash);
-      if (guess) {
-        try { localStorage.setItem('${epochKey(ZONE_CACHE_KEY)}', JSON.stringify({ v: guess, at: Date.now(), from: 'item-id' })); } catch (e) {}
-        return { v: guess, from: 'item-id' };
-      }
+      if (guess) return { v: guess, from: 'item-id' };
     }
     return { v: null, from: 'none' };
   };
@@ -850,11 +866,35 @@ ${icPrelude()}
     // NetworkSession, which carries the SHOP id and not the tenant; when we are
     // not on a store URL the lookup falls through to the old guess and search
     // still works, without prices.
-    // Split, not a regex. A backslash inside this template literal is eaten on
-    // the way out -- the regex written here first emitted //store/([^/?#]+)/,
-    // which is a comment, and took the whole script down with a syntax error.
-    var slugParts = String(location.pathname || '').split('/');
-    var slug = (slugParts[1] === 'store' && slugParts[2]) ? slugParts[2] : null;
+    // THE SLUG, from the tenant table by HOSTNAME. Not from the path.
+    //
+    // The first cut read it out of location.pathname expecting /store/<slug>/,
+    // and that is wrong twice over. Every banner has its OWN origin -- ALDI is
+    // www.aldi.us and Publix is delivery.publix.com, not instacart.com -- and
+    // the WebView is not guaranteed to be sitting on a /store/ path when a
+    // search batch runs. Either miss produced a null slug, which fell straight
+    // through to the item-id zone, which is the priceless path. It measured
+    // green in a browser parked on the storefront and did nothing on a phone.
+    //
+    // The mapping is static and known at build time, so it is interpolated
+    // rather than discovered. The path is kept as a second look for a banner
+    // reached on a host the table does not list.
+    var HOSTS = ${JSON.stringify(
+      Object.fromEntries(Object.values(INSTACART_TENANTS).map((t) => [t.domain, t.slug])),
+    )};
+    var host = String(location.hostname || '');
+    var slug = null;
+    for (var hk in HOSTS) {
+      if (!Object.prototype.hasOwnProperty.call(HOSTS, hk)) continue;
+      if (host === hk || host.indexOf('.' + hk) === host.length - hk.length - 1) { slug = HOSTS[hk]; break; }
+    }
+    if (!slug) {
+      // Split, not a regex. A backslash inside this template literal is eaten on
+      // the way out -- the regex written here first emitted //store/([^/?#]+)/,
+      // which is a comment, and took the whole script down with a syntax error.
+      var slugParts = String(location.pathname || '').split('/');
+      if (slugParts[1] === 'store' && slugParts[2]) slug = slugParts[2];
+    }
     var probe = await IC.gql('AsyncItemSearch', {
       query: TERMS[0], shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}', searchSource: 'search',
     }, REQ_MS, 'search');

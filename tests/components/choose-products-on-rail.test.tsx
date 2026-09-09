@@ -170,6 +170,40 @@ describe('Choose Products runs on the rail', () => {
   });
 });
 
+describe('no results, no quantity', () => {
+  // Stephen, 2026-09-09: "anytime there are no search results during search
+  // products or reconciliation, the qty selection section should not appear."
+  //
+  // A quantity is a question about a product, and an empty result list has no
+  // product to ask it about. The stepper sat there anyway — and glowing, because
+  // an unset quantity glows — asking how many of nothing to add.
+
+  it('hides the quantity stepper when the store found nothing', () => {
+    const view = chooseRun('heb', 'H-E-B', []);
+    // The screen still says what happened and still offers a way forward.
+    expect(view.queryByText('No products found')).toBeTruthy();
+    // But there is nothing to count.
+    expect(view.queryByTestId('qty-glow-choose')).toBeNull();
+    expect(view.queryByText('Qty for this meal')).toBeNull();
+  });
+
+  it('still shows it the moment there IS something to count', () => {
+    // The guard against over-hiding: this is a per-render read of the list, not
+    // a one-way latch, so a custom search that finds something brings it back.
+    const view = chooseRun('heb', 'H-E-B', ['Daisy Sour Cream']);
+    expect(view.queryByText('Qty for this meal')).toBeTruthy();
+  });
+
+  it('leaves the way out of the screen alone', () => {
+    // Hiding the buttons with the stepper would strand the run on an empty
+    // screen. Back stays, and so does the custom-search row that is the actual
+    // fix for "no products found".
+    const view = chooseRun('heb', 'H-E-B', []);
+    expect(view.queryByText('← Back')).toBeTruthy();
+    expect(view.queryByText(/type a product name/i)).toBeTruthy();
+  });
+});
+
 describe('choosing a product saves the store id THERE AND THEN', () => {
   // Stephen, 2026-09-03: "do we save the sku during choose products too? Or
   // only after the first add? This question is for all stores."

@@ -7784,7 +7784,13 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
 
               <View style={[styles.footer, { gap: 8 }]}>
                 {/* Per-meal qty — only for review-unmatched flow; choose-product uses single chooseQty below */}
-                {!isChoose && currentReview.mealIngredients.map((mi) => {
+                {/*
+                  ...and only when something was found. Reconciliation asks the
+                  same question the choose flow does, and it is the same nonsense
+                  when the list under it is empty: how many of nothing. The
+                  hint below and the buttons stay.
+                */}
+                {!isChoose && hasCandidates && currentReview.mealIngredients.map((mi) => {
                   const qty = mealQtys[mi.mealId] ?? 0;
                   const showMealName = currentReview.mealIngredients.length > 1;
                   const qtyRequired = qty === 0;
@@ -7846,6 +7852,16 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                 {isChoose ? (
                   // Choose-product flow: "Qty for this meal" + Back / Next→ / Save
                   <>
+                    {/*
+                      NO RESULTS, NO QUANTITY (no ticket; Stephen, 2026-09-09).
+                      A quantity is a question about a product, and with nothing
+                      found there is no product to ask it about. The stepper sat
+                      there anyway — glowing, because an unset quantity glows —
+                      asking the user to choose how many of nothing to add. Back,
+                      Next and the custom-search row stay: they are the ways out
+                      of this screen, and hiding them would strand the run.
+                    */}
+                    {hasCandidates && (
                     <View style={{ borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 12, gap: 6 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Text style={{ fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text2 }}>
@@ -7899,6 +7915,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                           flashes when the button is pressed instead, and the
                           button's own label already says Choose Quantity. */}
                     </View>
+                    )}
                     <View style={{ flexDirection: 'row', gap: 8 }}>
                       <TouchableOpacity
                         onPress={() => { setReviewIdx(reviewIdx - 1); }}

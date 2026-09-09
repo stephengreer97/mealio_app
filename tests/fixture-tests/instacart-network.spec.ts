@@ -287,6 +287,52 @@ describe('search', () => {
     expect(calls.filter((c) => c.op === 'Search').length).toBe(1);
   }, AT_ALDI);
 
+  itWithFixture('storefront.html', 'ignores a zone cached before the fix, rather than trusting it', async (runner) => {
+    // THE REGRESSION THAT MADE THE FIX INVISIBLE ON A REAL PHONE. Every install
+    // that ran before MEAL-235 has a cached zone holding the item-id number, and
+    // those entries carry no provenance at all. The first cut read any cached
+    // value and LABELLED it 'cache:storefront', so a device that had ever run
+    // the app kept the priceless zone for twelve hours and said it had not.
+    await runner.page.evaluate(`
+      var k = Object.keys(localStorage).filter(function (x) { return x.indexOf('_zone_') >= 0; });
+      for (var i = 0; i < k.length; i++) localStorage.removeItem(k[i]);
+      localStorage.setItem('__mealio_ic_zone_v2', JSON.stringify({ v: '23898', at: Date.now() }));
+    `);
+    await runner.inject(gqlStub({ searchIds: ['items_23898-9'], storefrontZone: '32' }));
+    await runner.inject(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })!);
+    const shape = await runner.waitForMessage('IC_SEARCH_SHAPE', 20_000) as Record<string, unknown>;
+    // An entry with no `from` is a pre-fix entry. Discarded, not read.
+    expect(shape.zone).toBe('32');
+    expect(shape.zoneFrom).toBe('storefront');
+  }, AT_ALDI);
+
+  itWithFixture('storefront.html', 'does not cache the fallback zone, so the next batch retries', async (runner) => {
+    // The fallback used to write itself to the cache, which let one bad
+    // storefront read wall the store off from prices for twelve hours AND
+    // re-arm on every run. Un-cached, the very next batch asks again.
+    await runner.inject(gqlStub({ searchIds: ['items_44100-9'], storefrontZone: null }));
+    await runner.inject(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })!);
+    const shape = await runner.waitForMessage('IC_SEARCH_SHAPE', 20_000) as Record<string, unknown>;
+    expect(shape.zoneFrom).toBe('item-id');
+    const cached = await runner.page.evaluate(
+      "localStorage.getItem('__mealio_ic_zone_v2')",
+    ) as string | null;
+    expect(cached).toBeNull();
+  }, AT_ALDI);
+
+  itWithFixture('storefront.html', 'finds the slug from the HOST, not from the path it happens to be on', async (runner) => {
+    // Every banner has its own origin — ALDI is www.aldi.us, Publix is
+    // delivery.publix.com — and a search batch is not guaranteed to run while
+    // the WebView sits on a /store/<slug>/ path. Reading the slug off the
+    // pathname gave null on both counts, and a null slug falls straight through
+    // to the item-id zone. Which is why this shipped and Stephen still saw no
+    // prices on ALDI or Publix.
+    await runner.inject(gqlStub({ searchIds: ['items_23898-9'], storefrontZone: '32' }));
+    await runner.inject(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })!);
+    const shape = await runner.waitForMessage('IC_SEARCH_SHAPE', 20_000) as Record<string, unknown>;
+    expect(shape.zoneFrom).toBe('storefront');
+  }, { url: 'https://www.aldi.us/' });
+
   itWithFixture('storefront.html', 'carries the price onto the candidate the app renders', async (runner) => {
     await runner.inject(gqlStub({ storefrontZone: '32' }));
     await runner.inject(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })!);
