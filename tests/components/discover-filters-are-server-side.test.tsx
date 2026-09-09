@@ -17,6 +17,8 @@
 // re-applied local filter agrees with the server almost always, and is wrong
 // exactly when the two definitions have drifted.
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
@@ -181,5 +183,57 @@ describe('applying a filter', () => {
     await waitFor(() => expect(lastParams().tags).toEqual(['vegetarian']));
 
     await waitFor(() => expect(view.queryByText(/Lentil dal/i)).toBeTruthy());
+  });
+});
+
+// ── One clear button, not two ────────────────────────────────────────────────
+//
+// Stephen, on the app, 2026-09-09: "when I type in the search bar, there are
+// two x icons to the right."
+//
+// The input carried `clearButtonMode="while-editing"` AND a custom ✕ beside it.
+// `clearButtonMode` is iOS-only, so it drew a second, NATIVE clear button inside
+// the field on a phone and nothing at all on Android -- MEASURED on the Pixel,
+// where exactly one ✕ showed.
+//
+// The custom one is what stays: it is the only one that exists on both
+// platforms, and dropping it to keep the native one would leave Android with no
+// way to clear the field.
+//
+// THE SOURCE ASSERTION IS THE POINT HERE. A rendered test cannot catch this --
+// jest has no iOS, so the native button never appears and re-adding the prop
+// would go green. The only thing that notices is reading the file, which is what
+// pref-glow.test.tsx does for the same reason.
+describe('the search box has one clear button', () => {
+  const src = readFileSync(
+    join(__dirname, '..', '..', 'src', 'screens', 'discover', 'DiscoverScreen.tsx'),
+    'utf8',
+  );
+
+  it('does not ask iOS for a second, native one', () => {
+    // Only the comment explaining the absence may mention it, so match the JSX
+    // prop rather than the word.
+    expect(src).not.toMatch(/clearButtonMode=/);
+  });
+
+  it('renders exactly one clear control once there is text', () => {
+    // The other half: nobody adds a SECOND custom button either.
+    const view = render(<DiscoverScreen />);
+    const input = view.getByPlaceholderText(/search meals or creators/i);
+
+    expect(view.queryAllByTestId('search-clear')).toHaveLength(0);
+    act(() => { fireEvent.changeText(input, 'mexican'); });
+    expect(view.queryAllByTestId('search-clear')).toHaveLength(1);
+  });
+
+  it('clears the field when pressed', () => {
+    const view = render(<DiscoverScreen />);
+    const input = view.getByPlaceholderText(/search meals or creators/i);
+    act(() => { fireEvent.changeText(input, 'mexican'); });
+
+    act(() => { fireEvent.press(view.getByTestId('search-clear')); });
+
+    expect(view.queryAllByTestId('search-clear')).toHaveLength(0);
+    expect(input.props.value).toBe('');
   });
 });

@@ -345,10 +345,25 @@ export default function DiscoverScreen() {
           value={searchQuery}
           onChangeText={setSearchQuery}
           returnKeyType="search"
-          clearButtonMode="while-editing"
+          // NO `clearButtonMode`. It is iOS-only and renders a NATIVE clear
+          // button inside the field -- so on a phone it sat next to the one
+          // below and the search box had two ✕ icons, while Android showed one.
+          // Stephen, 2026-09-09, on the app: "there are two x icons to the
+          // right." Measured: one on the Pixel, because `clearButtonMode` does
+          // nothing there.
+          //
+          // The custom button is the one that stays, because it is the only one
+          // that exists on both platforms. Losing it to keep the native one
+          // would leave Android with no way to clear the field at all.
         />
         {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.searchClear}>
+          <TouchableOpacity
+            testID="search-clear"
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+            onPress={() => setSearchQuery('')}
+            style={styles.searchClear}
+          >
             <Ionicons name="close-circle" size={16} color={Colors.text3} />
           </TouchableOpacity>
         )}
