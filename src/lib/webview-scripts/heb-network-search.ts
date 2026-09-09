@@ -597,11 +597,25 @@ ${CANDIDATE_HELPERS}
  * (MEAL-200). They are reported rather than silently left, so a canary that
  * cannot fully clean up says so instead of appearing to have.
  */
-export function buildHebClearCartScript(): string {
+export function buildHebClearCartScript(opts: { only?: string[] } = {}): string {
+  const only = Array.isArray(opts.only) ? opts.only.map(String) : [];
   return `(async function () {
 ${GQL_FN}
 ${CART_READ_FN}
+  var ONLY = ${JSON.stringify(only)};
+  // SCOPED CLEANUP. The canary runs against a real account whose cart holds real
+  // shopping, so "leave no state behind" must mean "remove what THIS RUN added",
+  // never "empty the basket". With no list it still empties, which is what a
+  // measurement run wants; the canary always passes one.
+  var onlySet = null;
+  if (ONLY && ONLY.length) { onlySet = {}; for (var oi = 0; oi < ONLY.length; oi++) onlySet[String(ONLY[oi])] = 1; }
+  var keep = function (id) { return !onlySet || onlySet[String(id)] === 1; };
   var post = function (o) {
+    o.type = 'CART_CLEARED';
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
+  };
+  try {
+    // The RAW lines, not rowsOf's display rows  var post = function (o) {
     o.type = 'CART_CLEARED';
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
@@ -620,6 +634,7 @@ ${CART_READ_FN}
       var pid = l.product && l.product.id, sid = l.sku && l.sku.id;
       if (w != null && !isNaN(w)) { declined.push(l); continue; }
       if (!pid || !sid) { declined.push(l); continue; }
+      if (!keep(pid)) continue;
       clearable.push({ productId: pid, skuId: sid });
     }
     if (!clearable.length) {
@@ -1099,7 +1114,7 @@ export const HEB_RAIL: NetworkRail = {
   sessionScript: buildHebSessionScript,
   searchBatch: (terms, sess) => buildHebNetworkSearchBatchScript(terms, sess),
   cartRead: () => buildHebCartReadScript(),
-  clearCart: () => buildHebClearCartScript(),
+  clearCart: (_storeId, opts) => buildHebClearCartScript({ only: opts?.only }),
   addBatch: (items, opts) =>
     buildHebNetworkAddBatchScript(
       // H-E-B addresses a cart line by sku, so an item without one is not

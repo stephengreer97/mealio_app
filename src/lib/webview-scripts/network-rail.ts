@@ -103,10 +103,12 @@ export interface NetworkRail {
    *
    * OPTIONAL, AND A RAIL THAT CANNOT DO IT SAFELY MUST NOT DEFINE IT. Emptying a
    * cart means writing to a real basket, and the correct call differs by rail in
-   * ways that are MEASURED rather than guessable: Instacart's write SETS a line,
-   * so quantity 0 removes it, while Wegmans' endpoint adds a line and does
-   * nothing to one that already exists, so the same call there is a silent
-   * no-op that would report success.
+   * ways that are MEASURED rather than guessable. Instacart's write SETS a line,
+   * so quantity 0 removes it; Albertsons answers 400 to the same call and keeps
+   * the line, needing a DELETE; and Wegmans needs a different ROUTE and a
+   * different VERB again -- PUT /itemdeletion, naming lines by sku -- which no
+   * variation of its add could have reached, and which was found by watching
+   * the site's own bin icon.
    *
    * Absent means the canary reports cleanup as unsupported for that store, which
    * is honest. A wrong guess writes to someone's groceries.
@@ -119,6 +121,17 @@ export interface NetworkRail {
      * with proven semantics ignore it.
      */
     limit?: number;
+    /**
+     * Remove only these products, named by the SAME id that rail's cart read
+     * uses for a line (sku on Wegmans, offerId on Walmart, itemId on Albertsons
+     * and Instacart, product id on H-E-B).
+     *
+     * The canary passes what it added. It runs against a real account whose cart
+     * holds real shopping, so "leave no state behind" has to mean "remove what
+     * this run added" rather than "empty the basket" -- the second would delete
+     * someone's groceries to tidy up after a test. Omitted, it still empties.
+     */
+    only?: string[];
   }): string | null;
   /**
    * `opts.knownLines` is the cart the sheet has ALREADY read, as

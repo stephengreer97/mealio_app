@@ -199,3 +199,27 @@ describe('an unreadable cart is never reported as a cleared one', () => {
     expect(script).toContain('cart_shape_unknown');
   });
 });
+
+describe('cleanup removes what the run added, not the basket', () => {
+  // The canary runs against a real account. Its cart holds real shopping -- the
+  // Wegmans one was 18 lines and $237 when this was written -- so a cleanup that
+  // "empties the cart" would delete someone's groceries to tidy up after a test.
+  // Every rail therefore takes a list of the products the run added, named by
+  // the same id that rail's own cart read uses for a line.
+  const RAILS = ['heb', 'walmart', 'wegmans', 'albertsons', 'aldi'];
+
+  it.each(RAILS)('%s scopes the removal when given a list', (id) => {
+    const script = getNetworkRail(id)!.clearCart!(id, { only: ['abc123', 'def456'] })!;
+    expect(`${id}: ${script.includes('abc123')}`).toBe(`${id}: true`);
+    expect(`${id}: ${script.includes('def456')}`).toBe(`${id}: true`);
+    // The filter has to be CONSULTED, not merely embedded.
+    expect(`${id}: ${script.includes('keep(')}`).toBe(`${id}: true`);
+  });
+
+  it.each(RAILS)('%s still empties when no list is given', (id) => {
+    const script = getNetworkRail(id)!.clearCart!(id)!;
+    // An empty list must not read as "remove nothing" -- that would make a
+    // measurement run silently do nothing and report success.
+    expect(`${id}: ${script.includes('var onlySet = null')}`).toBe(`${id}: true`);
+  });
+});

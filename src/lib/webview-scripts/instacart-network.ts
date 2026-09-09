@@ -1159,10 +1159,22 @@ function railTenantId(storeId: string | null | undefined): string {
  * whatever is THERE, including anything a previous failed run left behind, which
  * is the entire point of cleaning up.
  */
-export function buildInstacartClearCartScript(storeId: string): string {
+export function buildInstacartClearCartScript(
+  storeId: string,
+  opts: { only?: string[] } = {},
+): string {
   const seed = JSON.stringify(INSTACART_SEED_OPS);
+  const only = Array.isArray(opts.only) ? opts.only.map(String) : [];
   return `(async function () {
 ${icPrelude()}
+  var ONLY = ${JSON.stringify(only)};
+  // SCOPED CLEANUP. The canary runs against a real account whose cart holds real
+  // shopping, so "leave no state behind" must mean "remove what THIS RUN added",
+  // never "empty the basket". With no list it still empties, which is what a
+  // measurement run wants; the canary always passes one.
+  var onlySet = null;
+  if (ONLY && ONLY.length) { onlySet = {}; for (var oi = 0; oi < ONLY.length; oi++) onlySet[String(ONLY[oi])] = 1; }
+  var keep = function (id) { return !onlySet || onlySet[String(id)] === 1; };
   var post = function (o) { o.type = 'CART_CLEARED'; IC.post(o); };
   try {
     await IC.ensureOps(${seed}, 15000);
@@ -1201,7 +1213,7 @@ ${icPrelude()}
     for (var i = 0; i < lines.length; i++) {
       var bp = lines[i].basketProduct || null;
       var itemId = bp && bp.itemId ? String(bp.itemId) : null;
-      if (itemId) updates.push({ itemId: itemId, quantity: 0 });
+      if (itemId && keep(itemId)) updates.push({ itemId: itemId, quantity: 0 });
     }
     if (!updates.length) { post({ ok: false, why: 'no_item_ids', lines: lines.length }); return; }
 
@@ -1245,7 +1257,7 @@ export const INSTACART_RAIL: NetworkRail = {
       requestMs: INSTACART_RAIL.budgets.searchRequestMs,
     }),
   cartRead: (storeId) => buildInstacartCartReadScript({ storeId: railTenantId(storeId) }),
-  clearCart: (storeId) => buildInstacartClearCartScript(railTenantId(storeId)),
+  clearCart: (storeId, opts) => buildInstacartClearCartScript(railTenantId(storeId), { only: opts?.only }),
   addBatch: (items, opts) =>
     buildInstacartAddBatchScript(
       items.map((i) => ({ idx: i.idx, productId: i.productId, quantity: i.quantity, name: i.name })),

@@ -868,9 +868,18 @@ function albSearchUrlExpr(pageSize: number, storeId: number): string {
  * Reads the cart first: the canary clears whatever is there, including anything
  * a previous failed run left behind.
  */
-export function buildAlbertsonsClearCartScript(): string {
+export function buildAlbertsonsClearCartScript(opts: { only?: string[] } = {}): string {
+  const only = Array.isArray(opts.only) ? opts.only.map(String) : [];
   return `(async function () {
 ${albPrelude()}
+  var ONLY = ${JSON.stringify(only)};
+  // SCOPED CLEANUP. The canary runs against a real account whose cart holds real
+  // shopping, so "leave no state behind" must mean "remove what THIS RUN added",
+  // never "empty the basket". With no list it still empties, which is what a
+  // measurement run wants; the canary always passes one.
+  var onlySet = null;
+  if (ONLY && ONLY.length) { onlySet = {}; for (var oi = 0; oi < ONLY.length; oi++) onlySet[String(ONLY[oi])] = 1; }
+  var keep = function (id) { return !onlySet || onlySet[String(id)] === 1; };
   var post = function (o) {
     o.type = 'CART_CLEARED';
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
@@ -906,6 +915,7 @@ ${albPrelude()}
     // and 404s above.
     var lines = [];
     for (var i = 0; i < list.length; i++) {
+      if (!keep(list[i].itemId)) continue;
       lines.push({ itemId: String(list[i].itemId), qty: Number(list[i].qty) || 1 });
     }
     var res = await fetch(__albCartUrl(), {
@@ -1654,7 +1664,7 @@ export const ALBERTSONS_RAIL: NetworkRail = {
       firstRequestMs: ALBERTSONS_RAIL.budgets.searchFirstRequestMs,
     }),
   cartRead: () => buildAlbertsonsCartReadScript(),
-  clearCart: () => buildAlbertsonsClearCartScript(),
+  clearCart: (_storeId, opts) => buildAlbertsonsClearCartScript({ only: opts?.only }),
   addBatch: (items, opts) => buildAlbertsonsNetworkAddBatchScript(items, opts),
   // The cart is addressed by product id; the search returns no sku, and none is
   // needed to write.

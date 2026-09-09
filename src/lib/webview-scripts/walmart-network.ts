@@ -472,11 +472,22 @@ ${wmPrelude()}
  * real cart instead of twenty -- and it is the right tool the next time a rail's
  * removal is unknown.
  */
-export function buildWalmartClearCartScript(opts: { limit?: number } = {}): string {
+export function buildWalmartClearCartScript(
+  opts: { limit?: number; only?: string[] } = {},
+): string {
+  const only = Array.isArray(opts.only) ? opts.only.map(String) : [];
   const limit = typeof opts.limit === 'number' && opts.limit > 0 ? Math.trunc(opts.limit) : 0;
   return `(async function () {
 ${wmPrelude()}
   var LIMIT = ${JSON.stringify(limit)};
+  var ONLY = ${JSON.stringify(only)};
+  // SCOPED CLEANUP. The canary runs against a real account whose cart holds real
+  // shopping, so "leave no state behind" must mean "remove what THIS RUN added",
+  // never "empty the basket". With no list it still empties, which is what a
+  // measurement run wants; the canary always passes one.
+  var onlySet = null;
+  if (ONLY && ONLY.length) { onlySet = {}; for (var oi = 0; oi < ONLY.length; oi++) onlySet[String(ONLY[oi])] = 1; }
+  var keep = function (id) { return !onlySet || onlySet[String(id)] === 1; };
   var post = function (o) { o.type = 'CART_CLEARED'; WM.post(o); };
   var readCart = async function (cartId) {
     var r = await WM.gql('cartxo', 'MergeAndGetCart', 'mutation', '${OPS.MergeAndGetCart}', {
@@ -498,7 +509,7 @@ ${wmPrelude()}
     var targets = [];
     for (var i = 0; i < before.length; i++) {
       var p = (before[i] || {}).product || {};
-      if (p.offerId == null) continue;
+      if (p.offerId == null || !keep(p.offerId)) continue;
       targets.push({ offerId: String(p.offerId), name: String(p.name || ''),
                      was: Number(before[i].quantity) || 1 });
       if (LIMIT && targets.length >= LIMIT) break;
@@ -791,7 +802,7 @@ export const WALMART_RAIL: NetworkRail = {
   sessionScript: buildWalmartSessionScript,
   searchBatch: (terms) => buildWalmartNetworkSearchBatchScript(terms),
   cartRead: () => buildWalmartCartReadScript(),
-  clearCart: (_storeId, opts) => buildWalmartClearCartScript({ limit: opts?.limit }),
+  clearCart: (_storeId, opts) => buildWalmartClearCartScript({ limit: opts?.limit, only: opts?.only }),
   addBatch: (items, opts) =>
     buildWalmartNetworkAddBatchScript(
       items.map((i) => ({ idx: i.idx, productId: i.productId, skuId: i.skuId ?? null,

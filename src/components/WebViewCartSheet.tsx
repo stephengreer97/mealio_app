@@ -58,7 +58,7 @@ import CookieManager from '@react-native-cookies/cookies';
 import { getAutomationConfig, getConfigVersion } from '../lib/automation-config';
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode, requestFailureCode, type StepPhase } from '../lib/automation-telemetry';
-import { diffCartItems, isCountedCartSnapshot, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { diffCartItems, isCountedCartSnapshot, decodeHtmlEntities, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
 import { AddConfirmation, confirmDetail } from '../lib/cart-confirmation';
 import { attemptedFailureNames, auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
@@ -5136,6 +5136,29 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
             if (Array.isArray(msg.items)) {
               if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
               rows = diffCartItems(cartItemsBeforeRef.current, msg.items);
+              // MEAL-7. THE IDS THIS RUN PUT IN THE CART, so the canary's cleanup
+              // can remove what it added instead of emptying the basket.
+              //
+              // The canary runs against a real account. Its Wegmans cart was 18
+              // lines and $237 when this was written, so a cleanup that "empties
+              // the cart" deletes someone's groceries to tidy up after a test.
+              // The green rows are already the before/after delta; this pairs
+              // them back to the store's own line ids, which is what every
+              // rail's clearCart addresses lines by.
+              //
+              // Name-matched, because CartRow carries no id: a row is green
+              // BECAUSE its name grew against the baseline, so the name is the
+              // key the diff itself used. Rails whose cart read is name-only
+              // emit no itemId at all and simply contribute nothing here, which
+              // is why cleanup treats an empty list as "nothing to scope to"
+              // rather than as "remove everything".
+              try {
+                const addedNames = new Set(rows.filter((r) => r.added).map((r) => r.name));
+                const addedIds = (msg.items as CartItem[])
+                  .filter((it) => it.itemId && addedNames.has(decodeHtmlEntities(it.name)))
+                  .map((it) => String(it.itemId));
+                console.log(`[Cart ${ts()}]`, 'canary: added ids', JSON.stringify(addedIds));
+              } catch { /* diagnostics must never break a run */ }
             }
             const reconResults = parallelResultByIdxRef.current;
             const active = activeItemsRef.current;

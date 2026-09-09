@@ -26,7 +26,8 @@ the store. Any of those missing reports CANARY DID NOT RUN with a reason -- neve
 a store failure. An unplugged night that reads as a red store trains everyone to
 ignore the colour, which costs more than the missed run.
 """
-import json, os, random, subprocess, sys, time
+import json
+import urllib.request, os, random, subprocess, sys, time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -105,25 +106,32 @@ def signed_in(store_chip, timeout_s=90):
 
 # ── The run shapes ──────────────────────────────────────────────────────────
 
-def _start_run(select_extra_meal=False):
-    """Select the canary meal (and optionally a second) and start the run."""
-    drive.tap_xy(275, 600)                      # the first meal card
+def _start_run(meal_name, second_meal=None):
+    """Select the canary meal (and optionally a second) and start the run.
+
+    BY NAME, not by position. This tapped "the first meal card" at a fixed
+    coordinate, which was fine while one canary meal existed and wrong the moment
+    there were five: My Meals is ordered by recency, so the first card is
+    whichever store was curated last, and every store would have run the same
+    store's meal. Each canary meal is therefore named for its store.
+    """
+    drive.tap_text(meal_name, timeout=40)
     time.sleep(1.5)
-    if select_extra_meal:
+    if second_meal:
         # The combination run: two meals in one add, which exercises the merge
         # a single-meal run never reaches.
-        drive.tap_xy(800, 600)
+        drive.tap_text(second_meal, timeout=40)
         time.sleep(1.5)
     drive.tap_xy(539, 2100)                     # the floating action
     time.sleep(3)
     drive.tap_xy(539, 2113)                     # confirm on the qty sheet
 
 
-def run_once(shape='single', settle_s=240):
+def run_once(meal_name, shape='single', settle_s=240, second_meal=None):
     """Drive one run and return when it finalizes. Records the window."""
     since = now_iso()
     mark = drive.log_mark()
-    _start_run(select_extra_meal=(shape == 'combination'))
+    _start_run(meal_name, second_meal=second_meal if shape == 'combination' else None)
     end = time.time() + settle_s
     while time.time() < end:
         lines = drive.log_since(mark)
@@ -150,8 +158,62 @@ def cart_count(timeout_s=60):
     return None
 
 
-def cleanup(store_id):
-    """Empty the test cart, where the rail can do it safely.
+def added_ids(mark):
+    """The store line ids this run put in the cart.
+
+    The run already computes the before/after delta -- that is what colours the
+    done screen's green rows -- and now says which store ids those rows are.
+    Cleanup removes exactly those.
+    """
+    ids = []
+    for line in drive.log_since(mark):
+        if 'canary: added ids' in line:
+            try:
+                ids = json.loads(line[line.index('['):line.rindex(']') + 1])
+            except Exception:
+                continue
+    return [str(i) for i in ids]
+
+
+def load_plans():
+    """Enabled rows from `canary_plans`, newest curation wins.
+
+    Service-role, because this runs on the box rather than as a signed-in user
+    and RLS would otherwise hide every row.
+    """
+    env = {}
+    for line in open(os.path.expanduser('~/mealio_central/.env.local')):
+        if '=' in line and not line.startswith('#'):
+            k, v = line.split('=', 1)
+            env[k.strip()] = v.strip()
+    url = env.get('NEXT_PUBLIC_SUPABASE_URL')
+    key = env.get('SUPABASE_SERVICE_ROLE_KEY')
+    if not url or not key:
+        return []
+    req = urllib.request.Request(
+        url + '/rest/v1/canary_plans?select=*&enabled=eq.true',
+        headers={'apikey': key, 'authorization': 'Bearer ' + key})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        rows = json.loads(r.read().decode())
+    return [{'storeId': row['store_id'],
+             'storeChip': row.get('store_chip') or row['store_id'],
+             'mealName': row.get('meal_name'),
+             'outOfStock': row.get('out_of_stock_item') or '',
+             'unmatched': row.get('unmatched_item') or ''}
+            for row in rows if row.get('store_id')]
+
+
+def cleanup(store_id, only=None):
+    """Remove what this run added from the test cart.
+
+    NOT "empty the cart". The canary runs against Stephen's real account, whose
+    Wegmans cart was 18 lines and $237 when this was written; emptying it to tidy
+    up after a test would delete real groceries. `only` is the list of store line
+    ids the run added, and every rail's clearCart scopes to it.
+
+    An EMPTY list means the run added nothing that carries an id, so there is
+    nothing to clean up -- which is reported as such rather than falling through
+    to the unscoped clear, because unscoped here means "the whole basket".
 
     A canary that leaves state behind poisons its own next run, so failing this
     is a CANARY failure -- it is just not evidence about the store's automation,
@@ -173,6 +235,11 @@ def cleanup(store_id):
     ).stdout.strip().splitlines()[-1:] or ['no']
     if supported[0] != 'yes':
         return (None, 'this rail has no measured way to empty a cart')
+
+    if only is None or not len(only):
+        # Deliberately NOT a fall-through to the unscoped clear. Nothing to
+        # remove and "remove everything" must never be the same branch.
+        return (None, 'the run added no line this rail gives an id for')
 
     # The script runs in the cart sheet's WebView, so the sheet has to be open on
     # this store. Driven the same way a run is: nothing here reaches past the UI.
@@ -201,8 +268,17 @@ def main():
         return 0
 
     out['ran'] = True
-    plan_path = os.path.join(os.path.dirname(__file__), 'canary-plans.json')
-    plans = json.load(open(plan_path)) if os.path.exists(plan_path) else []
+    # THE DB IS THE SOURCE, not a file on this box. The plans moved to
+    # `canary_plans` when the admin panel gained the per-store boxes and the
+    # ON/OFF toggle; a JSON file next to the runner would go stale the first time
+    # Stephen curated a store, and the runner would then be testing something
+    # nobody had asked for. The scorer reads the same table.
+    plans = load_plans()
+    if not plans:
+        out.update({'ran': False, 'reason': 'no_plans',
+                    'detail': 'canary_plans has no enabled rows'})
+        print(json.dumps(out, indent=2))
+        return 0
 
     for plan in [p for p in plans if p.get('storeId')]:
         store, chip = plan['storeId'], plan.get('storeChip', plan['storeId'])
@@ -218,17 +294,27 @@ def main():
             continue
 
         entry = {'storeId': store, 'ran': True, 'windows': {}}
-        entry['windows']['single'] = run_once('single')
+        run_mark = drive.log_mark()
+        meal = plan.get('mealName') or 'Canary'
+        entry['windows']['single'] = run_once(meal)
         before = cart_count()
 
         # The repeat run: same meals again, against a non-empty cart.
-        entry['windows']['repeat'] = run_once('single')
+        entry['windows']['repeat'] = run_once(meal)
         entry['cart'] = {'before': before, 'after': cart_count()}
 
         # The combination run: two meals at once.
-        entry['windows']['combination'] = run_once('combination')
+        # The second meal is any OTHER meal saved for this store; without one the
+        # combination window is skipped rather than faked.
+        entry['windows']['combination'] = (
+            run_once(meal, 'combination', second_meal=plan.get('secondMeal'))
+            if plan.get('secondMeal') else None)
 
-        cleaned, detail = cleanup(store)
+        # Collected across ALL THREE windows: the repeat and the combination add
+        # on top (2026-09-01), so each contributes lines the cleanup owns.
+        entry['addedIds'] = sorted(set(added_ids(run_mark)))
+
+        cleaned, detail = cleanup(store, only=entry.get('addedIds') or [])
         entry['cleanup'] = {'ok': cleaned, 'detail': detail}
         out['results'].append(entry)
 

@@ -1016,11 +1016,22 @@ ${wegPrelude()}
 // an unknown route before it adds CORS headers -- which is also why a wrong
 // guess and an unreachable host are indistinguishable from inside the page, and
 // why guessing could never have converged here).
-export function buildWegmansClearCartScript(opts: { limit?: number } = {}): string {
+export function buildWegmansClearCartScript(
+  opts: { limit?: number; only?: string[] } = {},
+): string {
   const limit = typeof opts.limit === 'number' && opts.limit > 0 ? Math.trunc(opts.limit) : 0;
+  const only = Array.isArray(opts.only) ? opts.only.map(String) : [];
   return `(async function () {
 ${wegPrelude()}
   var LIMIT = ${JSON.stringify(limit)};
+  var ONLY = ${JSON.stringify(only)};
+  // SCOPED CLEANUP. The canary runs against a real account whose cart holds real
+  // shopping, so "leave no state behind" must mean "remove what THIS RUN added",
+  // never "empty the basket". With no list it still empties, which is what a
+  // measurement run wants; the canary always passes one.
+  var onlySet = null;
+  if (ONLY && ONLY.length) { onlySet = {}; for (var oi = 0; oi < ONLY.length; oi++) onlySet[String(ONLY[oi])] = 1; }
+  var keep = function (id) { return !onlySet || onlySet[String(id)] === 1; };
   var post = function (o) { o.type = 'CART_CLEARED'; WG.post(o); };
   try {
     var tok = await WG.token();
@@ -1055,7 +1066,7 @@ ${wegPrelude()}
     for (var i = 0; i < lines.length; i++) {
       var li = lines[i] || {};
       var sku = WG.lineSku(li);
-      if (!sku) continue;
+      if (!sku || !keep(sku)) continue;
       targets.push({ sku: String(sku), name: WG.lineName(li, sku),
                      was: Number(li.quantity != null ? li.quantity : 1) });
       if (LIMIT && targets.length >= LIMIT) break;
@@ -1448,7 +1459,7 @@ export const WEGMANS_RAIL: NetworkRail = {
       requestMs: WEGMANS_RAIL.budgets.searchRequestMs,
     }),
   cartRead: () => buildWegmansCartReadScript(),
-  clearCart: (_storeId, opts) => buildWegmansClearCartScript({ limit: opts?.limit }),
+  clearCart: (_storeId, opts) => buildWegmansClearCartScript({ limit: opts?.limit, only: opts?.only }),
   addBatch: (items, opts) =>
     buildWegmansNetworkAddBatchScript(
       items.map((i) => ({
