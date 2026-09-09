@@ -27,6 +27,7 @@ a store failure. An unplugged night that reads as a red store trains everyone to
 ignore the colour, which costs more than the missed run.
 """
 import json
+import re
 import urllib.request, os, random, subprocess, sys, time
 from datetime import datetime, timezone
 
@@ -66,6 +67,30 @@ def preflight():
     return None
 
 
+def select_store(store_chip):
+    """Tap a store's chip, scrolling the chip row to reach it.
+
+    My Meals is FILTERED by the selected chip, so this is not only how the
+    prewarm is asked about a store -- it is how the store's canary meal becomes
+    visible at all. Choosing products for "Canary ALDI" while Wegmans was
+    selected simply scrolled a list that could never contain it.
+    """
+    chip = drive.find(store_chip, exact=True)
+    if not chip:
+        # The chip row is horizontally scrollable and shows about four at a time.
+        for _ in range(8):
+            drive.sh('adb', 'shell', 'input', 'swipe', '950', '280', '150', '280', '500')
+            time.sleep(1.2)
+            chip = drive.find(store_chip, exact=True)
+            if chip:
+                break
+    if not chip:
+        return False
+    drive.tap(chip)
+    time.sleep(2)
+    return True
+
+
 def signed_in(store_chip, timeout_s=90):
     """Ask the app whether it is signed in to this store, before running.
 
@@ -78,18 +103,8 @@ def signed_in(store_chip, timeout_s=90):
     from a cart.
     """
     mark = drive.log_mark()
-    chip = drive.find(store_chip, exact=True)
-    if not chip:
-        # The chip row is horizontally scrollable and shows about four at a time.
-        for _ in range(6):
-            drive.sh('adb', 'shell', 'input', 'swipe', '950', '280', '150', '280', '500')
-            time.sleep(1.2)
-            chip = drive.find(store_chip, exact=True)
-            if chip:
-                break
-    if not chip:
+    if not select_store(store_chip):
         return (False, f'no store chip for {store_chip}')
-    drive.tap(chip)
     # THREE ANSWERS, NOT ONE: probed, cached ("checkStore skip ... already
     # loggedOut"), or no rail at all (Kroger). The first version waited only for
     # a probe line and read a cached verdict as "never answered", which would
@@ -106,7 +121,7 @@ def signed_in(store_chip, timeout_s=90):
 
 # ── The run shapes ──────────────────────────────────────────────────────────
 
-def _start_run(meal_name, second_meal=None):
+def _start_run(meal_name, second_meal=None, store_chip=None):
     """Select the canary meal (and optionally a second) and start the run.
 
     BY NAME, not by position. This tapped "the first meal card" at a fixed
@@ -115,6 +130,14 @@ def _start_run(meal_name, second_meal=None):
     whichever store was curated last, and every store would have run the same
     store's meal. Each canary meal is therefore named for its store.
     """
+    # BACK TO MY MEALS FIRST. A window leaves the app on the run's done screen,
+    # so the second and third windows looked for a meal card on a screen that has
+    # none. The tab is idempotent: tapping it from My Meals is a no-op.
+    drive.tap_id('tab-mymeals', timeout=40)
+    time.sleep(2)
+    if store_chip:
+        select_store(store_chip)
+    drive.scroll_to(meal_name)
     drive.tap_text(meal_name, timeout=40)
     time.sleep(1.5)
     if second_meal:
@@ -127,11 +150,120 @@ def _start_run(meal_name, second_meal=None):
     drive.tap_xy(539, 2113)                     # confirm on the qty sheet
 
 
-def run_once(meal_name, shape='single', settle_s=240, second_meal=None):
+def _chooser_step(xml):
+    """The chooser's own progress label, e.g. "Choose Product (2 of 3)"."""
+    m = re.search(r'Choose Product \(\d+ of \d+\)', xml or '')
+    return m.group(0) if m else None
+
+
+def choose_products(meal_name, store_chip, max_steps=12):
+    """Walk the product chooser once for a canary meal.
+
+    A meal added from the app cannot be run until its products are chosen: the
+    card says "Choose products once to add to cart" and the floating action reads
+    "Choose Products", not "Add to cart". Every canary window before this existed
+    tapped that button, landed in the chooser, and finalised nothing -- which is
+    why the first green-looking run reported no reconcile, no added ids, and a
+    cart that went from 0 to 0.
+
+    First candidate, always. The canary is not testing whether the ranking picks
+    a good product; it is testing that the add, the reconcile and the cleanup
+    work. An ingredient with no candidates at all -- "Nonexistent unobtainium
+    9000" is in every canary meal for exactly this -- is skipped, which is the
+    branch it is there to exercise.
+    """
+    drive.tap_id('tab-mymeals', timeout=40)
+    time.sleep(2)
+    select_store(store_chip)
+    # SCROLL FIRST. My Meals is a long list ordered by recency and tap_id does
+    # not scroll; a canary meal several rows down is simply not there yet.
+    drive.scroll_to(meal_name)
+    drive.tap_id('meal-card-' + meal_name, timeout=40)
+    time.sleep(1.5)
+    drive.tap_id('floating-add-to-cart', timeout=40)
+    time.sleep(6)
+
+    # NEVER CHOOSE A PRODUCT FOR THESE. The line exists to be unfindable, and
+    # a store will happily suggest SOMETHING for it -- ALDI offered allergy
+    # tablets, a sauvignon blanc and a dog basket. Picking the first of those
+    # turns the branch it is there to test into an ordinary add.
+    never = ['Nonexistent unobtainium 9000']
+
+    steps = []
+    for _ in range(max_steps):
+        xml = drive.ui()
+        if any(n in xml for n in never) and drive.find('Skip this ingredient'):
+            drive.tap_text('Skip this ingredient', timeout=20)
+            time.sleep(3)
+            steps.append('left-unfindable')
+            continue
+        if 'floating-add-to-cart' in xml and 'candidate-' not in xml:
+            break                                   # back on My Meals: done
+        if 'candidate-0' in xml:
+            # THREE TAPS, AND THE MIDDLE ONE IS NOT OPTIONAL. Selecting a
+            # product does not enable the primary: the quantity has to be set
+            # first, which is the small qty section at the bottom of the sheet
+            # (the one MEAL-218 put a glow on because it gets glanced over).
+            # Without the '+' the primary is disabled, the screen does not move,
+            # and the loop spins on the same ingredient until it runs out of
+            # steps -- which is exactly what happened the first time.
+            #
+            # candidate-0 by ID, not by its text: tapping the row's label selects
+            # nothing.
+            where = _chooser_step(xml)
+            drive.tap_id('candidate-0', timeout=20)
+            time.sleep(2)
+            try:
+                drive.tap_text('+', timeout=10)
+                time.sleep(1.5)
+            except Exception:
+                pass
+            drive.tap_id('review-primary', timeout=20)
+            time.sleep(3)
+            # DID IT ACTUALLY MOVE? The primary is disabled until the quantity is
+            # set, and a disabled tap is silent -- so without this the loop spins
+            # on one ingredient until max_steps and reports twelve cheerful
+            # "chose" steps having chosen nothing. H-E-B did exactly that.
+            if _chooser_step(drive.ui()) == where:
+                drive.tap_id('candidate-0', timeout=20)
+                time.sleep(1.5)
+                try:
+                    drive.tap_text('+', timeout=10)
+                    time.sleep(1.5)
+                except Exception:
+                    pass
+                drive.tap_id('review-primary', timeout=20)
+                time.sleep(3)
+                if _chooser_step(drive.ui()) == where:
+                    # Leave it rather than fight it: an unchosen line is honest,
+                    # and the run reports it as skipped.
+                    if drive.find('Skip this ingredient'):
+                        drive.tap_text('Skip this ingredient', timeout=20)
+                        time.sleep(3)
+                    steps.append('stuck')
+                    continue
+            steps.append('chose')
+            continue
+        if drive.find('Skip this ingredient'):
+            drive.tap_text('Skip this ingredient', timeout=20)
+            time.sleep(3)
+            steps.append('skipped')
+            continue
+        if drive.find('Done'):
+            drive.tap_text('Done', timeout=20)
+            time.sleep(3)
+            steps.append('done')
+            break
+        break
+    return steps
+
+
+def run_once(meal_name, shape='single', settle_s=240, second_meal=None, store_chip=None):
     """Drive one run and return when it finalizes. Records the window."""
     since = now_iso()
     mark = drive.log_mark()
-    _start_run(meal_name, second_meal=second_meal if shape == 'combination' else None)
+    _start_run(meal_name, second_meal=second_meal if shape == 'combination' else None,
+               store_chip=store_chip)
     end = time.time() + settle_s
     while time.time() < end:
         lines = drive.log_since(mark)
@@ -175,6 +307,21 @@ def added_ids(mark):
     return [str(i) for i in ids]
 
 
+def store_chips():
+    """storeId -> the name the app puts on the chip, read from its own constant.
+
+    Parsed rather than duplicated: a second copy of this mapping would go stale
+    the first time a store was renamed, and the failure would look like "not
+    signed in" rather than like a typo.
+    """
+    src = os.path.join(os.path.dirname(__file__), '..', '..', '..',
+                       'src', 'constants', 'stores.ts')
+    out = {}
+    for m in re.finditer(r"\{\s*id:\s*'([^']+)'\s*,\s*name:\s*('[^']*'|\"[^\"]*\")", open(src).read()):
+        out[m.group(1)] = m.group(2)[1:-1]
+    return out
+
+
 def load_plans():
     """Enabled rows from `canary_plans`, newest curation wins.
 
@@ -195,8 +342,13 @@ def load_plans():
         headers={'apikey': key, 'authorization': 'Bearer ' + key})
     with urllib.request.urlopen(req, timeout=30) as r:
         rows = json.loads(r.read().decode())
+    chips = store_chips()
     return [{'storeId': row['store_id'],
-             'storeChip': row.get('store_chip') or row['store_id'],
+             # THE CHIP IS THE DISPLAY NAME. The plan table stores a store_id
+             # ('aldi'), and the chip row shows what the app calls it ('ALDI'),
+             # so falling back to the id found no chip and reported every store
+             # as not signed in -- a rig problem, and a made-up one.
+             'storeChip': chips.get(row['store_id'], row['store_id']),
              'mealName': row.get('meal_name'),
              'outOfStock': row.get('out_of_stock_item') or '',
              'unmatched': row.get('unmatched_item') or ''}
@@ -231,7 +383,7 @@ def cleanup(store_id, only=None):
          f" const r = getNetworkRail({store_id!r});"
          " console.log(r && typeof r.clearCart === 'function' ? 'yes' : 'no')"],
         capture_output=True, text=True, timeout=120,
-        cwd=os.path.join(os.path.dirname(__file__), '..', '..', '..', 'mealio_app'),
+        cwd=os.path.join(os.path.dirname(__file__), '..', '..', '..'),
     ).stdout.strip().splitlines()[-1:] or ['no']
     if supported[0] != 'yes':
         return (None, 'this rail has no measured way to empty a cart')
@@ -274,6 +426,15 @@ def main():
     # Stephen curated a store, and the runner would then be testing something
     # nobody had asked for. The scorer reads the same table.
     plans = load_plans()
+    # `--store heb` runs one. The nightly job passes nothing and runs them all;
+    # this is for proving a change against a single store without spending an
+    # hour of device time to find out the runner has a typo in it.
+    wanted = None
+    for i, a in enumerate(sys.argv):
+        if a == '--store' and i + 1 < len(sys.argv):
+            wanted = sys.argv[i + 1]
+    if wanted:
+        plans = [p for p in plans if p.get('storeId') == wanted]
     if not plans:
         out.update({'ran': False, 'reason': 'no_plans',
                     'detail': 'canary_plans has no enabled rows'})
@@ -296,11 +457,11 @@ def main():
         entry = {'storeId': store, 'ran': True, 'windows': {}}
         run_mark = drive.log_mark()
         meal = plan.get('mealName') or 'Canary'
-        entry['windows']['single'] = run_once(meal)
+        entry['windows']['single'] = run_once(meal, store_chip=chip)
         before = cart_count()
 
         # The repeat run: same meals again, against a non-empty cart.
-        entry['windows']['repeat'] = run_once(meal)
+        entry['windows']['repeat'] = run_once(meal, store_chip=chip)
         entry['cart'] = {'before': before, 'after': cart_count()}
 
         # The combination run: two meals at once.

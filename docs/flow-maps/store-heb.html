@@ -120,7 +120,7 @@ flowchart TD
     NOTE{{"presearch, parallelAdd, parallelSearch and serial<br/>were the other four branches. All of them clicked<br/>through the storefront; all were deleted 2026-09-01.<br/>H-E-B has a rail, so it never falls back to one —<br/>a rail that cannot answer reruns ONCE, then offers<br/>whatever it found for review, and only hands the<br/>store to the user when it holds nothing at all.<br/>See decideHandover in the cart-engine map."}}
 
     subgraph PERITEM ["2 · Per item, over the rail"]
-        WORKER["search by request<br/><code>productSearchPageV2</code> — no page load"]
+        WORKER["search by request<br/><code>productSearchPageV2</code> — no page load<br/><i>six terms per document, aliased<br/>a0/a1/… ; a refused document<br/>falls back one term at a time</i>"]
         WORKER --> MATCH{"EXACT name match, in stock,<br/>with a productId and skuId?"}
         MATCH -->|no| TOREVIEW(["queue for review<br/><i>low_confidence / no_results / out_of_stock<br/>are all DEFINITIVE — no retry can<br/>change what the same search returns</i>"])
         MATCH -->|"sold by weight"| TOREVIEW

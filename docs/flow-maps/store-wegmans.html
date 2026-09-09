@@ -15,7 +15,7 @@ against a live signed-in session before a line was written &mdash; see
 <table class="src">
   <tr><th>Phase</th><th>How</th><th>Measured</th></tr>
   <tr><td>Login</td><td><code>msal.&lt;n&gt;.account.keys</code> in localStorage &mdash; MSAL keeps this in the CLEAR</td><td><b>0 network</b></td></tr>
-  <tr><td>Search</td><td>Algolia, index <code>products</code>, search-only key from the site's own URLs</td><td><b>13&nbsp;ms</b> filtered</td></tr>
+  <tr><td>Search</td><td>Algolia, index <code>products</code>, search-only key from the site's own URLs. Terms ride in chunks of ten on the <b>multi-query</b> endpoint (<code>/1/indexes/*/queries</code>) &mdash; the same endpoint, and the same request shape, the add path has used for sku enrichment all along</td><td><b>13&nbsp;ms</b> filtered</td></tr>
   <tr><td>Cart read</td><td><code>GET /commerce/cart/carts/</code> + bearer</td><td>&mdash;</td></tr>
   <tr><td>Add</td><td><code>POST /commerce/cart/carts/lineitems</code> + bearer</td><td><b>on</b> &mdash; qty 3 landed as 3</td></tr>
 </table>
@@ -151,7 +151,7 @@ flowchart TD
     ISIN -->|yes| BEFORE["<b>before-snapshot</b><br/><code>CART_COUNT phase=before</code>"]
 
     BEFORE --> ROUTE{{"chooseAddStrategy"}}
-    ROUTE -->|"nothing chosen yet:<br/><code>networkSearch</code> is ON"| WGCHOOSE(["<b>networkChoose</b> — the rail<br/><i>Algolia, ~585ms for 24 candidates.<br/>needs the store number, which is<br/>behind the bearer</i>"])
+    ROUTE -->|"nothing chosen yet:<br/><code>networkSearch</code> is ON"| WGCHOOSE(["<b>networkChoose</b> — the rail<br/><i>Algolia, ~585ms for 24 candidates.<br/>ten terms per request, results read<br/>by POSITION or not at all.<br/>needs the store number, which is<br/>behind the bearer</i>"])
     ROUTE -->|"<code>forceSerialSearch: true</code><br/>always"| SER["<b>serial</b><br/>one item at a time,<br/>one WebView"]
     ROUTE -.->|"parallelAdd / presearch<br/>never reached here"| NEVER["worker pool<br/><i>code kept for a retry;<br/>the WAF 403s even<br/>2 staggered workers</i>"]
 

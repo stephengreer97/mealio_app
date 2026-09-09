@@ -51,20 +51,42 @@ function product(over: Record<string, unknown> = {}) {
   };
 }
 
-/** Replace fetch so no test reaches H-E-B, and record what was asked for. */
+/**
+ * Replace fetch so no test reaches H-E-B, and record what was asked for.
+ *
+ * ANSWERS BOTH SHAPES. Search terms ride in chunks as ALIASED root fields of one
+ * document — a0/a1/... against $p0/$p1/... — so a stub that only ever answers
+ * `productSearchPageV2` replies to a batch with a payload none of its arms are
+ * in, and every term comes back unexpected_shape. The aliasing is unpacked here
+ * rather than in each test so the assertions stay written against behaviour.
+ */
 function stub(payload: unknown, opts: { status?: number; body?: string } = {}) {
+  const plain = (opts.status ?? 200) >= 400 || opts.body !== undefined;
   return [
     '(function () {',
     '  window.__calls = [];',
+    '  var PAYLOAD = ' + JSON.stringify(JSON.stringify(payload)) + ';',
     '  window.fetch = function (url, init) {',
     '    var body = null;',
     '    try { body = JSON.parse((init && init.body) || "null"); } catch (e) {}',
     '    window.__calls.push(body);',
+    // A batched search document, answered arm for arm with the same page the
+    // single-term document gets. Skipped when the test is stubbing a failure —
+    // that failure is the point and must reach the rail unchanged.
+    '    var v = (body && body.variables) || {};',
+    '    var one = null;',
+    '    try { one = JSON.parse(PAYLOAD).data.productSearchPageV2; } catch (e) {}',
+    '    if (' + String(!plain) + ' && one && ("p0" in v)) {',
+    '      var aliased = {};',
+    '      for (var n = 0; ("p" + n) in v; n++) aliased["a" + n] = one;',
+    '      return Promise.resolve({ ok: true, status: 200, text: function () {',
+    '        return Promise.resolve(JSON.stringify({ data: aliased })); } });',
+    '    }',
     '    return Promise.resolve({',
     '      ok: ' + String((opts.status ?? 200) < 400) + ',',
     '      status: ' + String(opts.status ?? 200) + ',',
     '      text: function () { return Promise.resolve(' +
-        (opts.body !== undefined ? JSON.stringify(opts.body) : JSON.stringify(JSON.stringify(payload))) + '); },',
+        (opts.body !== undefined ? JSON.stringify(opts.body) : 'PAYLOAD') + '); },',
     '    });',
     '  };',
     '})(); true;',
@@ -337,18 +359,22 @@ describe('HEB MEAL-202: many terms, one page, no navigation', () => {
 
   itWithFixture('logged-in-home.html', 'reports failures per term, not per batch', async (runner) => {
     // A term that fails must not take the other eleven down with it: the caller
-    // falls back to loading a page for JUST that term.
+    // falls back to loading a page for JUST that term. Terms now share a
+    // document, so this is the version that matters — one arm of one document
+    // failing, and the arms beside it still answering.
     await runner.inject([
       '(function () {',
       '  window.fetch = function (url, init) {',
       '    var body = JSON.parse(init.body);',
-      '    var term = body.variables.params.query;',
-      '    if (term === "tortillas") {',
-      '      return Promise.resolve({ ok: false, status: 403,',
-      '        text: function () { return Promise.resolve("<html>blocked</html>"); } });',
+      '    var v = body.variables || {};',
+      '    var data = {};',
+      '    for (var n = 0; ("p" + n) in v; n++) {',
+      '      data["a" + n] = v["p" + n].query === "tortillas"',
+      '        ? { __typename: "SearchPageError", code: "SEARCH_FAILED", message: "no" }',
+      '        : ' + JSON.stringify(searchPayload([product()]).data.productSearchPageV2) + ';',
       '    }',
       '    return Promise.resolve({ ok: true, status: 200, text: function () {',
-      '      return Promise.resolve(JSON.stringify(' + JSON.stringify(searchPayload([product()])) + '));',
+      '      return Promise.resolve(JSON.stringify({ data: data }));',
       '    } });',
       '  };',
       '})(); true;',
@@ -360,7 +386,73 @@ describe('HEB MEAL-202: many terms, one page, no navigation', () => {
     expect(ok).toEqual(['limes', 'sour cream']);
     expect(bad).toHaveLength(1);
     expect(bad[0].term).toBe('tortillas');
-    expect(bad[0].why).toBe('blocked');
+    expect(bad[0].why).toBe('search_page_error');
+  });
+
+  itWithFixture('logged-in-home.html', 'a document the gateway refuses costs no term its answer', async (runner) => {
+    // The one thing that makes batching safe to turn on before anyone has seen
+    // this gateway answer a wide document. A refused batch must not be a refused
+    // RUN: the chunk is re-asked one term at a time, which is exactly what this
+    // rail did before the batch existed.
+    //
+    // The single-term shape is the one that has been in production, so the stub
+    // answers it and refuses anything carrying $p0.
+    await runner.inject([
+      '(function () {',
+      '  window.__docs = [];',
+      '  window.fetch = function (url, init) {',
+      '    var body = JSON.parse(init.body);',
+      '    window.__docs.push(body.operationName);',
+      '    if (body.variables && ("p0" in body.variables)) {',
+      '      return Promise.resolve({ ok: false, status: 400,',
+      '        text: function () { return Promise.resolve("query too complex"); } });',
+      '    }',
+      '    return Promise.resolve({ ok: true, status: 200, text: function () {',
+      '      return Promise.resolve(JSON.stringify(' + JSON.stringify(searchPayload([product()])) + '));',
+      '    } });',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+    await runner.inject(batch(['sour cream', 'tortillas', 'limes']));
+    const fell = await runner.waitForMessage('SEARCH_BATCH_FELL_BACK', 20_000);
+    expect(fell.count).toBe(3);
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+    // Every term answered, by the path that has always answered them.
+    const results = runner.messagesOfType('SEARCH_RESULT');
+    expect(results.map((r: any) => r.term).sort()).toEqual(['limes', 'sour cream', 'tortillas']);
+    expect(runner.messagesOfType('SEARCH_RESULT_FAILED')).toHaveLength(0);
+
+    await runner.inject('(function(){ window.ReactNativeWebView.postMessage(JSON.stringify('
+      + '{ type: "DOCS", docs: window.__docs })); })(); true;');
+    const seen = await runner.waitForMessage('DOCS', 10_000);
+    // One refused batch, then one document per term.
+    expect(seen.docs).toEqual(['productSearchesV2',
+      'productSearchPageV2', 'productSearchPageV2', 'productSearchPageV2']);
+  });
+
+  itWithFixture('logged-in-home.html', 'asks for many terms in ONE document', async (runner) => {
+    // The point of the change. Six terms, one request, and every term still
+    // gets its own answer out of it.
+    await runner.inject(stub(searchPayload([product()])));
+    await runner.inject(batch(['a', 'b', 'c', 'd', 'e', 'f']));
+    const done = await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+    expect(done.count).toBe(6);
+    expect(runner.messagesOfType('SEARCH_RESULT').map((r: any) => r.term).sort())
+      .toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
+    await runner.inject(REPORT_CALLS);
+    expect((await runner.waitForMessage('CALLS', 10_000)).count).toBe(1);
+  });
+
+  itWithFixture('logged-in-home.html', 'chunks rather than sending one enormous document', async (runner) => {
+    // A wide document is a bigger thing to be refused and a bigger response to
+    // parse. Fourteen terms is three requests, not one and not fourteen.
+    await runner.inject(stub(searchPayload([product()])));
+    const many = Array.from({ length: 14 }, (_, i) => 'term' + i);
+    await runner.inject(batch(many));
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 25_000);
+    expect(runner.messagesOfType('SEARCH_RESULT')).toHaveLength(14);
+    await runner.inject(REPORT_CALLS);
+    expect((await runner.waitForMessage('CALLS', 10_000)).count).toBe(3);
   });
 
   itWithFixture('logged-in-home.html', 'keeps concurrency small rather than firing all at once', async (runner) => {

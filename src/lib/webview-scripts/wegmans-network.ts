@@ -855,16 +855,28 @@ ${wegPrelude()}
  */
 export function buildWegmansNetworkSearchBatchScript(
   terms: string[],
-  opts: { storeNumber?: string | null; requestMs?: number; hitsPerPage?: number } = {},
+  opts: {
+    storeNumber?: string | null; requestMs?: number; hitsPerPage?: number;
+    /**
+     * How many terms ride in one multi-query. Ten at 24 hits is 240 catalogue
+     * records in one response, which is a big but ordinary JSON parse; the cap
+     * is here so a thirty-item meal cannot turn into one enormous one.
+     */
+    batchTerms?: number;
+  } = {},
 ): string | null {
   if (!terms.length) return null;
   // NO STORE, NO SEARCH -- see WG.findStoreNumber for why. An unfiltered query
   // returns every store's catalogue, and its ids are not valid where this user
   // shops, so a product chosen from one would add the wrong thing next run.
   if (!opts.storeNumber) return null;
+  const batchTerms = Math.max(1, Math.min(opts.batchTerms ?? 10, 25));
+  const chunks: string[][] = [];
+  for (let i = 0; i < terms.length; i += batchTerms) chunks.push(terms.slice(i, i + batchTerms));
   return `(async function () {
 ${wegPrelude()}
   var TERMS = ${JSON.stringify(terms)};
+  var CHUNKS = ${JSON.stringify(chunks)};
   var STORE = ${JSON.stringify(opts.storeNumber)};
   var REQ_MS = ${opts.requestMs ?? 12000};
   var HITS = ${opts.hitsPerPage ?? 24};
@@ -877,6 +889,71 @@ ${wegPrelude()}
     return __mealioRetry(function () { return searchAttempt(term); },
       { phase: 'search', op: 'algolia-query' });
   };
+  /**
+   * MANY TERMS, ONE REQUEST.
+   *
+   * Algolia's multi-query endpoint takes a "requests" array where every entry
+   * carries its OWN query string, and answers { results: [...] } in request
+   * order. WG.hitsBySku has been sending exactly this shape to exactly this URL
+   * in the add path since it was written -- what was missing was that the search
+   * next door still asked one term at a time, serially, on the hottest path
+   * there is.
+   *
+   * ORDER IS THE WHOLE CONTRACT. results[k] answers requests[k], and there is no
+   * echo of the query in a result to check that against, so a response whose
+   * length does not match is refused outright rather than attributed by
+   * position. Misattributing a term is worse than not answering it: it puts real
+   * products under the wrong ingredient, which is a wrong add rather than a
+   * missing one.
+   */
+  var searchMany = function (chunk) {
+    return __mealioRetry(function () { return searchManyAttempt(chunk); },
+      { phase: 'search', op: 'algolia-multi' });
+  };
+  var searchManyAttempt = async function (chunk) {
+    var reqs = [];
+    for (var i = 0; i < chunk.length; i++) {
+      var rq = { indexName: '${ALGOLIA_INDEX}', query: chunk[i], hitsPerPage: HITS };
+      if (STORE) rq.filters = 'storeNumber:' + STORE;
+      reqs.push(rq);
+    }
+    var ctl = new AbortController();
+    // Scaled by the chunk: one request carrying ten queries legitimately takes
+    // longer than one carrying a single query, and aborting a slow answer turns
+    // it into no answer for ten terms at once.
+    var to = setTimeout(function () { ctl.abort(); }, REQ_MS + chunk.length * 1000);
+    var t0 = Date.now();
+    var r, txt;
+    try {
+      r = await fetch('${ALGOLIA_URL}', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json',
+          'x-algolia-application-id': '${ALGOLIA_APP}', 'x-algolia-api-key': '${ALGOLIA_KEY}' },
+        body: JSON.stringify({ requests: reqs }), signal: ctl.signal });
+      clearTimeout(to);
+      txt = await r.text();
+    } catch (e) {
+      clearTimeout(to);
+      return { ok: false, why: 'no_response', aborted: !!(e && e.name === 'AbortError'), ms: Date.now() - t0 };
+    }
+    var ms = Date.now() - t0;
+    if (r.status !== 200) return { ok: false, why: 'http', status: r.status, ms: ms,
+                                   detail: String(txt || '').slice(0, 160) };
+    var j = null;
+    try { j = JSON.parse(txt); } catch (e) {}
+    // A multi-query answers { results: [...] }; a single-index one answers
+    // { hits } directly. Accept both, the way WG.hitsBySku does.
+    var res = null;
+    if (j && j.results) res = j.results;
+    else if (j && j.hits) res = [{ hits: j.hits, nbHits: j.nbHits, processingTimeMS: j.processingTimeMS }];
+    if (!res) return { ok: false, why: 'unparseable', ms: ms };
+    if (res.length !== chunk.length) {
+      return { ok: false, why: 'length_mismatch', ms: ms,
+               detail: res.length + ' results for ' + chunk.length + ' queries' };
+    }
+    return { ok: true, results: res, ms: ms, bytes: txt.length };
+  };
+
   var searchAttempt = async function (term) {
     var url = '${ALGOLIA_HOST}/1/indexes/${ALGOLIA_INDEX}/query'
       + '?x-algolia-api-key=${ALGOLIA_KEY}&x-algolia-application-id=${ALGOLIA_APP}';
@@ -948,24 +1025,70 @@ ${wegPrelude()}
     };
   };
 
+  /**
+   * One index result -> this term's message.
+   *
+   * SHARED by the batched path and the per-term fallback. The two differ only in
+   * which request carried the hits, and a second copy of this loop is how a
+   * candidate starts meaning something slightly different depending on which one
+   * did -- [[reuse-the-rails-reader]].
+   */
+  var emit = function (term, hits, meta) {
+    var cands = [];
+    for (var i = 0; i < hits.length; i++) {
+      var c = toCandidate(hits[i]);
+      if (c.productName) cands.push(c);
+    }
+    post({ type: 'SEARCH_RESULT', source: 'network', term: term, candidates: cands,
+           ms: meta.ms, algoliaMs: meta.algoliaMs, nb: meta.nb, filtered: !!STORE });
+  };
+
+  /** The path this rail took for every term until the multi-query existed. */
+  var searchOne = async function (term) {
+    var r = await search(term);
+    if (!r.ok) {
+      post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: r.why,
+             status: r.status || null, ms: r.ms || null, detail: r.detail || null });
+      return;
+    }
+    emit(term, r.hits, { ms: r.ms, algoliaMs: r.algoliaMs, nb: r.nb });
+  };
+
   try {
-    for (var t = 0; t < TERMS.length; t++) {
-      var term = TERMS[t];
-      var r = await search(term);
-      if (!r.ok) {
-        post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: r.why,
-               status: r.status || null, ms: r.ms || null, detail: r.detail || null });
+    var fellBack = 0;
+    for (var c2 = 0; c2 < CHUNKS.length; c2++) {
+      var chunk = CHUNKS[c2];
+      // A one-term chunk IS the single query. The substitute search runs one
+      // term, and there is nothing to gain by wrapping it in an array.
+      if (chunk.length === 1) { await searchOne(chunk[0]); continue; }
+      var br = await searchMany(chunk);
+      if (br.ok) {
+        for (var k = 0; k < chunk.length; k++) {
+          var one = br.results[k];
+          // UNREADABLE IS NOT EMPTY. A result with no hits ARRAY is a slot this
+          // reader does not understand; calling it "the store has nothing" is
+          // the same mistake that once read an 18-line Wegmans cart as empty
+          // [[reuse-the-rails-reader]]. Zero hits is an answer, a missing hits
+          // key is not, and only the first of the two is one.
+          if (!one || !Array.isArray(one.hits)) {
+            post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: chunk[k],
+                   why: 'unexpected_shape', ms: br.ms });
+            continue;
+          }
+          emit(chunk[k], one.hits, { ms: br.ms, algoliaMs: one.processingTimeMS, nb: one.nbHits });
+        }
         continue;
       }
-      var cands = [];
-      for (var i = 0; i < r.hits.length; i++) {
-        var c = toCandidate(r.hits[i]);
-        if (c.productName) cands.push(c);
-      }
-      post({ type: 'SEARCH_RESULT', source: 'network', term: term, candidates: cands,
-             ms: r.ms, algoliaMs: r.algoliaMs, nb: r.nb, filtered: !!STORE });
+      // REFUSED, SO ASK THE OLD WAY. A multi-query that fails must not cost the
+      // terms in it their answer -- this is the same shape the H-E-B add takes
+      // when the gateway dislikes a batched document, and it leaves the rail
+      // exactly as fast as it was before batching existed.
+      fellBack += chunk.length;
+      post({ type: 'SEARCH_BATCH_FELL_BACK', source: 'network', count: chunk.length,
+             why: br.why || null, status: br.status || null, detail: br.detail || null });
+      for (var f = 0; f < chunk.length; f++) await searchOne(chunk[f]);
     }
-    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length, fellBack: fellBack });
   } catch (e) {
     post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length, threw: String(e).slice(0, 140) });
   }

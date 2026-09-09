@@ -327,6 +327,12 @@ a fast path now, not a gate: either signal routes the item to review.</p>
     <tr><td>rail search concurrency</td><td><b>3</b> (H-E-B), <b>2</b> (Albertsons)</td>
         <td>the rail's own batch script. Albertsons is lower because MEAL-207 has its search
         degrading under load, and it opens with ONE request before the lanes fan out</td></tr>
+    <tr><td>terms per search request</td><td><b>6</b> (H-E-B), <b>10</b> (Wegmans), <b>1</b> everywhere else</td>
+        <td>the rail's own batch script. H-E-B aliases the terms into one GraphQL document,
+        Wegmans sends them as one Algolia multi-query; both fall back to one term per request
+        when the store refuses the batched shape. The other three cannot be batched at all
+        &mdash; Walmart and Instacart route by persisted-query hash, and the Albertsons
+        gateway takes one <code>q</code></td></tr>
     <tr><td>rail add concurrency</td><td><b>2</b>, capped at 3</td>
         <td><code>addBatch(items, { concurrency })</code></td></tr>
     <tr><td>search deadline</td><td><b>40 s</b>, re-armed per document</td>

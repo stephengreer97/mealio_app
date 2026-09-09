@@ -326,6 +326,162 @@ describe('search', () => {
     const msg = await runner.waitForMessage('SEARCH_RESULT', 15_000) as Record<string, unknown>;
     expect((msg.candidates as Array<Record<string, unknown>>)[0].outOfStock).toBe(true);
   }, AT_WEGMANS);
+
+  // ---- many terms, one request -------------------------------------------
+  //
+  // Algolia's multi-query endpoint takes a requests array, each entry with its
+  // own query, and answers results[] in request order. WG.hitsBySku has used
+  // that endpoint in the add path all along; the search beside it was still
+  // asking one term at a time, serially.
+
+  itWithFixture('shop.html', 'asks for many terms in ONE request', async (runner) => {
+    await runner.inject(netStub());
+    await runner.inject(buildWegmansNetworkSearchBatchScript(
+      ['sour cream', 'tortillas', 'limes'], { storeNumber: '140' })!);
+    const done = await runner.waitForMessage('SEARCH_BATCH_DONE', 15_000) as Record<string, unknown>;
+    expect(done.count).toBe(3);
+    expect(done.fellBack).toBe(0);
+
+    const asked = await runner.page.evaluate('window.__algolia') as Array<Record<string, unknown>>;
+    expect(asked).toHaveLength(1);
+    const reqs = asked[0].requests as Array<Record<string, unknown>>;
+    expect(reqs.map((r) => r.query)).toEqual(['sour cream', 'tortillas', 'limes']);
+    // The store filter is not optional, and it must be on EVERY query in the
+    // array — one unfiltered entry offers another store's product ids.
+    expect(reqs.every((r) => r.filters === 'storeNumber:140')).toBe(true);
+
+    const results = runner.messagesOfType('SEARCH_RESULT') as Array<Record<string, unknown>>;
+    expect(results.map((r) => r.term).sort()).toEqual(['limes', 'sour cream', 'tortillas']);
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'a ONE-term search is still the single query', async (runner) => {
+    // The substitute search runs one term. Wrapping it in an array would change
+    // the shape of the request that has been in production for nothing.
+    await runner.inject(netStub());
+    await runner.inject(buildWegmansNetworkSearchBatchScript(['Onion'], { storeNumber: '140' })!);
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 15_000);
+    const asked = await runner.page.evaluate('window.__algolia') as Array<Record<string, unknown>>;
+    expect(asked).toHaveLength(1);
+    expect(asked[0].requests).toBeUndefined();
+    expect(asked[0].query).toBe('Onion');
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'chunks rather than sending one enormous request', async (runner) => {
+    // Ten terms at 24 hits is already 240 catalogue records in one response.
+    await runner.inject(netStub());
+    const many = Array.from({ length: 23 }, (_, i) => 'term' + i);
+    await runner.inject(buildWegmansNetworkSearchBatchScript(many, { storeNumber: '140' })!);
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+    const asked = await runner.page.evaluate('window.__algolia') as Array<Record<string, unknown>>;
+    expect(asked.map((a) => (a.requests as unknown[]).length)).toEqual([10, 10, 3]);
+    expect(runner.messagesOfType('SEARCH_RESULT')).toHaveLength(23);
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'refuses to attribute results it cannot line up', async (runner) => {
+    // POSITION IS THE WHOLE CONTRACT: results[k] answers requests[k], and a hit
+    // carries no echo of the query to check that against. A short results array
+    // must therefore never be read positionally — that puts real products under
+    // the wrong ingredient, which is a WRONG add rather than a missing one.
+    await runner.inject(netStub());
+    await runner.inject([
+      '(function () {',
+      '  var real = window.fetch;',
+      '  window.fetch = function (url, init) {',
+      '    var u = String(url);',
+      '    if (u.indexOf("algolia.net") > 0) {',
+      '      var body = JSON.parse(init.body);',
+      '      if (body.requests && body.requests.length > 1) {',
+      '        window.__algolia.push(body);',
+      // One result short. Nothing in the response says which query was dropped.
+      '        var out = body.requests.slice(1).map(function () { return { hits: [], nbHits: 0 }; });',
+      '        return Promise.resolve({ status: 200, text: function () {',
+      '          return Promise.resolve(JSON.stringify({ results: out })); } });',
+      '      }',
+      '    }',
+      '    return real(url, init);',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+    await runner.inject(buildWegmansNetworkSearchBatchScript(
+      ['sour cream', 'tortillas', 'limes'], { storeNumber: '140' })!);
+    const fell = await runner.waitForMessage('SEARCH_BATCH_FELL_BACK', 15_000) as Record<string, unknown>;
+    expect(fell.count).toBe(3);
+    expect(fell.why).toBe('length_mismatch');
+    const done = await runner.waitForMessage('SEARCH_BATCH_DONE', 15_000) as Record<string, unknown>;
+    expect(done.fellBack).toBe(3);
+    // Every term answered anyway, by the single query this rail has always used.
+    const results = runner.messagesOfType('SEARCH_RESULT') as Array<Record<string, unknown>>;
+    expect(results.map((r) => r.term).sort()).toEqual(['limes', 'sour cream', 'tortillas']);
+    for (const r of results) {
+      expect((r.candidates as unknown[]).length).toBe(1);
+    }
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'a slot it cannot read is not an empty shelf', async (runner) => {
+    // Zero hits is an answer; a result carrying no hits ARRAY is not one, and
+    // reporting it as "nothing found" sends the user to review saying the store
+    // does not stock something it may well stock.
+    await runner.inject(netStub());
+    await runner.inject([
+      '(function () {',
+      '  var real = window.fetch;',
+      '  window.fetch = function (url, init) {',
+      '    var u = String(url);',
+      '    if (u.indexOf("algolia.net") > 0) {',
+      '      var body = JSON.parse(init.body);',
+      '      if (body.requests && body.requests.length > 1) {',
+      '        var out = body.requests.map(function (rq, i) {',
+      '          return i === 1 ? { message: "index unavailable" } : { hits: [], nbHits: 0 };',
+      '        });',
+      '        return Promise.resolve({ status: 200, text: function () {',
+      '          return Promise.resolve(JSON.stringify({ results: out })); } });',
+      '      }',
+      '    }',
+      '    return real(url, init);',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+    await runner.inject(buildWegmansNetworkSearchBatchScript(
+      ['sour cream', 'tortillas', 'limes'], { storeNumber: '140' })!);
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 15_000);
+    // The two readable slots answered, with a real empty shelf each.
+    const ok = runner.messagesOfType('SEARCH_RESULT') as Array<Record<string, unknown>>;
+    expect(ok.map((r) => r.term).sort()).toEqual(['limes', 'sour cream']);
+    expect(ok.every((r) => (r.candidates as unknown[]).length === 0)).toBe(true);
+    // The unreadable one is a FAILURE, so the caller can go and load a page.
+    const bad = runner.messagesOfType('SEARCH_RESULT_FAILED') as Array<Record<string, unknown>>;
+    expect(bad).toHaveLength(1);
+    expect(bad[0].term).toBe('tortillas');
+    expect(bad[0].why).toBe('unexpected_shape');
+  }, AT_WEGMANS);
+
+  itWithFixture('shop.html', 'a refused multi-query costs no term its answer', async (runner) => {
+    await runner.inject(netStub());
+    await runner.inject([
+      '(function () {',
+      '  var real = window.fetch;',
+      '  window.fetch = function (url, init) {',
+      '    var u = String(url);',
+      '    if (u.indexOf("algolia.net") > 0) {',
+      '      var body = JSON.parse(init.body);',
+      '      if (body.requests && body.requests.length > 1) {',
+      '        return Promise.resolve({ status: 400, text: function () {',
+      '          return Promise.resolve("too many queries"); } });',
+      '      }',
+      '    }',
+      '    return real(url, init);',
+      '  };',
+      '})(); true;',
+    ].join('\n'));
+    await runner.inject(buildWegmansNetworkSearchBatchScript(
+      ['sour cream', 'tortillas'], { storeNumber: '140' })!);
+    const fell = await runner.waitForMessage('SEARCH_BATCH_FELL_BACK', 15_000) as Record<string, unknown>;
+    expect(fell.why).toBe('http');
+    expect(fell.status).toBe(400);
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 15_000);
+    expect((runner.messagesOfType('SEARCH_RESULT') as Array<Record<string, unknown>>)
+      .map((r) => r.term).sort()).toEqual(['sour cream', 'tortillas']);
+  }, AT_WEGMANS);
 });
 
 describe('which store', () => {

@@ -218,10 +218,14 @@ ${GQL_FN}
 })(); true;`;
 }
 
-/** The search document, written out so the nesting can be read. */
-const SEARCH_QUERY = [
-  'query productSearchPageV2($params: SearchPageParamsV2!) {',
-  '  productSearchPageV2(params: $params) {',
+/**
+ * ONE ARM'S SELECTION, written out so the nesting can be read.
+ *
+ * Held apart from the document because the batch below repeats it once per
+ * aliased field. Two copies of this would be two answers to "what is a
+ * candidate", which is the drift CANDIDATE_HELPERS exists to prevent.
+ */
+const SEARCH_SELECTION = [
   '    __typename',
   '    ... on SearchPage {',
   '      layout {',
@@ -256,9 +260,44 @@ const SEARCH_QUERY = [
   '      }',
   '    }',
   '    ... on SearchPageError { code message }',
+].join('\n');
+
+/** The single-term document. Unchanged, and still what ONE term is asked with. */
+const SEARCH_QUERY = [
+  'query productSearchPageV2($params: SearchPageParamsV2!) {',
+  '  productSearchPageV2(params: $params) {',
+  SEARCH_SELECTION,
   '  }',
   '}',
 ].join('\n');
+
+/**
+ * MANY TERMS, ONE DOCUMENT -- the same trick the add already uses.
+ *
+ * productSearchPageV2 takes ONE params object; there is no list parameter to
+ * fill. GraphQL provides the equivalent: several ALIASED root fields in one
+ * document, which is exactly how buildHebNetworkAddBatchScript writes a whole
+ * meal in a single request. That shape has answered this gateway in production
+ * since 2026-09-01, so the open question here is not whether H-E-B accepts an
+ * invented operation name -- cartItemsV2 is ours and it answers -- but only
+ * whether a document this WIDE trips a complexity limit. UNMEASURED, which is
+ * why the chunk is small and why a refused document falls back per term.
+ *
+ * Root QUERY fields may execute in parallel, unlike the mutation batch where
+ * serial execution was the whole point. Nothing here shares state, so that is
+ * free rather than a risk.
+ */
+function hebSearchBatchDoc(n: number): string {
+  const params: string[] = [];
+  const fields: string[] = [];
+  for (let i = 0; i < n; i++) {
+    params.push('$p' + i + ': SearchPageParamsV2!');
+    fields.push('  a' + i + ': productSearchPageV2(params: $p' + i + ') {\n'
+      + SEARCH_SELECTION + '\n  }');
+  }
+  return 'query productSearchesV2(' + params.join(', ') + ') {\n'
+    + fields.join('\n') + '\n}';
+}
 
 /**
  * Turning the gateway's products into candidates.
@@ -452,12 +491,19 @@ ${CANDIDATE_HELPERS}
  * This is where the time actually goes. The parallel worker pool exists to load
  * four results pages at once, because loading a page is what costs ~1.8 s per
  * ingredient. A network search needs no page at all: the WebView is already on
- * the store with a live session, so twelve ingredients are twelve requests from
- * where we already are.
+ * the store with a live session, so a whole meal is asked for from where we
+ * already are.
  *
  * Measured single-search latency is ~280 ms, so a twelve-item run is a few
  * seconds of network against 22.5 s of navigation — and it needs no worker
  * WebViews, which is also where the memory goes (about 187 MB of the peak).
+ *
+ * AND NOW IT IS NOT TWELVE REQUESTS EITHER. Terms ride in chunks of six as
+ * aliased fields of one document (hebSearchBatchDoc), so twelve ingredients are
+ * two requests rather than twelve. The time saved is real but modest -- the pool
+ * was already running three at a time -- and the thing actually being bought is
+ * a smaller surface for the 403 wall, which MEAL-16 measured as 71-84 s of
+ * downtime once it fires.
  *
  * CONCURRENCY IS DELIBERATELY SMALL. The bot defence did not react to 30 writes
  * at ~2/s (MEAL-115), and this is lighter than that, but a burst of twelve
@@ -466,11 +512,22 @@ ${CANDIDATE_HELPERS}
  *
  * Each term posts its own SEARCH_RESULT or SEARCH_RESULT_FAILED as it lands, so
  * the caller can fall back to loading a page for JUST the terms that failed
- * rather than abandoning the whole batch.
+ * rather than abandoning the whole batch. A document the gateway refuses costs
+ * no term its answer: the chunk is re-asked one term at a time.
  */
 export function buildHebNetworkSearchBatchScript(
   terms: string[],
-  opts: { storeId: string; shoppingContext: string; pageSize?: number; concurrency?: number },
+  opts: {
+    storeId: string; shoppingContext: string; pageSize?: number; concurrency?: number;
+    /**
+     * How many terms ride in one document. One request beats six, but a wide
+     * document is also a bigger thing to be refused and a bigger response to
+     * parse in a WebView -- six terms at pageSize 40 is already up to 240
+     * products. Small enough to stay cheap, big enough that a normal meal is
+     * one or two requests.
+     */
+    batchTerms?: number;
+  },
 ): string | null {
   const storeId = Number(opts.storeId);
   if (!Number.isInteger(storeId) || storeId <= 0) return null;
@@ -478,33 +535,49 @@ export function buildHebNetworkSearchBatchScript(
   if (!terms.length) return null;
   const pageSize = opts.pageSize && opts.pageSize > 0 ? Math.min(opts.pageSize, 60) : 40;
   const concurrency = Math.max(1, Math.min(opts.concurrency ?? 3, 4));
+  const batchTerms = Math.max(1, Math.min(opts.batchTerms ?? 6, 12));
+  const chunks: string[][] = [];
+  for (let i = 0; i < terms.length; i += batchTerms) chunks.push(terms.slice(i, i + batchTerms));
+  // Built HERE, not in the script: the chunk sizes are known now, so the
+  // documents are ordinary TypeScript that a unit test can read, rather than
+  // string building inside a template literal.
+  const docs: Record<string, string> = {};
+  for (const c of chunks) if (c.length > 1) docs[String(c.length)] = hebSearchBatchDoc(c.length);
   return `(async function () {
 ${GQL_FN}
   var TERMS = ${JSON.stringify(terms)};
+  var CHUNKS = ${JSON.stringify(chunks)};
+  var DOCS = ${JSON.stringify(docs)};
   var post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
 
 ${CANDIDATE_HELPERS}
 
-  var searchOne = async function (term) {
-    var res = await __hebGql('productSearchPageV2', ${JSON.stringify(SEARCH_QUERY)}, {
-      params: {
-        query: term,
-        storeId: ${storeId},
-        shoppingContext: ${JSON.stringify(opts.shoppingContext)},
-        excludeSponsoredContent: true,
-        includeOutOfStock: true,
-        pageSize: ${pageSize},
-      },
-    }, 9000, 'search');
-    if (!res.ok) {
-      post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term,
-             why: res.why, detail: res.detail || (res.status ? 'status ' + res.status : null) });
-      return;
-    }
-    var page = null;
-    try { page = res.data.productSearchPageV2; } catch (e) {}
+  var paramsFor = function (term) {
+    return {
+      query: term,
+      storeId: ${storeId},
+      shoppingContext: ${JSON.stringify(opts.shoppingContext)},
+      // Asked for, rather than filtered out afterwards. The page reader has to
+      // recognise sponsored tiles and drop them; not requesting them means they
+      // can never be mistaken for a result in the first place.
+      excludeSponsoredContent: true,
+      // Out of stock still comes back, flagged. The review screen needs to be
+      // able to SAY an item is out of stock rather than silently finding nothing.
+      includeOutOfStock: true,
+      pageSize: ${pageSize},
+    };
+  };
+
+  /**
+   * One arm's answer -> this term's message.
+   *
+   * SHARED by the batched path and the per-term fallback, deliberately: they
+   * differ only in which request carried the page, and a second copy of this is
+   * how "no grid" starts meaning one thing in a batch and another outside it.
+   */
+  var emit = function (term, page) {
     if (!page) { post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'unexpected_shape' }); return; }
     if (page.__typename === 'SearchPageError') {
       post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term, why: 'search_page_error',
@@ -533,23 +606,75 @@ ${CANDIDATE_HELPERS}
     post({ type: 'SEARCH_RESULT', source: 'network', term: term, candidates: __hebCandidates(items) });
   };
 
-  // A fixed-size worker pool over the term list. Not Promise.all: twelve
+  /** ONE term, the document that has always asked for it. Also the fallback. */
+  var searchOne = async function (term) {
+    var res = await __hebGql('productSearchPageV2', ${JSON.stringify(SEARCH_QUERY)},
+      { params: paramsFor(term) }, 9000, 'search');
+    if (!res.ok) {
+      post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term,
+             why: res.why, detail: res.detail || (res.status ? 'status ' + res.status : null) });
+      return;
+    }
+    var page = null;
+    try { page = res.data.productSearchPageV2; } catch (e) {}
+    emit(term, page);
+  };
+
+  /**
+   * ONE REQUEST FOR THE WHOLE CHUNK, and the per-term path when that is refused.
+   *
+   * A document-level failure must not cost the terms in it: the transport treats
+   * any GraphQL error as a failed request, so one bad arm takes the document
+   * down, and the fallback then asks each term the way it has always been asked.
+   * That is slower than the batch and exactly as fast as before it existed,
+   * which is the property worth having.
+   */
+  var searchChunk = async function (chunk) {
+    // A one-term chunk IS the single search. Nothing is gained by wrapping the
+    // substitute-search case in a new document shape.
+    if (chunk.length === 1) { await searchOne(chunk[0]); return; }
+    var vmap = {};
+    for (var i = 0; i < chunk.length; i++) vmap['p' + i] = paramsFor(chunk[i]);
+    var res = await __hebGql('productSearchesV2', DOCS[String(chunk.length)], vmap,
+      9000 + chunk.length * 1500, 'search');
+    if (!res.ok) {
+      post({ type: 'SEARCH_BATCH_FELL_BACK', source: 'network', count: chunk.length,
+             why: res.why || null,
+             detail: res.detail || (res.status ? 'status ' + res.status : null) });
+      for (var f = 0; f < chunk.length; f++) await searchOne(chunk[f]);
+      return;
+    }
+    for (var k = 0; k < chunk.length; k++) {
+      var node = null;
+      try { node = res.data['a' + k]; } catch (e) {}
+      emit(chunk[k], node);
+    }
+  };
+
+  // A fixed-size worker pool over the CHUNKS. Not Promise.all: twelve
   // simultaneous requests is a burst shape nothing has measured, and the point
-  // of this rail is to stop guessing about what the store tolerates.
+  // of this rail is to stop guessing about what the store tolerates. Batching
+  // only makes that gentler -- a twelve-term run is two documents, not twelve
+  // requests -- so the pool stays exactly as it was.
   var next = 0;
   var runner = async function () {
     while (true) {
       var i = next++;
-      if (i >= TERMS.length) return;
-      try { await searchOne(TERMS[i]); }
+      if (i >= CHUNKS.length) return;
+      try { await searchChunk(CHUNKS[i]); }
       catch (e) {
-        post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: TERMS[i],
-               why: 'threw', detail: String(e).slice(0, 120) });
+        // Per TERM, not per chunk. The caller falls back to loading a page for
+        // just the terms it never heard about, and a chunk-shaped failure would
+        // leave every term in it silent.
+        for (var z = 0; z < CHUNKS[i].length; z++) {
+          post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: CHUNKS[i][z],
+                 why: 'threw', detail: String(e).slice(0, 120) });
+        }
       }
     }
   };
   var lanes = [];
-  for (var L = 0; L < ${concurrency}; L++) lanes.push(runner());
+  for (var L = 0; L < ${concurrency} && L < CHUNKS.length; L++) lanes.push(runner());
   await Promise.all(lanes);
   post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length });
 })(); true;`;
