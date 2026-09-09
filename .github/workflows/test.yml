@@ -64,8 +64,13 @@ jobs:
             spec: tests/fixture-tests/heb-network-search.spec.ts
           - name: albertsons
             spec: tests/fixture-tests/albertsons-network.spec.ts
-          - name: aldi
-            spec: tests/fixture-tests/aldi-network.spec.ts
+          # ALDI's rail is the Instacart Storefront adapter, and the spec was
+          # renamed with it in 2d1f85e (MEAL-20) -- the file is registered
+          # against the PLATFORM, not the banner, and covers every Instacart
+          # tenant rather than ALDI alone. This entry kept the old name and the
+          # old path for both.
+          - name: instacart
+            spec: tests/fixture-tests/instacart-network.spec.ts
           - name: wegmans
             spec: tests/fixture-tests/wegmans-network.spec.ts
           - name: walmart
