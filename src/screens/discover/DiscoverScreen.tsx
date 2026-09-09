@@ -73,6 +73,14 @@ export default function DiscoverScreen() {
   const [selectedCreator, setSelectedCreator] = useState<Creator | null>(null);
   const [creatorSheetVisible, setCreatorSheetVisible] = useState(false);
 
+  // Who you follow, shown at the top of the Following feed.
+  //
+  // It used to live only on the Account screen, three taps away from the feed
+  // that is made of these people's meals. Stephen, 2026-09-09: "easier way to
+  // see who you're following on discover tab instead of having followers in
+  // account page."
+  const [followedCreators, setFollowedCreators] = useState<Creator[]>([]);
+
   // First run: the pitch (MEAL-84). Discover is the front door for signed-in and
   // signed-out users alike, and a grid of recipe photos never says that Mealio
   // fills a grocery cart. Held until the first load finishes so it does not
@@ -114,6 +122,29 @@ export default function DiscoverScreen() {
     setLoading(true);
     loadData(0, true);
   }, [segment, filters, debouncedSearch]);
+
+  // Read on every entry into Following rather than once, because following is
+  // the one list on this screen the user changes from inside the app: follow
+  // someone from a creator sheet, come back, and the strip has to have them.
+  // Keyed on the user's id and the segment name -- both plain strings, never a
+  // fresh object -- because the website's version of this effect span forever
+  // once a new Set() reached its dependency array.
+  useEffect(() => {
+    if (segment !== 'Following' || !user) {
+      if (!user) setFollowedCreators([]);
+      return;
+    }
+    loadFollowing();
+  }, [segment, user?.id]);
+
+  async function loadFollowing() {
+    try {
+      setFollowedCreators(await creatorsApi.following());
+    } catch {
+      // The strip is a convenience over the feed below it; a failed read leaves
+      // it out rather than putting an error where the creators should be.
+    }
+  }
 
   useEffect(() => {
     if (loading || welcomeChecked.current) return;
@@ -260,7 +291,8 @@ export default function DiscoverScreen() {
   }
 
   /**
-   * The byline on an open meal, tapped.
+   * A creator named somewhere on this screen, tapped: the byline on an open
+   * meal, the face on a card, or the strip at the top of the Following feed.
    *
    * The meal carries the creator's id and name and nothing else, and the profile
    * sheet shows a bio and a follower count, so this fetches the creator rather
@@ -268,11 +300,19 @@ export default function DiscoverScreen() {
    * sheet closes first: two page-sheet modals stacked is the website's order too
    * (its card closes the detail modal before opening the creator popup).
    */
-  async function openCreatorFromMeal(creatorId: string) {
+  async function openCreatorById(creatorId: string) {
     setDetailVisible(false);
     try {
       const { creator } = await creatorsApi.getById(creatorId);
-      openCreatorProfile(creator);
+      // `GET /api/creators/[id]` does not say whether YOU follow them, so the
+      // sheet opens on "Follow" for someone you already follow. Where this
+      // screen knows the answer -- it is holding the followed list for the
+      // strip -- it says so, which is every open from the strip itself.
+      openCreatorProfile(
+        followedCreators.some((c) => c.id === creatorId)
+          ? { ...creator, isFollowing: true }
+          : creator,
+      );
     } catch {
       Alert.alert('Not available', 'That creator profile could not be loaded.');
     }
@@ -318,7 +358,7 @@ export default function DiscoverScreen() {
       subtitle={item.creatorName ?? item.author ?? undefined}
       creatorPhotoUrl={item.creatorPhotoUrl}
       creatorName={item.creatorName}
-      onCreatorPress={item.creatorId ? () => openCreatorFromMeal(item.creatorId!) : undefined}
+      onCreatorPress={item.creatorId ? () => openCreatorById(item.creatorId!) : undefined}
       savedAt={savedMap[item.id]}
       testID={`meal-card-${index}`}
     />
@@ -424,8 +464,39 @@ export default function DiscoverScreen() {
               </TouchableOpacity>
             )}
 
+            {/* Creators you follow — the Following feed is made of their meals,
+                so this is where "who am I following?" is actually asked. It
+                stands in for the featured strip rather than sitting beside it:
+                two rows of round faces one above the other read as one list. */}
+            {segment === 'Following' && followedCreators.length > 0 && (
+              <View style={styles.creatorsSection}>
+                <Text style={styles.sectionTitle}>Creators You Follow</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  {followedCreators.map((creator) => (
+                    <TouchableOpacity
+                      key={creator.id}
+                      style={styles.creatorChip}
+                      testID={`following-creator-${creator.id}`}
+                      accessibilityRole="button"
+                      accessibilityLabel={`View ${creator.displayName}'s profile`}
+                      onPress={() => openCreatorById(creator.id)}
+                    >
+                      {creator.photoUrl ? (
+                        <Image source={{ uri: creator.photoUrl }} style={styles.creatorAvatar} contentFit="cover" />
+                      ) : (
+                        <View style={[styles.creatorAvatar, styles.creatorAvatarPlaceholder]}>
+                          <Text style={styles.creatorInitial}>{creator.displayName?.[0]?.toUpperCase() ?? '?'}</Text>
+                        </View>
+                      )}
+                      <Text style={styles.creatorName} numberOfLines={2}>{creator.displayName}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
             {/* Featured Creators */}
-            {featuredCreators.length > 0 && (
+            {segment !== 'Following' && featuredCreators.length > 0 && (
               <View style={styles.creatorsSection}>
                 <Text style={styles.sectionTitle}>Featured Creators</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -454,7 +525,11 @@ export default function DiscoverScreen() {
         ListEmptyComponent={
           !loading ? (
             <View style={styles.empty}>
-              <Text style={styles.emptyText}>No meals found</Text>
+              <Text style={styles.emptyText}>
+                {segment === 'Following' && followedCreators.length === 0
+                  ? 'You are not following anyone yet. Open a creator and tap Follow to see their meals here.'
+                  : 'No meals found'}
+              </Text>
             </View>
           ) : null
         }
@@ -476,7 +551,7 @@ export default function DiscoverScreen() {
         meal={selectedMeal}
         mode="view"
         onClose={() => setDetailVisible(false)}
-        onCreatorPress={openCreatorFromMeal}
+        onCreatorPress={openCreatorById}
         onPressSave={() => {
           if (!user) {
             setDetailVisible(false);
@@ -502,7 +577,7 @@ export default function DiscoverScreen() {
         visible={creatorSheetVisible}
         creator={selectedCreator}
         onClose={() => setCreatorSheetVisible(false)}
-        onFollowChange={() => loadData(0, true)}
+        onFollowChange={() => { loadData(0, true); loadFollowing(); }}
         isLoggedIn={!!user}
         onSignIn={() => { const parent = navigation.getParent?.(); if (parent?.navigate) parent.navigate('Auth'); else onSignIn?.(); }}
         onPressSaveMeal={(meal) => {

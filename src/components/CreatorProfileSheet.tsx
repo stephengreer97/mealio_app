@@ -52,9 +52,14 @@ export default function CreatorProfileSheet({
   const [mealLoading, setMealLoading] = useState(false);
   const [loadingMealId, setLoadingMealId] = useState<string | null>(null);
 
+  // On `visible` as well as on the creator's id. The sheet stays mounted between
+  // opens, so keying on the id alone meant reopening the SAME creator kept
+  // whatever follow state the last open ended on: open someone the caller knows
+  // you follow, and the button still said "Follow" because the effect never ran
+  // a second time.
   useEffect(() => {
     setFollowing(creator?.isFollowing ?? false);
-  }, [creator?.id]);
+  }, [creator?.id, visible]);
 
   useEffect(() => {
     if (visible && creator?.id) {
