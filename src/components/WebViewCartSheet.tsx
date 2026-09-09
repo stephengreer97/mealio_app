@@ -1519,25 +1519,42 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   }, [qtyGlowOn, reduceMotion, qtyIdleAnim]);
 
   /**
-   * AMBER, NOT RED, and the distinction is the whole ticket.
+   * MEALIO RED -- rgb(221, 0, 49), the brand colour (Stephen, 2026-09-09: "make
+   * the qty glow mealio red instead of yellow. I like that better").
    *
-   * The first version of this glow used the brand colour. The brand colour is
-   * #DD0031 -- rgb(221, 0, 49) -- which is a red, and a red that greets you is
-   * precisely what MEAL-218 removed: a colour already on when you arrive cannot
-   * then mean you did something wrong. Caught by this ticket's own test, which
-   * asserts the stepper is unlit on arrival.
+   * This was amber, and the reasoning for amber is worth keeping rather than
+   * deleting, because it names what to watch: MEAL-218 removed a red that
+   * GREETED you, on the grounds that a colour already on when you arrive cannot
+   * then mean you did something wrong. Amber was picked so the invitation could
+   * not be confused with the flash.
    *
-   * So the invitation gets its own colour. Amber says "look here" without
-   * claiming anything is broken, and it cannot be confused with the red flash
-   * firing two lines below it.
+   * WHAT STILL HOLDS with the brand colour. The property MEAL-218 actually fixed
+   * is timing, not hue: nothing is lit on arrival, the ring appears only while
+   * the quantity is unset, and it wears off the moment one is set. Its own test
+   * asserts the stepper is unlit on arrival, and that test still passes.
+   *
+   * WHAT GOT WEAKER, said plainly. The flash two functions below is also a red
+   * (rgb(239,68,68)) and answers a press. The two are now separated by tempo and
+   * intensity -- a 900ms breathe against a 140ms triple-pulse at full opacity --
+   * rather than by hue. If they read as one thing on a device, darkening the
+   * flash is the change to make, not reverting this.
+   *
+   * SHARED WITH THE PREFERENCE PICKER, deliberately -- the pref-glow element
+   * reads these same two values. (Named without its test id, because
+   * tests/components/pref-glow.test.tsx finds that element by searching this
+   * file for the literal string, and a second copy in a comment sends it here.)
+   * Both are the same kind of signal -- "something is missing here" -- so they
+   * use the same animated values and can never breathe out of step. Recolouring
+   * one without the other would put two different invitation colours on a screen
+   * that shows both.
    */
   const qtyIdleBorder = qtyIdleAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ['rgba(245,158,11,0.25)', 'rgba(245,158,11,0.85)'],
+    outputRange: ['rgba(221,0,49,0.25)', 'rgba(221,0,49,0.85)'],
   });
   const qtyIdleBg = qtyIdleAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: ['rgba(245,158,11,0.00)', 'rgba(245,158,11,0.10)'],
+    outputRange: ['rgba(221,0,49,0.00)', 'rgba(221,0,49,0.10)'],
   });
 
   // The pool path is declared BELOW the network path (it is the thing the

@@ -33,16 +33,22 @@ describe('the product chooser follows the same rule as the cart sheet', () => {
     expect(CHOOSER).toContain('qtyDisplay(productQty)');
   });
 
-  it('wears the same amber ring, not a second invention', () => {
-    expect(CHOOSER).toContain('rgba(245,158,11,0.25)');
+  it('wears the same ring as the sheet, not a second invention', () => {
+    // The point of this file: whatever colour the sheet uses, the chooser uses
+    // the SAME one. It was amber on both and is the brand red on both since
+    // 2026-09-09 (Stephen: "make the qty glow mealio red instead of yellow").
+    // A per-screen colour would be two answers to one question.
+    expect(CHOOSER).toContain('rgba(221,0,49,0.25)');
     expect(CHOOSER).toContain('testID="chooser-qty-glow"');
   });
 
-  it('uses amber and never a red for the resting glow', () => {
-    // Both reds are refused by value: the error red and the brand red, which is
-    // rgb(221,0,49) and would reintroduce the greeting in a different shade.
+  it('never uses the FLASH red, or the store colour, for the resting glow', () => {
+    // The distinction that still has to hold. The flash (rgb(239,68,68)) answers
+    // a press; this invites one. They are now told apart by tempo and by living
+    // on separate elements rather than by hue, so the resting ring must not
+    // simply BE the flash colour -- that would collapse the two into one signal.
     const glow = CHOOSER.slice(CHOOSER.indexOf('qtyIdleBorder = '), CHOOSER.indexOf('qtyIdleBg = ') + 200);
     expect(glow).not.toMatch(/239,\s*68,\s*68/);
-    expect(glow).not.toMatch(/221,\s*0,\s*49/);
+    expect(glow).not.toContain('storeColor');
   });
 });

@@ -133,11 +133,15 @@ export default function ProductChooserSheet({
     loop.start();
     return () => { loop.stop(); };
   }, [visible, reduceMotion, qtyIdleAnim]);
+  // MEALIO RED -- rgb(221, 0, 49), matching WebViewCartSheet exactly. It was
+  // amber on both; see the long note there for what that bought and what
+  // changing it costs. Kept identical rather than themed per store: this is the
+  // app saying "something is missing", not the store saying anything.
   const qtyIdleBorder = qtyIdleAnim.interpolate({
-    inputRange: [0, 1], outputRange: ['rgba(245,158,11,0.25)', 'rgba(245,158,11,0.85)'],
+    inputRange: [0, 1], outputRange: ['rgba(221,0,49,0.25)', 'rgba(221,0,49,0.85)'],
   });
   const qtyIdleBg = qtyIdleAnim.interpolate({
-    inputRange: [0, 1], outputRange: ['rgba(245,158,11,0.00)', 'rgba(245,158,11,0.10)'],
+    inputRange: [0, 1], outputRange: ['rgba(221,0,49,0.00)', 'rgba(221,0,49,0.10)'],
   });
   const [error, setError] = useState('');
   const [results, setResults] = useState<Array<{ ingredientName: string; suggestions: Suggestion[] }>>([]);

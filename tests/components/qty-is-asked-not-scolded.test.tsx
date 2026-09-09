@@ -178,19 +178,25 @@ describe('arriving at the review screen', () => {
     expect(style).not.toMatch(/rgba\(221,\s*0,\s*49/);
   });
 
-  it('DOES glow, in a colour that is not an error (MEAL-218, second half)', async () => {
+  it('DOES glow, in the brand red (MEAL-218, second half)', async () => {
     // Stephen: "I'm worried users will glance over it." An unlit control is
-    // honest and easy to miss, so the quantity now breathes amber while it is
-    // unset. Amber says look here; red would say you broke something.
+    // honest and easy to miss, so the quantity breathes while it is unset.
+    //
+    // The ring was amber, on the argument that red says "you broke something".
+    // Stephen, 2026-09-09: "make the qty glow mealio red instead of yellow. I
+    // like that better." What MEAL-218 actually fixed survives that, and is
+    // asserted by the test above: the STEPPER is unlit on arrival and the flash
+    // is still the only thing that paints its border.
     const view = await atReview();
     // The glow is a RING AROUND the stepper, not the stepper's own border. They
-    // have to be separate elements: the red flash lives on the border and fires
+    // have to be separate elements: the flash lives on the border and fires
     // exactly when the quantity is unset, which is when the glow is showing, so
-    // painting both on one border meant the amber suppressed the alert at the
-    // one moment it was needed. Layering keeps both signals.
+    // painting both on one border meant the ring suppressed the alert at the one
+    // moment it was needed. Layering keeps both signals -- and now that both are
+    // reds, the layering is the whole of what tells them apart.
     const glow = view.queryByTestId('qty-glow-m1') ?? view.queryByTestId('qty-glow-choose');
     expect(glow).toBeTruthy();
-    expect(JSON.stringify(glow!.props.style)).toMatch(/rgba\(245,\s*158,\s*11/);
+    expect(JSON.stringify(glow!.props.style)).toMatch(/rgba\(221,\s*0,\s*49/);
   });
 });
 

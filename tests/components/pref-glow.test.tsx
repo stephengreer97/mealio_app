@@ -47,11 +47,18 @@ describe('the unset preference section glows like an unset quantity', () => {
     expect(block).not.toMatch(/borderWidth:\s*2\s*,/);
   });
 
-  it('is amber, not the brand red', () => {
-    // The red is the flash: an answer to a press. This is an invitation to make
-    // one, and reusing red here reintroduces the "you did something wrong on
-    // arrival" reading MEAL-218 removed.
-    expect(src).toContain("rgba(245,158,11,0.25)");
+  it('is the brand red, and never the flash red or the store colour', () => {
+    // Was amber until 2026-09-09 (Stephen: "make the qty glow mealio red
+    // instead of yellow"). It follows the quantity glow wherever that goes,
+    // which is the point of sharing the values -- two invitation colours on one
+    // screen would be worse than either.
+    //
+    // Still NOT the flash red (#ef4444): that one answers a press, and this one
+    // invites it. They are now told apart by tempo and by living on separate
+    // elements rather than by hue. And still not the STORE colour -- this is the
+    // app saying something is missing, not the store saying anything.
+    expect(src).toContain("rgba(221,0,49,0.25)");
+    expect(src).not.toContain("rgba(245,158,11,0.25)");
     const block = src.slice(src.indexOf('testID="pref-glow"'), src.indexOf('testID="pref-glow"') + 700);
     expect(block).not.toContain('#ef4444');
     expect(block).not.toContain('storeColor');
