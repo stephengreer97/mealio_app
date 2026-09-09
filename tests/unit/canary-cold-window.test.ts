@@ -48,3 +48,40 @@ describe('clearing the canary meals is reversible', () => {
     expect(walk).toContain("'candidate-0' in xml or 'Products chosen' in xml");
   });
 });
+
+describe('the meal card is selected by its exact id', () => {
+  // The single worst bug in the curation walk, and it presented as a race.
+  //
+  // drive.tap_id matches a SUBSTRING, and the combination window's duplicate is
+  // the primary's name with a " B" on the end -- so "meal-card-Canary HEB" also
+  // matches "meal-card-Canary HEB B". The walk opened whichever the dump listed
+  // first, found only the line THAT meal had left unchosen, and reported
+  // 'skipped' or 'stuck' about an ingredient nobody had asked it to touch. The
+  // symptoms moved around between runs, which is what made it look like timing.
+  it('never selects a meal by substring', () => {
+    expect(src).toContain('def tap_meal_card');
+    expect(src).toContain("rid.group(1) != want");
+    // No path may reach a meal card through the substring matchers again.
+    expect(src).not.toMatch(/tap_id\('meal-card-/);
+    expect(src).not.toMatch(/tap_text\(meal_name/);
+    expect(src).not.toMatch(/tap_text\(second_meal/);
+  });
+
+  it('presses the quantity stepper by bounds, not by its label', () => {
+    // The '+' node is NOT marked clickable -- the handler sits on a parent -- so
+    // tap_text('+') raises, and an except that swallowed it left the quantity
+    // unset. The primary is disabled until it is set, a disabled tap is silent,
+    // and the walk called that 'stuck'.
+    expect(src).toContain('def _bump_qty');
+    expect(src).toContain('qty-stepper-choose');
+    const walk = src.slice(src.indexOf('def choose_products'), src.indexOf('def run_once'));
+    expect(walk).not.toContain("tap_text('+'");
+  });
+
+  it('distinguishes a store answering "none" from a walk that gave up', () => {
+    // H-E-B returns nothing at all for "Whole milk". That is a fact about the
+    // store and belongs in the result as such, not hidden inside a generic skip
+    // that also covers "I could not work this screen out".
+    expect(src).toContain("'no-candidates' if answered else 'skipped'");
+  });
+});

@@ -140,24 +140,19 @@ def _start_run(meal_name, second_meal=None, store_chip=None):
     time.sleep(2)
     if store_chip:
         select_store(store_chip)
-    drive.scroll_to(meal_name)
-    drive.tap_text(meal_name, timeout=40)
-    time.sleep(1.5)
+    tap_meal_card(meal_name)
     if second_meal:
         # The combination run: two meals in one add, which exercises the merge a
-        # single-meal run never reaches. The same meal twice is deliberate and
-        # sufficient -- selecting it a second time is a second selection, which
-        # is what the merge sees.
+        # single-meal run never reaches.
         #
-        # Tapping the SAME card again would deselect it, so this taps the card
-        # a second time only when the second meal is a different one; for the
-        # same meal the quantity is raised instead, which is the same two-meal
-        # add from the run's point of view.
-        if second_meal == meal_name:
-            _bump_meal_qty(meal_name)
-        else:
-            drive.tap_text(second_meal, timeout=40)
-            time.sleep(1.5)
+        # A meal card is a TOGGLE, so the second meal is a DUPLICATE saved meal
+        # with the same contents rather than the same card tapped twice, which
+        # would have deselected it and added nothing while looking like a pass.
+        # Identical contents is also the sharper test: two meals wanting the SAME
+        # product is where the merge has to choose between combining and
+        # double-adding, and adds land on top (2026-09-01), so a doubled line is
+        # the correct answer.
+        tap_meal_card(second_meal)
     # BY ID, not by coordinate. These two taps were the last blind ones, and they
     # are why a "successful" run finished in 22 seconds having done nothing: a
     # coordinate that misses is silent, and the window then broke out of its wait
@@ -170,42 +165,76 @@ def _start_run(meal_name, second_meal=None, store_chip=None):
         drive.tap_id('review-primary', timeout=20)
 
 
-def _bump_meal_qty(meal_name):
-    """Select the same meal a second time.
+def tap_meal_card(meal_name):
+    """Tap a meal card by its EXACT testID.
 
-    A meal card is a TOGGLE: tapping it again clears the selection, so a naive
-    "tap it twice" combination run would have added nothing and looked like a
-    pass. The card carries its own quantity control for exactly this, and
-    raising it is what the add sees as two meals.
+    drive.tap_id matches a SUBSTRING, and the combination window's duplicate is
+    the primary's name with a " B" on the end -- so "meal-card-Canary HEB" also
+    matches "meal-card-Canary HEB B", and whichever the dump listed first won.
+
+    Every confusing curation result came from this. The walk opened the wrong
+    meal, found only the one line THAT meal had left unchosen, and reported
+    'skipped' or 'stuck' about an ingredient nobody had asked it to touch. It
+    looked like a race because the symptoms moved around; it was a name being a
+    prefix of another name.
+
+    Selecting a meal for a RUN has the same trap, so both go through here.
     """
-    node = drive.find_id('meal-qty-plus-' + meal_name) or drive.find_id('meal-card-qty-' + meal_name)
-    if node:
-        drive.tap(node)
+    want = 'meal-card-' + meal_name
+    for _ in range(3):
+        drive.scroll_to(meal_name)
+        xml = drive.ui()
+        for m in re.finditer(r'<node[^>]*>', xml):
+            tag = m.group(0)
+            rid = re.search(r'resource-id="([^"]*)"', tag)
+            b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not rid or rid.group(1) != want or not b:
+                continue
+            x1, y1, x2, y2 = (int(g) for g in b.groups())
+            if x2 <= x1 or y2 <= y1:
+                continue
+            drive.tap_xy((x1 + x2) // 2, (y1 + y2) // 2)
+            time.sleep(1.5)
+            return True
+    raise AssertionError('no meal card with the exact id %r' % want)
+
+
+def _bump_qty():
+    """Press the quantity stepper's + inside the chooser.
+
+    BY COORDINATE, from bounds read a moment earlier, because the '+' node is
+    NOT marked clickable -- the touch handler sits on a parent, so tap_text('+')
+    raises "never found a tappable" and an except that swallowed it left the
+    quantity unset. The primary is disabled until the quantity is set, a
+    disabled tap is silent, and the walk then reported 'stuck' on an ingredient
+    whose screen was perfectly fine.
+
+    Scoped to the stepper's own box so it cannot hit some other '+' on screen.
+    """
+    xml = drive.ui()
+    box = None
+    for m in re.finditer(r'<node[^>]*>', xml):
+        tag = m.group(0)
+        rid = re.search(r'resource-id="(qty-stepper-choose|qty-glow-choose)"', tag)
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if rid and b:
+            box = tuple(int(g) for g in b.groups())
+            break
+    for m in re.finditer(r'<node[^>]*>', xml):
+        tag = m.group(0)
+        t = re.search(r'text="([^"]*)"', tag)
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not t or t.group(1) != '+' or not b:
+            continue
+        x1, y1, x2, y2 = (int(g) for g in b.groups())
+        if x2 <= x1 or y2 <= y1:
+            continue
+        if box and not (box[0] <= x1 and x2 <= box[2] and box[1] <= y1 and y2 <= box[3]):
+            continue
+        drive.tap_xy((x1 + x2) // 2, (y1 + y2) // 2)
         time.sleep(1.5)
         return True
     return False
-
-
-def _dismiss_overlay(tries=3):
-    """Close a run's done sheet (or any modal) so the tabs are reachable again.
-
-    Tried in order of how a person would leave: the explicit Done, then the
-    close glyph, then the hardware back. Silent when there is nothing to close,
-    because the common case is that the screen is already fine.
-    """
-    for _ in range(tries):
-        if drive.find_id('tab-mymeals'):
-            return True
-        for label in ('Done', '\u2715'):
-            node = drive.find(label, exact=True)
-            if node:
-                drive.tap(node)
-                time.sleep(2)
-                break
-        else:
-            drive.sh('adb', 'shell', 'input', 'keyevent', 'KEYCODE_BACK')
-            time.sleep(2)
-    return bool(drive.find_id('tab-mymeals'))
 
 
 def _answer_preference():
@@ -260,11 +289,7 @@ def choose_products(meal_name, store_chip, max_steps=12):
     drive.tap_id('tab-mymeals', timeout=40)
     time.sleep(2)
     select_store(store_chip)
-    # SCROLL FIRST. My Meals is a long list ordered by recency and tap_id does
-    # not scroll; a canary meal several rows down is simply not there yet.
-    drive.scroll_to(meal_name)
-    drive.tap_id('meal-card-' + meal_name, timeout=40)
-    time.sleep(1.5)
+    tap_meal_card(meal_name)
     drive.tap_id('floating-add-to-cart', timeout=40)
     # WAIT FOR THE CHOOSER, do not assume it. Its first screen is a LIVE search
     # against the store and takes as long as it takes; a fixed sleep let the loop
@@ -328,11 +353,7 @@ def choose_products(meal_name, store_chip, max_steps=12):
             # answered. Any option will do -- the canary is not testing which
             # preference is right.
             _answer_preference()
-            try:
-                drive.tap_text('+', timeout=10)
-                time.sleep(1.5)
-            except Exception:
-                pass
+            _bump_qty()
             drive.tap_id('review-primary', timeout=20)
             time.sleep(3)
             # DID IT ACTUALLY MOVE? The primary is disabled until the quantity is
@@ -342,11 +363,8 @@ def choose_products(meal_name, store_chip, max_steps=12):
             if _chooser_step(drive.ui()) == where:
                 drive.tap_id('candidate-0', timeout=20)
                 time.sleep(1.5)
-                try:
-                    drive.tap_text('+', timeout=10)
-                    time.sleep(1.5)
-                except Exception:
-                    pass
+                _answer_preference()
+                _bump_qty()
                 drive.tap_id('review-primary', timeout=20)
                 time.sleep(3)
                 if _chooser_step(drive.ui()) == where:
@@ -360,9 +378,14 @@ def choose_products(meal_name, store_chip, max_steps=12):
             steps.append('chose')
             continue
         if drive.find('Skip this ingredient'):
+            # "No products found" is the STORE answering, not the walk failing.
+            # H-E-B returns nothing at all for "Whole milk", and recording that
+            # as a generic skip hides a real fact about the store behind a step
+            # that also covers "I could not work this screen out".
+            answered = 'No products found' in xml
             drive.tap_text('Skip this ingredient', timeout=20)
             time.sleep(3)
-            steps.append('skipped')
+            steps.append('no-candidates' if answered else 'skipped')
             continue
         if drive.find('Done'):
             drive.tap_text('Done', timeout=20)
@@ -547,15 +570,16 @@ def load_plans():
     with urllib.request.urlopen(req, timeout=30) as r:
         rows = json.loads(r.read().decode())
     chips = store_chips()
+    # The item columns are not read any more: the out-of-stock and no-match lines
+    # are INGREDIENTS of the canary meal now, which is the one place a meal's
+    # contents are described.
     return [{'storeId': row['store_id'],
              # THE CHIP IS THE DISPLAY NAME. The plan table stores a store_id
              # ('aldi'), and the chip row shows what the app calls it ('ALDI'),
              # so falling back to the id found no chip and reported every store
              # as not signed in -- a rig problem, and a made-up one.
              'storeChip': chips.get(row['store_id'], row['store_id']),
-             'mealName': row.get('meal_name'),
-             'outOfStock': row.get('out_of_stock_item') or '',
-             'unmatched': row.get('unmatched_item') or ''}
+             'mealName': row.get('meal_name')}
             for row in rows if row.get('store_id')]
 
 

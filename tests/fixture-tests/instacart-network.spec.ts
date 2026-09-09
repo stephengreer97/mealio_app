@@ -55,6 +55,14 @@ function gqlStub(opts: {
   /** The carts the signed-in ACCOUNT holds, across retailers. Defaults to one
    *  ALDI cart, which is every case that existed before a second banner. */
   carts?: Array<{ id: string; itemCount: number; slug: string; retailerId?: string }>;
+  /**
+   * The fulfilment zone as the storefront payload carries it (MEAL-235).
+   *
+   * Defaults to a value, because the real payload has one and the rail's whole
+   * price story depends on reading it. Pass `null` to model a storefront whose
+   * marker has been renamed, which is the case the item-id fallback exists for.
+   */
+  storefrontZone?: string | null;
 } = {}) {
   const cart = opts.cart ?? {};
   const ids = opts.searchIds ?? ['items_23898-1', 'items_23898-2'];
@@ -98,7 +106,11 @@ function gqlStub(opts: {
     // The storefront, fetched as TEXT for the shop id. The value is in the
     // URL-ENCODED server payload, which is why the plain string is not there.
     '      return Promise.resolve({ status: 200, text: function () {',
-    '        return Promise.resolve("junk%5C%22shopId%5C%22%3A%5C%228583%5C%22junk"); } });',
+    '        return Promise.resolve("junk%5C%22shopId%5C%22%3A%5C%228583%5C%22junk"'
+      + (opts.storefrontZone === null
+          ? ''
+          : ' + "more%5C%22zoneId%5C%22%3A%5C%22' + (opts.storefrontZone ?? '32') + '%5C%22junk"')
+      + '); } });',
     '    }',
     '    if (u.indexOf("/graphql") < 0) {',
     // Anything else is a bundle fetch from the harvest.
@@ -232,16 +244,56 @@ describe('search', () => {
     expect(calls.filter((c) => c.op === 'AsyncItemSearch').length).toBe(1);
   }, AT_ALDI);
 
-  itWithFixture('storefront.html', 'reads zoneId back out of the ids a probe returned', async (runner) => {
-    // Search needs a zoneId and nothing hands one over. AsyncItemSearch does NOT
-    // need one and the ids it returns CARRY it, so one cheap call buys the zone
-    // rather than a hard-coded number nobody could explain.
-    await runner.inject(gqlStub({ searchIds: ['items_44100-9', 'items_44100-10'] }));
+  itWithFixture('storefront.html', 'takes the zone from the storefront, not from an item id', async (runner) => {
+    // MEAL-235, and the whole of it. The rail used to read the zone out of the
+    // ids a search returns — items_23898-18647633 -> 23898 — which is the
+    // RETAILER LOCATION id. The zone is a different, much smaller number, and
+    // the storefront payload carries it beside the shop id.
+    //
+    // A wrong zone does not fail, which is why it survived two months: Search
+    // answers 200 with every item present and "Not Found" on every price field.
+    // So this asserts the VARIABLE, because the failure it guards is silent.
+    await runner.inject(gqlStub({ searchIds: ['items_44100-9', 'items_44100-10'], storefrontZone: '32' }));
     await runner.inject(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })!);
     await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
     const calls = await runner.page.evaluate('window.__calls') as Array<{ op: string; vars: Record<string, unknown> }>;
     const search = calls.find((c) => c.op === 'Search')!;
-    expect(search.vars.zoneId).toBe('44100');
+    expect(search.vars.zoneId).toBe('32');
+    // Not 44100. The id still carries a number and it is still the wrong one.
+    expect(search.vars.zoneId).not.toBe('44100');
+  }, AT_ALDI);
+
+  itWithFixture('storefront.html', 'says WHICH zone it used, so a slide back to the priceless one is visible', async (runner) => {
+    await runner.inject(gqlStub({ storefrontZone: '32' }));
+    await runner.inject(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })!);
+    const shape = await runner.waitForMessage('IC_SEARCH_SHAPE', 20_000) as Record<string, unknown>;
+    expect(shape.zone).toBe('32');
+    expect(shape.zoneFrom).toBe('storefront');
+  }, AT_ALDI);
+
+  itWithFixture('storefront.html', 'falls back to the id when the storefront marker is gone, and says so', async (runner) => {
+    // The fallback is kept rather than deleted because it is what makes search
+    // work AT ALL: with no zone the batch bails and returns nothing, so a marker
+    // Instacart renames would turn "no prices" into "no results". The telemetry
+    // has to say which one answered or the two are indistinguishable.
+    await runner.inject(gqlStub({ searchIds: ['items_44100-9', 'items_44100-10'], storefrontZone: null }));
+    await runner.inject(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })!);
+    const shape = await runner.waitForMessage('IC_SEARCH_SHAPE', 20_000) as Record<string, unknown>;
+    expect(shape.zone).toBe('44100');
+    expect(shape.zoneFrom).toBe('item-id');
+    await runner.waitForMessage('SEARCH_BATCH_DONE', 20_000);
+    const calls = await runner.page.evaluate('window.__calls') as Array<{ op: string }>;
+    // Still searches. A missing zone marker costs prices, never results.
+    expect(calls.filter((c) => c.op === 'Search').length).toBe(1);
+  }, AT_ALDI);
+
+  itWithFixture('storefront.html', 'carries the price onto the candidate the app renders', async (runner) => {
+    await runner.inject(gqlStub({ storefrontZone: '32' }));
+    await runner.inject(buildInstacartSearchBatchScript(['sour cream'], { shopId: '8583' })!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 20_000) as Record<string, unknown>;
+    const cands = msg.candidates as Array<Record<string, unknown>>;
+    // The field was null on every Instacart candidate that has ever been built.
+    expect(cands[0].price).toBe('$2.49');
   }, AT_ALDI);
 
   itWithFixture('storefront.html', 'a term the store refused does not take the batch with it', async (runner) => {

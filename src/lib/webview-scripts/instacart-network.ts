@@ -287,6 +287,11 @@ ${RETRY_FN}
       // items alongside them. Treating that as a failure threw away a working
       // search over a field the matcher does not read. Only a response with no
       // data at all is a failure.
+      //
+      // That twenty-error shape was the WRONG ZONE and is fixed (MEAL-235), but
+      // this stays exactly as it is: partial errors are a property of GraphQL,
+      // not of that one bug, and the next resolver to fail on a field nobody
+      // reads must not throw away a working search either.
       if (!j.data) {
         return { ok: false, why: 'gql_error', op: name, ms: ms, code: code,
                  detail: String(first.message || '').slice(0, 160) };
@@ -356,7 +361,67 @@ ${RETRY_FN}
          || IC.digitsAfter(html, '%22shops%22%3A%5B%7B%22id%22%3A%22', 8)
          || IC.digitsAfter(html, '%22shopId%22%3A%22', 8)
          || IC.digitsAfter(html, '"shopId":"', 8);
-    return { v: v, ms: Date.now() - t0, bytes: html.length };
+    // THE ZONE, out of the same five megabytes (MEAL-235). It is beside the shop
+    // id under the same encoding, so harvesting it here costs nothing: the
+    // alternative was a second fetch of the same document, or the guess below
+    // that has been wrong since the day it was written.
+    var z = IC.digitsAfter(html, '%5C%22zoneId%5C%22%3A%5C%22', 8)
+         || IC.digitsAfter(html, '%22zoneId%22%3A%22', 8)
+         || IC.digitsAfter(html, '%22zone_id%22%3A%22', 8)
+         || IC.digitsAfter(html, '"zoneId":"', 8);
+    if (z) { try { localStorage.setItem('${epochKey(ZONE_CACHE_KEY)}', JSON.stringify({ v: z, at: Date.now(), from: 'storefront' })); } catch (e) {} }
+    return { v: v, zone: z, ms: Date.now() - t0, bytes: html.length };
+  };
+
+  /**
+   * The fulfilment zone, which is NOT the number in an item id.
+   *
+   * WHAT WAS WRONG (MEAL-235). This rail read the zone out of the ids a search
+   * returns -- items_23898-18647633 -> 23898 -- which is a real number that
+   * Search accepts and returns twenty items for. It is the RETAILER LOCATION id;
+   * the same response calls it that, in
+   * viewSection.trackingProperties.retailer_location_id. The zone is 32.
+   *
+   * A wrong zone does not fail. Search answers 200 with every item present and
+   * "Not Found" on every price field, so the rail read it as "Instacart does not
+   * give us prices" and worked around it for two months. MEASURED with the two
+   * side by side, same session, same items, same postcode: zone 23898 gives 20
+   * price errors and no prices, zone 32 gives none and every price. The postcode
+   * makes no difference at all -- the placeholder works.
+   *
+   * Order: the cache, then the storefront payload, then the old guess. The guess
+   * is kept as a LAST resort rather than deleted because it is what makes search
+   * work at all: with no zone the batch bails and returns nothing, so a marker
+   * Instacart renames would turn "no prices" into "no results". zoneFrom on the
+   * IC_SEARCH_SHAPE telemetry says which one answered, so a silent slide back to
+   * the priceless path is visible rather than inferred.
+   */
+  IC.findZoneId = async function (slug, firstItemId, budgetMs) {
+    try {
+      var raw = localStorage.getItem('${epochKey(ZONE_CACHE_KEY)}');
+      if (raw) {
+        var j = JSON.parse(raw);
+        if (j && j.v && Date.now() - j.at < ${OPS_CACHE_MAX_AGE_MS}) {
+          return { v: String(j.v), from: j.from === 'item-id' ? 'cache:item-id' : 'cache:storefront' };
+        }
+      }
+    } catch (e) {}
+
+    var got = await IC.fetchShopId(slug, budgetMs);
+    if (got && got.zone) return { v: String(got.zone), from: 'storefront', ms: got.ms };
+
+    // Last resort. Search will work; prices will not.
+    var f = String(firstItemId || '');
+    var us = f.indexOf('_');
+    var dash = f.indexOf('-');
+    if (us >= 0 && dash > us) {
+      var guess = f.slice(us + 1, dash);
+      if (guess) {
+        try { localStorage.setItem('${epochKey(ZONE_CACHE_KEY)}', JSON.stringify({ v: guess, at: Date.now(), from: 'item-id' })); } catch (e) {}
+        return { v: guess, from: 'item-id' };
+      }
+    }
+    return { v: null, from: 'none' };
   };
 
   IC.findShopId = async function (slug, budgetMs) {
@@ -744,10 +809,14 @@ ${icPrelude()}
       // The write is what finds out, and it verifies against the cart.
       outOfStock: false,
       preferences: null,
-      // MEASURED: price resolves to "Not Found" on every item, under the real
-      // postcode and the placeholder alike, and with the zone or the shop as
-      // zoneId. Cosmetic -- the matcher scores on the name and the write uses
-      // the id -- so it is left null rather than faked.
+      // THE PRICE, which arrives now that the zone is the zone (MEAL-235).
+      //
+      // This read "MEASURED: price resolves to Not Found on every item" and was
+      // true of every run the rail had ever made -- because every one of them
+      // sent the retailer location id as the zoneId. It was not Instacart
+      // withholding a price; it was us asking in the wrong zone. Still allowed to
+      // be null: an item genuinely without a price, and the item-id fallback zone,
+      // both land here, and the row simply shows no price rather than a wrong one.
       price: price,
       productId: it.id != null ? String(it.id) : null,
       skuId: null,
@@ -759,36 +828,54 @@ ${icPrelude()}
   try {
     await IC.ensureOps(${seed}, 15000);
 
-    // THE ZONE, discovered rather than guessed. Search needs a zoneId and
-    // nothing hands one over -- but AsyncItemSearch does NOT need one, and the
-    // ids it returns carry it (items_23898-18647633). So one cheap call
-    // (MEASURED 117ms) buys the zone, and it is cached for twelve hours with
-    // the shop id.
-    var zone = null;
-    var cachedZone = null;
+    // THE ZONE, and it is the whole of MEAL-235.
+    //
+    // This used to be read out of the ids a search returns --
+    // items_23898-18647633 -> 23898 -- which is a real number Search accepts and
+    // answers twenty items for. It is the RETAILER LOCATION id. The zone is 32,
+    // and the same response says so: viewSection.trackingProperties carries
+    // retailer_location_id 23898 and the storefront sends zoneId 32 on every
+    // call it makes.
+    //
+    // A wrong zone does not fail, which is why this survived two months: Search
+    // returns 200 with every item present and "Not Found" on every price field,
+    // so the rail concluded Instacart does not give us prices and wrote that
+    // down. MEASURED side by side, same session, same items: zone 23898 gives 20
+    // price errors and no prices; zone 32 gives zero errors and every price. The
+    // postcode is irrelevant -- the placeholder works.
+    //
+    // The right zone is in the storefront payload the shop id already comes
+    // from, so this costs no extra request on a cache hit and reuses a fetch on
+    // a miss. The slug comes off the URL because searchBatch is handed a
+    // NetworkSession, which carries the SHOP id and not the tenant; when we are
+    // not on a store URL the lookup falls through to the old guess and search
+    // still works, without prices.
+    // Split, not a regex. A backslash inside this template literal is eaten on
+    // the way out -- the regex written here first emitted //store/([^/?#]+)/,
+    // which is a comment, and took the whole script down with a syntax error.
+    var slugParts = String(location.pathname || '').split('/');
+    var slug = (slugParts[1] === 'store' && slugParts[2]) ? slugParts[2] : null;
+    var probe = await IC.gql('AsyncItemSearch', {
+      query: TERMS[0], shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}', searchSource: 'search',
+    }, REQ_MS, 'search');
+    var firstId = null;
     try {
-      var rawZ = localStorage.getItem('${epochKey(ZONE_CACHE_KEY)}');
-      if (rawZ) {
-        var jz = JSON.parse(rawZ);
-        if (jz && jz.v && Date.now() - jz.at < ${OPS_CACHE_MAX_AGE_MS}) cachedZone = String(jz.v);
-      }
+      var pids = probe.data.itemSearch.itemResultList.itemIds || [];
+      if (pids.length) firstId = String(pids[0]);
     } catch (e) {}
-    zone = cachedZone;
-    if (!zone) {
-      var probe = await IC.gql('AsyncItemSearch', {
-        query: TERMS[0], shopId: SHOP, postalCode: '${PLACEHOLDER_POSTAL}', searchSource: 'search',
-      }, REQ_MS, 'search');
-      var pids = [];
-      try { pids = probe.data.itemSearch.itemResultList.itemIds || []; } catch (e) {}
-      if (pids.length) {
-        var f = String(pids[0]);
-        var us = f.indexOf('_');
-        var dash = f.indexOf('-');
-        if (us >= 0 && dash > us) zone = f.slice(us + 1, dash);
-      }
-      if (zone) { try { localStorage.setItem('${epochKey(ZONE_CACHE_KEY)}', JSON.stringify({ v: zone, at: Date.now() })); } catch (e) {} }
+    var found = slug
+      ? await IC.findZoneId(slug, firstId, 20000)
+      : { v: null, from: 'no_slug' };
+    if (!found.v && firstId) {
+      var us2 = firstId.indexOf('_');
+      var dash2 = firstId.indexOf('-');
+      if (us2 >= 0 && dash2 > us2) found = { v: firstId.slice(us2 + 1, dash2), from: 'item-id' };
     }
-    post({ type: 'IC_SEARCH_SHAPE', source: 'network', zone: zone, zoneFrom: cachedZone ? 'cache' : 'probe' });
+    var zone = found.v;
+    // zoneFrom is load-bearing rather than decoration. 'storefront' means
+    // prices; 'item-id' means the old priceless path, and a slide back to it is
+    // otherwise indistinguishable from Instacart withholding prices again.
+    post({ type: 'IC_SEARCH_SHAPE', source: 'network', zone: zone, zoneFrom: found.from });
     if (!zone) {
       for (var z = 0; z < TERMS.length; z++) {
         post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: TERMS[z], why: 'no_zone' });
