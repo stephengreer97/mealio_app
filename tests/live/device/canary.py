@@ -28,7 +28,8 @@ ignore the colour, which costs more than the missed run.
 """
 import json
 import re
-import urllib.request, os, random, subprocess, sys, time
+import urllib.request
+import urllib.parse, os, random, subprocess, sys, time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -207,6 +208,33 @@ def _dismiss_overlay(tries=3):
     return bool(drive.find_id('tab-mymeals'))
 
 
+def _answer_preference():
+    """Pick the first preference option, if the screen is asking for one."""
+    xml = drive.ui()
+    if 'Select your preference' not in xml:
+        return False
+    # The options sit in a row under the label; the first tappable one after it
+    # is the first option.
+    for m in re.finditer(r'<node[^>]*>', xml):
+        tag = m.group(0)
+        if 'clickable="true"' not in tag:
+            continue
+        t = re.search(r'text="([^"]*)"', tag)
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if not t or not b or not t.group(1).strip():
+            continue
+        label = t.group(1).strip()
+        if label in ('+', '-', '\u2212') or label.startswith('Select your preference'):
+            continue
+        x1, y1, x2, y2 = (int(g) for g in b.groups())
+        if x2 <= x1 or y2 <= y1:
+            continue
+        drive.tap_xy((x1 + x2) // 2, (y1 + y2) // 2)
+        time.sleep(1.5)
+        return True
+    return False
+
+
 def _chooser_step(xml):
     """The chooser's own progress label, e.g. "Choose Product (2 of 3)"."""
     m = re.search(r'Choose Product \(\d+ of \d+\)', xml or '')
@@ -238,7 +266,19 @@ def choose_products(meal_name, store_chip, max_steps=12):
     drive.tap_id('meal-card-' + meal_name, timeout=40)
     time.sleep(1.5)
     drive.tap_id('floating-add-to-cart', timeout=40)
-    time.sleep(6)
+    # WAIT FOR THE CHOOSER, do not assume it. Its first screen is a LIVE search
+    # against the store and takes as long as it takes; a fixed sleep let the loop
+    # below look at My Meals, see no candidates and break out reporting no steps
+    # at all -- an empty list that reads exactly like "nothing to do".
+    opened = False
+    for _ in range(30):
+        x = drive.ui()
+        if 'candidate-0' in x or _chooser_step(x) or 'Skip this ingredient' in x:
+            opened = True
+            break
+        time.sleep(2)
+    if not opened:
+        return ['chooser-never-opened']
 
     # NEVER CHOOSE A PRODUCT FOR THESE. The line exists to be unfindable, and
     # a store will happily suggest SOMETHING for it -- ALDI offered allergy
@@ -248,13 +288,24 @@ def choose_products(meal_name, store_chip, max_steps=12):
 
     steps = []
     for _ in range(max_steps):
+        # WAIT FOR THIS INGREDIENT'S SEARCH, every time -- not just the first.
+        # Each step runs its own live search, and acting on a half-rendered
+        # screen is how the walk produced 'skipped' for an ingredient that had
+        # 40 candidates a second later, and 'stuck' for one whose list arrived
+        # after the tap. "No candidates" is a real answer here and has to be
+        # distinguished from "not yet", which only time can do.
         xml = drive.ui()
+        for _ in range(20):
+            if 'candidate-0' in xml or 'Products chosen' in xml or 'Done!' in xml:
+                break
+            time.sleep(1.5)
+            xml = drive.ui()
         if any(n in xml for n in never) and drive.find('Skip this ingredient'):
             drive.tap_text('Skip this ingredient', timeout=20)
             time.sleep(3)
             steps.append('left-unfindable')
             continue
-        if 'floating-add-to-cart' in xml and 'candidate-' not in xml:
+        if 'floating-add-to-cart' in xml and 'candidate-' not in xml and not _chooser_step(xml):
             break                                   # back on My Meals: done
         if 'candidate-0' in xml:
             # THREE TAPS, AND THE MIDDLE ONE IS NOT OPTIONAL. Selecting a
@@ -270,6 +321,13 @@ def choose_products(meal_name, store_chip, max_steps=12):
             where = _chooser_step(xml)
             drive.tap_id('candidate-0', timeout=20)
             time.sleep(2)
+            # A PREFERENCE CAN BLOCK THE PRIMARY exactly as an unset quantity
+            # does. H-E-B asks one for bananas, and this is why the first
+            # curation pass sat on that ingredient tapping a disabled button:
+            # 40 candidates, review rendered fine, and a question nobody had
+            # answered. Any option will do -- the canary is not testing which
+            # preference is right.
+            _answer_preference()
             try:
                 drive.tap_text('+', timeout=10)
                 time.sleep(1.5)
@@ -373,6 +431,90 @@ def added_ids(mark):
     return [str(i) for i in ids]
 
 
+def reset_selections(meal_names):
+    """Clear the chosen product on every line of these meals.
+
+    WHY THE CANARY DOES THIS EVERY NIGHT. With products already chosen, a run
+    goes search -> exact match -> add, and the CHOOSER is never exercised: live
+    search, ranking, the preference modal, the weight ladder, and the "no
+    candidates at all" branch are all choose-time behaviour. Curating once by
+    hand and never again means the half of the product most exposed to a store
+    changing its mind has no canary at all.
+
+    At the START of the run rather than the end. Clearing afterwards would leave
+    the meal uncurated until somebody noticed; clearing and re-choosing makes
+    curation part of the run, so the plan maintains itself as stores relist --
+    which the ticket says outright is going to happen.
+
+    A failure here is a CHOOSER failure and is reported as its own window. It is
+    not evidence about the add path, and the add windows that follow will have
+    nothing to add, which the scoring has to see as one problem and not four.
+    """
+    env = _central_env()
+    url, key = env.get('NEXT_PUBLIC_SUPABASE_URL'), env.get('SUPABASE_SERVICE_ROLE_KEY')
+    if not url or not key:
+        return []
+    # SNAPSHOT FIRST. Clearing is only safe if it can be undone: the walk that
+    # re-chooses is UI automation against a live store, and when it fails the
+    # meal is left with nothing chosen -- worse than before the run started, and
+    # every add window after it has nothing to add. H-E-B ended up exactly there
+    # the first time this ran.
+    snapshot = {}
+    cleared = []
+    for name in meal_names:
+        q = url + '/rest/v1/meals?select=id,ingredients&name=eq.' + urllib.parse.quote(name)
+        req = urllib.request.Request(q, headers={'apikey': key, 'authorization': 'Bearer ' + key})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            rows = json.loads(r.read().decode())
+        if not rows:
+            continue
+        m = rows[0]
+        snapshot[name] = {'id': m['id'], 'ingredients': m.get('ingredients') or []}
+        ing = [dict(i, searchTerm=None) for i in (m.get('ingredients') or [])]
+        body = json.dumps({'ingredients': ing}).encode()
+        req2 = urllib.request.Request(
+            url + '/rest/v1/meals?id=eq.' + m['id'], data=body, method='PATCH',
+            headers={'apikey': key, 'authorization': 'Bearer ' + key,
+                     'content-type': 'application/json'})
+        urllib.request.urlopen(req2, timeout=30).read()
+        cleared.append(name)
+    return {'cleared': cleared, 'snapshot': snapshot}
+
+
+def restore_selections(snapshot, names=None):
+    """Put back what reset_selections cleared.
+
+    Called when the re-choose did not finish. The canary's job is to report that
+    the chooser is broken, NOT to leave the meals it tests in a state where
+    nothing else can be tested either.
+    """
+    env = _central_env()
+    url, key = env.get('NEXT_PUBLIC_SUPABASE_URL'), env.get('SUPABASE_SERVICE_ROLE_KEY')
+    if not url or not key:
+        return []
+    put_back = []
+    for name, rec in (snapshot or {}).items():
+        if names is not None and name not in names:
+            continue
+        body = json.dumps({'ingredients': rec['ingredients']}).encode()
+        req = urllib.request.Request(
+            url + '/rest/v1/meals?id=eq.' + rec['id'], data=body, method='PATCH',
+            headers={'apikey': key, 'authorization': 'Bearer ' + key,
+                     'content-type': 'application/json'})
+        urllib.request.urlopen(req, timeout=30).read()
+        put_back.append(name)
+    return put_back
+
+
+def _central_env():
+    env = {}
+    for line in open(os.path.expanduser('~/mealio_central/.env.local')):
+        if '=' in line and not line.startswith('#'):
+            k, v = line.split('=', 1)
+            env[k.strip()] = v.strip()
+    return env
+
+
 def store_chips():
     """storeId -> the name the app puts on the chip, read from its own constant.
 
@@ -394,11 +536,7 @@ def load_plans():
     Service-role, because this runs on the box rather than as a signed-in user
     and RLS would otherwise hide every row.
     """
-    env = {}
-    for line in open(os.path.expanduser('~/mealio_central/.env.local')):
-        if '=' in line and not line.startswith('#'):
-            k, v = line.split('=', 1)
-            env[k.strip()] = v.strip()
+    env = _central_env()
     url = env.get('NEXT_PUBLIC_SUPABASE_URL')
     key = env.get('SUPABASE_SERVICE_ROLE_KEY')
     if not url or not key:
@@ -541,6 +679,30 @@ def main():
         entry = {'storeId': store, 'ran': True, 'windows': {}}
         run_mark = drive.log_mark()
         meal = plan.get('mealName') or 'Canary'
+        second = plan.get('secondMeal') or (meal + ' B')
+
+        # THE COLD WINDOW: clear every chosen product, then choose them again
+        # through the real chooser. This is the only window that exercises live
+        # search, ranking and the preference modal, and it leaves both meals
+        # curated for the add windows that follow.
+        reset = reset_selections([meal, second])
+        entry['choose'] = {'cleared': reset['cleared']}
+        try:
+            entry['choose']['primary'] = choose_products(meal, chip)
+            entry['choose']['second'] = choose_products(second, chip)
+            bad = ('stuck', 'chooser-never-opened')
+            entry['choose']['ok'] = not any(
+                any(b in steps for b in bad) for steps in
+                (entry['choose']['primary'], entry['choose']['second']))
+        except Exception as e:
+            entry['choose']['ok'] = False
+            entry['choose']['error'] = str(e)[:200]
+        if not entry['choose'].get('ok'):
+            # The chooser failed, which is a finding. Leaving both meals
+            # uncurated on top of it would turn one finding into four, and the
+            # add windows would measure nothing at all.
+            entry['choose']['restored'] = restore_selections(reset['snapshot'])
+
         entry['windows']['single'] = run_once(meal, store_chip=chip)
         before = cart_count()
 
@@ -558,7 +720,7 @@ def main():
         entry['windows']['combination'] = run_once(
             # Convention rather than a schema column: the duplicate is the
             # canary meal's name with a " B" on the end.
-            meal, 'combination', second_meal=plan.get('secondMeal') or (meal + ' B'),
+            meal, 'combination', second_meal=second,
             store_chip=chip)
 
         # Collected across ALL THREE windows: the repeat and the combination add
