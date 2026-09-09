@@ -106,7 +106,27 @@ The WHY is in the banner on purpose; "choose a store" alone reads as busywork.</
 needs a person for a moment, then the run resumes &mdash; and Try again already restarts from the
 login check, which re-reads the session and picks up the store they chose. The banner is the only
 difference between the two cases.</p>
-<p>Four of the five rails need a store; Walmart says <code>needsStoreId: false</code> and never
+<p><p><b>THE REPAIR RUNS IN THE PREWARM TOO</b> (2026-09-09). An <code>ok:false</code> from a rail is
+"could not tell", not "signed out" &mdash; on Wegmans it is the ordinary state an hour after the user
+last opened the site, because MSAL renews its token only where the site's own JavaScript runs and the
+rail sits on robots.txt. The sheet has always answered that by loading the real storefront and asking
+again. <code>SilentLoginProbe</code> did not: it reported nothing, sat out its whole 20s timeout and
+finished ERROR, so the prewarm had no verdict and the user watched the sheet do the repair instead.
+MEASURED on the Pixel: the silent probe gave up on <code>token_expired</code>, and the same script on
+the sheet's WebView five seconds later answered <code>loggedIn, verified, storeId 140</code> in 723ms.
+The probe now does the same repair once, invisibly, before the cart is ever opened. It still reports
+NOTHING unless it gets a definite answer &mdash; a prewarm <code>loggedOut</code> is terminal, so a
+guess there is the one thing that can do real harm.</p>
+
+<p><b>The page is never shown while the answer is unknown</b>, and on a rail store it is never shown
+during the check at all: <code>netRunVisual</code> parks the WebView in <code>hiddenLayer</code> and
+the CartRunAnimation takes the space. That layer used to hide behind <code>zIndex: -1</code>, which
+RN Android does not honour for a native WebView &mdash; so the store's page drew through at the
+bottom of the sheet, on the Pixel only. It is translated out of the box now rather than ordered
+behind it, keeping the real viewport and the non-zero opacity that Chromium needs to keep its timers
+running.</p>
+
+Four of the five rails need a store; Walmart says <code>needsStoreId: false</code> and never
 reaches this, because its search is national and its cart is the account's.</p>
 </div>
 <div class="wrap" style="border-left:4px solid #ef4444;padding-left:14px">
