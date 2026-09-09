@@ -739,7 +739,7 @@ ${RETRY_FN}
     // A 401 means the token we cached is spent. Drop it so the next run looks
     // again rather than failing the same way for an hour.
     if (r.status === 401 || r.status === 403) { WG.forgetToken(); return { ok: false, why: 'unauthorised', status: r.status, ms: ms }; }
-    if (r.status < 200 || r.status >= 300) return { ok: false, why: 'http', status: r.status, ms: ms, detail: String(txt || '').slice(0, 160) };
+    if (r.status < 200 || r.status >= 300) return { ok: false, why: 'http', status: r.status, ms: ms, detail: String(txt || '').slice(0, 700) };
     var j = null;
     try { j = JSON.parse(txt); } catch (e) {}
     return { ok: true, data: j, ms: ms, bytes: (txt || '').length };
@@ -1228,12 +1228,25 @@ ${wegPrelude()}
       }
     }
     post({
-      // THE WRITE HAS TO HAVE SUCCEEDED TOO. A 400 that leaves stillThere at 0
-      // -- because the re-read matched nothing rather than because anything was
-      // removed -- was reporting ok:true over a refused delete. "The cart
-      // decides" is right, but only once the store has accepted the request;
-      // before that, a zero count means the question was never asked.
-      ok: !!w.ok && stillThere === 0 && left != null, wrote: !!w.ok,
+      // THE WRITE, OR PROOF THE CART MOVED.
+      //
+      // Two failure shapes have to stay distinguishable, and neither
+      // "stillThere === 0" nor "w.ok" tells them apart on its own:
+      //
+      //   the write never landed   -> nothing removed, and stillThere is 0 only
+      //                               because the re-read matched nothing
+      //   the write errored anyway -> observed 2026-09-09: a PUT of seven skus
+      //                               answered 400 "malformed" and removed all
+      //                               seven, 19 lines to 12. The same call has
+      //                               since answered 200 for one sku and for
+      //                               sixteen, so the 400 was not batch size and
+      //                               has not reproduced.
+      //
+      // So: the targets are gone AND either the store accepted it or the cart
+      // is demonstrably shorter than it was. A cart that did not shrink cannot
+      // have had anything removed from it, whatever the status line said.
+      ok: stillThere === 0 && left != null && (!!w.ok || left < lines.length),
+      wrote: !!w.ok, shrank: left != null ? lines.length - left : null,
       why: w.ok ? null : (w.why || 'write_refused'), status: w.status || null,
       detail: w.ok ? null : (w.detail || null),
       asked: targets.length, stillThere: stillThere,

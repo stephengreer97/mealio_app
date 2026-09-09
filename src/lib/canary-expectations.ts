@@ -232,9 +232,21 @@ export const UNIVERSAL_LINES = {
 /** One saved-meal ingredient, as the plan needs to see it. */
 export interface CanaryMealLine {
   ingredientName: string;
-  /** The chosen product. Null means the app would send this line to the chooser. */
+  /** The chosen product's NAME. Null means the app sends this line to the chooser. */
   searchTerm?: string | null;
   unit?: string | null;
+  /**
+   * The chosen product's IDENTITY, per store, as the chooser saved it.
+   *
+   * THIS WINS over searchTerm, because the add path uses it and skips the
+   * matcher entirely -- "the identifier IS the choice". An ingredient can carry
+   * both, and they can disagree: editing a meal's searchTerm in the database
+   * without touching storeProducts leaves the run adding the OLD product while
+   * every name in the plan says the new one. That looked like the app ignoring
+   * a chosen product; it was two fields describing one choice, and only one of
+   * them edited.
+   */
+  storeProducts?: Record<string, { name?: string | null }> | null;
 }
 
 /**
@@ -260,10 +272,12 @@ export function buildPlanFromMeal(
   mealName: string,
   lines: CanaryMealLine[],
 ): CanaryStorePlan {
-  const WEIGHT_UNITS = ['lb', 'lbs', 'pound', 'pounds', 'oz'];
   const items: CanaryExpectation[] = [];
   for (const line of lines) {
-    const term = (line.searchTerm ?? '').trim();
+    // THE STORED PRODUCT FIRST. It is what the run will actually add, and the
+    // name it will report; searchTerm is only what the chooser searched for.
+    const stored = line.storeProducts?.[storeId]?.name;
+    const term = (stored || line.searchTerm || '').trim();
     if (!term) {
       // No chosen product: the app sends this to the chooser rather than adding
       // it, so a run does not report it at all and the plan must not expect it.
@@ -274,24 +288,49 @@ export function buildPlanFromMeal(
     if (unfindable) {
       items.push({
         item: term,
-        // REVIEW, not failed. Measured against the real stores: a line with no
-        // candidates is handed to the USER -- the run parks on "could not be
-        // added to cart", naming the item and why. That is the designed
-        // behaviour and the right one, so it is what the plan predicts.
-        // Expecting 'failed' scored every store red for working correctly.
+        // REVIEW, AND NO CODE. Measured against all five stores:
+        //
+        //   Walmart, H-E-B   search returns nothing        -> no_candidates
+        //   Wegmans, ALDI,   search returns junk the       -> match_rejected
+        //   Tom Thumb        matcher refuses
+        //
+        // Both are the same property and both are correct -- the run ASKED
+        // rather than guessed. Which one a store produces is a fact about its
+        // search, not about the app, and pinning either scored three stores red
+        // for behaving properly. The scorer compares a code only when the plan
+        // names one, so leaving it out is the way to say "either".
+        //
+        // 'failed' was wrong for the same reason and worse: no store answers it.
+        // A line with nothing to match is handed to the USER, and the run parks
+        // on "could not be added to cart" naming the item and why.
         why: 'nothing should match: the run must ask rather than guess',
-        expect: { outcome: 'review', code: 'no_candidates' },
+        expect: { outcome: 'review' },
       });
       continue;
     }
-    const byWeight = WEIGHT_UNITS.includes(String(line.unit ?? '').toLowerCase())
-      || /,\s*lb\.?$/i.test(term);
+    // ADDED, and the plan does NOT try to predict sold-by-weight.
+    //
+    // Weight is a property the STORE assigns to a product, and no amount of
+    // reading the name gets at it. Two attempts failed on real runs:
+    //
+    //   the recipe's unit   a line measured in lb whose chosen product is a
+    //                       6 oz packet is an ordinary count item
+    //   "per lb" in the name ALDI's "Bananas, per lb, per lb" reports plain
+    //                       `added`; the label is decoration, not a price mode
+    //
+    // Both predicted added_by_weight and failed a correct run, which is the one
+    // thing an expectation table must never do -- a canary that cries wolf gets
+    // ignored, and then it is worth less than nothing.
+    //
+    // THE COST: the sold-by-weight branch the ticket asks for is NOT asserted by
+    // this plan. Getting it needs a genuinely weight-priced product chosen
+    // through the app (H-E-B's deli counter is the obvious one), so that the
+    // stored product itself carries the weight semantics -- not a guess made
+    // from its name.
     items.push({
       item: term,
-      why: byWeight
-        ? 'sold by weight: confirmed by presence, never by quantity'
-        : 'plain in-stock item: should match and confirm',
-      expect: { outcome: byWeight ? 'added_by_weight' : 'added' },
+      why: 'plain in-stock item: should match and confirm',
+      expect: { outcome: 'added' },
     });
   }
   return { storeId, mealName, items };

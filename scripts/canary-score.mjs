@@ -34,17 +34,42 @@ const U = env.NEXT_PUBLIC_SUPABASE_URL;
 const runs = await (await fetch(
   `${U}/rest/v1/automation_runs?select=id,store_id,started_at,outcome,items_added,items_requested`
   + `&store_id=eq.${encodeURIComponent(storeId)}&started_at=gte.${encodeURIComponent(sinceISO)}`
-  + `&order=started_at.desc&limit=1`, { headers: H })).json();
+  // A HANDFUL OF CANDIDATES, then pick the window's own.
+  //
+  // Neither end of the sort is right. `desc` takes whatever happened LAST for
+  // the store -- a cleanup probe minutes later is a run too, and scoring against
+  // it turned a window that passed all four lines into three "never reported"
+  // drops. `asc` takes the first row at that instant, which is often a run that
+  // never reached a terminal step.
+  //
+  // So: the runs starting in the few minutes after the window opened, earliest
+  // first, and take the first one that actually FINISHED. A window's score
+  // belongs to the run that window started, and the run it started is the one
+  // that produced steps.
+  + `&order=started_at.asc&limit=6`, { headers: H })).json();
 
 if (!Array.isArray(runs) || runs.length === 0) {
   console.log(JSON.stringify({ ran: false, reason: 'run_not_found', storeId, since: sinceISO }, null, 2));
   process.exit(2);
 }
-const run = runs[0];
+// THE FIRST CANDIDATE THAT ACTUALLY PRODUCED STEPS. A run row exists as soon as
+// a sheet opens, so the earliest row after a window is often one that never got
+// anywhere -- and scoring against it reports every line as a silent drop, which
+// is the loudest failure this scorer has.
+async function stepsFor(runId) {
+  const rows = await (await fetch(
+    `${U}/rest/v1/automation_steps?select=step,outcome,code,item_index,detail,phase`
+    + `&run_id=eq.${runId}&order=seq.asc`, { headers: H })).json();
+  return Array.isArray(rows) ? rows : [];
+}
 
-const steps = await (await fetch(
-  `${U}/rest/v1/automation_steps?select=step,outcome,code,item_index,detail,phase`
-  + `&run_id=eq.${run.id}&order=seq.asc`, { headers: H })).json();
+let run = runs[0];
+let steps = await stepsFor(run.id);
+for (const candidate of runs) {
+  const rows = await stepsFor(candidate.id);
+  if (rows.some((r) => r.step === 'run_summary')) { run = candidate; steps = rows; break; }
+  if (rows.length > steps.length) { run = candidate; steps = rows; }
+}
 
 // One terminal row per item, emitted at reconcile. Anything else is a step on
 // the way there and is not what the expectation table is about.
@@ -116,6 +141,8 @@ async function mealLines(row) {
     ingredientName: i.ingredientName ?? i.name ?? '',
     searchTerm: i.searchTerm ?? null,
     unit: i.unit ?? null,
+    // The chosen product's identity wins over its name: the add path uses it.
+    storeProducts: i.storeProducts ?? null,
   })) : [];
 }
 

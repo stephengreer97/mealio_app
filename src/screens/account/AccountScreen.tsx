@@ -1122,6 +1122,16 @@ export default function AccountScreen() {
             >
               <Text style={styles.devResetText}>Measure cart clear: Wegmans, 1 line (dev)</Text>
             </TouchableOpacity>
+            {/* Wegmans is a TEST-ONLY account (Stephen, 2026-09-09: "wegans
+                clearing every time is okay. I don't shop there"), so an
+                unscoped clear is safe there and is what the canary wants. */}
+            <TouchableOpacity
+              testID="clear-all-wegmans"
+              onPress={() => setClearProbe({ storeId: 'wegmans' })}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Clear ALL: Wegmans (dev)</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setCapture({ storeId: 'wegmans', path: '/cart' })}
               style={styles.devResetBtn}
