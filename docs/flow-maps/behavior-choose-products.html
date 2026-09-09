@@ -129,6 +129,16 @@ at the search field, offer a SKIP past the ingredient, and put a search button b
 search input rather than relying on the return key. On Kroger with nothing found, Skip takes the
 primary slot and Next goes away &mdash; Next is gated on a quantity, and there is none to set.</p>
 
+<p><b>It is FOUR screens, not two</b> (2026-09-09). <code>WebViewCartSheet</code> serves rail choose
+AND rail reconcile; <code>ProductChooserSheet</code> is Kroger choose and
+<code>KrogerCartReviewSheet</code> is Kroger reconcile. Every behaviour here has had to be implemented
+three times and repeatedly has not been &mdash; the search-row glow reached one screen of four, and
+the search BUTTON one of four. All four now agree: with an empty candidate list the custom-search
+field opens itself (no tap on the "Other" row first), carries a search button beside it, wears the
+pulsing ring, and has no quantity stepper above it. autoFocus follows the TAP and not the empty list,
+so a keyboard is never thrown over a screen the user still has to read. Kroger's footer matches the
+rest: Back and the primary in a row, Skip full-width underneath.</p>
+
 <p>A search that finds nothing leaves the user on a review screen whose only useful control is
   the one that looks least like a control: a row of placeholder text under an empty list. The
   "Other: type a product name" row pulses in the store's colour while that is true.</p>
