@@ -91,6 +91,32 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
   const probeUrl = scripts ? loginProbeUrl(scripts, getNetworkRail(storeId)) : 'about:blank';
   const [uri, setUri] = useState(probeUrl);
 
+  /**
+   * THE REPAIR PASS, silently (2026-09-09).
+   *
+   * A rail that answers `ok:false` has not said "signed out" — it has said it
+   * could not tell. On Wegmans that is the ordinary state an hour after the user
+   * last opened the site: MSAL holds an account and an expired access token, and
+   * it renews them only where the site's own JavaScript runs. This probe sits on
+   * robots.txt, where it does not.
+   *
+   * The cart sheet already knows the answer to this: load the real storefront so
+   * the site fixes itself, then ask again. MEASURED on Stephen's device, the
+   * sheet doing exactly that took 723ms to go from `token_expired` to
+   * `loggedIn: true, verified: true, storeId: 140`.
+   *
+   * This probe did not do it. It reported nothing, sat out its whole timeout,
+   * and finished ERROR — so the prewarm had no verdict, and the user opened the
+   * cart to a visible WebView doing the repair in front of them. Same repair,
+   * five seconds later, in public.
+   *
+   * ONE ATTEMPT, and it is not a guess: the probe still reports nothing unless
+   * it gets a definite answer. All this changes is where the answer comes from.
+   * The invariant that matters — a prewarm never publishes `loggedOut` on a
+   * hunch, because that verdict is terminal — is untouched.
+   */
+  const repairedRef = useRef(false);
+
   const beforeContent = Platform.OS === 'android' ? WEBVIEW_FINGERPRINT_SHIM : undefined;
 
   const finish = useCallback(
@@ -237,6 +263,25 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
             // The DOM check that used to catch this is gone (2026-09-04). Two
             // ways to answer one question is two answers with no way to know
             // which you got.
+            // ...unless the storefront can fix it, which costs nothing here:
+            // this WebView is already invisible, so the repair the sheet does in
+            // front of the user happens behind it instead.
+            if (!repairedRef.current && scripts?.storeUrl) {
+              repairedRef.current = true;
+              console.log('[Prewarm] probe', storeId, 'network session inconclusive —', msg.why,
+                '— loading the storefront so the site can fix it');
+              // The deadline is for a store that never answers. This one is
+              // answering "not yet", so it is re-armed for the repair rather
+              // than left to expire mid-renewal.
+              armTimeout(LOGIN_TIMEOUT_MS, () => {
+                console.log('[Prewarm] probe', storeId, 'timed out after the storefront repair');
+                finish('error');
+              });
+              // The storefront, not the quiet page: its own JavaScript is the
+              // whole point of going there. onLoadEnd re-asks when it lands.
+              setUri(scripts.storeUrl);
+              return;
+            }
             console.log('[Prewarm] probe', storeId, 'network session inconclusive —', msg.why, '— reporting nothing');
             return;
           }

@@ -7025,6 +7025,21 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     };
   }, [visible]);
 
+  /**
+   * When this REGION is on screen -- which is not the same as the store's page
+   * being on screen, and the difference is the whole of how `login_check` works.
+   *
+   * `login_check` is on this list because the CartRunAnimation renders inside
+   * this container. On a rail store the WebView within it is pushed to
+   * `hiddenLayer` and the animation takes the space, so what the user sees while
+   * we ask the store is "Checking your <store> account", never the store.
+   *
+   * Removing `login_check` from here was tried on 2026-09-09 and was wrong: it
+   * took the animation off-screen with the WebView and left a blank sheet under
+   * a "Connecting…" title. Measured on the Pixel. The page was never the thing
+   * to hide here -- `hiddenLayer` already does that -- it just was not hiding
+   * properly on Android. See that style.
+   */
   const browserVisible =
     step === 'login_check' || step === 'login' || step === 'searching' ||
     step === 'adding' || step === 'robot_challenge' || step === 'manual';
@@ -8528,8 +8543,23 @@ const styles = StyleSheet.create({
     // Both properties have to hold at once: a real viewport, and invisible. The
     // opacity is what Chromium needs to keep the layer drawn and its timers
     // running -- a 1s interval fired 34 SECONDS late when this was properly
-    // hidden -- so it cannot go to 0, and the size cannot go back. zIndex is the
-    // only one of the three that was never load-bearing.
+    // hidden -- so it cannot go to 0, and the size cannot go back.
+    //
+    // zIndex: -1 WAS THE WHOLE HIDING MECHANISM, AND IT DOES NOT WORK ON
+    // ANDROID. Stephen, 2026-09-09: "during login check on some stores, I am
+    // seeing some of the webpage at the bottom. Seems to be only on pixel."
+    // Exactly right, and exactly why: a WebView is a native view, and RN Android
+    // does not reliably paint one behind its siblings on a negative z-index. So
+    // the layer drew on top wherever the animation did not cover it -- which is
+    // the bottom of the sheet, because the animation does not fill it.
+    //
+    // Moved out of the box instead of ordered behind it. The translate keeps
+    // both load-bearing properties intact: a real 414x896 viewport, and an
+    // opacity Chromium still composites, so the timers keep running (they fired
+    // 34 SECONDS late when this was properly hidden with opacity: 0). It is the
+    // same trick `presearchOffscreen` and `webviewHidden` already use for
+    // WebViews that must keep working while out of sight.
+    transform: [{ translateX: 100000 }],
     zIndex: -1,
   },
   gridWrap: {
