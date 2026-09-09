@@ -12,8 +12,9 @@ import { Meal, PresetMeal } from '../types';
 
 const CARD_WIDTH = Dimensions.get('window').width / 2 - 20;
 const IMAGE_HEIGHT = 140;
-// 5% more area than the 30 it started at, which is a diameter of 30 x sqrt(1.05).
-const AVATAR_SIZE = 30.7;
+// Area, twice asked for and twice in area rather than width: 5% more than the 30
+// it started at, then another 10%. Diameter of 30 x sqrt(1.05 x 1.10).
+const AVATAR_SIZE = 32.2;
 
 interface MealCardProps {
   meal: Meal | PresetMeal;
@@ -25,10 +26,11 @@ interface MealCardProps {
   warning?: string; // amber badge shown below meta row
   creatorPhotoUrl?: string | null; // creator's face, over the meal photo
   creatorName?: string | null;     // who the face belongs to; drives the initial fallback
+  onCreatorPress?: () => void;     // open that creator, the way the byline does
   testID?: string; // stable handle for Maestro flows (meal titles are live data)
 }
 
-export default function MealCard({ meal, onPress, subtitle, savedAt, selected, onView, warning, creatorPhotoUrl, creatorName, testID }: MealCardProps) {
+export default function MealCard({ meal, onPress, subtitle, savedAt, selected, onView, warning, creatorPhotoUrl, creatorName, onCreatorPress, testID }: MealCardProps) {
   const photoUrl = 'photoUrl' in meal ? meal.photoUrl : undefined;
   const ingredientCount = meal.ingredients?.length ?? 0;
   // The face sits on the photo, not in the body, and that is the whole reason it
@@ -36,6 +38,19 @@ export default function MealCard({ meal, onPress, subtitle, savedAt, selected, o
   // take ~30 of the ~150pt the body has, and the byline is the line that wraps
   // first. Over the photo it costs the text nothing.
   const creatorInitial = (creatorName ?? '').replace(/^@/, '').trim().charAt(0).toUpperCase();
+  const creatorFace = creatorPhotoUrl ? (
+    <Image
+      source={{ uri: creatorPhotoUrl }}
+      style={styles.avatarImage}
+      contentFit="cover"
+      recyclingKey={creatorPhotoUrl}
+      cachePolicy="memory-disk"
+    />
+  ) : (
+    <View style={[styles.avatarImage, styles.avatarFallback]}>
+      <Text style={styles.avatarInitial}>{creatorInitial || '?'}</Text>
+    </View>
+  );
 
   return (
     <TouchableOpacity
@@ -61,21 +76,25 @@ export default function MealCard({ meal, onPress, subtitle, savedAt, selected, o
         </View>
       )}
       {creatorName ? (
-        <View style={styles.avatarWrap} testID="creator-avatar">
-          {creatorPhotoUrl ? (
-            <Image
-              source={{ uri: creatorPhotoUrl }}
-              style={styles.avatarImage}
-              contentFit="cover"
-              recyclingKey={creatorPhotoUrl}
-              cachePolicy="memory-disk"
-            />
-          ) : (
-            <View style={[styles.avatarImage, styles.avatarFallback]}>
-              <Text style={styles.avatarInitial}>{creatorInitial || '?'}</Text>
-            </View>
-          )}
-        </View>
+        // A Touchable only when there is a creator to open, and nested inside the
+        // card's own Touchable on purpose: React Native hands the touch to the
+        // innermost responder, so pressing the face opens the creator INSTEAD of
+        // the meal. That is the outcome the website needs stopPropagation for.
+        onCreatorPress ? (
+          <TouchableOpacity
+            style={styles.avatarWrap}
+            testID="creator-avatar"
+            onPress={onCreatorPress}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={`View ${creatorName}'s profile`}
+          >
+            {creatorFace}
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.avatarWrap} testID="creator-avatar">{creatorFace}</View>
+        )
       ) : null}
       {onView !== undefined && (
         <View style={styles.checkOverlay}>

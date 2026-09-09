@@ -318,6 +318,7 @@ export default function DiscoverScreen() {
       subtitle={item.creatorName ?? item.author ?? undefined}
       creatorPhotoUrl={item.creatorPhotoUrl}
       creatorName={item.creatorName}
+      onCreatorPress={item.creatorId ? () => openCreatorFromMeal(item.creatorId!) : undefined}
       savedAt={savedMap[item.id]}
       testID={`meal-card-${index}`}
     />

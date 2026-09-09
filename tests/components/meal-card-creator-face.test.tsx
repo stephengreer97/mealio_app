@@ -6,7 +6,7 @@
 // most likely to wrap. It goes on the photo instead, which costs the text
 // nothing, and the assertion that guards that decision is the last one here.
 
-import { render } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
 import React from 'react';
 
 jest.mock('expo-image', () => {
@@ -59,5 +59,41 @@ describe('the creator face on a meal card', () => {
     // Absolute, so it takes no width from the byline. If this becomes a laid-out
     // row in the body, the byline starts wrapping and this fails.
     expect(style.position).toBe('absolute');
+  });
+
+  it('opens the creator when the face is pressed', () => {
+    const onCreatorPress = jest.fn();
+    const { getByTestId } = render(
+      <MealCard
+        meal={meal}
+        creatorName="Sarah Lane"
+        creatorPhotoUrl="https://img/sarah.jpg"
+        onCreatorPress={onCreatorPress}
+      />,
+    );
+    fireEvent.press(getByTestId('creator-avatar'));
+    expect(onCreatorPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the creator instead of the meal, not as well as it', () => {
+    // The card is itself a Touchable. React Native gives the touch to the
+    // innermost responder, which is what spares this the website's
+    // stopPropagation -- but only while the face IS a Touchable of its own.
+    const onCreatorPress = jest.fn();
+    const onPress = jest.fn();
+    const { getByTestId } = render(
+      <MealCard meal={meal} creatorName="Sarah Lane" onPress={onPress} onCreatorPress={onCreatorPress} />,
+    );
+    fireEvent.press(getByTestId('creator-avatar'));
+    expect(onCreatorPress).toHaveBeenCalledTimes(1);
+    expect(onPress).not.toHaveBeenCalled();
+  });
+
+  it('is not pressable where the caller offers nowhere to go', () => {
+    const onPress = jest.fn();
+    const { getByTestId } = render(
+      <MealCard meal={meal} creatorName="Sarah Lane" onPress={onPress} />,
+    );
+    expect(getByTestId('creator-avatar').props.accessibilityRole).toBeUndefined();
   });
 });
