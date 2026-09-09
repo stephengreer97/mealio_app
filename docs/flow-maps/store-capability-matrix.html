@@ -74,6 +74,12 @@ back to their quantity.</p>
 <code>clearCart</code> that nothing had ever called, so the canary's cleanup rested on four
 untested hypotheses. <code>CartClearProbe</code> (Account, <code>__DEV__</code>) now runs one, against
 a real cart, with a <code>limit</code> so the first attempt touches ONE line.</p>
+<p><b>A scoped clear is judged by its TARGETS, not by an empty cart</b> (af69644). H-E-B,
+Instacart and Albertsons all used to report <code>ok</code> as "nothing left in the cart",
+which fails every single time a scoped cleanup succeeds &mdash; the user's own shopping is
+still there, by design. Each now reports whether the lines it MEANT to remove survived, and
+still requires having seen the cart re-read at all, so "could not read it" never passes for
+"it worked".</p>
 <table>
   <tr><th>Store</th><th>How a line is removed</th><th>State</th></tr>
   <tr><td><b>Walmart</b></td><td><code>updateItems [{offerId, quantity: 0}]</code></td>
