@@ -260,3 +260,35 @@ describe('a scoped clear is judged by what it targeted', () => {
     }
   });
 });
+
+describe('every clear script is valid JavaScript', () => {
+  // A patch to the H-E-B clear once spliced its `post` function into the middle
+  // of a COMMENT. The emitted script was a syntax error, so it threw before its
+  // first fetch: no requests, no CART_CLEARED, and the probe reported "timed out
+  // waiting" -- which reads like a slow store rather than like code that cannot
+  // run. Nothing caught it, because every other test asserts on the script's
+  // TEXT and text does not have to parse.
+  //
+  // These scripts are strings until the moment they reach a WebView, so this is
+  // the only place the compiler can be made to look at them.
+  const RAILS = ['heb', 'walmart', 'wegmans', 'albertsons', 'aldi'];
+
+  it.each(RAILS)('%s emits a script that parses', (id) => {
+    const rail = getNetworkRail(id)!;
+    for (const opts of [undefined, { limit: 1 }, { only: ['a', 'b'] }] as const) {
+      const script = rail.clearCart!(id, opts as never)!;
+      expect(`${id}: ${typeof script}`).toBe(`${id}: string`);
+      // eslint-disable-next-line no-new-func
+      expect(() => new Function(script)).not.toThrow();
+    }
+  });
+
+  it.each(RAILS)('%s emits a script with balanced braces', (id) => {
+    // A cheap second opinion: `new Function` accepts some things a human would
+    // call broken, and the failure above was structural.
+    const script = getNetworkRail(id)!.clearCart!(id, { only: ['a'] })!;
+    const opens = (script.match(/\{/g) ?? []).length;
+    const closes = (script.match(/\}/g) ?? []).length;
+    expect(`${id}: ${opens === closes}`).toBe(`${id}: true`);
+  });
+});

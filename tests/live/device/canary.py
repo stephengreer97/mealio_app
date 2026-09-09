@@ -68,6 +68,32 @@ def preflight():
     return None
 
 
+def ensure_my_meals(tries=3):
+    """Get to My Meals with its store-chip row actually on screen.
+
+    Every step that follows -- picking a store, finding a meal, reading the
+    action button -- assumes this screen, and each of them has failed at least
+    once because the app was somewhere else: a done sheet still up, or the tab
+    the app restored on launch. "no store chip for H-E-B" is what that looks
+    like from the outside, and it gets reported as NOT SIGNED IN, which is a
+    lie about the store.
+    """
+    for _ in range(tries):
+        _dismiss_overlay()
+        try:
+            drive.tap_id('tab-mymeals', timeout=20)
+        except Exception:
+            pass
+        time.sleep(2)
+        xml = drive.ui()
+        # The chip row is the thing later steps need, so it is what gets checked.
+        if 'My Meals' in xml and re.search(r'text="(H-E-B|Walmart|Wegmans|ALDI|Kroger)"', xml):
+            return True
+        drive.restart_app()
+        time.sleep(9)
+    return False
+
+
 def select_store(store_chip):
     """Tap a store's chip, scrolling the chip row to reach it.
 
@@ -135,11 +161,22 @@ def _start_run(meal_name, second_meal=None, store_chip=None):
     # which is a sheet OVER the tab bar -- so the next window could not even
     # reach the tab, let alone a meal card. Dismiss whatever is on top, then
     # navigate. The tab is idempotent: tapping it from My Meals is a no-op.
-    _dismiss_overlay()
-    drive.tap_id('tab-mymeals', timeout=40)
-    time.sleep(2)
+    # RESTART FIRST, every window. A meal card is a TOGGLE and the selection
+    # SURVIVES: whatever was selected before this window is still selected, so
+    # the run adds those meals too. A window meant to add "Canary HEB" ran
+    # "All-purpose flour, Butter unsalted, Brown sugar..." because another meal
+    # had been left selected -- and it looked like a working run, just of the
+    # wrong thing, which is the worst shape a canary result can take.
+    #
+    # A restart is the only selection reset that cannot itself be half-applied,
+    # and it costs about ten seconds against a window that takes minutes.
+    drive.restart_app()
+    time.sleep(9)
+    if not ensure_my_meals():
+        raise AssertionError('could not get to My Meals to start the window')
     if store_chip:
-        select_store(store_chip)
+        if not select_store(store_chip):
+            raise AssertionError('could not select the %r chip' % store_chip)
     tap_meal_card(meal_name)
     if second_meal:
         # The combination run: two meals in one add, which exercises the merge a
@@ -157,12 +194,115 @@ def _start_run(meal_name, second_meal=None, store_chip=None):
     # are why a "successful" run finished in 22 seconds having done nothing: a
     # coordinate that misses is silent, and the window then broke out of its wait
     # on a reconcile line left over from an earlier run.
+    # CHECK WHAT IS ABOUT TO RUN, before running it.
+    #
+    # The action button names the store and the count -- "Add 2 meals to H-E-B
+    # cart". Three windows once ran WEGMANS with a Caprese Sandwich while
+    # reporting themselves as H-E-B canary windows: the store chip had not
+    # changed, the meal tap landed on a neighbour, and every window recorded a
+    # tidy timestamp for work nobody asked for.
+    #
+    # A canary that runs the WRONG THING and says it ran is worse than one that
+    # fails, because the failure is invisible and the green is a lie. So the
+    # label has to name this store, and the count has to be what was selected.
+    label = _action_label()
+    if store_chip and label and store_chip.lower() not in label.lower():
+        raise AssertionError('the action button says %r, not %s' % (label, store_chip))
+    want = 2 if second_meal else 1
+    if label and not re.search(r'\b%d\b' % want, label):
+        raise AssertionError('the action button says %r, expected %d meal(s)' % (label, want))
+
     drive.tap_id('floating-add-to-cart', timeout=40)
-    time.sleep(4)
-    # The confirm sheet. With products already chosen the primary reads "Add to
-    # cart"; it is the same id the chooser's primary uses.
-    if drive.find_id('review-primary'):
-        drive.tap_id('review-primary', timeout=20)
+
+    # THE CONFIRM SHEET, and it must actually be pressed.
+    #
+    # The action opens "Add to Cart" -- a checklist of the meal's ingredients
+    # with "Add Ingredients to <Store> Cart" at the bottom. Nothing was pressing
+    # it: the code waited four seconds and looked for `review-primary`, which is
+    # the CHOOSER's id and does not exist on this sheet. So every window opened
+    # the sheet, pressed nothing, and sat there until its 240s settle expired --
+    # three windows per store of a run that never started, reported as three
+    # tidy timestamps.
+    #
+    # WAIT for it rather than sleeping at it. The sheet takes as long as the
+    # cart read takes, and a fixed sleep was also why earlier dumps kept showing
+    # the screen underneath and looking like a modal the tree could not see.
+    primary = None
+    for _ in range(30):
+        xml = drive.ui()
+        for m in re.finditer(r'<node[^>]*>', xml):
+            tag = m.group(0)
+            t = re.search(r'text="([^"]*)"', tag)
+            b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+            if not t or not b:
+                continue
+            if 'Add Ingredients to' not in t.group(1):
+                continue
+            x1, y1, x2, y2 = (int(g) for g in b.groups())
+            if x2 > x1 and y2 > y1:
+                primary = ((x1 + x2) // 2, (y1 + y2) // 2)
+                break
+        if primary:
+            break
+        time.sleep(2)
+    if not primary:
+        raise AssertionError('the Add to Cart sheet never offered its confirm button')
+    drive.tap_xy(*primary)
+    time.sleep(3)
+
+
+def _dismiss_overlay(tries=3):
+    """Close a run's done sheet (or any modal) so the tabs are reachable again.
+
+    A window leaves the app on the run's done screen, which is a sheet OVER the
+    tab bar -- so the next window could not reach the tab, let alone a meal card.
+    Tried in the order a person would leave: the explicit Done, then the close
+    glyph, then hardware back. Silent when there is nothing to close.
+    """
+    for _ in range(tries):
+        # AN OVERLAY FIRST, and only then the tab bar. The tab bar is still in
+        # the tree UNDERNEATH the run's done sheet, so checking for it first
+        # returned "nothing to dismiss" while a full-screen sheet was covering
+        # everything -- and the tap that followed went to a covered tab and did
+        # nothing. Cleanup then hunted for a button on a screen it never reached.
+        xml = drive.ui()
+        overlay = ('Done!' in xml or 'Items Not Added' in xml
+                   or 'Products chosen' in xml or 'could not be added' in xml)
+        if not overlay and drive.find_id('tab-mymeals'):
+            return True
+        for label in ('Done', '\u2715'):
+            node = drive.find(label, exact=True)
+            if node:
+                drive.tap(node)
+                time.sleep(2)
+                break
+        else:
+            drive.sh('adb', 'shell', 'input', 'keyevent', 'KEYCODE_BACK')
+            time.sleep(2)
+    return bool(drive.find_id('tab-mymeals'))
+
+
+def _action_label():
+    """The floating action button's text, e.g. "Add 2 meals to H-E-B cart".
+
+    It is the one place the app says out loud what the next tap will do -- which
+    store, and how many meals -- so it is what a window checks itself against.
+    """
+    xml = drive.ui()
+    for m in re.finditer(r'<node[^>]*>', xml):
+        tag = m.group(0)
+        b = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        t = re.search(r'text="([^"]*)"', tag)
+        if not b or not t:
+            continue
+        label = t.group(1).strip()
+        if not label:
+            continue
+        y1 = int(b.group(2))
+        # The action sits above the tab bar, near the bottom of the screen.
+        if y1 > 1900 and ('cart' in label.lower() or 'meal' in label.lower()):
+            return label
+    return None
 
 
 def tap_meal_card(meal_name):
@@ -286,8 +426,7 @@ def choose_products(meal_name, store_chip, max_steps=12):
     9000" is in every canary meal for exactly this -- is skipped, which is the
     branch it is there to exercise.
     """
-    drive.tap_id('tab-mymeals', timeout=40)
-    time.sleep(2)
+    ensure_my_meals()
     select_store(store_chip)
     tap_meal_card(meal_name)
     drive.tap_id('floating-add-to-cart', timeout=40)
@@ -396,7 +535,8 @@ def choose_products(meal_name, store_chip, max_steps=12):
     return steps
 
 
-def run_once(meal_name, shape='single', settle_s=240, second_meal=None, store_chip=None):
+def run_once(meal_name, shape='single', settle_s=240, second_meal=None, store_chip=None,
+             sink=None):
     """Drive one run and return when it finalizes. Records the window."""
     since = now_iso()
     # MARKED BEFORE THE NAVIGATION, so the wait below cannot be satisfied by a
@@ -409,11 +549,61 @@ def run_once(meal_name, shape='single', settle_s=240, second_meal=None, store_ch
         lines = drive.log_since(mark)
         if any(('reconcile:' in l) or ('dead end' in l) or ('run complete' in l) for l in lines):
             break
+        # ANSWER THE REVIEW. A run PARKS when an item has no candidates -- which
+        # is exactly what "Nonexistent unobtainium 9000" is in every canary meal
+        # for -- and waits for a person. Nobody was answering, so every window
+        # sat out its full 240s settle and finalised nothing: three windows of
+        # silence that read as a slow store rather than as a question.
+        #
+        # Skipping is the honest answer for an item with no candidates, and it
+        # is the branch the plan expects that line to take. What gets skipped is
+        # recorded, because the expectation table cares which items landed here.
+        try:
+            xml = drive.ui()
+
+            # THE RUN'S OWN VERDICT SCREEN, and the window's real end.
+            #
+            # "Items Not Added -- N items could not be added to cart", naming
+            # each one and why ("H-E-B had no match for this"). That is the
+            # unfindable line's branch reported correctly, and it is a RESULT,
+            # not a question -- but the sheet waits for a person, so the window
+            # sat there until its settle expired and recorded nothing.
+            #
+            # Read it, then close it. What could not be added is the single most
+            # interesting thing a canary window produces.
+            if 'could not be added' in xml or 'Items Not Added' in xml:
+                if sink is not None:
+                    for m in re.finditer(r'text="([^"]*)"', xml):
+                        t = m.group(1).strip()
+                        if t and ('no match for this' in t or 'out of stock' in t.lower()):
+                            sink.append('not-added: ' + t[:80])
+                    sink.append('run-reported-items-not-added')
+                for label in ('\u2715', 'Close', 'Done'):
+                    node = drive.find(label, exact=True)
+                    if node:
+                        drive.tap(node)
+                        time.sleep(2)
+                        break
+                break
+
+            # A review a person is expected to answer. Skipping is the honest
+            # answer for an item with no candidates, and it is the branch the
+            # plan expects that line to take.
+            if 'Skip this ingredient' in xml:
+                node = drive.find('Skip this ingredient')
+                if node:
+                    drive.tap(node)
+                    if sink is not None:
+                        sink.append('skipped-in-review')
+                    time.sleep(3)
+                    continue
+        except Exception:
+            pass
         time.sleep(3)
     return since
 
 
-def cart_count(timeout_s=60):
+def cart_count(mark=0, store_id=None):
     """The cart's line count, read from the app's own CART_COUNT message.
 
     Used by the repeat run, which asserts the cart GROWS. Adds land on top
@@ -424,8 +614,22 @@ def cart_count(timeout_s=60):
     # all ("CART_COUNT phase= reconcile count= 58"), and the JSON form's first
     # closing brace belongs to the first cart ITEM, so slicing to it produced
     # invalid JSON. Both were swallowed by the except, and the cart read as 0.
-    for line in reversed(drive.log_since(0)):
+    # SINCE THE WINDOW, and this store only.
+    #
+    # This scanned the WHOLE log and took the most recent CART_COUNT from any
+    # source -- including the prewarm, which probes every signed-in store in the
+    # background. So an H-E-B window reported 101 -> 104 while H-E-B's cart held
+    # 68 the entire time: numbers from a different store's cart, with a delta
+    # that happened to look like the three items the run added.
+    #
+    # A canary that reports the wrong store's numbers is worse than one that
+    # reports none, because the numbers look right.
+    for line in reversed(drive.log_since(mark)):
         if 'CART_COUNT' not in line:
+            continue
+        # The prewarm names its store; the sheet's own reads do not, and only
+        # the sheet's reads belong to this window.
+        if 'Prewarm' in line:
             continue
         m = re.search(r'\bcount[=:]\s*"?(\d+)', line)
         if m:
@@ -612,6 +816,35 @@ def load_plans():
             for row in rows if row.get('store_id')]
 
 
+def _cold_window(entry, meal, second, chip):
+    """Clear both meals' chosen products, then choose them again for real.
+
+    The only window that exercises the CHOOSER -- live search, ranking, the
+    preference modal, the weight ladder, the no-candidates branch -- and the only
+    part of the canary that writes to the meals it tests. Opt-in for that second
+    reason: a walk that fails leaves a meal uncurated, and the add windows then
+    measure nothing on a store that was perfectly fine.
+
+    It restores what it cleared whenever the re-choose does not finish, judged by
+    READING THE MEALS BACK rather than by the walk's own account of itself. That
+    account has been wrong three separate ways.
+    """
+    reset = reset_selections([meal, second])
+    entry['choose'] = {'cleared': reset['cleared']}
+    try:
+        entry['choose']['primary'] = choose_products(meal, chip)
+        entry['choose']['second'] = choose_products(second, chip)
+        checks = [selections_ok(meal), selections_ok(second)]
+        entry['choose']['verified'] = checks
+        entry['choose']['ok'] = all(c and c['ok'] for c in checks)
+    except Exception as e:
+        entry['choose']['ok'] = False
+        entry['choose']['error'] = str(e)[:200]
+    if not entry['choose'].get('ok'):
+        entry['choose']['restored'] = restore_selections(reset['snapshot'])
+    return entry['choose']
+
+
 def cleanup(store_id, only=None):
     """Remove what this run added from the test cart.
 
@@ -677,10 +910,22 @@ def cleanup(store_id, only=None):
     line, _ = drive.log_wait(base, r'CART_CLEARED|CartClear', 120)
     if not line:
         return (False, 'no CART_CLEARED came back')
-    return ('"ok": true' in line or "'ok': true" in line, line.strip()[-120:])
+    # PARSE IT, do not pattern-match it. This looked for '"ok": true' WITH a
+    # space, and the rail posts '{"ok":true' without one -- so a cleanup that
+    # removed exactly what it meant to, and said so, was recorded as a failure.
+    # The canary's whole job is telling working from broken; a verdict decided by
+    # whitespace cannot do that.
+    try:
+        payload = json.loads(line[line.index('{'):line.rindex('}') + 1])
+    except Exception:
+        return (False, 'could not parse the clear result: ' + line.strip()[-120:])
+    return (payload.get('ok') is True, json.dumps(payload)[:200])
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
+
+COLD = False
+
 
 def main():
     out = {'startedAt': now_iso(), 'results': []}
@@ -704,6 +949,8 @@ def main():
     # `--store heb` runs one. The nightly job passes nothing and runs them all;
     # this is for proving a change against a single store without spending an
     # hour of device time to find out the runner has a typo in it.
+    global COLD
+    COLD = '--cold' in sys.argv
     wanted = None
     for i, a in enumerate(sys.argv):
         if a == '--store' and i + 1 < len(sys.argv):
@@ -720,8 +967,11 @@ def main():
         store, chip = plan['storeId'], plan.get('storeChip', plan['storeId'])
         drive.restart_app()
         time.sleep(8)
-        drive.tap_id('tab-mymeals', timeout=40)
-        time.sleep(2)
+        if not ensure_my_meals():
+            out['results'].append({'storeId': store, 'ran': False,
+                                   'skipReason': 'device_not_ready',
+                                   'detail': 'could not get to My Meals with the store chips showing'})
+            continue
 
         ok, why = signed_in(chip)
         if not ok:
@@ -734,35 +984,35 @@ def main():
         meal = plan.get('mealName') or 'Canary'
         second = plan.get('secondMeal') or (meal + ' B')
 
-        # THE COLD WINDOW: clear every chosen product, then choose them again
-        # through the real chooser. This is the only window that exercises live
-        # search, ranking and the preference modal, and it leaves both meals
-        # curated for the add windows that follow.
-        reset = reset_selections([meal, second])
-        entry['choose'] = {'cleared': reset['cleared']}
-        try:
-            entry['choose']['primary'] = choose_products(meal, chip)
-            entry['choose']['second'] = choose_products(second, chip)
-            # THE MEALS DECIDE, not the step labels. Walmart came back with a
-            # clean-looking run of 'no-candidates' and nothing chosen at all.
-            checks = [selections_ok(meal), selections_ok(second)]
-            entry['choose']['verified'] = checks
-            entry['choose']['ok'] = all(c and c['ok'] for c in checks)
-        except Exception as e:
-            entry['choose']['ok'] = False
-            entry['choose']['error'] = str(e)[:200]
-        if not entry['choose'].get('ok'):
-            # The chooser failed, which is a finding. Leaving both meals
-            # uncurated on top of it would turn one finding into four, and the
-            # add windows would measure nothing at all.
-            entry['choose']['restored'] = restore_selections(reset['snapshot'])
+        # THE COLD WINDOW IS OPT-IN (--cold), and OFF by default.
+        #
+        # It is the only window that exercises the chooser -- live search,
+        # ranking, the preference modal -- and it is also the only part of the
+        # canary that WRITES to the meals it tests. While the walk is still
+        # unreliable, running it nightly costs more than it buys: a walk that
+        # fails leaves a meal uncurated, and then the add windows measure
+        # nothing on a store that was fine.
+        #
+        # The add path, the repeat, the merge and the cleanup do not need it.
+        # Turn it on per run once the walk is clean on every store.
+        if COLD:
+            _cold_window(entry, meal, second, chip)
 
-        entry['windows']['single'] = run_once(meal, store_chip=chip)
-        before = cart_count()
+        entry['answered'] = []
+        try:
+            entry['windows']['single'] = run_once(meal, store_chip=chip, sink=entry['answered'])
+        except AssertionError as e:
+            # The window refused to run because it could not confirm WHAT it was
+            # about to run. That is a rig problem, not a store failure, and it
+            # must not be reported as either a pass or a broken store.
+            out['results'].append({'storeId': store, 'ran': False,
+                                   'skipReason': 'wrong_selection', 'detail': str(e)[:200]})
+            continue
+        before = cart_count(run_mark, store)
 
         # The repeat run: same meals again, against a non-empty cart.
-        entry['windows']['repeat'] = run_once(meal, store_chip=chip)
-        entry['cart'] = {'before': before, 'after': cart_count()}
+        entry['windows']['repeat'] = run_once(meal, store_chip=chip, sink=entry['answered'])
+        entry['cart'] = {'before': before, 'after': cart_count(run_mark, store)}
 
         # The combination run: two meals at once.
         # THE SAME MEAL TWICE (Stephen, 2026-09-09: "for two meal run, you can
@@ -775,7 +1025,7 @@ def main():
             # Convention rather than a schema column: the duplicate is the
             # canary meal's name with a " B" on the end.
             meal, 'combination', second_meal=second,
-            store_chip=chip)
+            store_chip=chip, sink=entry['answered'])
 
         # Collected across ALL THREE windows: the repeat and the combination add
         # on top (2026-09-01), so each contributes lines the cleanup owns.

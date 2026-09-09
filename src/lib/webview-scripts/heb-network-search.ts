@@ -82,6 +82,12 @@ const CART_READ_FN = `
       if (typeof size === 'string' && size && nm.indexOf(size) === -1) nm = nm + ', ' + size;
       var w = (l.estimatedWeight != null) ? Number(l.estimatedWeight) : null;
       var row = { name: nm, qty: Number(l.quantity) || 0 };
+      // THE PRODUCT ID TRAVELS WITH THE ROW. CartItem.itemId is optional and
+      // nothing may require it, but withholding one we already have costs the
+      // canary its cleanup: the run works out what it ADDED by diffing these
+      // rows, and a row with no id cannot be handed to a scoped clear. H-E-B's
+      // clear addresses lines by product id, and this query already selects it.
+      if (l.product && l.product.id) row.itemId = String(l.product.id);
       // A weight line is reconciled by presence, not by count — same rule the
       // page reader follows, so both paths produce identical rows.
       if (w != null && !isNaN(w)) { row.isWeight = true; row.weight = w; }
@@ -740,11 +746,6 @@ ${CART_READ_FN}
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
   try {
-    // The RAW lines, not rowsOf's display rows  var post = function (o) {
-    o.type = 'CART_CLEARED';
-    try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
-  };
-  try {
     // The RAW lines, not rowsOf's display rows: those carry {name, qty} for
     // diffing against the page reader and have no ids to write against. The
     // CartLines query already selects product.id and sku.id.
@@ -763,7 +764,21 @@ ${CART_READ_FN}
       clearable.push({ productId: pid, skuId: sid });
     }
     if (!clearable.length) {
-      post({ ok: false, cleared: 0, declined: declined.length, why: 'all_weight_priced' });
+      // WHY nothing was clearable, not just that nothing was. Zero clearable AND
+      // zero declined means the scope list matched no line at all -- a different
+      // failure entirely from "every line is sold by weight", and the two were
+      // reported with the same word.
+      var seen = [];
+      for (var d = 0; d < lines.length; d++) {
+        var dp = lines[d] && lines[d].product;
+        if (dp) seen.push(String(dp.id) + '=' + String(dp.fullDisplayName || '').slice(0, 28));
+      }
+      var totalQty = 0;
+      for (var q = 0; q < lines.length; q++) totalQty += Number(lines[q].quantity) || 0;
+      post({ ok: false, cleared: 0, declined: declined.length, totalQty: totalQty,
+             why: declined.length ? 'all_weight_priced' : 'only_matched_nothing',
+             lines: lines.length, asked: ONLY.length, wanted: ONLY.slice(0, 8),
+             sampleCartIds: seen });
       return;
     }
 

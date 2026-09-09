@@ -885,8 +885,19 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
     expect(Array.isArray(done.cartAfter)).toBe(true);
     // The user's own item is in BOTH, so the diff can render it grey rather than
     // crediting this run with it.
-    expect(done.cartBefore).toEqual([{ name: 'Eggs', qty: 2 }]);
-    expect(done.cartAfter).toEqual([{ name: 'Eggs', qty: 2 }, { name: 'Sour Cream', qty: 1 }]);
+    // THE ROWS CARRY THE PRODUCT ID NOW (2026-09-09). CartItem.itemId is optional
+    // and nothing may require it, but withholding one the query already selects
+    // cost the canary its cleanup: a run works out what it ADDED by diffing
+    // these rows, and a row with no id cannot be handed to a scoped clear, so
+    // H-E-B's cleanup had nothing to remove and said the cart was fine.
+    //
+    // These assertions are about the row SHAPE the done-screen diff expects, so
+    // they name the id rather than ignoring it.
+    expect(done.cartBefore).toEqual([{ name: 'Eggs', qty: 2, itemId: 'pEggs' }]);
+    expect(done.cartAfter).toEqual([
+      { name: 'Eggs', qty: 2, itemId: 'pEggs' },
+      { name: 'Sour Cream', qty: 1, itemId: 'pSour Cream' },
+    ]);
   });
 
   itWithFixture('logged-in-home.html', 'a write the store ACCEPTS but does not apply is caught and re-written', async (runner) => {
@@ -942,7 +953,8 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
 
     const done = await runner.waitForMessage('NET_ADD_DONE', 15_000);
     // Two writes: the accepted-and-lost one, and the retry.
-    expect(done.cartAfter).toContainEqual({ name: 'Fresh Spinach, 1 Bundle', qty: 1 });
+    expect(done.cartAfter).toContainEqual(
+      expect.objectContaining({ name: 'Fresh Spinach, 1 Bundle', qty: 1 }));
     // And the per-item record matches the CART, not the mutation.
     const results = runner.messagesOfType('NET_ADD_RESULT');
     expect(results[results.length - 1]).toMatchObject({
@@ -1021,9 +1033,13 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
     // CART_COUNT, which is exactly how this got past the last check.
     expect(msg.reason).toBeUndefined();
     expect(msg.count).toBe(5);            // total quantity, as the page sums it
+    // The product id rides along (2026-09-09): the canary's cleanup diffs these
+    // rows to learn what a run ADDED, and a row with no id cannot be handed to a
+    // scoped clear -- which is why H-E-B's cleanup had nothing to remove and
+    // reported the cart as fine.
     expect(msg.items).toEqual([
-      { name: 'H-E-B Bakery Southwestern Flour Tortillas, 10 ct', qty: 2 },
-      { name: 'Fresh Lime, Each', qty: 3 },
+      { name: 'H-E-B Bakery Southwestern Flour Tortillas, 10 ct', qty: 2, itemId: 'p1' },
+      { name: 'Fresh Lime, Each', qty: 3, itemId: 'p2' },
     ]);
   });
 
@@ -1077,9 +1093,11 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
 
     const done = await runner.waitForMessage('NET_ADD_DONE', 15_000);
     // The size is appended...
-    expect(done.cartBefore).toContainEqual({ name: 'H-E-B Bakery Southwestern Flour Tortillas, 10 ct', qty: 2 });
+    expect(done.cartBefore).toContainEqual(
+      expect.objectContaining({ name: 'H-E-B Bakery Southwestern Flour Tortillas, 10 ct', qty: 2 }));
     // ...and NOT duplicated when the name already ends in it.
-    expect(done.cartBefore).toContainEqual({ name: 'Fresh Lime, Each', qty: 1 });
+    expect(done.cartBefore).toContainEqual(
+      expect.objectContaining({ name: 'Fresh Lime, Each', qty: 1 }));
   });
 
   itWithFixture('logged-in-home.html', 'marks a weight line by presence, as the page reader does', async (runner) => {
@@ -1101,7 +1119,8 @@ describe('MEAL-209: the done screen breakdown comes off the rail, not a page loa
       { idx: 0, productId: 'x', skuId: 'y', quantity: 1, name: 'x' },
     ])!);
     const done = await runner.waitForMessage('NET_ADD_DONE', 15_000);
-    expect(done.cartAfter[0]).toEqual({ name: 'Deli Turkey', qty: 1, isWeight: true, weight: 0.75 });
+    expect(done.cartAfter[0]).toEqual(
+      expect.objectContaining({ name: 'Deli Turkey', qty: 1, isWeight: true, weight: 0.75 }));
   });
 });
 
