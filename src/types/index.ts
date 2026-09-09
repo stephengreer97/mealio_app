@@ -95,6 +95,7 @@ export interface PresetMeal {
   creatorId?: string | null;
   creatorName?: string | null;
   creatorSocial?: string | null;
+  creatorPhotoUrl?: string | null;
   creator?: Creator;
   saves?: number;
   trendingScore?: number;

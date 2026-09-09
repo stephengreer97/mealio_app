@@ -293,7 +293,12 @@ export default function DiscoverScreen() {
     <MealCard
       meal={item}
       onPress={() => openMealDetail(item)}
-      subtitle={item.author ?? item.creatorName ?? undefined}
+      // Creator first, author second, which is the order the website's card has
+      // always used. It matters now that the card also shows the creator's face:
+      // the name under it has to be the person the face belongs to.
+      subtitle={item.creatorName ?? item.author ?? undefined}
+      creatorPhotoUrl={item.creatorPhotoUrl}
+      creatorName={item.creatorName}
       savedAt={savedMap[item.id]}
       testID={`meal-card-${index}`}
     />

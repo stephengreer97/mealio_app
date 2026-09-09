@@ -11,6 +11,8 @@ import { Colors, Radius } from '../constants/colors';
 import { Meal, PresetMeal } from '../types';
 
 const CARD_WIDTH = Dimensions.get('window').width / 2 - 20;
+const IMAGE_HEIGHT = 140;
+const AVATAR_SIZE = 30;
 
 interface MealCardProps {
   meal: Meal | PresetMeal;
@@ -20,12 +22,19 @@ interface MealCardProps {
   selected?: boolean; // shown in multi-select mode
   onView?: () => void; // view button shown in multi-select mode
   warning?: string; // amber badge shown below meta row
+  creatorPhotoUrl?: string | null; // creator's face, over the meal photo
+  creatorName?: string | null;     // who the face belongs to; drives the initial fallback
   testID?: string; // stable handle for Maestro flows (meal titles are live data)
 }
 
-export default function MealCard({ meal, onPress, subtitle, savedAt, selected, onView, warning, testID }: MealCardProps) {
+export default function MealCard({ meal, onPress, subtitle, savedAt, selected, onView, warning, creatorPhotoUrl, creatorName, testID }: MealCardProps) {
   const photoUrl = 'photoUrl' in meal ? meal.photoUrl : undefined;
   const ingredientCount = meal.ingredients?.length ?? 0;
+  // The face sits on the photo, not in the body, and that is the whole reason it
+  // fits. This card is half the screen wide: an avatar beside the byline would
+  // take ~30 of the ~150pt the body has, and the byline is the line that wraps
+  // first. Over the photo it costs the text nothing.
+  const creatorInitial = (creatorName ?? '').replace(/^@/, '').trim().charAt(0).toUpperCase();
 
   return (
     <TouchableOpacity
@@ -50,6 +59,23 @@ export default function MealCard({ meal, onPress, subtitle, savedAt, selected, o
           <Text style={styles.placeholderEmoji}>🍽️</Text>
         </View>
       )}
+      {creatorName ? (
+        <View style={styles.avatarWrap} testID="creator-avatar">
+          {creatorPhotoUrl ? (
+            <Image
+              source={{ uri: creatorPhotoUrl }}
+              style={styles.avatarImage}
+              contentFit="cover"
+              recyclingKey={creatorPhotoUrl}
+              cachePolicy="memory-disk"
+            />
+          ) : (
+            <View style={[styles.avatarImage, styles.avatarFallback]}>
+              <Text style={styles.avatarInitial}>{creatorInitial || '?'}</Text>
+            </View>
+          )}
+        </View>
+      ) : null}
       {onView !== undefined && (
         <View style={styles.checkOverlay}>
           <View style={[styles.checkCircle, selected && styles.checkCircleSelected]}>
@@ -108,7 +134,7 @@ const styles = StyleSheet.create({
   },
   image: {
     width: '100%',
-    height: 140,
+    height: IMAGE_HEIGHT,
     backgroundColor: Colors.surface,
   },
   imagePlaceholder: {
@@ -136,6 +162,22 @@ const styles = StyleSheet.create({
     borderColor: Colors.brand,
   },
   checkMark: { fontSize: 12, color: '#fff', fontFamily: 'Inter_700Bold' },
+  // Bottom-left of the photo, which is 140 tall and starts at the card's top.
+  avatarWrap: {
+    position: 'absolute',
+    left: 8,
+    top: IMAGE_HEIGHT - 8 - AVATAR_SIZE,
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+    borderRadius: AVATAR_SIZE / 2,
+    borderWidth: 2,
+    borderColor: Colors.surfaceRaised,
+    overflow: 'hidden',
+    backgroundColor: Colors.brand,
+  },
+  avatarImage: { width: '100%', height: '100%' },
+  avatarFallback: { alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.brand },
+  avatarInitial: { fontSize: 13, color: '#fff', fontFamily: 'Inter_600SemiBold' },
   body: { padding: 12 },
   name: {
     fontSize: 14,

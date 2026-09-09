@@ -55,6 +55,7 @@ export function mapPresetMeal(m: any): PresetMeal {
     creatorId: m.creator_id ?? m.creatorId ?? null,
     creatorName: m.creator_name ?? m.creatorName ?? null,
     creatorSocial: m.creator_social ?? m.creatorSocial ?? null,
+    creatorPhotoUrl: m.creator_photo ?? m.creatorPhotoUrl ?? null,
     saves: m.saves_all ?? m.saves ?? 0,
     trendingScore: m.trending_score ?? m.trendingScore ?? 0,
     createdAt: m.created_at ?? m.createdAt,

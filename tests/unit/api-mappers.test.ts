@@ -93,6 +93,7 @@ describe('mapPresetMeal', () => {
       creator_id: 'c1',
       creator_name: 'Stephen',
       creator_social: '@stephen',
+      creator_photo: 'https://x/face.jpg',
       saves_all: 42,
       trending_score: 99.5,
       created_at: '2026-01-01',
@@ -101,6 +102,7 @@ describe('mapPresetMeal', () => {
     expect(r.creatorId).toBe('c1');
     expect(r.creatorName).toBe('Stephen');
     expect(r.creatorSocial).toBe('@stephen');
+    expect(r.creatorPhotoUrl).toBe('https://x/face.jpg');
     expect(r.saves).toBe(42);
     expect(r.trendingScore).toBe(99.5);
     expect(r.createdAt).toBe('2026-01-01');
@@ -113,6 +115,7 @@ describe('mapPresetMeal', () => {
       creatorId: 'c2',
       creatorName: 'Sam',
       creatorSocial: '@sam',
+      creatorPhotoUrl: 'https://y/face.jpg',
       saves: 10,
       trendingScore: 12.3,
     });
@@ -120,6 +123,7 @@ describe('mapPresetMeal', () => {
     expect(r.creatorId).toBe('c2');
     expect(r.creatorName).toBe('Sam');
     expect(r.creatorSocial).toBe('@sam');
+    expect(r.creatorPhotoUrl).toBe('https://y/face.jpg');
     expect(r.saves).toBe(10);
     expect(r.trendingScore).toBe(12.3);
   });
@@ -145,6 +149,7 @@ describe('mapPresetMeal', () => {
     expect(r.creatorId).toBe(null);
     expect(r.creatorName).toBe(null);
     expect(r.creatorSocial).toBe(null);
+    expect(r.creatorPhotoUrl).toBe(null);
     expect(r.photoUrl).toBe(null);
     expect(r.difficulty).toBe(null);
     expect(r.serves).toBe(null);
