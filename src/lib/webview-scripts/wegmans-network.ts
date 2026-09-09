@@ -59,6 +59,10 @@ const CART_PATH = '/commerce/cart/carts/';
  * dead host are indistinguishable.
  */
 const CART_WRITE_PATH = '/commerce/cart/carts/lineitems';
+// Removal is its own route and its own METHOD. Captured from the site on
+// 2026-09-08 by watching the cart's bin icon: PUT, one word, and the body
+// names lines by SKU alone.
+const CART_DELETE_PATH = '/commerce/cart/carts/itemdeletion';
 const STORE_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -684,6 +688,11 @@ ${RETRY_FN}
     '/commerce/my-items': '2024-01-26',
     '/commerce/cart/carts/': '2024-02-19-preview',
     '/commerce/cart/carts/lineitems': '2024-02-19-preview',
+    // Captured from the site's own bin icon, 2026-09-08. Without this the
+    // default version goes out and the gateway answers nothing at all --
+    // the same 'Failed to fetch' an unknown ROUTE gives, which is why a
+    // wrong api-version looks exactly like a wrong path from in here.
+    '/commerce/cart/carts/itemdeletion': '2024-02-19-preview',
   };
   // Read off the site's own version table (TURBOPACK chunk 96047), which names
   // one per API: ACCOUNT 2024-03-06-preview, CART 2024-02-19-preview, CART_V2
@@ -982,41 +991,36 @@ ${wegPrelude()}
  * re-read afterwards, and the result reports whether the line actually went --
  * because a store that ignores the write answers 200 either way.
  */
-// MEASURED 2026-09-08, and the answer is that this does not work yet.
+// MEASURED 2026-09-08. Removal here is a DIFFERENT ROUTE AND A DIFFERENT VERB,
+// and it was found by watching the site rather than by guessing:
 //
-//   POST /lineitems, full line object, quantity 1  ->  200, line 4 -> 1
-//   POST /lineitems, full line object, quantity 4  ->  200, line 1 -> 4
-//   POST /lineitems, full line object, quantity 0  ->  500 Internal Error
-//   DELETE /lineitems, same body                   ->  no response at all
+//   PUT /commerce/cart/carts/itemdeletion?api-version=2024-02-19-preview  -> 200
+//   {"cartData":[{"cartID":"...","cartVersion":9566,
+//     "custom":[{"name":"orderLevelAdjustments","value":"[]"}],
+//     "isAlcoholic":false,
+//     "lineItems":[{"sku":"59556"}]}]}
 //
-// The two writes that are not zero are the CONTROL, and they are why the 500 is
-// a finding rather than a broken script: the body is right, the line id is
-// right, the envelope is right, and the store still refuses a zero. DELETE gets
-// a bare "Failed to fetch", which on this gateway means the route does not
-// exist -- it rejects unknown routes before it adds CORS headers, which is the
-// same wall every guessed route hit when the ADD was being found.
+// The cart went from 55 items to 54 on that call.
 //
-// So Wegmans is Albertsons-shaped: a zero is not a removal here, and the real
-// removal is a different call. Finding it needs the site WATCHED removing an
-// item, the way the add route was found; the cached bundle carries no literal
-// for it. Until then the rail deliberately does NOT expose clearCart, because a
-// cleanup that cannot clean is worse than one that says it cannot.
+// EVERYTHING ABOUT IT DIFFERS FROM THE ADD, which is why no amount of varying
+// the add could have reached it:
 //
-// The knobs below are what measured this. Point the dev probe back at this
-// builder and they will measure the next hypothesis too.
-export function buildWegmansClearCartScript(
-  opts: { limit?: number; setTo?: number; method?: 'POST' | 'DELETE' } = {},
-): string {
+//   the add    POST /lineitems   full line objects from the catalogue, plus
+//                                StoreKey, customerEmail and customerID
+//   the delete PUT  /itemdeletion  lineItems: [{sku}] and nothing else
+//
+// A line is named by its SKU, not by its line id, and the line object is not
+// sent at all. Before this was captured, the attempts were: quantity 0 on the
+// add route (500, where the identical body with a 1 answers 200 and moves the
+// line), and DELETE on the add route (no response, because that gateway rejects
+// an unknown route before it adds CORS headers -- which is also why a wrong
+// guess and an unreachable host are indistinguishable from inside the page, and
+// why guessing could never have converged here).
+export function buildWegmansClearCartScript(opts: { limit?: number } = {}): string {
   const limit = typeof opts.limit === 'number' && opts.limit > 0 ? Math.trunc(opts.limit) : 0;
-  // MEASUREMENT KNOBS, not production settings. The removal call here is not
-  // known yet, and the only way to tell "my body is wrong" from "a zero is
-  // refused" is to send the same body with a quantity that is not zero.
-  const setTo = typeof opts.setTo === 'number' ? Math.trunc(opts.setTo) : 0;
-  const method = opts.method === 'DELETE' ? 'DELETE' : 'POST';
   return `(async function () {
 ${wegPrelude()}
   var LIMIT = ${JSON.stringify(limit)};
-  var SET_TO = ${JSON.stringify(setTo)};
   var post = function (o) { o.type = 'CART_CLEARED'; WG.post(o); };
   try {
     var tok = await WG.token();
@@ -1027,15 +1031,13 @@ ${wegPrelude()}
     // WG.groceryCart, NOT a hand-rolled unwrap. The lines live at
     // data.grocery.lineItems; an earlier version of this script reached for a
     // 'carts' array that does not exist, fell through to the raw envelope,
-    // found no lineItems on it and called a 60-item cart empty -- reporting
-    // that as ok:true. Every other reader in this file uses this helper, and a
-    // second reading of the same response is how the two disagree.
+    // found no lineItems on it and called a cart of 18 lines empty -- reporting
+    // that as ok:true. Every other reader in this file uses this helper.
     var cart = WG.groceryCart(r.data) || {};
     var lines = cart.lineItems || cart.items || null;
     if (!lines) {
       // NOT 'already_empty'. Not finding the lines and there being no lines are
-      // different answers, and only one of them is success. Name the keys so
-      // the next shape change is read rather than guessed at.
+      // different answers, and only one of them is success.
       post({ ok: false, why: 'cart_shape_unknown',
              dataKeys: Object.keys(r.data || {}).slice(0, 24),
              cartKeys: Object.keys(cart).slice(0, 24) });
@@ -1047,101 +1049,55 @@ ${wegPrelude()}
       return;
     }
 
-    // THE WRITE DOES NOT TAKE A CART LINE BACK. Measured 2026-09-08: sending
-    // {id, quantity: 0} answers 400 "The resource request is malformed".
-    //
-    // A cart line here is a commercetools line -- id, productId, variant,
-    // taxedPricePortions, lineItemMode -- and the lineitems endpoint wants the
-    // shape WG.lineItemFor builds out of a CATALOGUE row: sku, standalonePrice,
-    // distributionChannelKey, and the custom[] block. They are different shapes,
-    // so a removal cannot be assembled from the cart alone; it is built exactly
-    // the way the add builds it, with the quantity set to 0 and the line's own
-    // id attached. That id is what makes the write an update instead of an
-    // insert, and it is the only reason a zero can mean anything here.
-    var storeNo = null;
-    try { storeNo = WG.customField(cart, 'storeNumber'); } catch (e) {}
-    if (!storeNo) storeNo = WG.cachedStore();
-
+    // BY SKU. The line id addresses a line for the ADD, which SETS a quantity;
+    // the deletion route does not take one.
     var targets = [];
     for (var i = 0; i < lines.length; i++) {
       var li = lines[i] || {};
       var sku = WG.lineSku(li);
-      if (li.id == null || !sku) continue;
-      targets.push({ id: String(li.id), sku: String(sku), name: WG.lineName(li, sku),
+      if (!sku) continue;
+      targets.push({ sku: String(sku), name: WG.lineName(li, sku),
                      was: Number(li.quantity != null ? li.quantity : 1) });
       if (LIMIT && targets.length >= LIMIT) break;
     }
-    if (!targets.length) { post({ ok: false, why: 'no_line_ids', before: lines.length }); return; }
-
-    // The catalogue rows the line objects are built from -- one request for the
-    // batch, the same call the add makes.
-    var skus = [];
-    for (var s1 = 0; s1 < targets.length; s1++) skus.push(targets[s1].sku);
-    var catRows = await WG.hitsBySku(skus, storeNo);
+    if (!targets.length) { post({ ok: false, why: 'no_skus', before: lines.length }); return; }
 
     var payload = [];
-    var missing = [];
-    for (var t = 0; t < targets.length; t++) {
-      var hit = catRows[targets[t].sku];
-      if (!hit) { missing.push(targets[t].sku); continue; }
-      var li2 = WG.lineItemFor(hit, SET_TO);
-      li2.id = targets[t].id;
-      payload.push(li2);
-    }
-    if (!payload.length) {
-      post({ ok: false, why: 'no_catalogue_rows', missing: missing, before: lines.length });
-      return;
-    }
+    for (var t = 0; t < targets.length; t++) payload.push({ sku: targets[t].sku });
 
-    var storeKey = await WG.storeKey(storeNo);
-    var who = await WG.customerRef(tok);
-    if (!storeKey || !who) {
-      post({ ok: false, why: 'write_prereq', missingPart: !storeKey ? 'store key' : 'customer ref' });
-      return;
-    }
-
-    // THE ADD's ENVELOPE, field for field. The earlier version of this dropped
-    // storeNumber and fulfillmentType and passed a null store key, which is a
-    // second way to earn the same 400.
     var body = {
-      StoreKey: storeKey,
       cartData: [{
         cartID: cart.id,
         cartVersion: cart.version,
-        custom: [
-          { name: 'orderLevelAdjustments', value: '[]' },
-          { name: 'storeNumber', value: String(storeNo) },
-          { name: 'fulfillmentType', value: 'pickup' },
-        ],
+        custom: [{ name: 'orderLevelAdjustments', value: '[]' }],
         isAlcoholic: false,
         lineItems: payload,
       }],
-      customerEmail: who.email,
-      customerID: who.id,
     };
-    var w = await WG.commerce('${CART_WRITE_PATH}', tok, { method: '${method}', body: JSON.stringify(body) }, 25000);
+    var w = await WG.commerce('${CART_DELETE_PATH}', tok,
+      { method: 'PUT', body: JSON.stringify(body) }, 25000);
 
     // THE CART DECIDES. A store that ignores the write answers 200 either way.
     var after = await WG.commerce('${CART_PATH}', tok, { method: 'GET' }, 15000);
     var left = null, stillThere = 0;
     if (after.ok) {
       var c2 = WG.groceryCart(after.data) || {};
-      var l2 = c2.lineItems || c2.items || [];
-      left = l2.length;
-      for (var a = 0; a < l2.length; a++) {
-        for (var t2 = 0; t2 < targets.length; t2++) {
-          if (l2[a] && String(l2[a].id) === targets[t2].id) stillThere++;
+      var l2 = c2.lineItems || c2.items || null;
+      if (l2) {
+        left = l2.length;
+        for (var a = 0; a < l2.length; a++) {
+          var s2 = WG.lineSku(l2[a] || {});
+          for (var t2 = 0; t2 < targets.length; t2++) {
+            if (s2 && String(s2) === targets[t2].sku) stillThere++;
+          }
         }
       }
     }
     post({
       ok: stillThere === 0 && left != null, wrote: !!w.ok,
       why: w.ok ? null : (w.why || 'write_refused'), status: w.status || null,
-      // The store's own words. A bare 400 is not a finding -- on Albertsons the
-      // same shape of refusal named one wrong parameter, and reading it was the
-      // difference between a fix and a guess.
       detail: w.ok ? null : (w.detail || null),
-      asked: targets.length, stillThere: stillThere, setTo: SET_TO, method: '${method}',
+      asked: targets.length, stillThere: stillThere,
       before: lines.length, after: left, targets: targets,
     });
   } catch (e) {
@@ -1492,10 +1448,7 @@ export const WEGMANS_RAIL: NetworkRail = {
       requestMs: WEGMANS_RAIL.budgets.searchRequestMs,
     }),
   cartRead: () => buildWegmansCartReadScript(),
-  // NO clearCart. Not "not measured yet" -- measured, and refused: a quantity of
-  // 0 answers 500 where the identical body with a 1 succeeds. See the note on
-  // buildWegmansClearCartScript. The canary must not be handed a cleanup that
-  // reports failure on every run.
+  clearCart: (_storeId, opts) => buildWegmansClearCartScript({ limit: opts?.limit }),
   addBatch: (items, opts) =>
     buildWegmansNetworkAddBatchScript(
       items.map((i) => ({

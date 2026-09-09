@@ -84,14 +84,22 @@ a real cart, with a <code>limit</code> so the first attempt touches ONE line.</p
       <td>measured</td></tr>
   <tr><td><b>Albertsons family</b></td><td><code>DELETE</code> &mdash; a 0 answers 400, see above</td>
       <td>measured</td></tr>
-  <tr><td><b>Wegmans</b></td><td>no known removal call</td>
-      <td><b>REFUSED</b> &mdash; a 0 answers 500 where the same body with a 1
-      succeeds; DELETE is not a route. The rail exposes no <code>clearCart</code>.</td></tr>
+  <tr><td><b>Wegmans</b></td><td><code>PUT /commerce/cart/carts/itemdeletion</code>,
+      <code>lineItems: [{sku}]</code></td>
+      <td><b>measured 2026-09-08</b> &mdash; 16 &rarr; 15, target gone</td></tr>
   <tr><td><b>Kroger family</b></td><td colspan="2">n/a &mdash; web integration, not a WebView rail</td></tr>
 </table>
 <p>Walmart, H-E-B and Instacart all remove on a zero; Albertsons and Wegmans do not. That is the
 whole reason each is measured rather than inferred from the others.</p>
-<p><b>The Wegmans measurement, with its control</b> &mdash; quantity 1 answered 200 and moved the line
+<p><b>Wegmans removal is its own route AND its own verb</b>, captured by watching the site's bin icon
+rather than by guessing. The add is <code>POST /lineitems</code> carrying full catalogue-built line
+objects plus a StoreKey and a customer; the deletion is <code>PUT /itemdeletion</code> naming lines by
+<b>SKU alone</b>. Nothing about it is reachable by varying the add, which is why the earlier attempts
+failed: a quantity of 0 on the add route answers 500 where the identical body with a 1 answers 200,
+and a DELETE there answers nothing at all. <b>A wrong api-version is indistinguishable from a wrong
+route here</b> &mdash; both give a bare "Failed to fetch" &mdash; and the first attempt at the correct
+route still reported <code>no_response</code> until <code>2024-02-19-preview</code> was added for it.</p>
+<p><b>The earlier measurement, with its control</b> &mdash; quantity 1 answered 200 and moved the line
 from 4 to 1, quantity 4 moved it back, quantity 0 answered 500, and DELETE got no response at all.
 The control is what makes the 500 a property of the store rather than a broken script. Two of my own
 errors were corrected on the way: a cart line here is a commercetools line and cannot be sent back as

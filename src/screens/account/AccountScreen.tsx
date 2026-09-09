@@ -19,6 +19,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Colors, Radius } from '../../constants/colors';
 import { resetFirstRun } from '../../lib/firstRun';
 import CartClearProbe from '../../components/CartClearProbe';
+import StorefrontCaptureProbe from '../../components/StorefrontCaptureProbe';
 import { useStores } from '../../lib/store-catalog/useStores';
 import { useAuth } from '../../context/AuthContext';
 import { auth as authApi, account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
@@ -65,6 +66,7 @@ export default function AccountScreen() {
   // Account deletion
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [clearProbe, setClearProbe] = useState<{ storeId: string; limit?: number } | null>(null);
+  const [capture, setCapture] = useState<{ storeId: string; path?: string } | null>(null);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
@@ -978,7 +980,20 @@ export default function AccountScreen() {
             >
               <Text style={styles.devResetText}>Measure cart clear: Wegmans, 1 line (dev)</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setCapture({ storeId: 'wegmans', path: '/cart' })}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Watch storefront calls: Wegmans cart (dev)</Text>
+            </TouchableOpacity>
           </>
+        )}
+        {__DEV__ && capture && (
+          <StorefrontCaptureProbe
+            storeId={capture.storeId}
+            path={capture.path}
+            onClose={() => setCapture(null)}
+          />
         )}
         {__DEV__ && clearProbe && (
           <CartClearProbe

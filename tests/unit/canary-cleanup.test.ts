@@ -47,19 +47,34 @@ describe('which rails can empty a cart', () => {
     expect(typeof getNetworkRail('walmart')?.clearCart).toBe('function');
   });
 
-  it('Wegmans does NOT, because a zero is REFUSED there', () => {
-    // Measured on the real cart 2026-09-08, with a control:
+  it('Wegmans can, by a DIFFERENT route and a different verb', () => {
+    // Captured from the site's own bin icon on 2026-09-08, then measured:
+    // before 16 lines, after 15, the target gone.
     //
-    //   quantity 1 -> 200, the line went 4 to 1     (the body is correct)
-    //   quantity 4 -> 200, the line went 1 back to 4 (and correct again)
-    //   quantity 0 -> 500 Internal Error
-    //   DELETE     -> no response; the route does not exist
+    //   PUT /commerce/cart/carts/itemdeletion?api-version=2024-02-19-preview
+    //   {"cartData":[{"cartID":..,"cartVersion":..,"lineItems":[{"sku":"59556"}]}]}
     //
-    // So this is not "unmeasured" and not "the script is wrong". The write
-    // works; the store will not accept a zero, exactly as Albertsons does not.
-    // Wegmans' real removal is some other call, and until it is watched rather
-    // than guessed the rail must not claim a cleanup it cannot perform.
-    expect(getNetworkRail('wegmans')?.clearCart).toBeUndefined();
+    // Nothing about it could have been reached by varying the add: the add is a
+    // POST to /lineitems carrying full catalogue-built line objects, a StoreKey
+    // and a customer; the deletion is a PUT to its own route naming lines by SKU
+    // alone. A quantity of 0 on the add route answers 500 where the identical
+    // body with a 1 answers 200.
+    const rail = getNetworkRail('wegmans');
+    expect(typeof rail?.clearCart).toBe('function');
+    const script = rail!.clearCart!('wegmans', { limit: 1 })!;
+    expect(script).toContain('itemdeletion');
+    expect(script).toContain("method: 'PUT'");
+    // By SKU, not by line id -- the line id is the ADD's addressing.
+    expect(script).toContain('sku: targets[t].sku');
+    expect(script).toContain('stillThere');
+  });
+
+  it('the deletion route carries its own api-version', () => {
+    // A wrong api-version on this gateway is indistinguishable from a wrong
+    // route: both answer nothing at all. The default version is what made the
+    // first attempt at the captured route report no_response.
+    const script = getNetworkRail('wegmans')!.clearCart!('wegmans', { limit: 1 })!;
+    expect(script).toContain("'/commerce/cart/carts/itemdeletion': '2024-02-19-preview'");
   });
 });
 
@@ -159,9 +174,7 @@ describe('an unreadable cart is never reported as a cleared one', () => {
   //
   // So the invariant is per rail, not per store: unreadable and empty are
   // different answers, and only one of them is ok.
-  // Wegmans is absent on purpose: it has no clearCart, because a zero is
-  // refused there. See the test above.
-  const RAILS = ['heb', 'walmart', 'albertsons', 'aldi'];
+  const RAILS = ['heb', 'walmart', 'wegmans', 'albertsons', 'aldi'];
 
   it.each(RAILS)('%s names an unreadable cart separately from an empty one', (id) => {
     const script = getNetworkRail(id)!.clearCart!(id, { limit: 1 })!;
@@ -177,16 +190,12 @@ describe('an unreadable cart is never reported as a cleared one', () => {
     expect(`${id}: ${/catch\s*\([^)]*\)\s*\{\s*\w+\s*=\s*\[\]/.test(script)}`).toBe(`${id}: false`);
   });
 
-  it('the Wegmans builder still unwraps the cart the way every other reader does', () => {
-    // The builder outlives its removal from the rail: it is what will measure
-    // the next hypothesis. The unwrap bug it carried is what made a cart of 18
-    // lines report as empty, so it stays covered.
+  it('the Wegmans clear unwraps the cart the way every other reader does', () => {
+    // The unwrap bug this carried is what made a cart of 18 lines report as
+    // empty, with ok:true, so it stays covered.
     const script = buildWegmansClearCartScript({ limit: 1 });
     expect(script).toContain('WG.groceryCart');
     expect(script).not.toContain('.carts ?');
     expect(script).toContain('cart_shape_unknown');
-    // Built from the CATALOGUE row, not from the cart line: the two are
-    // different shapes, and sending the cart's own line back is the 400.
-    expect(script).toContain('WG.lineItemFor');
   });
 });
