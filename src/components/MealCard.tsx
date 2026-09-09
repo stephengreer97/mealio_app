@@ -12,9 +12,8 @@ import { Meal, PresetMeal } from '../types';
 
 const CARD_WIDTH = Dimensions.get('window').width / 2 - 20;
 const IMAGE_HEIGHT = 140;
-// Area, twice asked for and twice in area rather than width: 5% more than the 30
-// it started at, then another 10%. Diameter of 30 x sqrt(1.05 x 1.10).
-const AVATAR_SIZE = 32.2;
+// A diameter Stephen picked by eye, after two rounds of growing it by area.
+const AVATAR_SIZE = 38;
 
 interface MealCardProps {
   meal: Meal | PresetMeal;
