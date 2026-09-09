@@ -91,18 +91,35 @@ const planRows = await (await fetch(
 const cfg = Array.isArray(planRows) && planRows[0] ? planRows[0] : null;
 
 /** Built by the same library the panel and the tests use, never re-implemented. */
-function planFrom(row) {
+function planFrom(row, lines) {
   const arg = JSON.stringify({
     storeId: row.store_id,
     mealName: row.meal_name,
-    outOfStockItem: row.out_of_stock_item,
-    unmatchedItem: row.unmatched_item,
+    lines,
   });
   const out = execFileSync('npx', ['tsx', 'scripts/_canary-plan.ts', arg], { encoding: 'utf8' });
   return JSON.parse(out.trim().split('\n').pop());
 }
 
-const plan = cfg && cfg.enabled !== false ? planFrom(cfg) : null;
+// THE MEAL IS THE PLAN. The admin item boxes are gone: a canary's branches are
+// curated by editing the saved meal, so the expectations have to be read from
+// the meal's own ingredients. Keyed on the chosen product, because that is the
+// name a run reports -- keying on the ingredient scored every line as "never
+// reported" while listing the same items again as unplanned.
+async function mealLines(row) {
+  if (!row?.meal_name) return [];
+  const rows = await (await fetch(
+    `${U}/rest/v1/meals?name=eq.${encodeURIComponent(row.meal_name)}&select=ingredients`,
+    { headers: H })).json();
+  const ing = Array.isArray(rows) && rows[0] ? rows[0].ingredients : null;
+  return Array.isArray(ing) ? ing.map((i) => ({
+    ingredientName: i.ingredientName ?? i.name ?? '',
+    searchTerm: i.searchTerm ?? null,
+    unit: i.unit ?? null,
+  })) : [];
+}
+
+const plan = cfg && cfg.enabled !== false ? planFrom(cfg, await mealLines(cfg)) : null;
 
 if (!plan) {
   console.log(JSON.stringify({

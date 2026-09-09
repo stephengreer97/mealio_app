@@ -95,6 +95,21 @@ still requires having seen the cart re-read at all, so "could not read it" never
       <td><b>measured 2026-09-08</b> &mdash; 16 &rarr; 15, target gone</td></tr>
   <tr><td><b>Kroger family</b></td><td colspan="2">n/a &mdash; web integration, not a WebView rail</td></tr>
 </table>
+<div class="wrap" style="border-left:4px solid #ef4444;padding-left:14px">
+<p><b>2026-09-09 &mdash; a cleanup deleted the user's own groceries.</b> The Wegmans clear removed seven
+lines from a real cart; five were his shopping, not the canary's. The cause was a run with NO cart
+baseline: <code>cartItemsBeforeRef</code> is empty then, and <code>diffCartItems</code> marks the
+ENTIRE existing cart as newly added &mdash; which the cart engine already documents where the
+north-star metric guards against it. Those rows were being written to the cleanup's delete list, so
+the scoping built to protect the cart is what carried the whole cart into the delete.</p>
+<p>No baseline now means no recorded ids, and cleanup reports "the run added no line this rail gives
+an id for" rather than guessing. <code>restoreLines</code> on the rail is the undo, and it put all
+five lines back at their original quantities.</p>
+<p><b>And the verdict was fail-open on top of it.</b> Wegmans reported ok over a REFUSED write: a 400,
+with <code>stillThere</code> at 0 because the re-read matched nothing rather than because anything
+was removed. "The cart decides" holds only once the store has accepted the request; Wegmans and
+Walmart now require that too.</p>
+</div>
 <p><b>A clear is SCOPED, and judged by its targets.</b> The canary runs against a real account whose
 cart holds real shopping, so cleanup means "remove what this run added", never "empty the basket" --
 every rail's <code>clearCart</code> takes an <code>only</code> list of store line ids, and the run

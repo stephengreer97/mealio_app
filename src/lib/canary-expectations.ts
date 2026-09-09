@@ -229,6 +229,74 @@ export const UNIVERSAL_LINES = {
   noCandidates: 'Nonexistent unobtainium 9000',
 } as const;
 
+/** One saved-meal ingredient, as the plan needs to see it. */
+export interface CanaryMealLine {
+  ingredientName: string;
+  /** The chosen product. Null means the app would send this line to the chooser. */
+  searchTerm?: string | null;
+  unit?: string | null;
+}
+
+/**
+ * Build the expectation table from the CANARY MEAL ITSELF.
+ *
+ * The meal is the only description of what a canary run does, now that the admin
+ * item boxes are gone -- Stephen curates the out-of-stock and no-match lines by
+ * adding them to the saved meal.
+ *
+ * KEYED ON THE CHOSEN PRODUCT, not the ingredient name. A run reports what it
+ * put in the cart, which is the product ("Borden Whole Milk, 1 gal"); the plan
+ * used to name the ingredient ("Whole milk") and every line scored as "never
+ * reported". Four silent drops and four unplanned lines, describing the same
+ * four items twice.
+ *
+ * The expectation follows from the line:
+ *   - a product that cannot exist  -> no candidates
+ *   - a line sold by weight        -> confirmed by presence, never by quantity
+ *   - anything else                -> added
+ */
+export function buildPlanFromMeal(
+  storeId: string,
+  mealName: string,
+  lines: CanaryMealLine[],
+): CanaryStorePlan {
+  const WEIGHT_UNITS = ['lb', 'lbs', 'pound', 'pounds', 'oz'];
+  const items: CanaryExpectation[] = [];
+  for (const line of lines) {
+    const term = (line.searchTerm ?? '').trim();
+    if (!term) {
+      // No chosen product: the app sends this to the chooser rather than adding
+      // it, so a run does not report it at all and the plan must not expect it.
+      continue;
+    }
+    const unfindable = /unobtainium|thereshouldnotbe/i.test(term)
+      || /unobtainium|thereshouldnotbe/i.test(line.ingredientName ?? '');
+    if (unfindable) {
+      items.push({
+        item: term,
+        // REVIEW, not failed. Measured against the real stores: a line with no
+        // candidates is handed to the USER -- the run parks on "could not be
+        // added to cart", naming the item and why. That is the designed
+        // behaviour and the right one, so it is what the plan predicts.
+        // Expecting 'failed' scored every store red for working correctly.
+        why: 'nothing should match: the run must ask rather than guess',
+        expect: { outcome: 'review', code: 'no_candidates' },
+      });
+      continue;
+    }
+    const byWeight = WEIGHT_UNITS.includes(String(line.unit ?? '').toLowerCase())
+      || /,\s*lb\.?$/i.test(term);
+    items.push({
+      item: term,
+      why: byWeight
+        ? 'sold by weight: confirmed by presence, never by quantity'
+        : 'plain in-stock item: should match and confirm',
+      expect: { outcome: byWeight ? 'added_by_weight' : 'added' },
+    });
+  }
+  return { storeId, mealName, items };
+}
+
 export function buildPlanFromConfig(cfg: CanaryStoreConfig): CanaryStorePlan {
   const items: CanaryExpectation[] = [
     {
