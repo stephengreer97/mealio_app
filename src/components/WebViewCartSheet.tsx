@@ -7736,7 +7736,29 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
 
               {/* Preference picker — sticky between scroll and footer */}
               {needsPref && candidate?.preferences && (
-                <View style={[styles.prefBox, { marginHorizontal: 16, marginBottom: 0 }]}>
+                // THE SAME GLOW THE QUANTITY GETS (MEAL-218's shape, applied
+                // here). This section stops the run exactly as an unset quantity
+                // does -- the primary is disabled until a preference is picked --
+                // and it is just as easy to scroll past. It was announcing itself
+                // with the word "required" in red, which is a label rather than
+                // something the eye is drawn to.
+                //
+                // The ring goes OUTSIDE the box, so the box keeps its own border
+                // and the two never fight; and it wears off the moment a
+                // preference is chosen, because an animation that never ends
+                // stops being noticed.
+                <Animated.View
+                  testID="pref-glow"
+                  style={{
+                    marginHorizontal: 16,
+                    borderWidth: !selectedPreference ? 2 : 0,
+                    borderRadius: 13,
+                    padding: !selectedPreference ? 1 : 0,
+                    borderColor: !selectedPreference ? qtyIdleBorder : 'transparent',
+                    backgroundColor: !selectedPreference ? qtyIdleBg : 'transparent',
+                  }}
+                >
+                <View style={[styles.prefBox, { marginHorizontal: 0, marginBottom: 0 }]}>
                   <Text style={styles.prefLabel}>
                     Select your preference:{' '}
                     {!selectedPreference && <Text style={{ color: '#ef4444' }}>required</Text>}
@@ -7757,6 +7779,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                     })}
                   </View>
                 </View>
+                </Animated.View>
               )}
 
               <View style={[styles.footer, { gap: 8 }]}>

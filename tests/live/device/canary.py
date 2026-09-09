@@ -143,10 +143,20 @@ def _start_run(meal_name, second_meal=None, store_chip=None):
     drive.tap_text(meal_name, timeout=40)
     time.sleep(1.5)
     if second_meal:
-        # The combination run: two meals in one add, which exercises the merge
-        # a single-meal run never reaches.
-        drive.tap_text(second_meal, timeout=40)
-        time.sleep(1.5)
+        # The combination run: two meals in one add, which exercises the merge a
+        # single-meal run never reaches. The same meal twice is deliberate and
+        # sufficient -- selecting it a second time is a second selection, which
+        # is what the merge sees.
+        #
+        # Tapping the SAME card again would deselect it, so this taps the card
+        # a second time only when the second meal is a different one; for the
+        # same meal the quantity is raised instead, which is the same two-meal
+        # add from the run's point of view.
+        if second_meal == meal_name:
+            _bump_meal_qty(meal_name)
+        else:
+            drive.tap_text(second_meal, timeout=40)
+            time.sleep(1.5)
     # BY ID, not by coordinate. These two taps were the last blind ones, and they
     # are why a "successful" run finished in 22 seconds having done nothing: a
     # coordinate that misses is silent, and the window then broke out of its wait
@@ -157,6 +167,22 @@ def _start_run(meal_name, second_meal=None, store_chip=None):
     # cart"; it is the same id the chooser's primary uses.
     if drive.find_id('review-primary'):
         drive.tap_id('review-primary', timeout=20)
+
+
+def _bump_meal_qty(meal_name):
+    """Select the same meal a second time.
+
+    A meal card is a TOGGLE: tapping it again clears the selection, so a naive
+    "tap it twice" combination run would have added nothing and looked like a
+    pass. The card carries its own quantity control for exactly this, and
+    raising it is what the add sees as two meals.
+    """
+    node = drive.find_id('meal-qty-plus-' + meal_name) or drive.find_id('meal-card-qty-' + meal_name)
+    if node:
+        drive.tap(node)
+        time.sleep(1.5)
+        return True
+    return False
 
 
 def _dismiss_overlay(tries=3):
@@ -523,11 +549,17 @@ def main():
         entry['cart'] = {'before': before, 'after': cart_count()}
 
         # The combination run: two meals at once.
-        # The second meal is any OTHER meal saved for this store; without one the
-        # combination window is skipped rather than faked.
-        entry['windows']['combination'] = (
-            run_once(meal, 'combination', second_meal=plan.get('secondMeal'))
-            if plan.get('secondMeal') else None)
+        # THE SAME MEAL TWICE (Stephen, 2026-09-09: "for two meal run, you can
+        # use the same one twice"). What this window tests is the merge -- two
+        # selected meals going into one add -- and that path does not care
+        # whether the two are different. Requiring a second curated meal per
+        # store made the window skip on every store instead, which tested
+        # nothing at all.
+        entry['windows']['combination'] = run_once(
+            # Convention rather than a schema column: the duplicate is the
+            # canary meal's name with a " B" on the end.
+            meal, 'combination', second_meal=plan.get('secondMeal') or (meal + ' B'),
+            store_chip=chip)
 
         # Collected across ALL THREE windows: the repeat and the combination add
         # on top (2026-09-01), so each contributes lines the cleanup owns.
