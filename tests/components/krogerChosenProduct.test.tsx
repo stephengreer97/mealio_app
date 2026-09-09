@@ -237,3 +237,54 @@ describe('the meal editor’s product chooser records it too', () => {
     expect('storeProducts' in patch.ingredients[0]).toBe(false);
   });
 });
+
+describe('Kroger reconcile with nothing found', () => {
+  // Stephen, 2026-09-09: the search field on this screen had no button, no ring
+  // and did not open until you tapped the row above it — three things every
+  // other store's reconcile has had for months. Kroger is a separate component
+  // and every fix has had to be made twice.
+  const walkToEmptyReview = async () => {
+    mockSearchProducts.mockResolvedValue({
+      results: [{
+        term: 'Saffron', quantity: 1, upc: null, description: null,
+        exact: false, reason: 'no_results', suggestions: [],
+      }],
+    });
+    const screen = renderSheet([ingredient({ ingredientName: 'Saffron', searchTerm: 'saffron' })]);
+    fireEvent.press(screen.getByText(/add ingredients to/i));
+    await waitFor(() => expect(screen.getByText(/Review 1 Ingredient/)).toBeTruthy());
+    fireEvent.press(screen.getByText(/Review 1 Ingredient/));
+    return screen;
+  };
+
+  it('opens the search field and shows its button, with no tap first', async () => {
+    const screen = await walkToEmptyReview();
+    await waitFor(() => expect(screen.queryByTestId('kroger-custom-search-btn')).toBeTruthy());
+  });
+
+  it('glows the search row, because it is the only way forward', async () => {
+    const screen = await walkToEmptyReview();
+    await waitFor(() => expect(screen.queryByTestId('kroger-search-glow')).toBeTruthy());
+  });
+
+  it('leaves both off when there is something to pick', async () => {
+    mockSearchProducts.mockResolvedValue({
+      results: [{
+        term: 'Sour Cream', quantity: 1, upc: null, description: null,
+        exact: false, reason: 'low_confidence',
+        suggestions: [{ upc: '1', description: 'Daisy Sour Cream', size: '16 oz', price: 2.99 }],
+      }],
+    });
+    const screen = renderSheet([ingredient()]);
+    fireEvent.press(screen.getByText(/add ingredients to/i));
+    await waitFor(() => expect(screen.getByText(/Review 1 Ingredient/)).toBeTruthy());
+    fireEvent.press(screen.getByText(/Review 1 Ingredient/));
+
+    // "Kroger suggests" is the header the sheet draws when it HAS suggestions,
+    // so it is the signal that this is the populated branch. The product label
+    // itself carries the size, which is not what this test is about.
+    await waitFor(() => expect(screen.queryByText('Kroger suggests')).toBeTruthy());
+    expect(screen.queryByTestId('kroger-search-glow')).toBeNull();
+    expect(screen.queryByTestId('kroger-custom-search-btn')).toBeNull();
+  });
+});

@@ -1547,7 +1547,13 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   });
 
   /**
-   * True while the review screen is showing an item with nothing to choose from.
+   * True while EITHER decision screen is showing an item with nothing to choose
+   * from.
+   *
+   * `step === 'review'` alone until 2026-09-09, which meant reconciliation
+   * glowed and Choose Products did not — the same screen, the same empty list,
+   * the same one control that can move the run forward, and the hint only on one
+   * of them. Both now.
    *
    * Derived from the same two inputs the screen itself reads, rather than set
    * during its render: a setState in a render path that re-runs on every
@@ -1557,7 +1563,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
    * out the moment they find something — it points at the control, it does not
    * decorate it.
    */
-  const glowCustomRow = step === 'review'
+  const glowCustomRow = (step === 'review' || step === 'searchResult')
     && customSuggestions.length === 0
     && (searchResults[reviewIdx]?.candidates.length ?? 0) === 0;
   useEffect(() => {
@@ -7717,16 +7723,11 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                     looks least like a control, being placeholder text under an
                     empty list. The glow points at it. */}
                 <View>
-                  {!hasCandidates && (
-                    <Animated.View
-                      pointerEvents="none"
-                      testID="custom-row-glow"
-                      style={[
-                        styles.customGlow,
-                        { borderColor: storeColor, shadowColor: storeColor, opacity: glowAnim },
-                      ]}
-                    />
-                  )}
+                  {/* The ring used to sit here, on the row whose only job is to
+                      reveal the field. With nothing found the field now opens
+                      itself, so the glow moved down onto the field — pointing at
+                      a button that reveals something already revealed is
+                      pointing at the wrong thing. */}
                   <TouchableOpacity
                     onPress={() => setSelectedSuggIdx('custom')}
                     style={[
@@ -7743,7 +7744,16 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                     </Text>
                   </TouchableOpacity>
                 </View>
-                {selectedSuggIdx === 'custom' && (
+                {(selectedSuggIdx === 'custom' || !hasCandidates) && (
+                  // OPEN ALREADY WHEN THERE IS NOTHING TO PICK.
+                  //
+                  // The field used to appear only after tapping the row above
+                  // it, which is one gratuitous step at exactly the moment the
+                  // user has nothing else to do — the search IS the screen when
+                  // the list is empty, and the button was invisible until you had
+                  // found it. Stephen, testing H-E-B: "I also don't see the
+                  // search button."
+                  //
                   // A BUTTON BESIDE THE FIELD, the way Kroger's chooser has
                   // always had it. Submitting was keyboard-only here — the
                   // return key, and nothing on screen saying so — which is
@@ -7751,9 +7761,27 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                   // and leaves someone who typed a name with a field that looks
                   // like it did nothing. onSubmitEditing still works; this is
                   // the same action made visible.
+                  <View>
+                  {/* THE GLOW, on the field. When the search found nothing this
+                      is the only control on the screen that can move the run
+                      forward, and it is the one that looks least like a control
+                      — an empty box under an empty list. */}
+                  {glowCustomRow && (
+                    <Animated.View
+                      pointerEvents="none"
+                      testID="custom-row-glow"
+                      style={[
+                        styles.customGlow,
+                        { borderColor: storeColor, shadowColor: storeColor, opacity: glowAnim },
+                      ]}
+                    />
+                  )}
                   <View style={styles.customRow}>
                     <TextInput
-                      autoFocus
+                      // Focus follows the TAP, not the empty list. Opening a
+                      // keyboard over every no-results screen would hide the very
+                      // thing the user needs to read.
+                      autoFocus={selectedSuggIdx === 'custom'}
                       value={customText}
                       onChangeText={setCustomText}
                       placeholder="e.g. Chicken Breast Boneless"
@@ -7779,6 +7807,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                         ? <ActivityIndicator color="#fff" size="small" />
                         : <Ionicons name="search" size={16} color="#fff" />}
                     </TouchableOpacity>
+                  </View>
                   </View>
                 )}
 

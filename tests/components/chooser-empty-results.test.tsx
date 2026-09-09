@@ -99,14 +99,27 @@ describe('Kroger chooser with no results', () => {
     expect(view.queryByText('Qty for this meal')).toBeNull();
   });
 
-  it('makes Skip the primary action rather than a disabled Next', async () => {
-    // Next is gated on a quantity, and there is no quantity to set for a product
-    // that does not exist — so leaving it would be a disabled primary button
-    // reading "Choose Quantity" over a stepper that is no longer on screen.
+  it('lays the buttons out the way every other store does', async () => {
+    // Stephen, 2026-09-09: "the skip back and next/choose qty button layout in
+    // Kroger view should be the same as other stores." So: Back and the primary
+    // share a row, and Skip is a full-width line under them — not a third button
+    // squeezed into the row, and not promoted into the primary slot.
     const view = renderChooser([ing('Saffron')], empty);
     await waitFor(() => expect(view.queryByText('No products found')).toBeTruthy());
+    expect(view.queryByText('← Back')).toBeTruthy();
+    expect(view.queryByText('Skip this ingredient')).toBeTruthy();
+    // With nothing found there is no quantity to choose, so the primary is not
+    // asking for one.
     expect(view.queryByText('Choose Quantity')).toBeNull();
-    expect(view.queryByText('Skip & Save')).toBeTruthy();
+  });
+
+  it('glows the search row, because it is the only way forward', async () => {
+    // Borrowed from WebViewCartSheet: the field is the one control that can move
+    // the run on, and it is the one that looks least like a control — placeholder
+    // text under an empty list.
+    const view = renderChooser([ing('Saffron')], empty);
+    await waitFor(() => expect(view.queryByText('No products found')).toBeTruthy());
+    expect(view.queryByTestId('chooser-search-glow')).toBeTruthy();
   });
 
   it('saves nothing for a skipped ingredient', async () => {
@@ -131,5 +144,8 @@ describe('Kroger chooser with results', () => {
     expect(view.queryByTestId('chooser-qty-glow')).toBeTruthy();
     expect(view.queryByTestId('chooser-skip')).toBeTruthy();
     expect(view.queryByText('Choose Quantity')).toBeTruthy();
+    // ...and no glow: there is something to pick, so the search row is not the
+    // thing to point at.
+    expect(view.queryByTestId('chooser-search-glow')).toBeNull();
   });
 });

@@ -142,6 +142,18 @@ export default function ProductChooserSheet({
   const [error, setError] = useState('');
   const [results, setResults] = useState<Array<{ ingredientName: string; suggestions: Suggestion[] }>>([]);
   const [pickIdx, setPickIdx] = useState(0);
+  /**
+   * THE GLOW ON THE SEARCH ROW, borrowed from WebViewCartSheet.
+   *
+   * When the search found nothing, the search field is the only control on the
+   * screen that can move the run forward — and it is the one that looks least
+   * like a control, being placeholder text under an empty list. The glow points
+   * at it. Same 900ms in/out, same settle-at-steady behaviour under reduce
+   * motion: with motion off the row should still stand out, it just should not
+   * move.
+   */
+  const searchGlowAnim = useRef(new Animated.Value(0)).current;
+
   const [selections, setSelections] = useState<Map<string, { description: string; qty: number; upc: string | null; price?: string }>>(new Map());
   const [productQty, setProductQty] = useState(0);
   const [selectedDescription, setSelectedDescription] = useState<string | null>(null);
@@ -160,6 +172,24 @@ export default function ProductChooserSheet({
   const unchosenIngredients = meal.ingredients.filter((i) => !i.searchTerm);
   const current = results[pickIdx];
   const isLast = pickIdx === results.length - 1;
+
+  // Nothing found for THIS ingredient, so the search row is the way forward.
+  const glowSearchRow = !!current && current.suggestions.length === 0;
+  useEffect(() => {
+    if (!glowSearchRow || reduceMotion) {
+      searchGlowAnim.stopAnimation();
+      searchGlowAnim.setValue(reduceMotion && glowSearchRow ? 1 : 0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(searchGlowAnim, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(searchGlowAnim, { toValue: 0.25, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [glowSearchRow, reduceMotion, searchGlowAnim]);
 
   const selectedImageUrl: string | null = (selectedDescription && current)
     ? current.suggestions.find((s) => displayNameOf(s) === selectedDescription)?.imageUrl ?? null
@@ -267,6 +297,16 @@ export default function ProductChooserSheet({
    * `productQty`, unlike Next -- the whole point is that there is nothing here
    * to set a quantity for.
    */
+  /**
+   * Whether Next/Save can fire.
+   *
+   * A quantity when there is something to count. With nothing found there is no
+   * stepper on screen, so gating on a quantity would leave a permanently
+   * disabled primary and Skip as the only live control — which is the shape the
+   * other stores have, so it is the shape this has.
+   */
+  const canAdvance = current ? (current.suggestions.length === 0 || productQty > 0) : false;
+
   function handleSkip() {
     const newSelections = new Map(selections);
     if (current) newSelections.delete(current.ingredientName);
@@ -443,6 +483,17 @@ export default function ProductChooserSheet({
                   </TouchableOpacity>
                 );
               })}
+              <View>
+                {glowSearchRow && (
+                  <Animated.View
+                    pointerEvents="none"
+                    testID="chooser-search-glow"
+                    style={[
+                      styles.customGlow,
+                      { borderColor: storeColor, shadowColor: storeColor, opacity: searchGlowAnim },
+                    ]}
+                  />
+                )}
               <View style={styles.customRow}>
                 <TextInput
                   style={styles.customInput}
@@ -463,6 +514,7 @@ export default function ProductChooserSheet({
                     ? <ActivityIndicator color="#fff" size="small" />
                     : <Ionicons name="search" size={16} color="#fff" />}
                 </TouchableOpacity>
+              </View>
               </View>
             </ScrollView>
             <View style={styles.footer}>
@@ -526,40 +578,31 @@ export default function ProductChooserSheet({
                 >
                   <Text style={styles.navBtnSecondaryText}>← Back</Text>
                 </TouchableOpacity>
-                {/*
-                  WITH NOTHING FOUND, SKIP IS THE ANSWER, so it takes the primary
-                  slot and Next goes away. Next is gated on a quantity, and there
-                  is no quantity to set for a product that does not exist — so
-                  leaving it there would be a disabled primary button reading
-                  "Choose Quantity" over a stepper that is no longer on screen.
-                */}
-                {current.suggestions.length === 0 ? (
-                  <TouchableOpacity
-                    style={[styles.navBtn, { backgroundColor: storeColor }]}
-                    onPress={handleSkip}
-                    testID="chooser-skip"
-                  >
-                    <Text style={styles.navBtnText}>{isLast ? 'Skip & Save' : 'Skip →'}</Text>
-                  </TouchableOpacity>
-                ) : (
-                  <>
-                    <TouchableOpacity
-                      style={[styles.navBtn, styles.navBtnSecondary]}
-                      onPress={handleSkip}
-                      testID="chooser-skip"
-                    >
-                      <Text style={styles.navBtnSecondaryText}>Skip</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.navBtn, { backgroundColor: storeColor }, productQty === 0 && { opacity: 0.4 }]}
-                      onPress={handleNextBtn}
-                      disabled={productQty === 0}
-                    >
-                      <Text style={styles.navBtnText}>{productQty === 0 ? 'Choose Quantity' : isLast ? 'Save' : 'Next →'}</Text>
-                    </TouchableOpacity>
-                  </>
-                )}
+                <TouchableOpacity
+                  style={[styles.navBtn, { backgroundColor: storeColor }, !canAdvance && { opacity: 0.4 }]}
+                  onPress={handleNextBtn}
+                  disabled={!canAdvance}
+                >
+                  <Text style={styles.navBtnText}>
+                    {productQty === 0 && current.suggestions.length > 0
+                      ? 'Choose Quantity'
+                      : isLast ? 'Save' : 'Next →'}
+                  </Text>
+                </TouchableOpacity>
               </View>
+              {/*
+                SKIP, ON ITS OWN LINE UNDER THE PAIR — the layout every other
+                store's chooser uses. It was briefly a third button in the row
+                here, and a row of three on a phone gives each of them a third of
+                the width for a label that does not fit in one.
+              */}
+              <TouchableOpacity
+                onPress={handleSkip}
+                testID="chooser-skip"
+                style={styles.skipBtn}
+              >
+                <Text style={styles.skipBtnText}>Skip this ingredient</Text>
+              </TouchableOpacity>
             </View>
           </>
 
@@ -682,6 +725,17 @@ const styles = StyleSheet.create({
   outOfStock: { fontSize: 11, fontFamily: 'Inter_500Medium', color: '#b45309', marginTop: 2 },
   suggPrice: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text2 },
   customRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  /** The same ring WebViewCartSheet draws around its custom-search row. */
+  customGlow: {
+    position: 'absolute',
+    top: 2, left: -2, right: -2, bottom: -2,
+    borderRadius: 12,
+    borderWidth: 2,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 8,
+    elevation: 6,
+  },
   customInput: {
     flex: 1,
     height: 40,
@@ -751,6 +805,9 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.border,
     gap: 12,
   },
+  /** Matches WebViewCartSheet's: full width, under the Back/Next pair. */
+  skipBtn: { paddingVertical: 10, alignItems: 'center', marginTop: 8 },
+  skipBtnText: { fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text3 },
   footerButtons: {
     flexDirection: 'row',
     gap: 12,

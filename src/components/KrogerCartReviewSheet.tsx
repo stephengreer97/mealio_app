@@ -9,6 +9,9 @@ import {
   ActivityIndicator,
   TextInput,
   Linking,
+  Animated,
+  Easing,
+  AccessibilityInfo,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -258,6 +261,44 @@ export default function KrogerCartReviewSheet({
   const [customSuggestions, setCustomSuggestions] = useState<SearchResult['suggestions']>([]);
   const [customSearchTerm, setCustomSearchTerm] = useState('');
   const shouldShowSuggestionsRef = useRef(false);
+
+  /**
+   * THE GLOW ON THE SEARCH ROW, borrowed from WebViewCartSheet (2026-09-09).
+   *
+   * When nothing was found, the search field is the only control on this screen
+   * that can move the run forward, and it is the one that looks least like a
+   * control. Reconciliation on every other store has pointed at it for months;
+   * Kroger's did not.
+   *
+   * `searchGlowOn` is set from the render below, where the suggestion list is
+   * actually known — hence a ref plus a state mirror rather than a derived
+   * const: this component computes `hasSuggestions` per review row inside the
+   * map, not at the top.
+   */
+  const searchGlowAnim = useRef(new Animated.Value(0)).current;
+  const [searchGlowOn, setSearchGlowOn] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled?.().then((on) => { if (alive) setReduceMotion(!!on); }).catch(() => {});
+    const sub = AccessibilityInfo.addEventListener?.('reduceMotionChanged', (on) => setReduceMotion(!!on));
+    return () => { alive = false; sub?.remove?.(); };
+  }, []);
+  useEffect(() => {
+    if (!searchGlowOn || reduceMotion) {
+      searchGlowAnim.stopAnimation();
+      searchGlowAnim.setValue(reduceMotion && searchGlowOn ? 1 : 0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(searchGlowAnim, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(searchGlowAnim, { toValue: 0.25, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [searchGlowOn, reduceMotion, searchGlowAnim]);
 
   // The product preview on the review step. This used to be a fixed, untappable
   // (`pointerEvents="none"`) 80x80 box of Kroger's own — it now runs the same
@@ -718,6 +759,10 @@ export default function KrogerCartReviewSheet({
         {step === 'review' && currentReview && (() => {
           const displaySuggestions = customSuggestions.length > 0 ? customSuggestions : currentReview.suggestions;
           const hasSuggestions = displaySuggestions.length > 0;
+          // Mirrored into state so the animation effect can react. Guarded, or a
+          // setState on every render of a screen that re-renders on every
+          // keystroke of the custom search is a loop.
+          if (searchGlowOn !== !hasSuggestions) setSearchGlowOn(!hasSuggestions);
           const canAdd = hasSuggestions
             ? selectedSuggIdx !== 'custom' || customText.trim().length > 0
             : selectedSuggIdx === 'custom' && customText.trim().length > 0;
@@ -817,17 +862,56 @@ export default function KrogerCartReviewSheet({
                     {customSuggestions.length > 0 ? 'Try a different search…' : 'Other: type a product name…'}
                   </Text>
                 </TouchableOpacity>
-                {selectedSuggIdx === 'custom' && (
-                  <TextInput
-                    autoFocus
-                    value={customText}
-                    onChangeText={setCustomText}
-                    placeholder="e.g. Ground Beef 80/20"
-                    placeholderTextColor={Colors.text3}
-                    style={[styles.customInput, { borderColor: storeColor }]}
-                    onSubmitEditing={() => { if (customText.trim()) handleReviewDecision('add'); }}
-                    returnKeyType="search"
-                  />
+                {(selectedSuggIdx === 'custom' || !hasSuggestions) && (
+                  // OPEN ALREADY WHEN THERE IS NOTHING TO PICK, with a button
+                  // beside it and a ring around it. All three were missing here
+                  // and present on every other store: the field appeared only
+                  // after tapping the row above, submitting was keyboard-only,
+                  // and nothing pointed at the one control that can move the run
+                  // forward. Stephen, 2026-09-09.
+                  <View>
+                    {!hasSuggestions && (
+                      <Animated.View
+                        pointerEvents="none"
+                        testID="kroger-search-glow"
+                        style={[
+                          styles.customGlow,
+                          { borderColor: storeColor, shadowColor: storeColor, opacity: searchGlowAnim },
+                        ]}
+                      />
+                    )}
+                    <View style={styles.customRow}>
+                      <TextInput
+                        // Focus follows the TAP, not the empty list: a keyboard
+                        // over every no-results screen hides what needs reading.
+                        autoFocus={selectedSuggIdx === 'custom'}
+                        value={customText}
+                        onChangeText={setCustomText}
+                        placeholder="e.g. Ground Beef 80/20"
+                        placeholderTextColor={Colors.text3}
+                        style={[styles.customInput, { borderColor: storeColor }]}
+                        onSubmitEditing={() => { if (customText.trim()) handleReviewDecision('add'); }}
+                        returnKeyType="search"
+                        editable={!customSearching}
+                      />
+                      <TouchableOpacity
+                        testID="kroger-custom-search-btn"
+                        accessibilityRole="button"
+                        accessibilityLabel="Search"
+                        style={[
+                          styles.customSearchBtn,
+                          { backgroundColor: storeColor },
+                          (!customText.trim() || customSearching) && { opacity: 0.4 },
+                        ]}
+                        onPress={() => { if (customText.trim()) handleReviewDecision('add'); }}
+                        disabled={!customText.trim() || customSearching}
+                      >
+                        {customSearching
+                          ? <ActivityIndicator color="#fff" size="small" />
+                          : <Ionicons name="search" size={16} color="#fff" />}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
                 )}
               </ScrollView>
 
@@ -1194,7 +1278,28 @@ const styles = StyleSheet.create({
     color: '#b45309',
     marginTop: 2,
   },
+  customRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, marginBottom: 6 },
+  /** Square, 40, the same as every other store's. */
+  customSearchBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.button,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  /** The same ring WebViewCartSheet draws around its custom-search row. */
+  customGlow: {
+    position: 'absolute',
+    top: 4, left: -2, right: -2, bottom: 4,
+    borderRadius: 12,
+    borderWidth: 2,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 8,
+    elevation: 6,
+  },
   customInput: {
+    flex: 1,
     borderWidth: 1.5,
     borderRadius: 10,
     paddingHorizontal: 12,
@@ -1203,8 +1308,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     color: Colors.text1,
     backgroundColor: Colors.surface,
-    marginTop: 6,
-    marginBottom: 6,
   },
 
   // Shared footer / buttons

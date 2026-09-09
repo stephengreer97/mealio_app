@@ -194,6 +194,29 @@ describe('no results, no quantity', () => {
     expect(view.queryByText('Qty for this meal')).toBeTruthy();
   });
 
+  it('opens the search field, with its button, without a tap first', () => {
+    // Stephen, testing H-E-B: "I also don't see the search button." It was
+    // behind a tap on the "Other: type a product name…" row — one gratuitous
+    // step at exactly the moment the user has nothing else to do, and the button
+    // was invisible until you had found it.
+    const view = chooseRun('heb', 'H-E-B', []);
+    expect(view.queryByTestId('custom-search-btn')).toBeTruthy();
+  });
+
+  it('glows the search field in CHOOSE, not only in reconcile', () => {
+    // `glowCustomRow` was gated on `step === 'review'`, so reconciliation
+    // pointed at the field and Choose Products did not — same screen, same empty
+    // list, same one control that can move the run forward.
+    const view = chooseRun('heb', 'H-E-B', []);
+    expect(view.queryByTestId('custom-row-glow')).toBeTruthy();
+  });
+
+  it('does not open the field, or glow, when there is something to pick', () => {
+    const view = chooseRun('heb', 'H-E-B', ['Daisy Sour Cream']);
+    expect(view.queryByTestId('custom-search-btn')).toBeNull();
+    expect(view.queryByTestId('custom-row-glow')).toBeNull();
+  });
+
   it('leaves the way out of the screen alone', () => {
     // Hiding the buttons with the stepper would strand the run on an empty
     // screen. Back stays, and so does the custom-search row that is the actual
