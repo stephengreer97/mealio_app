@@ -1224,9 +1224,26 @@ ${icPrelude()}
     // follows: re-read and count what is actually left.
     var after = await IC.gql('CartItems',
       { id: String(mine.id), shopId: shopId, postalCode: '${PLACEHOLDER_POSTAL}' }, 15000, 'cart_read');
-    var left = null;
-    try { left = (after.data.userCart.cartItemCollection.cartItems || []).length; } catch (e) {}
-    post({ ok: left === 0, cleared: updates.length, left: left });
+    var left = null, stillThere = 0, seen = false;
+    try {
+      var l2 = after.data.userCart.cartItemCollection.cartItems || [];
+      left = l2.length;
+      seen = true;
+      for (var a = 0; a < l2.length; a++) {
+        var bp2 = l2[a] && l2[a].basketProduct;
+        var id2 = bp2 && bp2.itemId ? String(bp2.itemId) : null;
+        for (var u = 0; u < updates.length; u++) {
+          if (id2 && id2 === updates[u].itemId) stillThere++;
+        }
+      }
+    } catch (e) {}
+    // WHAT WE ASKED TO REMOVE IS GONE -- not "the cart is empty". A scoped
+    // clear removes the canary's own lines from a cart that still holds the
+    // user's real shopping, so judging it by an empty cart fails every time it
+    // succeeds. It was reported as a cleanup failure on a run that cleaned up
+    // correctly.
+    post({ ok: seen && stillThere === 0, cleared: updates.length,
+           left: left, stillThere: stillThere, asked: updates.length });
   } catch (e) {
     post({ ok: false, why: 'threw', detail: String(e).slice(0, 160) });
   }

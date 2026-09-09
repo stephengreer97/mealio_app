@@ -20,15 +20,21 @@ import { WebView } from 'react-native-webview';
 import { getNetworkRail } from '../lib/webview-scripts/network-rail';
 import { getStoreScripts } from '../lib/webview-scripts';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
+import { takeAddedIds, clearAddedIds } from '../lib/canary-added-ids';
 
 interface Props {
   storeId: string;
+  /**
+   * Remove only what the last run(s) added, read from the store's remembered
+   * list. The canary sets this; a measurement run leaves it off and empties.
+   */
+  scoped?: boolean;
   /** Passed to rails that support it, so a measurement need not empty a cart. */
   limit?: number;
   onDone: (result: Record<string, unknown> | { error: string }) => void;
 }
 
-export default function CartClearProbe({ storeId, limit, onDone }: Props) {
+export default function CartClearProbe({ storeId, limit, scoped, onDone }: Props) {
   const webviewRef = useRef<WebView>(null);
   const doneRef = useRef(false);
   const [uri] = useState(() => {
@@ -57,10 +63,27 @@ export default function CartClearProbe({ storeId, limit, onDone }: Props) {
       finish({ error: `no measured way to empty a ${storeId} cart` });
       return;
     }
+    void (async () => {
+      const only = scoped ? await takeAddedIds(storeId) : [];
+      if (scoped && !only.length) {
+        // NOT a fall-through to the unscoped clear. Nothing recorded and
+        // "remove everything" must never be the same branch: the second empties
+        // a real basket.
+        finish({ ok: null, why: 'nothing recorded for this store to clean up' });
+        return;
+      }
+      runClear(rail, only);
+    })();
+  };
+
+  const runClear = (rail: NonNullable<ReturnType<typeof getNetworkRail>>, only: string[]) => {
     // Rails that take a limit read it off the second argument; the others
     // ignore it, which is why it is not on the interface.
-    const script = (rail.clearCart as (s?: string | null, o?: { limit?: number }) => string | null)(
-      storeId, limit ? { limit } : undefined,
+    const script = (rail.clearCart as (
+      s?: string | null, o?: { limit?: number; only?: string[] },
+    ) => string | null)(
+      storeId,
+      (limit || only.length) ? { limit: limit || undefined, only: only.length ? only : undefined } : undefined,
     );
     if (!script) { finish({ error: 'rail returned no script' }); return; }
     setTimeout(() => webviewRef.current?.injectJavaScript(script), 1500);
@@ -76,7 +99,12 @@ export default function CartClearProbe({ storeId, limit, onDone }: Props) {
         onMessage={(e) => {
           try {
             const msg = JSON.parse(e.nativeEvent.data);
-            if (msg?.type === 'CART_CLEARED') finish(msg);
+            if (msg?.type === 'CART_CLEARED') {
+              // Only once it actually cleared: a failed cleanup must stay owed,
+              // or the next run's list would silently lose these lines.
+              if (scoped && msg.ok === true) void clearAddedIds(storeId);
+              finish(msg);
+            }
           } catch { /* not ours */ }
         }}
         javaScriptEnabled

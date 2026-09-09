@@ -223,3 +223,40 @@ describe('cleanup removes what the run added, not the basket', () => {
     expect(`${id}: ${script.includes('var onlySet = null')}`).toBe(`${id}: true`);
   });
 });
+
+describe('a scoped clear is judged by what it targeted', () => {
+  // A scoped clear removes the canary's own lines from a cart that still holds
+  // the user's real shopping, so "the cart is empty" is the wrong success test:
+  // it fails every single time the cleanup works. The first end-to-end canary
+  // run reported cleanup ok:false having removed exactly the line it meant to,
+  // because Instacart's clear still judged itself that way.
+  const RAILS = ['heb', 'walmart', 'wegmans', 'albertsons', 'aldi'];
+
+  it.each(RAILS)('%s reports whether the TARGETS survived', (id) => {
+    const script = getNetworkRail(id)!.clearCart!(id, { only: ['x1'] })!;
+    const judgesByTargets =
+      script.includes('stillThere === 0') || script.includes('left === 0 &&');
+    expect(`${id}: ${judgesByTargets}`).toBe(`${id}: true`);
+  });
+
+  it('no rail calls an unreadable re-read a success', () => {
+    for (const id of RAILS) {
+      const script = getNetworkRail(id)!.clearCart!(id, { only: ['x1'] })!;
+      // Every verdict must require having actually SEEN the cart back.
+      // Every verdict names the thing it had to have SEEN: the re-read itself
+      // (`seen`, `after != null`, `afterList != null`, `!!after`, `left != null`).
+      // A verdict of the bare form `stillThere === 0` passes when the re-read
+      // failed and the loop never ran, which is the fail-open shape.
+      // EVERY deciding verdict, not the first `ok:` in the file (which is an
+      // early `ok: false` bail-out). A deciding one is any that weighs what
+      // survived; each must also name the re-read it had to have seen, or it
+      // passes when the re-read failed and the counting loop never ran.
+      const deciding = (script.match(/ok:\s*[^,\n]*/g) ?? [])
+        .filter((v) => v.includes('stillThere') || v.includes('left ==='));
+      const guarded = deciding.length > 0 && deciding.every((v) =>
+        ['seen', 'after != null', 'afterList != null', '!!after', 'left != null']
+          .some((sentinel) => v.includes(sentinel)));
+      expect(`${id}: ${guarded}`).toBe(`${id}: true`);
+    }
+  });
+});

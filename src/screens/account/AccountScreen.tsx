@@ -20,6 +20,17 @@ import { Colors, Radius } from '../../constants/colors';
 import { resetFirstRun } from '../../lib/firstRun';
 import CartClearProbe from '../../components/CartClearProbe';
 import StorefrontCaptureProbe from '../../components/StorefrontCaptureProbe';
+
+// The canary's stores, one per family with a signed-in session. Kept here rather
+// than read from canary_plans because this is a dev control list, not the plan:
+// the plan lives in the DB and can be toggled per store from the admin panel.
+const CANARY_STORES = [
+  { id: 'aldi', name: 'ALDI' },
+  { id: 'heb', name: 'H-E-B' },
+  { id: 'walmart', name: 'Walmart' },
+  { id: 'wegmans', name: 'Wegmans' },
+  { id: 'tom_thumb', name: 'Tom Thumb' },
+];
 import { useStores } from '../../lib/store-catalog/useStores';
 import { useAuth } from '../../context/AuthContext';
 import { auth as authApi, account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
@@ -65,7 +76,7 @@ export default function AccountScreen() {
 
   // Account deletion
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [clearProbe, setClearProbe] = useState<{ storeId: string; limit?: number } | null>(null);
+  const [clearProbe, setClearProbe] = useState<{ storeId: string; limit?: number; scoped?: boolean } | null>(null);
   const [capture, setCapture] = useState<{ storeId: string; path?: string } | null>(null);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -986,6 +997,21 @@ export default function AccountScreen() {
             >
               <Text style={styles.devResetText}>Watch storefront calls: Wegmans cart (dev)</Text>
             </TouchableOpacity>
+            {/* MEAL-7's cleanup, one control per canary store.
+                SCOPED: each removes only what that store's runs added, read from
+                the list the run wrote down. The canary taps these by testID --
+                it cannot pass the ids through a tap, which is the whole reason
+                the run persists them. */}
+            {CANARY_STORES.map((s) => (
+              <TouchableOpacity
+                key={s.id}
+                testID={`clear-cart-${s.id}`}
+                onPress={() => setClearProbe({ storeId: s.id, scoped: true })}
+                style={styles.devResetBtn}
+              >
+                <Text style={styles.devResetText}>Clear canary items: {s.name} (dev)</Text>
+              </TouchableOpacity>
+            ))}
           </>
         )}
         {__DEV__ && capture && (
@@ -1000,6 +1026,7 @@ export default function AccountScreen() {
             key={`${clearProbe.storeId}-${clearProbe.limit ?? 0}`}
             storeId={clearProbe.storeId}
             limit={clearProbe.limit}
+            scoped={clearProbe.scoped}
             onDone={(r) => {
               setClearProbe(null);
               console.log('[CartClear]', clearProbe.storeId, JSON.stringify(r));

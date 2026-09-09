@@ -59,6 +59,7 @@ import { getAutomationConfig, getConfigVersion } from '../lib/automation-config'
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode, requestFailureCode, type StepPhase } from '../lib/automation-telemetry';
 import { diffCartItems, isCountedCartSnapshot, decodeHtmlEntities, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
+import { rememberAddedIds } from '../lib/canary-added-ids';
 import { AddConfirmation, confirmDetail } from '../lib/cart-confirmation';
 import { attemptedFailureNames, auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
@@ -5158,6 +5159,9 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                   .filter((it) => it.itemId && addedNames.has(decodeHtmlEntities(it.name)))
                   .map((it) => String(it.itemId));
                 console.log(`[Cart ${ts()}]`, 'canary: added ids', JSON.stringify(addedIds));
+                // Written down, because the cleanup is driven by a TAP and a tap
+                // carries no arguments. See canary-added-ids.
+                if (storeId) void rememberAddedIds(storeId, addedIds);
               } catch { /* diagnostics must never break a run */ }
             }
             const reconResults = parallelResultByIdxRef.current;

@@ -936,7 +936,19 @@ ${albPrelude()}
     // -- so an unreadable answer would report total success.
     var afterList = (((after || {}).carts || [])[0] || {}).cartItemsList || null;
     var left = afterList ? afterList.length : null;
-    post({ ok: left === 0, cleared: lines.length, left: left,
+    // THE TARGETS, not the whole cart. A scoped clear leaves everything else
+    // alone by design, so judging it by an empty cart reports every successful
+    // cleanup as a failure.
+    var stillThere = 0;
+    if (afterList) {
+      for (var q = 0; q < afterList.length; q++) {
+        for (var c2 = 0; c2 < lines.length; c2++) {
+          if (String((afterList[q] || {}).itemId) === lines[c2].itemId) stillThere++;
+        }
+      }
+    }
+    post({ ok: afterList != null && stillThere === 0, cleared: lines.length, left: left,
+           stillThere: stillThere, asked: lines.length,
            why: left == null ? 'after_unreadable' : null });
   } catch (e) {
     post({ ok: false, why: 'threw', detail: String(e).slice(0, 160) });

@@ -131,8 +131,10 @@ def _start_run(meal_name, second_meal=None, store_chip=None):
     store's meal. Each canary meal is therefore named for its store.
     """
     # BACK TO MY MEALS FIRST. A window leaves the app on the run's done screen,
-    # so the second and third windows looked for a meal card on a screen that has
-    # none. The tab is idempotent: tapping it from My Meals is a no-op.
+    # which is a sheet OVER the tab bar -- so the next window could not even
+    # reach the tab, let alone a meal card. Dismiss whatever is on top, then
+    # navigate. The tab is idempotent: tapping it from My Meals is a no-op.
+    _dismiss_overlay()
     drive.tap_id('tab-mymeals', timeout=40)
     time.sleep(2)
     if store_chip:
@@ -145,9 +147,38 @@ def _start_run(meal_name, second_meal=None, store_chip=None):
         # a single-meal run never reaches.
         drive.tap_text(second_meal, timeout=40)
         time.sleep(1.5)
-    drive.tap_xy(539, 2100)                     # the floating action
-    time.sleep(3)
-    drive.tap_xy(539, 2113)                     # confirm on the qty sheet
+    # BY ID, not by coordinate. These two taps were the last blind ones, and they
+    # are why a "successful" run finished in 22 seconds having done nothing: a
+    # coordinate that misses is silent, and the window then broke out of its wait
+    # on a reconcile line left over from an earlier run.
+    drive.tap_id('floating-add-to-cart', timeout=40)
+    time.sleep(4)
+    # The confirm sheet. With products already chosen the primary reads "Add to
+    # cart"; it is the same id the chooser's primary uses.
+    if drive.find_id('review-primary'):
+        drive.tap_id('review-primary', timeout=20)
+
+
+def _dismiss_overlay(tries=3):
+    """Close a run's done sheet (or any modal) so the tabs are reachable again.
+
+    Tried in order of how a person would leave: the explicit Done, then the
+    close glyph, then the hardware back. Silent when there is nothing to close,
+    because the common case is that the screen is already fine.
+    """
+    for _ in range(tries):
+        if drive.find_id('tab-mymeals'):
+            return True
+        for label in ('Done', '\u2715'):
+            node = drive.find(label, exact=True)
+            if node:
+                drive.tap(node)
+                time.sleep(2)
+                break
+        else:
+            drive.sh('adb', 'shell', 'input', 'keyevent', 'KEYCODE_BACK')
+            time.sleep(2)
+    return bool(drive.find_id('tab-mymeals'))
 
 
 def _chooser_step(xml):
@@ -261,6 +292,8 @@ def choose_products(meal_name, store_chip, max_steps=12):
 def run_once(meal_name, shape='single', settle_s=240, second_meal=None, store_chip=None):
     """Drive one run and return when it finalizes. Records the window."""
     since = now_iso()
+    # MARKED BEFORE THE NAVIGATION, so the wait below cannot be satisfied by a
+    # reconcile line from the PREVIOUS window.
     mark = drive.log_mark()
     _start_run(meal_name, second_meal=second_meal if shape == 'combination' else None,
                store_chip=store_chip)
@@ -280,13 +313,16 @@ def cart_count(timeout_s=60):
     (2026-09-01), so a second run doubling is correct and idempotency would be
     the regression.
     """
+    # REGEX, not a JSON slice. The plain form of this line carries no braces at
+    # all ("CART_COUNT phase= reconcile count= 58"), and the JSON form's first
+    # closing brace belongs to the first cart ITEM, so slicing to it produced
+    # invalid JSON. Both were swallowed by the except, and the cart read as 0.
     for line in reversed(drive.log_since(0)):
-        if 'CART_COUNT' in line and 'count' in line:
-            try:
-                seg = line[line.index('{'):]
-                return json.loads(seg[:seg.index('}') + 1]).get('count')
-            except Exception:
-                continue
+        if 'CART_COUNT' not in line:
+            continue
+        m = re.search(r'\bcount[=:]\s*"?(\d+)', line)
+        if m:
+            return int(m.group(1))
     return None
 
 
@@ -300,8 +336,12 @@ def added_ids(mark):
     ids = []
     for line in drive.log_since(mark):
         if 'canary: added ids' in line:
+            # FROM AFTER THE MARKER. The log's own prefix is "[Cart 20:14:34]",
+            # so indexing to the first '[' in the line grabbed the timestamp and
+            # parsed nothing -- silently, into an empty list.
+            tail = line.split('canary: added ids', 1)[1]
             try:
-                ids = json.loads(line[line.index('['):line.rindex(']') + 1])
+                ids = json.loads(tail[tail.index('['):tail.rindex(']') + 1])
             except Exception:
                 continue
     return [str(i) for i in ids]
@@ -393,13 +433,31 @@ def cleanup(store_id, only=None):
         # remove and "remove everything" must never be the same branch.
         return (None, 'the run added no line this rail gives an id for')
 
+    # The ids themselves travel through the APP, not through this call: a tap
+    # carries no arguments, so the run wrote them down and the probe reads them
+    # back. What `only` does here is decide whether cleanup is worth driving.
+
     # The script runs in the cart sheet's WebView, so the sheet has to be open on
     # this store. Driven the same way a run is: nothing here reaches past the UI.
-    mark = drive.log_mark()
-    drive.tap_xy(539, 2100)
+    # THROUGH ACCOUNT, not through the meal flow. Driving the cart sheet meant
+    # selecting a meal and tapping the add action, which would have added a
+    # FOURTH time before cleaning up. The dev control opens a hidden WebView on
+    # the store and clears from there, touching nothing else.
+    base = drive.log_mark()
+    _dismiss_overlay()
+    # The tab by id, then by label: tapping the id alone did not always leave My
+    # Meals, and a cleanup that silently stays put reads as a missing control.
+    drive.tap_id('tab-account', timeout=40)
     time.sleep(2)
-    drive.tap_xy(539, 2113)
-    line, _ = drive.log_wait(mark, r'CART_CLEARED', 90)
+    if not drive.find('Clear canary items'):
+        try:
+            drive.tap_text('Account', timeout=20)
+            time.sleep(2)
+        except Exception:
+            pass
+    drive.scroll_to('Clear canary items')
+    drive.tap_id('clear-cart-' + store_id, timeout=40)
+    line, _ = drive.log_wait(base, r'CART_CLEARED|CartClear', 120)
     if not line:
         return (False, 'no CART_CLEARED came back')
     return ('"ok": true' in line or "'ok': true" in line, line.strip()[-120:])

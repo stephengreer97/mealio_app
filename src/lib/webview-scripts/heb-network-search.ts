@@ -782,7 +782,21 @@ ${CART_READ_FN}
     // THE CART DECIDES, never the writes' own reports.
     var after = await readCart();
     var left = after ? after.length : null;
-    post({ ok: left === 0, cleared: wrote, failed: failed, declined: declined.length, left: left });
+    // WHAT WE ASKED TO REMOVE, not whether the cart is empty. A scoped clear
+    // leaves the user's own shopping in place, so an empty-cart test fails
+    // every time the cleanup works.
+    var stillThere = 0;
+    if (after) {
+      for (var q = 0; q < after.length; q++) {
+        var pid2 = after[q] && after[q].product && after[q].product.id;
+        for (var c2 = 0; c2 < clearable.length; c2++) {
+          if (pid2 && String(pid2) === String(clearable[c2].productId)) stillThere++;
+        }
+      }
+    }
+    post({ ok: after != null && stillThere === 0, cleared: wrote, failed: failed,
+           declined: declined.length, left: left, stillThere: stillThere,
+           asked: clearable.length });
   } catch (e) {
     post({ ok: false, why: 'threw', detail: String(e).slice(0, 160) });
   }
