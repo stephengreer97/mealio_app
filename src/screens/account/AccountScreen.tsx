@@ -89,7 +89,6 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
 export default function AccountScreen() {
   const { user, isCreator, logout, refreshUser } = useAuth();
   const stores = useStores();
-  const [following, setFollowing] = useState<Creator[]>([]);
   const [deletedMeals, setDeletedMeals] = useState<Meal[]>([]);
 
   // Change password state
@@ -157,7 +156,6 @@ export default function AccountScreen() {
   const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
 
   useEffect(() => {
-    loadFollowing();
     loadDeletedMeals();
     loadKrogerStatus();
     if (isCreator) loadCreatorProfile();
@@ -227,13 +225,6 @@ export default function AccountScreen() {
     });
     return () => sub.remove();
   }, []);
-
-  async function loadFollowing() {
-    try {
-      const data = await creatorsApi.following();
-      setFollowing(data);
-    } catch {}
-  }
 
   async function loadDeletedMeals() {
     try {
@@ -307,15 +298,6 @@ export default function AccountScreen() {
       } finally {
         setUploading(false);
       }
-    }
-  }
-
-  async function handleUnfollow(creatorId: string) {
-    try {
-      await creatorsApi.unfollow(creatorId);
-      setFollowing((prev) => prev.filter((c) => c.id !== creatorId));
-    } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not unfollow');
     }
   }
 
@@ -977,30 +959,11 @@ export default function AccountScreen() {
 
         <SectionHeading>Your meals</SectionHeading>
 
-        {/* Following */}
-        {following.length > 0 && (
-          <Card style={styles.card}>
-            <Text style={styles.cardTitle}>Following ({following.length})</Text>
-            {following.map((creator) => (
-              <View key={creator.id} style={styles.followRow}>
-                {creator.photoUrl ? (
-                  <Image source={{ uri: creator.photoUrl }} style={styles.followAvatar} contentFit="cover" />
-                ) : (
-                  <View style={[styles.followAvatar, styles.followAvatarPlaceholder]}>
-                    <Text style={styles.followAvatarText}>{creator.displayName?.[0]?.toUpperCase() ?? '?'}</Text>
-                  </View>
-                )}
-                <Text style={styles.followName} numberOfLines={1}>{creator.displayName}</Text>
-                <Button
-                  label="Unfollow"
-                  variant="ghost"
-                  size="sm"
-                  onPress={() => handleUnfollow(creator.id)}
-                />
-              </View>
-            ))}
-          </Card>
-        )}
+        {/* Following lives on Discover now. It was here because the app had
+            nowhere else to put it, and it answered "who do I follow?" three
+            taps from the feed made of their meals. The Following tab opens with
+            that list and a See all beside it, where following can be read and
+            changed in the place it is used. */}
 
         {/* Deleted Meals */}
         {deletedMeals.length > 0 && (
@@ -1374,20 +1337,6 @@ const styles = StyleSheet.create({
   creatorPhotoPlaceholder: { justifyContent: 'center', alignItems: 'center' },
   creatorPhotoPlaceholderText: { fontSize: 12, color: Colors.text3, fontFamily: 'Inter_400Regular' },
   photoBtn: { flex: 1 },
-  followRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  followAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    marginRight: 10,
-  },
-  followAvatarPlaceholder: {
-    backgroundColor: Colors.brand,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  followAvatarText: { fontSize: 16, fontFamily: 'Inter_700Bold', color: '#fff' },
-  followName: { flex: 1, fontSize: 15, fontFamily: 'Inter_500Medium', color: Colors.text1 },
   deletedRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   deletedName: { flex: 1, fontSize: 15, fontFamily: 'Inter_500Medium', color: Colors.text2 },
   deletedActions: { flexDirection: 'row', gap: 8 },

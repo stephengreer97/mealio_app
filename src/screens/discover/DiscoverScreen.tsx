@@ -24,6 +24,7 @@ import { getStores } from '../../lib/store-catalog';
 import MealCard from '../../components/MealCard';
 import MealDetailSheet from '../../components/MealDetailSheet';
 import CreatorProfileSheet from '../../components/CreatorProfileSheet';
+import FollowingListSheet from '../../components/FollowingListSheet';
 import StoreSelectorSheet from '../../components/StoreSelectorSheet';
 import FilterSheet, { FilterValues, EMPTY_FILTERS } from '../../components/FilterSheet';
 import WelcomeSheet from '../../components/WelcomeSheet';
@@ -80,6 +81,7 @@ export default function DiscoverScreen() {
   // see who you're following on discover tab instead of having followers in
   // account page."
   const [followedCreators, setFollowedCreators] = useState<Creator[]>([]);
+  const [followingListVisible, setFollowingListVisible] = useState(false);
 
   // First run: the pitch (MEAL-84). Discover is the front door for signed-in and
   // signed-out users alike, and a grid of recipe photos never says that Mealio
@@ -470,7 +472,17 @@ export default function DiscoverScreen() {
                 two rows of round faces one above the other read as one list. */}
             {segment === 'Following' && followedCreators.length > 0 && (
               <View style={styles.creatorsSection}>
-                <Text style={styles.sectionTitle}>Creators You Follow</Text>
+                <View style={styles.followHeaderRow}>
+                  <Text style={[styles.sectionTitle, styles.followHeaderTitle]}>Creators You Follow</Text>
+                  <TouchableOpacity
+                    onPress={() => setFollowingListVisible(true)}
+                    testID="see-all-following"
+                    accessibilityRole="button"
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Text style={styles.seeAll}>See all {followedCreators.length}</Text>
+                  </TouchableOpacity>
+                </View>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                   {followedCreators.map((creator) => (
                     <TouchableOpacity
@@ -571,6 +583,17 @@ export default function DiscoverScreen() {
         meal={selectedMeal}
         onClose={() => setStoreSelectorVisible(false)}
         onSaved={() => { setStoreSelectorVisible(false); loadSavedMap(); }}
+      />
+
+      <FollowingListSheet
+        visible={followingListVisible}
+        creators={followedCreators}
+        onClose={() => setFollowingListVisible(false)}
+        onOpenCreator={(creatorId) => { setFollowingListVisible(false); openCreatorById(creatorId); }}
+        // The sheet holds no list of its own: an unfollow re-reads here and the
+        // shorter list goes back down, so the sheet, the strip and the feed
+        // cannot disagree about who you follow.
+        onUnfollowed={() => { loadFollowing(); loadData(0, true); }}
       />
 
       <CreatorProfileSheet
@@ -674,6 +697,11 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: 12, paddingBottom: 20 },
   mealRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 0 },
   creatorsSection: { marginBottom: 20 },
+  followHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  // The section title carries its own bottom margin, which the row would
+  // otherwise stretch the link to match.
+  followHeaderTitle: { marginBottom: 0 },
+  seeAll: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.brand },
   sectionTitle: {
     fontSize: 18,
     fontFamily: 'Inter_700Bold',

@@ -76,6 +76,7 @@ jest.mock('../../src/lib/api', () => ({
       creator: { id: 'c1', displayName: 'Sarah Lane', photoUrl: null, followers: 12 },
       meals: [],
     })),
+    unfollow: jest.fn(async () => {}),
   },
   meals: { list: jest.fn(async () => []) },
 }));
@@ -85,6 +86,7 @@ import { creators } from '../../src/lib/api';
 
 const following = creators.following as jest.Mock;
 const getById = creators.getById as jest.Mock;
+const unfollow = creators.unfollow as jest.Mock;
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -153,5 +155,56 @@ describe('the other feeds', () => {
     await waitFor(() => expect(view.getByText('Featured Creators')).toBeTruthy());
     expect(view.queryByText('Creators You Follow')).toBeNull();
     expect(view.queryByTestId('following-creator-c1')).toBeNull();
+  });
+});
+
+describe('See all', () => {
+  /** Opens Following, then the full list behind "See all". */
+  async function openSeeAll() {
+    const view = await openFollowing();
+    await waitFor(() => expect(view.getByTestId('see-all-following')).toBeTruthy());
+    await act(async () => { fireEvent.press(view.getByTestId('see-all-following')); });
+    return view;
+  }
+
+  it('counts what it will show', async () => {
+    following.mockResolvedValue([
+      { id: 'c1', displayName: 'Sarah Lane', photoUrl: null },
+      { id: 'c2', displayName: 'Priya', photoUrl: null },
+    ]);
+    const view = await openFollowing();
+    await waitFor(() => expect(view.getByText('See all 2')).toBeTruthy());
+  });
+
+  it('lists everyone you follow, one row each', async () => {
+    following.mockResolvedValue([
+      { id: 'c1', displayName: 'Sarah Lane', photoUrl: null },
+      { id: 'c2', displayName: 'Priya', photoUrl: null },
+    ]);
+    const view = await openSeeAll();
+    await waitFor(() => expect(view.getByTestId('following-row-c1')).toBeTruthy());
+    expect(view.getByTestId('following-row-c2')).toBeTruthy();
+  });
+
+  it('opens the creator from their name', async () => {
+    const view = await openSeeAll();
+    await waitFor(() => expect(view.getByTestId('following-row-c1')).toBeTruthy());
+    await act(async () => { fireEvent.press(view.getByTestId('following-row-c1')); });
+    expect(getById).toHaveBeenCalledWith('c1');
+  });
+
+  it('unfollows from the row, and re-reads rather than trusting its own copy', async () => {
+    const view = await openSeeAll();
+    await waitFor(() => expect(view.getByTestId('following-row-c1')).toBeTruthy());
+    const readsBefore = following.mock.calls.length;
+
+    following.mockResolvedValue([]);
+    await act(async () => { fireEvent.press(view.getByText('Unfollow')); });
+
+    expect(unfollow).toHaveBeenCalledWith('c1');
+    // The shorter list comes from the server, so the sheet, the strip and the
+    // feed cannot end up disagreeing about who you follow.
+    await waitFor(() => expect(following.mock.calls.length).toBeGreaterThan(readsBefore));
+    await waitFor(() => expect(view.queryByTestId('following-row-c1')).toBeNull());
   });
 });
