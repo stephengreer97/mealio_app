@@ -139,6 +139,17 @@ pulsing ring, and has no quantity stepper above it. autoFocus follows the TAP an
 so a keyboard is never thrown over a screen the user still has to read. Kroger's footer matches the
 rest: Back and the primary in a row, Skip full-width underneath.</p>
 
+<p><b>The search field is PERMANENT, and searching is an ACTION</b> (2026-09-09). The
+"Other: type a product name&hellip;" row is gone from all four screens, and with it the
+pseudo-selection it set. <code>selectedSuggIdx = 'custom'</code> was a selection that was not a
+product, so <code>canAdd</code> meant two things, <code>otherwiseReady</code> had to exclude it, and
+on Kroger's reconcile a press of the primary secretly meant "search" whenever it was set. The field
+is simply present on every list now &mdash; a search offered only when the store found NOTHING is
+unavailable exactly when the user disagrees with what it DID find &mdash; and the button beside it
+runs the search, so <code>selectedSuggIdx</code> is a number everywhere. The pulsing ring went too:
+it existed to point at a control hidden behind placeholder text, and a permanent control does not
+need pointing at.</p>
+
 <p>A search that finds nothing leaves the user on a review screen whose only useful control is
   the one that looks least like a control: a row of placeholder text under an empty list. The
   "Other: type a product name" row pulses in the store's colour while that is true.</p>
