@@ -29,12 +29,17 @@ interface Props {
    * list. The canary sets this; a measurement run leaves it off and empties.
    */
   scoped?: boolean;
+  /**
+   * RECOVERY MODE: put these lines back instead of taking anything out. Used
+   * once, to undo a cleanup that removed the user's own groceries.
+   */
+  restore?: Array<{ sku: string; quantity: number }>;
   /** Passed to rails that support it, so a measurement need not empty a cart. */
   limit?: number;
   onDone: (result: Record<string, unknown> | { error: string }) => void;
 }
 
-export default function CartClearProbe({ storeId, limit, scoped, onDone }: Props) {
+export default function CartClearProbe({ storeId, limit, scoped, restore, onDone }: Props) {
   const webviewRef = useRef<WebView>(null);
   const doneRef = useRef(false);
   const [uri] = useState(() => {
@@ -59,6 +64,15 @@ export default function CartClearProbe({ storeId, limit, scoped, onDone }: Props
   const onLoadEnd = () => {
     if (doneRef.current) return;
     const rail = getNetworkRail(storeId);
+    if (restore && restore.length) {
+      // THROUGH THE RAIL, not by importing the store's module: this component is
+      // shared, and a shared component that names one store is how store
+      // knowledge leaks everywhere (storeBoundaries enforces it).
+      const script = rail?.restoreLines?.(restore);
+      if (!script) { finish({ error: `no measured way to restore ${storeId} lines` }); return; }
+      setTimeout(() => webviewRef.current?.injectJavaScript(script), 1500);
+      return;
+    }
     if (!rail?.clearCart) {
       finish({ error: `no measured way to empty a ${storeId} cart` });
       return;

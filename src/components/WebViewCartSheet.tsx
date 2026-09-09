@@ -5160,6 +5160,24 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
               // is why cleanup treats an empty list as "nothing to scope to"
               // rather than as "remove everything".
               try {
+                // ONLY WITH A REAL BASELINE. With no before-snapshot,
+                // cartItemsBeforeRef is [] and diffCartItems marks the user's
+                // ENTIRE EXISTING CART as newly added -- the same trap the
+                // north-star metric guards against a few lines below.
+                //
+                // Here it is not a metric, it is a DELETE LIST. On 2026-09-09
+                // that emptied seven lines out of a real Wegmans cart, five of
+                // which were Stephen's own groceries, because the run recorded
+                // them as things it had added and the cleanup believed it.
+                //
+                // No baseline means this run cannot know what it added, and the
+                // honest answer is to record nothing: cleanup then reports "the
+                // run added no line this rail gives an id for" and touches
+                // nothing at all.
+                if (!cartItemsBeforeRef.current.length) {
+                  console.log(`[Cart ${ts()}]`, 'canary: no baseline — recording no added ids');
+                  throw new Error('no baseline');
+                }
                 const addedNames = new Set(rows.filter((r) => r.added).map((r) => r.name));
                 const addedIds = (msg.items as CartItem[])
                   .filter((it) => it.itemId && addedNames.has(decodeHtmlEntities(it.name)))

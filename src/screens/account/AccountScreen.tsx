@@ -109,7 +109,8 @@ export default function AccountScreen() {
 
   // Account deletion
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [clearProbe, setClearProbe] = useState<{ storeId: string; limit?: number; scoped?: boolean } | null>(null);
+  const [clearProbe, setClearProbe] = useState<{ storeId: string; limit?: number; scoped?: boolean;
+    restore?: Array<{ sku: string; quantity: number }> } | null>(null);
   const [capture, setCapture] = useState<{ storeId: string; path?: string } | null>(null);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -1132,6 +1133,26 @@ export default function AccountScreen() {
                 the list the run wrote down. The canary taps these by testID --
                 it cannot pass the ids through a tap, which is the whole reason
                 the run persists them. */}
+            {/* ONE-OFF RECOVERY, 2026-09-09. The canary's cleanup removed five
+                of Stephen's own Wegmans lines because the run had no cart
+                baseline and recorded his whole basket as its own. Skus and
+                quantities are from the clear's own report. */}
+            <TouchableOpacity
+              testID="restore-wegmans"
+              onPress={() => setClearProbe({
+                storeId: 'wegmans',
+                restore: [
+                  { sku: '942808', quantity: 5 },
+                  { sku: '44752', quantity: 5 },
+                  { sku: '716689', quantity: 8 },
+                  { sku: '905535', quantity: 2 },
+                  { sku: '53292', quantity: 2 },
+                ],
+              })}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Restore Wegmans lines (dev)</Text>
+            </TouchableOpacity>
             {CANARY_STORES.map((s) => (
               <TouchableOpacity
                 key={s.id}
@@ -1157,6 +1178,7 @@ export default function AccountScreen() {
             storeId={clearProbe.storeId}
             limit={clearProbe.limit}
             scoped={clearProbe.scoped}
+            restore={clearProbe.restore}
             onDone={(r) => {
               setClearProbe(null);
               console.log('[CartClear]', clearProbe.storeId, JSON.stringify(r));

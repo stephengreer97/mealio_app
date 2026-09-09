@@ -562,7 +562,9 @@ ${wmPrelude()}
       }
     }
     post({
-      ok: stillThere === 0 && !!after, wrote: w && w.ok ? true : false,
+      // The write must have been ACCEPTED as well as the targets gone: a
+      // refused write whose re-read matches nothing is not a removal.
+      ok: !!(w && w.ok) && stillThere === 0 && !!after, wrote: w && w.ok ? true : false,
       why: w && w.ok ? null : (w && w.why) || 'write_failed',
       asked: targets.length, stillThere: stillThere,
       before: before.length, after: after ? after.length : null,

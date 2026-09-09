@@ -113,6 +113,17 @@ export interface NetworkRail {
    * Absent means the canary reports cleanup as unsupported for that store, which
    * is honest. A wrong guess writes to someone's groceries.
    */
+  /**
+   * Put lines BACK. The inverse of clearCart, and it exists because a cleanup
+   * once removed lines it should never have touched: a run with no cart
+   * baseline recorded the user's whole basket as its own, and the scoped clear
+   * believed it. Recording is fixed; this is the undo.
+   *
+   * Optional, and only implemented where the add call is already measured --
+   * putting a line back is an ADD, so a rail that cannot add cannot restore.
+   */
+  restoreLines?(items: Array<{ sku: string; quantity: number }>): string | null;
+
   clearCart?(storeId?: string | null, opts?: {
     /**
      * Touch at most this many lines. For MEASURING a rail whose removal
