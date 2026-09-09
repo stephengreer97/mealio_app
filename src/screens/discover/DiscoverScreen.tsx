@@ -29,6 +29,7 @@ import StoreSelectorSheet from '../../components/StoreSelectorSheet';
 import FilterSheet, { FilterValues, EMPTY_FILTERS } from '../../components/FilterSheet';
 import WelcomeSheet from '../../components/WelcomeSheet';
 import { hasSeen, markSeen, FIRST_RUN_WELCOME } from '../../lib/firstRun';
+import { POPULAR_TAGS, DISCOVER_TAG_CHIPS } from '../../constants/tags';
 import { useDeepLinkBusy } from '../../context/DeepLinkContext';
 
 const LIMIT = 20;
@@ -113,6 +114,39 @@ export default function DiscoverScreen() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  /**
+   * The tags the chip row offers.
+   *
+   * Curated order, cut to what the catalogue has meals for: a chip whose tag
+   * nobody has used can only ever answer "No meals found", and the row is meant
+   * to be the fast way in. Until the facets land -- or if that read fails -- it
+   * shows the first of the curated list rather than an empty row, because a row
+   * that appears a second later moves everything under it.
+   */
+  const chipTags = React.useMemo(() => {
+    if (facets.tags.length === 0) return POPULAR_TAGS.slice(0, DISCOVER_TAG_CHIPS);
+    const inUse = new Set(facets.tags.map((t) => t.toLowerCase()));
+    return POPULAR_TAGS.filter((t) => inUse.has(t.toLowerCase())).slice(0, DISCOVER_TAG_CHIPS);
+  }, [facets.tags]);
+
+  /**
+   * ANY-OF, and it has to be. A meal carries at most MAX_MEAL_TAGS tags, so an
+   * all-of row would ask for two of a meal's three on the second tap and for
+   * the impossible on the third. It is also what `?tags=` already means on the
+   * server, so the chips and the filter sheet cannot mean different things by
+   * the same request.
+   *
+   * The chips write into `filters.tags` rather than keeping a selection of
+   * their own: the filter sheet reads that too, so a tag chosen in either place
+   * shows as chosen in both, and the request is built once.
+   */
+  function toggleTag(tag: string) {
+    setFilters((prev) => ({
+      ...prev,
+      tags: prev.tags.includes(tag) ? prev.tags.filter((t) => t !== tag) : [...prev.tags, tag],
+    }));
+  }
 
   const [debouncedSearch, setDebouncedSearch] = useState('');
   useEffect(() => {
@@ -448,6 +482,36 @@ export default function DiscoverScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Colors.brand} />}
         ListHeaderComponent={
           <>
+            {/* Tag chips. Inside the list header, NOT above it with the search
+                box: the search box is how you get back to everything and stays
+                put, while these are a starting point and scroll away with the
+                meals they filtered. */}
+            {chipTags.length > 0 && (
+              <View style={styles.tagChipRow} testID="tag-chip-row">
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.tagChipRowContent}
+                >
+                  {chipTags.map((tag) => {
+                    const on = filters.tags.includes(tag);
+                    return (
+                      <TouchableOpacity
+                        key={tag}
+                        style={[styles.tagChip, on && styles.tagChipOn]}
+                        onPress={() => toggleTag(tag)}
+                        testID={`tag-chip-${tag}`}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: on }}
+                      >
+                        <Text style={[styles.tagChipText, on && styles.tagChipTextOn]}>{tag}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
+
             {/* Upgrade nudge for free tier */}
             {user && user?.tier !== 'paid' && totalMealCount >= FREE_LIMIT && (
               <TouchableOpacity style={styles.upgradeBanner} onPress={handleUpgrade} activeOpacity={0.8}>
@@ -696,6 +760,23 @@ const styles = StyleSheet.create({
   searchClear: { padding: 2 },
   list: { paddingHorizontal: 12, paddingBottom: 20 },
   mealRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 0 },
+  // Negative margins cancel the list's own 12pt padding so the row runs to both
+  // edges: a chip half off the screen is what says "this scrolls" without a
+  // scrollbar. The content padding puts the first chip back where the search
+  // box above it starts.
+  tagChipRow: { marginHorizontal: -12, marginBottom: 16 },
+  tagChipRowContent: { paddingHorizontal: 16, gap: 8 },
+  tagChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  tagChipOn: { backgroundColor: Colors.brand, borderColor: Colors.brand },
+  tagChipText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text2 },
+  tagChipTextOn: { color: '#fff', fontFamily: 'Inter_600SemiBold' },
   creatorsSection: { marginBottom: 20 },
   followHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   // The section title carries its own bottom margin, which the row would

@@ -17,6 +17,31 @@ export const ALL_TAGS = [
 ];
 
 /**
+ * The tags worth a chip on Discover, in the order they earn the space.
+ *
+ * Not the whole vocabulary: 88 tags is a filter sheet, not a row you swipe. The
+ * order is how people say what they want for dinner -- time first, then the
+ * meal slot, then a diet, then a protein, then a cuisine -- and Discover shows
+ * the first 15 of these that the catalogue actually has meals for, so a chip
+ * that could only ever come back empty never appears.
+ *
+ * They filter as ANY-OF, which is both what `?tags=` has always meant on the
+ * server and the only thing that can work here: a meal carries at most
+ * MAX_MEAL_TAGS of them, so requiring two would already ask for two of a meal's
+ * three, and three would ask for the impossible.
+ */
+export const POPULAR_TAGS = [
+  'Under 30 Min', 'Dinner', 'Breakfast', 'Dessert',
+  'Vegetarian', 'Vegan', 'Gluten-Free', 'Healthy', 'High Protein',
+  'Chicken', 'Beef', 'Seafood',
+  'Mexican', 'Italian', 'Asian',
+  'One Pot', 'Comfort Food', 'Kid Friendly', 'Budget Friendly', 'Meal Prep',
+];
+
+/** How many of POPULAR_TAGS the Discover chip row shows. */
+export const DISCOVER_TAG_CHIPS = 15;
+
+/**
  * How many tags one meal carries.
  *
  * This is a server rule, mirrored here the same way `ALL_TAGS` mirrors the
