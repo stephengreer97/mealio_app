@@ -167,7 +167,13 @@ flowchart TD
   no migration, so a row nobody has chosen for must serialise the way it always did. It is bound to
   the choice and dies with it — renaming a row or clearing its product removes the id along with the
   remembered weight and the dropdown, because a stale weight biases an add while a stale identifier
-  resolves and adds the wrong product outright.</p>
+  resolves and adds the wrong product outright.
+  Since 2026-09-09 the entry also carries what the store said the product COST, as a verbatim string
+  with the date beside it. The rails do not agree on shape &mdash; H-E-B prices some things by the
+  pound, Kroger returns a number &mdash; so nothing parses it into one currency figure and nothing
+  renders it yet; it is captured so the decision about what a stored price MEANS can be made later.
+  Both fields follow the same absent-not-null rule and travel together, because a price with no date
+  is a number nobody can judge the age of.</p>
   <p><b>&#9888; One store's id is not stable across its own shops.</b> Wegmans numbers a product
   per store &mdash; the same Daisy sour cream is <code>626485</code> at store 50 and
   <code>608294</code> at store 140 &mdash; where Kroger's banners and the Albertsons family share one

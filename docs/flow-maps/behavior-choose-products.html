@@ -121,7 +121,15 @@ flowchart TD
 
 <div class="notes">
   <h2>An empty search glows at the one control that helps (MEAL-202)</h2>
-  <p>A search that finds nothing leaves the user on a review screen whose only useful control is
+  <p><b>Two screens, one behaviour</b> (2026-09-09). Choose Products is
+<code>WebViewCartSheet</code> on a rail store and <code>ProductChooserSheet</code> on Kroger, and
+every fix has had to be made twice. Both now: hide the quantity stepper when the candidate list is
+empty (a quantity is a question about a product), draw the same highlighted no-results box pointing
+at the search field, offer a SKIP past the ingredient, and put a search button beside the custom
+search input rather than relying on the return key. On Kroger with nothing found, Skip takes the
+primary slot and Next goes away &mdash; Next is gated on a quantity, and there is none to set.</p>
+
+<p>A search that finds nothing leaves the user on a review screen whose only useful control is
   the one that looks least like a control: a row of placeholder text under an empty list. The
   "Other: type a product name" row pulses in the store's colour while that is true.</p>
   <p><b>It is off whenever there is anything to pick</b>, including an out-of-stock product &mdash;
