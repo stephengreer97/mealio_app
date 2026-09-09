@@ -123,8 +123,11 @@ during the check at all: <code>netRunVisual</code> parks the WebView in <code>hi
 the CartRunAnimation takes the space. That layer used to hide behind <code>zIndex: -1</code>, which
 RN Android does not honour for a native WebView &mdash; so the store's page drew through at the
 bottom of the sheet, on the Pixel only. It is translated out of the box now rather than ordered
-behind it, keeping the real viewport and the non-zero opacity that Chromium needs to keep its timers
-running.</p>
+behind it &mdash; <code>elevation</code> is the property Android actually orders native views by, and
+a WebView is one. The WebView's own styling is deliberately untouched: its real viewport and non-zero
+opacity are what keep Chromium compositing it and its timers running, and an off-screen layer is
+exactly what an engine throttles. NOT REPRODUCED: Albertsons' check renders clean either way on the
+Pixel, so this is the mechanism the report describes rather than a measured before-and-after.</p>
 
 Four of the five rails need a store; Walmart says <code>needsStoreId: false</code> and never
 reaches this, because its search is national and its cart is the account's.</p>
