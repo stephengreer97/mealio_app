@@ -7242,12 +7242,14 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                 inside it) and is moved off-screen; the animation takes the
                 space. Unmounting it would kill the run. */}
             {netRunVisual && (
-              <CartRunAnimation
-                progress={step === 'login_check' ? null : netPct}
-                label={step === 'login_check' ? null : (netProgress?.label ?? null)}
-                title={step === 'login_check' ? `Checking your ${storeName} account` : null}
-                note={netNote}
-              />
+              <View style={styles.runVisualLayer} pointerEvents="box-none">
+                <CartRunAnimation
+                  progress={step === 'login_check' ? null : netPct}
+                  label={step === 'login_check' ? null : (netProgress?.label ?? null)}
+                  title={step === 'login_check' ? `Checking your ${storeName} account` : null}
+                  note={netNote}
+                />
+              </View>
             )}
             <View
               style={netRunVisual ? styles.hiddenLayer : (gridMode ? styles.gridWrap : styles.fullWrap)}
@@ -8545,22 +8547,38 @@ const styles = StyleSheet.create({
     // running -- a 1s interval fired 34 SECONDS late when this was properly
     // hidden -- so it cannot go to 0, and the size cannot go back.
     //
-    // zIndex: -1 WAS THE WHOLE HIDING MECHANISM, AND IT DOES NOT WORK ON
-    // ANDROID. Stephen, 2026-09-09: "during login check on some stores, I am
-    // seeing some of the webpage at the bottom. Seems to be only on pixel."
-    // Exactly right, and exactly why: a WebView is a native view, and RN Android
-    // does not reliably paint one behind its siblings on a negative z-index. So
-    // the layer drew on top wherever the animation did not cover it -- which is
-    // the bottom of the sheet, because the animation does not fill it.
-    //
-    // Moved out of the box instead of ordered behind it. The translate keeps
-    // both load-bearing properties intact: a real 414x896 viewport, and an
-    // opacity Chromium still composites, so the timers keep running (they fired
-    // 34 SECONDS late when this was properly hidden with opacity: 0). It is the
-    // same trick `presearchOffscreen` and `webviewHidden` already use for
-    // WebViews that must keep working while out of sight.
-    transform: [{ translateX: 100000 }],
+    // NOTHING HERE MOVED, and that is deliberate. Both remaining properties are
+    // load-bearing and measured, so the fix for the page showing through
+    // (2026-09-09) went on the ANIMATION instead -- see `runVisualLayer`. A
+    // translate here would hide it just as well and would also be the one change
+    // most likely to break the thing this comment is about: an off-screen layer
+    // is exactly what an engine throttles.
     zIndex: -1,
+  },
+  /**
+   * The animation, composited ABOVE the parked WebView.
+   *
+   * Stephen, 2026-09-09: "during login check on some stores, I am seeing some of
+   * the webpage at the bottom. Seems to be only on pixel." The WebView is parked
+   * in `hiddenLayer` at 1% opacity behind a `zIndex: -1` -- and RN Android does
+   * not reliably honour a negative z-index for a NATIVE view, which a WebView
+   * is. It renders after the animation in this file, so on Android it could draw
+   * over it wherever the animation did not cover: the bottom of the sheet.
+   *
+   * `elevation` is the property Android actually orders native views by, so it
+   * is what settles this; `zIndex` does the same job on iOS, where there was no
+   * bug. The WebView's own styling is untouched, so nothing about its
+   * compositing, its viewport or its timers changes.
+   *
+   * NOT REPRODUCED. Albertsons' check renders clean on the Pixel with and
+   * without this, so what is here is the mechanism the report describes rather
+   * than a measured before-and-after. It is safe either way -- it moves one
+   * overlay up a layer -- but the store that shows it is still worth catching.
+   */
+  runVisualLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2,
+    elevation: 2,
   },
   gridWrap: {
     flex: 1,
