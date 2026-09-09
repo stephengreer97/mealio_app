@@ -134,7 +134,7 @@ export default function CreatorApplyScreen() {
       <KeyboardAwareScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" enableOnAndroid extraScrollHeight={24}>
           <Text style={styles.title}>Become a Creator</Text>
           <Text style={styles.subtitle}>
-            Share your meals with the Mealio community and earn a share of subscription revenue.
+            Share your meals with the Mealio community and earn a share of subscription profit.
           </Text>
 
           <Card style={styles.card}>
@@ -198,7 +198,7 @@ export default function CreatorApplyScreen() {
                 {termsAccepted && <Text style={styles.checkmark}>✓</Text>}
               </View>
               <Text style={styles.termsText}>
-                I agree to the Mealio Creator Terms and understand the revenue share model
+                I agree to the Mealio Creator Terms and understand the profit share model
               </Text>
             </TouchableOpacity>
             {errors.terms && <Text style={styles.errorText}>{errors.terms}</Text>}

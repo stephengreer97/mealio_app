@@ -96,9 +96,9 @@ const FAQ_SECTIONS: { title: string; items: FAQItem[] }[] = [
           'Tap the Creator tab and fill out the application form. We\'ll review it within 3-5 business days. Approved creators can publish meals visible to all users.',
       },
       {
-        question: 'How does the revenue share work?',
+        question: 'How does the profit share work?',
         answer:
-          'Creators earn a percentage of subscription revenue based on how many times their meals are saved by Pro users each quarter.',
+          'Each quarter, 1/3 of Mealio\'s subscription profit goes to the creator pool. Your share of that pool is your meal saves over the last 12 months as a percentage of all creator meal saves over the same window, and the Creator tab shows the number. Payouts are issued quarterly for amounts above $25.',
       },
     ],
   },
