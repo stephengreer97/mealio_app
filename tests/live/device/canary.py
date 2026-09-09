@@ -504,6 +504,35 @@ def reset_selections(meal_names):
     return {'cleared': cleared, 'snapshot': snapshot}
 
 
+def selections_ok(meal_name, never=('Nonexistent unobtainium 9000',)):
+    """Did the walk actually leave this meal curated?
+
+    THE OUTCOME, NOT THE STEP LABELS. The walk reports what it thinks it did, and
+    it has been wrong about that in three different ways so far -- an empty step
+    list that read as "nothing to do", a 'chose' for a screen that never moved,
+    and a run of 'no-candidates' that left Walmart with nothing selected while
+    passing the step check. Reading the meal back cannot be fooled by any of
+    them: either the lines have products or they do not.
+
+    The deliberately unfindable line is expected to have none, and its absence is
+    not a failure -- it is the branch it exists to exercise.
+    """
+    env = _central_env()
+    url, key = env.get('NEXT_PUBLIC_SUPABASE_URL'), env.get('SUPABASE_SERVICE_ROLE_KEY')
+    if not url or not key:
+        return None
+    q = url + '/rest/v1/meals?select=ingredients&name=eq.' + urllib.parse.quote(meal_name)
+    req = urllib.request.Request(q, headers={'apikey': key, 'authorization': 'Bearer ' + key})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        rows = json.loads(r.read().decode())
+    if not rows:
+        return None
+    missing = [i.get('ingredientName') for i in (rows[0].get('ingredients') or [])
+               if not i.get('searchTerm')
+               and not any(n.lower() in str(i.get('ingredientName', '')).lower() for n in never)]
+    return {'ok': not missing, 'missing': missing}
+
+
 def restore_selections(snapshot, names=None):
     """Put back what reset_selections cleared.
 
@@ -714,10 +743,11 @@ def main():
         try:
             entry['choose']['primary'] = choose_products(meal, chip)
             entry['choose']['second'] = choose_products(second, chip)
-            bad = ('stuck', 'chooser-never-opened')
-            entry['choose']['ok'] = not any(
-                any(b in steps for b in bad) for steps in
-                (entry['choose']['primary'], entry['choose']['second']))
+            # THE MEALS DECIDE, not the step labels. Walmart came back with a
+            # clean-looking run of 'no-candidates' and nothing chosen at all.
+            checks = [selections_ok(meal), selections_ok(second)]
+            entry['choose']['verified'] = checks
+            entry['choose']['ok'] = all(c and c['ok'] for c in checks)
         except Exception as e:
             entry['choose']['ok'] = False
             entry['choose']['error'] = str(e)[:200]

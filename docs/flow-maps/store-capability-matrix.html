@@ -95,6 +95,13 @@ still requires having seen the cart re-read at all, so "could not read it" never
       <td><b>measured 2026-09-08</b> &mdash; 16 &rarr; 15, target gone</td></tr>
   <tr><td><b>Kroger family</b></td><td colspan="2">n/a &mdash; web integration, not a WebView rail</td></tr>
 </table>
+<p><b>A clear is SCOPED, and judged by its targets.</b> The canary runs against a real account whose
+cart holds real shopping, so cleanup means "remove what this run added", never "empty the basket" --
+every rail's <code>clearCart</code> takes an <code>only</code> list of store line ids, and the run
+persists what it added because the cleanup is driven by a tap and a tap carries no arguments. Three
+rails judged success as <code>left === 0</code>, which fails every single time a scoped cleanup
+works; each now reports whether its own targets survived, and still requires having seen the re-read
+at all.</p>
 <p>Walmart, H-E-B and Instacart all remove on a zero; Albertsons and Wegmans do not. That is the
 whole reason each is measured rather than inferred from the others.</p>
 <p><b>Wegmans removal is its own route AND its own verb</b>, captured by watching the site's bin icon

@@ -435,4 +435,54 @@ describe('the search takes the operation, not the page', () => {
     const msg = await runner.waitForMessage('SEARCH_RESULT', 25_000) as Record<string, unknown>;
     expect((msg.candidates as Array<Record<string, unknown>>)[0].price).toBe('$2.79');
   }, AT_WALMART);
+
+  itWithFixture('logged-in-home.html', 'prices an item that is NOT on promotion', async (runner) => {
+    // MEAL-234, and the whole of it. This rail read DISCOUNTED_PRICE and nothing
+    // else, so it priced only the items that happened to be on offer. MEASURED
+    // on a live "sour cream" search: 4 of 24 candidates priced, and the four
+    // were sponsored marketplace listings while every Great Value and Daisy tub
+    // on the shelf came back blank. The ordinary line type is CURRENT_PRICE.
+    //
+    // A missing price renders as nothing rather than as an error, which is why
+    // this was "some products" and not a bug report.
+    await runner.inject(cartMap());
+    await runner.inject(stub({ opItems: [hit({ priceInfo: { priceDetails: { priceLines: [
+      { lineType: 'CURRENT_PRICE', values: [{ key: 'PRICE', value: '1.98' }] },
+      { lineType: 'UNIT_PRICE', values: [{ key: 'UNIT_PRICE', value: '0.12' }] },
+    ] } } })] }));
+    await runner.inject(buildWalmartNetworkSearchBatchScript(['sour cream'])!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 25_000) as Record<string, unknown>;
+    // Not the per-ounce number beside it, which is the wrong price to show and
+    // is the one a wider net would have picked up.
+    expect((msg.candidates as Array<Record<string, unknown>>)[0].price).toBe('$1.98');
+  }, AT_WALMART);
+
+  itWithFixture('logged-in-home.html', 'prefers the promotion price over the shelf price', async (runner) => {
+    // Both line types present, which is what an item on offer looks like. The
+    // shopper pays the discounted one, so widening to CURRENT_PRICE must not
+    // change which number wins.
+    await runner.inject(cartMap());
+    await runner.inject(stub({ opItems: [hit({ priceInfo: { priceDetails: { priceLines: [
+      { lineType: 'CURRENT_PRICE', values: [{ key: 'PRICE', value: '3.48' }] },
+      { lineType: 'DISCOUNTED_PRICE', values: [{ key: 'PRICE', value: '2.79' }] },
+    ] } } })] }));
+    await runner.inject(buildWalmartNetworkSearchBatchScript(['sour cream'])!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 25_000) as Record<string, unknown>;
+    expect((msg.candidates as Array<Record<string, unknown>>)[0].price).toBe('$2.79');
+  }, AT_WALMART);
+
+  itWithFixture('logged-in-home.html', 'never shows a struck-through price as the price', async (runner) => {
+    // COMPARISON/WAS_PRICE and OPTIONS_RANGE are the two shapes a "just take any
+    // number that looks like a price" fix would have picked up. A was-price on
+    // the row is worse than the blank it replaces: it is a real number, it is
+    // wrong, and nothing on the screen says so.
+    await runner.inject(cartMap());
+    await runner.inject(stub({ opItems: [hit({ priceInfo: { priceDetails: { priceLines: [
+      { lineType: 'COMPARISON', values: [{ key: 'WAS_PRICE', value: '4.94' }] },
+      { lineType: 'OPTIONS_RANGE', values: [{ key: 'LOW_PRICE', value: '1.00' }, { key: 'HIGH_PRICE', value: '9.00' }] },
+    ] } } })] }));
+    await runner.inject(buildWalmartNetworkSearchBatchScript(['sour cream'])!);
+    const msg = await runner.waitForMessage('SEARCH_RESULT', 25_000) as Record<string, unknown>;
+    expect((msg.candidates as Array<Record<string, unknown>>)[0].price).toBeNull();
+  }, AT_WALMART);
 });

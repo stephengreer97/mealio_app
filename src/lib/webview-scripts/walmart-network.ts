@@ -364,18 +364,42 @@ ${RETRY_FN}
     // The server-rendered page ships priceInfo with every field empty and
     // price: 0 on every item — Walmart strips it there — which is why this rail
     // reached the Choose Products screen without prices at all. The Search
-    // operation returns priceDetails.priceLines instead, and DISCOUNTED_PRICE
-    // is the one the shopper pays.
+    // operation returns priceDetails.priceLines instead.
+    //
+    // MEAL-234: this read DISCOUNTED_PRICE and nothing else, so it priced only
+    // the items that happened to be on promotion. MEASURED on a live "sour
+    // cream" search, 4 of 24 candidates priced — and the four were sponsored
+    // marketplace listings, while every Great Value and Daisy tub on the shelf
+    // came back blank. The ordinary line type is CURRENT_PRICE:
+    //
+    //   DISCOUNTED_PRICE  PRICE                 on promotion, and what is paid
+    //   CURRENT_PRICE     PRICE                 the shelf price. The common case.
+    //   COMPARISON        WAS_PRICE             struck through. NOT what is paid.
+    //   UNIT_PRICE        UNIT_PRICE            per ounce. Not a shelf price.
+    //   OPTIONS_RANGE     LOW_PRICE HIGH_PRICE  a variant span, not one price.
+    //
+    // So the fix is an ORDER, not a wider net. DISCOUNTED_PRICE still wins where
+    // both exist — that is the number on the shelf tag when something is on
+    // offer — and the three line types that are not a price this shopper pays
+    // stay unreadable rather than becoming a fallback. Widening to "any value
+    // named something price-ish" would have put a struck-through was-price on the
+    // row, which is worse than the blank it replaces.
     var price = null;
     try {
       var lines = it.priceInfo && it.priceInfo.priceDetails && it.priceInfo.priceDetails.priceLines;
       if (lines) {
-        for (var li = 0; li < lines.length && !price; li++) {
-          if (String(lines[li].lineType) !== 'DISCOUNTED_PRICE') continue;
-          var vals = lines[li].values || [];
-          for (var vi = 0; vi < vals.length && !price; vi++) {
-            if (String(vals[vi].key) === 'PRICE' && vals[vi].value != null) {
-              price = '$' + String(vals[vi].value);
+        var WANT = ['DISCOUNTED_PRICE', 'CURRENT_PRICE'];
+        for (var wi = 0; wi < WANT.length && !price; wi++) {
+          for (var li = 0; li < lines.length && !price; li++) {
+            if (String(lines[li].lineType) !== WANT[wi]) continue;
+            var vals = lines[li].values || [];
+            for (var vi = 0; vi < vals.length && !price; vi++) {
+              // The KEY is checked as well as the line type. UNIT_PRICE rides on
+              // its own line here, but a line that ever carried both would
+              // otherwise hand back the per-ounce number.
+              if (String(vals[vi].key) === 'PRICE' && vals[vi].value != null) {
+                price = '$' + String(vals[vi].value);
+              }
             }
           }
         }

@@ -47,9 +47,15 @@ which is not far off what tripped this. A lighter search than a 780&nbsp;KB docu
 the Next.js data route <code>/_next/data/&lt;buildId&gt;/search.json</code> &mdash; would be quieter
 AND faster. Unmeasured: by the time it was tried the session was challenged on the homepage too, so
 there was no buildId to read.</p>
-<p><b>&#9888; NO PRICE.</b> The SSR payload carries <code>priceInfo</code> with every field empty and
-<code>price: 0</code> on every item, so Walmart candidates reach the Choose Products screen without
-one. The only rail with this gap.</p>
+<p><b>&#9888; PRICE COMES FROM THE OPERATION, NEVER THE PAGE.</b> The SSR payload carries
+<code>priceInfo</code> with every field empty and <code>price: 0</code> on every item. The Search
+operation returns <code>priceDetails.priceLines</code> instead, and the LINE TYPE decides which number
+is the price: <code>DISCOUNTED_PRICE</code> (on offer) then <code>CURRENT_PRICE</code> (the shelf price,
+and the common one) are read; <code>COMPARISON</code>/<code>WAS_PRICE</code>, <code>UNIT_PRICE</code>
+and <code>OPTIONS_RANGE</code> deliberately are not, because a struck-through or per-ounce number on the
+row is worse than the blank it replaces. MEAL-234: reading <code>DISCOUNTED_PRICE</code> alone priced 4
+of 24 candidates on a live search, and the four were sponsored listings while every Great Value tub on
+the shelf came back empty.</p>
 <p><b>&#9888; A rail may have NO STORE.</b> The engine used to demand a <code>storeId</code> and a
 <code>shoppingContext</code> from every session, because the first four rails all have a catalogue
 that is per store. Walmart's search is national and its cart is the account's, so every run was

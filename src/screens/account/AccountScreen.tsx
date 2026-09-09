@@ -32,6 +32,7 @@ const CANARY_STORES = [
   { id: 'tom_thumb', name: 'Tom Thumb' },
 ];
 import { useStores } from '../../lib/store-catalog/useStores';
+import { isWebViewStore } from '../../constants/stores';
 import { useAuth } from '../../context/AuthContext';
 import { auth as authApi, account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
 import * as tokenStorage from '../../lib/tokenStorage';
@@ -39,6 +40,7 @@ import { getPushStatus, enablePush, disablePush, type PushStatus } from '../../l
 import { getAllOfferings, purchasePackage, restorePurchases, getActiveSubscriptionStore, getEntitlementDetails, getManagementURL, onEntitlementChange, ENTITLEMENT_ID, type EntitlementDetails } from '../../lib/purchases';
 import Purchases, { type PurchasesPackage } from 'react-native-purchases';
 import * as WebBrowser from 'expo-web-browser';
+import * as Clipboard from 'expo-clipboard';
 import { Creator, Meal } from '../../types';
 import Card from '../../components/ui/Card';
 import NotificationSettingsSheet from '../../components/NotificationSettingsSheet';
@@ -51,6 +53,37 @@ import { bumpEpoch } from '../../lib/store-session-epoch-storage';
 /** e.g. "Jul 9, 2026" */
 function formatExpiry(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/**
+ * An expiry far enough out that it is a sandbox receipt, not a subscription.
+ *
+ * StoreKit and Play's test environments compress a billing period into minutes
+ * and hand back a date two centuries away, and the account screen printed it:
+ * "Full Access until May 22, 2226". It reads as a real promise, it is the first
+ * thing anyone notices on this screen, and it is wrong on every tester's build.
+ *
+ * Five years, because no real subscription this product sells reaches it and no
+ * sandbox receipt falls short of it.
+ */
+const SANDBOX_EXPIRY_YEARS = 5;
+
+function isSandboxExpiry(iso: string): boolean {
+  const at = new Date(iso).getTime();
+  if (Number.isNaN(at)) return true;
+  return at > Date.now() + SANDBOX_EXPIRY_YEARS * 365 * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * A heading with weight, above a group of cards.
+ *
+ * The screen was a flat list in which identity, billing, a store integration,
+ * notifications and a destructive action all read at exactly the same level.
+ * Grouping them is most of MEAL-228: nothing here changes what the controls do,
+ * only which ones are read as belonging together.
+ */
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return <Text style={styles.sectionHeading}>{children}</Text>;
 }
 
 export default function AccountScreen() {
@@ -95,6 +128,29 @@ export default function AccountScreen() {
 
   // Notifications (MEAL-88)
   const prewarm = useLoginPrewarm();
+
+  /**
+   * The stores this session has CONFIRMED a sign-in for, plus Kroger.
+   *
+   * `statusVersion` is in the deps because `getStatus` is read imperatively off
+   * a ref — without it this list is computed once and never notices a probe
+   * settling. Only 'loggedIn' counts: 'unknown' is a store nobody has asked
+   * about, and rendering it as disconnected would be a claim the app cannot make.
+   *
+   * Kroger is not a WebView store and has no prewarm verdict; its connection is
+   * an OAuth grant the screen already tracks, so it is added on its own terms.
+   */
+  const connectedStores = React.useMemo(() => {
+    const out = stores.filter(
+      (st) => isWebViewStore(st.id) && prewarm.getStatus(st.id) === 'loggedIn',
+    );
+    if (krogerConnected && !out.some((st) => st.id === 'kroger')) {
+      const kroger = stores.find((st) => st.id === 'kroger');
+      if (kroger) out.push(kroger);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stores, krogerConnected, prewarm.statusVersion]);
   const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
   const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
@@ -574,6 +630,8 @@ export default function AccountScreen() {
       <KeyboardAwareScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" enableOnAndroid extraScrollHeight={24}>
         <Text style={styles.pageTitle}>Account</Text>
 
+        <SectionHeading>You</SectionHeading>
+
         {/* Account Information */}
         <Card style={styles.card}>
           <Text style={styles.cardTitle}>Account Information</Text>
@@ -588,10 +646,34 @@ export default function AccountScreen() {
               Member since {new Date(user.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
             </Text>
           )}
+          {/*
+            THE USER ID, which is useful in exactly one situation and noise in
+            every other. It shipped as a raw uuid under the member-since line —
+            "User ID: 0b97d87a-4c21-..." — where it is the longest string on the
+            screen and means nothing to the person reading it.
+
+            It is not deleted, because a bug report without it is a bug report
+            nobody can trace. It is reduced to the first block, which is enough
+            to match a log line, and the whole id goes to the clipboard on a tap.
+          */}
           {user?.id && (
-            <Text style={styles.profileMeta}>User ID: {user.id}</Text>
+            <TouchableOpacity
+              onPress={async () => {
+                await Clipboard.setStringAsync(user.id);
+                Alert.alert('Copied', 'Your support code is on the clipboard. Paste it into a bug report.');
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Copy your support code"
+            >
+              <Text style={styles.supportCode}>
+                Support code {user.id.slice(0, 8)}
+                <Text style={styles.supportCodeHint}>  ·  tap to copy</Text>
+              </Text>
+            </TouchableOpacity>
           )}
         </Card>
+
+        <SectionHeading>Plan</SectionHeading>
 
         {/* Subscription */}
         <Card style={styles.card}>
@@ -600,9 +682,19 @@ export default function AccountScreen() {
             <>
               <View style={styles.subBadgePaid}>
                 <Text style={styles.subBadgeTitlePaid}>Mealio Full Access</Text>
+                {/*
+                  A cancelled-but-still-active subscription says when it runs
+                  out. A SANDBOX receipt says May 22, 2226, and this line printed
+                  that as though it were a promise — on every tester's build, at
+                  the top of the screen, for months. A date nobody can believe
+                  makes the screen around it harder to believe too, so it is
+                  named rather than shown.
+                */}
                 <Text style={styles.subBadgeDesc}>
                   {entDetails && entDetails.isActive && !entDetails.willRenew && entDetails.expirationDate
-                    ? `Full Access until ${formatExpiry(entDetails.expirationDate)}`
+                    ? (isSandboxExpiry(entDetails.expirationDate)
+                        ? 'Test subscription. The store reports an expiry date centuries out, so there is nothing real to show here.'
+                        : `Full Access until ${formatExpiry(entDetails.expirationDate)}`)
                     : 'Unlimited saved meals across all stores.'}
                 </Text>
               </View>
@@ -683,6 +775,8 @@ export default function AccountScreen() {
             </>
           )}
         </Card>
+
+        <SectionHeading>Grocery stores</SectionHeading>
 
         {/* Kroger Cart */}
         <Card style={styles.card}>
@@ -770,6 +864,8 @@ export default function AccountScreen() {
             </View>
           )}
         </Card>
+
+        <SectionHeading>Preferences</SectionHeading>
 
         {/* Notifications — the always-available way in, for anyone who dismissed
             or denied the in-app ask. Hidden entirely where remote push can't
@@ -878,6 +974,8 @@ export default function AccountScreen() {
           </Card>
         )}
 
+        <SectionHeading>Your meals</SectionHeading>
+
         {/* Following */}
         {following.length > 0 && (
           <Card style={styles.card}>
@@ -931,21 +1029,53 @@ export default function AccountScreen() {
           </Card>
         )}
 
-        {/* Log out of grocery stores */}
-        <Button
-          label="Log Out of Grocery Stores"
-          variant="secondary"
-          loading={storeLogoutLoading}
-          onPress={handleStoreLogout}
-          style={styles.storeLogoutBtn}
-        />
-        <Text style={styles.storeLogoutHint}>
-          Signs you out of every connected grocery store.
-        </Text>
+        <SectionHeading>Signing out</SectionHeading>
+
+        {/*
+          THE BLAST RADIUS, before the button rather than after it.
+          "Log Out of Grocery Stores" sat inline with everything else on a flat
+          screen, and nothing said which stores it would take. The app knows: the
+          prewarm holds a per-store login verdict for the session.
+
+          What it CANNOT say is which stores you are signed out of. A store the
+          prewarm has not probed this session is 'unknown', which is not 'no' —
+          so only the confirmed ones are listed, and the caveat says the list is
+          the floor rather than the whole of it. A screen that guessed here would
+          be telling someone their account is disconnected when it is not.
+        */}
+        <Card style={styles.card}>
+          <Text style={styles.cardTitle}>Connected grocery stores</Text>
+          {connectedStores.length > 0 ? (
+            <View style={styles.storeList}>
+              {connectedStores.map((st) => (
+                <View key={st.id} style={styles.storeRow}>
+                  <View style={[styles.storeDot, { backgroundColor: st.color ?? Colors.success }]} />
+                  <Text style={styles.storeRowName}>{st.name}</Text>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.storeNone}>
+              No store sign-ins confirmed this session. That is not the same as none: a store is only
+              listed once the app has checked it, which happens when you build a cart.
+            </Text>
+          )}
+          <Button
+            label="Sign out of these stores"
+            variant="secondary"
+            loading={storeLogoutLoading}
+            onPress={handleStoreLogout}
+            style={styles.storeLogoutBtn}
+          />
+          <Text style={styles.storeCaveat}>
+            This clears every grocery store sign-in on this device, including any not listed above.
+            Your Mealio account stays signed in.
+          </Text>
+        </Card>
 
         {/* Sign Out */}
         <Button
-          label="Sign Out"
+          label="Sign Out of Mealio"
           variant="danger"
           onPress={handleLogout}
           style={styles.signOutBtn}
@@ -1035,6 +1165,8 @@ export default function AccountScreen() {
           />
         )}
 
+        <SectionHeading>Danger zone</SectionHeading>
+
         {/* Delete Account */}
         <TouchableOpacity onPress={handleDeleteAccount} disabled={deleteLoading} style={styles.deleteAccountBtn}>
           <Text style={styles.deleteAccountText}>{deleteLoading ? 'Deleting…' : 'Delete Account'}</Text>
@@ -1097,6 +1229,24 @@ export default function AccountScreen() {
 }
 
 const styles = StyleSheet.create({
+  sectionHeading: {
+    fontSize: 13,
+    fontFamily: 'Inter_700Bold',
+    color: Colors.text3,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginTop: 22,
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  supportCode: { fontSize: 12, color: Colors.text3, marginTop: 6, fontFamily: 'Inter_500Medium' },
+  supportCodeHint: { fontSize: 11, color: Colors.text3, fontFamily: 'Inter_400Regular' },
+  storeList: { marginTop: 2, marginBottom: 10 },
+  storeRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 5 },
+  storeDot: { width: 7, height: 7, borderRadius: 4, marginRight: 9 },
+  storeRowName: { fontSize: 14, color: Colors.text1, fontFamily: 'Inter_500Medium' },
+  storeNone: { fontSize: 13, color: Colors.text3, lineHeight: 19, marginBottom: 8 },
+  storeCaveat: { fontSize: 11, color: Colors.text3, lineHeight: 16, marginTop: 2 },
   safe: { flex: 1, backgroundColor: Colors.bg },
   scroll: { padding: 16, paddingBottom: 40 },
   pageTitle: { fontSize: 28, fontFamily: 'Inter_700Bold', color: Colors.text1, marginBottom: 16 },

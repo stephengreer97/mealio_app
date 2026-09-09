@@ -32,12 +32,13 @@ describe('clearing the canary meals is reversible', () => {
     expect(main).toContain("if not entry['choose'].get('ok')");
   });
 
-  it('counts a chooser that never opened as a failure, not a pass', () => {
-    // An empty step list reads exactly like "nothing to do", which is how a
-    // walk that never saw the chooser first reported success.
+  it('records a chooser that never opened, distinctly from an empty walk', () => {
+    // An empty step list reads exactly like "nothing to do", which is how a walk
+    // that never saw the chooser first reported success. The step is still
+    // recorded for diagnosis -- but it is no longer what DECIDES the outcome,
+    // because a label-based gate always misses the label nobody anticipated.
+    // See the outcome check below.
     expect(src).toContain("'chooser-never-opened'");
-    const main = src.slice(src.indexOf("entry['choose'] = {"), src.indexOf("entry['windows']['single']"));
-    expect(main).toContain('chooser-never-opened');
   });
 
   it('waits for each ingredient search, not just the first', () => {
@@ -83,5 +84,31 @@ describe('the meal card is selected by its exact id', () => {
     // store and belongs in the result as such, not hidden inside a generic skip
     // that also covers "I could not work this screen out".
     expect(src).toContain("'no-candidates' if answered else 'skipped'");
+  });
+});
+
+describe('the meal decides whether curation worked, not the walk', () => {
+  // The walk reports what it THINKS it did, and it has been wrong about that in
+  // three different ways: an empty step list that read as "nothing to do", a
+  // 'chose' for a screen that never moved, and a clean-looking run of
+  // 'no-candidates' that left Walmart with nothing selected at all while passing
+  // the step check -- so the restore guard, which exists for exactly that, did
+  // not fire and the meal stayed empty.
+  //
+  // Reading the meal back cannot be fooled by any of them.
+  it('verifies by reading the meal, not by inspecting step labels', () => {
+    expect(src).toContain('def selections_ok');
+    const main = src.slice(src.indexOf("entry['choose'] = {"), src.indexOf("entry['windows']['single']"));
+    expect(main).toContain('selections_ok(meal)');
+    expect(main).toContain('selections_ok(second)');
+    // The old label-sniffing gate must be gone: a step vocabulary that grows
+    // will always have a label nobody thought to treat as failure.
+    expect(main).not.toContain("bad = ('stuck'");
+  });
+
+  it('does not count the deliberately unfindable line as missing', () => {
+    // It is expected to have no product. That is the branch it exists for, and
+    // treating it as a failure would make every successful curation look broken.
+    expect(src).toContain("never=('Nonexistent unobtainium 9000',)");
   });
 });
