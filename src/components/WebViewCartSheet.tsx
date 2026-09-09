@@ -22,7 +22,7 @@ import FloatingPreviewImage from './FloatingPreviewImage';
 import ProductImageViewer from './ProductImageViewer';
 import { Ionicons } from '@expo/vector-icons';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { Colors } from '../constants/colors';
+import { Colors, Radius } from '../constants/colors';
 import { getStoreProduct } from '../lib/storeProducts';
 import ExpandableNotice from './ui/ExpandableNotice';
 import { Meal } from '../types';
@@ -228,7 +228,7 @@ export interface WebViewCartSheetProps {
    *  is what makes Choose Product once, add forever literal: the next run writes
    *  that id straight to the cart instead of searching the name and letting the
    *  store's ranking pick again. */
-  onIngredientChosen?: (ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null, storeProduct?: { upc: string; name: string; sku?: string } | null) => void;
+  onIngredientChosen?: (ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null, storeProduct?: { upc: string; name: string; sku?: string; barcode?: string; price?: string } | null) => void;
   /** 'modal' (default) renders the original native pageSheet — unchanged
    *  behavior. 'layer' renders a provider-controlled root overlay that can be
    *  slid offscreen (collapsed) while keeping the WebView mounted, so the cart
@@ -251,7 +251,7 @@ export interface WebViewCartSheetProps {
    * evidence the id is real.
    */
   onIngredientIdentified?: (ingredientName: string, mealIds: string[],
-                            storeProduct: { upc: string; name: string; sku?: string }) => void;
+                            storeProduct: { upc: string; name: string; sku?: string; barcode?: string; price?: string }) => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -277,7 +277,8 @@ function storedProductFor(item: { storeProducts?: Record<string, { upc: string; 
 
 function railStoreProduct(c: {
   productId?: string | null; skuId?: string | null; productName?: string; upc?: string | null;
-}): { upc: string; name: string; sku?: string; barcode?: string } | null {
+  price?: string | null;
+}): { upc: string; name: string; sku?: string; barcode?: string; price?: string } | null {
   if (!c || !c.productId) return null;
   return {
     upc: String(c.productId),
@@ -290,6 +291,11 @@ function railStoreProduct(c: {
     // product id is per store (626485 at store 50, 608294 at store 140 for the
     // same item), so a saved id alone would resolve to the wrong product.
     ...(c.upc ? { barcode: String(c.upc) } : {}),
+    // WHAT IT COST, captured rather than used. Every rail already extracts a
+    // price to draw the row and this threw it away at exactly this line, so a
+    // saved product remembered what it was and not what it cost. Stored as the
+    // store's own string; the date is stamped by `withStoreProduct`.
+    ...(c.price ? { price: String(c.price) } : {}),
   };
 }
 
@@ -7720,16 +7726,42 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                   </TouchableOpacity>
                 </View>
                 {selectedSuggIdx === 'custom' && (
-                  <TextInput
-                    autoFocus
-                    value={customText}
-                    onChangeText={setCustomText}
-                    placeholder="e.g. Chicken Breast Boneless"
-                    placeholderTextColor={Colors.text3}
-                    style={[styles.customInput, { borderColor: storeColor }]}
-                    onSubmitEditing={() => { if (customText.trim()) handleCustomSearch(customText); }}
-                    returnKeyType="search"
-                  />
+                  // A BUTTON BESIDE THE FIELD, the way Kroger's chooser has
+                  // always had it. Submitting was keyboard-only here — the
+                  // return key, and nothing on screen saying so — which is
+                  // invisible on a phone the moment the keyboard is dismissed,
+                  // and leaves someone who typed a name with a field that looks
+                  // like it did nothing. onSubmitEditing still works; this is
+                  // the same action made visible.
+                  <View style={styles.customRow}>
+                    <TextInput
+                      autoFocus
+                      value={customText}
+                      onChangeText={setCustomText}
+                      placeholder="e.g. Chicken Breast Boneless"
+                      placeholderTextColor={Colors.text3}
+                      style={[styles.customInput, { borderColor: storeColor }]}
+                      onSubmitEditing={() => { if (customText.trim()) handleCustomSearch(customText); }}
+                      returnKeyType="search"
+                      editable={!customSearching}
+                    />
+                    <TouchableOpacity
+                      testID="custom-search-btn"
+                      accessibilityRole="button"
+                      accessibilityLabel="Search"
+                      style={[
+                        styles.customSearchBtn,
+                        { backgroundColor: storeColor },
+                        (!customText.trim() || customSearching) && { opacity: 0.4 },
+                      ]}
+                      onPress={() => { if (customText.trim()) handleCustomSearch(customText); }}
+                      disabled={!customText.trim() || customSearching}
+                    >
+                      {customSearching
+                        ? <ActivityIndicator color="#fff" size="small" />
+                        : <Ionicons name="search" size={16} color="#fff" />}
+                    </TouchableOpacity>
+                  </View>
                 )}
 
               </KeyboardAwareScrollView>
@@ -8756,7 +8788,9 @@ const styles = StyleSheet.create({
   noResultsTitle: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1 },
   noResultsBody: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, lineHeight: 17 },
 
+  customRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, marginBottom: 6 },
   customInput: {
+    flex: 1,
     borderWidth: 1.5,
     borderRadius: 10,
     paddingHorizontal: 12,
@@ -8765,8 +8799,14 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     color: Colors.text1,
     backgroundColor: Colors.surface,
-    marginTop: 6,
-    marginBottom: 6,
+  },
+  /** Square, and the same 40 as Kroger's, so the two screens agree. */
+  customSearchBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.button,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   // Preference picker

@@ -510,7 +510,7 @@ export default function MyMealsScreen() {
    */
   async function handleIngredientIdentified(
     ingredientName: string, mealIds: string[],
-    storeProduct: { upc: string; name: string; sku?: string },
+    storeProduct: { upc: string; name: string; sku?: string; barcode?: string; price?: string },
   ) {
     const epoch = saveEpochRef.current;
     await Promise.all(mealIds.map((mealId) => enqueueMealSave(mealId, async () => {
@@ -535,7 +535,7 @@ export default function MyMealsScreen() {
     })));
   }
 
-  async function handleIngredientChosen(ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null, storeProduct?: { upc: string; name: string; sku?: string } | null) {
+  async function handleIngredientChosen(ingredientName: string, mealIds: string[], productName: string, mealQtys?: Record<string, number>, dropdown?: { type: string; selectedText: string; selectedValue: string } | null, purchaseWeight?: number | null, weightStep?: number | null, storeProduct?: { upc: string; name: string; sku?: string; barcode?: string; price?: string } | null) {
     // Whose choice this is. Captured HERE, when the product is picked, rather
     // than read inside the queued work: the point of the guard is to compare the
     // session that queued a save against the one running when it comes up.

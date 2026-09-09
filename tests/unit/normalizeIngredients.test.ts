@@ -470,3 +470,32 @@ describe('a saved store product keeps everything the store needs', () => {
     expect('storeProducts' in ing).toBe(false);
   });
 });
+
+describe('the store-product whitelist keeps the price', () => {
+  // sanitizeStoreProducts is a whitelist and its own comment records what that
+  // has already cost: `sku` was written by the rail, sent, stored, read back and
+  // dropped right there, so H-E-B re-searched every ingredient forever and
+  // nothing said why. `price` would have failed identically.
+  it('survives a round trip through the normalizer', () => {
+    const [ing] = normalizeIngredients([{
+      ingredientName: 'sour cream',
+      storeProducts: {
+        heb: { upc: '1', name: 'Daisy', sku: 's1', barcode: 'b1', price: '$2.79', pricedAt: '2026-09-09T00:00:00.000Z' },
+      },
+    }]) as any[];
+
+    expect(ing.storeProducts.heb).toMatchObject({
+      upc: '1', name: 'Daisy', sku: 's1', barcode: 'b1',
+      price: '$2.79', pricedAt: '2026-09-09T00:00:00.000Z',
+    });
+  });
+
+  it('drops a lone pricedAt, which describes a price that is not there', () => {
+    const [ing] = normalizeIngredients([{
+      ingredientName: 'sour cream',
+      storeProducts: { heb: { upc: '1', name: 'Daisy', pricedAt: '2026-09-09T00:00:00.000Z' } },
+    }]) as any[];
+
+    expect(ing.storeProducts.heb.pricedAt).toBeUndefined();
+  });
+});

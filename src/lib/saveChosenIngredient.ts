@@ -37,7 +37,7 @@ export interface ChosenProductUpdate {
    * With this, the choice IS the identifier. `searchTerm` stays for display and
    * as the fallback when the id no longer resolves.
    */
-  storeProduct?: { upc: string; name: string; sku?: string } | null;
+  storeProduct?: { upc: string; name: string; sku?: string; barcode?: string; price?: string } | null;
   /** Which store the id belongs to. An id is meaningless at another chain, and
    *  `storeProducts` is keyed by rail for exactly that reason. */
   storeId?: string | null;
@@ -132,7 +132,7 @@ export function mergeStoreProductOnly(
   ingredients: any[],
   ingredientName: string,
   storeId: string | null | undefined,
-  product: { upc: string; name: string; sku?: string },
+  product: { upc: string; name: string; sku?: string; barcode?: string; price?: string },
 ): any[] {
   if (!product?.upc) return ingredients;
   let changed = false;
@@ -151,8 +151,23 @@ export function mergeStoreProductOnly(
     const key = storeProductKey(storeId);
     const was = (ing.storeProducts ?? {})[key];
     const now = (updated.storeProducts ?? {})[key];
+    //
+    // EVERY STORED FIELD IS COMPARED, except one. `barcode` and `price` were
+    // missing: a price that moved would have been written by `withStoreProduct`
+    // and then thrown away right here, because the row "had not changed" — so a
+    // captured price would have frozen at whatever it was the first time and
+    // never moved again.
+    //
+    // `pricedAt` is deliberately NOT compared. The writer stamps it with `now`
+    // on every call, so comparing it makes every run look changed and turns this
+    // identity check into a PATCH on every cart open. Leaving it out means an
+    // unchanged price keeps its ORIGINAL date, which reads as "first seen at
+    // this price" — the more useful of the two readings, and the one that does
+    // not churn.
     if (was && now && was.upc === now.upc && was.name === now.name
-        && (was.sku ?? null) === (now.sku ?? null)) {
+        && (was.sku ?? null) === (now.sku ?? null)
+        && (was.barcode ?? null) === (now.barcode ?? null)
+        && (was.price ?? null) === (now.price ?? null)) {
       return ing;
     }
     changed = true;

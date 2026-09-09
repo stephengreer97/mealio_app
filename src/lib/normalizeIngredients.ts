@@ -168,6 +168,8 @@ function sanitizeStoreProducts(raw: any): { storeProducts: Record<string, StoreP
     const name = (value as any).name;
     const sku = (value as any).sku;
     const barcode = (value as any).barcode;
+    const price = (value as any).price;
+    const pricedAt = (value as any).pricedAt;
     clean[key] = {
       upc,
       name: typeof name === 'string' ? name : '',
@@ -183,12 +185,22 @@ function sanitizeStoreProducts(raw: any): { storeProducts: Record<string, StoreP
       // here, so H-E-B re-searched every ingredient forever and nothing said
       // why. `barcode` is Wegmans' equivalent and would fail identically.
       ...(typeof barcode === 'string' && barcode.trim() ? { barcode } : {}),
+      // ...which is exactly what would have happened to these two. What the
+      // product cost, and when that was true. They travel together: a price with
+      // no date is a number nobody can judge the age of, so `pricedAt` is only
+      // kept alongside a price.
+      ...(typeof price === 'string' && price.trim()
+        ? {
+            price,
+            ...(typeof pricedAt === 'string' && pricedAt.trim() ? { pricedAt } : {}),
+          }
+        : {}),
     };
   }
   return Object.keys(clean).length ? { storeProducts: clean } : null;
 }
 
-type StoreProductEntry = { upc: string; name: string; sku?: string; barcode?: string };
+type StoreProductEntry = { upc: string; name: string; sku?: string; barcode?: string; price?: string; pricedAt?: string };
 
 export function normalizeIngredients(raw: any): Ingredient[] {
   if (!Array.isArray(raw)) return [];

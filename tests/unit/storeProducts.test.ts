@@ -13,6 +13,7 @@ import {
   withoutStoreProducts,
 } from '../../src/lib/storeProducts';
 import { normalizeIngredients } from '../../src/lib/normalizeIngredients';
+import { mergeStoreProductOnly } from '../../src/lib/saveChosenIngredient';
 
 const MILK = { upc: '0001111041700', name: 'Kroger Whole Milk, 1 gal' };
 
@@ -269,5 +270,74 @@ describe('the backfill does not write to say nothing', () => {
     const out = mergeStoreProductOnly(rows, 'Spinach', 'heb', sp);
     expect(out).not.toBe(rows);
     expect(out[0].storeProducts.heb.sku).toBe('4090');
+  });
+});
+
+describe('a price that moved is written, and one that did not is not', () => {
+  // `mergeStoreProductOnly` returns the row UNCHANGED when nothing moved, so the
+  // caller can skip the PATCH. Adding a field to the entry without adding it
+  // here means the field is written by `withStoreProduct` and then thrown away
+  // one line later — which is how a captured price would have frozen at
+  // whatever it was the first time.
+  const ING = [{ ingredientName: 'sour cream', searchTerm: 'sour cream' }];
+
+  it('writes when only the price changed', () => {
+    const first = mergeStoreProductOnly(ING, 'sour cream', 'heb',
+      { upc: '1', name: 'Daisy', price: '$2.79' });
+    const second = mergeStoreProductOnly(first, 'sour cream', 'heb',
+      { upc: '1', name: 'Daisy', price: '$3.19' });
+
+    expect(second).not.toBe(first);
+    expect((second[0] as any).storeProducts.heb.price).toBe('$3.19');
+  });
+
+  it('does NOT write when the price is the same, so pricedAt does not churn', () => {
+    // The writer stamps pricedAt with `now` on every call, so a comparison that
+    // included it would make every cart open a PATCH.
+    const first = mergeStoreProductOnly(ING, 'sour cream', 'heb',
+      { upc: '1', name: 'Daisy', price: '$2.79' });
+    const second = mergeStoreProductOnly(first, 'sour cream', 'heb',
+      { upc: '1', name: 'Daisy', price: '$2.79' });
+
+    expect(second).toBe(first);
+  });
+});
+
+describe('what it cost, captured', () => {
+  // Stephen, 2026-09-09: "I just want to capture in the DB. We can decide how to
+  // use it later." So this stores what the store said and decides nothing: a
+  // string, verbatim, with the date it was true beside it.
+  it('writes the price and stamps when it was true', () => {
+    const out = withStoreProduct({ ingredientName: 'sour cream' } as Record<string, any>, 'heb',
+      { upc: '123', name: 'Daisy Sour Cream', price: '$2.79' });
+
+    expect(out.storeProducts.heb.price).toBe('$2.79');
+    // A price with no date is a number nobody can judge the age of, so the two
+    // are written together and the writer supplies the date.
+    expect(typeof out.storeProducts.heb.pricedAt).toBe('string');
+    expect(Number.isNaN(Date.parse(out.storeProducts.heb.pricedAt))).toBe(false);
+  });
+
+  it('serialises exactly as before when the store gave no price', () => {
+    // The rule every optional field on this entry follows. A product with no
+    // price must not gain a null, an empty string or a lone pricedAt.
+    const out = withStoreProduct({ ingredientName: 'sour cream' } as Record<string, any>, 'heb',
+      { upc: '123', name: 'Daisy Sour Cream' });
+
+    expect(out.storeProducts.heb).toEqual({ upc: '123', name: 'Daisy Sour Cream' });
+  });
+
+  it('keeps a caller-supplied timestamp rather than overwriting it', () => {
+    const out = withStoreProduct({ ingredientName: 'x' } as Record<string, any>, 'heb',
+      { upc: '1', name: 'n', price: '$1.00', pricedAt: '2026-01-01T00:00:00.000Z' });
+
+    expect(out.storeProducts.heb.pricedAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('reads both back', () => {
+    const ing = withStoreProduct({ ingredientName: 'x' } as Record<string, any>, 'heb',
+      { upc: '1', name: 'n', price: '$1.00', pricedAt: '2026-01-01T00:00:00.000Z' });
+
+    expect(getStoreProduct(ing, 'heb')).toMatchObject({ price: '$1.00', pricedAt: '2026-01-01T00:00:00.000Z' });
   });
 });

@@ -47,6 +47,25 @@ export interface StoreProduct {
    */
   sku?: string;
   /**
+   * What it cost when the user chose it, as the store said it.
+   *
+   * A STRING, not a number, and stored verbatim: every rail already builds a
+   * display string and they do not agree on shape. Wegmans and Walmart hand over
+   * "$4.99"; H-E-B prices some things by the pound; Kroger returns a number.
+   * Parsing five formats into one number here would mean deciding what a
+   * per-pound price means, and that decision has not been made yet -- so this
+   * captures what was shown and leaves the arithmetic to whoever needs it.
+   *
+   * A SNAPSHOT, and known to go stale. It is the price at the moment of
+   * choosing, for that store, in that fulfilment zone -- ALDI's prices are
+   * zone-specific, which is what MEAL-235 was about. `pricedAt` is stored beside
+   * it precisely so nothing can read it as current without noticing the date.
+   * Nothing renders it yet.
+   */
+  price?: string;
+  /** When `price` was captured. ISO. Absent whenever `price` is. */
+  pricedAt?: string;
+  /**
    * The product's real BARCODE, where the store gives us one.
    *
    * Not to be confused with `upc` above, which is misnamed: it holds the
@@ -106,6 +125,8 @@ export function getStoreProduct(ing: any, storeId: string | null | undefined): S
     name: typeof entry.name === 'string' ? entry.name : '',
     ...(typeof entry.sku === 'string' && entry.sku ? { sku: entry.sku } : {}),
     ...(typeof entry.barcode === 'string' && entry.barcode ? { barcode: entry.barcode } : {}),
+    ...(typeof entry.price === 'string' && entry.price ? { price: entry.price } : {}),
+    ...(typeof entry.pricedAt === 'string' && entry.pricedAt ? { pricedAt: entry.pricedAt } : {}),
   };
 }
 
@@ -137,6 +158,13 @@ export function withStoreProduct<T extends Record<string, any>>(
         // serialises exactly as it did before this field existed -- the same
         // rule `sku` and `prep` follow.
         ...(product.barcode ? { barcode: product.barcode } : {}),
+        // Same rule again: written only when the store gave one, so a product
+        // with no price serialises exactly as it did before this field existed.
+        // The two travel together — a price with no date is a number nobody can
+        // judge the age of.
+        ...(product.price
+          ? { price: product.price, pricedAt: product.pricedAt ?? new Date().toISOString() }
+          : {}),
       },
     },
   };

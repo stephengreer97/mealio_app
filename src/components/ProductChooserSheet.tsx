@@ -64,6 +64,26 @@ function upcForLabel(item: { suggestions: Suggestion[] } | undefined, label: str
   return matches.length === 1 ? matches[0].upc : null;
 }
 
+/**
+ * What the chosen product cost, as a string, on the SAME unambiguous-match rule
+ * the upc uses.
+ *
+ * Kroger is the one store that hands over a number rather than a display string,
+ * so it is formatted here -- and the per-pound shape is kept, because "$4.99"
+ * and "$4.99 / lb" are different facts and flattening them would be the first
+ * decision about what a stored price means. Nothing has decided that yet.
+ */
+function priceForLabel(item: { suggestions: Suggestion[] } | undefined, label: string | null): string | undefined {
+  if (!label) return undefined;
+  const matches = item?.suggestions.filter((s) => displayNameOf(s) === label) ?? [];
+  if (matches.length !== 1) return undefined;
+  const s = matches[0];
+  if (s.price == null) return undefined;
+  return s.soldBy === 'WEIGHT' && s.size
+    ? `$${s.price.toFixed(2)} / ${s.size.replace(/(\d)([a-zA-Z])/, '$1 $2').toLowerCase()}`
+    : `$${s.price.toFixed(2)}`;
+}
+
 // First in-stock suggestion's label, used to default-select like the other stores do.
 function firstDisplayName(item?: { suggestions: Suggestion[] }): string | null {
   const s = item?.suggestions?.find((x) => x.stockLevel !== 'TEMPORARILY_OUT_OF_STOCK') ?? item?.suggestions?.[0];
@@ -122,7 +142,7 @@ export default function ProductChooserSheet({
   const [error, setError] = useState('');
   const [results, setResults] = useState<Array<{ ingredientName: string; suggestions: Suggestion[] }>>([]);
   const [pickIdx, setPickIdx] = useState(0);
-  const [selections, setSelections] = useState<Map<string, { description: string; qty: number; upc: string | null }>>(new Map());
+  const [selections, setSelections] = useState<Map<string, { description: string; qty: number; upc: string | null; price?: string }>>(new Map());
   const [productQty, setProductQty] = useState(0);
   const [selectedDescription, setSelectedDescription] = useState<string | null>(null);
   const [customText, setCustomText] = useState('');
@@ -222,7 +242,7 @@ export default function ProductChooserSheet({
   function handleBack() {
     const newSelections = new Map(selections);
     if (selectedDescription && current) {
-      newSelections.set(current.ingredientName, { description: selectedDescription, qty: productQty, upc: upcForLabel(current, selectedDescription) });
+      newSelections.set(current.ingredientName, { description: selectedDescription, qty: productQty, upc: upcForLabel(current, selectedDescription), price: priceForLabel(current, selectedDescription) });
     } else if (current) {
       newSelections.delete(current.ingredientName);
     }
@@ -234,10 +254,41 @@ export default function ProductChooserSheet({
     setPickIdx(prevIdx);
   }
 
+  /**
+   * Move past this ingredient without choosing anything for it.
+   *
+   * Every other store's chooser has had this and Kroger's did not, so the only
+   * ways off an ingredient were to pick a product or to close the sheet and lose
+   * the ones already picked. An ingredient the store genuinely does not stock is
+   * the ordinary case, and there was no ordinary answer to it.
+   *
+   * It is a SKIP, not a decline: the selection is dropped so nothing is saved
+   * for this ingredient, and the run carries on. Deliberately not gated on
+   * `productQty`, unlike Next -- the whole point is that there is nothing here
+   * to set a quantity for.
+   */
+  function handleSkip() {
+    const newSelections = new Map(selections);
+    if (current) newSelections.delete(current.ingredientName);
+    setSelections(newSelections);
+    if (!isLast) {
+      const nextIdx = pickIdx + 1;
+      const nextSel = results[nextIdx] ? newSelections.get(results[nextIdx].ingredientName) : undefined;
+      setSelectedDescription(nextSel?.description ?? firstDisplayName(results[nextIdx]));
+      setProductQty(nextSel?.qty ?? 0);
+      setPickIdx(nextIdx);
+      return;
+    }
+    // Last ingredient: saving an empty map is still the right end of the run.
+    // `doSave` writes only what is in the map, so a skipped ingredient simply
+    // has no entry and the next cart run searches for it by name as before.
+    void doSave(newSelections);
+  }
+
   function handleNextBtn() {
     const newSelections = new Map(selections);
     if (selectedDescription && current) {
-      newSelections.set(current.ingredientName, { description: selectedDescription, qty: productQty, upc: upcForLabel(current, selectedDescription) });
+      newSelections.set(current.ingredientName, { description: selectedDescription, qty: productQty, upc: upcForLabel(current, selectedDescription), price: priceForLabel(current, selectedDescription) });
     }
     setSelections(newSelections);
     if (!isLast) {
@@ -251,7 +302,7 @@ export default function ProductChooserSheet({
     }
   }
 
-  async function doSave(selMap: Map<string, { description: string; qty: number; upc: string | null }>) {
+  async function doSave(selMap: Map<string, { description: string; qty: number; upc: string | null; price?: string }>) {
     setStep('saving');
     const updatedIngredients = meal.ingredients.map((ing) => {
       const chosen = selMap.get(ing.ingredientName);
@@ -263,7 +314,7 @@ export default function ProductChooserSheet({
       // Written together or not at all — a new name beside the previous
       // product's identifier would add something nobody chose.
       return chosen.upc
-        ? withStoreProduct(next, meal.storeId, { upc: chosen.upc, name: chosen.description })
+        ? withStoreProduct(next, meal.storeId, { upc: chosen.upc, name: chosen.description, ...(chosen.price ? { price: chosen.price } : {}) })
         : withoutStoreProducts(next);
     });
     const count = selMap.size;
@@ -348,9 +399,21 @@ export default function ProductChooserSheet({
                   return withPrep(line, ing.prep);
                 })()}</Text>
               </View>
-              <Text style={styles.sectionLabel}>
-                {current.suggestions.length > 0 ? `${storeName} products` : 'No products found'}
-              </Text>
+              {current.suggestions.length > 0 ? (
+                <Text style={styles.sectionLabel}>{storeName} products</Text>
+              ) : (
+                // The same box the WebView sheet draws, for the same reason: a
+                // grey "No products found" heading reads as a section that
+                // happens to be empty, and the user's way forward — the search
+                // box directly below — is not what their eye goes to. This is
+                // the one screen where the search field IS the answer.
+                <View style={styles.noResultsBox}>
+                  <Text style={styles.noResultsTitle}>No products found</Text>
+                  <Text style={styles.noResultsBody}>
+                    Type a different product name below to search {storeName} again.
+                  </Text>
+                </View>
+              )}
               {current.suggestions.map((s, i) => {
                 const isWeight = s.soldBy === 'WEIGHT';
                 const displayName = displayNameOf(s);
@@ -403,6 +466,14 @@ export default function ProductChooserSheet({
               </View>
             </ScrollView>
             <View style={styles.footer}>
+              {/*
+                NO RESULTS, NO QUANTITY. Same rule the WebView sheet got: a
+                quantity is a question about a product, and an empty list has no
+                product to ask it about. The stepper sat here glowing, asking how
+                many of nothing to add. Back, Skip and the search box stay — they
+                are the ways out of this screen.
+              */}
+              {current.suggestions.length > 0 && (
               <View style={styles.qtySection}>
                 <View style={styles.qtyRow}>
                   {/* MEAL-218, and this screen never got it. The fix landed in
@@ -446,6 +517,7 @@ export default function ProductChooserSheet({
                   </Text>
                 )}
               </View>
+              )}
               <View style={styles.footerButtons}>
                 <TouchableOpacity
                   style={[styles.navBtn, styles.navBtnSecondary, pickIdx === 0 && { opacity: 0.3 }]}
@@ -454,13 +526,39 @@ export default function ProductChooserSheet({
                 >
                   <Text style={styles.navBtnSecondaryText}>← Back</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.navBtn, { backgroundColor: storeColor }, productQty === 0 && { opacity: 0.4 }]}
-                  onPress={handleNextBtn}
-                  disabled={productQty === 0}
-                >
-                  <Text style={styles.navBtnText}>{productQty === 0 ? 'Choose Quantity' : isLast ? 'Save' : 'Next →'}</Text>
-                </TouchableOpacity>
+                {/*
+                  WITH NOTHING FOUND, SKIP IS THE ANSWER, so it takes the primary
+                  slot and Next goes away. Next is gated on a quantity, and there
+                  is no quantity to set for a product that does not exist — so
+                  leaving it there would be a disabled primary button reading
+                  "Choose Quantity" over a stepper that is no longer on screen.
+                */}
+                {current.suggestions.length === 0 ? (
+                  <TouchableOpacity
+                    style={[styles.navBtn, { backgroundColor: storeColor }]}
+                    onPress={handleSkip}
+                    testID="chooser-skip"
+                  >
+                    <Text style={styles.navBtnText}>{isLast ? 'Skip & Save' : 'Skip →'}</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <>
+                    <TouchableOpacity
+                      style={[styles.navBtn, styles.navBtnSecondary]}
+                      onPress={handleSkip}
+                      testID="chooser-skip"
+                    >
+                      <Text style={styles.navBtnSecondaryText}>Skip</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.navBtn, { backgroundColor: storeColor }, productQty === 0 && { opacity: 0.4 }]}
+                      onPress={handleNextBtn}
+                      disabled={productQty === 0}
+                    >
+                      <Text style={styles.navBtnText}>{productQty === 0 ? 'Choose Quantity' : isLast ? 'Save' : 'Next →'}</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
               </View>
             </View>
           </>
@@ -596,6 +694,20 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     color: Colors.text1,
   },
+  // The same three the WebView sheet uses, so "no products found" looks the
+  // same wherever a user meets it.
+  noResultsBox: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginBottom: 10,
+    gap: 4,
+  },
+  noResultsTitle: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: Colors.text1 },
+  noResultsBody: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, lineHeight: 17 },
   customSearchBtn: {
     width: 40,
     height: 40,
