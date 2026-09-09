@@ -568,9 +568,12 @@ const styles = StyleSheet.create({
     borderRadius: Radius.button - 2,
     alignItems: 'center',
   },
-  segmentActive: { backgroundColor: Colors.surfaceRaised, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
+  // The selected feed is brand red rather than a raised white pill: on this
+  // screen the white pill sat on a near-white track and read as no selection at
+  // all on a bright phone.
+  segmentActive: { backgroundColor: Colors.brand, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
   segmentText: { fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text3 },
-  segmentTextActive: { color: Colors.text1, fontFamily: 'Inter_600SemiBold' },
+  segmentTextActive: { color: '#fff', fontFamily: 'Inter_600SemiBold' },
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
