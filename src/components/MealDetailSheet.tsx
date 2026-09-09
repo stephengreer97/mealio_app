@@ -39,6 +39,14 @@ interface MealDetailSheetProps {
   krogerLocationId?: string | null;
   onNeedKrogerStore?: () => void;
   hideShare?: boolean;
+  /**
+   * Open the creator's profile from the byline, the way the website's card does.
+   *
+   * Optional, and deliberately not passed by every caller: inside the creator's
+   * own profile sheet the byline would lead back to the sheet you are standing
+   * in, and a personal meal carries an author string with no creator behind it.
+   */
+  onCreatorPress?: (creatorId: string) => void;
 }
 
 function fmtMeasurement(ing: Ingredient): string {
@@ -85,6 +93,7 @@ export default function MealDetailSheet({
   krogerLocationId,
   onNeedKrogerStore,
   hideShare = false,
+  onCreatorPress,
 }: MealDetailSheetProps) {
   const stores = useStores();
   const [editing, setEditing] = useState(false);
@@ -253,6 +262,7 @@ export default function MealDetailSheet({
   const authorName = m?.creatorSocial
     ? `@${m.creatorSocial}`
     : m?.creatorName ?? m?.author ?? null;
+  const creatorId: string | null = m?.creatorId ?? null;
   const sourceStr: string | null = m?.source ?? m?.website ?? null;
   const sourceHost = sourceStr
     ? (() => { try { return new URL(sourceStr).hostname.replace('www.', ''); } catch { return sourceStr; } })()
@@ -569,7 +579,21 @@ export default function MealDetailSheet({
 
                 {authorName && (
                   <View style={styles.metaRow}>
-                    <Text style={styles.authorText}>by {authorName}</Text>
+                    {/* Tappable only when there is a creator to open. An author
+                        is a string copied off a recipe; a creator is a profile. */}
+                    {creatorId && onCreatorPress ? (
+                      <TouchableOpacity
+                        onPress={() => onCreatorPress(creatorId)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`View ${authorName}'s profile`}
+                        testID="meal-detail-creator"
+                      >
+                        <Text style={[styles.authorText, styles.authorLink]}>by {authorName}</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <Text style={styles.authorText}>by {authorName}</Text>
+                    )}
                   </View>
                 )}
 
@@ -721,6 +745,9 @@ const styles = StyleSheet.create({
   mealName: { fontSize: 24, fontFamily: 'Inter_700Bold', color: Colors.text1, marginBottom: 6 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   authorText: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.brand },
+  // There is no hover on a phone, so the affordance the website gets from an
+  // underline-on-hover has to be visible at rest.
+  authorLink: { textDecorationLine: 'underline' },
   metaDot: { fontSize: 13, color: Colors.text3 },
   metaLabel: { fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3 },
   sourceRow: { marginBottom: 12 },

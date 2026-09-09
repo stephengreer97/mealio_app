@@ -12,7 +12,8 @@ import { Meal, PresetMeal } from '../types';
 
 const CARD_WIDTH = Dimensions.get('window').width / 2 - 20;
 const IMAGE_HEIGHT = 140;
-const AVATAR_SIZE = 30;
+// 5% more area than the 30 it started at, which is a diameter of 30 x sqrt(1.05).
+const AVATAR_SIZE = 30.7;
 
 interface MealCardProps {
   meal: Meal | PresetMeal;

@@ -259,6 +259,25 @@ export default function DiscoverScreen() {
     setCreatorSheetVisible(true);
   }
 
+  /**
+   * The byline on an open meal, tapped.
+   *
+   * The meal carries the creator's id and name and nothing else, and the profile
+   * sheet shows a bio and a follower count, so this fetches the creator rather
+   * than opening the sheet on the three fields a meal happens to hold. The meal
+   * sheet closes first: two page-sheet modals stacked is the website's order too
+   * (its card closes the detail modal before opening the creator popup).
+   */
+  async function openCreatorFromMeal(creatorId: string) {
+    setDetailVisible(false);
+    try {
+      const { creator } = await creatorsApi.getById(creatorId);
+      openCreatorProfile(creator);
+    } catch {
+      Alert.alert('Not available', 'That creator profile could not be loaded.');
+    }
+  }
+
   const activeFilterCount = [
     filters.tags.length > 0,
     filters.difficulty.length > 0,
@@ -456,6 +475,7 @@ export default function DiscoverScreen() {
         meal={selectedMeal}
         mode="view"
         onClose={() => setDetailVisible(false)}
+        onCreatorPress={openCreatorFromMeal}
         onPressSave={() => {
           if (!user) {
             setDetailVisible(false);
