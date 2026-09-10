@@ -93,7 +93,6 @@ import { hasSeen, markSeen, resetFirstRun, FIRST_RUN_WELCOME } from '../../src/l
 import {
   PITCH_HEADLINE,
   PITCH_SUBHEAD,
-  PITCH_STORES,
   PITCH_STEPS,
   PITCH_NOTHING_ORDERED,
   PITCH_FREE_TIER,
@@ -151,13 +150,14 @@ describe('the pitch says what mealio_central says', () => {
     expect(PITCH_STEPS[1].body).not.toMatch(/mobile app/i);
   });
 
-  it('still keeps the full store list for the surfaces that enumerate it', () => {
-    // Help's FAQ answers "which stores" directly, and there the list IS the
-    // answer. Dropping it from step 2 must not drop it from the module.
-    expect(PITCH_STORES).toBe(
-      'H-E-B, Walmart, Kroger and its banners, Albertsons, Safeway, ALDI, Amazon '
-      + 'Fresh and Wegmans',
-    );
+  it('names no retailer anywhere in the pitch', () => {
+    // The module used to carry the product's store list for the surfaces that
+    // enumerated it. None do now: the roster changes with a database row and a
+    // shipped string cannot follow it, which is how the list came to be offering
+    // Amazon Fresh five days after the product dropped it.
+    const everything = [PITCH_HEADLINE, PITCH_SUBHEAD, PITCH_NOTHING_ORDERED,
+      ...PITCH_STEPS.flatMap((s) => [s.title, s.body])].join(' ');
+    expect(everything).not.toMatch(/kroger|walmart|h-e-b|albertsons|safeway|wegmans|aldi|amazon/i);
   });
 });
 

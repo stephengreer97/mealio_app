@@ -12,7 +12,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../../constants/colors';
 import BugReportSheet from '../../components/BugReportSheet';
 import HowMealioWorks from '../../components/HowMealioWorks';
-import { PITCH_STORES } from '../../constants/pitch';
 
 interface FAQItem {
   question: string;
@@ -34,11 +33,13 @@ const FAQ_SECTIONS: { title: string; items: FAQItem[] }[] = [
           'Browse the Discover tab to find meals you like. Tap on any meal and press "Save to My Meals". Choose which grocery store you shop at, and the meal will appear in your My Meals tab.',
       },
       {
-        // Was "H-E-B, Walmart, and Kroger … available in the browser extension",
-        // which is neither true nor the same answer the rest of the app gives.
-        // One store list, from the canonical pitch module (MEAL-84).
+        // No list. It named eight retailers, one of which (Amazon Fresh) the
+        // product had already dropped, because a string in a shipped binary
+        // cannot track a roster that changes with a database row. The picker
+        // can, so the answer points there.
         question: 'Which grocery stores are supported?',
-        answer: `Mealio works with ${PITCH_STORES}. Pick your store when you save a meal, and Mealio adds the ingredients to your cart there.`,
+        answer:
+          'Mealio supports most major grocery retailers. Pick your store when you save a meal: the picker shows exactly which stores are available, and it is always the current list.',
       },
     ],
   },

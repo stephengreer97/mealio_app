@@ -6,12 +6,9 @@
 // whenever either changes, and expect the diff to be EMPTY for every string.
 //
 // It was not always. Step 2 used to interpolate a store list, and the list had
-// to differ per surface: cart automation for everything except Kroger runs in
-// this app, so the web build narrowed its list to `PITCH_STORES_WEB` and mobile
-// deliberately did not follow. Step 2 now names no store at all, which removed
-// the divergence and the constant with it. `PITCH_STORES` survives here because
-// the full list is still true of this app and still worth stating where someone
-// has gone looking for it.
+// to differ per surface, because the two surfaces can drive different stores.
+// No copy names a store now, on either surface, which ended that divergence and
+// took both constants with it -- see the note further down.
 //
 // The point of a shared module is that both surfaces tell one story. The web
 // front door (`/discover`) and this app's first run describe the same product;
@@ -37,26 +34,27 @@ export const PITCH_SUBHEAD =
   + 'you shop at, and every ingredient goes into your online cart there.';
 
 /**
- * Every store whose cart Mealio can fill — the product's list.
+ * NO STORE LIST LIVES HERE ANY MORE.
  *
- * The web copy of this module also carries `PITCH_STORES_WEB`, a narrower list,
- * because cart automation for everything except Kroger runs in *this* app. That
- * constant is deliberately NOT copied here: on mobile the full list is true.
- * Verified against `src/constants/stores.ts` — `WEBVIEW_STORE_IDS` covers H-E-B,
- * Walmart, ALDI, Amazon Fresh, Wegmans and the whole Albertsons family
- * (including Safeway), and `KROGER_BRAND_IDS` covers Kroger and its banners via
- * the in-app Kroger connection (`KrogerCartReviewSheet` / `ProductChooserSheet`).
+ * `PITCH_STORES` named eight retailers, and Help's FAQ answered "which stores?"
+ * with it. Stephen, 2026-09-09: "I don't want specific stores named anywhere.
+ * Keep it generic."
+ *
+ * Staleness had already caught it: the string still offered Amazon Fresh, which
+ * was removed from the product on 2026-09-04. That is the structural problem
+ * with the list rather than an oversight. The roster changes with a database
+ * row, and a string in a shipped binary changes with a release, so the two
+ * cannot help drifting apart.
+ *
+ * The store picker is the answer now, and it is built from the catalog, so it
+ * is right on the day a store is added or pulled.
+ * `tests/unit/no-store-names-in-copy.test.ts` keeps a brand name from
+ * reappearing in the copy.
  */
-export const PITCH_STORES =
-  'H-E-B, Walmart, Kroger and its banners, Albertsons, Safeway, ALDI, Amazon '
-  + 'Fresh and Wegmans';
 
 /**
  * The mechanism in three steps. Ordered; a surface with room for one shows the
  * last, because the cart is the part nobody guesses from a grid of photos.
- *
- * Step 2 interpolates `PITCH_STORES` rather than the web build's
- * `PITCH_STORES_WEB` — see the note on `PITCH_STORES`.
  */
 export const PITCH_STEPS: ReadonlyArray<{ title: string; body: string }> = [
   {
@@ -64,11 +62,10 @@ export const PITCH_STEPS: ReadonlyArray<{ title: string; body: string }> = [
     body: 'Browse recipes from cooks and creators. No account needed to look.',
   },
   {
-    // Names no store, and is now identical to the web original — see the header.
+    // Names no store, and is identical to the web original — see the header.
     // Someone meeting the product wants to know a store like theirs is covered;
     // the honest answer to "is MY store here" is the picker, which shows exactly
-    // what this build supports. `PITCH_STORES` still enumerates them for the
-    // surfaces where someone has gone looking.
+    // what this build supports and is right the day the roster changes.
     title: 'Pick the store you shop at',
     body: 'Mealio supports most major grocery retailers. You\'ll see the full list when you pick yours.',
   },
