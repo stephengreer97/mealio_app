@@ -83,6 +83,64 @@ export function isSupportedStore(storeId: string): boolean {
  * Order is meaningful only in that it is stable: entries the remote catalog adds
  * are appended after these, and every picker sorts by name anyway.
  */
+/**
+ * Family names a store should also answer to when someone searches the picker
+ * (MEAL-229).
+ *
+ * "Kroger" has to surface Ralphs and Fry's, and "Albertsons" has to surface Tom
+ * Thumb, because that is how people hold these: they know who owns their store
+ * even when the sign over the door says something else.
+ *
+ * WHY THIS IS NOT READ FROM THE SERVER, where the same fact lives as
+ * `stores.banner_group`. That column is deliberately not on the wire, and
+ * `tests/api/stores.test.ts` has a leak sentinel to keep it there: on the seeded
+ * rows `banner_group` partitions the catalog exactly like the app's capability
+ * sets, so a client reads it as a RULE and applies it to rows the binary has
+ * never seen -- which is the one question only the binary can answer. Serving it
+ * "just for search" would put the field in front of the next reader with that
+ * warning nowhere in sight. Overturning that is a decision worth taking
+ * deliberately, not a side effect of adding a search box.
+ *
+ * So this is DISPLAY data in the binary, the same category as BUNDLED_STORES,
+ * and it claims nothing about what this build can drive. The cost is honest and
+ * small: a store added by catalog row alone has no family keyword until a
+ * release, and until then it still matches on its own name.
+ */
+const KROGER_FAMILY = ['Kroger'];
+const ALBERTSONS_FAMILY = ['Albertsons'];
+export const STORE_SEARCH_ALIASES: Record<string, string[]> = {
+  // Kroger banners
+  bakers: KROGER_FAMILY,
+  city_market: KROGER_FAMILY,
+  dillons: KROGER_FAMILY,
+  fred_meyer: KROGER_FAMILY,
+  frys: KROGER_FAMILY,
+  harris_teeter: KROGER_FAMILY,
+  king_soopers: KROGER_FAMILY,
+  marianos: KROGER_FAMILY,
+  metro_market: KROGER_FAMILY,
+  pay_less: KROGER_FAMILY,
+  pick_n_save: KROGER_FAMILY,
+  qfc: KROGER_FAMILY,
+  ralphs: KROGER_FAMILY,
+  smiths: KROGER_FAMILY,
+  // Albertsons banners
+  acme: ALBERTSONS_FAMILY,
+  balduccis: ALBERTSONS_FAMILY,
+  carrs: ALBERTSONS_FAMILY,
+  haggen: ALBERTSONS_FAMILY,
+  jewel_osco: ALBERTSONS_FAMILY,
+  kings: ALBERTSONS_FAMILY,
+  pavilions: ALBERTSONS_FAMILY,
+  randalls: ALBERTSONS_FAMILY,
+  safeway: ALBERTSONS_FAMILY,
+  shaws: ALBERTSONS_FAMILY,
+  star_market: ALBERTSONS_FAMILY,
+  tom_thumb: ALBERTSONS_FAMILY,
+  united: ALBERTSONS_FAMILY,
+  vons: ALBERTSONS_FAMILY,
+};
+
 export const BUNDLED_STORES: Store[] = [
   { id: 'acme',           name: 'Acme Markets',        color: '#F04035' },
   { id: 'albertsons',     name: 'Albertsons',          color: '#009ee5' },

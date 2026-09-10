@@ -4,15 +4,18 @@ import {
   Text,
   StyleSheet,
   Modal,
+  TextInput,
   TouchableOpacity,
   FlatList,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
 import { Colors, Radius } from '../constants/colors';
 import { Store } from '../constants/stores';
 import { useStores } from '../lib/store-catalog/useStores';
+import { filterStores } from '../lib/storeSearch';
 import { presetMeals, meals as mealsApi } from '../lib/api';
 import { PresetMeal } from '../types';
 import Button from './ui/Button';
@@ -69,13 +72,31 @@ export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: 
   const [selectedStore, setSelectedStore] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const stores = useStores();
-  const [listItems, setListItems] = useState<ListItem[]>(stores);
+  const [query, setQuery] = useState('');
+  const [recentIds, setRecentIds] = useState<string[]>([]);
 
   useEffect(() => {
-    if (visible) {
-      getRecentStores().then((recent) => setListItems(buildListItems(recent, stores)));
+    if (visible) getRecentStores().then(setRecentIds);
+    // Opening the sheet again starts from the whole list. A query left over from
+    // the last save would hide most of the catalogue with no obvious cause.
+    if (!visible) setQuery('');
+  }, [visible]);
+
+  /**
+   * Searching flattens the list on purpose.
+   *
+   * Recent / All Stores is a good shape for browsing forty stores and a bad one
+   * for four results: a "Recent" heading over one row and "All Stores" over
+   * three reads as two lists when the user is looking at one answer. So a query
+   * gets matches in alphabetical order and nothing else.
+   */
+  const searching = query.trim() !== '';
+  const listItems: ListItem[] = React.useMemo(() => {
+    if (searching) {
+      return filterStores(stores, query).slice().sort((a, b) => a.name.localeCompare(b.name));
     }
-  }, [visible, stores]);
+    return buildListItems(recentIds, stores);
+  }, [searching, query, stores, recentIds]);
 
   async function handleSave() {
     if (!meal || !selectedStore) return;
@@ -129,6 +150,36 @@ export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: 
 
         <Text style={styles.subtitle}>Which store do you shop at?</Text>
 
+        <View style={styles.searchRow}>
+          <Ionicons name="search-outline" size={18} color={Colors.text3} style={styles.searchIcon} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search stores"
+            placeholderTextColor={Colors.text3}
+            value={query}
+            onChangeText={setQuery}
+            autoCorrect={false}
+            autoCapitalize="none"
+            returnKeyType="search"
+            testID="store-search"
+            // NO `clearButtonMode`: it is iOS-only and draws a NATIVE clear
+            // button inside the field, which would sit beside the one below and
+            // give iOS two X icons where Android has one (fixed once already on
+            // the Discover search box).
+          />
+          {query.length > 0 && (
+            <TouchableOpacity
+              testID="store-search-clear"
+              accessibilityRole="button"
+              accessibilityLabel="Clear store search"
+              onPress={() => setQuery('')}
+              style={styles.searchClear}
+            >
+              <Ionicons name="close-circle" size={16} color={Colors.text3} />
+            </TouchableOpacity>
+          )}
+        </View>
+
         <FlatList
           data={listItems}
           keyExtractor={(item) => ('type' in item ? `header-${item.label}` : item.id)}
@@ -150,6 +201,14 @@ export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: 
               </TouchableOpacity>
             );
           }}
+          keyboardShouldPersistTaps="handled"
+          ListEmptyComponent={
+            searching ? (
+              <Text style={styles.noResults} testID="store-search-empty">
+                No stores match "{query.trim()}". Try the chain's name: searching Kroger or Albertsons finds the stores they own.
+              </Text>
+            ) : null
+          }
         />
 
         <View style={styles.footer}>
@@ -183,6 +242,34 @@ const styles = StyleSheet.create({
     color: Colors.text2,
     padding: 20,
     paddingBottom: 8,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 20,
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    borderRadius: Radius.input,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  searchIcon: { marginRight: 8 },
+  searchInput: {
+    flex: 1,
+    paddingVertical: 10,
+    fontSize: 15,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text1,
+  },
+  searchClear: { paddingLeft: 8, paddingVertical: 8 },
+  noResults: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.text3,
+    textAlign: 'center',
+    marginTop: 24,
+    lineHeight: 20,
   },
   list: { paddingHorizontal: 20 },
   sectionHeader: {
