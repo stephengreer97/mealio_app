@@ -386,6 +386,14 @@ a fast path now, not a gate: either signal routes the item to review.</p>
   code for a store, and no server response can make that true &mdash; a database row would otherwise
   promise automation the installed app cannot deliver. The catalog can add a store's <i>name</i>;
   only a release can add its <i>automation</i>.</p>
+  <p><code>STORE_SEARCH_ALIASES</code> (MEAL-229) is in the binary too, and for a different
+  reason worth keeping straight: it is <b>display data, not capability</b>. It exists so the
+  store picker's search box answers &ldquo;Kroger&rdquo; with Ralphs and Fry's, and it claims
+  nothing about what this build can drive. The same fact lives server-side as
+  <code>stores.banner_group</code>, which is deliberately never served: on the seeded rows it
+  partitions the catalog exactly like table 1, so a client would read it as a rule and apply it
+  to rows the binary has never seen. Keeping the aliases here costs a release when a new banner
+  wants a family keyword, and until then that store still matches on its own name.</p>
 </div>
 <script src="assets/mermaid.min.js"></script>
 <script src="assets/flow-init.js"></script>
