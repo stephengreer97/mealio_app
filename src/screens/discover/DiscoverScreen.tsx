@@ -60,6 +60,26 @@ export default function DiscoverScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadingMoreRef = React.useRef(false);
+
+  /**
+   * Which fetch is still allowed to write.
+   *
+   * Tapping a segment starts a request and does not cancel the one before it,
+   * so switching fast enough lets the OLDER answer land last and overwrite the
+   * newer one. Stephen, 2026-09-09: "if I click following then back to trending
+   * very quick, it will show the following filter, and not switch back to
+   * trending." The header said Trending because the header is state; the list
+   * said Following because the list was whatever resolved last.
+   *
+   * Every call takes a number, and only the newest number may touch state.
+   *
+   * What this deliberately does NOT do: the stale request is not cancelled (the
+   * API client has no abort), and its `finally` does not clear the loading
+   * flags. Clearing them from a discarded response is how the website's version
+   * of this guard ended up spinning forever -- the newest request clears them in
+   * its own `finally`, which is the only one that means anything.
+   */
+  const fetchGenRef = React.useRef(0);
   const [hasMore, setHasMore] = useState(true);
 
   // Map of presetMealId → store names where user has already saved it
@@ -256,6 +276,7 @@ export default function DiscoverScreen() {
   }
 
   async function loadData(offset: number, reset: boolean) {
+    const gen = ++fetchGenRef.current;
     try {
       const [result, creatorsData] = await Promise.all([
         presetMealsApi.list({
@@ -275,6 +296,12 @@ export default function DiscoverScreen() {
         featuredCreators.length === 0 ? creatorsApi.featured() : Promise.resolve(null),
       ]);
 
+      // A newer segment, filter or search started while this was in flight, so
+      // this answer is about a question nobody is asking any more.
+      // A newer segment, filter or search started while this was in flight, so
+      // this answer is about a question nobody is asking any more.
+      if (fetchGenRef.current !== gen) return;
+
       if (creatorsData) setFeaturedCreators(creatorsData);
 
       if (reset) {
@@ -287,12 +314,17 @@ export default function DiscoverScreen() {
       }
       setHasMore(result.hasMore);
     } catch (err: any) {
+      // Same rule for the failure: a stale request's error is not this screen's
+      // problem, and an alert about the feed you already left is noise.
+      if (fetchGenRef.current !== gen) return;
       Alert.alert('Error', err.message || 'Could not load meals');
     } finally {
-      loadingMoreRef.current = false;
-      setLoading(false);
-      setRefreshing(false);
-      setLoadingMore(false);
+      if (fetchGenRef.current === gen) {
+        loadingMoreRef.current = false;
+        setLoading(false);
+        setRefreshing(false);
+        setLoadingMore(false);
+      }
       if (onReady && !readyCalled.current) {
         readyCalled.current = true;
         onReady();
