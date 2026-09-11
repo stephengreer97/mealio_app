@@ -122,6 +122,15 @@ import {
 import { PrewarmedCart } from '../../src/components/SilentLoginProbe';
 import { auth } from '../../src/lib/api';
 import { clearSessionLogs, getSessionLogs, installConsoleCapture } from '../../src/lib/logBuffer';
+// THIS SUITE IS ABOUT THE WEBVIEW PROBE, which is now one branch of three:
+// checkStore asks over HTTP first and only falls back to a renderer for a store
+// that cannot be answered that way. Everything below still describes behaviour
+// worth pinning, so the checker is stubbed to send every store down it.
+//
+// The teardown this file guards matters MORE since that change, not less: the
+// check became asynchronous, which opened a ~400ms window in which a sign-out
+// can land mid-check. That race has its own test in native-login-first.test.tsx.
+import { __setLoginCheckerForTests, __resetLoginCheckerForTests } from '../../src/lib/native-login';
 
 const login = auth.login as jest.Mock;
 
@@ -207,11 +216,15 @@ const prewarmLines = () => getSessionLogs().split('\n').filter((l) => l.includes
 beforeAll(() => { installConsoleCapture(); });
 
 beforeEach(() => {
+  __setLoginCheckerForTests(async () => ({
+    state: 'needs-webview' as const, how: 'stubbed for this suite', ms: 0,
+  }));
   login.mockReset();
   mockKeychain.clear();
   probes().length = 0;
   clearSessionLogs();
 });
+afterEach(() => { __resetLoginCheckerForTests(); });
 
 // ── The probe itself has to stop ─────────────────────────────────────────────
 

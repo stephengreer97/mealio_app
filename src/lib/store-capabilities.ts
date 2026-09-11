@@ -110,12 +110,23 @@ const CAPABILITIES: Record<string, StoreCapability> = {
       + 'needs storage native code cannot read and WebCrypto React Native does not have',
   },
 
+  // WALMART IS UNTOUCHED, and `measured: false` is what makes that true.
+  //
+  // Stephen, 2026-09-11: "Walmart is off the table for now." Marking it
+  // measured-and-blocked looked like the honest reading -- its login IS
+  // localStorage only -- but it changed Walmart's behaviour: a measured-blocked
+  // store DEFERS its login check, so Walmart silently stopped getting the probe
+  // it has always had at launch. Off the table has to mean the old path, not a
+  // better-informed new one.
+  //
+  // So it sits with the unmeasured stores until somebody deliberately picks it
+  // up again, which is also true: nobody has measured a native Walmart, because
+  // the decision was to go through walmart.io instead.
   walmart: {
-    measured: true,
+    measured: false,
     nativeLogin: false,
     nativeRun: false,
-    why: 'login is localStorage only (glassCartIdMap.isGuest) with no request to make, and Stephen '
-      + 'has paused it in favour of walmart.io on his own bot-detection history',
+    why: 'paused on Stephen\'s call in favour of walmart.io; keeps the WebView path it has always had',
   },
 };
 

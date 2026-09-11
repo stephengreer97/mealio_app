@@ -66,13 +66,43 @@ async function jarIsEmpty(origin: string): Promise<boolean> {
 }
 
 /**
+ * THE CHECK, SWAPPABLE UNDER TEST.
+ *
+ * Same shape as __applyAutomationConfigForTests elsewhere in this repo, and for
+ * the same reason: the real implementation makes a network request, and a suite
+ * about the PREWARM'S behaviour should not be deciding what a store answers.
+ *
+ * Without this the two prewarm suites hang rather than fail. They call
+ * checkStore and assert on what happened; the real checker reaches for fetch,
+ * which under jest neither succeeds nor fails quickly, so the probe that should
+ * follow it never mounts inside the test's act() window. Ten tests went red on
+ * exactly that, and the fix is a seam rather than a timeout nobody can see.
+ */
+let checker: (storeId: string) => Promise<LoginVerdict> = realCheckLogin;
+
+/** Swap the checker. Tests only; production never calls this. */
+export function __setLoginCheckerForTests(fn: (storeId: string) => Promise<LoginVerdict>): void {
+  checker = fn;
+}
+
+/** Put the real one back. */
+export function __resetLoginCheckerForTests(): void {
+  checker = realCheckLogin;
+}
+
+/** Ask the store, through whatever checker is installed. */
+export function checkLogin(storeId: string): Promise<LoginVerdict> {
+  return checker(storeId);
+}
+
+/**
  * Ask the store. Cheap where the store allows it, honest where it does not.
  *
  * Never throws: a check that dies takes the run's decision with it, and the
  * caller can do something sensible with 'needs-webview' but nothing at all with
  * an exception.
  */
-export async function checkLogin(storeId: string): Promise<LoginVerdict> {
+async function realCheckLogin(storeId: string): Promise<LoginVerdict> {
   const t0 = Date.now();
   const done = (v: Omit<LoginVerdict, 'ms'>): LoginVerdict => ({ ...v, ms: Date.now() - t0 });
 
