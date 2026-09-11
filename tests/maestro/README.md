@@ -55,8 +55,15 @@ eas build --platform ios --profile ios-simulator --no-wait
 
 ## First run gets in the way, on purpose
 
-Every flow launches with `clearState: true`, which is genuinely a first run, so
-the welcome sheet covers Discover before any of them can see the meal list.
+Every flow launches with `clearState: true` **and `clearKeychain: true`**, which
+together are genuinely a first run, so the welcome sheet covers Discover before
+any of them can see the meal list.
+
+`clearKeychain` is load-bearing, not belt-and-braces. The first-run flags live in
+`expo-secure-store`, which is the keychain, and `clearState` does not touch it.
+With only `clearState`, whichever flow ran first dismissed the sheet **for every
+flow after it** — so the flows were not independent, and a flow passed or failed
+depending on what ran before it.
 `../subflows/dismiss-welcome.yaml` waits for it and taps through, and every flow
 runs it immediately after `launchApp`.
 
