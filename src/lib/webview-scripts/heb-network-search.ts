@@ -109,7 +109,7 @@ const GQL_FN = `
 ${RETRY_FN}
   function __hebGqlAttempt(op, query, variables, timeoutMs) {
     var ctl = null;
-    try { ctl = new AbortController(); } catch (e) { ctl = null; }
+    try { ctl = __mealioTrack(new AbortController()); } catch (e) { ctl = null; }
     var timer = null;
     return (async function () {
       try {
@@ -553,6 +553,10 @@ export function buildHebNetworkSearchBatchScript(
 ${GQL_FN}
   var TERMS = ${JSON.stringify(terms)};
   var CHUNKS = ${JSON.stringify(chunks)};
+  // The generation this batch was injected under. A stop bumps the counter, so
+  // every loop below notices at its next check and the run's own script, injected
+  // afterwards, is never held by the stop that ended this one.
+  var MY_GEN = __mealioGen();
   var DOCS = ${JSON.stringify(docs)};
   var post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
@@ -663,8 +667,12 @@ ${CANDIDATE_HELPERS}
   // only makes that gentler -- a twelve-term run is two documents, not twelve
   // requests -- so the pool stays exactly as it was.
   var next = 0;
+  var STOPPED = false;
   var runner = async function () {
     while (true) {
+      // Per chunk, which on this rail is the finest grain there is -- a chunk is
+      // one batched document, so there is nothing smaller to stop between.
+      if (__mealioGen() !== MY_GEN) { STOPPED = true; return; }
       var i = next++;
       if (i >= CHUNKS.length) return;
       try { await searchChunk(CHUNKS[i]); }
@@ -682,7 +690,7 @@ ${CANDIDATE_HELPERS}
   var lanes = [];
   for (var L = 0; L < ${concurrency} && L < CHUNKS.length; L++) lanes.push(runner());
   await Promise.all(lanes);
-  post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length });
+  post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length, stopped: STOPPED });
 })(); true;`;
 }
 

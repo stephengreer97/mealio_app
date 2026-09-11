@@ -1245,23 +1245,37 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
    *  a robots.txt: if it has not landed by now it is not going to. */
   const QUIET_NAV_TIMEOUT_MS = 6_000;
 
-  const NET_PREWARM_WAIT_MS = 300;
   /**
-   * THREE SECONDS WAS NOT A WAIT, IT WAS A RACE.
+   * STOPPING THE PREWARM, RATHER THAN WAITING FOR IT.
    *
-   * The prewarm and the run search the IDENTICAL terms. Standing back costs
-   * time; not standing back costs a second batch of the same size against a
-   * store whose search degrades under burst (MEAL-207). Measured on Albertsons,
-   * six terms, 2026-09-01: the run gave up after 3s, both batches then ran
-   * together for 100 seconds, and the first answer took 68 of them. The prewarm
-   * alone had been answering fine.
+   * Stephen, 2026-09-10: "The prewarm should be cleanly interruptible and that
+   * should not add any time. Even if interrupted I still want to be able to use
+   * the data that it warmed."
    *
-   * So the ceiling scales with the batch, because a bigger batch is both slower
-   * to finish AND worse to duplicate. A prewarm that dies still releases the run
-   * immediately — netPrewarmDoneRef is set on its failure paths too, so this
-   * ceiling is only reached by one that is genuinely still working.
+   * What was here before was a wait. The prewarm and the run search the IDENTICAL
+   * terms, so starting the run's batch beside one still in flight costs a second
+   * batch of the same size against a store whose search degrades under burst
+   * (MEAL-207) — measured on Albertsons, six terms, 2026-09-01: both batches ran
+   * together for 100 seconds and the first answer took 68 of them. Standing back
+   * avoided that, and charged the user for it: the ceiling was
+   * `min(300, max(60, terms * 15))` polls of 300ms, which is 27 SECONDS of a
+   * six-term ALDI run spent watching a prewarm finish work the run was about to
+   * redo anyway.
+   *
+   * Both of those are avoidable, because the third option was never tried. The
+   * prewarm runs in this WebView, and a script in this WebView can be told to
+   * stop: __mealioStop bumps a generation every batch loop reads between terms
+   * and aborts what is on the wire. So the run stops it and starts, immediately,
+   * with no second batch and no wait.
+   *
+   * Nothing warmed is lost. Every answer the prewarm posted before the stop is
+   * already in netPrewarmCandidatesRef, and the seed below takes them out of the
+   * run's batch. A stopped prewarm makes the run's batch SMALLER, never larger.
+   *
+   * Defined next to netPrewarmSettle, which it calls; reached from here through
+   * a ref, the same way netStartSearch and netFinishChoose are.
    */
-  const netPrewarmMaxWaits = (terms: number) => Math.min(300, Math.max(60, terms * 15));
+  const netStopPrewarmRef = useRef<(why: string) => void>(() => {});
   /** How long a session answer stays good enough for the run to reuse instead of
    *  re-asking. The login check and the run happen seconds apart, so anything on
    *  this scale works; two minutes is short enough that a sheet left sitting
@@ -1283,9 +1297,6 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   const netPrewarmStartedRef = useRef(false);
   const netPrewarmCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
   const netPrewarmTermsRef = useRef<string[]>([]);
-  /** How many times the run has stood back for an in-flight prewarm. Bounded so
-   *  a prewarm that never answers cannot hold the run for ever. */
-  const netPrewarmWaitsRef = useRef(0);
   const netStartSearchRef = useRef<() => void>(() => {});
   /** Set when the prewarm has finished (or given up). Diagnostic only now — the
    *  WebView stays mounted through the qty screen either way, because keeping
@@ -1308,20 +1319,26 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
    */
   const netPrewarmInjectedRef = useRef(false);
   /**
+   * The batch came BACK, as opposed to the prewarm merely being over.
+   *
+   * netPrewarmDoneRef conflates two things that need different answers here: a
+   * batch that reported SEARCH_BATCH_DONE, and a prewarm the deadline gave up
+   * on. The second one is still searching inside the page — that is the whole
+   * reason the deadline exists — so a stop that checked only netPrewarmDoneRef
+   * would skip exactly the case that most needs stopping, and the run's batch
+   * would go out beside a live one. This is the flag that can tell them apart.
+   */
+  const netPrewarmBatchDoneRef = useRef(false);
+  /**
    * THE PREWARM'S OWN DEADLINE, separate from the run's.
    *
-   * netStartSearch stands back for a prewarm that is still answering, and the
-   * note on netPrewarmMaxWaits used to claim "a prewarm that dies still releases
-   * the run immediately -- netPrewarmDoneRef is set on its failure paths too".
-   * That was true of the failures the prewarm is TOLD about and false of the two
-   * that matter: a session probe that never answers, and a search batch whose
-   * SEARCH_BATCH_DONE never arrives because the store went quiet or the document
-   * was torn down. Neither posts anything, so nothing set the flag and the run
-   * sat out the whole wait ceiling.
-   *
-   * MEASURED 2026-09-02, Albertsons, 31 items: the run waited 19.6s -- 60 waits
-   * of 300ms, the floor of the ceiling -- and then searched anyway. On a batch
-   * big enough that ceiling is 300 waits, which is 90 seconds of standing still.
+   * It no longer holds the run back -- netStartSearch stops the prewarm rather
+   * than waiting for it -- but it is still what ends a prewarm the user never
+   * interrupts, and the two silent failures it was built for are still silent: a
+   * session probe that never answers, and a search batch whose SEARCH_BATCH_DONE
+   * never arrives because the store went quiet or the document was torn down.
+   * Neither posts anything, so without this the prewarm would stay "running" for
+   * the life of the sheet and keep its terms out of the run's seed.
    *
    * The run's own netTimeoutRef cannot do this job: firing it hands the user
    * over, and a prewarm giving up is not a run failing.
@@ -2672,22 +2689,19 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       return;
     }
 
-    // WAIT FOR AN IN-FLIGHT PREWARM BEFORE OPENING A SECOND BURST.
+    // STOP AN IN-FLIGHT PREWARM. DO NOT WAIT FOR IT.
     //
-    // The user can tap while the prewarm's batch is still out — measured at
-    // 0.2s after it went. Starting the run's own search then puts TWO batches
-    // in the same page at once, which is both the burst shape a store is most
-    // likely to challenge and pure waste, since the answers are already coming.
+    // The user can tap while the prewarm's batch is still out — measured at 0.2s
+    // after it went. Starting the run's own search beside it would put TWO
+    // batches of the identical terms in one page, which is the burst shape a
+    // store is most likely to challenge (MEAL-207).
     //
-    // Bounded: the prewarm's own deadline is the backstop, and if it has not
-    // finished by then the run proceeds and searches what it is missing.
-    if (netPrewarmStartedRef.current && !netPrewarmDoneRef.current
-        && netPrewarmWaitsRef.current < netPrewarmMaxWaits(terms.length)) {
-      netPrewarmWaitsRef.current += 1;
-      console.log(`[Cart ${ts()}]`, 'network run: prewarm still answering — waiting for it rather than searching twice');
-      setTimeout(() => netStartSearchRef.current(), NET_PREWARM_WAIT_MS);
-      return;
-    }
+    // This used to stand back until the prewarm finished, and that is the wait
+    // that made prewarm cost time rather than save it. Stopping is strictly
+    // better on both counts: no second batch, and no standing still. The terms
+    // it had already answered are kept, and the seed below leaves them out of
+    // the run's batch, so the run is smaller for the prewarm having run at all.
+    netStopPrewarmRef.current('the user tapped');
 
     // WHAT THE PREWARM ALREADY ANSWERED IS NOT ASKED AGAIN.
     //
@@ -2715,6 +2729,14 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         'terms already prewarmed — skipping the search phase');
       netSearchTermsRef.current = terms;
       netPhaseRef.current = 'search';
+      // A SKIPPED SEARCH IS A FINISHED SEARCH, not an unstarted one.
+      //
+      // This branch set no progress at all, so netPct stayed null, the animation
+      // read that as indeterminate, and the bag sat on the empty frame with no
+      // label under it for a run whose search was in fact complete. Every term is
+      // answered here by definition — that is what missing.length === 0 means.
+      setNetProgress({ done: terms.length, total: terms.length, label: null, phase: 'search' });
+      advanceNetPct('search', terms.length, terms.length);
       // The same fork the end of a search takes. A choose run stops here.
       if (netChooseOnlyRef.current) { netFinishChooseRef.current(); return; }
       netStartAddsRef.current();
@@ -2729,8 +2751,16 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     netSearchInjectsRef.current = 1;
     netPhaseRef.current = 'search';
     setStep('searching');
-    setNetProgress({ done: 0, total: terms.length, label: 'Looking up ingredients', phase: 'search' });
-    advanceNetPct('search', 0, terms.length);
+    // A PREWARMED TERM IS A LOOKED-UP TERM, so it starts the counter ahead.
+    //
+    // The total is every term, but the only thing that moves `done` is a
+    // SEARCH_RESULT arriving at THIS WebView — and a prewarmed term answered
+    // earlier, somewhere else, so it never sends one. Starting at zero meant the
+    // bag could only ever fill by missing/terms and never reached full. Prewarm
+    // doing its job better made the animation look more broken, which is exactly
+    // backwards: the frame is supposed to BE the progress.
+    setNetProgress({ done: reused, total: terms.length, label: 'Looking up ingredients', phase: 'search' });
+    advanceNetPct('search', reused, terms.length);
     setSearchingLabel(`Searching ${terms.length} ingredients…`);
     console.log(`[Cart ${ts()}]`, 'network run: searching', terms.length, 'terms with no page load');
     // A FLAT 40 SECONDS THREW AWAY A SEARCH THAT WAS WORKING.
@@ -2813,7 +2843,6 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     netFallbackCandidatesRef.current = new Map();
     netFallbackPendingRef.current = false;
     netRunBaselineRef.current = null;
-    netPrewarmWaitsRef.current = 0;
     netPhaseRef.current = 'session';
     setStep('searching');
     setSearchingLabel('Connecting…');
@@ -3112,6 +3141,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       netPrewarmTermsRef.current = [];
       netPrewarmDoneRef.current = false;
       netPrewarmInjectedRef.current = false;
+      netPrewarmBatchDoneRef.current = false;
       postLoginQuietNavRef.current = false;
       // The deadline goes with it. A timer left running from the last open would
       // fire into this one and release its run before the prewarm had started.
@@ -4009,6 +4039,30 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     if (netPhaseRef.current === 'prewarm') netPhaseRef.current = 'idle';
     console.log(`[Cart ${ts()}]`, 'search prewarm: finished —', why);
   }, []);
+
+  /**
+   * Stop the prewarm where it stands, and keep everything it got.
+   *
+   * The injected __mealioStop bumps a generation that every rail's batch loop
+   * reads between terms, and aborts what is on the wire. On the serial rails
+   * (ALDI, Wegmans) that is most of the saving: a stop at term two spares the
+   * other sixteen requests rather than cancelling one.
+   *
+   * Reached from netStartSearch through netStopPrewarmRef, because that function
+   * is defined above this one.
+   */
+  const netStopPrewarm = useCallback((why: string) => {
+    // Gated on the BATCH, not on the prewarm being over. A deadline that fired
+    // leaves netPrewarmDoneRef true and the search still running in the page,
+    // which is the one case where not stopping costs a duplicate burst.
+    if (!netPrewarmInjectedRef.current || netPrewarmBatchDoneRef.current) return;
+    console.log(`[Cart ${ts()}]`, 'search prewarm: stopping it —', why, '—',
+      netPrewarmCandidatesRef.current.size, 'terms already answered and kept');
+    webviewRef.current?.injectJavaScript(
+      'try { window.__mealioStop && window.__mealioStop(); } catch (e) {} true;');
+    netPrewarmSettle('stopped by the run');
+  }, [netPrewarmSettle]);
+  netStopPrewarmRef.current = netStopPrewarm;
 
   /** Give the prewarm's next step a ceiling. Silence is a failure like any other. */
   const netPrewarmArm = useCallback((ms: number, why: string) => {
@@ -6250,6 +6304,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
             && netPhaseRef.current !== 'search') {
           console.log(`[Cart ${ts()}]`, 'search prewarm: done —',
             netPrewarmCandidatesRef.current.size, 'terms answered before the user tapped');
+          netPrewarmBatchDoneRef.current = true;
           netPrewarmSettle('the batch came back');
           return;
         }
@@ -6515,7 +6570,8 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         // not fed to the sequential handler below — that one assumes it is the
         // answer to the ONE item the run is currently walking, and a batch posts
         // twelve of them in no particular order.
-        // A PREWARM ANSWER IS KEPT WHATEVER THE PHASE SAYS.
+        // A PREWARM ANSWER IS KEPT WHATEVER THE PHASE SAYS, AND WHATEVER THE
+        // DEADLINE SAYS.
         //
         // It used to be gated on phase === 'prewarm', and there is a gap: the
         // user taps, the run sets the phase to 'session', and every prewarm
@@ -6524,10 +6580,29 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         // answers fell in the gap, and the run re-searched all nineteen terms
         // instead of the thirteen it was missing. The prewarm cost a burst and
         // saved nothing.
+        //
+        // That fix closed the window BEFORE the prewarm's deadline and left the
+        // one after it open, which is the same bug on a slower store: the
+        // deadline fires, netPrewarmDoneRef goes true, the batch's answers
+        // finally arrive during the run's session phase, and the branch below
+        // drops everything that is not phase === 'search'. So the gate is no
+        // longer "is the prewarm still running" but "did the prewarm ask for
+        // this term", which is the question that was always meant. A term this
+        // run is not searching yet, whose answer we have, is warmed data — the
+        // only thing to do with it is keep it.
         if (msg.type === 'SEARCH_RESULT' && msg.source === 'network'
-            && netPrewarmStartedRef.current && !netPrewarmDoneRef.current
-            && netPhaseRef.current !== 'search') {
-          if (typeof msg.term === 'string' && Array.isArray(msg.candidates)) {
+            && netPrewarmStartedRef.current
+            && netPhaseRef.current !== 'search'
+            && typeof msg.term === 'string'
+            && netPrewarmTermsRef.current.includes(msg.term)
+            // ...but the FALLBACK batch owns its answers, even for a term the
+            // prewarm also asked for. It fires during the add phase, which is
+            // not 'search', and its terms are drawn from the ones that came back
+            // empty -- so they overlap the prewarm's set almost by definition.
+            // Without this the widened re-search lands in the prewarm's map,
+            // where nothing reads it, and the review screen offers nothing.
+            && !netFallbackPendingRef.current) {
+          if (Array.isArray(msg.candidates)) {
             netPrewarmCandidatesRef.current.set(msg.term, msg.candidates as Candidate[]);
           }
           return;

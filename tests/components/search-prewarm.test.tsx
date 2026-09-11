@@ -318,53 +318,61 @@ describe('a prewarm still in flight when the user taps', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
 
-  it('waits for it rather than opening a second burst', () => {
-    // Measured on a 19-item run: the user tapped 0.2s after the prewarm's batch
-    // went out, so TWO batches were in the same page at once — the burst shape a
-    // store is most likely to challenge, and pure waste, since the answers were
-    // already on their way.
+  it('stops the prewarm and searches immediately, rather than waiting for it', () => {
+    // THE WAIT WAS THE BUG. Measured on a 19-item run: the user tapped 0.2s
+    // after the prewarm's batch went out, so TWO batches were in the same page
+    // at once — the burst shape a store is most likely to challenge. Standing
+    // back avoided the second batch and charged the user for it: up to 27s on a
+    // six-term ALDI order, spent watching the prewarm redo work the run was
+    // about to redo anyway.
+    //
+    // Stephen, 2026-09-10: "The prewarm should be cleanly interruptible and that
+    // should not add any time." So the run stops it and goes.
     const { view, post, load } = openSheet();
     load();
     post(SESSION);
     const duringPrewarm = searchBatches();
+
+    // One of the two came back before the tap. That answer is warmed data.
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('sour cream')] });
 
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
     post(SESSION);
     post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     post(SESSION);
 
-    // Nothing new went out: the run is standing back.
-    expect(searchBatches()).toBe(duringPrewarm);
+    // The page was told to stop, and no clock had to run for it.
+    expect(injected.some((s) => s.includes('__mealioStop'))).toBe(true);
 
-    // The prewarm finishes, having answered one of the two.
-    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('sour cream')] });
-    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 2 });
-    act(() => { jest.advanceTimersByTime(500); });
-
-    // NOW it searches, and only for what it is missing.
+    // It searched straight away — no advanceTimersByTime anywhere above.
     expect(searchBatches()).toBe(duringPrewarm + 1);
+
+    // And only for what it was missing. The stopped prewarm made the run's
+    // batch SMALLER, which is the whole point of it having run.
     const last = injected.filter((x) => x.includes('productSearchPageV2')).pop()!;
     expect(last).toContain('tortillas');
     expect(last).not.toContain('sour cream');
   });
 
-  it('does not wait for ever on a prewarm that never answers', () => {
-    // Bounded, or a prewarm that never speaks holds the run open for good. The
-    // ceiling scales with the batch now — standing back is cheaper than
-    // duplicating it — so this waits out the whole ceiling, not three seconds.
+  it('keeps an answer that arrives after the prewarm has been stopped', () => {
+    // The interrupt must not throw away what it interrupted. A request already
+    // on the wire can still land after the stop — the abort is a best effort,
+    // not a guarantee — and a term answered is a term answered whichever side of
+    // the stop it arrives on.
     const { view, post, load } = openSheet();
     load();
     post(SESSION);
-    const duringPrewarm = searchBatches();
 
     act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    // Still mid-session, so the run has not started its own search yet.
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'sour cream', candidates: [candidate('sour cream')] });
     post(SESSION);
     post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     post(SESSION);
-    // Two terms: 60 ticks of 300ms, the floor.
-    act(() => { jest.advanceTimersByTime(30_000); });
 
-    expect(searchBatches()).toBe(duringPrewarm + 1);
+    const last = injected.filter((x) => x.includes('productSearchPageV2')).pop()!;
+    expect(last).not.toContain('sour cream');
+    expect(last).toContain('tortillas');
   });
 });
 
@@ -735,6 +743,60 @@ describe('a Choose Products run fills the bag with its search', () => {
     // Half full would be frame 2 or 3 of 6. A finished choose run is the last.
     expect(frame).toBe(meta.frames - 1);
   });
+
+  it('counts a prewarmed term as looked up, so the bag still fills', () => {
+    // THE BETTER PREWARM DID, THE EMPTIER THE BAG LOOKED.
+    //
+    // The total is every term, but the only thing that moved `done` was a
+    // SEARCH_RESULT arriving at THIS WebView — and a prewarmed term answered
+    // earlier, in the selection screen's own probe, so it never sent one. On
+    // ALDI, where the prewarm usually gets nearly everything, the bag could only
+    // fill by the share prewarm MISSED and then stopped. Stephen watched exactly
+    // that on 2026-09-10 and reported it as the animation being stuck.
+    //
+    // One of the two terms is answered before the sheet opens. The run searches
+    // the other. Both are looked up by the end, so the bag is full.
+    jest.useFakeTimers();
+    __applyAutomationConfigForTests({
+      stores: { heb: { networkSearch: true, networkAdd: true, cartSkuConfirm: true } },
+    });
+    ((global as any).__earlyAnswers as Map<string, unknown[]>)
+      .set('Sour Cream', [candidate('Sour Cream')]);
+
+    const view = render(
+      <WebViewCartSheet visible meals={[unchosen] as never} storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+    );
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    const load = () => act(() => {
+      const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/robots.txt' } });
+    });
+
+    load();
+    post(SESSION);
+    post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    post(SESSION);
+    // ONLY the term the prewarm missed comes back at the run. The other one was
+    // answered before any of this and is never re-asked.
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'Tortillas', candidates: [candidate('Tortillas')] });
+
+    for (let i = 0; i < 40; i++) act(() => { jest.advanceTimersByTime(60); });
+    jest.useRealTimers();
+
+    const meta = require('../../assets/anim/bag-fill.json');
+    const win = view.getByTestId('bag-frame-window').children[0] as unknown as
+      { props: { style: Record<string, unknown> } };
+    const t = (win.props.style.transform ?? []) as Array<Record<string, number>>;
+    const dispH = 232;
+    const dispW = Math.round(meta.frameWidth * (dispH / meta.frameHeight));
+    const col = Math.round(Math.abs(t.find((x) => 'translateX' in x)?.translateX ?? 0) / dispW);
+    const row = Math.round(Math.abs(t.find((x) => 'translateY' in x)?.translateY ?? 0) / dispH);
+    expect(row * meta.cols + col).toBe(meta.frames - 1);
+  });
 });
 
 describe('a run records what it learned, so the next one need not search', () => {
@@ -922,9 +984,11 @@ describe('a prewarm that never comes back', () => {
     expect(searchBatches()).toBe(duringPrewarm + 1);
   });
 
-  it('does NOT give up on one that is still answering', () => {
-    // The deadline must not undo the wait itself, which is what stops two
-    // identical batches hitting the store at once.
+  it('stops one that is still answering, rather than leaving it to duplicate', () => {
+    // What the store must never see is two batches of the same terms at once
+    // (MEAL-207). The run used to buy that by waiting; it buys it now by
+    // stopping, which costs nothing. Either way the claim is the same: ONE more
+    // batch goes out, not two, and the prewarm is told to stop before it does.
     const { view, post, load } = openSheet();
     load();
     post(SESSION);
@@ -936,7 +1000,13 @@ describe('a prewarm that never comes back', () => {
     post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
     post(SESSION);
 
-    expect(searchBatches()).toBe(duringPrewarm);
+    // Stopped, and the stop went out before the run's own batch did.
+    const stopAt = injected.findIndex((s) => s.includes('__mealioStop'));
+    expect(stopAt).toBeGreaterThanOrEqual(0);
+    const runBatchAt = injected.map((s, i) => [s, i] as const)
+      .filter(([s]) => s.includes('productSearchPageV2')).pop()![1];
+    expect(stopAt).toBeLessThan(runBatchAt);
+    expect(searchBatches()).toBe(duringPrewarm + 1);
   });
 });
 
