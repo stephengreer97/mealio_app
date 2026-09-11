@@ -77,12 +77,26 @@ function digitsAfter(s: string, marker: string, max: number): string | null {
   return out || null;
 }
 
-/** shopId and zoneId, both out of the one storefront document. */
+/**
+ * shopId and zoneId, both out of the one storefront document.
+ *
+ * THIS IS NOT PART OF LOGIN DETECTION, and the first cut of this file made it
+ * look like it was. Calling it from session() put a 1.8MB document fetch inside
+ * the step labelled "login", which then reported 3914ms on a cold run and 411ms
+ * on a warm one. The login question is CurrentUser and nothing else; shop and
+ * zone are what SEARCH and CART READ need. Timed separately now so the number
+ * against "login" is the login.
+ */
+let lastShopMs = 0;
+let lastHtmlBytes = 0;
 async function shopAndZone(ua: string): Promise<{ shopId: string | null; zoneId: string | null }> {
+  const t0 = Date.now();
   const r = await fetch(`${ORIGIN}/store/${SLUG}/storefront`, {
     credentials: 'include', headers: { 'User-Agent': ua },
   });
   const html = await r.text();
+  lastShopMs = Date.now() - t0;
+  lastHtmlBytes = html.length;
   // Two independent markers each, because one will change before both do.
   const shopId = digitsAfter(html, '%5C%22shopId%5C%22%3A%5C%22', 8)
     || digitsAfter(html, '%22shops%22%3A%5B%7B%22id%22%3A%22', 8)
@@ -127,7 +141,6 @@ export const INSTACART_NATIVE: NativeRail = {
     const guest = cu.guest === true;
     if (guest) return { ok: true, status: who.status, detail: 'currentUser.guest: signed out', session: { loggedIn: false } };
 
-    if (!cachedShop) cachedShop = await shopAndZone(ua);
     // THIS RETAILER'S CART, matched on retailer.slug. An Instacart account holds
     // carts across retailers, so carts[0] borrows somebody else's -- and
     // "signed in" and "has a cart here" are separate facts: a new banner has no
@@ -141,14 +154,16 @@ export const INSTACART_NATIVE: NativeRail = {
     } catch { /* reported below as cart none */ }
     return {
       ok: true, status: who.status,
-      detail: `signed in, shop ${cachedShop.shopId ?? '?'}, zone ${cachedShop.zoneId ?? '?'}, cart ${cartId ? 'found' : 'none'}`,
-      session: { loggedIn: true, storeId: cachedShop.shopId, cartId, shoppingContext: 'delivery' },
+      detail: `signed in, cart ${cartId ? 'found' : 'none'} (CurrentUser + ActiveCarts only)`,
+      session: { loggedIn: true, storeId: null, cartId, shoppingContext: 'delivery' },
     };
   }),
 
   cartRead: (ua, s) => timed(async () => {
     if (!s.cartId) return { ok: false, status: null, detail: 'no cart id from the session step' };
-    const r = await gql(ua, 'CartItems', { id: s.cartId, shopId: s.storeId, postalCode: POSTAL });
+    const warm = !!cachedShop;
+    if (!cachedShop) cachedShop = await shopAndZone(ua);
+    const r = await gql(ua, 'CartItems', { id: s.cartId, shopId: cachedShop.shopId, postalCode: POSTAL });
     if (r.status !== 200) return { ok: false, status: r.status, detail: `http ${r.status}` };
     // The rail's path, copied rather than guessed at: the first cut reached for
     // data.cart.items and got nothing, because a cart line lives under
@@ -161,14 +176,17 @@ export const INSTACART_NATIVE: NativeRail = {
       const q = Number(l.quantity != null ? l.quantity : 1);
       return n + (q > 0 ? q : 1);
     }, 0);
-    return { ok: true, status: r.status, detail: `${items.length} lines, ${count} items`, count, lines: items.length };
+    const boot = warm ? 'shop/zone cached' : `shop/zone fetch ${lastShopMs}ms for ${Math.round(lastHtmlBytes / 1024)}KB`;
+    return { ok: true, status: r.status, detail: `${items.length} lines, ${count} items (${boot})`, count, lines: items.length };
   }),
 
   search: (ua, s, term) => timed(async () => {
+    const warm = !!cachedShop;
     if (!cachedShop) cachedShop = await shopAndZone(ua);
+    void warm;
     if (!cachedShop.zoneId) return { ok: false, status: null, detail: 'no zone id: the storefront document did not carry one' };
     const r = await gql(ua, 'Search', {
-      query: term, shopId: s.storeId ?? cachedShop.shopId, zoneId: cachedShop.zoneId, postalCode: POSTAL,
+      query: term, shopId: cachedShop.shopId, zoneId: cachedShop.zoneId, postalCode: POSTAL,
     });
     if (r.status !== 200) return { ok: false, status: r.status, detail: `http ${r.status}` };
     let items: any[] = [];

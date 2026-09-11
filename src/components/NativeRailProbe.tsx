@@ -6,6 +6,8 @@ import { getStoreWebViewUA } from '../lib/webview-user-agent';
 import { NativeCandidate, NativeRail, NativeSession } from '../lib/native-rail/types';
 import { HEB_NATIVE } from '../lib/native-rail/heb';
 import { INSTACART_NATIVE } from '../lib/native-rail/instacart';
+import { ALBERTSONS_NATIVE } from '../lib/native-rail/albertsons';
+import { WEGMANS_NATIVE } from '../lib/native-rail/wegmans';
 
 /**
  * ALL FOUR JOBS, EVERY STORE, NO WEBVIEW.
@@ -32,7 +34,7 @@ import { INSTACART_NATIVE } from '../lib/native-rail/instacart';
  * Account screen already carries a per-store canary clear to undo it.
  */
 
-const RAILS: NativeRail[] = [HEB_NATIVE, INSTACART_NATIVE];
+const RAILS: NativeRail[] = [HEB_NATIVE, INSTACART_NATIVE, ALBERTSONS_NATIVE, WEGMANS_NATIVE];
 
 /** A term every grocer stocks, so a zero result means the search failed. */
 const TERM = 'milk';
@@ -81,8 +83,13 @@ export default function NativeRailProbe({ onClose }: { onClose: () => void }) {
         push('search', found);
         firstCandidate = found.candidates?.[0] ?? null;
       } else {
-        steps.push({ label: 'cart read', ok: null, status: null, ms: 0, detail: 'skipped: not signed in' });
-        steps.push({ label: 'search', ok: null, status: null, ms: 0, detail: 'skipped: not signed in' });
+        steps.push({ label: 'cart read', ok: null, status: null, ms: 0, detail: 'skipped: no session' });
+        // SEARCH RUNS ANYWAY. Wegmans' search is Algolia with a public
+        // search-only key and no session at all, so skipping it for want of a
+        // login would hide the one part of that store that needs no WebView.
+        const found = await rail.search(ua, session ?? { loggedIn: false }, TERM);
+        push('search', found);
+        firstCandidate = found.candidates?.[0] ?? null;
       }
 
       setRows((r) => [...r, { rail, cookies, steps, session, firstCandidate }]);
