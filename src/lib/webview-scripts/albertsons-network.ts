@@ -190,7 +190,7 @@ ${RETRY_FN}
   }
 
   async function __albFetchUserInfo(budgetMs) {
-    var ctl = new AbortController();
+    var ctl = __mealioTrack(new AbortController());
     // A backstop, not the mechanism. Timers are the thing that gets throttled in
     // a backgrounded WebView, so nothing here DEPENDS on this firing on time --
     // the fetch settles on its own.
@@ -331,7 +331,7 @@ ${RETRY_FN}
       A.keyCandidates = cached.candidates || [];
       return;
     }
-    var ctl = new AbortController();
+    var ctl = __mealioTrack(new AbortController());
     var to = setTimeout(function () { try { ctl.abort(); } catch (e) {} }, budgetMs || 8000);
     var html = '';
     try {
@@ -507,7 +507,7 @@ ${RETRY_FN}
         // candidate and then report the wrong reason.
         var kk = keys[i];
         var fr = await __mealioFetchRetry(function () {
-          var ctl = new AbortController();
+          var ctl = __mealioTrack(new AbortController());
           var to = setTimeout(function () { ctl.abort(); }, budgetMs || 12000);
           return fetch(__albCartReadUrl(), {
             method: 'POST', body: '{}',
@@ -1027,6 +1027,10 @@ ${albPrelude()}
 ${ALB_CANDIDATE_HELPERS}
 ${albSearchUrlExpr(pageSize, storeId)}
   var TERMS = ${JSON.stringify(terms)};
+  // The generation this batch was injected under. A stop bumps the counter, so
+  // every loop below notices at its next check and the run's own script, injected
+  // afterwards, is never held by the stop that ended this one.
+  var MY_GEN = __mealioGen();
   var post = function (o) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
@@ -1072,7 +1076,7 @@ ${albSearchUrlExpr(pageSize, storeId)}
       { phase: 'search', op: 'search:' + variant });
   }
   async function searchAttempt(term, variant) {
-    var ctl = new AbortController();
+    var ctl = __mealioTrack(new AbortController());
     // The FIRST request of a batch gets the longer budget: measured cold at the
     // full 15s while the document was provably healthy, and sub-second after.
     // Aborting a slow answer turns it into no answer.
@@ -1242,8 +1246,12 @@ ${albSearchUrlExpr(pageSize, storeId)}
   }
 
   var next = 0;
+  var STOPPED = false;
   async function worker() {
     while (next < TERMS.length) {
+      // Read per term rather than per pool, so a stop lands within one request
+      // on every lane instead of waiting for the slowest one to drain.
+      if (__mealioGen() !== MY_GEN) { STOPPED = true; return; }
       var i = next++;
       try { await one(TERMS[i]); }
       catch (e) {
@@ -1270,7 +1278,7 @@ ${albSearchUrlExpr(pageSize, storeId)}
   var pool = [];
   for (var c = 0; c < ${concurrency}; c++) pool.push(worker());
   await Promise.all(pool);
-  post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length });
+  post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length, stopped: STOPPED });
 })(); true;`;
 }
 
@@ -1477,7 +1485,7 @@ ${albPrelude()}
     // rather than surrendering the whole batch. Each attempt builds its own
     // controller because a retry cannot reuse a signal that already fired.
     var fr = await __mealioFetchRetry(function () {
-      var ctl = new AbortController();
+      var ctl = __mealioTrack(new AbortController());
       // Scaled: one request carrying twenty items is not the same wait as one
       // carrying one.
       var to = setTimeout(function () { ctl.abort(); }, 15000 + planned.length * 1500);
@@ -1599,7 +1607,7 @@ ${albPrelude()}
         // unavailable line sitting in the cart blocking checkout -- the exact
         // thing the undo exists to prevent.
         var fr = await __mealioFetchRetry(function () {
-          var ctl = new AbortController();
+          var ctl = __mealioTrack(new AbortController());
           var to = setTimeout(function () { ctl.abort(); }, 15000);
           return fetch(__albCartUrl(), {
             method: method, credentials: 'include', headers: __albCartHeaders(A.cartKey),

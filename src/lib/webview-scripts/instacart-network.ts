@@ -255,7 +255,7 @@ ${RETRY_FN}
   IC.gqlAttempt = async function (name, variables, budgetMs) {
     var hash = (IC.ops && IC.ops[name]) || null;
     if (!hash) return { ok: false, why: 'no_hash', op: name };
-    var ctl = new AbortController();
+    var ctl = __mealioTrack(new AbortController());
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 15000);
     var t0 = Date.now();
     var r, txt;
@@ -356,7 +356,7 @@ ${RETRY_FN}
   // running a line of the store's own JavaScript -- and it is cached for twelve
   // hours, so it is once a day rather than once a run.
   IC.fetchShopId = async function (slug, budgetMs) {
-    var ctl = new AbortController();
+    var ctl = __mealioTrack(new AbortController());
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 20000);
     var t0 = Date.now();
     var html = '';
@@ -798,6 +798,10 @@ export function buildInstacartSearchBatchScript(
   return `(async function () {
 ${icPrelude()}
   var TERMS = ${JSON.stringify(terms)};
+  // The generation this batch was injected under. A stop bumps the counter, so
+  // every loop below notices at its next check and the run's own script, injected
+  // afterwards, is never held by the stop that ended this one.
+  var MY_GEN = __mealioGen();
   var SHOP = ${JSON.stringify(opts.shopId)};
   var REQ_MS = ${opts.requestMs ?? 15000};
   var post = IC.post;
@@ -925,6 +929,14 @@ ${icPrelude()}
     }
 
     for (var t = 0; t < TERMS.length; t++) {
+      // THE STOP IS READ BETWEEN TERMS, and on this rail that is most of the
+      // saving: the loop is serial, so a stop at term two spares the other
+      // sixteen requests rather than just cancelling one. Everything already
+      // posted has already been kept by the sheet.
+      if (__mealioGen() !== MY_GEN) {
+        post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length, stopped: true, at: t });
+        return;
+      }
       var term = TERMS[t];
       var r = await IC.gql('Search', {
         query: term, shopId: SHOP, zoneId: zone, postalCode: '${PLACEHOLDER_POSTAL}',

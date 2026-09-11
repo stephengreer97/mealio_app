@@ -719,7 +719,7 @@ ${RETRY_FN}
       { phase: phase, op: String(path || '').split('?')[0].slice(0, 60) });
   };
   WG.commerceAttempt = async function (path, tok, init, budgetMs) {
-    var ctl = new AbortController();
+    var ctl = __mealioTrack(new AbortController());
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 15000);
     var t0 = Date.now();
     var opts = init || {};
@@ -877,6 +877,10 @@ export function buildWegmansNetworkSearchBatchScript(
 ${wegPrelude()}
   var TERMS = ${JSON.stringify(terms)};
   var CHUNKS = ${JSON.stringify(chunks)};
+  // The generation this batch was injected under. A stop bumps the counter, so
+  // every loop below notices at its next check and the run's own script, injected
+  // afterwards, is never held by the stop that ended this one.
+  var MY_GEN = __mealioGen();
   var STORE = ${JSON.stringify(opts.storeNumber)};
   var REQ_MS = ${opts.requestMs ?? 12000};
   var HITS = ${opts.hitsPerPage ?? 24};
@@ -917,7 +921,7 @@ ${wegPrelude()}
       if (STORE) rq.filters = 'storeNumber:' + STORE;
       reqs.push(rq);
     }
-    var ctl = new AbortController();
+    var ctl = __mealioTrack(new AbortController());
     // Scaled by the chunk: one request carrying ten queries legitimately takes
     // longer than one carrying a single query, and aborting a slow answer turns
     // it into no answer for ten terms at once.
@@ -959,7 +963,7 @@ ${wegPrelude()}
       + '?x-algolia-api-key=${ALGOLIA_KEY}&x-algolia-application-id=${ALGOLIA_APP}';
     var body = { query: term, hitsPerPage: HITS };
     if (STORE) body.filters = 'storeNumber:' + STORE;
-    var ctl = new AbortController();
+    var ctl = __mealioTrack(new AbortController());
     var to = setTimeout(function () { ctl.abort(); }, REQ_MS);
     var t0 = Date.now();
     var r, txt;
@@ -1057,6 +1061,12 @@ ${wegPrelude()}
   try {
     var fellBack = 0;
     for (var c2 = 0; c2 < CHUNKS.length; c2++) {
+      // Serial like ALDI, so a stop here spares every chunk after this one.
+      if (__mealioGen() !== MY_GEN) {
+        post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length,
+               fellBack: fellBack, stopped: true, at: c2 });
+        return;
+      }
       var chunk = CHUNKS[c2];
       // A one-term chunk IS the single query. The substitute search runs one
       // term, and there is nothing to gain by wrapping it in an array.

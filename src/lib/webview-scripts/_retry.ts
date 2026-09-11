@@ -108,6 +108,79 @@ export function retryDelayMs(attempt: number, f: AttemptFailure | null | undefin
  * says so in the telemetry rather than looking clean.
  */
 export const RETRY_FN = `
+  // ── STOPPING COSTS NOTHING AND LOSES NOTHING ────────────────────────────
+  //
+  // Stephen, 2026-09-10: "The prewarm should be cleanly interruptible and that
+  // should not add any time. Even if interrupted I still want to be able to use
+  // the data that it warmed."
+  //
+  // The sheet's own prewarm runs in the SAME WebView as the run, so it cannot be
+  // torn down the way the selection screen's probe can -- unmounting the page
+  // would take the run with it. The run therefore used to stand back and WAIT
+  // for it, up to 27s on a six-term ALDI order, which is prewarm making the
+  // thing it exists to speed up slower.
+  //
+  // So the page gets a stop instead. One injected call ends every batch loop at
+  // its next check and aborts whatever is already on the wire. Nothing is
+  // discarded: an answer that arrived before the stop is already posted and
+  // already kept, and the terms that never answered are simply the ones the run
+  // searches itself.
+  //
+  // A GENERATION, NOT A BOOLEAN, and that is load-bearing.
+  //
+  // The prewarm and the run share one document, so a sticky "stopped" flag would
+  // have to be cleared before the run's own requests -- and clearing it races
+  // the prewarm loop that has not read it yet. Stopping bumps a number instead.
+  // A script captures the generation it was injected under and stops when the
+  // number moves; the run's script is injected AFTER the stop, captures the new
+  // number, and is never gated by it. No resume, and nothing to get the order
+  // wrong.
+  //
+  // On the global rather than as a local so the native side can call it from its
+  // own injectJavaScript, which is the whole point.
+  //
+  // Reached through __mealioRoot rather than naming window directly, because
+  // this text is not only injected: retry.test.ts evaluates it in Node to
+  // cross-check the injected policy against the TypeScript one, and a bare
+  // window is a ReferenceError there. In a WebView __mealioRoot IS window, so
+  // __mealioRoot.__mealioStop and window.__mealioStop are the same property.
+  var __mealioRoot = (typeof window !== 'undefined') ? window
+    : ((typeof globalThis !== 'undefined') ? globalThis : this);
+  __mealioRoot.__mealioNet = __mealioRoot.__mealioNet || { gen: 0, aborts: [] };
+  function __mealioGen() {
+    try { return __mealioRoot.__mealioNet.gen; } catch (e) { return 0; }
+  }
+  // Tracked so a stop reaches the request that is ALREADY out, not just the ones
+  // that have not gone yet. Every rail's per-request controller registers here.
+  //
+  // NOT unregistered when a request finishes, deliberately. Aborting a
+  // controller whose fetch already settled is a no-op, so a stale entry is
+  // harmless, and the alternative -- an untrack paired with every clearTimeout
+  // across five rails -- is fifteen more places to get wrong for no behaviour.
+  // The list is capped instead: far more than can ever be in flight at once
+  // (H-E-B's three parallel writes is the widest anything gets), and bounded so
+  // a long-lived page cannot accumulate.
+  function __mealioTrack(ctl) {
+    try {
+      var a = __mealioRoot.__mealioNet.aborts;
+      a.push(ctl);
+      if (a.length > 64) a.splice(0, a.length - 64);
+    } catch (e) {}
+    return ctl;
+  }
+  // Bumps the generation, so every script already running stops at its next
+  // check, and aborts what is on the wire so the stop is felt now rather than at
+  // the end of the current request's budget. Returns how many it aborted, which
+  // is what the native side logs.
+  __mealioRoot.__mealioStop = function () {
+    try {
+      __mealioRoot.__mealioNet.gen = (__mealioRoot.__mealioNet.gen || 0) + 1;
+      var list = __mealioRoot.__mealioNet.aborts || [];
+      __mealioRoot.__mealioNet.aborts = [];
+      for (var i = 0; i < list.length; i++) { try { list[i].abort(); } catch (e) {} }
+      return list.length;
+    } catch (e) { return 0; }
+  };
   function __mealioRetriableStatus(status) {
     if (typeof status !== 'number') return false;
     if (status === 429) return true;

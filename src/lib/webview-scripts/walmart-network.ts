@@ -164,7 +164,7 @@ ${RETRY_FN}
       { phase: phase || 'session', op: op });
   };
   WM.gqlAttempt = async function (domain, op, kind, hash, variables, budgetMs) {
-    var ctl = new AbortController();
+    var ctl = __mealioTrack(new AbortController());
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 20000);
     var t0 = Date.now();
     var r, txt;
@@ -242,7 +242,7 @@ ${RETRY_FN}
       vars = JSON.parse(String(WM.SEARCH_VARS).split('__TERM__').join(
         String(term).split('"').join(' ').split(String.fromCharCode(92)).join(' ')));
     } catch (e) { return null; }
-    var ctl = new AbortController();
+    var ctl = __mealioTrack(new AbortController());
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 20000);
     var t0 = Date.now();
     var r, txt;
@@ -280,7 +280,7 @@ ${RETRY_FN}
   // ONE ATTEMPT. The HTML fallback is the LAST thing standing between a term
   // and the review screen, so a 5xx here costs the item outright.
   WM.searchPageAttempt = async function (term, budgetMs) {
-    var ctl = new AbortController();
+    var ctl = __mealioTrack(new AbortController());
     var to = setTimeout(function () { ctl.abort(); }, budgetMs || 20000);
     var t0 = Date.now();
     var r, html;
@@ -630,9 +630,21 @@ export function buildWalmartNetworkSearchBatchScript(terms: string[]): string | 
   return `(async function () {
 ${wmPrelude()}
   var TERMS = ${JSON.stringify(terms)};
+  // The generation this batch was injected under. A stop bumps the counter, so
+  // every loop below notices at its next check and the run's own script, injected
+  // afterwards, is never held by the stop that ended this one.
+  var MY_GEN = __mealioGen();
   var post = WM.post;
   try {
     for (var t = 0; t < TERMS.length; t++) {
+      // Same shape as the blocked bail below, for the same reason: there is no
+      // point spending the rest of the batch. Here it is the user having tapped
+      // rather than the store refusing, so the run is about to ask for what is
+      // left itself.
+      if (__mealioGen() !== MY_GEN) {
+        post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: TERMS.length, stopped: true, at: t });
+        return;
+      }
       var term = TERMS[t];
       // PACED. A burst of full-page searches from one session is what a scraper
       // looks like, and this store answers that with a challenge — measured
