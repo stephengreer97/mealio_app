@@ -101,7 +101,7 @@ flowchart TD
     L1 --> OUT(["AuthStack"])
     L2 --> OUT
 
-    G(["Log Out of Grocery Stores"]) --> GW["<b>CookieManager.clearAll(true)</b><br/><b>and clearAll(false)</b><br/><i>both, to cover iOS WKWebView AND the<br/>shared NSHTTPCookieStorage; the<br/>argument is ignored on Android</i>"]
+    G(["Sign out of my stores"]) --> GW["<b>CookieManager.clearAll(true)</b><br/><b>and clearAll(false)</b><br/><i>both, to cover iOS WKWebView AND the<br/>shared NSHTTPCookieStorage; the<br/>argument is ignored on Android</i>"]
     GW --> GK{"Kroger connected?"}
     GK -->|yes| GD["POST /api/kroger/disconnect<br/><i>Kroger is OAuth, not a cookie —<br/>so 'all stores' really means all</i>"]
     GK -->|no| GDONE
