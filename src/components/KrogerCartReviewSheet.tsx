@@ -16,6 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
+import CartRunAnimation from './CartRunAnimation';
 import { Meal, Ingredient } from '../types';
 import { ingredientAmount, withPrep } from '../lib/formatMeasurement';
 import { prepOf } from '../lib/consolidateIngredients';
@@ -221,12 +222,6 @@ export function consolidateIngredients(
   return [...map.values()];
 }
 
-// ── Spinner component (no CSS animations in RN, use ActivityIndicator styled with store color) ──
-
-function StoreSpinner({ color }: { color: string }) {
-  return <ActivityIndicator size="large" color={color} />;
-}
-
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function KrogerCartReviewSheet({
@@ -241,6 +236,33 @@ export default function KrogerCartReviewSheet({
   const storeColor = useStores().find((s) => s.id === storeId)?.color ?? '#003087';
 
   const [step, setStep] = useState<Step>('qty');
+  // ── HOW FULL THE BAG IS, AND WHY IT MOVES IN TWO STEPS HERE ────────────────
+  //
+  // Same animation as every other store, driven by the same rule: the frame IS
+  // the progress, and nothing here is decorative timing pretending to be a
+  // measurement.
+  //
+  // WHAT KROGER CAN HONESTLY REPORT. The WebView stores answer one request per
+  // term and one per write, so their bag ticks per ingredient. This path is an
+  // API client: the whole basket is ONE search call and ONE add call. There is
+  // no per-item progress to be had, and manufacturing some -- chunking the
+  // request so the bar moves -- would add round trips to the user's wait to make
+  // an animation look busier. So the bag moves on the milestones that are real:
+  //
+  //   searching   nothing has completed yet            indeterminate, empty
+  //   results in  every ingredient has been looked up  half
+  //   added       every item has been written          full
+  //
+  // Coarser than the other stores and truthful at every frame. The component
+  // tweens between them at 45ms a frame, so each step reads as the bag filling
+  // rather than jumping -- that easing is the animation's, not a fake counter.
+  const [krogerPct, setKrogerPct] = useState<number | null>(null);
+  const pctRef = useRef(0);
+  /** Forward only. A bag that goes backwards is a bag nobody believes. */
+  const advancePct = (v: number) => {
+    if (v > pctRef.current) { pctRef.current = v; setKrogerPct(v); }
+  };
+  const resetPct = () => { pctRef.current = 0; setKrogerPct(null); };
   const [error, setError] = useState('');
 
   // Step qty
@@ -286,6 +308,7 @@ export default function KrogerCartReviewSheet({
       setItems(consolidated);
       setCheckedItems(consolidated.map(() => true));
       setStep('qty');
+      resetPct();
       setError('');
       setSearchResults([]);
       setReviewIdx(0);
@@ -348,6 +371,7 @@ export default function KrogerCartReviewSheet({
     const active = items.filter((it, i) => (checkedItems[i] ?? true) && !isZeroedOut(it));
     if (active.length === 0) return;
     setStep('searching');
+    resetPct();
     setError('');
     try {
       const data = await krogerApi.searchProducts(
@@ -379,6 +403,13 @@ export default function KrogerCartReviewSheet({
         };
       });
       setSearchResults(results);
+      // EVERY ingredient, not just the exact ones. The question this milestone
+      // answers is "have they all been looked up", and a term that came back
+      // needing review was looked up -- it is the review screen's turn next, not
+      // the search's. Counting only the exact matches would mean a run with six
+      // matches and six to review reported half a search, which is a different
+      // fact wearing this one's clothes.
+      advancePct(0.5);
 
       const needsReview = results.filter((r) => !r.exact);
       if (needsReview.length === 0) {
@@ -501,6 +532,11 @@ export default function KrogerCartReviewSheet({
       setTotalAdded(cartItems.reduce((n, i) => n + Math.max(1, i.quantity || 1), 0));
       setAddedItems(cartItems.map((i) => ({ description: i.description ?? '', quantity: i.quantity })));
       setCartError('');
+      // ONLY ON THE WRITE COMING BACK. The catch below deliberately leaves the
+      // bag where it was: a run that failed to add must not finish on a full
+      // bag, which would be the animation contradicting the error message
+      // underneath it.
+      advancePct(1);
     } catch (err: any) {
       setTotalAdded(0);
       setAddedItems([]);
@@ -663,12 +699,10 @@ export default function KrogerCartReviewSheet({
 
         {/* ── Step: searching ───────────────────────────────────────────── */}
         {step === 'searching' && (
-          <View style={styles.centered}>
-            <StoreSpinner color={storeColor} />
-            <Text style={styles.spinnerLabel}>
-              Searching for {activeCount} ingredient{activeCount !== 1 ? 's' : ''}…
-            </Text>
-          </View>
+          <CartRunAnimation
+            progress={krogerPct}
+            label={`Searching for ${activeCount} ingredient${activeCount !== 1 ? 's' : ''}`}
+          />
         )}
 
         {/* ── Step: searchResult ────────────────────────────────────────── */}
@@ -943,10 +977,10 @@ export default function KrogerCartReviewSheet({
 
         {/* ── Step: adding ──────────────────────────────────────────────── */}
         {step === 'adding' && (
-          <View style={styles.centered}>
-            <StoreSpinner color={storeColor} />
-            <Text style={styles.spinnerLabel}>Adding items to your {storeName} cart…</Text>
-          </View>
+          <CartRunAnimation
+            progress={krogerPct}
+            label={`Adding items to your ${storeName} cart`}
+          />
         )}
 
         {/* ── Step: done ────────────────────────────────────────────────── */}
@@ -1312,21 +1346,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   floatingImage: { width: '100%', height: '100%' },
-
-  // Centered (spinners / done)
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-    gap: 16,
-  },
-  spinnerLabel: {
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    color: Colors.text2,
-    textAlign: 'center',
-  },
 
   // Done step
   doneEmoji: { fontSize: 44, marginBottom: 8 },
