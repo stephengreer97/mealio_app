@@ -33,16 +33,49 @@ generate `tapOn` / `assertVisible` lines.
 
 ## Running in CI (no Mac needed)
 
-`.github/workflows/ios-maestro.yml` runs these flows on a free GitHub-hosted
-macOS runner every PR into `main` and every push to `main`. The full
-pipeline:
+`.github/workflows/ios-maestro.yml` runs these flows on a GitHub-hosted macOS
+runner every PR into `main` and every push to `main`. **GitHub never compiles
+the app** — the binary comes from EAS:
 
-1. Checkout, install npm + CocoaPods deps.
-2. `expo prebuild --platform ios` generates the native `ios/` folder.
-3. `xcodebuild` builds for iOS Simulator (debug, no code signing).
-4. Boot a fresh iPhone 15 simulator.
-5. Install the built `.app` on the simulator.
-6. `maestro test tests/maestro/flows` runs every YAML flow.
+1. `wait-for-eas` (ubuntu) finds the `ios-simulator` build for this commit,
+   waiting if one is in flight.
+2. If there is no build for the commit it falls back to the newest finished
+   one, and **refuses a fallback more than 14 days old**. A flow-only change
+   riding yesterday's binary is what the fallback is for; a green tick against
+   a binary from two months ago is not a smoke test, and this lane spent two
+   months proving that.
+3. `ios-maestro` (macOS) downloads that artifact, boots a simulator, installs
+   it, and runs each flow with a `sudo purge` and one retry between them.
+
+Kick a commit-exact build whenever app code changes:
+
+```bash
+eas build --platform ios --profile ios-simulator --no-wait
+```
+
+## First run gets in the way, on purpose
+
+Every flow launches with `clearState: true` **and `clearKeychain: true`**, which
+together are genuinely a first run, so the welcome sheet covers Discover before
+any of them can see the meal list.
+
+`clearKeychain` is load-bearing, not belt-and-braces. The first-run flags live in
+`expo-secure-store`, which is the keychain, and `clearState` does not touch it.
+With only `clearState`, whichever flow ran first dismissed the sheet **for every
+flow after it** — so the flows were not independent, and a flow passed or failed
+depending on what ran before it.
+`../subflows/dismiss-welcome.yaml` waits for it and taps through, and every flow
+runs it immediately after `launchApp`.
+
+**A new first-run modal will break all of them at once**, with the same line in
+each: an assertion about a Discover element that is simply behind something. If
+that happens, dismiss the new thing in that subflow rather than in seven flows.
+
+Dismiss it by its **text**, not by a `testID` on the `<Modal>`. React Native
+does not surface a Modal's own testID as a queryable view on iOS — the content
+is presented in its own `UIWindow` — so a flow waiting on that id times out
+against a sheet that is plainly on screen. The modal's contents are visible to
+Maestro; its wrapper is not.
 7. Upload a JUnit-formatted report. On failure, upload a screenshot of the
    simulator at the moment of failure.
 

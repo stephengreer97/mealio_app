@@ -1,0 +1,42 @@
+# The welcome sheet, out of the way, before any flow looks at Discover.
+#
+# WHAT BROKE. The sheet shipped on 2026-08-05 and covers the Discover screen on
+# first run. Every flow here launches with `clearState: true`, which IS first
+# run, so from that day on all seven flows met a modal where they expected the
+# meal list and failed on the same line: `"Trending Meals" is visible`. The lane
+# has been red on every push since.
+#
+# NOT CONDITIONAL, deliberately. `clearState: true` guarantees the sheet, so
+# this waits for it and dismisses it rather than checking whether it is there.
+# A `when: visible` probe would race the sheet's own mount -- it appears only
+# after the meals have loaded and an async first-run read has come back -- and
+# the race would fail silently and intermittently, which is worse than failing
+# here with a line that names the sheet.
+#
+# TEXT, NOT testID, AND THAT IS NOT A STYLE CHOICE. WelcomeSheet carries
+# testID="welcome-sheet" on the <Modal> itself, and React Native does not
+# surface a Modal's testID as a queryable view on iOS -- the content is
+# presented in its own UIWindow. The first cut of this file waited on that id
+# and every flow timed out against a sheet that was plainly on screen in the
+# failure screenshot. The sheet's CONTENT is visible to Maestro; its wrapper is
+# not.
+#
+# THE TIMEOUT COVERS A NETWORK FETCH. Nothing shows the sheet until
+# DiscoverScreen has its meals, so this waits longer than the 15s the flows give
+# the meal cards themselves.
+appId: co.mealio.app
+---
+- extendedWaitUntil:
+    visible: "Browse meals"
+    timeout: 30000
+
+# The button rather than the backdrop. Both dismiss, and welcome-backdrop is
+# the more obvious target -- but it is a full-screen pressable, so its centre
+# is UNDER the sheet and a tap there lands on the sheet instead of behind it.
+- tapOn: "Browse meals"
+
+# The sheet is gone, not merely tapped. Its button is the only thing on this
+# screen that says this, so its absence is the dismissal.
+- extendedWaitUntil:
+    notVisible: "Browse meals"
+    timeout: 10000
