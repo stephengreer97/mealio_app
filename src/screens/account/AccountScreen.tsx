@@ -21,6 +21,7 @@ import { resetFirstRun } from '../../lib/firstRun';
 import CartClearProbe from '../../components/CartClearProbe';
 import StorefrontCaptureProbe from '../../components/StorefrontCaptureProbe';
 import Meal17Probe from '../../components/Meal17Probe';
+import NativeSessionProbe from '../../components/NativeSessionProbe';
 
 // The canary's stores, one per family with a signed-in session. Kept here rather
 // than read from canary_plans because this is a dev control list, not the plan:
@@ -113,6 +114,7 @@ export default function AccountScreen() {
     restore?: Array<{ sku: string; quantity: number }> } | null>(null);
   const [capture, setCapture] = useState<{ storeId: string; path?: string } | null>(null);
   const [meal17, setMeal17] = useState<'matrix' | 'burst' | null>(null);
+  const [nativeSession, setNativeSession] = useState(false);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
@@ -1066,6 +1068,20 @@ export default function AccountScreen() {
             >
               <Text style={styles.devResetText}>Watch storefront calls: Wegmans cart (dev)</Text>
             </TouchableOpacity>
+            {/* Answers "can the session be read without a WebView at all?" with
+                evidence instead of reasoning. Read-only; writes to no cart. */}
+            <TouchableOpacity onPress={() => setNativeSession(true)} style={styles.devResetBtn}>
+              <Text style={styles.devResetText}>Session over native fetch (dev)</Text>
+            </TouchableOpacity>
+            {/* Answers "can the session be read without a WebView at all?" with
+                evidence instead of reasoning. Read-only; writes to no cart. */}
+            <TouchableOpacity
+              testID="native-session-probe"
+              onPress={() => setNativeSession(true)}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Session over native fetch (dev)</Text>
+            </TouchableOpacity>
             {/* MEAL-17, TEMPORARY. Delete with the spike. */}
             <TouchableOpacity onPress={() => setMeal17('matrix')} style={styles.devResetBtn}>
               <Text style={styles.devResetText}>MEAL-17: edge case matrix (dev)</Text>
@@ -1109,6 +1125,9 @@ export default function AccountScreen() {
               </TouchableOpacity>
             ))}
           </>
+        )}
+        {__DEV__ && nativeSession && (
+          <NativeSessionProbe onClose={() => setNativeSession(false)} />
         )}
         {__DEV__ && meal17 && (
           <Meal17Probe mode={meal17} onClose={() => setMeal17(null)} />
