@@ -52,6 +52,7 @@ import Input from '../../components/ui/Input';
 import CookieManager from '@react-native-cookies/cookies';
 import { clearBotCookiesFor } from '../../lib/bot-cookies';
 import { nativeRailOrigins } from '../../lib/native-rail';
+import { getStoreWebViewUA } from '../../lib/webview-user-agent';
 import { useLoginPrewarm } from '../../context/LoginPrewarmContext';
 import { bumpEpoch } from '../../lib/store-session-epoch-storage';
 
@@ -1047,11 +1048,21 @@ export default function AccountScreen() {
         {__DEV__ && (
           <TouchableOpacity
             onPress={async () => {
+              // WHAT WE TELL THE STORE WE ARE. The UA is spoofed to a Chrome
+              // major, and the native WebView broadcasts its REAL major in
+              // Sec-CH-UA on every request regardless -- a mismatch between the
+              // two is the spoofing tell webview-user-agent.ts warns about and
+              // names Imperva at H-E-B as the WAF that catches. Printed here
+              // because it was the one input to that we had never looked at.
+              console.log('[bot-cookies] store UA =', getStoreWebViewUA());
               const sweeps = await clearBotCookiesFor(nativeRailOrigins());
               const hit = sweeps.filter((s2) => s2.cleared.length > 0);
               for (const s2 of sweeps) {
+                // NAMES, NEVER VALUES. A token IS the session, and a log file
+                // is not the place for one. The names are what tell an Imperva
+                // jar from an Akamai one, and which of them we are not clearing.
                 console.log('[bot-cookies]', s2.origin, 'cleared=', s2.cleared.join(',') || 'none',
-                  'saw=', s2.saw.length, 'cookie(s)', s2.error ? `error=${s2.error}` : '');
+                  'saw=', s2.saw.slice().sort().join(','), s2.error ? `error=${s2.error}` : '');
               }
               Alert.alert(
                 hit.length ? 'Bot tokens cleared' : 'Nothing to clear',
