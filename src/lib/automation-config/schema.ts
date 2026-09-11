@@ -194,6 +194,32 @@ export interface StoreConfigEntry {
    */
   networkSearch?: boolean;
   /**
+   * THE REVERT SWITCH FOR THE NATIVE TRANSPORT.
+   *
+   * Stephen, 2026-09-11: "we can always revert if we need to." This is that,
+   * without a release and without the big hammer -- turning networkSearch off
+   * would send the store to the assisted path and hand the user its search page,
+   * which is a far larger regression than going back to the injected rail.
+   *
+   * THREE STATES, and the middle one is the point:
+   *
+   *   undefined  the capability table decides (lib/store-capabilities.ts). The
+   *              normal state, and what every store ships with.
+   *   false      force the page transport. The injected rail, exactly as before.
+   *   true       does NOT force the native one. A store the table says cannot
+   *              run natively still cannot, because this flag cannot make a
+   *              store's credential reachable from outside its own origin --
+   *              that is what the table records and it is not a preference.
+   *
+   * So this only ever takes capability AWAY, which is the only direction a
+   * config push can be safe in: a wrong `false` costs speed, and a `true` that
+   * could grant capability would cost correctness on a store nobody measured.
+   *
+   * Flip it with a config push:
+   *   {"stores":{"heb":{"nativeRun":false}}}
+   */
+  nativeRun?: boolean;
+  /**
    * Where the cart-confirmation rail POSTs its query — a same-origin path, not a
    * URL. `network-confirmation-findings.md` asks for cart endpoints to live in
    * remote config because they drift the way selectors do, and a hardcoded path

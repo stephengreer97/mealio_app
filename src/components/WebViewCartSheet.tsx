@@ -35,7 +35,7 @@ import { getStores } from '../lib/store-catalog';
 import { useStores } from '../lib/store-catalog/useStores';
 import { buildBlankPageRecoveryScript } from '../lib/webview-scripts/blank-page-recovery';
 import { getStoreScripts, StoreScripts } from '../lib/webview-scripts';
-import { getNetworkRail, railConfigKey, isProvenStore, NETWORK_SESSION_MESSAGE_TYPES } from '../lib/webview-scripts/network-rail';
+import { getNetworkRail, railConfigKey, isProvenStore, NETWORK_SESSION_MESSAGE_TYPES, type NetworkAddItem, type NetworkSession } from '../lib/webview-scripts/network-rail';
 import { planSearchResume } from '../lib/webview-scripts/resume-search';
 import CartRunAnimation from './CartRunAnimation';
 import { isAuthRedirectUrl } from '../lib/webview-scripts/auth-urls';
@@ -72,6 +72,9 @@ import { firstAddableIdx, reviewUnaddableReason } from '../lib/review-selection'
 import { qtyDisplay, qtyIsTheOnlyBlocker } from '../lib/qty-prompt';
 import { drainPrewarmRequests } from '../lib/prewarm-requests';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
+import { nativeRunFor } from '../lib/native-rail';
+import { nativeStop, type NativeRunDriver, type PostToSheet } from '../lib/native-rail/run';
+import { runNeedsWebView } from '../lib/store-capabilities';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -1146,6 +1149,125 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   // the callbacks below froze at an early render.
   const netRail = useCallback(() => getNetworkRail(lockedStoreIdRef.current), []);
 
+  // ── WHICH SIDE OF THE BRIDGE ASKS THE STORE ─────────────────────────────────
+  //
+  // Stephen, 2026-09-11: "I want the same general logic, I just want it to be
+  // done without a webview and just 100% over network instead."
+  //
+  // Everything below this comment and above netPrepare exists to make that one
+  // sentence true without touching a line of what a run DECIDES. The rails have
+  // always been 100% network -- every one is fetch() against the store's own
+  // gateway -- so the WebView was never supplying the requests, only the origin
+  // they went from. On Android RN's fetch shares that origin's cookie jar, which
+  // is the whole of why this is possible at all.
+  //
+  // A NATIVE DRIVER POSTS THE MESSAGES THE INJECTED SCRIPT WOULD HAVE POSTED.
+  // Same types, same fields, into the same onMessage. That is deliberate and it
+  // is the property that makes this revertible: the ~320 lines of decision logic
+  // in this file cannot tell which transport answered, so flipping a store back
+  // is one entry in store-capabilities.ts and nothing else.
+
+  /** onMessage is defined far below and created once; this is how the native
+   *  side reaches it without reordering the file. */
+  const onMessageRef = useRef<(e: WebViewMessageEvent) => void>(() => {});
+
+  /**
+   * A native driver's message, fed in exactly where the page's would arrive.
+   *
+   * Through the SAME handler, not past it. Posting into a second reader would
+   * be a second copy of the dispatch, and the first thing to drift would be the
+   * part nobody looks at -- the failure branches.
+   */
+  const postFromNative = useCallback<PostToSheet>((msg) => {
+    try {
+      onMessageRef.current({ nativeEvent: { data: JSON.stringify(msg) } } as WebViewMessageEvent);
+    } catch (e) {
+      console.log(`[Cart ${ts()}]`, 'native message could not be delivered —', String(e).slice(0, 120));
+    }
+  }, []);
+
+  /**
+   * The native driver for the locked store, or null when this store runs in a
+   * page.
+   *
+   * Gated on store-capabilities, NOT on a driver existing. The registry answers
+   * "is there code for this store"; the capability table answers "has anyone
+   * measured that it works", and those are different questions -- an unmeasured
+   * store must keep doing exactly what it did before.
+   */
+  const netDriver = useCallback((): NativeRunDriver | null => {
+    const sid = lockedStoreIdRef.current;
+    if (!sid || runNeedsWebView(sid)) return null;
+    // AND A WAY BACK WITHOUT A RELEASE. `nativeRun: false` in a config push
+    // returns one store to the injected rail; anything else leaves the
+    // capability table in charge. Read through railConfigKey because fifteen
+    // banners share one config entry, and a banner id would find nothing and
+    // read as a store that had said nothing.
+    const cfg = getAutomationConfig().stores?.[railConfigKey(sid)] ?? {};
+    if (cfg.nativeRun === false) return null;
+    return nativeRunFor(sid);
+  }, []);
+
+  /**
+   * One store operation, ready to send, or null when this store cannot build it.
+   *
+   * A THUNK RATHER THAN A SEND, and the shape is not incidental. Every call site
+   * in this file is written as build, check for null, set up the phase, then
+   * inject -- because `rail.searchBatch` returns `string | null` and the null is
+   * a real answer ("this store cannot search without a store id"). Sending at
+   * build time would have forced those call sites to reorder, and a reordered
+   * phase setup is exactly the class of change that breaks a run in a way no
+   * test notices. So null still means cannot, and calling the thunk is the send.
+   */
+  type NetOp =
+    | { kind: 'session' }
+    | { kind: 'cartRead' }
+    | { kind: 'search'; terms: string[]; sess: NetworkSession }
+    | { kind: 'add'; items: NetworkAddItem[]; knownLines: Record<string, number> | null };
+
+  const netPrepare = useCallback((op: NetOp): (() => void) | null => {
+    const sid = lockedStoreIdRef.current;
+    const driver = netDriver();
+    if (driver) {
+      const go = op.kind === 'session' ? driver.session(sid)
+        : op.kind === 'cartRead' ? driver.cartRead(sid)
+        : op.kind === 'search' ? driver.searchBatch(op.terms, op.sess)
+        : driver.addBatch(op.items, { knownLines: op.knownLines });
+      if (!go) return null;
+      return () => {
+        console.log(`[Cart ${ts()}]`, 'over the network, no page:', op.kind);
+        // Not awaited. The driver posts as it goes, exactly as the injected
+        // script does, and every phase already has its own budget -- so there is
+        // nothing here for a caller to wait on that the run does not already
+        // watch for. A rejection cannot escape: guarded() turns a throw into the
+        // driver's own terminal message.
+        void go(postFromNative);
+      };
+    }
+    const rail = netRail();
+    if (!rail) return null;
+    const script = op.kind === 'session' ? rail.sessionScript(sid)
+      : op.kind === 'cartRead' ? rail.cartRead(sid)
+      : op.kind === 'search' ? rail.searchBatch(op.terms, op.sess)
+      : rail.addBatch(op.items, { knownLines: op.knownLines });
+    if (!script) return null;
+    return () => { webviewRef.current?.injectJavaScript(script); };
+  }, [netDriver, netRail, postFromNative]);
+
+  /**
+   * Does this run need the WebView sitting on the store page before it can ask?
+   *
+   * Only a page run does. An injected script's requests are same-origin, so
+   * asking from about:blank is not merely useless -- it comes back no_response,
+   * which reads as a store that would not answer. A native request carries the
+   * cookie jar wherever it is made from, so there is no page to wait for and
+   * waiting for one would be the slowest possible way to do nothing.
+   */
+  const netNeedsPage = useCallback((): boolean => netDriver() === null, [netDriver]);
+  /** onMessage is created once (deps []), so it reaches the dispatcher this way. */
+  const netPrepareRef = useRef(netPrepare);
+  netPrepareRef.current = netPrepare;
+
   /**
    * Can this store's cart be read at all — by its rail, or by its own page
    * reader?
@@ -1932,7 +2054,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       }, cfgTimeouts.cartProbeResultMs);
       cartCountPendingRef.current = phase;
       console.log(`[Cart ${ts()}]`, 'cart probe over the network —', phase, 'no page load');
-      webviewRef.current?.injectJavaScript(railForCart.cartRead(lockedStoreIdRef.current));
+      netPrepare({ kind: 'cartRead' })?.();
       return;
     }
     // NO RAIL, NO CART. The navigate-to-the-cart-page fallback that stood here
@@ -1943,7 +2065,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     // to add".
     console.log(`[Cart ${ts()}]`, 'cart probe: no rail for', sid, '— finishing without a cart verdict');
     if (phase === 'reconcile') { parallelReconcileArmedRef.current = false; setStep('done'); }
-  }, [setStep, storeName, setWebviewUri]);
+  }, [setStep, storeName, setWebviewUri, netPrepare]);
 
   const finishParallelAdd = useCallback((resultsByIdx: Map<number, AddResult>) => {
     const active = activeItemsRef.current;
@@ -2514,8 +2636,8 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     if (known && !usable) {
       console.log(`[Cart ${ts()}]`, 'add: baseline has no line ids — letting the write read the cart itself');
     }
-    const script = rail.addBatch(coalesced, { knownLines });
-    if (!script) { netHandOverToUser('add_script_unbuildable'); return; }
+    const sendAdds = netPrepare({ kind: 'add', items: coalesced, knownLines });
+    if (!sendAdds) { netHandOverToUser('add_script_unbuildable'); return; }
     netPhaseRef.current = 'add';
     setStep('adding');
     // THE DENOMINATOR NEVER SHRINKS, AND A TOP-UP NEVER RESTARTS IT.
@@ -2564,8 +2686,8 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     // screen usually has its candidates. The user never sees a second search.
     netStartFallbackSearchRef.current();
     netArmFinalize(rail.budgets.addMs(toWrite.length));
-    webviewRef.current?.injectJavaScript(script);
-  }, [finishParallelAdd, netArm, netArmFinalize, netHandOverToUser, setStep]);
+    sendAdds();
+  }, [finishParallelAdd, netArm, netArmFinalize, netHandOverToUser, setStep, netPrepare]);
   // Lost in the DOM-removal merge, which took the branch's dependency list and
   // the line under it with it. Without this the ref stays the no-op it was
   // initialised with, so a run whose terms were all prewarmed reached "straight
@@ -2584,13 +2706,13 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     const rail = netRail();
     if (!sess || !rail) return;
     const terms = [...new Set(wanted)];
-    const script = rail.searchBatch(terms, sess);
-    if (!script) return;
+    const send = netPrepare({ kind: 'search', terms, sess });
+    if (!send) return;
     netFallbackPendingRef.current = true;
     console.log(`[Cart ${ts()}]`, 'network run: nothing found for', terms.length,
       'chosen products — searching the ingredient name instead');
-    webviewRef.current?.injectJavaScript(script);
-  }, [netRail]);
+    send();
+  }, [netRail, netPrepare]);
   netStartFallbackSearchRef.current = netStartFallbackSearch;
 
   /**
@@ -2756,8 +2878,8 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     if (reused > 0) {
       console.log(`[Cart ${ts()}]`, 'network run: reusing', reused, 'prewarmed terms, searching', missing.length);
     }
-    const script = rail.searchBatch(missing, sess);
-    if (!script) { netHandOverToUser('search_script_unbuildable'); return; }
+    const sendSearch = netPrepare({ kind: 'search', terms: missing, sess });
+    if (!sendSearch) { netHandOverToUser('search_script_unbuildable'); return; }
     // What the run actually asked for. The prewarmed terms are NOT in here: they
     // are already counted as done by the `reused` seed below.
     netRunAskedRef.current = new Set(missing);
@@ -2790,8 +2912,8 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     // So the window covers a slow start PLUS the terms, and is capped so a store
     // that has genuinely stopped answering still ends the phase.
     netArm(Math.min(45_000 + terms.length * 8_000, 180_000), 'search_timeout');
-    webviewRef.current?.injectJavaScript(script);
-  }, [netArm, netHandOverToUser, setStep]);
+    sendSearch();
+  }, [netArm, netHandOverToUser, setStep, netPrepare]);
   // Same loss as netStartAddsRef above: the merge took the branch's dependency
   // list and the wiring line that followed it. Without this the prewarm-wait
   // retry calls a no-op, so a run that stood back for an in-flight prewarm never
@@ -2832,15 +2954,15 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       return;
     }
     const outstanding = plan.terms;
-    const script = rail.searchBatch(outstanding, sess);
-    if (!script) return;
+    const send = netPrepare({ kind: 'search', terms: outstanding, sess });
+    if (!send) return;
     netSearchInjectsRef.current += 1;
     console.log(`[Cart ${ts()}]`, 'network search: page navigated, re-asking', outstanding.length,
       'of', netSearchTermsRef.current.length, 'terms');
     // A fresh document deserves a fresh window; the old one was spent loading.
     netArm(rail.budgets.searchResumeMs, 'search_timeout');
-    webviewRef.current?.injectJavaScript(script);
-  }, [netArm, netRail]);
+    send();
+  }, [netArm, netRail, netPrepare]);
 
   /** Phase 1. Who is signed in, which store, pickup or delivery. */
   const startNetworkRun = useCallback(() => {
@@ -2896,6 +3018,8 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     // ignored once the phase has moved on.
     const rail = netRail();
     if (!rail) { netHandOverToUser('no_rail'); return; }
+    const sendSession = netPrepare({ kind: 'session' });
+    if (!sendSession) { netHandOverToUser('no_rail'); return; }
     // The store's own ceiling, not a shared one. See NetworkRail.budgets.
     netArm(rail.budgets.sessionMs, 'session_timeout');
     // ONLY IF WE ARE ACTUALLY ON THE STORE. Everything the session script does
@@ -2913,13 +3037,18 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     // Off-origin, we simply wait: the onLoadEnd retry below injects the moment
     // the quiet page lands, and the budget armed just above is what bounds the
     // wait rather than an answer we cannot trust.
-    if (onStorePage()) {
-      webviewRef.current?.injectJavaScript(rail.sessionScript(lockedStoreIdRef.current));
+    //
+    // A NATIVE RUN HAS NO SUCH PROBLEM and must not inherit the wait. Its
+    // request carries the cookie jar wherever it is made from, so there is no
+    // quiet page to land and nothing to stand back for -- and standing back
+    // anyway would mean waiting for a page load this run exists to avoid.
+    if (!netNeedsPage() || onStorePage()) {
+      sendSession();
     } else {
       console.log(`[Cart ${ts()}]`, 'network run: not on the store yet —',
         'waiting for the quiet page instead of asking about:blank');
     }
-  }, [netArm, setStep, netRail, netHandOverToUser, netStartSearch, onStorePage]);
+  }, [netArm, setStep, netRail, netHandOverToUser, netStartSearch, onStorePage, netPrepare, netNeedsPage]);
 
   netResumeSearchAfterNavRef.current = netResumeSearchAfterNav;
 
@@ -4084,8 +4213,17 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     if (!netPrewarmInjectedRef.current || netPrewarmBatchDoneRef.current) return;
     console.log(`[Cart ${ts()}]`, 'search prewarm: stopping it —', why, '—',
       netPrewarmCandidatesRef.current.size, 'terms already answered and kept');
+    // BOTH SIDES OF THE BRIDGE, unconditionally. The generation counters are
+    // independent -- one lives in the page, one in this process -- and a run
+    // that switched transports mid-sheet (a native prewarm, then a page run
+    // after a WAF block) would otherwise leave the other one running. Neither
+    // call costs anything when there is nothing to stop.
     webviewRef.current?.injectJavaScript(
       'try { window.__mealioStop && window.__mealioStop(); } catch (e) {} true;');
+    const abortedNatively = nativeStop();
+    if (abortedNatively > 0) {
+      console.log(`[Cart ${ts()}]`, 'search prewarm: aborted', abortedNatively, 'native requests in flight');
+    }
     netPrewarmSettle('stopped by the run');
   }, [netPrewarmSettle]);
   netStopPrewarmRef.current = netStopPrewarm;
@@ -4180,8 +4318,8 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     console.log(`[Cart ${ts()}]`, 'search prewarm: asking the session for', missing.length, 'terms');
     // A session probe that never answers is the commoner of the two silences.
     netPrewarmArm(rail.budgets.sessionMs, 'the session never answered');
-    webviewRef.current?.injectJavaScript(rail.sessionScript(lockedStoreIdRef.current));
-  }, [netSeedFromEarlyPrewarm, netPrewarmArm, netPrewarmSettle]);
+    netPrepare({ kind: 'session' })?.();
+  }, [netSeedFromEarlyPrewarm, netPrewarmArm, netPrewarmSettle, netPrepare]);
 
   const beginSearchFlow = useCallback(() => {
     setStep('searching');
@@ -4333,9 +4471,13 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       // It degrades more quietly than the session did — the timeout armed above
       // starts the search with no baseline rather than handing over — and a run
       // that reconciles against no baseline is its own bug.
-      if (onStorePage()) {
+      // A NATIVE READ HAS NO PAGE TO WAIT FOR. Same reasoning as the session
+      // ask: the request carries the cookie jar wherever it is made from, so
+      // deferring it to a navigation that this run never makes would leave the
+      // baseline permanently pending.
+      if (!netNeedsPage() || onStorePage()) {
         console.log(`[Cart ${ts()}]`, 'snapshotBefore: reading the cart over the network, no page load');
-        webviewRef.current?.injectJavaScript(railForBefore.cartRead(lockedStoreIdRef.current));
+        netPrepare({ kind: 'cartRead' })?.();
       } else {
         console.log(`[Cart ${ts()}]`, 'snapshotBefore: not on the store yet — reading the cart when it lands');
         cartReadPendingNavRef.current = true;
@@ -4347,7 +4489,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     // and the run starts without a baseline rather than with a made-up one.
     console.log(`[Cart ${ts()}]`, 'snapshotBefore: no rail for', probeStoreId, '— starting search without a baseline');
     beginSearchFlow();
-  }, [beginSearchFlow, loginPrewarm]);
+  }, [beginSearchFlow, loginPrewarm, netPrepare, netNeedsPage]);
   snapshotBeforeRef.current = snapshotBeforeNow;
   snapshotBeforeAndBeginSearchRef.current = snapshotBeforeAndBeginSearch;
 
@@ -4418,8 +4560,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       // not working". Mine, from the commit that added the gate.
       lastLoadEndUrlRef.current = url;
       console.log(`[Cart ${ts()}]`, 'snapshotBefore: the store landed — reading the cart now');
-      const railForPending = getNetworkRail(lockedStoreIdRef.current);
-      if (railForPending) webviewRef.current?.injectJavaScript(railForPending.cartRead(lockedStoreIdRef.current));
+      netPrepare({ kind: 'cartRead' })?.();
       return;
     }
     // A network run waiting on its session: the injection at run start can land
@@ -4429,8 +4570,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       // landing, because what runs after a session answer asks where we are.
       lastLoadEndUrlRef.current = url;
       console.log(`[Cart ${ts()}]`, 'network run: re-reading the session on', url.slice(0, 60));
-      const railForSession = getNetworkRail(lockedStoreIdRef.current);
-      if (railForSession) webviewRef.current?.injectJavaScript(railForSession.sessionScript(lockedStoreIdRef.current));
+      netPrepare({ kind: 'session' })?.();
       return;
     }
     // Walmart anti-bot redirect: /blocked?url=<encoded original>. We surface
@@ -6166,8 +6306,10 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
             netSessionRef.current = sess;
             netSessionAtRef.current = Date.now();
             const railP = getNetworkRail(lockedStoreIdRef.current);
-            const scriptP = railP?.searchBatch(netPrewarmTermsRef.current, sess) ?? null;
-            if (!scriptP) { netPrewarmSettle('no search script for this store'); return; }
+            const sendP = netPrepareRef.current({
+              kind: 'search', terms: netPrewarmTermsRef.current, sess,
+            });
+            if (!sendP) { netPrewarmSettle('no search script for this store'); return; }
             netPrewarmInjectedRef.current = true;
             console.log(`[Cart ${ts()}]`, 'search prewarm: searching', netPrewarmTermsRef.current.length,
               'terms while the user is on the qty screen');
@@ -6175,7 +6317,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
             // has stopped answering, and the run should stop waiting on it.
             netPrewarmArm(railP!.budgets.searchMs(netPrewarmTermsRef.current.length),
               'the store stopped answering the batch');
-            webviewRef.current?.injectJavaScript(scriptP);
+            sendP();
             return;
           }
           if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
@@ -6728,6 +6870,10 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     },
     [navigateToAddItem],
   );
+  // THE NATIVE SIDE'S WAY IN. A driver's message arrives here, through the same
+  // handler and the same parse as the page's, which is what lets every branch
+  // below stay ignorant of which transport answered.
+  onMessageRef.current = onMessage;
 
   // ── Review step helpers ──────────────────────────────────────────────────
 

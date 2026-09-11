@@ -1,6 +1,8 @@
 import { NativeRail } from './types';
-import { HEB_NATIVE } from './heb';
-import { INSTACART_NATIVE } from './instacart';
+import { NativeRunDriver } from './run';
+import { HEB_NATIVE, HEB_NATIVE_RUN } from './heb';
+import { INSTACART_NATIVE, instacartNativeRun } from './instacart';
+import { isInstacartStore } from '../webview-scripts/instacart';
 import { ALBERTSONS_NATIVE, useAlbertsonsBanner } from './albertsons';
 import { WEGMANS_NATIVE } from './wegmans';
 import { ALBERTSONS_FAMILY_IDS } from '../webview-scripts/albertsons';
@@ -49,4 +51,55 @@ export function nativeRailFor(storeId: string | null | undefined): NativeRail | 
     return useAlbertsonsBanner(storeId) ? ALBERTSONS_NATIVE : null;
   }
   return null;
+}
+
+
+/**
+ * storeId -> the driver that can RUN it over plain HTTP.
+ *
+ * A second map rather than a field on NativeRail, because the two answer
+ * different questions and a store can legitimately do one and not the other.
+ * nativeRailFor says "can this store be ASKED over HTTP" -- login, one search,
+ * one read -- and every store in the table above can. This says "can a whole RUN
+ * go over HTTP", which additionally needs the write, the batching and the
+ * verification, and which store-capabilities.ts gates on separately for exactly
+ * that reason.
+ *
+ * WALMART IS DELIBERATELY ABSENT, and not by omission. Stephen, 2026-09-11:
+ * "Walmart is off the table for now" -- walmart.io is the intended path there,
+ * and a native run driver for it would be built on the assumption he has already
+ * ruled out. It keeps the WebView path it has always had.
+ */
+let override: ((storeId: string | null | undefined) => NativeRunDriver | null) | null = null;
+
+export function nativeRunFor(storeId: string | null | undefined): NativeRunDriver | null {
+  if (override) return override(storeId);
+  if (!storeId) return null;
+  if (storeId === 'heb') return HEB_NATIVE_RUN;
+  // A DRIVER PER BANNER, built here because this is the only file allowed to
+  // know which banners there are.
+  if (isInstacartStore(storeId)) return instacartNativeRun(storeId);
+  return null;
+}
+
+
+/**
+ * THE TRANSPORT SEAM, for suites that are about one side of the bridge.
+ *
+ * Follows __setLoginCheckerForTests next door, and exists for the same reason:
+ * the engine's decisions -- one batch per session answer, stop rather than wait,
+ * reuse what the prewarm answered -- are transport-INDEPENDENT, and the suites
+ * that pin them observe the transport because that is the only thing observable
+ * from outside. A suite that pins the page path says so here; a suite that pins
+ * the native path installs a driver here. Neither is a suite silently testing
+ * whichever path the capability table happened to select that week.
+ */
+export function __setNativeRunForTests(
+  fn: (storeId: string | null | undefined) => NativeRunDriver | null,
+): void {
+  override = fn;
+}
+
+export function __resetNativeRunForTests(): void {
+  override = null;
 }
