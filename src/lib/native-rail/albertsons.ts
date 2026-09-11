@@ -1,5 +1,5 @@
 import CookieManager from '@react-native-cookies/cookies';
-import { NativeCandidate, NativeRail, postJson, timed } from './types';
+import { NativeCandidate, NativeRail, fetchWithTimeout, postJson, timed } from './types';
 
 /**
  * The Albertsons family, natively. Tom Thumb, because that is the banner
@@ -29,15 +29,50 @@ const SEARCH_PATH = '/abs/pub/xapi/pgmsearch/v1/search/products';
 const CART_PATH = '/abs/pub/erums/cartservice/api/v2/cart/customer/';
 const TZ = 'America/Los_Angeles';
 
+/**
+ * THE HEADERS A PAGE GETS FOR FREE AND A NATIVE FETCH DOES NOT.
+ *
+ * The rail runs INSIDE the document, so Chromium attaches Referer, Origin and
+ * the whole sec-fetch/sec-ch-ua family to every same-origin XHR without the
+ * script asking. RN's fetch attaches none of them, and the first native attempt
+ * answered 403 on search and 401 on every cart key -- which is what a gateway
+ * does to a request that does not look like it came from its own page.
+ *
+ * Not a workaround for a block so much as sending what the browser was already
+ * sending. Every value here is what a Chrome-on-Android WebView on this origin
+ * would send; the UA is the one the rail spoofs, so the two agree.
+ */
+const browserHeaders = (ua: string) => ({
+  'User-Agent': ua,
+  Referer: `${ORIGIN}/`,
+  Origin: ORIGIN,
+  'Accept-Language': 'en-US,en;q=0.9',
+  'sec-ch-ua': '"Chromium";v="151", "Not.A/Brand";v="24", "Google Chrome";v="151"',
+  'sec-ch-ua-mobile': '?1',
+  'sec-ch-ua-platform': '"Android"',
+  'Sec-Fetch-Site': 'same-origin',
+  'Sec-Fetch-Mode': 'cors',
+  'Sec-Fetch-Dest': 'empty',
+});
+
 type User = {
   token: string; customerId: string; branchId: string; zipcode: string;
 };
 let cachedUser: User | null = null;
 let cachedKeys: string[] | null = null;
+/**
+ * The key that actually worked, remembered.
+ *
+ * The cart key sits at no field anyone can name, so it is found by walking
+ * candidates -- and the first successful run walked SIXTEEN of them, at 9.7s.
+ * Every one of those fifteen refusals is a request into a store that does not
+ * need them twice. The rail keeps the winner in A.cartKey for the same reason.
+ */
+let cachedCartKey: string | null = null;
 
 /** Every 32-hex value on the homepage, the named ones first. */
 async function fetchKeys(ua: string): Promise<string[]> {
-  const r = await fetch(`${ORIGIN}/`, { credentials: 'include', headers: { 'User-Agent': ua } });
+  const r = await fetchWithTimeout(`${ORIGIN}/`, { credentials: 'include', headers: { 'User-Agent': ua } }, 15000);
   if (r.status !== 200) return [];
   const html = await r.text();
   const out: string[] = [];
@@ -83,7 +118,7 @@ export const ALBERTSONS_NATIVE: NativeRail = {
      * attached by hand. Which one answers is the finding.
      */
     const url = `${ORIGIN}/bin/safeway/unified/userinfo?rand=${Math.floor(1e6 * Math.random())}&banner=${BANNER}`;
-    const ask = (cookieHeader?: string) => fetch(url, {
+    const ask = (cookieHeader?: string) => fetchWithTimeout(url, {
       credentials: 'include',
       headers: {
         'User-Agent': ua,
@@ -159,33 +194,75 @@ export const ALBERTSONS_NATIVE: NativeRail = {
     // THE KEY IS PROBED, not known. The rail walks candidates because the cart
     // key sits at no field anyone can name; a 401 or 403 burns a candidate
     // rather than the request.
+    // A DEADLINE FOR THE WHOLE WALK, not just each request.
+    //
+    // Per-request timeouts stopped the hang and replaced it with a long wait:
+    // 25 candidates at 6s each is 150 seconds of politely timing out. A wrong
+    // key is refused in milliseconds, so anything slow is not the key -- the
+    // per-key budget can be short, and the walk needs its own ceiling on top.
+    const walkDeadline = Date.now() + 20_000;
     let lastStatus: number | null = null;
-    for (let i = 0; i < Math.min(cachedKeys.length, 12); i++) {
-      const r = await fetch(url, {
+    const order = cachedCartKey
+      ? [cachedCartKey, ...cachedKeys.filter((k) => k !== cachedCartKey)]
+      : cachedKeys;
+    for (let i = 0; i < order.length; i++) {
+      if (Date.now() > walkDeadline) {
+        return {
+          ok: false, status: lastStatus,
+          detail: `gave up after ${i} of ${order.length} key candidates, last status ${lastStatus}`,
+        };
+      }
+      const r = await fetchWithTimeout(url, {
         method: 'POST', body: '{}', credentials: 'include',
         headers: {
-          'User-Agent': ua,
+          ...browserHeaders(ua),
           Authorization: `Bearer ${cachedUser.token}`,
-          'ocp-apim-subscription-key': cachedKeys[i],
+          'ocp-apim-subscription-key': order[i],
           'Content-Type': 'application/json',
           Accept: 'application/json, text/plain, */*',
           'x-swy-client-id': 'web-portal',
           'Sort-Order': 'date',
         },
-      });
+      }, 4000);
       lastStatus = r.status;
       if (r.status === 401 || r.status === 403) continue;
       if (r.status !== 200) return { ok: false, status: r.status, detail: `http ${r.status} on key ${i + 1}` };
+      cachedCartKey = order[i];
       const j = await r.json().catch(() => null);
+      // THE BODY IS { multiCartSummary, carts, errors }, measured by asking it.
+      // The first reader looked for cartItems at the top level, found nothing,
+      // and reported an empty cart -- which is the failure this endpoint makes
+      // easiest, because a wrong path and a genuinely empty cart are the same
+      // zero. One banner can hold several carts (1P, marketplace, wine), so the
+      // lines are the union of them rather than the first one's.
       let lines: any[] = [];
-      try { lines = j.cartItems || j.items || j.cart?.cartItems || []; } catch { /* below */ }
+      try {
+        const carts: any[] = Array.isArray(j?.carts) ? j.carts : [];
+        for (const c of carts) {
+          const inner = c?.cartItems || c?.items || [];
+          if (Array.isArray(inner)) lines = lines.concat(inner);
+        }
+        if (!lines.length && Array.isArray(j?.cartItems)) lines = j.cartItems;
+      } catch { /* reported by the shape line below */ }
       const count = lines.reduce((n: number, l: any) => n + (Number(l.qty ?? l.quantity) || 0), 0);
+      // THE TOP-LEVEL KEYS, because "0 lines" has two very different causes and
+      // they look identical: an empty cart, and a reader looking in the wrong
+      // place. Naming what came back lets the second one be seen.
+      // Still says what it saw when the answer is zero, one level deeper now:
+      // an empty cart and a wrong path inside `carts` are the same zero again.
+      const shape = lines.length === 0
+        ? ` [carts: ${Array.isArray(j?.carts) ? j.carts.length : 'none'}`
+          + `, first cart keys: ${Object.keys(j?.carts?.[0] || {}).slice(0, 8).join(',') || 'none'}]`
+        : '';
       return {
         ok: true, status: r.status, count, lines: lines.length,
-        detail: `${lines.length} lines, ${count} items (key ${i + 1} of ${cachedKeys.length})`,
+        detail: `${lines.length} lines, ${count} items (key ${i + 1} of ${order.length})${shape}`,
       };
     }
-    return { ok: false, status: lastStatus, detail: `every one of ${cachedKeys.length} key candidates was refused` };
+    return {
+      ok: false, status: lastStatus,
+      detail: `all ${cachedKeys.length} key candidates refused, last status ${lastStatus}`,
+    };
   }),
 
   search: (ua, s, term) => timed(async () => {
@@ -214,10 +291,10 @@ export const ALBERTSONS_NATIVE: NativeRail = {
     p.set('pp', 'true');
     p.set('includeOffer', 'true');
     p.set('banner', BANNER);
-    const r = await fetch(`${ORIGIN}${SEARCH_PATH}?${p.toString()}`, {
+    const r = await fetchWithTimeout(`${ORIGIN}${SEARCH_PATH}?${p.toString()}`, {
       credentials: 'include',
       headers: {
-        'User-Agent': ua,
+        ...browserHeaders(ua),
         'ocp-apim-subscription-key': key,
         Accept: 'application/json, text/plain, */*',
       },

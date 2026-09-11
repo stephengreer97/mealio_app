@@ -1,5 +1,5 @@
 import {
-  NativeCandidate, NativeRail, NativeSession, postJson, timed,
+  NativeCandidate, NativeRail, NativeSession, fetchWithTimeout, postJson, timed,
 } from './types';
 
 /**
@@ -98,7 +98,7 @@ async function shopAndZone(ua: string): Promise<{ shopId: string | null; zoneId:
   const sources = [`/store/${SLUG}/search_v3/zz`, `/store/${SLUG}/storefront`];
   let html = '';
   for (const path of sources) {
-    const r = await fetch(`${ORIGIN}${path}`, { credentials: 'include', headers: { 'User-Agent': ua } });
+    const r = await fetchWithTimeout(`${ORIGIN}${path}`, { credentials: 'include', headers: { 'User-Agent': ua } }, 15000);
     html = await r.text();
     lastSource = path;
     if (html.includes('%22zoneId%22%3A%22') || html.includes('%5C%22zoneId%5C%22%3A%5C%22')) break;

@@ -74,13 +74,38 @@ export type NativeRail = {
   add(ua: string, s: NativeSession, c: NativeCandidate): Promise<NativeResult & { added?: boolean }>;
 };
 
+/**
+ * EVERY REQUEST GETS A DEADLINE, because one of them will not answer.
+ *
+ * The injected rails wrap every fetch in an AbortController with a per-request
+ * budget; this spike had none, and it showed the moment it met a request that
+ * tarpits. Walking Tom Thumb's 25 key candidates, one of them simply never
+ * answered and the whole probe sat at "running..." for ever -- the same thing a
+ * plain curl to that host did from the laptop.
+ *
+ * A run that hangs is worse than a run that fails: a failure is a result.
+ */
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  budgetMs = 12_000,
+): Promise<Response> {
+  const ctl = new AbortController();
+  const to = setTimeout(() => { try { ctl.abort(); } catch { /* already gone */ } }, budgetMs);
+  try {
+    return await fetch(url, { ...init, signal: ctl.signal });
+  } finally {
+    clearTimeout(to);
+  }
+}
+
 /** Shared JSON POST. Returns the parsed body and the status, never throwing. */
 export async function postJson(
   url: string,
   body: unknown,
   headers: Record<string, string>,
 ): Promise<{ status: number; json: any; text: string }> {
-  const r = await fetch(url, {
+  const r = await fetchWithTimeout(url, {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json', accept: '*/*', ...headers },

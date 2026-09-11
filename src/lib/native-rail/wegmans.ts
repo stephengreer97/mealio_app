@@ -1,4 +1,4 @@
-import { NativeCandidate, NativeRail, timed } from './types';
+import { NativeCandidate, NativeRail, fetchWithTimeout, timed } from './types';
 
 /**
  * Wegmans, natively, AND THE ONE STORE WHERE THE ANSWER IS MOSTLY NO.
@@ -64,7 +64,7 @@ export const WEGMANS_NATIVE: NativeRail = {
   search: (ua, _s, term) => timed(async () => {
     const url = `https://${ALGOLIA_APP.toLowerCase()}-dsn.algolia.net/1/indexes/products/query`
       + `?x-algolia-api-key=${ALGOLIA_KEY}&x-algolia-application-id=${ALGOLIA_APP}`;
-    const r = await fetch(url, {
+    const r = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'User-Agent': ua },
       body: JSON.stringify({ query: term, hitsPerPage: 12 }),
