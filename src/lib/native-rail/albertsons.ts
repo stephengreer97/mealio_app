@@ -239,7 +239,11 @@ export const ALBERTSONS_NATIVE: NativeRail = {
       try {
         const carts: any[] = Array.isArray(j?.carts) ? j.carts : [];
         for (const c of carts) {
-          const inner = c?.cartItems || c?.items || [];
+          // cartItemsList, measured by dumping every key on the cart object.
+          // Two earlier guesses (cartItems, items) both missed and both reported
+          // an empty cart, which is why the shape is printed rather than
+          // guessed at a third time.
+          const inner = c?.cartItemsList || c?.cartItems || c?.items || [];
           if (Array.isArray(inner)) lines = lines.concat(inner);
         }
         if (!lines.length && Array.isArray(j?.cartItems)) lines = j.cartItems;
@@ -252,7 +256,7 @@ export const ALBERTSONS_NATIVE: NativeRail = {
       // an empty cart and a wrong path inside `carts` are the same zero again.
       const shape = lines.length === 0
         ? ` [carts: ${Array.isArray(j?.carts) ? j.carts.length : 'none'}`
-          + `, first cart keys: ${Object.keys(j?.carts?.[0] || {}).slice(0, 8).join(',') || 'none'}]`
+          + `, ALL first-cart keys: ${Object.keys(j?.carts?.[0] || {}).join(',') || 'none'}]`
         : '';
       return {
         ok: true, status: r.status, count, lines: lines.length,
@@ -291,6 +295,8 @@ export const ALBERTSONS_NATIVE: NativeRail = {
     p.set('pp', 'true');
     p.set('includeOffer', 'true');
     p.set('banner', BANNER);
+    // 20s, because this endpoint sometimes tarpits: it answered in 1016ms on one
+    // run and aborted at 12s on the next, from the same device minutes apart.
     const r = await fetchWithTimeout(`${ORIGIN}${SEARCH_PATH}?${p.toString()}`, {
       credentials: 'include',
       headers: {
@@ -298,7 +304,7 @@ export const ALBERTSONS_NATIVE: NativeRail = {
         'ocp-apim-subscription-key': key,
         Accept: 'application/json, text/plain, */*',
       },
-    });
+    }, 20000);
     if (r.status !== 200) return { ok: false, status: r.status, detail: `http ${r.status}` };
     const j = await r.json().catch(() => null);
     let items: any[] = [];

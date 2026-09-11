@@ -31,6 +31,33 @@ import { NativeCandidate, NativeRail, fetchWithTimeout, timed } from './types';
  * was never an HTTP problem in the first place.
  */
 
+/**
+ * TWO ASSUMPTIONS, NOW TESTED RATHER THAN INHERITED.
+ *
+ * Stephen, 2026-09-11: "are you 1000% sure about wegmans?" No, and the reason I
+ * gave was partly wrong. The rail's note reads "the commerce API also refuses
+ * the cookie session -- a no-cors request comes back opaque, so it is answered
+ * and we are simply not allowed to read it." That is a CORS rule, and CORS is a
+ * BROWSER rule. RN's fetch is not a browser and is not subject to it: the server
+ * answered, and only the page was forbidden from looking. Native code can look.
+ *
+ * Reading further there is a stronger reason the cart is blocked, and it is not
+ * CORS: COMMERCE_BASE is api.digitaldevelopment.wegmans.cloud, a different
+ * registrable domain from shop.wegmans.com. Cookies set on the shop origin are
+ * not sent there by ANY client. It is Bearer-authenticated.
+ *
+ * But "should not work" is not "was measured not to work", and the browser could
+ * never observe this particular answer. So both assumptions get a probe:
+ *
+ *   1. Does shop.wegmans.com answer a cookie-authenticated "who am I"? The rail
+ *      reads MSAL's localStorage because it is FREE and offline, not because
+ *      anything else was tried and failed. Nobody has looked.
+ *   2. Does the commerce API answer a cookie-only request? Cross-domain cookies
+ *      say no. The browser could not see the answer either way.
+ *
+ * If either works, Wegmans stops needing a WebView.
+ */
+const COMMERCE_BASE = 'https://api.digitaldevelopment.wegmans.cloud';
 const ALGOLIA_APP = 'QGPPR19V8V';
 const ALGOLIA_KEY = '9a10b1401634e9a6e55161c3a60c200d';
 const ORIGIN = 'https://shop.wegmans.com';
@@ -46,12 +73,74 @@ export const WEGMANS_NATIVE: NativeRail = {
   label: 'Wegmans',
   origin: ORIGIN,
 
-  session: () => timed(async () => ({
-    ...BLOCKED_LOCALSTORAGE,
-    detail: 'blocked: MSAL keeps the account list in the site\'s localStorage, not in any response',
-  })),
+  /**
+   * Probe 1: is there a cookie-authenticated identity endpoint on the SHOP
+   * origin? Candidates are the shapes this site family uses; each reports its
+   * own status so a 404 (wrong guess) and a 401 (right guess, no session) stay
+   * different findings.
+   */
+  session: (ua) => timed(async () => {
+    const candidates = [
+      '/api/v2/user',
+      '/api/user',
+      '/api/v2/account',
+      '/api/session',
+      '/api/v2/customer',
+    ];
+    const seen: string[] = [];
+    for (const path of candidates) {
+      try {
+        const r = await fetchWithTimeout(`${ORIGIN}${path}`, {
+          credentials: 'include',
+          headers: { 'User-Agent': ua, accept: 'application/json, text/plain, */*' },
+        }, 6000);
+        seen.push(`${path}:${r.status}`);
+        if (r.status === 200) {
+          const t = await r.text();
+          let j: any = null;
+          try { j = JSON.parse(t); } catch { /* HTML means it is a page, not an API */ }
+          if (j && typeof j === 'object') {
+            const keys = Object.keys(j).slice(0, 6).join(',');
+            return {
+              ok: true, status: 200,
+              detail: `${path} answered JSON with cookies: keys ${keys}`,
+              session: { loggedIn: true },
+            };
+          }
+        }
+      } catch (e) {
+        seen.push(`${path}:threw`);
+      }
+    }
+    return {
+      ...BLOCKED_LOCALSTORAGE,
+      detail: `no cookie-authenticated identity endpoint found. Tried ${seen.join(' ')}`,
+    };
+  }),
 
-  cartRead: () => timed(async () => ({ ...BLOCKED_LOCALSTORAGE })),
+  /**
+   * Probe 2: does the commerce API answer a cookie-only request?
+   *
+   * No Bearer, deliberately -- the point is whether the session alone is enough.
+   * The browser asked this once in no-cors mode and could not read the reply;
+   * native fetch reads whatever comes back, including the status the page never
+   * saw.
+   */
+  cartRead: (ua) => timed(async () => {
+    const url = `${COMMERCE_BASE}/commerce/account/customer?api-version=2024-03-06-preview`;
+    const r = await fetchWithTimeout(url, {
+      credentials: 'include',
+      headers: { 'User-Agent': ua, accept: 'application/json, text/plain, */*' },
+    }, 8000);
+    const body = (await r.text()).slice(0, 120);
+    if (r.status === 200) {
+      return { ok: true, status: 200, detail: `commerce answered a COOKIE-ONLY request: ${body}` };
+    }
+    return {
+      ok: false, status: r.status,
+      detail: `commerce refused cookies alone: ${r.status}. ${body}`,
+    };
+  }),
 
   /**
    * The one that works, and it needs no session at all.

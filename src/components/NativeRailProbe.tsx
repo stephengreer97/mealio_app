@@ -76,21 +76,23 @@ export default function NativeRailProbe({ onClose }: { onClose: () => void }) {
       // The later steps need identifiers the login step produced. Without a
       // session there is nothing to ask WITH, so they are skipped rather than
       // failed -- a skipped step and a broken one are different findings.
-      if (session?.loggedIn) {
-        const cart = await rail.cartRead(ua, session);
-        push('cart read', cart);
-        const found = await rail.search(ua, session, TERM);
-        push('search', found);
-        firstCandidate = found.candidates?.[0] ?? null;
-      } else {
-        steps.push({ label: 'cart read', ok: null, status: null, ms: 0, detail: 'skipped: no session' });
-        // SEARCH RUNS ANYWAY. Wegmans' search is Algolia with a public
-        // search-only key and no session at all, so skipping it for want of a
-        // login would hide the one part of that store that needs no WebView.
-        const found = await rail.search(ua, session ?? { loggedIn: false }, TERM);
-        push('search', found);
-        firstCandidate = found.candidates?.[0] ?? null;
-      }
+      // EVERY STEP RUNS, AND THE RAIL DECIDES WHAT IT NEEDS.
+      //
+      // The harness used to skip cart read whenever login failed, which is
+      // sensible for a store whose cart needs a session and wrong for the one
+      // case that mattered: Wegmans' cart read IS the experiment -- does the
+      // commerce API answer cookies alone -- and a failed login is its normal
+      // state. So the probe that existed to test it never ran once.
+      //
+      // A rail that genuinely needs a session says so itself ("no session from
+      // the login step"), which is a finding. The harness deciding on its behalf
+      // is not.
+      const s2 = session ?? { loggedIn: false };
+      const cart = await rail.cartRead(ua, s2);
+      push('cart read', cart);
+      const found = await rail.search(ua, s2, TERM);
+      push('search', found);
+      firstCandidate = found.candidates?.[0] ?? null;
 
       setRows((r) => [...r, { rail, cookies, steps, session, firstCandidate }]);
     }
