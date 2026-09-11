@@ -1070,11 +1070,6 @@ export default function AccountScreen() {
             </TouchableOpacity>
             {/* Answers "can the session be read without a WebView at all?" with
                 evidence instead of reasoning. Read-only; writes to no cart. */}
-            <TouchableOpacity onPress={() => setNativeSession(true)} style={styles.devResetBtn}>
-              <Text style={styles.devResetText}>Session over native fetch (dev)</Text>
-            </TouchableOpacity>
-            {/* Answers "can the session be read without a WebView at all?" with
-                evidence instead of reasoning. Read-only; writes to no cart. */}
             <TouchableOpacity
               testID="native-session-probe"
               onPress={() => setNativeSession(true)}

@@ -61,25 +61,45 @@ type Probe = {
 
 const PROBES: Probe[] = [
   {
-    label: 'Albertsons: userinfo (GET)',
-    origin: 'https://www.albertsons.com',
+    label: 'Tom Thumb: userinfo (GET)',
+    origin: 'https://www.tomthumb.com',
     // The same path albertsons-network.ts builds: /bin/safeway/unified/userinfo
     // with a cache-buster and the banner taken from the host.
     run: async (ua) => {
-      const url = 'https://www.albertsons.com/bin/safeway/unified/userinfo?rand='
-        + Math.floor(1e6 * Math.random()) + '&banner=albertsons';
-      const r = await fetch(url, { credentials: 'include', headers: { 'User-Agent': ua, accept: '*/*' } });
+      // THE BANNER IS THE ACCOUNT. albertsons.com and tomthumb.com are separate
+      // origins with separate cookie jars, and Stephen's runs are on Tom Thumb
+      // (storeId 2574) -- so the first cut of this probed a banner he has no
+      // session on and read the correct answer for that banner as a failure of
+      // native fetch. __albBanner() derives this from the host for the same
+      // reason.
+      const url = 'https://www.tomthumb.com/bin/safeway/unified/userinfo?rand='
+        + Math.floor(1e6 * Math.random()) + '&banner=tomthumb';
+      const r = await fetch(url, {
+        credentials: 'include',
+        headers: { 'User-Agent': ua, accept: 'text/plain, application/json, */*' },
+      });
+      // The rail's own reading, copied rather than invented: the site treats
+      // 401/403 here as signed out, and a 200 with no SWY_SHOP_TOKEN is the
+      // expired-session answer -- the site tears the session down on it.
+      //
+      // The FIRST cut of this looked for `customerId`, which this endpoint does
+      // not return, so a signed-in session reported signed out. The response was
+      // plainly personalised (a zipcode, a store id, emailVerified) and the
+      // verdict still said no, which is exactly the shape of a probe measuring
+      // the wrong thing.
+      if (r.status === 401 || r.status === 403) {
+        return { status: r.status, loggedIn: false, detail: 'the site reads this status as signed out' };
+      }
       const text = await r.text();
       let j: Record<string, unknown> | null = null;
       try { j = JSON.parse(text); } catch { /* an HTML body is itself the answer */ }
-      // The rail treats a customerId as the signed-in signal.
-      const id = j ? (j.customerId ?? j.custId ?? null) : null;
+      if (!j) return { status: r.status, loggedIn: null, detail: `non-JSON body, ${text.length} chars` };
+      // PRESENCE, NEVER THE VALUE. SWY_SHOP_TOKEN is the session itself.
+      const signedIn = !!j.SWY_SHOP_TOKEN;
       return {
         status: r.status,
-        loggedIn: j ? !!id : null,
-        detail: j
-          ? `keys=${Object.keys(j).slice(0, 8).join(',')}`
-          : `non-JSON body, ${text.length} chars: ${text.slice(0, 80)}`,
+        loggedIn: signedIn,
+        detail: `${Object.keys(j).length} keys, SWY_SHOP_TOKEN ${signedIn ? 'present' : 'absent'}`,
       };
     },
   },
