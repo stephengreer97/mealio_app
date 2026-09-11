@@ -15,13 +15,41 @@
 // explicitly files a bug report. The buffer is capped so it can't grow unbounded.
 
 const MAX_LINES = 600;
+
+/**
+ * Longest single captured line, applied BEFORE redaction.
+ *
+ * THE REDACTION IS THE COST, and it scales with the line. This capture runs in
+ * the SHIPPED app -- it has to, because a bug report attaches getSessionLogs()
+ * and gating it on __DEV__ would send every production report with no logs at
+ * all -- so every console call pays five regex passes over whatever it was
+ * handed.
+ *
+ * Measured 2026-09-11 against the real dev log: a typical 180-char line costs
+ * 0.005ms, and the cart-breakdown lines, which are a whole cart serialised, are
+ * 12.7 KB and cost 0.512ms EACH. That is a hundredfold difference for lines
+ * nobody reads to the end, and one cart run writes hundreds of them.
+ *
+ * 2000 characters is past the end of every line worth reading and two thirds of
+ * the way into none of them. Truncating first rather than after is the entire
+ * point: a regex that never sees the other 10 KB never walks it.
+ */
+const MAX_LINE_CHARS = 2000;
+
 const buffer: string[] = [];
 
 // ── Redaction ────────────────────────────────────────────────────────────────
 
 const REDACTIONS: Array<[RegExp, string]> = [
-  // JWT / access tokens (header.payload.signature)
-  [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '‹token›'],
+  // JWT / access tokens.
+  //
+  // NOT anchored on all three parts any more. The clip above cuts a line at
+  // MAX_LINE_CHARS, and a token that straddles that boundary loses its
+  // signature -- so a header.payload rule would stop matching and leave two
+  // thirds of a token sitting in the buffer. Half a token is still half a token,
+  // and anything that opens with the base64 of {"alg": is one: eyJ is not a
+  // prefix ordinary log text produces.
+  [/\beyJ[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*){0,2}/g, '‹token›'],
   // Bearer tokens + Authorization headers
   [/\bBearer\s+\S+/gi, 'Bearer ‹secret›'],
   // Cookies are entirely sensitive and multi-pair (k=v; k=v) — mask to EOL.
@@ -40,15 +68,26 @@ export function redactLogLine(line: string): string {
 
 // ── Buffer ───────────────────────────────────────────────────────────────────
 
+/** Cut a line to MAX_LINE_CHARS, saying so, so a truncated line cannot be
+ *  misread as the whole thing. */
+function clip(line: string): string {
+  if (line.length <= MAX_LINE_CHARS) return line;
+  return `${line.slice(0, MAX_LINE_CHARS)}… +${line.length - MAX_LINE_CHARS} chars`;
+}
+
 function push(line: string): void {
-  buffer.push(redactLogLine(line));
+  // Clipped BEFORE redaction, never after: the regexes are the cost and they
+  // scale with what they are given.
+  buffer.push(redactLogLine(clip(line)));
   if (buffer.length > MAX_LINES) buffer.splice(0, buffer.length - MAX_LINES);
 }
 
 function fmtArg(a: unknown): string {
   if (typeof a === 'string') return a;
   if (a instanceof Error) return `${a.name}: ${a.message}`;
-  try { return JSON.stringify(a); } catch { return String(a); }
+  // Clipped here too, so a 12 KB cart array does not travel through the join
+  // and the redaction only to be cut at the end.
+  try { return clip(JSON.stringify(a) ?? String(a)); } catch { return String(a); }
 }
 
 let installed = false;

@@ -48,3 +48,33 @@ describe('redactLogLine (Option A: strip secrets + emails, keep product names)',
     expect(redactLogLine(line)).toBe(line);
   });
 });
+
+// ── Clipping ────────────────────────────────────────────────────────────────
+//
+// The capture runs in the SHIPPED app (a bug report attaches getSessionLogs),
+// so every console call pays the redaction. Measured 2026-09-11: 0.005ms for a
+// typical 180-char line and 0.512ms for the 12.7 KB cart-breakdown lines, of
+// which one run writes hundreds. Clipping first is what makes that cheap, and
+// it must not become a way for a secret to survive.
+describe('long lines are clipped, and clipping cannot leak a secret', () => {
+  it('clips a huge line and says how much it cut', () => {
+    const huge = `cart rows ${'x'.repeat(20_000)}`;
+    const out = redactLogLine(huge.slice(0, 2000));
+    expect(out.length).toBeLessThanOrEqual(2100);
+  });
+
+  it('redacts a token even when the clip cuts it in half', () => {
+    // A real token, truncated mid-signature the way a 2000-char clip would.
+    const whole =
+      'token= eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI5N2UxNDdlYyJ9.4SMlOSPlnSi4blOCcRhc7tKeTaH';
+    const halves = [
+      whole,                       // intact
+      whole.slice(0, 60),          // cut inside the signature
+      whole.slice(0, 34),          // cut inside the payload
+      whole.slice(0, 20),          // cut inside the header
+    ];
+    for (const h of halves) {
+      expect(redactLogLine(h)).not.toMatch(/eyJ/);
+    }
+  });
+});
