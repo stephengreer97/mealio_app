@@ -22,6 +22,7 @@ import CartClearProbe from '../../components/CartClearProbe';
 import StorefrontCaptureProbe from '../../components/StorefrontCaptureProbe';
 import Meal17Probe from '../../components/Meal17Probe';
 import NativeSessionProbe from '../../components/NativeSessionProbe';
+import NativeRailProbe from '../../components/NativeRailProbe';
 
 // The canary's stores, one per family with a signed-in session. Kept here rather
 // than read from canary_plans because this is a dev control list, not the plan:
@@ -115,6 +116,7 @@ export default function AccountScreen() {
   const [capture, setCapture] = useState<{ storeId: string; path?: string } | null>(null);
   const [meal17, setMeal17] = useState<'matrix' | 'burst' | null>(null);
   const [nativeSession, setNativeSession] = useState(false);
+  const [nativeRail, setNativeRail] = useState(false);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
@@ -1077,6 +1079,13 @@ export default function AccountScreen() {
             >
               <Text style={styles.devResetText}>Session over native fetch (dev)</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              testID="native-rail-probe"
+              onPress={() => setNativeRail(true)}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Native rail: all 4 jobs, no WebView (dev)</Text>
+            </TouchableOpacity>
             {/* MEAL-17, TEMPORARY. Delete with the spike. */}
             <TouchableOpacity onPress={() => setMeal17('matrix')} style={styles.devResetBtn}>
               <Text style={styles.devResetText}>MEAL-17: edge case matrix (dev)</Text>
@@ -1120,6 +1129,9 @@ export default function AccountScreen() {
               </TouchableOpacity>
             ))}
           </>
+        )}
+        {__DEV__ && nativeRail && (
+          <NativeRailProbe onClose={() => setNativeRail(false)} />
         )}
         {__DEV__ && nativeSession && (
           <NativeSessionProbe onClose={() => setNativeSession(false)} />
