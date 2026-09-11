@@ -33,7 +33,7 @@ const CANARY_STORES = [
   { id: 'tom_thumb', name: 'Tom Thumb' },
 ];
 import { useStores } from '../../lib/store-catalog/useStores';
-import { isWebViewStore } from '../../constants/stores';
+import { isKrogerBrand } from '../../constants/stores';
 import { useAuth } from '../../context/AuthContext';
 import { auth as authApi, account as accountApi, creators as creatorsApi, meals as mealsApi, images as imagesApi, payments as paymentsApi, kroger as krogerApi } from '../../lib/api';
 import * as tokenStorage from '../../lib/tokenStorage';
@@ -132,33 +132,25 @@ export default function AccountScreen() {
   const prewarm = useLoginPrewarm();
 
   /**
-   * The stores this session has CONFIRMED a sign-in for, plus Kroger.
+   * Does this account have a meal saved to a Kroger-family store?
    *
-   * `statusVersion` is in the deps because `getStatus` is read imperatively off
-   * a ref — without it this list is computed once and never notices a probe
-   * settling. Only 'loggedIn' counts: 'unknown' is a store nobody has asked
-   * about, and rendering it as disconnected would be a claim the app cannot make.
+   * The Kroger card is the only store-specific thing on this screen, and it is
+   * meaningless to someone who does not shop there: it explains an account link
+   * for stores they have never picked. So it appears when their own meals say
+   * it is relevant, and the section heading goes with it rather than sitting
+   * over nothing.
    *
-   * Kroger is not a WebView store and has no prewarm verdict; its connection is
-   * an OAuth grant the screen already tracks, so it is added on its own terms.
+   * Live meals only. A deleted meal is not a reason to keep offering the
+   * integration.
    */
-  const connectedStores = React.useMemo(() => {
-    const out = stores.filter(
-      (st) => isWebViewStore(st.id) && prewarm.getStatus(st.id) === 'loggedIn',
-    );
-    if (krogerConnected && !out.some((st) => st.id === 'kroger')) {
-      const kroger = stores.find((st) => st.id === 'kroger');
-      if (kroger) out.push(kroger);
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stores, krogerConnected, prewarm.statusVersion]);
+  const [hasKrogerMeal, setHasKrogerMeal] = useState(false);
   const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
   const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
 
   useEffect(() => {
     loadDeletedMeals();
+    loadKrogerRelevance();
     loadKrogerStatus();
     if (isCreator) loadCreatorProfile();
   }, [isCreator]);
@@ -227,6 +219,16 @@ export default function AccountScreen() {
     });
     return () => sub.remove();
   }, []);
+
+  async function loadKrogerRelevance() {
+    try {
+      const meals = await mealsApi.list();
+      setHasKrogerMeal(meals.some((m) => isKrogerBrand(m.storeId)));
+    } catch {
+      // Leave it hidden. Offering an account link nobody asked for is worse
+      // than not offering one, and the card is reachable again on the next load.
+    }
+  }
 
   async function loadDeletedMeals() {
     try {
@@ -355,25 +357,6 @@ export default function AccountScreen() {
     }
   }
 
-  async function handleKrogerDisconnect() {
-    Alert.alert('Disconnect Kroger', 'Remove your Kroger connection?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Disconnect',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await krogerApi.disconnect();
-            setKrogerConnected(false);
-            setKrogerLocations({});
-            setKrogerLocationsList([]);
-          } catch (err: any) {
-            Alert.alert('Error', err.message || 'Could not disconnect');
-          }
-        },
-      },
-    ]);
-  }
 
   async function handleKrogerSearchStores() {
     if (!krogerZip.trim()) return;
@@ -554,8 +537,8 @@ export default function AccountScreen() {
 
   async function handleStoreLogout() {
     Alert.alert(
-      'Log Out of Grocery Stores',
-      'This signs you out of every connected grocery store (H-E-B, Albertsons, Walmart, Kroger, etc.). You will need to reconnect Kroger to use it again. Your Mealio account stays signed in.',
+      'Sign out of my stores',
+      'This signs you out of every grocery store on this device, including any connected through an account link, which you would need to connect again. Your Mealio account stays signed in.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -761,95 +744,6 @@ export default function AccountScreen() {
           )}
         </Card>
 
-        <SectionHeading>Grocery stores</SectionHeading>
-
-        {/* Kroger Cart */}
-        <Card style={styles.card}>
-          <Text style={styles.cardTitle}>Kroger Brands Integration</Text>
-          {!krogerConnected ? (
-            <View>
-              <Text style={styles.krogerDesc}>
-                Connect your Kroger account to add meal ingredients directly to your cart, with no extension needed. Works with Kroger, Ralphs, Fred Meyer, King Soopers, Harris Teeter, and more.
-              </Text>
-              <View style={styles.krogerBrandNote}>
-                <Text style={styles.krogerBrandNoteText}>
-                  Shop at King Soopers, Fred Meyer, Ralphs, or Harris Teeter? These stores use Kroger's login system, so you may see a Kroger sign-in screen. That is normal.
-                </Text>
-              </View>
-              <Button
-                label={krogerConnecting ? 'Opening Kroger…' : 'Connect Kroger Account'}
-                variant="secondary"
-                onPress={handleKrogerConnect}
-                loading={krogerConnecting}
-              />
-            </View>
-          ) : (
-            <View>
-              <View style={styles.krogerConnectedBadge}>
-                <Text style={styles.krogerConnectedTitle}>Connected</Text>
-                {Object.keys(krogerLocations).length === 0 ? (
-                  <Text style={styles.krogerConnectedDesc}>No stores selected. Search below to add one.</Text>
-                ) : (
-                  Object.entries(krogerLocations).map(([sid, loc]) => (
-                    <Text key={sid} style={styles.krogerConnectedDesc}>
-                      {stores.find(s => s.id === sid)?.name ?? sid}: {loc.locationName}
-                    </Text>
-                  ))
-                )}
-              </View>
-
-              {/* Store search */}
-              <Text style={[styles.sectionSubLabel, { marginTop: 12 }]}>
-                Add or change store location
-              </Text>
-              <View style={styles.krogerSearchRow}>
-                <TextInput
-                  style={styles.krogerZipInput}
-                  placeholder="ZIP code"
-                  placeholderTextColor={Colors.text3}
-                  value={krogerZip}
-                  onChangeText={setKrogerZip}
-                  keyboardType="numeric"
-                  maxLength={10}
-                  returnKeyType="search"
-                  onSubmitEditing={handleKrogerSearchStores}
-                />
-                <TouchableOpacity
-                  style={[styles.krogerSearchBtn, (!krogerZip.trim() || krogerSearching) && { opacity: 0.5 }]}
-                  onPress={handleKrogerSearchStores}
-                  disabled={!krogerZip.trim() || krogerSearching}
-                >
-                  <Text style={styles.krogerSearchBtnText}>{krogerSearching ? '…' : 'Search'}</Text>
-                </TouchableOpacity>
-              </View>
-
-              {krogerLocationsList.map((loc) => (
-                <TouchableOpacity
-                  key={loc.locationId}
-                  style={[styles.krogerLocRow, krogerLocations[loc.storeId]?.locationId === loc.locationId && styles.krogerLocRowActive]}
-                  onPress={() => handleKrogerSaveLocation(loc)}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.krogerLocName}>{loc.name}</Text>
-                    <Text style={styles.krogerLocAddr} numberOfLines={1}>{loc.address}</Text>
-                  </View>
-                  {krogerLocations[loc.storeId]?.locationId === loc.locationId && (
-                    <Text style={styles.krogerLocCheck}>✓</Text>
-                  )}
-                </TouchableOpacity>
-              ))}
-
-              <Button
-                label="Disconnect Kroger"
-                variant="ghost"
-                size="sm"
-                onPress={handleKrogerDisconnect}
-                style={{ marginTop: 12 }}
-              />
-            </View>
-          )}
-        </Card>
-
         <SectionHeading>Preferences</SectionHeading>
 
         {/* Notifications — the always-available way in, for anyone who dismissed
@@ -959,8 +853,6 @@ export default function AccountScreen() {
           </Card>
         )}
 
-        <SectionHeading>Your meals</SectionHeading>
-
         {/* Following lives on Discover now. It was here because the app had
             nowhere else to put it, and it answered "who do I follow?" three
             taps from the feed made of their meals. The Following tab opens with
@@ -995,47 +887,118 @@ export default function AccountScreen() {
           </Card>
         )}
 
+        {/* Kroger Cart. Shown only to accounts with a meal saved at one of its
+            banners: for everyone else this is a page of instructions for an
+            account link they have no use for, and the heading above it would
+            stand over nothing. */}
+        {hasKrogerMeal && (
+        <>
+        <SectionHeading>Grocery stores</SectionHeading>
+        <Card style={styles.card}>
+          <Text style={styles.cardTitle}>Kroger Brands Integration</Text>
+          {!krogerConnected ? (
+            <View>
+              <Text style={styles.krogerDesc}>
+                Connect your Kroger account to add meal ingredients directly to your cart, with no extension needed. Works with Kroger, Ralphs, Fred Meyer, King Soopers, Harris Teeter, and more.
+              </Text>
+              <View style={styles.krogerBrandNote}>
+                <Text style={styles.krogerBrandNoteText}>
+                  Shop at King Soopers, Fred Meyer, Ralphs, or Harris Teeter? These stores use Kroger's login system, so you may see a Kroger sign-in screen. That is normal.
+                </Text>
+              </View>
+              <Button
+                label={krogerConnecting ? 'Opening Kroger…' : 'Connect Kroger Account'}
+                variant="secondary"
+                onPress={handleKrogerConnect}
+                loading={krogerConnecting}
+              />
+            </View>
+          ) : (
+            <View>
+              <View style={styles.krogerConnectedBadge}>
+                <Text style={styles.krogerConnectedTitle}>Connected</Text>
+                {Object.keys(krogerLocations).length === 0 ? (
+                  <Text style={styles.krogerConnectedDesc}>No stores selected. Search below to add one.</Text>
+                ) : (
+                  Object.entries(krogerLocations).map(([sid, loc]) => (
+                    <Text key={sid} style={styles.krogerConnectedDesc}>
+                      {stores.find(s => s.id === sid)?.name ?? sid}: {loc.locationName}
+                    </Text>
+                  ))
+                )}
+              </View>
+
+              {/* Store search */}
+              <Text style={[styles.sectionSubLabel, { marginTop: 12 }]}>
+                Add or change store location
+              </Text>
+              <View style={styles.krogerSearchRow}>
+                <TextInput
+                  style={styles.krogerZipInput}
+                  placeholder="ZIP code"
+                  placeholderTextColor={Colors.text3}
+                  value={krogerZip}
+                  onChangeText={setKrogerZip}
+                  keyboardType="numeric"
+                  maxLength={10}
+                  returnKeyType="search"
+                  onSubmitEditing={handleKrogerSearchStores}
+                />
+                <TouchableOpacity
+                  style={[styles.krogerSearchBtn, (!krogerZip.trim() || krogerSearching) && { opacity: 0.5 }]}
+                  onPress={handleKrogerSearchStores}
+                  disabled={!krogerZip.trim() || krogerSearching}
+                >
+                  <Text style={styles.krogerSearchBtnText}>{krogerSearching ? '…' : 'Search'}</Text>
+                </TouchableOpacity>
+              </View>
+
+              {krogerLocationsList.map((loc) => (
+                <TouchableOpacity
+                  key={loc.locationId}
+                  style={[styles.krogerLocRow, krogerLocations[loc.storeId]?.locationId === loc.locationId && styles.krogerLocRowActive]}
+                  onPress={() => handleKrogerSaveLocation(loc)}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.krogerLocName}>{loc.name}</Text>
+                    <Text style={styles.krogerLocAddr} numberOfLines={1}>{loc.address}</Text>
+                  </View>
+                  {krogerLocations[loc.storeId]?.locationId === loc.locationId && (
+                    <Text style={styles.krogerLocCheck}>✓</Text>
+                  )}
+                </TouchableOpacity>
+              ))}
+
+            </View>
+          )}
+        </Card>
+        </>
+        )}
+
         <SectionHeading>Signing out</SectionHeading>
 
         {/*
-          THE BLAST RADIUS, before the button rather than after it.
-          "Log Out of Grocery Stores" sat inline with everything else on a flat
-          screen, and nothing said which stores it would take. The app knows: the
-          prewarm holds a per-store login verdict for the session.
+          ONE PLACE TO SIGN OUT OF STORES, and it says nothing about which ones.
 
-          What it CANNOT say is which stores you are signed out of. A store the
-          prewarm has not probed this session is 'unknown', which is not 'no' —
-          so only the confirmed ones are listed, and the caveat says the list is
-          the floor rather than the whole of it. A screen that guessed here would
-          be telling someone their account is disconnected when it is not.
+          It used to list the stores the prewarm had confirmed this session, with
+          a caveat explaining that the list was a floor rather than the whole
+          truth (an unprobed store is 'unknown', which is not 'no'). Stephen,
+          2026-09-11: "I don't want to show which stores the user is connected
+          to." The caveat is the tell that the list was never able to answer the
+          question it raised, so the list goes and the button keeps doing what it
+          always did: everything, including the account link.
         */}
         <Card style={styles.card}>
-          <Text style={styles.cardTitle}>Connected grocery stores</Text>
-          {connectedStores.length > 0 ? (
-            <View style={styles.storeList}>
-              {connectedStores.map((st) => (
-                <View key={st.id} style={styles.storeRow}>
-                  <View style={[styles.storeDot, { backgroundColor: st.color ?? Colors.success }]} />
-                  <Text style={styles.storeRowName}>{st.name}</Text>
-                </View>
-              ))}
-            </View>
-          ) : (
-            <Text style={styles.storeNone}>
-              No store sign-ins confirmed this session. That is not the same as none: a store is only
-              listed once the app has checked it, which happens when you build a cart.
-            </Text>
-          )}
+          <Text style={styles.cardTitle}>Grocery store sign-ins</Text>
           <Button
-            label="Sign out of these stores"
+            label="Sign out of my stores"
             variant="secondary"
             loading={storeLogoutLoading}
             onPress={handleStoreLogout}
             style={styles.storeLogoutBtn}
           />
           <Text style={styles.storeCaveat}>
-            This clears every grocery store sign-in on this device, including any not listed above.
-            Your Mealio account stays signed in.
+            This clears every grocery store sign-in on this device. Your Mealio account stays signed in.
           </Text>
         </Card>
 
@@ -1248,11 +1211,6 @@ const styles = StyleSheet.create({
   },
   supportCode: { fontSize: 12, color: Colors.text3, marginTop: 6, fontFamily: 'Inter_500Medium' },
   supportCodeHint: { fontSize: 11, color: Colors.text3, fontFamily: 'Inter_400Regular' },
-  storeList: { marginTop: 2, marginBottom: 10 },
-  storeRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 5 },
-  storeDot: { width: 7, height: 7, borderRadius: 4, marginRight: 9 },
-  storeRowName: { fontSize: 14, color: Colors.text1, fontFamily: 'Inter_500Medium' },
-  storeNone: { fontSize: 13, color: Colors.text3, lineHeight: 19, marginBottom: 8 },
   storeCaveat: { fontSize: 11, color: Colors.text3, lineHeight: 16, marginTop: 2 },
   safe: { flex: 1, backgroundColor: Colors.bg },
   scroll: { padding: 16, paddingBottom: 40 },
