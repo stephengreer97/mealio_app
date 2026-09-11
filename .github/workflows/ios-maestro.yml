@@ -73,6 +73,11 @@ jobs:
 
       - name: Find or wait for the simulator build
         id: find
+        env:
+          # How stale a fallback binary may be before a green tick stops meaning
+          # anything. Two weeks is generous for a flow-only change and far short
+          # of the two months this lane once ran on.
+          MAX_FALLBACK_AGE_DAYS: "14"
         run: |
           # On pull_request events github.sha is the synthetic merge commit;
           # the EAS build (kicked locally) carries the branch HEAD sha.
@@ -89,7 +94,11 @@ jobs:
             # 1. Finished build for exactly this commit?
             URL=$(echo "$BUILDS" | jq -r --arg sha "$TARGET_SHA" \
               '[.[] | select(.gitCommitHash==$sha and .status=="FINISHED")][0].artifacts.buildUrl // empty')
-            [ -n "$URL" ] && { echo "Found commit-exact finished build."; break; }
+            if [ -n "$URL" ]; then
+              echo "Found commit-exact finished build for $TARGET_SHA."
+              echo "build_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+              break
+            fi
 
             # 2. Build for this commit still running? Wait for it.
             INPROG=$(echo "$BUILDS" | jq -r --arg sha "$TARGET_SHA" \
@@ -101,10 +110,29 @@ jobs:
             fi
 
             # 3. No build for this commit at all — fall back to latest finished.
-            URL=$(echo "$BUILDS" | jq -r \
-              '[.[] | select(.status=="FINISHED")][0].artifacts.buildUrl // empty')
+            #
+            # THE FALLBACK HAS A SHELF LIFE NOW, and it is why this lane spent
+            # two months reporting on an app nobody was writing. A flow-only
+            # change riding yesterday's binary is exactly what the fallback is
+            # for; a green tick against a binary from July is not a smoke test,
+            # it is a smoke test's shadow. So the fallback still happens and the
+            # AGE decides whether it counts.
+            FB=$(echo "$BUILDS" | jq -r \
+              '[.[] | select(.status=="FINISHED")][0] // empty')
+            URL=$(echo "$FB" | jq -r '.artifacts.buildUrl // empty')
             if [ -n "$URL" ]; then
-              echo "::warning::No EAS build for commit $TARGET_SHA — using the latest finished simulator build (may not include this commit's changes)."
+              FB_AT=$(echo "$FB" | jq -r '.completedAt // .createdAt // empty')
+              FB_SHA=$(echo "$FB" | jq -r '.gitCommitHash // "unknown"')
+              AGE_DAYS=""
+              if [ -n "$FB_AT" ]; then
+                AGE_DAYS=$(( ( $(date -u +%s) - $(date -u -d "$FB_AT" +%s) ) / 86400 ))
+              fi
+              echo "Fallback build: commit $FB_SHA, built $FB_AT (${AGE_DAYS:-?} days old)."
+              if [ -n "$AGE_DAYS" ] && [ "$AGE_DAYS" -gt "$MAX_FALLBACK_AGE_DAYS" ]; then
+                echo "::error::The newest EAS ios-simulator build is $AGE_DAYS days old (commit $FB_SHA), past the $MAX_FALLBACK_AGE_DAYS day limit. Running the flows against it would test an app this branch does not contain. Kick a build: eas build --platform ios --profile ios-simulator --no-wait"
+                exit 1
+              fi
+              echo "::warning::No EAS build for commit $TARGET_SHA — using the latest finished simulator build from $FB_SHA, $AGE_DAYS days old. It does not include this commit's app changes."
             fi
             break
           done

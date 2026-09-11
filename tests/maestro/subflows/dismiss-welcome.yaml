@@ -1,0 +1,34 @@
+# The welcome sheet, out of the way, before any flow looks at Discover.
+#
+# WHAT BROKE. The sheet shipped on 2026-08-05 and covers the Discover screen on
+# first run. Every flow here launches with `clearState: true`, which IS first
+# run, so from that day on all seven flows met a modal where they expected the
+# meal list and failed on the same line: `"Trending Meals" is visible`. The lane
+# has been red on every push since.
+#
+# NOT CONDITIONAL, deliberately. `clearState: true` guarantees the sheet, so
+# this waits for it and dismisses it rather than checking whether it is there.
+# A `when: visible` probe would race the sheet's own mount -- it appears only
+# after the meals have loaded and an async first-run read has come back -- and
+# the race would fail silently and intermittently, which is worse than failing
+# here with a line that names the sheet.
+#
+# THE TIMEOUT COVERS A NETWORK FETCH. Nothing shows the sheet until
+# DiscoverScreen has its meals, so this waits longer than the 15s the flows give
+# the meal cards themselves.
+appId: co.mealio.app
+---
+- extendedWaitUntil:
+    visible:
+      id: "welcome-sheet"
+    timeout: 30000
+
+# The button rather than the backdrop. Both dismiss, and welcome-backdrop is
+# the more obvious target -- but it is a full-screen pressable, so its centre
+# is UNDER the sheet and a tap there lands on the sheet instead of behind it.
+- tapOn: "Browse meals"
+
+- extendedWaitUntil:
+    notVisible:
+      id: "welcome-sheet"
+    timeout: 10000

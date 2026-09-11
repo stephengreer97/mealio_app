@@ -8,6 +8,9 @@ appId: co.mealio.app
     clearState: true
     stopApp: true
 
+# First run covers Discover with the welcome sheet. See the subflow.
+- runFlow: ../subflows/dismiss-welcome.yaml
+
 - assertVisible: "Trending Meals"
 - tapOn: "Sign In"
 - assertVisible: "Welcome back"
