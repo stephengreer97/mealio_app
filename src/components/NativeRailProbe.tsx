@@ -4,10 +4,7 @@ import CookieManager from '@react-native-cookies/cookies';
 import { Colors } from '../constants/colors';
 import { getStoreWebViewUA } from '../lib/webview-user-agent';
 import { NativeCandidate, NativeRail, NativeSession } from '../lib/native-rail/types';
-import { HEB_NATIVE } from '../lib/native-rail/heb';
-import { INSTACART_NATIVE } from '../lib/native-rail/instacart';
-import { ALBERTSONS_NATIVE } from '../lib/native-rail/albertsons';
-import { WEGMANS_NATIVE } from '../lib/native-rail/wegmans';
+import { nativeRailFor } from '../lib/native-rail';
 
 /**
  * ALL FOUR JOBS, EVERY STORE, NO WEBVIEW.
@@ -34,7 +31,17 @@ import { WEGMANS_NATIVE } from '../lib/native-rail/wegmans';
  * Account screen already carries a per-store canary clear to undo it.
  */
 
-const RAILS: NativeRail[] = [HEB_NATIVE, INSTACART_NATIVE, ALBERTSONS_NATIVE, WEGMANS_NATIVE];
+/**
+ * Asked for by id, through the registry.
+ *
+ * The first cut imported four store modules directly, which made this shared
+ * component reach into every store and broke the boundary rule -- the whole
+ * point of which is that a change to one store cannot bring down another. A
+ * probe is not exempt from that just because it is behind __DEV__.
+ */
+const RAILS: NativeRail[] = ['heb', 'aldi', 'tom_thumb', 'wegmans']
+  .map((id) => nativeRailFor(id))
+  .filter((r): r is NativeRail => r !== null);
 
 /** A term every grocer stocks, so a zero result means the search failed. */
 const TERM = 'milk';

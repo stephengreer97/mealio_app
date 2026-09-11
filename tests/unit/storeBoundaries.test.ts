@@ -45,10 +45,27 @@ const STORE_FILES: Record<string, string[]> = {
   wegmans: ['wegmans.ts', 'wegmans-network.ts'],
 };
 
-/** The two files whose job is knowing every store. */
+/**
+ * The NATIVE rails, which are per-store files in their own directory.
+ *
+ * Same rule, second home. lib/native-rail/<family>.ts asks the same store the
+ * same questions over plain HTTP instead of through an injected script, so it
+ * belongs to that store exactly as its webview-scripts counterpart does -- and
+ * must not reach another. Listed separately only because the paths differ;
+ * heb.ts here is the same store as heb.ts there.
+ */
+const NATIVE_RAIL_FILES: Record<string, string[]> = {
+  heb: ['heb.ts'],
+  albertsons: ['albertsons.ts'],
+  instacart: ['instacart.ts'],
+  wegmans: ['wegmans.ts'],
+};
+
+/** The files whose job is knowing every store. */
 const REGISTRIES = [
-  'lib/webview-scripts/index.ts',      // storeId → StoreScripts
+  'lib/webview-scripts/index.ts',        // storeId → StoreScripts
   'lib/webview-scripts/network-rail.ts', // storeId → NetworkRail
+  'lib/native-rail/index.ts',            // storeId → NativeRail
 ];
 
 /**
@@ -85,6 +102,9 @@ function allSources(): string[] {
 const FILE_TO_STORE = new Map<string, string>();
 for (const [store, files] of Object.entries(STORE_FILES)) {
   for (const f of files) FILE_TO_STORE.set(`lib/webview-scripts/${f}`, store);
+}
+for (const [store, files] of Object.entries(NATIVE_RAIL_FILES)) {
+  for (const f of files) FILE_TO_STORE.set(`lib/native-rail/${f}`, store);
 }
 
 /** Which store a module belongs to, or null for shared code. */
@@ -124,11 +144,15 @@ describe('nothing shared can reach into a store', () => {
       expect(reached).toEqual([]);
     });
 
-  it('and the registries, which may, are the only two', () => {
-    // Named rather than derived: adding a third place that imports every store
+  it('and the registries, which may, are the only ones', () => {
+    // Named rather than derived: adding another place that imports every store
     // should be a decision someone makes on purpose, and this is where they say
-    // so. Both of these exist to map a storeId onto that store's own code and to
-    // do nothing else with it.
+    // so. Each of these exists to map a storeId onto that store's own code and
+    // to do nothing else with it.
+    //
+    // lib/store-capabilities.ts is deliberately NOT here. It names stores, but
+    // it reaches none of them -- it takes the banner list from the registry
+    // below -- so it is ordinary shared code and needs no exemption.
     for (const r of REGISTRIES) {
       expect(importsOf(r).some((i) => storeOf(i) !== null)).toBe(true);
     }

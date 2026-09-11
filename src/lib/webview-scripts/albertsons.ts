@@ -49,6 +49,18 @@ const DOMAIN_MAP: Record<string, string> = {
 
 export const ALBERTSONS_FAMILY_IDS: string[] = Object.keys(DOMAIN_MAP);
 
+/**
+ * The banner's host, for callers outside the injected scripts.
+ *
+ * The rail derives this from window.location.hostname because it runs INSIDE
+ * the page. A native caller has no page and does not need one -- the run already
+ * knows which store it locked, which is the same fact the hostname was standing
+ * in for. Exported rather than duplicated so one map stays the answer.
+ */
+export function albertsonsHostFor(storeId: string): string | null {
+  return DOMAIN_MAP[storeId] ?? null;
+}
+
 /** The cart's path on every Albertsons banner — a separate Angular app from the
  *  /shop storefront. Platform-uniform (MEAL-15: endpoint paths need no
  *  per-banner configuration; only the host list does). Exported so the cart-page

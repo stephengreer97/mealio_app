@@ -1,5 +1,6 @@
 import CookieManager from '@react-native-cookies/cookies';
 import { NativeCandidate, NativeRail, fetchWithTimeout, postJson, timed } from './types';
+import { albertsonsHostFor } from '../webview-scripts/albertsons';
 
 /**
  * The Albertsons family, natively. Tom Thumb, because that is the banner
@@ -23,8 +24,40 @@ import { NativeCandidate, NativeRail, fetchWithTimeout, postJson, timed } from '
  * no page -- exactly like Instacart's shop and zone.
  */
 
-const ORIGIN = 'https://www.tomthumb.com';
-const BANNER = 'tomthumb';
+/**
+ * EVERY BANNER, NOT JUST THE ONE THAT WAS MEASURED.
+ *
+ * Fifteen brands run the same storefront platform behind the same gateway, so
+ * one rail serves all of them -- the only per-banner facts are the host and the
+ * `banner` query parameter, and both come from the map the WebView scripts
+ * already use. Measured on Tom Thumb because that is the banner Stephen's
+ * session is on.
+ *
+ * The banner is passed in rather than read from a page: the rail's __albBanner
+ * splits window.location.hostname, which is the WebView's way of learning
+ * something the app already knows.
+ */
+let ORIGIN = 'https://www.tomthumb.com';
+let BANNER = 'tomthumb';
+
+/** Point this rail at one of the fifteen banners. Resets anything cached. */
+export function useAlbertsonsBanner(storeId: string): boolean {
+  const host = albertsonsHostFor(storeId);
+  if (!host) return false;
+  const nextOrigin = `https://www.${host}`;
+  if (nextOrigin === ORIGIN) return true;
+  ORIGIN = nextOrigin;
+  // The banner parameter is the host's own second-level label, exactly as
+  // __albBanner derives it: www.tomthumb.com -> tomthumb.
+  BANNER = host.split('.')[0];
+  // A different banner is a different origin, a different cookie jar and a
+  // different set of API keys. Carrying any of it across is how one account's
+  // session gets read as another's.
+  cachedUser = null;
+  cachedKeys = null;
+  cachedCartKey = null;
+  return true;
+}
 const SEARCH_PATH = '/abs/pub/xapi/pgmsearch/v1/search/products';
 const CART_PATH = '/abs/pub/erums/cartservice/api/v2/cart/customer/';
 const TZ = 'America/Los_Angeles';
