@@ -63,6 +63,12 @@ runs it immediately after `launchApp`.
 **A new first-run modal will break all of them at once**, with the same line in
 each: an assertion about a Discover element that is simply behind something. If
 that happens, dismiss the new thing in that subflow rather than in seven flows.
+
+Dismiss it by its **text**, not by a `testID` on the `<Modal>`. React Native
+does not surface a Modal's own testID as a queryable view on iOS — the content
+is presented in its own `UIWindow` — so a flow waiting on that id times out
+against a sheet that is plainly on screen. The modal's contents are visible to
+Maestro; its wrapper is not.
 7. Upload a JUnit-formatted report. On failure, upload a screenshot of the
    simulator at the moment of failure.
 
