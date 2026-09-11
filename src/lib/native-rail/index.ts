@@ -55,6 +55,25 @@ export function nativeRailFor(storeId: string | null | undefined): NativeRail | 
 
 
 /**
+ * EVERY ORIGIN A STORE SESSION LIVES ON, for the tools that operate on jars
+ * rather than on stores.
+ *
+ * The bot-cookie sweep needs origins and must not import a store module to get
+ * them; this file already holds every rail and every rail already states its
+ * own origin, so the list is derived rather than typed out. A store added above
+ * is swept without anyone remembering to add it here.
+ */
+export function nativeRailOrigins(): string[] {
+  const seen = new Set<string>();
+  for (const r of Object.values(NATIVE_RAILS)) seen.add(r.origin);
+  for (const b of ALBERTSONS_FAMILY_IDS) {
+    const r = nativeRailFor(b);
+    if (r) seen.add(r.origin);
+  }
+  return [...seen];
+}
+
+/**
  * storeId -> the driver that can RUN it over plain HTTP.
  *
  * A second map rather than a field on NativeRail, because the two answer

@@ -149,21 +149,65 @@ export const INSTACART_NATIVE: NativeRail = {
     const guest = cu.guest === true;
     if (guest) return { ok: true, status: who.status, detail: 'currentUser.guest: signed out', session: { loggedIn: false } };
 
-    // THIS RETAILER'S CART, matched on retailer.slug. An Instacart account holds
-    // carts across retailers, so carts[0] borrows somebody else's -- and
-    // "signed in" and "has a cart here" are separate facts: a new banner has no
-    // cart until you add to it, and deriving login from the cart deadlocks it.
+    // ── THE CART IS PART OF THE VERDICT, NOT A DETAIL ALONGSIDE IT ──────────
+    //
+    // Stephen, 2026-09-11: "when I do the ALDI login it continues with the
+    // automation before I get the chance to actually log in. Then I tried it
+    // again and it did let me sign in. The inconsistency scares me."
+    //
+    // WHAT WAS WRONG. The injected rail's verdict is
+    //
+    //     loggedIn: !!mine && !acctDenied && !acctGuest
+    //
+    // and this asked only the last two. It fetched ActiveCarts purely for a cart
+    // id, swallowed any failure of it in a catch, and answered "signed in"
+    // regardless. So a session where CurrentUser still answers but ActiveCarts
+    // has expired -- a 401 from the very query the injected rail calls THE
+    // authentication fact -- read as signed IN here and signed OUT there.
+    //
+    // WHY THAT REACHED THE USER. The cart sheet skips its own login check
+    // outright when the prewarm says loggedIn ("A POSITIVE signal, and the only
+    // one that skips the check"). That was safe while both verdicts came from
+    // the same probe. Making the prewarm native made them two verdicts with two
+    // rules, and this is the one that was looser -- so the run started under a
+    // user who was being shown a sign-in screen. It was intermittent because it
+    // depends on which of the two queries expires first.
+    //
+    // A NATIVE VERDICT MUST BE THE RAIL'S VERDICT. Not similar to it, and not a
+    // better one. Where this rail is deliberately conservative -- and the cart
+    // requirement IS deliberate, with a known Publix deadlock written down
+    // beside it -- the native copy inherits that too. One verdict, two
+    // transports; anywhere they differ, the WebView's is the one that ships.
     const carts = await gql(ua, 'ActiveCarts', {});
-    let cartId: string | null = null;
-    try {
-      const list: any[] = carts.json.data.userCarts.carts || [];
-      const mine = list.find((c) => String(c?.retailer?.slug || '') === SLUG);
-      if (mine) cartId = String(mine.id);
-    } catch { /* reported below as cart none */ }
+    // 401 from the cart query is THE authentication fact on this platform, and
+    // it is the signal the injected probe acts on first.
+    if (carts.status === 401) {
+      return {
+        ok: true, status: 401, session: { loggedIn: false },
+        detail: 'ActiveCarts 401: signed out',
+      };
+    }
+    // Anything else that is not an answer says something about the request and
+    // nothing about the user. Inconclusive, so the caller opens the renderer --
+    // never "signed out", which is the mistake this project has made three times.
+    if (carts.status !== 200) {
+      return { ok: false, status: carts.status, detail: `ActiveCarts http ${carts.status}` };
+    }
+    let list: any[] | null = null;
+    try { list = carts.json.data.userCarts.carts || []; } catch { list = null; }
+    if (list === null) {
+      return { ok: false, status: carts.status, detail: 'ActiveCarts shape unreadable' };
+    }
+    const mine = list.find((c) => String(c?.retailer?.slug || '') === SLUG) ?? null;
+    const cartId = mine ? String(mine.id) : null;
     return {
       ok: true, status: who.status,
-      detail: `signed in, cart ${cartId ? 'found' : 'none'} (CurrentUser + ActiveCarts only)`,
-      session: { loggedIn: true, storeId: null, cartId, shoppingContext: 'delivery' },
+      detail: mine
+        ? 'signed in, cart found (CurrentUser + ActiveCarts)'
+        : 'no cart at this retailer: the rail reads that as signed out',
+      // !!mine, exactly as the injected rail has it. See the note above about
+      // why this is not "improved" here.
+      session: { loggedIn: !!mine, storeId: null, cartId, shoppingContext: 'delivery' },
     };
   }),
 

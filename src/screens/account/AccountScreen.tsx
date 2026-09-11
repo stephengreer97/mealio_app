@@ -50,6 +50,8 @@ import NotificationSettingsSheet from '../../components/NotificationSettingsShee
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import CookieManager from '@react-native-cookies/cookies';
+import { clearBotCookiesFor } from '../../lib/bot-cookies';
+import { nativeRailOrigins } from '../../lib/native-rail';
 import { useLoginPrewarm } from '../../context/LoginPrewarmContext';
 import { bumpEpoch } from '../../lib/store-session-epoch-storage';
 
@@ -1031,6 +1033,36 @@ export default function AccountScreen() {
             style={styles.devResetBtn}
           >
             <Text style={styles.devResetText}>Reset first-run explainers (dev)</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* THE WALL, WITHOUT THE SIGN-OUT.
+            A store behind Imperva or Akamai can wall the SESSION rather than the
+            IP, and once it does, the WebView carries the burned token too --
+            measured on H-E-B, 2026-09-11: HTML 200, /graphql 403, unchanged for
+            35 minutes, which is not MEAL-16's self-healing wall. The only tool
+            was "Sign out of my stores", which fixes it by throwing the login
+            away. This expires the vendor's token and leaves the login alone, so
+            the next page load mints a fresh one. */}
+        {__DEV__ && (
+          <TouchableOpacity
+            onPress={async () => {
+              const sweeps = await clearBotCookiesFor(nativeRailOrigins());
+              const hit = sweeps.filter((s2) => s2.cleared.length > 0);
+              for (const s2 of sweeps) {
+                console.log('[bot-cookies]', s2.origin, 'cleared=', s2.cleared.join(',') || 'none',
+                  'saw=', s2.saw.length, 'cookie(s)', s2.error ? `error=${s2.error}` : '');
+              }
+              Alert.alert(
+                hit.length ? 'Bot tokens cleared' : 'Nothing to clear',
+                hit.length
+                  ? hit.map((s2) => `${s2.origin.replace(/^https?:\/\//, '')}: ${s2.cleared.join(', ')}`).join('\n')
+                  : 'No Imperva or Akamai cookies in the jar. Your store logins are untouched either way.',
+              );
+            }}
+            style={styles.devResetBtn}
+          >
+            <Text style={styles.devResetText}>Clear bot-protection cookies, keep logins (dev)</Text>
           </TouchableOpacity>
         )}
 
