@@ -1,3 +1,4 @@
+import CookieManager from '@react-native-cookies/cookies';
 import { NativeCandidate, NativeRail, postJson, timed } from './types';
 
 /**
@@ -63,20 +64,61 @@ export const ALBERTSONS_NATIVE: NativeRail = {
   origin: ORIGIN,
 
   session: (ua) => timed(async () => {
+    /**
+     * TWO ATTEMPTS, AND THE SECOND ONE IS THE EXPERIMENT.
+     *
+     * Stephen, 2026-09-11: "I was able to add to cart with Tom Thumb just now.
+     * Looks like it was already logged in." The first native attempt reported
+     * signed out -- 200, 16 keys, no SWY_SHOP_TOKEN -- so the probe was wrong,
+     * not the account.
+     *
+     * "Signed out" and "the cookies never went" produce that identical
+     * response, and the cookie COUNT cannot tell them apart: CookieManager
+     * reading 31 cookies proves they are in the jar, not that OkHttp attached
+     * them to this request. H-E-B and ALDI both worked on the implicit jar, but
+     * both are POSTs to /graphql and this is a GET to a different path, so the
+     * assumption deserved testing rather than carrying over.
+     *
+     * So: ask normally, and if that says no token, ask again with the jar
+     * attached by hand. Which one answers is the finding.
+     */
     const url = `${ORIGIN}/bin/safeway/unified/userinfo?rand=${Math.floor(1e6 * Math.random())}&banner=${BANNER}`;
-    const r = await fetch(url, {
+    const ask = (cookieHeader?: string) => fetch(url, {
       credentials: 'include',
-      headers: { 'User-Agent': ua, accept: 'text/plain, application/json, */*' },
+      headers: {
+        'User-Agent': ua,
+        accept: 'text/plain, application/json, */*',
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      },
     });
+    let how = 'implicit jar';
+    let r = await ask();
     // The site itself treats these as signed out: it calls
     // processUserInfoFlow('{}') on a 403.
     if (r.status === 401 || r.status === 403) {
       return { ok: true, status: r.status, detail: 'the site reads this status as signed out', session: { loggedIn: false } };
     }
     if (r.status !== 200) return { ok: false, status: r.status, detail: `http ${r.status}` };
-    const text = await r.text();
+    let text = await r.text();
     let j: any = null;
     try { j = JSON.parse(text); } catch { return { ok: false, status: r.status, detail: 'non-JSON body' }; }
+
+    if (!j?.SWY_SHOP_TOKEN) {
+      // The experiment. Values never leave the device and none is logged.
+      let header = '';
+      try {
+        const jar = await CookieManager.get(ORIGIN, true);
+        header = Object.entries(jar)
+          .map(([, c]: [string, any]) => `${c.name}=${c.value}`)
+          .join('; ');
+      } catch { /* reported as the implicit answer standing */ }
+      if (header) {
+        r = await ask(header);
+        text = await r.text();
+        try { j = JSON.parse(text); } catch { j = null; }
+        how = j?.SWY_SHOP_TOKEN ? 'EXPLICIT Cookie header (the implicit jar did NOT travel)' : 'implicit jar';
+      }
+    }
     // A 200 with no token IS the expired-session answer: the site responds to it
     // by tearing the user's session down.
     if (!j?.SWY_SHOP_TOKEN) {
@@ -91,9 +133,17 @@ export const ALBERTSONS_NATIVE: NativeRail = {
       branchId: String(j.branchId ?? j.shopStoreId ?? ''),
       zipcode: String(j.zipcode ?? j.shopZipcode ?? ''),
     };
+    // WHICH IDENTIFIER CAME FROM WHERE, because the rail's note says they come
+    // from different places: "The endpoint carries the customer; the cookie
+    // carries the store. Neither knows both, which is why the page merges them."
+    // A cart 401 with an EMPTY customerId is a malformed URL, not a bad key, and
+    // those two look identical from the outside.
+    const who = cachedUser.customerId
+      ? `customerId ${cachedUser.customerId.length} chars`
+      : 'customerId MISSING from userinfo';
     return {
       ok: true, status: r.status,
-      detail: `signed in, store ${cachedUser.branchId || '?'}, zip ${cachedUser.zipcode || '?'}`,
+      detail: `signed in via ${how}, store ${cachedUser.branchId || '?'}, zip ${cachedUser.zipcode || '?'}, ${who}`,
       session: { loggedIn: true, storeId: cachedUser.branchId, shoppingContext: 'pickup' },
     };
   }),

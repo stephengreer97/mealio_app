@@ -89,12 +89,20 @@ function digitsAfter(s: string, marker: string, max: number): string | null {
  */
 let lastShopMs = 0;
 let lastHtmlBytes = 0;
+let lastSource = '';
 async function shopAndZone(ua: string): Promise<{ shopId: string | null; zoneId: string | null }> {
   const t0 = Date.now();
-  const r = await fetch(`${ORIGIN}/store/${SLUG}/storefront`, {
-    credentials: 'include', headers: { 'User-Agent': ua },
-  });
-  const html = await r.text();
+  // The light one first, the storefront only if it comes back without them.
+  // WHICH ONE ANSWERED IS REPORTED, for the reason the rail reports it: a store
+  // fact discovered by guessing is one nobody can debug later.
+  const sources = [`/store/${SLUG}/search_v3/zz`, `/store/${SLUG}/storefront`];
+  let html = '';
+  for (const path of sources) {
+    const r = await fetch(`${ORIGIN}${path}`, { credentials: 'include', headers: { 'User-Agent': ua } });
+    html = await r.text();
+    lastSource = path;
+    if (html.includes('%22zoneId%22%3A%22') || html.includes('%5C%22zoneId%5C%22%3A%5C%22')) break;
+  }
   lastShopMs = Date.now() - t0;
   lastHtmlBytes = html.length;
   // Two independent markers each, because one will change before both do.
@@ -176,7 +184,8 @@ export const INSTACART_NATIVE: NativeRail = {
       const q = Number(l.quantity != null ? l.quantity : 1);
       return n + (q > 0 ? q : 1);
     }, 0);
-    const boot = warm ? 'shop/zone cached' : `shop/zone fetch ${lastShopMs}ms for ${Math.round(lastHtmlBytes / 1024)}KB`;
+    const boot = warm ? 'shop/zone cached'
+      : `shop/zone ${lastShopMs}ms, ${Math.round(lastHtmlBytes / 1024)}KB from ${lastSource}`;
     return { ok: true, status: r.status, detail: `${items.length} lines, ${count} items (${boot})`, count, lines: items.length };
   }),
 
