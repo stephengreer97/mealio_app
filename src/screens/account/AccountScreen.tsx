@@ -116,7 +116,7 @@ export default function AccountScreen() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [clearProbe, setClearProbe] = useState<{ storeId: string; limit?: number; scoped?: boolean;
     restore?: Array<{ sku: string; quantity: number }> } | null>(null);
-  const [capture, setCapture] = useState<{ storeId: string; path?: string } | null>(null);
+  const [capture, setCapture] = useState<{ storeId: string; path?: string; honestUa?: boolean } | null>(null);
   const [meal17, setMeal17] = useState<'matrix' | 'burst' | null>(null);
   const [nativeSession, setNativeSession] = useState(false);
   const [nativeRail, setNativeRail] = useState(false);
@@ -1113,6 +1113,35 @@ export default function AccountScreen() {
             >
               <Text style={styles.devResetText}>Watch storefront calls: Wegmans cart (dev)</Text>
             </TouchableOpacity>
+            {/* THE H-E-B QUESTION, ASKED THE ONLY WAY THAT SETTLES IT.
+                Our request to /graphql is refused and the same store works in
+                Chrome on the same phone. Two explanations: the request is wrong,
+                or the client is blocked. Loading a real H-E-B page in OUR WebView
+                and watching what the SITE sends to the identical endpoint tells
+                them apart -- if the page's own calls succeed here, the request is
+                ours to fix, and the header names say what we are missing. */}
+            <TouchableOpacity
+              onPress={() => setCapture({ storeId: 'heb', path: '/cart' })}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Watch storefront calls: H-E-B cart (dev)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setCapture({ storeId: 'heb', path: '/search?q=milk' })}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Watch storefront calls: H-E-B search (dev)</Text>
+            </TouchableOpacity>
+            {/* THE SAME PAGE, TELLING THE TRUTH ABOUT WHAT IT IS. If the site's
+                own /graphql calls succeed here and fail above, the disguise is
+                what is being refused and the fix is to stop wearing it on this
+                store. */}
+            <TouchableOpacity
+              onPress={() => setCapture({ storeId: 'heb', path: '/search?q=milk', honestUa: true })}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Watch H-E-B search, honest UA (dev)</Text>
+            </TouchableOpacity>
             {/* Answers "can the session be read without a WebView at all?" with
                 evidence instead of reasoning. Read-only; writes to no cart. */}
             <TouchableOpacity
@@ -1186,6 +1215,7 @@ export default function AccountScreen() {
           <StorefrontCaptureProbe
             storeId={capture.storeId}
             path={capture.path}
+            honestUa={capture.honestUa}
             onClose={() => setCapture(null)}
           />
         )}

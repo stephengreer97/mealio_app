@@ -54,6 +54,15 @@ const BOT_COOKIE_PREFIXES: readonly string[] = [
   'incap_ses_',
   'visid_incap_',
   'nlbi_',
+  // Imperva ADVANCED Bot Protection, which is the old Distil Networks product
+  // and a SEPARATE tier from the reese84 stack above. Missing it is what made
+  // the first sweep look like it had ruled the cookie out: H-E-B's jar was
+  // cleared of all three Incapsula names, re-minted a fresh reese84 on the next
+  // page load, and answered 403 exactly as before -- while _iidt sat there
+  // untouched the whole time.
+  '_iidt',
+  '_vid_t',
+  '___utmvc',
   // Akamai Bot Manager. Same story, different vendor: _abck is the token and
   // bm_sz is its session. Listed because the next store to wall us is as likely
   // to be behind this one, and finding that out at 403 time is the expensive way.
