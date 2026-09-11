@@ -18,3 +18,39 @@ jest.mock('@react-native-cookies/cookies', () => ({
     clearByName: jest.fn(async () => true),
   },
 }));
+
+// ── InteractionManager runs straight through ────────────────────────────────
+//
+// WebViewCartSheet mounts its store WebView in runAfterInteractions, so the qty
+// screen paints and becomes touchable before Android starts building a Chromium
+// renderer (Stephen, 2026-09-11: two seconds before the ingredients showed and
+// the button could be tapped).
+//
+// This belongs here rather than in a suite, unlike everything above it, and for
+// a different reason than "no JS fallback": runAfterInteractions waits for the
+// FRAME LOOP to go idle, and under jest there is no frame loop at all. There is
+// nothing for it to wait for, so every suite that renders the sheet would hang
+// on a WebView that never arrives -- a dozen files, none of which are about
+// timing. Running the callback straight through is what "no interactions in
+// flight" means here.
+//
+// The DEFERRAL ITSELF is not tested through this stub, which would be circular.
+// tests/components/webview-mounts-after-paint.test.tsx overrides it with one
+// that never fires and proves the WebView is absent until the backstop timer.
+jest.mock('react-native/Libraries/Interaction/InteractionManager', () => ({
+  __esModule: true,
+  default: {
+    runAfterInteractions: (cb) => {
+      if (typeof cb === 'function') cb();
+      return { cancel: () => {} };
+    },
+    createInteractionHandle: () => 1,
+    clearInteractionHandle: () => {},
+  },
+  runAfterInteractions: (cb) => {
+    if (typeof cb === 'function') cb();
+    return { cancel: () => {} };
+  },
+  createInteractionHandle: () => 1,
+  clearInteractionHandle: () => {},
+}));

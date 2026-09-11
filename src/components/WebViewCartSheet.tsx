@@ -14,6 +14,7 @@ import {
   Easing,
   AccessibilityInfo,
   AppState,
+  InteractionManager,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
@@ -1298,6 +1299,16 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
   const netPrewarmCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
   const netPrewarmTermsRef = useRef<string[]>([]);
   const netStartSearchRef = useRef<() => void>(() => {});
+  /**
+   * The terms THIS run put on the wire, and the ones it has already counted.
+   *
+   * The bag's counter used to move on any network search answer at all, which
+   * is not the same thing: a stopped prewarm's aborted request answers too, and
+   * so does a term the resume path re-asks. Both inflated the bag against a
+   * total that never grew. See the note at the SEARCH_RESULT handler.
+   */
+  const netRunAskedRef = useRef<Set<string>>(new Set());
+  const netRunCountedRef = useRef<Set<string>>(new Set());
   /** Set when the prewarm has finished (or given up). Diagnostic only now — the
    *  WebView stays mounted through the qty screen either way, because keeping
    *  the page LOADED is worth more than the prewarm that needed it. */
@@ -2747,6 +2758,10 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     }
     const script = rail.searchBatch(missing, sess);
     if (!script) { netHandOverToUser('search_script_unbuildable'); return; }
+    // What the run actually asked for. The prewarmed terms are NOT in here: they
+    // are already counted as done by the `reused` seed below.
+    netRunAskedRef.current = new Set(missing);
+    netRunCountedRef.current = new Set();
     netSearchTermsRef.current = terms;
     netSearchInjectsRef.current = 1;
     netPhaseRef.current = 'search';
@@ -3132,6 +3147,15 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       setLockedStoreId(openStoreId);
       scriptsRef.current = openScripts;
       console.log(`[Cart ${ts()}]`, 'cart opened: locking store=', openStoreId);
+      // THE CLOCK THE BROWSER MILESTONES ARE MEASURED AGAINST.
+      //
+      // Stephen, 2026-09-11: "how much of the time spent waiting is on spinning
+      // up the webview vs navigating to the actual ALDI store page". The logs
+      // could not answer it -- cart open and onLoadEnd were the only two stamps,
+      // so renderer startup and page load were one number (5.1s, 5.3s and 11.2s
+      // across three ALDI opens, against a robots.txt that fetches in 0.17s).
+      // The three stamps below split that number where the question needs it.
+      sheetOpenedAtRef.current = Date.now();
       // A new open is a new prewarm. Without this the flag stays set from the
       // last one and the second run of a session searches on the critical path
       // again -- and worse, a different meal's ingredients would be matched
@@ -3142,6 +3166,8 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
       netPrewarmDoneRef.current = false;
       netPrewarmInjectedRef.current = false;
       netPrewarmBatchDoneRef.current = false;
+      netRunAskedRef.current = new Set();
+      netRunCountedRef.current = new Set();
       postLoginQuietNavRef.current = false;
       // The deadline goes with it. A timer left running from the last open would
       // fire into this one and release its run before the prewarm had started.
@@ -4415,7 +4441,11 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
     console.log(`[Cart ${ts()}]`, 'onLoadEnd url=', url,
       'queue=', loadQueueRef.current.length,
       'step=', stepRef.current,
-      'onBlockedPage=', onBlockedPage);
+      'onBlockedPage=', onBlockedPage,
+      // The third stamp. With the mount and navigation-start lines above it,
+      // the gaps between these three say how much of the wait was the renderer
+      // and how much was the store.
+      '+' + (Date.now() - (sheetOpenedAtRef.current || Date.now())) + 'ms after open');
     if (onBlockedPage && stepRef.current !== 'robot_challenge') {
       console.log(`[Cart ${ts()}]`, 'onLoadEnd detected anti-bot block — showing webview for user');
       if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null; }
@@ -6287,7 +6317,30 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
         if ((msg.type === 'SEARCH_RESULT' || msg.type === 'SEARCH_RESULT_FAILED') && msg.source === 'network') {
           // Both outcomes are an answer, so both advance the ring — a term the
           // store had nothing for is progress, not a stall.
-          bumpNetProgress(typeof msg.term === 'string' ? msg.term : null);
+          //
+          // THE RUN COUNTS ITS OWN BATCH AND NOTHING ELSE. Two ways this counted
+          // things that were not the run's work:
+          //
+          //   - A prewarm the run STOPPED has its in-flight request aborted, and
+          //     the abort posts SEARCH_RESULT_FAILED. Seen on ALDI 2026-09-11:
+          //     "Garlic, Package — no_response ms= 858" arriving 60ms after the
+          //     stop, which bumped the run by one for a search the run had not
+          //     made. Over-counting by exactly the number of requests the stop
+          //     cancelled, on every run the user taps through.
+          //   - A term re-asked by the resume path answered twice and counted
+          //     twice.
+          //
+          // Both are the same missing question: did THIS run ask for this term,
+          // and has it already been counted? A term the prewarm answered is
+          // already in the opening `reused` count and must not be counted again
+          // here either.
+          const term = typeof msg.term === 'string' ? msg.term : null;
+          if (term
+              && netRunAskedRef.current.has(term)
+              && !netRunCountedRef.current.has(term)) {
+            netRunCountedRef.current.add(term);
+            bumpNetProgress(term);
+          }
         }
         if (msg.type === 'SEARCH_RESULT_FAILED' && msg.source === 'network') {
           if (!netActiveRef.current) return;
@@ -7090,6 +7143,57 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
    * So the endpoints were never slow. The document was asleep. This is also why
    * the run looked like it stalled and then delivered everything at once.
    */
+  /**
+   * THE WEBVIEW MOUNTS AFTER THE QTY SCREEN HAS PAINTED, NOT WITH IT.
+   *
+   * Stephen, 2026-09-11, on ALDI: "it takes about 2 seconds for the ingredients
+   * to show up and for the add ingredients to aldi cart button to be clickable."
+   *
+   * The ingredients are not slow. MEASURED from his own run:
+   *
+   *   +0.001s   open: meals=1 consolidated=14      <- the list is ready
+   *   +5.292s   onLoadEnd aldi.us/robots.txt
+   *
+   * and across three opens onLoadEnd landed at +5.1s, +5.3s and +11.2s, while
+   * aldi.us/robots.txt fetches in 0.17s. So none of that is the network. It is
+   * Android building a Chromium renderer process, which it was doing at the
+   * exact moment the sheet was sliding in and the qty screen was trying to paint
+   * fourteen rows. Nothing gates the button -- it is disabled only on
+   * activeCount === 0 -- so what he was waiting on was the thread.
+   *
+   * runAfterInteractions puts the mount after the commit that paints the qty
+   * screen, so the list and the button are up and touchable before the renderer
+   * is built. It holds for both presentations: in layer mode (the live path,
+   * FEATURE_BACKGROUND_CART) there is no animation to wait out and it simply
+   * lands a commit later, and in modal mode it additionally waits out the slide.
+   *
+   * The prewarm pays a few hundred ms it was never short of: it does not begin
+   * until this WebView's onLoadEnd, five seconds out, and the qty screen is up
+   * for longer than that.
+   *
+   * The timer is a backstop, not the mechanism. runAfterInteractions waits for
+   * EVERY interaction handle to clear, and one animation that never settles
+   * would mean a cart run with no WebView at all -- a worse failure than the one
+   * being fixed.
+   */
+  const sheetOpenedAtRef = useRef<number>(0);
+  const [browserMounted, setBrowserMounted] = useState(false);
+  useEffect(() => {
+    if (!visible) return;
+    const mount = (why: string) => {
+      setBrowserMounted((already) => {
+        if (!already) {
+          console.log(`[Cart ${ts()}]`, 'webview: mounting now —', why,
+            '— +' + (Date.now() - (sheetOpenedAtRef.current || Date.now())) + 'ms after open');
+        }
+        return true;
+      });
+    };
+    const task = InteractionManager.runAfterInteractions(() => mount('interactions settled'));
+    const backstop = setTimeout(() => mount('backstop'), 800);
+    return () => { task.cancel(); clearTimeout(backstop); };
+  }, [visible]);
+
   useEffect(() => {
     if (!visible) return;
     let held = true;
@@ -7347,9 +7451,28 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                   pointerEvents={gridMode ? 'none' : 'auto'}
                 >
                   <View style={gridMode ? { width: 414, height: 896, transform: [{ scale: tileScale }] } : styles.fullCell}>
+                    {/* Gated on browserMounted so the renderer is built AFTER the
+                        qty screen paints -- see the note on that state. The gate
+                        is on the WebView and not on any wrapper above it: this is
+                        the sole child here, so appearing a beat late reorders no
+                        siblings, and the "never remounts" promise the wrappers
+                        exist to keep is untouched. Once true it stays true for
+                        the life of the sheet. */}
+                    {browserMounted && (
                     <WebView
                       ref={webviewRef}
                       source={{ uri: webviewUri }}
+                      // THE SPLIT STEPHEN ASKED FOR, 2026-09-11.
+                      //
+                      // mount -> loadStart is the renderer: Android building a
+                      // Chromium process and handing it a document. loadStart ->
+                      // loadEnd is the store: DNS, TLS, the fetch and the parse.
+                      // Without this stamp the two were one number and the
+                      // answer was a guess.
+                      onLoadStart={() => {
+                        console.log(`[Cart ${ts()}]`, 'webview: navigation started — +'
+                          + (Date.now() - (sheetOpenedAtRef.current || Date.now())) + 'ms after open');
+                      }}
                       // incognito  // TODO: uncomment to force fresh session (no stored cookies)
                       style={gridMode ? { width: 414, height: 896 } : { flex: 1 }}
                       onLoadEnd={onLoadEnd}
@@ -7374,6 +7497,7 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
                       userAgent={getStoreWebViewUA()}
                       injectedJavaScriptBeforeContentLoaded={beforeContent}
                     />
+                    )}
                   </View>
                 </View>
                 {gridMode && (
