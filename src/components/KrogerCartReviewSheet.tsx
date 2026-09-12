@@ -257,6 +257,9 @@ export default function KrogerCartReviewSheet({
   // tweens between them at 45ms a frame, so each step reads as the bag filling
   // rather than jumping -- that easing is the animation's, not a fake counter.
   const [krogerPct, setKrogerPct] = useState<number | null>(null);
+  /** How many products the write is actually sending. Not the same as the row
+   *  count: a row the user skipped, or one nothing matched, is not written. */
+  const [writingCount, setWritingCount] = useState(0);
   const pctRef = useRef(0);
   /** Forward only. A bag that goes backwards is a bag nobody believes. */
   const advancePct = (v: number) => {
@@ -515,6 +518,7 @@ export default function KrogerCartReviewSheet({
   };
 
   const doAddToCart = async (cartItems: { upc: string; quantity: number; description?: string }[]) => {
+    setWritingCount(cartItems.length);
     setStep('adding');
     if (cartItems.length === 0) {
       setTotalAdded(0);
@@ -698,10 +702,16 @@ export default function KrogerCartReviewSheet({
         )}
 
         {/* ── Step: searching ───────────────────────────────────────────── */}
+        {/* A TITLE, NOT A LABEL, and the difference is the honest one. `label`
+            sits under a bag that is filling; there is nothing to fill here,
+            because the whole basket is one request and nothing has come back
+            yet. The WebView stores use `title` for exactly this state -- their
+            login check -- and it reads as a named phase rather than a bar that
+            has stopped. */}
         {step === 'searching' && (
           <CartRunAnimation
             progress={krogerPct}
-            label={`Searching for ${activeCount} ingredient${activeCount !== 1 ? 's' : ''}`}
+            title={`Looking up ${activeCount} ingredient${activeCount !== 1 ? 's' : ''}`}
           />
         )}
 
@@ -976,10 +986,14 @@ export default function KrogerCartReviewSheet({
         })()}
 
         {/* ── Step: adding ──────────────────────────────────────────────── */}
+        {/* Half full, and the label says what the other half is waiting on.
+            The COUNT is the information the frame cannot carry here: one write
+            for the whole basket means the bag cannot tick, so the words do the
+            work the frames do on the other stores. */}
         {step === 'adding' && (
           <CartRunAnimation
             progress={krogerPct}
-            label={`Adding items to your ${storeName} cart`}
+            label={`Adding ${writingCount} item${writingCount !== 1 ? 's' : ''} to your ${storeName} cart`}
           />
         )}
 

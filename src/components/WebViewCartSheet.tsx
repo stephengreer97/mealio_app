@@ -935,6 +935,45 @@ export default function WebViewCartSheet({
 const RUN_RETRY_DELAY_MS = 1_200;
 
 const SESSION_REPAIR_WINDOW_MS = 30_000;
+/**
+ * HOW LONG A "SIGNED OUT" IS ALLOWED TO BE WRONG BEFORE IT BECOMES A WALL.
+ *
+ * Stephen, 2026-09-12: "Wegmans showed webview for login even though I was
+ * logged in. It noticed about 3 seconds later."
+ *
+ * A store that has not run its own code yet cannot answer this. Wegmans keeps
+ * its session in MSAL's localStorage and the account list reads EMPTY until the
+ * site has run once; the Albertsons family mints its token through an SSO
+ * redirect that only the storefront triggers. Both say "signed out" from the
+ * quiet page and mean "not yet".
+ *
+ * The repair already knew that and gave them a storefront load. What it did not
+ * do was give them a SECOND chance after it: one more signed-out answer, from a
+ * page still finishing its own boot, went straight to a sign-in wall — and then
+ * the site finished, the next answer said signed in, and the run carried on.
+ * The user watched a login screen they never needed, for about three seconds.
+ *
+ * SIX SECONDS, AND THE NUMBER IS MEASURED RATHER THAN PICKED. The trace in
+ * albertsons-early-session.test.tsx, recorded the last time Stephen reported
+ * this exact thing, is the reason:
+ *
+ *   12:53:08.8  signed out, from robots.txt   -> sign-in screen
+ *   12:53:09.7  the storefront loads
+ *   12:53:10.0  ask #1 -> signed out
+ *   12:53:14.2  ask #5 -> SIGNED IN
+ *
+ * The right answer arrived on the FIFTH ask, 4.2s after the storefront landed
+ * and 5.4s after the repair began. The fix that trace shipped with was "one
+ * storefront load, then believe the answer" -- which believes ask #1, the one
+ * the trace shows is still wrong. That is why the complaint came back, on
+ * Wegmans, ten days later.
+ *
+ * So the window has to outlast the boot it is waiting on, and six seconds
+ * clears the measured 5.4s with room. It is still SHORT on purpose: a genuinely
+ * signed-out user is the common case and must not wait out the thirty-second
+ * window the inconclusive path uses.
+ */
+const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
   const SESSION_REPAIR_ASK_EVERY_MS = 2_000;
   // Tracks which search idx to resume from after a robot/captcha challenge
   // (Walmart redirects to /blocked when it suspects automation; user has to
@@ -6272,6 +6311,29 @@ const SESSION_REPAIR_WINDOW_MS = 30_000;
               console.log(`[Cart ${ts()}]`, 'signed out on the quiet page — letting the storefront answer first');
               navToRef.current(scriptsRef.current!.storeUrl);
               armLoginCheckTimeoutRef.current();
+            }
+            // THE STOREFRONT IS LOADED AND IT STILL SAYS NO. Not necessarily an
+            // answer yet: a site part-way through its own boot says signed out
+            // with the same words it uses when you are. So the repair gets a
+            // short second wind rather than a wall -- see the constant.
+            else if (!onLoginStep && netSessionRepairFromRef.current !== 0
+                     && Date.now() - netSessionRepairFromRef.current < SESSION_SIGNED_OUT_REPAIR_WINDOW_MS) {
+              armLoginCheckTimeoutRef.current();
+              // One pending ask, however many answers arrive. A storefront load
+              // posts several by itself, and each would otherwise queue its own.
+              if (!netSessionRepairAskRef.current) {
+                netSessionRepairAskRef.current = setTimeout(() => {
+                  netSessionRepairAskRef.current = null;
+                  if (stepRef.current !== 'login_check') return;
+                  const again = loginCheckScript();
+                  if (again) {
+                    console.log(`[Cart ${ts()}]`, 'still signed out —',
+                      Math.round((Date.now() - netSessionRepairFromRef.current) / 1000),
+                      's in, asking once more before the sign-in screen');
+                    webviewRef.current?.injectJavaScript(again);
+                  }
+                }, SESSION_REPAIR_ASK_EVERY_MS);
+              }
             }
             // THE ROUTE A RAIL STORE ACTUALLY TAKES, and it used to set the step
             // and navigate nowhere — leaving the user looking at robots.txt.
