@@ -72,6 +72,26 @@ export type NativeRail = {
    * the user shops from. It reports what it added so it can be undone.
    */
   add(ua: string, s: NativeSession, c: NativeCandidate): Promise<NativeResult & { added?: boolean }>;
+
+  /**
+   * DOES THIS STORE'S WRITE SET A LINE, OR ADD TO IT?
+   *
+   * Optional, and only worth implementing where the answer is still open. It is
+   * the difference between `quantity: n` meaning "make it n" and "n more", and
+   * getting it backwards is the silent under-add MEAL-194 exists to prevent.
+   *
+   * THE EXPERIMENT IS A NO-OP UNDER THE LIKELY ANSWER, deliberately. It writes a
+   * line back to the quantity it ALREADY holds: under SET the cart does not
+   * change at all, and under ADD the line doubles and says so. That is the only
+   * shape of this test that is safe to run against somebody's real shopping.
+   */
+  measureQtySemantics?(ua: string, s: NativeSession): Promise<NativeResult & {
+    /** 'set', 'add', or null when the cart could not be read either side. */
+    semantics?: 'set' | 'add' | null;
+    itemName?: string | null;
+    before?: number | null;
+    after?: number | null;
+  }>;
 };
 
 /**

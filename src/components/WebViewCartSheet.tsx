@@ -1271,7 +1271,13 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
       const go = op.kind === 'session' ? driver.session(sid)
         : op.kind === 'cartRead' ? driver.cartRead(sid)
         : op.kind === 'search' ? driver.searchBatch(op.terms, op.sess)
-        : driver.addBatch(op.items, { knownLines: op.knownLines });
+        // THE RAIL'S OWN DECLARATION, not a default. The injected path gets
+        // this by construction -- the rail builds its own script -- and the
+        // native driver has to be handed it, which is exactly what it was not.
+        : driver.addBatch(op.items, {
+          knownLines: op.knownLines,
+          absoluteQty: netRail()?.absoluteQty ?? null,
+        });
       if (!go) return null;
       return () => {
         console.log(`[Cart ${ts()}]`, 'over the network, no page:', op.kind);

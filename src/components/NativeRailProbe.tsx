@@ -120,6 +120,24 @@ export default function NativeRailProbe({ onClose }: { onClose: () => void }) {
       : r)));
   }, [rows]);
 
+  /**
+   * SET OR ADD? The one question this rail's add path is still refusing to
+   * answer, asked in the only shape that is safe against real shopping: write a
+   * line back to the quantity it already holds. Under SET nothing changes at
+   * all; under ADD the line doubles and the result says so in capitals.
+   */
+  const runQtyProbe = useCallback(async (idx: number) => {
+    const row = rows[idx];
+    if (!row?.session?.loggedIn || !row.rail.measureQtySemantics) return;
+    const out = await row.rail.measureQtySemantics(getStoreWebViewUA(), row.session);
+    console.log('[NativeRail]', row.rail.id, 'qty-semantics', out.semantics ?? 'inconclusive',
+      'item=', out.itemName, 'before=', out.before, 'after=', out.after, '-', out.detail);
+    setRows((rs) => rs.map((r, i) => (i === idx
+      ? { ...r, steps: [...r.steps.filter((s2) => s2.label !== 'qty semantics'),
+          { label: 'qty semantics', ok: out.ok, status: out.status, ms: out.ms, detail: out.detail }] }
+      : r)));
+  }, [rows]);
+
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <View style={styles.root}>
@@ -158,6 +176,11 @@ export default function NativeRailProbe({ onClose }: { onClose: () => void }) {
                   <Text style={styles.addText}>
                     Add 1 to cart: {row.firstCandidate.productName.slice(0, 34)}
                   </Text>
+                </TouchableOpacity>
+              )}
+              {row.session?.loggedIn && row.rail.measureQtySemantics && (
+                <TouchableOpacity onPress={() => runQtyProbe(i)} style={styles.addBtn}>
+                  <Text style={styles.addText}>Measure: does the write SET or ADD?</Text>
                 </TouchableOpacity>
               )}
             </View>

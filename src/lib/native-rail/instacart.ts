@@ -259,6 +259,92 @@ export const INSTACART_NATIVE: NativeRail = {
     };
   }),
 
+  /**
+   * THE QUESTION THE ADD PATH IS STILL REFUSING TO ANSWER.
+   *
+   * instacart-network.ts contradicts itself about this, 220 lines apart and in
+   * the same file:
+   *
+   *   buildInstacartAddBatchScript   "IS QUANTITY ABSOLUTE? NOBODY HAS
+   *                                   MEASURED IT, AND THIS SCRIPT REFUSES TO
+   *                                   GUESS."
+   *   buildInstacartClearCartScript  "SAFE HERE BECAUSE THE SEMANTICS ARE
+   *                                   MEASURED... a line holding 1 was written
+   *                                   to 2 and read back as 2, not 3"
+   *
+   * The clear path acted on a measurement the add path never heard about, so
+   * every ALDI run still refuses any item the cart already holds and pays a
+   * whole extra write-and-read cycle in the reconcile to put it right. Measured
+   * on Stephen's device 2026-09-12: two of two items refused
+   * 'qty_semantics_unproven', then topped up.
+   *
+   * A COMMENT IS NOT A MEASUREMENT, which is the whole reason this exists rather
+   * than a one-line flag flip on the strength of the second comment.
+   */
+  measureQtySemantics: (ua, s) => timed(async () => {
+    if (!s.cartId) return { ok: false, status: null, detail: 'no cart id from the session step', semantics: null };
+    if (!cachedShop) cachedShop = await shopAndZone(ua);
+    const read = async () => {
+      const r = await gql(ua, 'CartItems', { id: s.cartId, shopId: cachedShop!.shopId, postalCode: POSTAL });
+      if (r.status !== 200) return null;
+      try { return (r.json.data.userCart.cartItemCollection.cartItems || []) as any[]; } catch { return null; }
+    };
+    const before = await read();
+    if (!before || !before.length) {
+      return { ok: false, status: null, detail: 'cart is empty, nothing to measure against', semantics: null };
+    }
+    // A line holding at least one, and its ITEM id -- basketProduct.itemId, not
+    // the cart line id. See the read path's note: they are different id spaces.
+    let target: { itemId: string; qty: number; name: string } | null = null;
+    for (const li of before) {
+      const bp = li?.basketProduct || null;
+      const iid = (bp && (bp.itemId || bp.id)) || li?.itemId || li?.id;
+      const q = Number(li?.quantity ?? 1);
+      if (iid && q >= 1) {
+        target = { itemId: String(iid), qty: q, name: String(li?.name || bp?.name || iid) };
+        break;
+      }
+    }
+    if (!target) return { ok: false, status: null, detail: 'no line with a usable item id', semantics: null };
+
+    // WRITE IT BACK TO WHAT IT ALREADY IS. Under SET this changes nothing at
+    // all; under ADD the line doubles, which is the signal.
+    const w = await gql(ua, 'UpdateCartItemsMutation', {
+      cartItemUpdates: [{ itemId: target.itemId, quantity: target.qty }],
+    });
+    if (w.status !== 200 || w.json?.errors?.length) {
+      return {
+        ok: false, status: w.status, semantics: null,
+        detail: `write refused: ${String(w.json?.errors?.[0]?.message ?? w.status).slice(0, 80)}`,
+      };
+    }
+    const after = await read();
+    if (!after) return { ok: false, status: null, detail: 'could not re-read the cart', semantics: null };
+    let now: number | null = null;
+    for (const li of after) {
+      const bp = li?.basketProduct || null;
+      const iid = (bp && (bp.itemId || bp.id)) || li?.itemId || li?.id;
+      if (iid && String(iid) === target.itemId) { now = Number(li?.quantity ?? 0); break; }
+    }
+    if (now == null) {
+      return { ok: false, status: 200, semantics: null, detail: 'the line vanished, which answers nothing' };
+    }
+    const semantics = now === target.qty ? 'set' : now === target.qty * 2 ? 'add' : null;
+    return {
+      ok: semantics != null,
+      status: 200,
+      semantics,
+      itemName: target.name,
+      before: target.qty,
+      after: now,
+      detail: semantics === 'set'
+        ? `SET: wrote ${target.qty} over ${target.qty}, cart still holds ${now}. The cart is unchanged.`
+        : semantics === 'add'
+          ? `ADD: wrote ${target.qty} over ${target.qty}, cart now holds ${now}. THIS LINE IS DOUBLED.`
+          : `inconclusive: wrote ${target.qty} over ${target.qty}, cart holds ${now}`,
+    };
+  }),
+
   add: (ua, _s, c) => timed(async () => {
     // ONE unit. The rail refuses to guess whether quantity is absolute or
     // additive on this platform, and this spike is not the place to settle it --
