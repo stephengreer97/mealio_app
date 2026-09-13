@@ -149,11 +149,36 @@ async function realCheckLogin(storeId: string): Promise<LoginVerdict> {
 /**
  * Is it worth asking at all right now?
  *
- * At app open and on a store tab tap the answer is only worth having when it is
- * cheap OR when it is free. For a store whose run needs a renderer regardless,
- * asking early buys nothing -- the WebView is coming either way and the check
- * can happen inside it -- so the launch path skips it and stays silent.
+ * YES, FOR EVERY STORE, and that is a decision rather than a simplification.
+ *
+ * This used to skip a store whose run needs a renderer regardless, on the
+ * reasoning that the WebView is coming either way so the check can ride along
+ * inside it. True, and it misses where the time goes: riding along puts the
+ * check on the CRITICAL PATH, between the user tapping and the run starting.
+ *
+ * MEASURED on Stephen's device 2026-09-12:
+ *
+ *   Wegmans, no verdict yet   tap -> run starts   8.1s
+ *   Tom Thumb, no verdict yet tap -> run starts   8.2s
+ *   Wegmans, verdict already  tap -> DONE         4.3s, check skipped entirely
+ *
+ * The eight seconds are not the renderer. They are the store's own boot -- an
+ * SSO redirect on the Albertsons family, an MSAL token refresh on Wegmans --
+ * and it has to happen somewhere. Early, it happens while the user is picking
+ * meals; late, they watch it.
+ *
+ * THE RENDERER IS NOT PURELY A NEW COST EITHER. Building the first Chromium
+ * renderer in a process is what costs 8,499ms; the second is cheap. A probe
+ * that pays it in the background is partly moving a cost the run would pay
+ * anyway onto a moment where nobody is waiting.
+ *
+ * WHAT IT DOES COST is memory, one hidden renderer per store, and the honest
+ * bound on that is: at most ONCE PER STORE PER SESSION. checkStore returns
+ * early the moment a verdict exists, so this is not per tap.
+ *
+ * Stephen chose this trade on 2026-09-13, having been shown option A (leave it)
+ * and option C (probe on meal selection instead of tab tap).
  */
 export function worthCheckingEagerly(storeId: string): boolean {
-  return capabilityFor(storeId).nativeLogin || !webViewInevitable(storeId);
+  return !!storeId;
 }

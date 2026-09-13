@@ -91,13 +91,36 @@ const CAPABILITIES: Record<string, StoreCapability> = {
   // on every run after, at 12s and at 20s. One good sample against several bad
   // ones is not a capability. Turning this on would trade reliability for speed,
   // which is the one trade the goal forbids.
+  // NATIVE LOGIN WAS TRUE HERE AND IT WAS WRONG, in the one direction that
+  // matters. /userinfo answers 200 with no SWY_SHOP_TOKEN until the site's own
+  // SSO redirect has minted one -- and native fetch cannot trigger a redirect
+  // chain, because there is no page to redirect. So the native check reported
+  // SIGNED OUT for a signed-in user, which the sheet then had to spend eight
+  // seconds disproving.
+  //
+  // MEASURED 2026-09-12 on Stephen's device, one Tom Thumb run:
+  //   prewarm, native   -> logged out        (wrong)
+  //   sheet, robots.txt -> loggedIn false    (wrong, same reason)
+  //   /bin/safeway/unified/sso/authorize     <- the token being minted
+  //   sheet, storefront -> loggedIn TRUE     4.1s later
+  //
+  // The earlier native measurement that set this true was taken AFTER an SSO
+  // had already run in that session, so the jar held a token and the probe
+  // found it. That is a real 372ms and it proves the request works; it does not
+  // prove the check answers, because the case that matters is the one where the
+  // token is not there yet.
+  //
+  // False now, so the eager check is the WebView probe -- which, with
+  // sessionNeedsStorefront on the rail, lands where the SSO runs and answers
+  // correctly first time.
   tom_thumb: {
     measured: true,
-    nativeLogin: true,
+    nativeLogin: false,
     nativeRun: false,
-    why: 'login proven 2026-09-11 (372ms, store 2574) and cart read proven (27 lines, 91 items); '
-      + 'search UNRESOLVED -- answered once in 1016ms then timed out at 12s and 20s, so the run '
-      + 'stays on the WebView until that settles',
+    why: 'cart read proven natively 2026-09-11 (27 lines, 91 items), but LOGIN cannot be: '
+      + '/userinfo has no token until the storefront SSO mints one, and native fetch cannot '
+      + 'follow a redirect chain with no page. Search UNRESOLVED -- answered once in 1016ms '
+      + 'then timed out at 12s and 20s, so the run stays on the WebView until that settles',
   },
 
   wegmans: {

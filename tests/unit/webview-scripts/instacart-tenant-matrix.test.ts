@@ -134,11 +134,34 @@ describe('which page the login check parks on', () => {
     expect(INSTACART_RAIL.sessionNeedsStorefront).toBe(true);
   });
 
-  it('leaves every other rail on the quiet page', () => {
-    // This flag costs a storefront load, so it is opt-in per rail rather than a
-    // new default. A cookie-borne session answers the same from either page and
-    // should keep the cheap one.
-    for (const id of ['heb', 'walmart', 'wegmans', 'albertsons']) {
+  it('sends the two stores that MINT a session there as well', () => {
+    // ADDED 2026-09-13, and this list used to assert the opposite for both.
+    //
+    // The rule is not "Instacart is special". It is: a session the quiet page
+    // can READ keeps the cheap page, and a session the site has to MINT needs
+    // the page that mints it. Measured on Stephen's device 2026-09-12:
+    //
+    //   Albertsons  /userinfo from robots.txt -> signed out, for a signed-in
+    //               user, until /bin/safeway/unified/sso/authorize runs. The
+    //               storefront answered TRUE 4.1s later.
+    //   Wegmans     MSAL holds the account and an EXPIRED token; only the
+    //               site's own code refreshes it. 'token_expired' from
+    //               robots.txt, signed in 6.6s later on the storefront.
+    //
+    // Both were recovering via the repair, in front of the user, which is what
+    // "Wegmans showed webview for login even though I was logged in" was.
+    for (const id of ['wegmans', 'albertsons']) {
+      const rail = getNetworkRail(id);
+      expect(`${id}: ${!!rail?.sessionNeedsStorefront}`).toBe(`${id}: true`);
+    }
+  });
+
+  it('leaves the cookie-borne rails on the quiet page', () => {
+    // This flag costs a storefront load, so it stays opt-in. H-E-B and Walmart
+    // carry their session in a cookie, which reads the same from either page --
+    // so they keep the cheap one, and a future rail has to EARN the storefront
+    // with a measurement rather than inherit it.
+    for (const id of ['heb', 'walmart']) {
       const rail = getNetworkRail(id);
       if (!rail) continue;
       expect(`${id}: ${!!rail.sessionNeedsStorefront}`).toBe(`${id}: false`);
