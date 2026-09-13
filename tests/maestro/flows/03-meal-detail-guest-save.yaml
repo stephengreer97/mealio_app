@@ -8,7 +8,14 @@ appId: co.mealio.app
 ---
 - launchApp:
     clearState: true
+    # The first-run flags live in expo-secure-store, which clearState does
+    # NOT touch. Without this, whichever flow ran first dismissed the welcome
+    # sheet for all the others and they stopped being independent.
+    clearKeychain: true
     stopApp: true
+
+# First run covers Discover with the welcome sheet. See the subflow.
+- runFlow: ../subflows/dismiss-welcome.yaml
 
 - assertVisible: "Trending Meals"
 
