@@ -998,9 +998,14 @@ export default function KrogerCartReviewSheet({
         )}
 
         {/* ── Step: done ────────────────────────────────────────────────── */}
-        {step === 'done' && (
+        {step === 'done' && (() => {
+        /* Rows asked for, minus rows that came back added. A row the user
+           skipped on the review screen counts here, and should: they asked for
+           the ingredient and it is not in the cart. */
+        const notAddedCount = Math.max(0, activeCount - addedItems.length);
+        return (
           <>
-            <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 12 }}>
+            <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 32, paddingBottom: 16 }}>
               {cartError ? (
                 <>
                   <View style={styles.doneIconWrap}>
@@ -1024,6 +1029,16 @@ export default function KrogerCartReviewSheet({
                   <Text style={styles.doneTitle}>
                     {totalAdded} item{totalAdded !== 1 ? 's' : ''} added to your {storeName} cart!
                   </Text>
+                  {/* A COUNT, NOT NAMES, and that is the honest limit here. The
+                      other stores name each failure with its reason because
+                      their rails report one per item; this path gets a single
+                      answer for the whole basket, so it can say how many rows
+                      were asked for and how many came back and no more. */}
+                  {notAddedCount > 0 && (
+                    <Text style={[styles.doneSub, { color: '#b45309' }]} testID="done-failed-count">
+                      {notAddedCount} item{notAddedCount !== 1 ? 's' : ''} could not be added.
+                    </Text>
+                  )}
                 </>
               ) : (
                 <>
@@ -1037,25 +1052,64 @@ export default function KrogerCartReviewSheet({
                 </>
               )}
             </View>
-            {addedItems.length > 0 && (
-              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 8 }}>
-                {addedItems.map((item, i) => (
-                  <View
-                    key={i}
-                    style={{
-                      paddingVertical: 10,
-                      borderBottomWidth: i < addedItems.length - 1 ? 1 : 0,
-                      borderBottomColor: Colors.border,
-                    }}
-                  >
-                    <Text style={{ fontSize: 14, color: Colors.text1, fontFamily: 'Inter_400Regular' }}>
-                      {item.description}
+            {addedItems.length > 0 ? (
+              /* THE SAME BREAKDOWN THE OTHER STORES SHOW, minus the half that
+                 does not exist here.
+                 Stephen, 2026-09-12: "Kroger not showing same ending cart
+                 snapshot screen like other stores."
+                 The WebView stores render their cart twice over: green rows with
+                 a + for what this run added, grey rows for what was already
+                 there, and a total. Both halves come from reading the cart
+                 before and after. Kroger's API has no cart read at all -- the
+                 whole surface is status, connect, disconnect, locations,
+                 set-location, add-to-cart, search-products -- so the grey half
+                 and the total cannot be built, and are ABSENT rather than
+                 guessed or zeroed. "0 already in your cart" would be a claim
+                 nothing here can support.
+                 The heading names what the rows actually are, which is why it is
+                 not "Your Kroger cart": these are the items this run added, not
+                 the cart. */
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 8 }}>
+                <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 }}>
+                    <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.text2 }}>
+                      Added to your {storeName} cart
+                    </Text>
+                    <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.text2 }}>
+                      {totalAdded} added
                     </Text>
                   </View>
-                ))}
+                  {addedItems.map((item, i) => (
+                    <View
+                      key={i}
+                      testID="cart-row-added"
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingVertical: 10,
+                        borderBottomWidth: i < addedItems.length - 1 ? 1 : 0,
+                        borderBottomColor: Colors.border,
+                      }}
+                    >
+                      <View style={{ width: 22, alignItems: 'center' }}>
+                        <Ionicons name="add" size={18} color="#22c55e" />
+                      </View>
+                      <Text
+                        style={{ flex: 1, fontSize: 14, fontFamily: 'Inter_400Regular', color: '#15803d' }}
+                        numberOfLines={2}
+                      >
+                        {item.description}
+                      </Text>
+                      <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: '#15803d', marginLeft: 8 }}>
+                        x{Math.max(1, item.quantity || 1)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
               </ScrollView>
+            ) : (
+              <View style={{ flex: 1 }} />
             )}
-            {addedItems.length === 0 && <View style={{ flex: 1 }} />}
             <View style={[styles.footer, { gap: 8 }]}>
               {!cartError && totalAdded > 0 && (
                 <TouchableOpacity
@@ -1073,7 +1127,8 @@ export default function KrogerCartReviewSheet({
               </TouchableOpacity>
             </View>
           </>
-        )}
+        );
+        })()}
 
       </SafeAreaView>
     </Modal>
