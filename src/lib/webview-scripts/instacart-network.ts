@@ -1401,6 +1401,18 @@ export const INSTACART_RAIL: NetworkRail = {
   sessionMessageType: 'ALDI_SESSION',
   // robots.txt cannot answer this one. The ops live in the storefront bundle.
   sessionNeedsStorefront: true,
+  // THE WRITE SETS THE LINE, and this is where the fact lives now rather than
+  // only inside the addBatch call below -- so the native driver reads the same
+  // declaration the injected script does. See NetworkRail.absoluteQty for what
+  // it cost to have it in one place only.
+  //
+  // MEASURED TWICE, from opposite directions:
+  //   2026-09-03  a line holding 1, written to 2, read back as 2 not 3
+  //   2026-09-12  a line holding 1, written to 1, read back as 1 not 2
+  // and the storefront's own bundle agrees: its updateCartItems computes
+  // finalQuantity from the value you send and derives the delta only for
+  // analytics. The mutation variable is named newQuantity.
+  absoluteQty: true,
   // THE TENANT, not a default -- and it is no longer quietly turned into one.
   // Dropping it here is what made Publix report a signed-in user as signed out:
   // the probe matched carts against ALDI's slug. `?? 'aldi'` stood here and did

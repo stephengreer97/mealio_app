@@ -22,6 +22,7 @@ import CartClearProbe from '../../components/CartClearProbe';
 import StorefrontCaptureProbe from '../../components/StorefrontCaptureProbe';
 import Meal17Probe from '../../components/Meal17Probe';
 import NativeSessionProbe from '../../components/NativeSessionProbe';
+import NativeRailProbe from '../../components/NativeRailProbe';
 
 // The canary's stores, one per family with a signed-in session. Kept here rather
 // than read from canary_plans because this is a dev control list, not the plan:
@@ -49,6 +50,9 @@ import NotificationSettingsSheet from '../../components/NotificationSettingsShee
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import CookieManager from '@react-native-cookies/cookies';
+import { clearBotCookiesFor } from '../../lib/bot-cookies';
+import { nativeRailOrigins } from '../../lib/native-rail';
+import { getStoreWebViewUA } from '../../lib/webview-user-agent';
 import { useLoginPrewarm } from '../../context/LoginPrewarmContext';
 import { bumpEpoch } from '../../lib/store-session-epoch-storage';
 
@@ -112,9 +116,10 @@ export default function AccountScreen() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [clearProbe, setClearProbe] = useState<{ storeId: string; limit?: number; scoped?: boolean;
     restore?: Array<{ sku: string; quantity: number }> } | null>(null);
-  const [capture, setCapture] = useState<{ storeId: string; path?: string } | null>(null);
+  const [capture, setCapture] = useState<{ storeId: string; path?: string; honestUa?: boolean } | null>(null);
   const [meal17, setMeal17] = useState<'matrix' | 'burst' | null>(null);
   const [nativeSession, setNativeSession] = useState(false);
+  const [nativeRail, setNativeRail] = useState(false);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
@@ -1032,6 +1037,46 @@ export default function AccountScreen() {
           </TouchableOpacity>
         )}
 
+        {/* THE WALL, WITHOUT THE SIGN-OUT.
+            A store behind Imperva or Akamai can wall the SESSION rather than the
+            IP, and once it does, the WebView carries the burned token too --
+            measured on H-E-B, 2026-09-11: HTML 200, /graphql 403, unchanged for
+            35 minutes, which is not MEAL-16's self-healing wall. The only tool
+            was "Sign out of my stores", which fixes it by throwing the login
+            away. This expires the vendor's token and leaves the login alone, so
+            the next page load mints a fresh one. */}
+        {__DEV__ && (
+          <TouchableOpacity
+            onPress={async () => {
+              // WHAT WE TELL THE STORE WE ARE. The UA is spoofed to a Chrome
+              // major, and the native WebView broadcasts its REAL major in
+              // Sec-CH-UA on every request regardless -- a mismatch between the
+              // two is the spoofing tell webview-user-agent.ts warns about and
+              // names Imperva at H-E-B as the WAF that catches. Printed here
+              // because it was the one input to that we had never looked at.
+              console.log('[bot-cookies] store UA =', getStoreWebViewUA());
+              const sweeps = await clearBotCookiesFor(nativeRailOrigins());
+              const hit = sweeps.filter((s2) => s2.cleared.length > 0);
+              for (const s2 of sweeps) {
+                // NAMES, NEVER VALUES. A token IS the session, and a log file
+                // is not the place for one. The names are what tell an Imperva
+                // jar from an Akamai one, and which of them we are not clearing.
+                console.log('[bot-cookies]', s2.origin, 'cleared=', s2.cleared.join(',') || 'none',
+                  'saw=', s2.saw.slice().sort().join(','), s2.error ? `error=${s2.error}` : '');
+              }
+              Alert.alert(
+                hit.length ? 'Bot tokens cleared' : 'Nothing to clear',
+                hit.length
+                  ? hit.map((s2) => `${s2.origin.replace(/^https?:\/\//, '')}: ${s2.cleared.join(', ')}`).join('\n')
+                  : 'No Imperva or Akamai cookies in the jar. Your store logins are untouched either way.',
+              );
+            }}
+            style={styles.devResetBtn}
+          >
+            <Text style={styles.devResetText}>Clear bot-protection cookies, keep logins (dev)</Text>
+          </TouchableOpacity>
+        )}
+
         {/* MEAL-7. Run a rail's cart-clear and report what the cart said.
             `clearCart` was defined on four rails and called by nothing, so none
             of it had ever executed -- code that has never run is a hypothesis
@@ -1068,6 +1113,35 @@ export default function AccountScreen() {
             >
               <Text style={styles.devResetText}>Watch storefront calls: Wegmans cart (dev)</Text>
             </TouchableOpacity>
+            {/* THE H-E-B QUESTION, ASKED THE ONLY WAY THAT SETTLES IT.
+                Our request to /graphql is refused and the same store works in
+                Chrome on the same phone. Two explanations: the request is wrong,
+                or the client is blocked. Loading a real H-E-B page in OUR WebView
+                and watching what the SITE sends to the identical endpoint tells
+                them apart -- if the page's own calls succeed here, the request is
+                ours to fix, and the header names say what we are missing. */}
+            <TouchableOpacity
+              onPress={() => setCapture({ storeId: 'heb', path: '/cart' })}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Watch storefront calls: H-E-B cart (dev)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setCapture({ storeId: 'heb', path: '/search?q=milk' })}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Watch storefront calls: H-E-B search (dev)</Text>
+            </TouchableOpacity>
+            {/* THE SAME PAGE, TELLING THE TRUTH ABOUT WHAT IT IS. If the site's
+                own /graphql calls succeed here and fail above, the disguise is
+                what is being refused and the fix is to stop wearing it on this
+                store. */}
+            <TouchableOpacity
+              onPress={() => setCapture({ storeId: 'heb', path: '/search?q=milk', honestUa: true })}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Watch H-E-B search, honest UA (dev)</Text>
+            </TouchableOpacity>
             {/* Answers "can the session be read without a WebView at all?" with
                 evidence instead of reasoning. Read-only; writes to no cart. */}
             <TouchableOpacity
@@ -1076,6 +1150,13 @@ export default function AccountScreen() {
               style={styles.devResetBtn}
             >
               <Text style={styles.devResetText}>Session over native fetch (dev)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID="native-rail-probe"
+              onPress={() => setNativeRail(true)}
+              style={styles.devResetBtn}
+            >
+              <Text style={styles.devResetText}>Native rail: all 4 jobs, no WebView (dev)</Text>
             </TouchableOpacity>
             {/* MEAL-17, TEMPORARY. Delete with the spike. */}
             <TouchableOpacity onPress={() => setMeal17('matrix')} style={styles.devResetBtn}>
@@ -1121,6 +1202,9 @@ export default function AccountScreen() {
             ))}
           </>
         )}
+        {__DEV__ && nativeRail && (
+          <NativeRailProbe onClose={() => setNativeRail(false)} />
+        )}
         {__DEV__ && nativeSession && (
           <NativeSessionProbe onClose={() => setNativeSession(false)} />
         )}
@@ -1131,6 +1215,7 @@ export default function AccountScreen() {
           <StorefrontCaptureProbe
             storeId={capture.storeId}
             path={capture.path}
+            honestUa={capture.honestUa}
             onClose={() => setCapture(null)}
           />
         )}

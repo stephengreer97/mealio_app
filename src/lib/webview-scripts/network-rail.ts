@@ -207,6 +207,26 @@ export interface NetworkRail {
   sessionUsable(msg: { early?: boolean; storeId?: string | null }): boolean;
 
   /**
+   * DOES THIS STORE'S WRITE SET A LINE, OR ADD TO IT?
+   *
+   * A STORE FACT, DECLARED ONCE, so every transport gets the same answer.
+   *
+   * It used to be an argument only, passed into addBatch -- which meant the
+   * rail knew it, the injected script was told it, and the NATIVE driver was
+   * not. Measured on Stephen's device 2026-09-12: every ALDI run refused both
+   * of its items 'qty_semantics_unproven' and paid a whole extra write-and-read
+   * cycle in the reconcile to put them back, while the injected path for the
+   * same store had been passing absoluteQty: true for nine days. One store fact,
+   * two transports, and only one of them had heard.
+   *
+   * Undefined means "not measured", which is the conservative reading: a rail
+   * that does not know refuses any item the cart already holds rather than
+   * guess. Saying true here is a claim that somebody wrote a line back and read
+   * it, and the rail that says it should say where.
+   */
+  absoluteQty?: boolean;
+
+  /**
    * Does a run need a STORE from the session before it can start?
    *
    * True for every rail whose catalogue is per store — H-E-B, the Albertsons

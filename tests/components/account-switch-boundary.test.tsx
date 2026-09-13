@@ -145,6 +145,18 @@ import { LoginPrewarmProvider, useLoginPrewarm, LoginPrewarmStatus } from '../..
 import { auth, bugReport, creators } from '../../src/lib/api';
 import { clearSessionLogs, getSessionLogs, installConsoleCapture } from '../../src/lib/logBuffer';
 import { clearLastAutomationRun, getLastAutomationRun, setLastAutomationRun } from '../../src/lib/lastAutomationRun';
+// THESE SUITES ARE ABOUT THE WEBVIEW PROBE, which is now one branch of three.
+//
+// checkStore asks over HTTP first and only falls back to a renderer when the
+// store cannot be answered that way. Everything below was written when the
+// probe was the only path, and it still describes behaviour worth pinning --
+// so the checker is stubbed to send every store down it.
+//
+// Stubbed rather than left real for a second reason: the real one reaches for
+// fetch, which under jest neither succeeds nor fails quickly, so the probe
+// never mounts inside the test's act() window and ten tests here went red on a
+// timeout nobody could see. The native branch has its own suite.
+import { __setLoginCheckerForTests, __resetLoginCheckerForTests } from '../../src/lib/native-login';
 
 const submit = bugReport.submit as jest.Mock;
 const verify = auth.verify as jest.Mock;
@@ -356,6 +368,9 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  __setLoginCheckerForTests(async () => ({
+    state: 'needs-webview' as const, how: 'stubbed for this suite', ms: 0,
+  }));
   submit.mockClear();
   submit.mockResolvedValue({ ok: true });
   login.mockReset();

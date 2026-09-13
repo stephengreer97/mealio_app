@@ -1691,6 +1691,16 @@ ${wegPrelude()}
  * strictest of the three rails.
  */
 export const WEGMANS_RAIL: NetworkRail = {
+  // THE SAME REASON AS THE ALBERTSONS FAMILY, a different mechanism. This
+  // store's bearer lives in MSAL's encrypted localStorage and only the site's
+  // own code refreshes it, so from robots.txt the probe finds the account and
+  // an EXPIRED token and answers 'token_expired' -- measured 2026-09-12, with
+  // the storefront putting it right 6.6 seconds later.
+  //
+  // Stephen, the same day: "Wegmans showed webview for login even though I was
+  // logged in. It noticed about 3 seconds later." This is where that three
+  // seconds came from.
+  sessionNeedsStorefront: true,
   sessionMessageType: 'WEGMANS_SESSION',
   sessionScript: buildWegmansSessionScript,
   searchBatch: (terms, sess) =>

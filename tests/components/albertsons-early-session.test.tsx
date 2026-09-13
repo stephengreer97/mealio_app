@@ -298,9 +298,16 @@ describe('the login check and the early session answer', () => {
     expect(view.queryByText(/log into your Albertsons account once/i)).toBeNull();
   });
 
-  it('and takes the second answer at its word', () => {
-    // The other half. Once the site has had its load, a signed-out answer IS
-    // final and the user is not left waiting for a session that is not coming.
+  it('does NOT take the second answer at its word either', () => {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and the trace in the comment above
+    // is what refutes it: the right answer arrived on ask #5, 4.2s after the
+    // storefront loaded. "One storefront load, then believe the answer"
+    // believes ask #1 -- the one that trace shows is still wrong.
+    //
+    // So the same complaint came back on Wegmans ten days later, in the same
+    // words: "showed webview for login even though I was logged in. It noticed
+    // about 3 seconds later." A store part-way through its own boot says signed
+    // out with exactly the words it uses when you are.
     const { view, post } = openOnLoginCheck();
     post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
     act(() => {
@@ -309,7 +316,32 @@ describe('the login check and the early session answer', () => {
       });
     });
     post({ type: 'ALB_SESSION', ok: true, loggedIn: false, source: 'userinfo' });
-    expect(view.queryByText(/log into your Albertsons account once/i)).toBeTruthy();
+    expect(view.queryByText(/log into your Albertsons account once/i)).toBeNull();
+  });
+
+  it('but a store that is still saying no after the window IS signed out', () => {
+    // The other half, and the half that keeps this honest. Patience is not the
+    // same as never answering: a genuinely signed-out user must still reach the
+    // sign-in screen, and reach it in seconds rather than out of the
+    // thirty-second window the inconclusive path uses.
+    jest.useFakeTimers();
+    try {
+      const { view, post } = openOnLoginCheck();
+      post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
+      act(() => {
+        view.getAllByTestId('mock-webview')[0].props.onLoadEnd({
+          nativeEvent: { url: 'https://www.albertsons.com/?_t=2' },
+        });
+      });
+      post({ type: 'ALB_SESSION', ok: true, loggedIn: false, source: 'userinfo' });
+      expect(view.queryByText(/log into your Albertsons account once/i)).toBeNull();
+      // Past the window, and the store has not changed its mind.
+      act(() => { jest.advanceTimersByTime(7_000); });
+      post({ type: 'ALB_SESSION', ok: true, loggedIn: false, source: 'userinfo' });
+      expect(view.queryByText(/log into your Albertsons account once/i)).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

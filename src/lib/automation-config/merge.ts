@@ -196,6 +196,7 @@ function mergeStore(
       case 'nextDataSearch':
       case 'networkAdd':
       case 'networkSearch':
+      case 'nativeRun':
       case 'cartSkuConfirm': {
         const b = takeBoolean(path, value, warnings);
         if (b !== undefined) target[key] = b;

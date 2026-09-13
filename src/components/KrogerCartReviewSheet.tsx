@@ -257,6 +257,9 @@ export default function KrogerCartReviewSheet({
   // tweens between them at 45ms a frame, so each step reads as the bag filling
   // rather than jumping -- that easing is the animation's, not a fake counter.
   const [krogerPct, setKrogerPct] = useState<number | null>(null);
+  /** How many products the write is actually sending. Not the same as the row
+   *  count: a row the user skipped, or one nothing matched, is not written. */
+  const [writingCount, setWritingCount] = useState(0);
   const pctRef = useRef(0);
   /** Forward only. A bag that goes backwards is a bag nobody believes. */
   const advancePct = (v: number) => {
@@ -515,6 +518,7 @@ export default function KrogerCartReviewSheet({
   };
 
   const doAddToCart = async (cartItems: { upc: string; quantity: number; description?: string }[]) => {
+    setWritingCount(cartItems.length);
     setStep('adding');
     if (cartItems.length === 0) {
       setTotalAdded(0);
@@ -698,10 +702,16 @@ export default function KrogerCartReviewSheet({
         )}
 
         {/* ── Step: searching ───────────────────────────────────────────── */}
+        {/* A TITLE, NOT A LABEL, and the difference is the honest one. `label`
+            sits under a bag that is filling; there is nothing to fill here,
+            because the whole basket is one request and nothing has come back
+            yet. The WebView stores use `title` for exactly this state -- their
+            login check -- and it reads as a named phase rather than a bar that
+            has stopped. */}
         {step === 'searching' && (
           <CartRunAnimation
             progress={krogerPct}
-            label={`Searching for ${activeCount} ingredient${activeCount !== 1 ? 's' : ''}`}
+            title={`Looking up ${activeCount} ingredient${activeCount !== 1 ? 's' : ''}`}
           />
         )}
 
@@ -976,17 +986,26 @@ export default function KrogerCartReviewSheet({
         })()}
 
         {/* ── Step: adding ──────────────────────────────────────────────── */}
+        {/* Half full, and the label says what the other half is waiting on.
+            The COUNT is the information the frame cannot carry here: one write
+            for the whole basket means the bag cannot tick, so the words do the
+            work the frames do on the other stores. */}
         {step === 'adding' && (
           <CartRunAnimation
             progress={krogerPct}
-            label={`Adding items to your ${storeName} cart`}
+            label={`Adding ${writingCount} item${writingCount !== 1 ? 's' : ''} to your ${storeName} cart`}
           />
         )}
 
         {/* ── Step: done ────────────────────────────────────────────────── */}
-        {step === 'done' && (
+        {step === 'done' && (() => {
+        /* Rows asked for, minus rows that came back added. A row the user
+           skipped on the review screen counts here, and should: they asked for
+           the ingredient and it is not in the cart. */
+        const notAddedCount = Math.max(0, activeCount - addedItems.length);
+        return (
           <>
-            <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 12 }}>
+            <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 32, paddingBottom: 16 }}>
               {cartError ? (
                 <>
                   <View style={styles.doneIconWrap}>
@@ -1010,6 +1029,16 @@ export default function KrogerCartReviewSheet({
                   <Text style={styles.doneTitle}>
                     {totalAdded} item{totalAdded !== 1 ? 's' : ''} added to your {storeName} cart!
                   </Text>
+                  {/* A COUNT, NOT NAMES, and that is the honest limit here. The
+                      other stores name each failure with its reason because
+                      their rails report one per item; this path gets a single
+                      answer for the whole basket, so it can say how many rows
+                      were asked for and how many came back and no more. */}
+                  {notAddedCount > 0 && (
+                    <Text style={[styles.doneSub, { color: '#b45309' }]} testID="done-failed-count">
+                      {notAddedCount} item{notAddedCount !== 1 ? 's' : ''} could not be added.
+                    </Text>
+                  )}
                 </>
               ) : (
                 <>
@@ -1023,25 +1052,64 @@ export default function KrogerCartReviewSheet({
                 </>
               )}
             </View>
-            {addedItems.length > 0 && (
-              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 8 }}>
-                {addedItems.map((item, i) => (
-                  <View
-                    key={i}
-                    style={{
-                      paddingVertical: 10,
-                      borderBottomWidth: i < addedItems.length - 1 ? 1 : 0,
-                      borderBottomColor: Colors.border,
-                    }}
-                  >
-                    <Text style={{ fontSize: 14, color: Colors.text1, fontFamily: 'Inter_400Regular' }}>
-                      {item.description}
+            {addedItems.length > 0 ? (
+              /* THE SAME BREAKDOWN THE OTHER STORES SHOW, minus the half that
+                 does not exist here.
+                 Stephen, 2026-09-12: "Kroger not showing same ending cart
+                 snapshot screen like other stores."
+                 The WebView stores render their cart twice over: green rows with
+                 a + for what this run added, grey rows for what was already
+                 there, and a total. Both halves come from reading the cart
+                 before and after. Kroger's API has no cart read at all -- the
+                 whole surface is status, connect, disconnect, locations,
+                 set-location, add-to-cart, search-products -- so the grey half
+                 and the total cannot be built, and are ABSENT rather than
+                 guessed or zeroed. "0 already in your cart" would be a claim
+                 nothing here can support.
+                 The heading names what the rows actually are, which is why it is
+                 not "Your Kroger cart": these are the items this run added, not
+                 the cart. */
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 8 }}>
+                <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 }}>
+                    <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.text2 }}>
+                      Added to your {storeName} cart
+                    </Text>
+                    <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: Colors.text2 }}>
+                      {totalAdded} added
                     </Text>
                   </View>
-                ))}
+                  {addedItems.map((item, i) => (
+                    <View
+                      key={i}
+                      testID="cart-row-added"
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingVertical: 10,
+                        borderBottomWidth: i < addedItems.length - 1 ? 1 : 0,
+                        borderBottomColor: Colors.border,
+                      }}
+                    >
+                      <View style={{ width: 22, alignItems: 'center' }}>
+                        <Ionicons name="add" size={18} color="#22c55e" />
+                      </View>
+                      <Text
+                        style={{ flex: 1, fontSize: 14, fontFamily: 'Inter_400Regular', color: '#15803d' }}
+                        numberOfLines={2}
+                      >
+                        {item.description}
+                      </Text>
+                      <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: '#15803d', marginLeft: 8 }}>
+                        x{Math.max(1, item.quantity || 1)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
               </ScrollView>
+            ) : (
+              <View style={{ flex: 1 }} />
             )}
-            {addedItems.length === 0 && <View style={{ flex: 1 }} />}
             <View style={[styles.footer, { gap: 8 }]}>
               {!cartError && totalAdded > 0 && (
                 <TouchableOpacity
@@ -1059,7 +1127,8 @@ export default function KrogerCartReviewSheet({
               </TouchableOpacity>
             </View>
           </>
-        )}
+        );
+        })()}
 
       </SafeAreaView>
     </Modal>

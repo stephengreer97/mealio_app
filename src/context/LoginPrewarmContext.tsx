@@ -12,6 +12,8 @@ import { useSessionEnd } from './useSessionEnd';
 import SilentLoginProbe, { PrewarmedCart } from '../components/SilentLoginProbe';
 import SilentSearchProbe, { SearchCandidate } from '../components/SilentSearchProbe';
 import { getNetworkRail } from '../lib/webview-scripts/network-rail';
+import { checkLogin, worthCheckingEagerly } from '../lib/native-login';
+import { capabilityFor } from '../lib/store-capabilities';
 import { getStoreScripts } from '../lib/webview-scripts';
 import { isWebViewStore } from '../constants/stores';
 
@@ -193,6 +195,43 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     return cart;
   }, []);
 
+  /** pumpSearch is defined below this; reached through a ref, as elsewhere. */
+  const pumpSearchRef = useRef<() => void>(() => {});
+
+  /**
+   * ASK OVER HTTP BEFORE BUILDING ANYTHING.
+   *
+   * For H-E-B, ALDI and the fifteen Albertsons banners this settles the login
+   * question in about 400ms. For EVERY store it settles a user with an empty
+   * cookie jar for free. Only what is left reaches the probe queue below, and
+   * that queue is the thing that costs 8,499ms of Chromium startup.
+   *
+   * Returns true when the question is answered and no probe is needed.
+   */
+  const settleNatively = useCallback(async (storeId: string): Promise<boolean> => {
+    const v = await checkLogin(storeId);
+    // THE SESSION CAN END DURING THAT AWAIT.
+    //
+    // checkStore used to be synchronous, so this window did not exist; it is
+    // ~400ms wide now. A verdict resolved under A must never be written after B
+    // has taken the phone over -- it would put A's store login in B's cache and
+    // B's next run would trust it. This is the fourth writer the teardown note
+    // below warns about, and userRef is re-read rather than closed over for
+    // exactly the reason that note gives.
+    if (!userRef.current) {
+      console.log('[Prewarm]', storeId, 'native check discarded: no session by the time it answered');
+      return true;
+    }
+    console.log('[Prewarm]', storeId, 'native login check:', v.state, `(${v.ms}ms)`, '-', v.how);
+    if (v.state === 'needs-webview') return false;
+    statusRef.current.set(storeId, v.state === 'in' ? 'loggedIn' : 'loggedOut');
+    setStatusVersion((n) => n + 1);
+    // A store that just resolved signed-in may have terms waiting on exactly
+    // that answer, the same as after a probe settles.
+    setTimeout(() => pumpSearchRef.current(), 0);
+    return true;
+  }, []);
+
   // Start the head of the queue if nothing is in flight.
   const pump = useCallback(() => {
     if (currentRef.current != null) return;
@@ -232,9 +271,31 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
         console.log('[Prewarm] checkStore skip', storeId, '— already queued/in-flight');
         return;
       }
-      console.log('[Prewarm] checkStore queue', storeId, '(inflight=', currentRef.current, 'queue=', queueRef.current.length, ')');
-      queueRef.current.push(storeId);
-      pump();
+      // NATIVE FIRST. A renderer is the last resort now, not the first move.
+      //
+      // Marked 'checking' before the await so a second call for the same store
+      // inside that ~400ms does not start a duplicate: the guard above reads it.
+      statusRef.current.set(storeId, 'checking');
+      void settleNatively(storeId).then((settled) => {
+        if (settled || !userRef.current) return;
+        // Only a store that cannot be asked over HTTP gets here -- and only when
+        // asking EARLY is worth anything. A store whose run needs a renderer
+        // regardless can have its check ride along inside the one the run is
+        // about to build, so launching a second one now to answer it early is
+        // pure cost. Unmeasured stores are not in that category: they keep the
+        // probe they have always had.
+        if (!worthCheckingEagerly(storeId)) {
+          statusRef.current.set(storeId, 'unknown');
+          console.log('[Prewarm] checkStore deferring', storeId,
+            '- its run needs a WebView anyway, so the check rides along in that one');
+          return;
+        }
+        console.log('[Prewarm] checkStore queue', storeId,
+          '(inflight=', currentRef.current, 'queue=', queueRef.current.length, ')',
+          '-', capabilityFor(storeId).why);
+        queueRef.current.push(storeId);
+        pump();
+      });
     },
     [pump],
   );
@@ -304,6 +365,8 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
       'wanted terms (the rest are already answered or asked)');
     setSearchBatch(batch);
   }, []);
+
+  pumpSearchRef.current = pumpSearch;
 
   /**
    * Tear down the batch on the wire, if there is one.

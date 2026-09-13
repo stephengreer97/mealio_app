@@ -1675,6 +1675,22 @@ ${albPrelude()}
 // this one no longer means opening a file the other four are also in.
 
 export const ALBERTSONS_RAIL: NetworkRail = {
+  // ROBOTS.TXT CANNOT ANSWER THIS ONE EITHER, and that is measured rather than
+  // assumed. This store mints its session through an SSO redirect that only the
+  // storefront triggers -- /bin/safeway/unified/sso/authorize, visible in the
+  // device log -- so /userinfo from the quiet page answers "signed out" about a
+  // signed-in user and keeps doing so until the site has run once.
+  //
+  // MEASURED on Stephen's device 2026-09-12, one Tom Thumb run:
+  //   25:58.9  userinfo from robots.txt -> loggedIn false
+  //   26:00.9  /bin/safeway/unified/sso/authorize
+  //   26:05.0  loggedIn TRUE
+  //
+  // The repair already recovers from that, in about six seconds, in front of
+  // the user. Starting on the storefront is not an extra load -- it is the same
+  // load moved earlier -- and it removes the wrong answer instead of correcting
+  // it afterwards. Same reasoning, and the same one-line fix, as Instacart's.
+  sessionNeedsStorefront: true,
   sessionMessageType: 'ALB_SESSION',
   sessionScript: buildAlbertsonsSessionScript,
   searchBatch: (terms, sess) =>

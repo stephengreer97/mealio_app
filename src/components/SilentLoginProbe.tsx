@@ -116,6 +116,24 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
    * hunch, because that verdict is terminal — is untouched.
    */
   const repairedRef = useRef(false);
+  /**
+   * A SIGNED-OUT ANSWER GETS ONE MORE ASK BEFORE IT IS BELIEVED.
+   *
+   * The sheet learned this on 2026-09-12 and the probe had the same gap: a page
+   * part-way through its own boot says signed out in the same words it uses
+   * when you are. Measured on the Albertsons family, where the session is
+   * minted by an SSO redirect the storefront triggers:
+   *
+   *   storefront lands   -> /userinfo says signed out
+   *   +4.1s              -> SIGNED IN
+   *
+   * A PREWARM 'loggedOut' IS TERMINAL. It is cached for the session, and the
+   * cart sheet skips its own check on a positive verdict but acts on a negative
+   * one by showing a sign-in screen. So a premature no here is worse than a
+   * premature no in the sheet -- there is no second chance behind it.
+   */
+  const signedOutAsksRef = useRef(0);
+  const signedOutAskTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const beforeContent = Platform.OS === 'android' ? WEBVIEW_FINGERPRINT_SHIM : undefined;
 
@@ -124,6 +142,13 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
       if (resolvedRef.current) return;
       resolvedRef.current = true;
       if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
+      // The second-opinion timer outlives finish() otherwise, and the sign-out
+      // teardown next door is the reason that matters: it would fire an
+      // injection into a WebView being unmounted under someone else's session.
+      if (signedOutAskTimerRef.current) {
+        clearTimeout(signedOutAskTimerRef.current);
+        signedOutAskTimerRef.current = null;
+      }
       if (outcome === 'error') { console.log('[Prewarm] probe', storeId, 'finishing: ERROR'); onError(storeId); }
       else {
         console.log('[Prewarm] probe', storeId, 'finishing: loggedIn=', outcome.isLoggedIn, 'cart=', outcome.cart ? `${outcome.cart.count} count / ${outcome.cart.items.length} lines` : 'none');
@@ -285,8 +310,35 @@ export default function SilentLoginProbe({ storeId, onLogin, onResult, onError }
             console.log('[Prewarm] probe', storeId, 'network session inconclusive —', msg.why, '— reporting nothing');
             return;
           }
-          reportLogin(!!msg.loggedIn);
-          if (!msg.loggedIn) { finish({ isLoggedIn: false }); return; }
+          if (!msg.loggedIn) {
+            // Two more asks, two seconds apart, before this becomes a verdict.
+            // That covers the measured 4.1s SSO without keeping a genuinely
+            // signed-out user waiting: nobody is looking at this WebView, so the
+            // only cost is the probe finishing a few seconds later.
+            const railForRetry = getNetworkRail(storeId);
+            if (signedOutAsksRef.current < 2 && railForRetry) {
+              signedOutAsksRef.current += 1;
+              if (!signedOutAskTimerRef.current) {
+                console.log('[Prewarm] probe', storeId, 'signed out on a page that just loaded —',
+                  'asking again before believing it (', signedOutAsksRef.current, 'of 2 )');
+                armTimeout(LOGIN_TIMEOUT_MS, () => {
+                  console.log('[Prewarm] probe', storeId, 'timed out waiting for a second opinion');
+                  finish('error');
+                });
+                signedOutAskTimerRef.current = setTimeout(() => {
+                  signedOutAskTimerRef.current = null;
+                  webviewRef.current?.injectJavaScript(railForRetry.sessionScript(storeId));
+                }, 2_000);
+              }
+              return;
+            }
+            // Asked three times across six seconds and the store has not changed
+            // its mind. That is an answer.
+            reportLogin(false);
+            finish({ isLoggedIn: false });
+            return;
+          }
+          reportLogin(true);
           // ONE CART READ, whatever the store says.
           //
           // Albertsons answers this probe TWICE -- an early reply the instant

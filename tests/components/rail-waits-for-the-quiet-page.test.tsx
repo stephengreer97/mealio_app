@@ -109,6 +109,7 @@ jest.mock('../../src/lib/api', () => ({
 
 import WebViewCartSheet from '../../src/components/WebViewCartSheet';
 import { __applyAutomationConfigForTests, __resetAutomationConfigForTests } from '../../src/lib/automation-config';
+import { __setNativeRunForTests, __resetNativeRunForTests } from '../../src/lib/native-rail';
 
 beforeEach(() => {
   injected.length = 0;
@@ -116,6 +117,18 @@ beforeEach(() => {
   mockPrewarmedSearch = new Map();
 });
 afterEach(() => __resetAutomationConfigForTests());
+
+// THIS SUITE IS ABOUT THE PAGE TRANSPORT, and says so rather than inheriting it.
+//
+// The engine's decisions here -- one batch per session answer, stop rather than
+// wait, do not search what the prewarm already answered -- are the same whichever
+// side of the bridge asks the store. They are OBSERVED through the injected
+// script because that is what a page run leaves behind, so pinning the transport
+// is what keeps these assertions meaningful; without it they would quietly pass
+// or fail on whichever path store-capabilities.ts selected that week. The native
+// side of the same decisions is pinned in native-run-transport.test.tsx.
+beforeEach(() => __setNativeRunForTests(() => null));
+afterEach(() => __resetNativeRunForTests());
 
 const unchosen = { id: 'm1', name: 'Quesadilla', ingredients: [
   { ingredientName: 'sour cream', productQty: 1, qty: 1, unit: 'qty', measure: null },

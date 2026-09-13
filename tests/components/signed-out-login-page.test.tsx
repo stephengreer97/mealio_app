@@ -131,7 +131,14 @@ describe('a signed-out rail store', () => {
     // signed in. See signedOutIsFinal. The storefront gets one load...
     post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
     load('https://www.heb.com/?_t=2');
-    // ...and its answer is taken at its word.
+    // ...and then a short window to keep saying so, because a site part-way
+    // through its own boot says signed out in the same words it uses when you
+    // are. The measured trace is in albertsons-early-session.test.tsx: the
+    // right answer arrived on the FIFTH ask, 4.2s after the storefront landed.
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    expect(view.queryByText(/log into your H-E-B account/i)).toBeNull();
+    // Past the window, still signed out, and now it is an answer.
+    act(() => { jest.advanceTimersByTime(7_000); });
     post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
     expect(view.queryByText(/log into your H-E-B account/i)).toBeTruthy();
     // THE ASSERTION THIS FILE IS FOR. robots.txt has no sign-in form; the login

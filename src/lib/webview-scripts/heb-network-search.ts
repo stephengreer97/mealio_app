@@ -37,6 +37,20 @@ import { RETRY_FN } from './_retry';
  * cost in a rail run. It is also what made the cart breakdown wrong when that
  * navigation landed on the homepage.
  */
+/**
+ * THE CART DOCUMENT, ONCE.
+ *
+ * Lifted out of the script text so the NATIVE driver asks with the same
+ * document rather than a retyped copy of it. A query that drifts between the
+ * two transports is the one difference nobody would see: both answer, both
+ * parse, and one of them is missing a field the other's reader depends on.
+ */
+export const HEB_CART_LINES_QUERY = 'query CartLines { cartV2 { __typename'
+    + ' ... on Cart { id items { id quantity estimatedWeight'
+    + '   product { id fullDisplayName maximumOrderQuantity }'
+    + '   sku { id customerFriendlySize } } }'
+    + ' ... on CartError { code title message } } }';
+
 const CART_READ_FN = `
   // maximumOrderQuantity IS ON THE CART'S OWN PRODUCT, and H-E-B's storefront
   // selects it there: fragment CartItemFragment on CartItem { ... product { ...
@@ -47,11 +61,7 @@ const CART_READ_FN = `
   // search entirely -- "12 of 14 already chosen - writing those without
   // searching" -- so every one of those items reached the write with no cap and
   // no way to know it was already at one.
-  var CART = 'query CartLines { cartV2 { __typename'
-    + ' ... on Cart { id items { id quantity estimatedWeight'
-    + '   product { id fullDisplayName maximumOrderQuantity }'
-    + '   sku { id customerFriendlySize } } }'
-    + ' ... on CartError { code title message } } }';
+  var CART = ${JSON.stringify(HEB_CART_LINES_QUERY)};
 
   var readCart = async function () {
     var r = await __hebGql('CartLines', CART, {}, 8000, 'cart_read');
@@ -181,6 +191,16 @@ ${RETRY_FN}
  * fulfillment store is what this returns, and the preferred store number is
  * carried only as a diagnostic.
  */
+
+/** Who is signed in, and which branch they prefer. Shared with the native driver. */
+export const HEB_WHO_QUERY = 'query myPreferredStore { me { id preferredStore { storeNumber } } }';
+
+/** The FULFILMENT store and the pickup/delivery mode. See the note above about
+ *  why this store id, and not the preferred one, is the one search wants. */
+export const HEB_SESSION_QUERY = 'query SessionContext { cartV2 { __typename'
+  + ' ... on Cart { id fulfillment { selectionState curbsideFulfillmentMode store { id name } } }'
+  + ' ... on CartError { code title message } } }';
+
 export function buildHebSessionScript(): string {
   return `(async function () {
 ${GQL_FN}
@@ -190,7 +210,7 @@ ${GQL_FN}
   };
 
   var who = await __hebGql('myPreferredStore',
-    'query myPreferredStore { me { id preferredStore { storeNumber } } }', {}, 8000);
+    ${JSON.stringify(HEB_WHO_QUERY)}, {}, 8000);
   if (!who.ok) { post({ ok: false, why: who.why, status: who.status || null, detail: who.detail || null }); return; }
   var me = null, prefNumber = null;
   try { me = who.data.me && who.data.me.id; } catch (e) {}
@@ -198,9 +218,7 @@ ${GQL_FN}
   if (!me) { post({ ok: true, loggedIn: false }); return; }
 
   var sess = await __hebGql('SessionContext',
-    'query SessionContext { cartV2 { __typename'
-    + ' ... on Cart { id fulfillment { selectionState curbsideFulfillmentMode store { id name } } }'
-    + ' ... on CartError { code title message } } }', {}, 8000, 'session');
+    ${JSON.stringify(HEB_SESSION_QUERY)}, {}, 8000, 'session');
   var storeId = null, storeName = null, mode = null;
   if (sess.ok) {
     try {
@@ -269,7 +287,7 @@ const SEARCH_SELECTION = [
 ].join('\n');
 
 /** The single-term document. Unchanged, and still what ONE term is asked with. */
-const SEARCH_QUERY = [
+export const HEB_SEARCH_QUERY = [
   'query productSearchPageV2($params: SearchPageParamsV2!) {',
   '  productSearchPageV2(params: $params) {',
   SEARCH_SELECTION,
@@ -293,7 +311,7 @@ const SEARCH_QUERY = [
  * serial execution was the whole point. Nothing here shares state, so that is
  * free rather than a risk.
  */
-function hebSearchBatchDoc(n: number): string {
+export function hebSearchBatchDoc(n: number): string {
   const params: string[] = [];
   const fields: string[] = [];
   for (let i = 0; i < n; i++) {
@@ -456,7 +474,7 @@ ${CANDIDATE_HELPERS}
     post({ type: 'SEARCH_RESULT_FAILED', source: 'network', why: why, detail: detail || null, term: TERM });
   };
 
-  var res = await __hebGql('productSearchPageV2', ${JSON.stringify(SEARCH_QUERY)}, {
+  var res = await __hebGql('productSearchPageV2', ${JSON.stringify(HEB_SEARCH_QUERY)}, {
     params: {
       query: TERM,
       storeId: ${storeId},
@@ -618,7 +636,7 @@ ${CANDIDATE_HELPERS}
 
   /** ONE term, the document that has always asked for it. Also the fallback. */
   var searchOne = async function (term) {
-    var res = await __hebGql('productSearchPageV2', ${JSON.stringify(SEARCH_QUERY)},
+    var res = await __hebGql('productSearchPageV2', ${JSON.stringify(HEB_SEARCH_QUERY)},
       { params: paramsFor(term) }, 9000, 'search');
     if (!res.ok) {
       post({ type: 'SEARCH_RESULT_FAILED', source: 'network', term: term,
@@ -852,6 +870,42 @@ ${CART_READ_FN}
 })(); true;`;
 }
 
+
+/**
+ * THE ARMS THE WRITE SELECTS, once.
+ *
+ * Both the single write and the batched document read the same four arms, and
+ * applyOne reads them by name -- so an arm added to one document and not the
+ * other is a write whose verdict depends on which path carried it. The native
+ * driver reads the same names, which is the third copy this removes.
+ */
+export const HEB_ADD_ARMS = ' __typename'
+  + ' ... on Cart { id }'
+  + ' ... on AddOnsCart { id cart { id } }'
+  + ' ... on AddItemToCartV2Error { message title code }'
+  + ' ... on AddItemToCartV2TimeslotError { message title errorCode: code }';
+
+/** One write. */
+export const HEB_ADD_MUTATION = 'mutation cartItemV2($productId: String!, $skuId: String!, $quantity: Int,'
+  + ' $purchasePreferenceId: String) {'
+  + ' addItemToCartV2(productId: $productId, skuId: $skuId, quantity: $quantity,'
+  + ' purchasePreferenceId: $purchasePreferenceId) {'
+  + HEB_ADD_ARMS + ' } }';
+
+/** Many writes, one document. Root mutation fields execute SERIALLY by the
+ *  spec, which is exactly what one shared cart needs. */
+export function hebAddBatchDoc(n: number): string {
+  const params: string[] = [];
+  const fields: string[] = [];
+  for (let i = 0; i < n; i += 1) {
+    params.push('$p' + i + ': String!, $s' + i + ': String!, $q' + i + ': Int, $r' + i + ': String');
+    fields.push(' a' + i + ': addItemToCartV2(productId: $p' + i + ', skuId: $s' + i
+      + ', quantity: $q' + i + ', purchasePreferenceId: $r' + i + ') {'
+      + HEB_ADD_ARMS + ' }');
+  }
+  return 'mutation cartItemsV2(' + params.join(', ') + ') {' + fields.join('') + ' }';
+}
+
 export function buildHebNetworkAddBatchScript(
   items: Array<{
     idx: number; productId: string; skuId: string; quantity: number; name: string;
@@ -911,15 +965,7 @@ ${CART_READ_FN}
   ];
   void reasonCatalog;
 
-  var ADD = 'mutation cartItemV2($productId: String!, $skuId: String!, $quantity: Int,'
-    + ' $purchasePreferenceId: String) {'
-    + ' addItemToCartV2(productId: $productId, skuId: $skuId, quantity: $quantity,'
-    + ' purchasePreferenceId: $purchasePreferenceId) {'
-    + ' __typename'
-    + ' ... on Cart { id }'
-    + ' ... on AddOnsCart { id cart { id } }'
-    + ' ... on AddItemToCartV2Error { message title code }'
-    + ' ... on AddItemToCartV2TimeslotError { message title errorCode: code } } }';
+  var ADD = ${JSON.stringify(HEB_ADD_MUTATION)};
 
   // ONE REQUEST FOR EVERY WRITE, the GraphQL way.
   //
@@ -938,11 +984,7 @@ ${CART_READ_FN}
       params.push('$p' + i + ': String!, $s' + i + ': String!, $q' + i + ': Int, $r' + i + ': String');
       fields.push(' a' + i + ': addItemToCartV2(productId: $p' + i + ', skuId: $s' + i
         + ', quantity: $q' + i + ', purchasePreferenceId: $r' + i + ') {'
-        + ' __typename'
-        + ' ... on Cart { id }'
-        + ' ... on AddOnsCart { id cart { id } }'
-        + ' ... on AddItemToCartV2Error { message title code }'
-        + ' ... on AddItemToCartV2TimeslotError { message title errorCode: code } }');
+        + ${JSON.stringify(HEB_ADD_ARMS)} + ' }');
     }
     return 'mutation cartItemsV2(' + params.join(', ') + ') {' + fields.join('') + ' }';
   }

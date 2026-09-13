@@ -88,6 +88,19 @@ jest.mock('../../src/lib/push', () => ({ unregisterDevice: jest.fn(async () => {
 import { AuthProvider, useAuth } from '../../src/context/AuthContext';
 import { LoginPrewarmProvider, useLoginPrewarm } from '../../src/context/LoginPrewarmContext';
 import { prewarmTermsForMeals } from '../../src/lib/prewarmTerms';
+// THESE SUITES ARE ABOUT THE WEBVIEW PROBE, which is now one branch of three.
+//
+// checkStore asks over HTTP first and only falls back to a renderer when the
+// store cannot be answered that way. Everything below was written when the
+// probe was the only path, and it still describes behaviour worth pinning --
+// so the checker is stubbed to send every store down it.
+//
+// Stubbed rather than left real for a second reason: the real one reaches for
+// fetch, which under jest neither succeeds nor fails quickly, so the probe
+// never mounts inside the test's act() window and ten tests here went red on a
+// timeout nobody could see. The native branch has its own suite.
+import { __setLoginCheckerForTests, __resetLoginCheckerForTests } from '../../src/lib/native-login';
+
 import { auth } from '../../src/lib/api';
 
 const login = auth.login as jest.Mock;
@@ -162,12 +175,15 @@ async function settle() {
 }
 
 beforeEach(() => {
+  __setLoginCheckerForTests(async () => ({
+    state: 'needs-webview' as const, how: 'stubbed for this suite', ms: 0,
+  }));
   jest.useFakeTimers();
   mockKeychain.clear();
   (globalThis as any).__loginProbes = [];
   (globalThis as any).__searchProbes = [];
 });
-afterEach(() => { jest.useRealTimers(); });
+afterEach(() => { jest.useRealTimers(); __resetLoginCheckerForTests(); });
 
 describe('ticking everything and then unticking it', () => {
   it('looks up ONE meal when eleven of the twelve are unticked again', async () => {
