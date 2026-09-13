@@ -3321,6 +3321,15 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
       setLockedStoreId(openStoreId);
       scriptsRef.current = openScripts;
       console.log(`[Cart ${ts()}]`, 'cart opened: locking store=', openStoreId);
+      // AND THE PREWARM STOPS RACING US. If a hidden probe is still loading this
+      // same store, it is no longer a head start -- it is a second renderer
+      // competing with the one the user is waiting on, for the same site.
+      // Measured on Albertsons: 7.5s to load one page with the probe still
+      // re-querying the same host. See LoginPrewarmValue.standDown.
+      //
+      // Whatever it had already SETTLED is kept -- that is the prewarm doing its
+      // job and the branch below reads it. This only stops one still in flight.
+      loginPrewarm.standDown?.(openStoreId);
       // THE CLOCK THE BROWSER MILESTONES ARE MEASURED AGAINST.
       //
       // Stephen, 2026-09-11: "how much of the time spent waiting is on spinning

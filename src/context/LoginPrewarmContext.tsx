@@ -116,6 +116,27 @@ interface LoginPrewarmValue {
    * from the page the run is actually using. So it writes back.
    */
   noteLiveVerdict: (storeId: string, isLoggedIn: boolean) => void;
+  /**
+   * THE SHEET HAS TAKEN OVER THIS STORE. STOP RACING IT.
+   *
+   * A prewarm exists to have the answer BEFORE the sheet opens. Once it is
+   * open, the sheet is asking the same store the same question in a WebView the
+   * user is actually waiting on, and a hidden probe still loading that store is
+   * not a head start -- it is a second renderer competing for the same site.
+   *
+   * MEASURED on the Pixel 2026-09-13, Albertsons, tab tapped and a run started
+   * before the probe finished:
+   *
+   *   11:43:28.907  sheet's webview: navigation started   +198ms
+   *   11:43:34.437  webview: navigation started           +5727ms
+   *   11:43:36.248  onLoadEnd                             +7538ms
+   *
+   * Seven and a half seconds to load one page, with the probe re-querying the
+   * same host throughout. Stephen: "albertsons run just now was extremely
+   * slow." Same shape as netStopPrewarm in the cart sheet, which stops the
+   * in-page search prewarm the moment the user taps, and for the same reason.
+   */
+  standDown: (storeId: string) => void;
 }
 
 // Default is a working no-op so consumers rendered outside the provider (e.g.
@@ -129,6 +150,7 @@ const LoginPrewarmContext = createContext<LoginPrewarmValue>({
   getSearchResults: () => new Map(),
   forgetAll: () => {},
   noteLiveVerdict: () => {},
+  standDown: () => {},
 });
 
 export function useLoginPrewarm(): LoginPrewarmValue {
@@ -478,6 +500,20 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     setStatusVersion((v) => v + 1);
   }, []);
 
+  /** See standDown in LoginPrewarmValue. */
+  const standDown = useCallback((storeId: string) => {
+    if (currentRef.current !== storeId) return;
+    console.log('[Prewarm] standing down', storeId, '— the cart sheet is asking this store itself');
+    // NO VERDICT. The probe was mid-answer and whatever it had is now worth
+    // less than the sheet's own check, which is about to run anyway. Left
+    // 'unknown' rather than settled, so nothing downstream acts on a half
+    // answer -- and so a later run can prewarm it properly.
+    statusRef.current.set(storeId, 'unknown');
+    currentRef.current = null;
+    setCurrent(null);
+    setStatusVersion((v) => v + 1);
+  }, []);
+
   /** See noteLiveVerdict in LoginPrewarmValue. */
   const noteLiveVerdict = useCallback((storeId: string, isLoggedIn: boolean) => {
     const next = isLoggedIn ? 'loggedIn' : 'loggedOut';
@@ -588,8 +624,8 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   useSessionEnd(forgetAll);
 
   const value = useMemo<LoginPrewarmValue>(
-    () => ({ checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll, noteLiveVerdict }),
-    [checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll, noteLiveVerdict],
+    () => ({ checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll, noteLiveVerdict, standDown }),
+    [checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll, noteLiveVerdict, standDown],
   );
 
   return (
