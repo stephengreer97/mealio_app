@@ -133,12 +133,47 @@ describe('the Kroger done screen', () => {
     expect(view.queryByText(/already in your cart/i)).toBeNull();
   });
 
-  it('counts what did not make it, including rows the store never matched', async () => {
-    // Two of three matched. The third was asked for and is not in the cart,
-    // which is the fact the user needs whether it was skipped or unmatched.
+  it('counts what the store never matched as could-not-be-added', async () => {
+    // Two of three matched, and the third was never reviewed or skipped -- the
+    // store simply returned nothing for it.
     const view = await runWith(2);
     expect(view.queryByTestId('done-failed-count')).toBeTruthy();
     expect(view.queryByText(/1 item could not be added/i)).toBeTruthy();
+  });
+
+  it('calls a SKIPPED row skipped, and does not also call it a failure', async () => {
+    // Stephen, 2026-09-13: "if we skip products, I am seeing 2 items could not
+    // be added. Instead, like other stores, it should say the 2 items were
+    // skipped."
+    //
+    // Two different facts. "Could not be added" is the store refusing, and the
+    // answer is to go and look. Skipped is the user passing, and the only thing
+    // owed is a record of what they passed on. Counting a skip as a failure is
+    // telling someone their choice went wrong.
+    mockSearch.mockResolvedValue({
+      results: [
+        found('sour cream', 'u1', 'Daisy Sour Cream, 16 oz'),
+        { term: 'tortillas', exact: false, upc: null, description: null, quantity: 1,
+          suggestions: [{ upc: 'u9', description: 'Corn Tortillas' }] },
+        { term: 'limes', exact: false, upc: null, description: null, quantity: 1,
+          suggestions: [{ upc: 'u8', description: 'Key Limes' }] },
+      ],
+    });
+    mockAdd.mockResolvedValue({});
+    const view = open();
+    await act(async () => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    await waitFor(() => expect(view.queryByText(/review/i)).toBeTruthy());
+    await act(async () => { fireEvent.press(view.getByText(/review/i)); });
+    for (let i = 0; i < 2; i += 1) {
+      await act(async () => { fireEvent.press(view.getByText(/skip this ingredient/i)); });
+    }
+    await waitFor(() => expect(view.queryByText('Done')).toBeTruthy(), { timeout: 3_000 });
+
+    // Named as skipped...
+    expect(view.queryByTestId('snapshot-skipped')).toBeTruthy();
+    expect(view.queryByText(/2 items you skipped/i)).toBeTruthy();
+    // ...and NOT counted as failures, which is the whole complaint.
+    expect(view.queryByTestId('done-failed-count')).toBeNull();
   });
 
   it('says nothing about failures when everything landed', async () => {

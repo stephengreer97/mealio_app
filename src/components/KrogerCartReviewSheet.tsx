@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius } from '../constants/colors';
 import CartRunAnimation from './CartRunAnimation';
+import ExpandableNotice from './ui/ExpandableNotice';
 import { Meal, Ingredient } from '../types';
 import { ingredientAmount, withPrep } from '../lib/formatMeasurement';
 import { prepOf } from '../lib/consolidateIngredients';
@@ -242,30 +243,84 @@ export default function KrogerCartReviewSheet({
   // the progress, and nothing here is decorative timing pretending to be a
   // measurement.
   //
-  // WHAT KROGER CAN HONESTLY REPORT. The WebView stores answer one request per
-  // term and one per write, so their bag ticks per ingredient. This path is an
-  // API client: the whole basket is ONE search call and ONE add call. There is
-  // no per-item progress to be had, and manufacturing some -- chunking the
-  // request so the bar moves -- would add round trips to the user's wait to make
-  // an animation look busier. So the bag moves on the milestones that are real:
+  // WHAT KROGER CAN REPORT, AND WHAT STEPHEN ASKED FOR ON TOP OF IT.
   //
-  //   searching   nothing has completed yet            indeterminate, empty
-  //   results in  every ingredient has been looked up  half
-  //   added       every item has been written          full
+  // The WebView stores answer one request per term and one per write, so their
+  // bag ticks per ingredient. This path is an API client: the whole basket is
+  // ONE search call and ONE add call, so there are exactly two moments it can
+  // know anything about.
   //
-  // Coarser than the other stores and truthful at every frame. The component
-  // tweens between them at 45ms a frame, so each step reads as the bag filling
-  // rather than jumping -- that easing is the animation's, not a fake counter.
+  // I shipped that literally -- empty, then half, then full -- and it was wrong
+  // to watch. Stephen, 2026-09-13: "it never finishes... it does not move
+  // during the search part... Even if there are not many steps to drive the
+  // sequence, I still want to see it go start to finish."
+  //
+  // So the bag now CREEPS on a timer between the milestones, and the milestones
+  // still own the boundaries. The rule that keeps this from being a lying
+  // progress bar:
+  //
+  //   A PHASE NEVER COMPLETES ON THE TIMER. It creeps toward a ceiling short of
+  //   the boundary and waits there. Only the real event -- results landing, the
+  //   write returning -- crosses it.
+  //
+  // So a slow search shows a bag filling and then pausing just short of half,
+  // which is true: it is still working and nothing has finished. What it will
+  // not do is show you a full bag before your items are in the cart.
+  //
+  //   searching       creeps 0 -> 0.45, waits
+  //   results in      0.5
+  //   adding          creeps 0.5 -> 0.9, waits
+  //   write returns   1.0, held briefly so the last frames are seen
   const [krogerPct, setKrogerPct] = useState<number | null>(null);
   /** How many products the write is actually sending. Not the same as the row
    *  count: a row the user skipped, or one nothing matched, is not written. */
   const [writingCount, setWritingCount] = useState(0);
+  /**
+   * SKIPPED IS NOT FAILED, and the other stores have said so for a while.
+   *
+   * Stephen, 2026-09-13: "if we skip products, I am seeing 2 items could not be
+   * added. Instead, like other stores, it should say the 2 items were skipped."
+   *
+   * They are different facts and they lead somewhere different. "Could not be
+   * added" is the store refusing, and the answer is to go and look. Skipped is
+   * the USER passing, and the only thing owed is a record of what they passed
+   * on -- which is what the WebView sheet's "N items you skipped" notice is.
+   */
+  const [skippedNames, setSkippedNames] = useState<string[]>([]);
   const pctRef = useRef(0);
   /** Forward only. A bag that goes backwards is a bag nobody believes. */
   const advancePct = (v: number) => {
     if (v > pctRef.current) { pctRef.current = v; setKrogerPct(v); }
   };
-  const resetPct = () => { pctRef.current = 0; setKrogerPct(null); };
+  const resetPct = () => { pctRef.current = 0; setKrogerPct(0); };
+
+  /**
+   * The creep. Runs only while a phase is genuinely in flight, and stops dead at
+   * its ceiling.
+   *
+   * PACED FOR THE COMMON CASE, not for the worst one. A Kroger search takes
+   * about a second or two; reaching the ceiling in five means the bag is still
+   * moving when a normal call returns, which is the whole point. A call that
+   * takes longer than five seconds parks at the ceiling, which reads as "still
+   * working" rather than "nearly done".
+   */
+  const creepRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopCreep = () => {
+    if (creepRef.current) { clearInterval(creepRef.current); creepRef.current = null; }
+  };
+  const startCreep = (from: number, ceiling: number) => {
+    stopCreep();
+    advancePct(from);
+    const stepPer100ms = (ceiling - from) / 50; // ~5s from floor to ceiling
+    creepRef.current = setInterval(() => {
+      const next = Math.min(ceiling, pctRef.current + stepPer100ms);
+      if (next <= pctRef.current) { stopCreep(); return; }
+      advancePct(next);
+    }, 100);
+  };
+  // A sheet closed mid-run leaves the interval behind otherwise, and it would
+  // keep calling setState on an unmounted tree.
+  useEffect(() => stopCreep, []);
   const [error, setError] = useState('');
 
   // Step qty
@@ -312,6 +367,7 @@ export default function KrogerCartReviewSheet({
       setCheckedItems(consolidated.map(() => true));
       setStep('qty');
       resetPct();
+      setSkippedNames([]);
       setError('');
       setSearchResults([]);
       setReviewIdx(0);
@@ -375,6 +431,9 @@ export default function KrogerCartReviewSheet({
     if (active.length === 0) return;
     setStep('searching');
     resetPct();
+    // Moving from the first frame. Stephen: "it does not move during the search
+    // part." It waits at 0.45 if the call outruns the creep.
+    startCreep(0, 0.45);
     setError('');
     try {
       const data = await krogerApi.searchProducts(
@@ -412,6 +471,7 @@ export default function KrogerCartReviewSheet({
       // the search's. Counting only the exact matches would mean a run with six
       // matches and six to review reported half a search, which is a different
       // fact wearing this one's clothes.
+      stopCreep();
       advancePct(0.5);
 
       const needsReview = results.filter((r) => !r.exact);
@@ -425,6 +485,7 @@ export default function KrogerCartReviewSheet({
         setStep('searchResult');
       }
     } catch (err: any) {
+      stopCreep();
       setError(err.message || 'Search failed');
       setStep('qty');
     }
@@ -466,6 +527,12 @@ export default function KrogerCartReviewSheet({
 
   const handleReviewDecision = async (action: 'skip' | 'add' | 'update') => {
     const newPicked = [...pickedItems];
+    if (action === 'skip' && currentReview) {
+      // The ingredient's own name, not the product the store suggested: what
+      // the user passed on is the row they asked for.
+      const name = currentReview.term || currentReview.description || '';
+      if (name) setSkippedNames((prev) => (prev.includes(name) ? prev : [...prev, name]));
+    }
 
     if (action !== 'skip') {
       // The "a custom search just replaced the suggestions, so stay on this
@@ -520,7 +587,9 @@ export default function KrogerCartReviewSheet({
   const doAddToCart = async (cartItems: { upc: string; quantity: number; description?: string }[]) => {
     setWritingCount(cartItems.length);
     setStep('adding');
+    startCreep(0.5, 0.9);
     if (cartItems.length === 0) {
+      stopCreep();
       setTotalAdded(0);
       setAddedItems([]);
       setCartError('');
@@ -540,8 +609,16 @@ export default function KrogerCartReviewSheet({
       // bag where it was: a run that failed to add must not finish on a full
       // bag, which would be the animation contradicting the error message
       // underneath it.
+      stopCreep();
       advancePct(1);
+      // AND HELD LONG ENOUGH TO BE SEEN. "It never finishes" was literally true:
+      // the last frame landed in the same commit as the done screen, so the bag
+      // was replaced before it drew. The component tweens at 45ms a frame and
+      // has one frame left to cross here, so this is the shortest pause that
+      // shows it -- short enough that nobody reads it as the app being slow.
+      await new Promise<void>((r) => { setTimeout(r, 420); });
     } catch (err: any) {
+      stopCreep();
       setTotalAdded(0);
       setAddedItems([]);
       setCartError(err.message || 'Failed to add to cart');
@@ -1002,7 +1079,9 @@ export default function KrogerCartReviewSheet({
         /* Rows asked for, minus rows that came back added. A row the user
            skipped on the review screen counts here, and should: they asked for
            the ingredient and it is not in the cart. */
-        const notAddedCount = Math.max(0, activeCount - addedItems.length);
+        // Skipped rows come OUT of this. They are reported on their own below,
+        // and counting them twice was the complaint.
+        const notAddedCount = Math.max(0, activeCount - addedItems.length - skippedNames.length);
         return (
           <>
             <View style={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 32, paddingBottom: 16 }}>
@@ -1024,7 +1103,13 @@ export default function KrogerCartReviewSheet({
                       cart icon is the static placeholder until the
                       designer-approved animation lands. */}
                   <View style={styles.doneIconWrap}>
-                    <Ionicons name="cart" size={56} color={Colors.brand} />
+                    {/* THE STORE'S COLOUR, not Mealio's. Colors.brand is the
+                        Mealio red, and on this screen the cart being described
+                        is Kroger's -- or King Soopers', or Fred Meyer's, which
+                        is why this reads from the catalogue rather than naming
+                        one. The WebView sheet has always used storeColor here;
+                        this path was the odd one out. */}
+                    <Ionicons name="cart" size={56} color={storeColor} />
                   </View>
                   <Text style={styles.doneTitle}>
                     {totalAdded} item{totalAdded !== 1 ? 's' : ''} added to your {storeName} cart!
@@ -1052,6 +1137,16 @@ export default function KrogerCartReviewSheet({
                 </>
               )}
             </View>
+            {/* Same component, same wording, same place as the WebView sheet:
+                the count survives collapsed, the names expand. */}
+            {skippedNames.length > 0 && (
+              <ExpandableNotice
+                testID="snapshot-skipped"
+                containerStyle={{ marginHorizontal: 20, marginBottom: 8 }}
+                title={`${skippedNames.length} item${skippedNames.length !== 1 ? 's' : ''} you skipped`}
+                body={skippedNames.join(', ')}
+              />
+            )}
             {addedItems.length > 0 ? (
               /* THE SAME BREAKDOWN THE OTHER STORES SHOW, minus the half that
                  does not exist here.

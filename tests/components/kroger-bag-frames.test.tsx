@@ -95,16 +95,32 @@ beforeEach(() => {
 const latest = () => seen[seen.length - 1];
 
 describe('the bag on the Kroger path', () => {
-  it('is empty while the search is still out', async () => {
-    // Indeterminate, not zero-of-two. Nothing has completed, and the run has no
-    // way to know how far through one server call it is.
-    let release: (v: unknown) => void = () => {};
-    mockSearch.mockReturnValue(new Promise((r) => { release = r; }));
-    const { getByText, getByTestId } = open();
-    await act(async () => { fireEvent.press(getByText(/add ingredients to/i)); });
-    expect(getByTestId('bag')).toBeTruthy();
-    expect(latest()).toBeNull();
-    await act(async () => { release({ results: [] }); });
+  it('starts at empty and MOVES while the search is still out', async () => {
+    // Stephen, 2026-09-13: "it does not move during the search part."
+    //
+    // It starts at 0 rather than null now, because null is the animation's
+    // indeterminate state and a creep needs somewhere to creep FROM. Empty
+    // either way; the difference is that this one goes somewhere.
+    jest.useFakeTimers();
+    try {
+      let release: (v: unknown) => void = () => {};
+      mockSearch.mockReturnValue(new Promise((r) => { release = r; }));
+      const { getByText, getByTestId } = open();
+      await act(async () => { fireEvent.press(getByText(/add ingredients to/i)); });
+      expect(getByTestId('bag')).toBeTruthy();
+      expect(latest()).toBe(0);
+      await act(async () => { jest.advanceTimersByTime(1_000); });
+      const moved = latest() as number;
+      expect(moved).toBeGreaterThan(0);
+      // AND IT DOES NOT FINISH THE PHASE ON A TIMER. However long the call
+      // takes, the bag waits short of half until the results actually land --
+      // which is what keeps this an animation rather than a lying progress bar.
+      await act(async () => { jest.advanceTimersByTime(60_000); });
+      expect(latest() as number).toBeLessThanOrEqual(0.45);
+      await act(async () => { release({ results: [] }); });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('fills to half when every ingredient has been looked up', async () => {
@@ -115,7 +131,7 @@ describe('the bag on the Kroger path', () => {
     await waitFor(() => expect(latest()).toBe(0.5));
   });
 
-  it('holds at half for the whole write, and the last step lands with the done screen', async () => {
+  it('fills to full on the write, and is held long enough to be seen', async () => {
     // WHAT THE USER ACTUALLY SEES, which is not what I first assumed. The write
     // is ONE call: it completes at the same instant the run ends, so the bag is
     // handed 1 and the done screen replaces it in the same commit. The animation
@@ -139,10 +155,16 @@ describe('the bag on the Kroger path', () => {
     // Half for every frame the bag is on screen during the write, and never
     // more than that while it is still out.
     await waitFor(() => expect(queryByTestId('bag')).toBeTruthy());
-    expect(latest()).toBe(0.5);
+    // Half the moment the results land, then creeping again toward 0.9.
+    expect(latest() as number).toBeGreaterThanOrEqual(0.5);
+    expect(latest() as number).toBeLessThan(1);
+    // THE WRITE RETURNING IS WHAT FILLS IT, and the bag is held on screen long
+    // enough to draw the last frame. "It never finishes" was literally true
+    // before: full landed in the same commit as the done screen.
     await act(async () => { finish({}); });
-    // And the full frame belongs to a screen that has already been replaced.
-    expect(queryByTestId('bag')).toBeNull();
+    await waitFor(() => expect(latest()).toBe(1));
+    expect(queryByTestId('bag')).toBeTruthy();
+    await waitFor(() => expect(queryByTestId('bag')).toBeNull(), { timeout: 2_000 });
   });
 
   it('DOES NOT fill on a write that failed', async () => {
