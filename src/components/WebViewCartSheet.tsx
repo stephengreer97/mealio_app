@@ -1368,6 +1368,16 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
   /** One re-ask in flight at a time; the storefront's own load events post
    *  answers of their own and would otherwise burn the window in a second. */
   const netSessionRepairAskRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * The same two, for the RUN's own session read.
+   *
+   * Separate refs on purpose. The pair above belong to the login CHECK, and the
+   * two gates run at different moments against different deadlines -- sharing
+   * them would let a login check that used its window leave the run with none,
+   * which is the state Albertsons walled Stephen from on 2026-09-14.
+   */
+  const netRunSessionRepairFromRef = useRef(0);
+  const netRunSessionAskRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const netCandidatesRef = useRef<Map<string, Candidate[]>>(new Map());
   // The term list of the live search phase, kept so it can be re-asked if the
   // page navigates out from under the script. netSearchInjectsRef caps that:
@@ -3042,6 +3052,12 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
     netFallbackCandidatesRef.current = new Map();
     netFallbackPendingRef.current = false;
     netRunBaselineRef.current = null;
+    // A fresh run gets a fresh window, and no stale re-ask from the last one.
+    netRunSessionRepairFromRef.current = 0;
+    if (netRunSessionAskRef.current) {
+      clearTimeout(netRunSessionAskRef.current);
+      netRunSessionAskRef.current = null;
+    }
     netPhaseRef.current = 'session';
     setStep('searching');
     setSearchingLabel('Connecting…');
@@ -3811,6 +3827,10 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
       if (cartProbeTimeoutRef.current) clearTimeout(cartProbeTimeoutRef.current);
       if (cartRowsTimeoutRef.current) clearTimeout(cartRowsTimeoutRef.current);
       if (cartProbeResultTimeoutRef.current) clearTimeout(cartProbeResultTimeoutRef.current);
+      // Both session re-asks: each one injects into a WebView that is gone by
+      // the time it fires, and the run's also logs after the test has finished.
+      if (netSessionRepairAskRef.current) clearTimeout(netSessionRepairAskRef.current);
+      if (netRunSessionAskRef.current) clearTimeout(netRunSessionAskRef.current);
     };
   }, []);
 
@@ -6514,6 +6534,46 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
             return;
           }
           if (!msg.loggedIn) {
+            // A "NO" FROM A PAGE THAT JUST LOADED IS ABOUT THE BOOT, NOT THE USER.
+            //
+            // Stephen, 2026-09-14: "Albertsons ... did the same thing as wegmans
+            // was doing earlier - it prompted me to log in even though I was
+            // already logged in."
+            //
+            // The same fault as the Wegmans one, on a DIFFERENT route. That fix
+            // went into the login check's session branch; this is the RUN's own
+            // session read, which happens after the login gate has already been
+            // passed and had no grace of its own. A store part-way through its
+            // boot says signed out in the same words it uses when you are, and
+            // here that walled a user whose login had just been confirmed.
+            //
+            // The early-reply note below still holds -- the login question does
+            // not wait on OUR budgets. It waits only on the page being old
+            // enough for its answer to mean anything, and only when the answer
+            // is the negative one.
+            if (netRunSessionRepairFromRef.current === 0
+                && pageLoadedAtRef.current > 0
+                && Date.now() - pageLoadedAtRef.current < SESSION_BOOT_GRACE_MS) {
+              netRunSessionRepairFromRef.current = Date.now();
+              console.log(`[Cart ${ts()}]`, 'run session: signed out',
+                Date.now() - pageLoadedAtRef.current, 'ms after the page loaded — asking again before believing it');
+            }
+            if (netRunSessionRepairFromRef.current !== 0
+                && Date.now() - netRunSessionRepairFromRef.current < SESSION_SIGNED_OUT_REPAIR_WINDOW_MS) {
+              // One pending ask, however many answers arrive: a store that posts
+              // an early reply and a refined one would otherwise queue two.
+              if (!netRunSessionAskRef.current) {
+                netRunSessionAskRef.current = setTimeout(() => {
+                  netRunSessionAskRef.current = null;
+                  if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
+                  console.log(`[Cart ${ts()}]`, 'run session: still signed out —',
+                    Math.round((Date.now() - netRunSessionRepairFromRef.current) / 1000),
+                    's in, asking once more before the sign-in screen');
+                  netPrepareRef.current({ kind: 'session' })?.();
+                }, SESSION_REPAIR_ASK_EVERY_MS);
+              }
+              return;
+            }
             // The gate did its job. Hand the user the login screen exactly as the
             // page-based login check would have. Answered off the EARLY reply on
             // a store that sends one, deliberately -- the login question is the

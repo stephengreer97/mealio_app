@@ -212,14 +212,63 @@ describe('the run and the early session answer', () => {
     expect(writes()).toBe(1);
   });
 
-  it('still surfaces the login screen off the early answer', () => {
-    // The whole reason the early answer exists. A signed-OUT user must not wait
-    // on our key resolution to be told to sign in.
-    const { view, post } = runToSessionPhase();
-    post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
-    // The caption over the store's own login page — what the signed-out user
-    // actually gets, rather than a ref nobody can see.
-    expect(view.queryByText(/log into your Albertsons account once/i)).toBeTruthy();
+  it('still surfaces the login screen off the EARLY answer, not a refined one', () => {
+    // The whole reason the early answer exists: a signed-OUT user must not wait
+    // on our key resolution to be told to sign in. No refined answer is ever
+    // posted here, so reaching the screen at all proves the early one carried it.
+    //
+    // WHAT CHANGED 2026-09-14, and why it is not a retreat from that. Stephen:
+    // "Albertsons ... prompted me to log in even though I was already logged
+    // in." This branch acted on the first negative answer whatever the page was
+    // doing, and the page had finished loading milliseconds earlier -- the same
+    // fault as the Wegmans one, on the RUN's session read rather than the login
+    // check's. So the wait is on the PAGE being old enough for its answer to
+    // mean something, never on a budget of ours.
+    jest.useFakeTimers();
+    try {
+      const { view, post } = runToSessionPhase();
+      post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
+      act(() => { jest.advanceTimersByTime(7_000); });
+      post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
+      // The caption over the store's own login page — what the signed-out user
+      // actually gets, rather than a ref nobody can see.
+      expect(view.queryByText(/log into your Albertsons account once/i)).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does NOT surface it on a no that landed while the page was still booting', () => {
+    // Stephen's report, on the route the Wegmans fix did not cover. The run only
+    // reads its own session when the login gate has ALREADY been passed -- here
+    // by the prewarm -- so a signed-out answer arriving milliseconds after a
+    // page load contradicts something we just established, and the page is the
+    // thing more likely to be wrong.
+    jest.useFakeTimers();
+    try {
+      const { view, post } = runToSessionPhase();
+      post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
+      expect(view.queryByText(/log into your Albertsons account once/i)).toBeNull();
+      act(() => { jest.advanceTimersByTime(2_100); });
+      expect(view.queryByText(/log into your Albertsons account once/i)).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('and starts the run when the store changes its mind inside the window', () => {
+    // The point of waiting. Albertsons corrected itself 4.2s in on the device.
+    jest.useFakeTimers();
+    try {
+      const { view, post } = runToSessionPhase();
+      post({ type: 'ALB_SESSION', ok: true, loggedIn: false, early: true, source: 'userinfo' });
+      act(() => { jest.advanceTimersByTime(4_200); });
+      post(REFINED);
+      expect(view.queryByText(/log into your Albertsons account once/i)).toBeNull();
+      expect(writes()).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
