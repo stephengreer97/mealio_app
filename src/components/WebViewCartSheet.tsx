@@ -357,6 +357,21 @@ function fmtWeight(qty: number): string {
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
+/**
+ * How long after a page load a "signed out" is about the BOOT rather than the
+ * user, and so opens the repair window instead of a sign-in screen.
+ *
+ * MEASURED on the Pixel 2026-09-13, Wegmans, signed in throughout. The
+ * storefront's load event fired at 21:19:19.615 and the session script answered
+ * `loggedIn: false` at 21:19:19.635 -- twenty milliseconds later, while MSAL had
+ * cleared the account list to renew an expired token. It put the account back at
+ * 21:19:23.857. Stephen watched a sign-in wall for those 4.2 seconds.
+ *
+ * Three seconds, not six: this only decides whether the window OPENS, and the
+ * window itself is what covers the renewal.
+ */
+export const SESSION_BOOT_GRACE_MS = 3_000;
+
 export default function WebViewCartSheet({
   visible,
   meals,
@@ -869,6 +884,8 @@ export default function WebViewCartSheet({
   const loadQueueRef = useRef<string[]>([]);
   // Tracks the last URL processed by onLoadEnd to deduplicate extra fires per page load.
   const lastLoadEndUrlRef = useRef('');
+  /** When the WebView last finished a load. 0 = nothing has loaded yet. */
+  const pageLoadedAtRef = useRef(0);
   // True once the WebView has landed on a store search page — lets subsequent items
   // skip the homepage round-trip and inject buildSearchScript directly.
   const onSearchPageRef = useRef(false);
@@ -4556,6 +4573,11 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
   const onLoadEnd = useCallback((e: any) => {
     const url = e?.nativeEvent?.url ?? '';
     const s = scriptsRef.current;
+    // WHEN the page landed, for the session gate. A store's answer about who is
+    // signed in is only as good as the boot it was asked during -- see
+    // SESSION_BOOT_GRACE_MS. Recorded before any of the early returns below,
+    // because a load this handler declines to inject into is still a load.
+    pageLoadedAtRef.current = Date.now();
     // Only process pages for this store — ignore about:blank and other internal loads.
     //
     // NOT FIXED, recorded: this is a substring test, so it matches any host that
@@ -6317,42 +6339,75 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
             // sign-in wall and then signed him in by itself six seconds later.
             // The repair already knows how to give the site a storefront load;
             // it just has to happen BEFORE the wall rather than underneath it.
-            else if (!onLoginStep && !signedOutIsFinal({
-              url: lastLoadEndUrlRef.current,
-              domain: scriptsRef.current!.domain,
-              railUrl: scriptsRef.current!.railUrl,
-            }) && netSessionRepairFromRef.current === 0) {
-              netSessionRepairFromRef.current = Date.now();
-              console.log(`[Cart ${ts()}]`, 'signed out on the quiet page — letting the storefront answer first');
-              navToRef.current(scriptsRef.current!.storeUrl);
-              armLoginCheckTimeoutRef.current();
-            }
-            // THE STOREFRONT IS LOADED AND IT STILL SAYS NO. Not necessarily an
-            // answer yet: a site part-way through its own boot says signed out
-            // with the same words it uses when you are. So the repair gets a
-            // short second wind rather than a wall -- see the constant.
-            else if (!onLoginStep && netSessionRepairFromRef.current !== 0
-                     && Date.now() - netSessionRepairFromRef.current < SESSION_SIGNED_OUT_REPAIR_WINDOW_MS) {
-              armLoginCheckTimeoutRef.current();
-              // One pending ask, however many answers arrive. A storefront load
-              // posts several by itself, and each would otherwise queue its own.
-              if (!netSessionRepairAskRef.current) {
-                netSessionRepairAskRef.current = setTimeout(() => {
-                  netSessionRepairAskRef.current = null;
-                  if (stepRef.current !== 'login_check') return;
-                  const again = loginCheckScript();
-                  if (again) {
-                    console.log(`[Cart ${ts()}]`, 'still signed out —',
-                      Math.round((Date.now() - netSessionRepairFromRef.current) / 1000),
-                      's in, asking once more before the sign-in screen');
-                    webviewRef.current?.injectJavaScript(again);
+            else if (!onLoginStep) {
+              // THE FIRST "NO" IS NEVER THE ANSWER, whichever page it came from.
+              //
+              // MEASURED on Stephen's device 2026-09-13, Wegmans, signed in the
+              // whole time. The quiet page answered token_expired with accounts:1
+              // -- an account exists, its token is stale -- so the sheet loaded
+              // the storefront. MSAL then CLEARS the account list while it
+              // renews, and the session script, asked 20ms after that page
+              // loaded, counted zero accounts and said signed out. SSO put the
+              // account back 4.2s later. He watched a sign-in wall for those
+              // 4.2 seconds and then watched it disappear.
+              //
+              // The window below already existed for exactly this, but only
+              // opened when the sheet had done the quiet-page -> storefront
+              // repair ITSELF. A run whose first answer already came from the
+              // storefront skipped straight to the wall with no grace at all.
+              // Where the answer came from decides what to DO about it, not
+              // whether to believe it.
+              if (netSessionRepairFromRef.current === 0) {
+                const onQuietPage = !signedOutIsFinal({
+                  url: lastLoadEndUrlRef.current,
+                  domain: scriptsRef.current!.domain,
+                  railUrl: scriptsRef.current!.railUrl,
+                });
+                // A "no" from a page that landed milliseconds ago is not an
+                // answer about the user -- it is an answer about the boot.
+                const stillBooting = pageLoadedAtRef.current > 0
+                  && Date.now() - pageLoadedAtRef.current < SESSION_BOOT_GRACE_MS;
+                if (onQuietPage || stillBooting) {
+                  netSessionRepairFromRef.current = Date.now();
+                  if (onQuietPage) {
+                    console.log(`[Cart ${ts()}]`, 'signed out on the quiet page — letting the storefront answer first');
+                    navToRef.current(scriptsRef.current!.storeUrl);
+                    armLoginCheckTimeoutRef.current();
+                    // The storefront load posts its own session; nothing to schedule.
+                    return;
                   }
-                }, SESSION_REPAIR_ASK_EVERY_MS);
+                  console.log(`[Cart ${ts()}]`, 'signed out',
+                    Date.now() - pageLoadedAtRef.current, 'ms after the page loaded — asking again before believing it');
+                }
               }
+              // THE STOREFRONT IS LOADED AND IT STILL SAYS NO. Not necessarily an
+              // answer yet: a site part-way through its own boot says signed out
+              // with the same words it uses when you are. So the repair gets a
+              // short second wind rather than a wall -- see the constant.
+              if (Date.now() - netSessionRepairFromRef.current < SESSION_SIGNED_OUT_REPAIR_WINDOW_MS) {
+                armLoginCheckTimeoutRef.current();
+                // One pending ask, however many answers arrive. A storefront load
+                // posts several by itself, and each would otherwise queue its own.
+                if (!netSessionRepairAskRef.current) {
+                  netSessionRepairAskRef.current = setTimeout(() => {
+                    netSessionRepairAskRef.current = null;
+                    if (stepRef.current !== 'login_check') return;
+                    const again = loginCheckScript();
+                    if (again) {
+                      console.log(`[Cart ${ts()}]`, 'still signed out —',
+                        Math.round((Date.now() - netSessionRepairFromRef.current) / 1000),
+                        's in, asking once more before the sign-in screen');
+                      webviewRef.current?.injectJavaScript(again);
+                    }
+                  }, SESSION_REPAIR_ASK_EVERY_MS);
+                }
+                return;
+              }
+              // The window has closed and the store has not changed its mind.
+              // THE ROUTE A RAIL STORE ACTUALLY TAKES, and it used to set the step
+              // and navigate nowhere — leaving the user looking at robots.txt.
+              surfaceLoginRef.current();
             }
-            // THE ROUTE A RAIL STORE ACTUALLY TAKES, and it used to set the step
-            // and navigate nowhere — leaving the user looking at robots.txt.
-            else if (!onLoginStep) surfaceLoginRef.current();
             // Already on the login step and still signed out: stay put. Saying it
             // again would re-render the sheet under someone mid-sign-in.
             return;
@@ -8750,32 +8805,61 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
                       Your cart is empty.
                     </Text>
                   ) : (
-                    cartResultRows.map((row, i) => (
-                      <View
-                        key={i}
-                        style={{
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          paddingVertical: 10,
-                          borderBottomWidth: i < cartResultRows.length - 1 ? 1 : 0,
-                          borderBottomColor: Colors.border,
-                        }}
-                        testID={row.added ? 'cart-row-added' : 'cart-row-existing'}
-                      >
-                        <View style={{ width: 22, alignItems: 'center' }}>
-                          {row.added && <Ionicons name="add" size={18} color="#22c55e" />}
-                        </View>
-                        <Text
-                          style={{ flex: 1, fontSize: 14, fontFamily: 'Inter_400Regular', color: row.added ? '#15803d' : Colors.text3 }}
-                          numberOfLines={2}
-                        >
-                          {row.name}
-                        </Text>
-                        <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: row.added ? '#15803d' : Colors.text3, marginLeft: 8 }}>
-                          {row.isWeight && row.weight ? `${row.weight} lb` : `x${row.qty}`}
-                        </Text>
-                      </View>
-                    ))
+                    cartResultRows.map((row, i) => {
+                      // WHERE THE RUN'S WORK STOPS AND THE CART'S OWN CONTENTS
+                      // BEGIN. diffCartItems returns green rows then grey ones,
+                      // so the handover is the first row that is not `added`.
+                      // Without a break the two halves read as one list, and the
+                      // grey half looks like things Mealio tried and failed to
+                      // add rather than what was sitting there before it ran.
+                      const prev = cartResultRows[i - 1];
+                      const next = cartResultRows[i + 1];
+                      const startsExisting = !row.added && !!prev && prev.added;
+                      // The rule is the separation, so the row above it does not
+                      // draw its own line as well.
+                      const ruleFollows = row.added && !!next && !next.added;
+                      return (
+                        <React.Fragment key={i}>
+                          {startsExisting && (
+                            <View
+                              style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 14, paddingBottom: 6 }}
+                              testID="cart-existing-divider"
+                            >
+                              <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
+                              {/* The grey rows' own font and colour — this labels
+                                  them, it does not announce itself. */}
+                              <Text style={{ marginHorizontal: 10, fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text3 }}>
+                                Already in your cart
+                              </Text>
+                              <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
+                            </View>
+                          )}
+                          <View
+                            style={{
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              paddingVertical: 10,
+                              borderBottomWidth: i < cartResultRows.length - 1 && !ruleFollows ? 1 : 0,
+                              borderBottomColor: Colors.border,
+                            }}
+                            testID={row.added ? 'cart-row-added' : 'cart-row-existing'}
+                          >
+                            <View style={{ width: 22, alignItems: 'center' }}>
+                              {row.added && <Ionicons name="add" size={18} color="#22c55e" />}
+                            </View>
+                            <Text
+                              style={{ flex: 1, fontSize: 14, fontFamily: 'Inter_400Regular', color: row.added ? '#15803d' : Colors.text3 }}
+                              numberOfLines={2}
+                            >
+                              {row.name}
+                            </Text>
+                            <Text style={{ fontSize: 14, fontFamily: 'Inter_500Medium', color: row.added ? '#15803d' : Colors.text3, marginLeft: 8 }}>
+                              {row.isWeight && row.weight ? `${row.weight} lb` : `x${row.qty}`}
+                            </Text>
+                          </View>
+                        </React.Fragment>
+                      );
+                    })
                   )}
                 </View>
               ) : addedNames.length > 0 ? (

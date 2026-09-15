@@ -95,7 +95,7 @@ jest.mock('../../src/context/LoginPrewarmContext', () => {
   };
 });
 
-import WebViewCartSheet from '../../src/components/WebViewCartSheet';
+import WebViewCartSheet, { SESSION_BOOT_GRACE_MS } from '../../src/components/WebViewCartSheet';
 import { enableRail } from './helpers/railRun';
 
 const chosen = (name: string) => ({
@@ -243,6 +243,101 @@ describe('when the probe cannot answer, the site is asked to fix itself', () => 
       act(() => { jest.advanceTimersByTime(2_100); });
     }
     act(() => { jest.advanceTimersByTime(20_000); });
+    expect(view.queryByText(/log into your H-E-B account/i)).toBeTruthy();
+  });
+});
+
+// A "NO" FROM A PAGE THAT HAS ONLY JUST LOADED IS ABOUT THE BOOT, NOT THE USER.
+//
+// Stephen, 2026-09-13: "I just did a wegmans run. Again, it showed the prompt to
+// sign in even though I was signed in. After a few seconds, Mealio realized and
+// continued. We should not see the webview unless Mealio is sure that I am not
+// signed in."
+//
+// From his log, signed in the whole time:
+//
+//   21:19:19.615  onLoadEnd https://www.wegmans.com/   step= login_check
+//   21:19:19.635  WEGMANS_SESSION {"ok":true,"loggedIn":false}      <- 20ms later
+//   21:19:19.636  login: navigating to https://www.wegmans.com
+//   21:19:23.857  WEGMANS_SESSION {"loggedIn":true,"accounts":1}    <- 4.2s later
+//
+// MSAL clears its account list while it renews an expired token and puts it back
+// when SSO answers. The session script counted zero accounts inside that gap and
+// reported a definitive signed-out.
+//
+// The repair window already existed for exactly this. It only opened for a sheet
+// that had done the quiet-page -> storefront hop ITSELF, and this run's first
+// answer already came from the storefront, so it went straight to the wall.
+describe('a signed-out answer from a page that just loaded', () => {
+  /** Tap Add, land a storefront load, then answer from it. */
+  function answeredOnLoad(gapMs: number) {
+    enableRail();
+    const view = render(
+      <WebViewCartSheet visible meals={[{ id: 'm1', name: 'Tacos', ingredients: [chosen('sour cream')] }] as never}
+        storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+    );
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    // The storefront lands...
+    act(() => {
+      const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/' } });
+    });
+    // ...and the page is given this long before it answers.
+    act(() => { jest.advanceTimersByTime(gapMs); });
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    return { view, post };
+  }
+
+  it('does not put a sign-in screen in front of the user', () => {
+    const { view } = answeredOnLoad(20);
+    expect(view.queryByText(/log into your H-E-B account/i)).toBeNull();
+  });
+
+  it('asks the page again instead', () => {
+    const { view } = answeredOnLoad(20);
+    const before = checks();
+    act(() => { jest.advanceTimersByTime(2_100); });
+    expect(checks()).toBe(before + 1);
+    expect(view.queryByText(/log into your H-E-B account/i)).toBeNull();
+  });
+
+  it('starts the run when the site changes its mind, as Wegmans did at 4.2s', () => {
+    const { view, post } = answeredOnLoad(20);
+    // ASSERTED ON THE WAY THROUGH, not at the end. Once the store says signed
+    // in, the sign-in screen goes away whether or not it was ever shown -- so
+    // checking only after the fact passes with the bug still in place.
+    act(() => { jest.advanceTimersByTime(2_100); });
+    expect(view.queryByText(/log into your H-E-B account/i)).toBeNull();
+    act(() => { jest.advanceTimersByTime(2_100); });
+    expect(view.queryByText(/log into your H-E-B account/i)).toBeNull();
+    post({
+      type: 'HEB_SESSION', ok: true, loggedIn: true,
+      storeId: '476', shoppingContext: 'CURBSIDE_DELIVERY',
+    });
+    expect(view.queryByText(/Finding Products/i)).toBeTruthy();
+  });
+
+  it('still walls a user the page has had time to answer for', () => {
+    // THE OTHER HALF, and what keeps this from delaying every signed-out user by
+    // six seconds. A page that settled seconds ago and then says signed out is
+    // answering about the user, and that answer is taken at once.
+    const { view } = answeredOnLoad(SESSION_BOOT_GRACE_MS + 500);
+    expect(view.queryByText(/log into your H-E-B account/i)).toBeTruthy();
+  });
+
+  it('gives up if the page never changes its mind', () => {
+    // The grace is a window, not a hold: past it the user gets the sign-in
+    // screen they would have got immediately before.
+    const { view, post } = answeredOnLoad(20);
+    for (let i = 0; i < 5; i++) {
+      post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+      act(() => { jest.advanceTimersByTime(2_100); });
+    }
     expect(view.queryByText(/log into your H-E-B account/i)).toBeTruthy();
   });
 });
