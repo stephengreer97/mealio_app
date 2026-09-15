@@ -315,6 +315,19 @@ export interface NetworkRail {
      */
     searchRequestMs: number;
     searchFirstRequestMs: number;
+    /**
+     * The budget once the store has shown that its search is not being served
+     * right now -- optional, and only Albertsons sets it today.
+     *
+     * The two above are for a store that is answering, slowly. This is for one
+     * that is not answering at all while the same document reads and writes its
+     * cart in under a second: a term that has timed out on one request shape and
+     * had a real HTTP reply on the other proves the connection is fine. The
+     * remaining terms are still asked -- these outages come and go -- but they
+     * stop waiting fifteen seconds each for a service measured at 0.6-1.0s when
+     * it is working.
+     */
+    searchUnservedRequestMs?: number;
   };
 }
 

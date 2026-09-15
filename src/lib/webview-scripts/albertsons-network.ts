@@ -590,6 +590,12 @@ ${albPrelude()}
     o.type = 'ALB_SESSION';
     try { window.ReactNativeWebView.postMessage(JSON.stringify(o)); } catch (e) {}
   };
+  // A NEW RUN GETS TO ASK AGAIN. A.searchDead latches on the shared window
+  // object so the search batches of ONE run stop re-proving the same thing; the
+  // session read is what marks the start of a run, so it is where the latch
+  // clears. Without this a document that refused search once would refuse it for
+  // as long as the WebView lived.
+  A.searchUnserved = false;
   // IS THE DOCUMENT EVEN AWAKE? See the note in the search batch: a request that
   // reports 90s while its own 15s abort timer never fired was not slow, it was
   // FROZEN. This measures both -- what the page says about itself, and the real
@@ -1004,10 +1010,32 @@ ${albPrelude()}
 })(); true;`;
 }
 
+/**
+ * WHEN ONE SHAPE HANGING AND THE OTHER ANSWERING MEANS "STOP WAITING SO LONG".
+ *
+ * Its own constant so the test evaluates the code that actually ships, the way
+ * retry.test.ts does with RETRY_FN. `firstWhy` is the primary shape's failure;
+ * `got` is whatever the fallback came back with.
+ *
+ * A timeout ON ITS OWN is not enough -- the 40s cold budget exists because a
+ * slow first request has answered before. It takes a timeout AND a real HTTP
+ * reply from the other shape, which together say the connection is fine and the
+ * endpoint is simply not serving us.
+ *
+ * What it buys is a shorter wait for the remaining terms, not a decision about
+ * them: this endpoint's outages come and go, and the same query hung for 40s at
+ * 22:04 and answered in 1025ms at 22:12 on the same device and the same day.
+ */
+export const ALB_SEARCH_UNSERVED_FN = `
+  function __albSearchUnserved(firstWhy, got) {
+    return firstWhy === 'no_response' && got.why === 'http' && !!got.status;
+  }
+`;
+
 export function buildAlbertsonsNetworkSearchBatchScript(
   terms: string[],
   opts: { storeId: string; pageSize?: number; concurrency?: number;
-          requestMs?: number; firstRequestMs?: number },
+          requestMs?: number; firstRequestMs?: number; unservedRequestMs?: number },
 ): string | null {
   const storeId = Number(opts.storeId);
   // "abc" | 0 would search store zero and return a plausible-looking empty result.
@@ -1026,6 +1054,7 @@ export function buildAlbertsonsNetworkSearchBatchScript(
 ${albPrelude()}
 ${ALB_CANDIDATE_HELPERS}
 ${albSearchUrlExpr(pageSize, storeId)}
+${ALB_SEARCH_UNSERVED_FN}
   var TERMS = ${JSON.stringify(terms)};
   // The generation this batch was injected under. A stop bumps the counter, so
   // every loop below notices at its next check and the run's own script, injected
@@ -1068,6 +1097,8 @@ ${albSearchUrlExpr(pageSize, storeId)}
   // reverses. Same result shape either way.
   var VARIANTS = ['site', 'plain'];
   var winner = null;
+  /** One second opinion per batch after a timeout -- see worthRetryingElsewhere. */
+  var triedAlternate = false;
 
   // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
   // _retry.ts for which failures earn a second ask and why a timeout does not.
@@ -1080,8 +1111,18 @@ ${albSearchUrlExpr(pageSize, storeId)}
     // The FIRST request of a batch gets the longer budget: measured cold at the
     // full 15s while the document was provably healthy, and sub-second after.
     // Aborting a slow answer turns it into no answer.
-    var to = setTimeout(function () { ctl.abort(); },
-      A.searchedOnce ? ${opts.requestMs ?? 15000} : ${opts.firstRequestMs ?? 15000});
+    // THE THIRD BUDGET, and the reason it exists is intermittency.
+    //
+    // Once one term has shown that this endpoint hangs while the connection
+    // underneath it answers (A.searchUnserved), the rest are STILL ASKED -- the
+    // outage comes and goes, and on the Pixel 2026-09-14 the same query hung for
+    // 40s at 22:04 and answered in 1025ms at 22:12. Skipping them would trade a
+    // slow run for a wrong one. What changes is the wait: a store measured at
+    // 0.6-1.0s when it is serving does not need fifteen seconds to say so.
+    var budget = A.searchUnserved
+      ? ${opts.unservedRequestMs ?? 3000}
+      : (A.searchedOnce ? ${opts.requestMs ?? 15000} : ${opts.firstRequestMs ?? 15000});
+    var to = setTimeout(function () { ctl.abort(); }, budget);
     A.searchedOnce = true;
     var url = __albSearchUrl(term, variant);
     // MEASURED, NOT GUESSED. Stephen: "search and cart read are still extremely
@@ -1166,6 +1207,7 @@ ${albSearchUrlExpr(pageSize, storeId)}
     var first = winner || VARIANTS[0];
     var got = await attempt(term, first);
     got.variant = first;
+    var firstWhy = got.why;
     // A REFUSAL is worth re-asking elsewhere; a bad minute is not.
     //
     // This used to test only for the soft envelope -- 200 with appCode 400 --
@@ -1177,7 +1219,25 @@ ${albSearchUrlExpr(pageSize, storeId)}
     // a second request per term for nothing.
     var refused = got.why === 'search_error'
       || (got.why === 'http' && got.status >= 400 && got.status < 500);
-    if (!got.ok && refused && !winner) {
+    // A TIMEOUT EARNS ONE SECOND OPINION, ONCE PER BATCH.
+    //
+    // The rule above is right in general and was wrong for the case that
+    // actually happens. MEASURED on Stephen's device 2026-09-13: seven
+    // search:site requests on albertsons.com came back no_response -- one at the
+    // 40s cold budget, six at 15s -- while cart, cart-write and cart-undo
+    // answered on the SAME document in 0.6-1.4s, and tom_thumb's identical
+    // search:site answered 4 of 4 in under a second on the same rail and the
+    // same quiet page. A document that is writing a cart is not having a bad
+    // minute; that endpoint is not answering us. Eighty-five of the run's
+    // ninety-two seconds went into asking it again anyway.
+    //
+    // Bounded to ONE extra request for the whole batch, which is what keeps the
+    // original reasoning intact: if the other shape answers it becomes the
+    // winner and every later term takes it, and if it does not, no other term
+    // pays for the question.
+    var worthRetryingElsewhere = got.why === 'no_response' && !triedAlternate;
+    if (!got.ok && (refused || worthRetryingElsewhere) && !winner) {
+      triedAlternate = true;
       for (var vi = 0; vi < VARIANTS.length; vi++) {
         if (VARIANTS[vi] === first) continue;
         var alt = await attempt(term, VARIANTS[vi]);
@@ -1199,6 +1259,28 @@ ${albSearchUrlExpr(pageSize, storeId)}
         alt.firstStatus = got.status != null ? got.status : null;
         got = alt;
       }
+    }
+    // ONE SHAPE HUNG AND THE OTHER ANSWERED. That pair is not a slow network and
+    // not a bad minute -- it is this endpoint declining to serve us while the
+    // connection underneath it is demonstrably fine. It shortens what the
+    // remaining terms wait; it does NOT decide their answer for them.
+    //
+    // MEASURED on the Pixel 2026-09-14, albertsons.com, signed in, one term:
+    //
+    //   22:04:26.565  search:site   sent
+    //   22:05:06.594  search:site   no_response after 40.0s
+    //   22:05:06.750  search:plain  HTTP 401 after 151ms
+    //
+    // ...on a document whose cart read had answered in 609ms moments earlier.
+    // Without this, every remaining term repeats the 40s (then 15s) wait: in
+    // Stephen's 2026-09-13 run that was 85 of the 92 seconds, and it is why he
+    // saw "no progress in the frame sequence for a long time, then a burst".
+    //
+    // DELIBERATELY NARROW. If the alternate ALSO times out, nothing is latched
+    // and every term is still asked -- that shape genuinely is a bad minute, and
+    // the 40s cold budget above exists because it has paid off before.
+    if (!got.ok && __albSearchUnserved(firstWhy, got)) {
+      A.searchUnserved = true;
     }
     var url = got.url;
     var j = got.json || null;
@@ -1698,6 +1780,7 @@ export const ALBERTSONS_RAIL: NetworkRail = {
       storeId: sess.storeId,
       requestMs: ALBERTSONS_RAIL.budgets.searchRequestMs,
       firstRequestMs: ALBERTSONS_RAIL.budgets.searchFirstRequestMs,
+      unservedRequestMs: ALBERTSONS_RAIL.budgets.searchUnservedRequestMs,
     }),
   cartRead: () => buildAlbertsonsCartReadScript(),
   clearCart: (_storeId, opts) => buildAlbertsonsClearCartScript({ only: opts?.only }),
@@ -1738,5 +1821,11 @@ export const ALBERTSONS_RAIL: NetworkRail = {
     // the first request ran the whole 15s budget and was aborted, while every
     // one after it answered in 0.3s. Aborting a slow answer makes it no answer.
     searchFirstRequestMs: 40_000,
+    // ...AND THE ONE FOR AFTER THE STORE HAS SHOWN ITS HAND. Applied only once a
+    // term has both timed out on one shape and had a real HTTP reply on the
+    // other -- see ALB_SEARCH_UNSERVED_FN. Healthy responses here measure 0.6-1.0s
+    // (tom_thumb 639-999ms, albertsons 1025ms), so three seconds is generous for
+    // an endpoint we already know is not serving this document.
+    searchUnservedRequestMs: 3_000,
   },
 };
