@@ -886,6 +886,11 @@ export default function WebViewCartSheet({
   const lastLoadEndUrlRef = useRef('');
   /** When the WebView last finished a load. 0 = nothing has loaded yet. */
   const pageLoadedAtRef = useRef(0);
+  /** When the user tapped to start. Paired with sheetOpenedAtRef (declared with
+   *  the browser milestones below), these are the two clocks a timing breakdown
+   *  needs: the gap between them is the user reading the quantity screen, and
+   *  everything after the tap is time they spend waiting on us. */
+  const runTapAtRef = useRef(0);
   /** One jar re-read per sheet opening — see the note at the onLoadEnd that sets
    *  pageLoadedAtRef. Dev diagnostic only. */
   const jarRecheckedRef = useRef(false);
@@ -3358,6 +3363,7 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
       scriptsRef.current = openScripts;
       console.log(`[Cart ${ts()}]`, 'cart opened: locking store=', openStoreId);
       jarRecheckedRef.current = false;
+      runTapAtRef.current = 0;
       // AND THE PREWARM STOPS RACING US. If a hidden probe is still loading this
       // same store, it is no longer a head start -- it is a second renderer
       // competing with the one the user is waiting on, for the same site.
@@ -3812,6 +3818,26 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
     } else {
       tel().record('run_summary', 'ok', { detail: runSummaryDetail(summaryFacts) });
     }
+    // THE TWO NUMBERS THAT ANSWER "HOW LONG DID THAT TAKE".
+    //
+    // Stephen, 2026-09-16: "give me timing breakdowns. Also separate out full
+    // timing vs user timing so I can tell how much time the prewarm saves."
+    //
+    //   full  the sheet opening to the done screen -- includes the seconds the
+    //         user spent on the quantity screen, which are not ours
+    //   user  their TAP to the done screen -- the only stretch anyone waits
+    //
+    // The prewarm's saving is the difference between what `user` is and what it
+    // would have been had the work started at the tap, so the phase stamps
+    // matter as much as the totals: a store whose login was already settled
+    // shows no login_check leg at all.
+    const now = Date.now();
+    console.log(`[Cart ${ts()}]`, 'TIMING', lockedStoreIdRef.current,
+      '| full', sheetOpenedAtRef.current ? now - sheetOpenedAtRef.current : null, 'ms',
+      '| user', runTapAtRef.current ? now - runTapAtRef.current : null, 'ms',
+      '| onQtyScreen', (sheetOpenedAtRef.current && runTapAtRef.current)
+        ? runTapAtRef.current - sheetOpenedAtRef.current : null, 'ms',
+      '| items', requestedRef.current);
     void tel().flush();
     // skippedByIdx / unverifiedWeightLines are read above; automationCompletedRef
     // keeps this to one firing per run whatever re-renders the extra dependencies
@@ -4060,6 +4086,18 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
   const handleStartSearch = () => {
     const active = items.filter((it, i) => (checkedItems[i] ?? true) && !isZeroedOut(it));
     if (active.length === 0) return;
+    // THE MOMENT THE USER'S WAIT STARTS.
+    //
+    // Everything before this the prewarm can do off the critical path; everything
+    // after it is time somebody is watching a spinner. Stephen, 2026-09-16: "I
+    // want ... timing breakdowns. Also separate out full timing vs user timing so
+    // I can tell how much time the prewarm saves." Neither number was derivable
+    // from the log: `cart opened` is when the SHEET opened, and the gap after it
+    // is the user reading the quantity screen, not the app working.
+    runTapAtRef.current = Date.now();
+    console.log(`[Cart ${ts()}]`, 'TAP — run starts, items=', active.length,
+      'prewarm=', loginPrewarm.getStatus(lockedStoreIdRef.current),
+      'sheetOpenedAgo=', sheetOpenedAtRef.current ? Date.now() - sheetOpenedAtRef.current : null, 'ms');
     activeItemsRef.current = active;
     // The north-star denominator, fixed here and never recounted. This is the
     // only gate a shopping run passes through, and it is the last moment the
@@ -9109,7 +9147,35 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: Colors.border,
   },
-  browserArea: { flex: 1, backgroundColor: Colors.border },
+  browserArea: {
+    flex: 1,
+    backgroundColor: Colors.border,
+    // CLIP THE PARKED WEBVIEW TO THIS REGION.
+    //
+    // Stephen, 2026-09-16: "on the pixel I am seeing the webview at the bottom
+    // while doing a wegmans run" -- the same report as 2026-09-09, which was
+    // answered by raising the animation's elevation above it.
+    //
+    // That covered the overlap and not the overflow. `hiddenLayer` is a fixed
+    // 414x896 anchored at this view's top-left, and a Pixel 6 is 393x873dp --
+    // so the parked WebView is WIDER AND TALLER THAN THE SCREEN, and the part
+    // hanging below this region is past the bottom of the overlay that is meant
+    // to cover it. RN does not clip children by default, and the animation
+    // cannot cover what is outside its own parent however high it sits.
+    //
+    // NOT REPRODUCED on five runs here (H-E-B, Wegmans, Albertsons x2, ALDI) --
+    // the bottom of the sheet came back clean grey every time, so this is the
+    // geometry the report describes rather than a measured before-and-after.
+    // The numbers above are not in doubt though: 414 > 393 and 896 > 873 on the
+    // device that shows it.
+    //
+    // A CLIP, NOT A MOVE. The two properties this file says are load-bearing --
+    // the real 414x896 viewport and the 1% opacity -- are what keep Chromium
+    // drawing the layer and running its timers, and both are untouched. The
+    // WebView keeps its size, its position and its visibility; only the pixels
+    // outside this box stop being drawn.
+    overflow: 'hidden',
+  },
   // Single WebView fills the region (login, login_check, sequential, snapshot).
   fullWrap: { flex: 1 },
   fullCell: { flex: 1 },
