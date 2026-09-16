@@ -33,6 +33,20 @@ export type LoginVerdict = {
   state: 'in' | 'out' | 'needs-webview';
   /** How it was decided, for the log and for anyone debugging a wrong answer. */
   how: string;
+  /**
+   * Did the STORE say so, or did we infer it?
+   *
+   * Only ever set on 'out', and the difference is what the user waits through.
+   * Stephen, 2026-09-16: "the problem is that after we get the positive signal
+   * that we are logged out, it seems that the web view is not spinning up. If we
+   * know we're signed out, I should see the webview immediately after clicking
+   * add to cart."
+   *
+   * A CurrentUser call that answers guest:true IS the positive signal his own
+   * rule asks for. The empty-jar negative next to it is not -- it is an
+   * inference, and one measured wrong on his iPhone four times in a row.
+   */
+  measured?: boolean;
   ms: number;
   /** Identifiers the run can reuse, when the check produced them. */
   session?: NativeSession;
@@ -199,6 +213,8 @@ async function realCheckLogin(storeId: string): Promise<LoginVerdict> {
   // to find out" into "open a WebView to sign in", which is a thing the user
   // asked for rather than a thing they waited through.
   if (origin && await jarIsEmpty(origin)) {
+    // INFERRED, not measured: nobody asked the store anything. Left unmarked on
+    // purpose so the sheet checks this one for itself before walling anyone.
     return done({ state: 'out', how: 'no cookies for this origin: never signed in here' });
   }
 
@@ -221,6 +237,8 @@ async function realCheckLogin(storeId: string): Promise<LoginVerdict> {
     }
     return done({
       state: out.session?.loggedIn ? 'in' : 'out',
+      // MEASURED: the store's own answer over the wire, not a guess about it.
+      measured: true,
       how: `native: ${out.detail}`,
       session: out.session,
     });

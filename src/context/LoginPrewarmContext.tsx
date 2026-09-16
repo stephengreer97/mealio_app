@@ -69,6 +69,17 @@ interface LoginPrewarmValue {
   checkStore: (storeId: string) => void;
   /** Last known status for a store this session. */
   getStatus: (storeId: string) => LoginPrewarmStatus;
+  /**
+   * Did the STORE say this user is signed out, or did we infer it?
+   *
+   * Only meaningful alongside a 'loggedOut' status. The cart sheet re-checks an
+   * inferred one for itself before surfacing a sign-in screen -- see the
+   * 2026-09-02 note at its call site -- and that second opinion cost Stephen
+   * seventeen seconds of spinner on 2026-09-16 for an answer Instacart had
+   * already given over the wire before the sheet even opened. A measured
+   * negative does not need re-proving.
+   */
+  signedOutIsMeasured: (storeId: string) => boolean;
   /** A cart "before" snapshot pre-captured during the silent login check, if one
    *  exists. Consumes it (one-shot) so the next run — after this one has changed
    *  the cart — live-snapshots instead of reusing a stale baseline. Returns null
@@ -144,6 +155,7 @@ interface LoginPrewarmValue {
 const LoginPrewarmContext = createContext<LoginPrewarmValue>({
   checkStore: () => {},
   getStatus: () => 'unknown',
+  signedOutIsMeasured: () => false,
   takePrewarmedCart: () => null,
   statusVersion: 0,
   setSearchTerms: () => {},
@@ -208,6 +220,13 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     (storeId: string): LoginPrewarmStatus => statusRef.current.get(storeId) ?? 'unknown',
     [],
   );
+  /** Stores whose signed-out answer came from the store itself. Cleared whenever
+   *  a status is set, so it can never outlive the verdict it describes. */
+  const measuredOutRef = useRef<Set<string>>(new Set());
+  const signedOutIsMeasured = useCallback(
+    (storeId: string): boolean => measuredOutRef.current.has(storeId),
+    [],
+  );
 
   const takePrewarmedCart = useCallback((storeId: string): PrewarmedCart | null => {
     const cart = cartRef.current.get(storeId);
@@ -246,6 +265,10 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     }
     console.log('[Prewarm]', storeId, 'native login check:', v.state, `(${v.ms}ms)`, '-', v.how);
     if (v.state === 'needs-webview') return false;
+    // Set together with the status, never separately: a stale `measured` beside
+    // a fresh verdict is the one way this could wall a signed-in user.
+    if (v.state === 'out' && v.measured) measuredOutRef.current.add(storeId);
+    else measuredOutRef.current.delete(storeId);
     statusRef.current.set(storeId, v.state === 'in' ? 'loggedIn' : 'loggedOut');
     setStatusVersion((n) => n + 1);
     // A store that just resolved signed-in may have terms waiting on exactly
@@ -624,8 +647,8 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   useSessionEnd(forgetAll);
 
   const value = useMemo<LoginPrewarmValue>(
-    () => ({ checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll, noteLiveVerdict, standDown }),
-    [checkStore, getStatus, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll, noteLiveVerdict, standDown],
+    () => ({ checkStore, getStatus, signedOutIsMeasured, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll, noteLiveVerdict, standDown }),
+    [checkStore, getStatus, signedOutIsMeasured, takePrewarmedCart, statusVersion, setSearchTerms, getSearchResults, forgetAll, noteLiveVerdict, standDown],
   );
 
   return (

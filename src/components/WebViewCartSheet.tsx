@@ -6404,7 +6404,32 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
               // storefront skipped straight to the wall with no grace at all.
               // Where the answer came from decides what to DO about it, not
               // whether to believe it.
-              if (netSessionRepairFromRef.current === 0) {
+              // CORROBORATED ALREADY, so it does not need six more seconds.
+              //
+              // Stephen, 2026-09-16: "if we know we're signed out, I should see
+              // the webview immediately after clicking add to cart." MEASURED on
+              // his iPhone that day -- the prewarm had asked Instacart over the
+              // wire and been told guest:true in 281ms, BEFORE the sheet opened,
+              // and he then watched:
+              //
+              //   15:15:11.3  his tap
+              //   15:15:17.9  storefront finally loaded      (6.5s, the site)
+              //   15:15:18.1  signed out — asking again      (the grace opens)
+              //   ~15:15:25   sign-in screen                 (7s of re-asks)
+              //
+              // The grace exists because a page mid-boot says signed out in the
+              // same words it uses when you are. That explanation is much weaker
+              // once a SECOND, independent transport -- a native HTTP call to the
+              // store's own API -- has already returned the same answer. Only a
+              // measured negative counts; the empty-jar inference does not, and
+              // that is the one that has been wrong on this device.
+              //
+              // AND BEING WRONG IS CHEAP HERE, which is what makes the trade
+              // safe: surfaceLogin starts the login poll, so a store that does
+              // change its mind is noticed about a second later and the run goes
+              // on by itself. Today being RIGHT costs seven seconds, every time.
+              const corroborated = !!loginPrewarm.signedOutIsMeasured?.(lockedStoreIdRef.current);
+              if (netSessionRepairFromRef.current === 0 && !corroborated) {
                 const onQuietPage = !signedOutIsFinal({
                   url: lastLoadEndUrlRef.current,
                   domain: scriptsRef.current!.domain,

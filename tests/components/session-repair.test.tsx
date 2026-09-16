@@ -89,6 +89,7 @@ jest.mock('../../src/context/LoginPrewarmContext', () => {
     ...actual,
     useLoginPrewarm: () => ({
       checkStore: () => {}, getStatus: () => 'unknown', takePrewarmedCart: () => null,
+      signedOutIsMeasured: () => !!(global as any).__measuredOut,
       statusVersion: 1, setSearchTerms: () => {}, getSearchResults: () => new Map(),
       noteLiveVerdict: () => {},
     }),
@@ -339,5 +340,55 @@ describe('a signed-out answer from a page that just loaded', () => {
       act(() => { jest.advanceTimersByTime(2_100); });
     }
     expect(view.queryByText(/log into your H-E-B account/i)).toBeTruthy();
+  });
+});
+
+// AN ANSWER THE STORE HAS ALREADY GIVEN DOES NOT NEED SIX MORE SECONDS.
+//
+// Stephen, 2026-09-16: "the problem is that after we get the positive signal
+// that we are logged out, it seems that the web view is not spinning up. If we
+// know we're signed out, I should see the webview immediately after clicking
+// add to cart."
+//
+// The grace above is for a page mid-boot. When a SECOND transport -- the native
+// HTTP check against the store's own API -- has already returned signed out, the
+// boot explanation is much weaker, and re-proving it cost him seven seconds on
+// top of a 6.5s storefront load.
+//
+// The prewarm's own inference does NOT count. "no cookies for this origin" is a
+// guess, it measured wrong on his iPhone four launches in a row, and the guard
+// in prewarm-verdict-never-opens-login.test.ts exists because of exactly that.
+describe('a signed-out answer the prewarm already measured', () => {
+  afterEach(() => { (global as any).__measuredOut = false; });
+
+  const run = (measured: boolean) => {
+    (global as any).__measuredOut = measured;
+    enableRail();
+    const view = render(
+      <WebViewCartSheet visible meals={[{ id: 'm1', name: 'Tacos', ingredients: [chosen('sour cream')] }] as never}
+        storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+    );
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    act(() => {
+      const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url: 'https://www.heb.com/' } });
+    });
+    post({ type: 'HEB_SESSION', ok: true, loggedIn: false });
+    return view;
+  };
+
+  it('goes straight to the sign-in screen', () => {
+    expect(run(true).queryByText(/log into your H-E-B account/i)).toBeTruthy();
+  });
+
+  it('but an UNcorroborated one still gets the full grace', () => {
+    // The control. Without this, "skip the wait" could quietly become "never
+    // wait", which is the bug the grace was added for three days ago.
+    expect(run(false).queryByText(/log into your H-E-B account/i)).toBeNull();
   });
 });
