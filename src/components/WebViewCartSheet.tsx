@@ -6491,33 +6491,7 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
             const origin = scriptsRef.current?.storeUrl;
             if (origin) {
               CookieManager.get(origin, true)
-                .then((jar) => {
-                  console.log(`[Cart ${ts()}]`, 'native cookie names', JSON.stringify(Object.keys(jar).sort()));
-                  // WHICH OF THEM DIE WHEN THE APP DOES.
-                  //
-                  // Stephen, 2026-09-14: "I am having to log into ALDI every
-                  // time I open Mealio." His log says the login check is right --
-                  // Instacart answers guest:true and he really does sign in
-                  // again -- so the question is why the session ends, and a
-                  // cookie with no expiry is one that WKWebView drops when the
-                  // process does.
-                  //
-                  // ANDROID CANNOT ANSWER THIS. Its CookieManager hands back a
-                  // `name=value` string with no attributes, so everything reads
-                  // as session-scoped and the list below is all-or-nothing. iOS
-                  // reads WKHTTPCookieStore, which carries the real ones -- so
-                  // this is worth logging even though it is uninformative on the
-                  // device it is easiest to test on.
-                  //
-                  // Names and a boolean. The value IS the session and is never
-                  // logged, same rule as the line above.
-                  const noExpiry: string[] = []; const persists: string[] = [];
-                  for (const [n, c] of Object.entries(jar as Record<string, { expires?: string }>)) {
-                    (c && c.expires ? persists : noExpiry).push(n);
-                  }
-                  console.log(`[Cart ${ts()}]`, 'cookie expiry — dies with the app:', JSON.stringify(noExpiry.sort()));
-                  console.log(`[Cart ${ts()}]`, 'cookie expiry — persists:', JSON.stringify(persists.sort()));
-                })
+                .then((jar) => console.log(`[Cart ${ts()}]`, 'native cookie names', JSON.stringify(Object.keys(jar).sort())))
                 .catch(() => {});
             }
           }

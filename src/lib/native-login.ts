@@ -58,6 +58,28 @@ function originFor(storeId: string, rail: NativeRail | null): string | null {
 async function jarIsEmpty(origin: string): Promise<boolean> {
   try {
     const jar = await CookieManager.get(origin, true);
+    // WHAT THE JAR ACTUALLY HELD, at the one moment the verdict is made.
+    //
+    // Stephen, 2026-09-14: "I am having to log into ALDI every time I open
+    // Mealio." MEASURED on his iPhone 2026-09-16 -- signed in at 10:42:06, app
+    // restarted, signed out again at 10:42:43, twenty-eight seconds later. Not a
+    // misread: the WebView itself answered guest:true on a fresh session.
+    //
+    // The first version of this diagnostic sat in the RUN's session read, which
+    // is only reached once the user is already signed in -- so on the run that
+    // mattered it never fired. Here it runs on every app open whatever the
+    // answer turns out to be, which is the whole point.
+    //
+    // Names and a boolean. The value IS the session and is never logged.
+    if (__DEV__) {
+      const noExpiry: string[] = []; const persists: string[] = [];
+      for (const [n, c] of Object.entries(jar as Record<string, { expires?: string }>)) {
+        (c && c.expires ? persists : noExpiry).push(n);
+      }
+      console.log('[native-login]', origin, 'jar:', Object.keys(jar).length, 'cookie(s)');
+      console.log('[native-login]', origin, 'dies with the app:', JSON.stringify(noExpiry.sort()));
+      console.log('[native-login]', origin, 'persists:', JSON.stringify(persists.sort()));
+    }
     return Object.keys(jar).length === 0;
   } catch {
     // An unreadable jar is not an empty one. Fall through and ask properly.
