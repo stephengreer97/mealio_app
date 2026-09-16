@@ -57,30 +57,63 @@ function originFor(storeId: string, rail: NativeRail | null): string | null {
  */
 async function jarIsEmpty(origin: string): Promise<boolean> {
   try {
-    const jar = await CookieManager.get(origin, true);
-    // WHAT THE JAR ACTUALLY HELD, at the one moment the verdict is made.
+    // BOTH STORES, because on iOS they are different objects and only one of
+    // them is lazy.
     //
-    // Stephen, 2026-09-14: "I am having to log into ALDI every time I open
-    // Mealio." MEASURED on his iPhone 2026-09-16 -- signed in at 10:42:06, app
-    // restarted, signed out again at 10:42:43, twenty-eight seconds later. Not a
-    // misread: the WebView itself answered guest:true on a fresh session.
+    // CookieManager.get(url, true) resolves through
+    // WKWebsiteDataStore.defaultDataStore.httpCookieStore
+    // (RNCookieManagerIOS.m:122); get(url, false) reads
+    // NSHTTPCookieStorage.sharedHTTPCookieStorage, which the WebViews sync into
+    // via sharedCookiesEnabled and which is readable immediately. On Android the
+    // flag is ignored and both calls answer identically, so this costs nothing
+    // there.
     //
-    // The first version of this diagnostic sat in the RUN's session read, which
-    // is only reached once the user is already signed in -- so on the run that
-    // mattered it never fired. Here it runs on every app open whatever the
-    // answer turns out to be, which is the whole point.
+    // MEASURED on Stephen's iPhone 2026-09-16: the WebKit store answered ZERO
+    // cookies for heb, wegmans AND aldi, every app open, at 47-64ms -- always
+    // before any WKWebView had been built in the process. He signs into ALDI,
+    // restarts, and is signed out again. Whether those cookies are gone or
+    // merely unreadable that early, this check was the thing turning it into a
+    // confident "never signed in here" and sending him to a sign-in screen.
+    //
+    // EMPTY NOW MEANS EMPTY IN BOTH. That can only ever downgrade a confident
+    // negative into "ask properly", which is a WebView a genuinely signed-out
+    // user was about to see anyway -- and the comment above already says a
+    // non-empty jar proves nothing, so the falling-through path is the ordinary
+    // one rather than a new risk.
+    // READ FAILED and READ EMPTY are different answers, and collapsing them is
+    // how the guarantee above gets lost: `.catch(() => ({}))` on each call made
+    // a store that threw look like a store with nothing in it, which is the one
+    // reading this function must never produce. Caught by the test for it.
+    const read = async (useWebKit: boolean) => {
+      try { return { ok: true, jar: await CookieManager.get(origin, useWebKit) }; }
+      catch { return { ok: false, jar: {} as Record<string, unknown> }; }
+    };
+    const [webkitRead, sharedRead] = await Promise.all([read(true), read(false)]);
+    const webkit = webkitRead.jar; const shared = sharedRead.jar;
+    // BOTH READABLE AND BOTH EMPTY. Anything less is not proof of anything.
+    const empty = webkitRead.ok && sharedRead.ok
+      && Object.keys(webkit).length === 0 && Object.keys(shared).length === 0;
+    // THE ANSWER IS ALREADY DECIDED ABOVE, and the diagnostic gets its own
+    // try/catch so it can never change it. `__DEV__` is a React Native global
+    // and is simply absent under the node test project -- inside the outer try
+    // that was a ReferenceError, swallowed into `return false`, which quietly
+    // turned the free negative off and made three tests in
+    // native-login-empty-jar pass for the wrong reason.
     //
     // Names and a boolean. The value IS the session and is never logged.
-    if (__DEV__) {
-      const noExpiry: string[] = []; const persists: string[] = [];
-      for (const [n, c] of Object.entries(jar as Record<string, { expires?: string }>)) {
-        (c && c.expires ? persists : noExpiry).push(n);
+    try {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        const noExpiry: string[] = []; const persists: string[] = [];
+        for (const [n, c] of Object.entries({ ...shared, ...webkit } as Record<string, { expires?: string }>)) {
+          (c && c.expires ? persists : noExpiry).push(n);
+        }
+        console.log('[native-login]', origin, 'jar: webkit', Object.keys(webkit).length,
+          '/ shared', Object.keys(shared).length);
+        console.log('[native-login]', origin, 'dies with the app:', JSON.stringify(noExpiry.sort()));
+        console.log('[native-login]', origin, 'persists:', JSON.stringify(persists.sort()));
       }
-      console.log('[native-login]', origin, 'jar:', Object.keys(jar).length, 'cookie(s)');
-      console.log('[native-login]', origin, 'dies with the app:', JSON.stringify(noExpiry.sort()));
-      console.log('[native-login]', origin, 'persists:', JSON.stringify(persists.sort()));
-    }
-    return Object.keys(jar).length === 0;
+    } catch { /* a diagnostic must never decide a verdict */ }
+    return empty;
   } catch {
     // An unreadable jar is not an empty one. Fall through and ask properly.
     return false;
