@@ -886,6 +886,9 @@ export default function WebViewCartSheet({
   const lastLoadEndUrlRef = useRef('');
   /** When the WebView last finished a load. 0 = nothing has loaded yet. */
   const pageLoadedAtRef = useRef(0);
+  /** One jar re-read per sheet opening — see the note at the onLoadEnd that sets
+   *  pageLoadedAtRef. Dev diagnostic only. */
+  const jarRecheckedRef = useRef(false);
   // True once the WebView has landed on a store search page — lets subsequent items
   // skip the homepage round-trip and inject buildSearchScript directly.
   const onSearchPageRef = useRef(false);
@@ -3354,6 +3357,7 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
       setLockedStoreId(openStoreId);
       scriptsRef.current = openScripts;
       console.log(`[Cart ${ts()}]`, 'cart opened: locking store=', openStoreId);
+      jarRecheckedRef.current = false;
       // AND THE PREWARM STOPS RACING US. If a hidden probe is still loading this
       // same store, it is no longer a head start -- it is a second renderer
       // competing with the one the user is waiting on, for the same site.
@@ -4598,6 +4602,29 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
     // SESSION_BOOT_GRACE_MS. Recorded before any of the early returns below,
     // because a load this handler declines to inject into is still a load.
     pageLoadedAtRef.current = Date.now();
+    // THE SAME JAR, READ AGAIN NOW THAT A WEBVIEW EXISTS.
+    //
+    // native-login reads it at app open, before any WKWebView has been built in
+    // this process, and on Stephen's iPhone 2026-09-16 it came back with zero
+    // cookies for EVERY store -- heb, wegmans and aldi, at 63/52/47ms. iOS reads
+    // WKWebsiteDataStore.defaultDataStore.httpCookieStore, which is lazy, so a
+    // cold read and a genuinely empty jar are indistinguishable from the log.
+    //
+    // This is the other half of that comparison and the only thing that tells
+    // them apart: same origin, same API, one page load later. Non-zero here
+    // after zero there means the cold read is lying and an empty jar is not the
+    // proof native-login treats it as; zero in both means the cookies really are
+    // gone. Once per sheet opening, dev only, count and names -- never values.
+    if (__DEV__ && !jarRecheckedRef.current) {
+      jarRecheckedRef.current = true;
+      const o = scriptsRef.current?.storeUrl;
+      if (o) {
+        CookieManager.get(o, true)
+          .then((jar) => console.log(`[Cart ${ts()}]`, 'jar re-read after a page load —', o,
+            Object.keys(jar).length, 'cookie(s):', JSON.stringify(Object.keys(jar).sort())))
+          .catch(() => {});
+      }
+    }
     // Only process pages for this store — ignore about:blank and other internal loads.
     //
     // NOT FIXED, recorded: this is a substring test, so it matches any host that
