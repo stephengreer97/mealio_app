@@ -109,6 +109,34 @@ async function jarIsEmpty(origin: string): Promise<boolean> {
         }
         console.log('[native-login]', origin, 'jar: webkit', Object.keys(webkit).length,
           '/ shared', Object.keys(shared).length);
+        // DID THE CREDENTIAL CHANGE? Not what it is -- whether it is the same one.
+        //
+        // MEASURED on Stephen's iPhone 2026-09-16: __Host-instacart_sid is
+        // present after every restart AND carries an expiry, so the cookie is
+        // not being dropped; yet both transports read currentUser.guest:true.
+        // The remaining explanation is that the value which persists is the
+        // GUEST session id and the signed-in one never reaches disk.
+        //
+        // A short FNV-1a of the value tells those apart and nothing else: it
+        // shows whether the id changed across a sign-in and across a restart. It
+        // is one-way and 32 bits wide, so it cannot reconstruct a session, and
+        // it is the smallest thing that answers the question. Credential-ish
+        // names only -- there is no reason to fingerprint an analytics cookie.
+        const fp = (v: string) => {
+          let h = 0x811c9dc5;
+          for (let i = 0; i < v.length; i++) {
+            h ^= v.charCodeAt(i);
+            h = Math.imul(h, 0x01000193) >>> 0;
+          }
+          return h.toString(16).padStart(8, '0');
+        };
+        const creds: string[] = [];
+        for (const [n, c] of Object.entries({ ...shared, ...webkit } as Record<string, { value?: string }>)) {
+          if (!/sid|sess|auth|token|login/i.test(n)) continue;
+          const v = String(c?.value ?? '');
+          creds.push(`${n}=#${v ? fp(v) : 'empty'}(len ${v.length})`);
+        }
+        console.log('[native-login]', origin, 'credential fingerprints:', creds.sort().join(' '));
         console.log('[native-login]', origin, 'dies with the app:', JSON.stringify(noExpiry.sort()));
         console.log('[native-login]', origin, 'persists:', JSON.stringify(persists.sort()));
       }
