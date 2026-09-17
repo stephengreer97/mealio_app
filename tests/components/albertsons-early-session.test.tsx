@@ -169,6 +169,8 @@ function openSheet() {
  * reason.
  */
 const writes = () => injected.filter((s) => s.includes('NET_ADD_RESULT')).length;
+/** Search batches, by the message only the search script posts. */
+const searches = () => injected.filter((s) => s.includes('SEARCH_BATCH_DONE')).length;
 
 describe('the run and the early session answer', () => {
   /**
@@ -533,5 +535,134 @@ describe('the prewarm and the early session answer', () => {
     post(REFINED);
     post(REFINED);
     expect(searches()).toBe(1);
+  });
+});
+
+// THE THIRTEEN SECONDS THE SEARCH USED TO SPEND WAITING.
+//
+// MEASURED on the Pixel 2026-09-16, Albertsons, 14 items, prewarm unsettled:
+//
+//   18:36:53.967  TAP
+//   18:36:56.030  early answer   loggedIn, storeId 161      2.1s
+//   18:37:09.661  refined answer verified                   13.6s later
+//   18:37:11.915  search starts
+//   18:37:13.445  search done, both terms answered          1.5s
+//   18:37:17.687  done, 11 of 12
+//
+// Twenty-four seconds, 13.6 of them with the run holding still. The same meal on
+// the same device took 4.8s when the prewarm had settled, so the prewarm was
+// hiding this rather than fixing it -- and it only settles if the user is slow
+// enough reaching the button.
+//
+// A search needs a store id and the early answer has one. A WRITE needs the
+// subscription key the cart call reads, which is what those 13.6 seconds are
+// resolving -- so the wait moves off the search and onto the writes, and the
+// property the file above exists for ("does not write on the early answer") is
+// untouched.
+describe('searching on the early answer', () => {
+  /**
+   * A MEAL WITH SOMETHING TO LOOK UP. The one above is chosen down to the last
+   * row, which is right for the write tests and useless here -- a run with
+   * nothing to search emits no batch, and the first version of this asserted
+   * against that and measured only its own setup.
+   */
+  const unchosen = {
+    id: 'm2', name: 'Beef Wellington',
+    ingredients: [
+      { ingredientName: 'Puff Pastry', searchTerm: 'Pepperidge Farm Puff Pastry Sheets',
+        productQty: 1, qty: 1, unit: 'qty', measure: null,
+        storeProducts: { albertsons: { upc: '143100034', name: 'Pepperidge Farm Puff Pastry Sheets' } } },
+      { ingredientName: 'Shallots', searchTerm: 'Signature Farms Shallots',
+        productQty: 1, qty: 1, unit: 'qty', measure: null },
+    ],
+  };
+  const openUnchosen = () => {
+    __applyAutomationConfigForTests({
+      stores: { albertsons: { networkSearch: true, networkAdd: true } },
+    });
+    const view = render(
+      <WebViewCartSheet visible meals={[unchosen] as never} storeId="albertsons" storeName="Albertsons" onClose={() => {}} />,
+    );
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.getAllByTestId('mock-webview')[0].props.onMessage({
+        nativeEvent: { data: JSON.stringify(payload) },
+      });
+    });
+    const load = (url = 'https://www.albertsons.com/robots.txt') => act(() => {
+      const wv = view.queryAllByTestId('mock-webview').find((w: any) => !!w.props.onLoadEnd);
+      wv?.props?.onLoadEnd?.({ nativeEvent: { url } });
+    });
+    return { view, post, load };
+  };
+  /** The same three steps the describe above uses, which scopes its own copy. */
+  const runToSessionPhase = (h0 = openSheet()) => {
+    const h = h0;
+    h.load();
+    act(() => { fireEvent.press(h.view.getByText(/add ingredients to/i)); });
+    h.post({ type: 'CART_COUNT', count: 0, items: [], source: 'network' });
+    return h;
+  };
+  const EARLY_WITH_STORE = {
+    type: 'ALB_SESSION', ok: true, loggedIn: true, verified: false, early: true,
+    source: 'userinfo', storeId: '161', shoppingContext: 'pickup',
+  };
+
+  it('starts the search without waiting for the refined answer', () => {
+    const { post } = runToSessionPhase(openUnchosen());
+    expect(searches()).toBe(0);
+    post(EARLY_WITH_STORE);
+    expect(searches()).toBe(1);
+  });
+
+  it('and still writes nothing on it', () => {
+    // THE LINE THAT MUST NOT MOVE. Everything in this file above exists because
+    // a run built on the early answer wrote nothing at all.
+    const { post } = runToSessionPhase();
+    post(EARLY_WITH_STORE);
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'Sour Cream', candidates: [] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+    expect(writes()).toBe(0);
+  });
+
+  it('releases the writes when the refined answer lands', () => {
+    const { post } = runToSessionPhase();
+    post(EARLY_WITH_STORE);
+    post({ type: 'SEARCH_RESULT', source: 'network', term: 'Sour Cream', candidates: [] });
+    post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+    expect(writes()).toBe(0);
+    post(REFINED);
+    expect(writes()).toBe(1);
+  });
+
+  it('never writes if the refined answer never comes', () => {
+    // The store going quiet must not become a write on a session that never
+    // proved out. The session deadline is what ends this, not a fallback write.
+    jest.useFakeTimers();
+    try {
+      const { post } = runToSessionPhase();
+      post(EARLY_WITH_STORE);
+      post({ type: 'SEARCH_RESULT', source: 'network', term: 'Sour Cream', candidates: [] });
+      post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+      act(() => { jest.advanceTimersByTime(60_000); });
+      expect(writes()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not start a second search when the refined answer arrives', () => {
+    // The refined answer reaches a branch of its own now, ahead of the phase
+    // guard. Falling through to the ordinary path would re-issue the whole batch.
+    const { post } = runToSessionPhase(openUnchosen());
+    post(EARLY_WITH_STORE);
+    post(REFINED);
+    expect(searches()).toBe(1);
+  });
+
+  it('waits as before when the early answer has no store to search', () => {
+    // Nothing to search WITH, so there is nothing to bring forward.
+    const { post } = runToSessionPhase(openUnchosen());
+    post({ type: 'ALB_SESSION', ok: true, loggedIn: true, early: true, source: 'userinfo' });
+    expect(searches()).toBe(0);
   });
 });

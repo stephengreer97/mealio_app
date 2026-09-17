@@ -205,6 +205,31 @@ export interface NetworkRail {
    * H-E-B posts once and answers true to whatever it posts.
    */
   sessionUsable(msg: { early?: boolean; storeId?: string | null }): boolean;
+  /**
+   * May the LOGIN CHECK hand off on this early answer, instead of holding the
+   * storefront while the store finishes?
+   *
+   * Different question from sessionUsable, which asks whether a run may WRITE on
+   * it. This one asks whether everything the run needs to get started is already
+   * in the message -- and if it is, the refined half is better done on the quiet
+   * page, where the rail lives.
+   *
+   * MEASURED on the Pixel 2026-09-16, Albertsons. Between the early post and the
+   * refined one the session script awaits __albEnsureKeys(6000) and
+   * __albReadCart(6000), and on the storefront both run to their full budgets:
+   *
+   *   19:32:34.131  early answer    hasSearchKey true, storeId 161
+   *   19:32:46.456  refined answer  12.3s later
+   *   19:32:46.798  on the quiet page — starting the run
+   *
+   * The same refined step on the QUIET PAGE costs 0.63s (18:38:53.394 ->
+   * 18:38:54.058, a 630ms cart read) because the keys are already cached and
+   * nothing else is competing for the renderer. Holding the storefront is
+   * therefore twelve seconds spent doing cheap work in the most expensive place.
+   *
+   * Absent means no -- a rail that has not been measured keeps the wait.
+   */
+  earlyStartOk?(msg: Record<string, unknown>): boolean;
 
   /**
    * DOES THIS STORE'S WRITE SET A LINE, OR ADD TO IT?

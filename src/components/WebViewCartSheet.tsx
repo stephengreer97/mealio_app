@@ -1111,6 +1111,29 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
    *  probe is then inert rather than a second start. */
   const netSessionSettledRef = useRef(false);
   /**
+   * SEARCH STARTED ON THE EARLY ANSWER, WRITES STILL WAITING FOR THE REFINED ONE.
+   *
+   * MEASURED on the Pixel 2026-09-16, Albertsons, 14 items, prewarm unsettled:
+   *
+   *   18:36:53.967  TAP
+   *   18:36:56.030  early answer   ok, loggedIn, storeId 161   <- 2.1s
+   *   18:37:09.661  refined answer verified                    <- 13.6s later
+   *   18:37:11.915  search starts
+   *   18:37:13.445  search done, both terms answered           <- 1.5s
+   *   18:37:17.687  done, 11 of 12 written
+   *
+   * Twenty-four seconds, of which 13.6 was the run holding still. The early
+   * answer already carries the store id, which is the only thing a SEARCH needs;
+   * what it cannot do is WRITE, because the subscription key the cart call reads
+   * is resolved during those 13.6 seconds. So the wait moves off the search and
+   * onto the writes, where it belongs.
+   */
+  const netEarlySearchRef = useRef(false);
+  /** True while a refined session is still owed. netStartAdds parks itself. */
+  const netWritesHeldRef = useRef(false);
+  /** The search finished while writes were held; release it when they unblock. */
+  const netAddsHeldRef = useRef(false);
+  /**
    * The cart as it stood before this run wrote anything, as the RAIL saw it.
    *
    * A fallback for when the page probe could not read the cart — which happens:
@@ -2436,6 +2459,15 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
     const active = activeItemsRef.current;
     const sess = netSessionRef.current;
     if (!sess) { netHandOverToUser('no_session_at_add'); return; }
+    // THE WAIT THE SEARCH NO LONGER PAYS. A run that started searching on an
+    // early session answer parks here until the refined one lands -- see
+    // netEarlySearchRef. Writing on the early answer is the thing that wrote
+    // nothing at all, which is why only this half waits.
+    if (netWritesHeldRef.current) {
+      netAddsHeldRef.current = true;
+      console.log(`[Cart ${ts()}]`, 'network run: search done, holding the writes for the refined session');
+      return;
+    }
 
     const toWrite: Array<{
       idx: number; productId: string; skuId: string | null; quantity: number; name: string;
@@ -3056,6 +3088,9 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
     netRunRef.current = true;
     netMatchedRef.current = new Map();
     netSessionSettledRef.current = false;
+    netEarlySearchRef.current = false;
+    netWritesHeldRef.current = false;
+    netAddsHeldRef.current = false;
     netFallbackWantedRef.current = new Map();
     netFallbackCandidatesRef.current = new Map();
     netFallbackPendingRef.current = false;
@@ -6372,9 +6407,45 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
             //
             // A signed-OUT answer is acted on immediately, early or not. That is
             // the entire reason the early answer exists.
-            if (msg.loggedIn && !netRail()?.sessionUsable(msg)) {
+            // ...OR HAND OFF, IF THE EARLY ANSWER ALREADY CARRIES EVERYTHING.
+            //
+            // Stephen, 2026-09-16: "Albertsons is still extremely slow."
+            // MEASURED on the Pixel that day, prewarm unsettled:
+            //
+            //   19:32:31.183  TAP
+            //   19:32:34.131  early answer   hasSearchKey true, storeId 161
+            //   19:32:46.456  refined answer                          12.3s
+            //   19:32:46.798  on the quiet page — starting the run
+            //   19:32:52.428  done, 11 of 12
+            //
+            // Half that run was this `return`. What it waits for is the session
+            // script awaiting __albEnsureKeys(6000) then __albReadCart(6000) --
+            // and on the STOREFRONT, with the site's own bundles competing for
+            // the renderer, both run to their full budgets. The identical step on
+            // the quiet page costs 0.63s (18:38:53.394 -> 18:38:54.058), because
+            // the keys are already cached and nothing is competing. Twelve
+            // seconds of cheap work done in the most expensive place.
+            //
+            // The early answer already has the store, the context and the search
+            // key -- `hasSearchKey` is computed BEFORE the early post. The only
+            // thing it lacks is the cart read that proves the token, and the run
+            // takes its own baseline read on the quiet page regardless.
+            //
+            // THE SESSION IS DELIBERATELY NOT CACHED BELOW when we leave this
+            // way, so the run does its own read on the quiet page rather than
+            // reusing an unproven one -- and that read's early answer is what
+            // netEarlySearchRef then overlaps the search with. Writes still wait
+            // for a refined answer, everywhere, which is the property
+            // albertsons-early-session.test.tsx holds.
+            const earlyHandOff = msg.loggedIn && !netRail()?.sessionUsable(msg)
+              && !!netRail()?.earlyStartOk?.(msg as Record<string, unknown>);
+            if (msg.loggedIn && !netRail()?.sessionUsable(msg) && !earlyHandOff) {
               console.log(`[Cart ${ts()}]`, 'login answered early — waiting for the store to finish before starting');
               return;
+            }
+            if (earlyHandOff) {
+              console.log(`[Cart ${ts()}]`, 'login answered early and carries the store —',
+                'starting the run; the refined half happens on the quiet page');
             }
             // MEAL-219: the network facts the rail already computed, as columns.
             // This is the login gate's success row and it was the largest single
@@ -6411,7 +6482,10 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
             // throw HERE, in the middle of the verdict handler, taking the
             // navigation below down with it rather than failing visibly.
             if (msg.ok) loginPrewarm.noteLiveVerdict?.(lockedStoreIdRef.current, !!msg.loggedIn);
-            if (msg.loggedIn && msg.storeId && msg.shoppingContext) {
+            // NOT FROM AN EARLY ANSWER. Caching it would let the run reuse a
+            // session the store has not proved, and skip the read on the quiet
+            // page that is the whole point of handing off here.
+            if (msg.loggedIn && msg.storeId && msg.shoppingContext && !earlyHandOff) {
               netSessionRef.current = {
                 storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext),
               };
@@ -6562,6 +6636,32 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
             sendP();
             return;
           }
+          // THE REFINED ANSWER, ARRIVING AFTER THE SEARCH ALREADY STARTED.
+          //
+          // Checked before the phase guard below on purpose: netStartSearch has
+          // moved the phase to 'search', so by the time Albertsons finishes
+          // resolving its keys this message would otherwise be dropped and the
+          // writes would stay parked forever.
+          if (netActiveRef.current && netEarlySearchRef.current) {
+            if (!msg.ok || !msg.loggedIn || !netRail()?.sessionUsable(msg)) return;
+            netEarlySearchRef.current = false;
+            netWritesHeldRef.current = false;
+            netSessionSettledRef.current = true;
+            if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
+            if (msg.storeId && msg.shoppingContext) {
+              netSessionRef.current = {
+                storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext),
+              };
+              netSessionAtRef.current = Date.now();
+            }
+            console.log(`[Cart ${ts()}]`, 'network run: refined session in —',
+              netAddsHeldRef.current ? 'releasing the writes it was holding' : 'writes were not waiting yet');
+            if (netAddsHeldRef.current) {
+              netAddsHeldRef.current = false;
+              netStartAddsRef.current();
+            }
+            return;
+          }
           if (!netActiveRef.current || netPhaseRef.current !== 'session') return;
           if (netSessionSettledRef.current) return;
           console.log(`[Cart ${ts()}]`, 'network run: session', JSON.stringify(msg));
@@ -6680,6 +6780,30 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
           // deadline stays ARMED here on purpose: if the refined answer never
           // comes, the session budget is what ends the wait.
           if (!netRail()?.sessionUsable(msg)) {
+            // THE SEARCH DOES NOT NEED WHAT THE EARLY ANSWER IS MISSING.
+            //
+            // It needs a store id, and the early answer has one; what it lacks
+            // is the subscription key the CART call reads, which Albertsons
+            // spends 13.6s resolving. Searching through that window costs
+            // nothing -- the batch has its own __albEnsureKeys -- and the writes
+            // still wait, which is the part that wrote nothing when a run was
+            // built on this answer before.
+            //
+            // The session deadline stays ARMED, deliberately: if the refined
+            // answer never comes, it is what ends the wait, and the run hands
+            // over rather than writing on a session that never proved out.
+            if (!netEarlySearchRef.current && msg.storeId && msg.shoppingContext) {
+              netEarlySearchRef.current = true;
+              netWritesHeldRef.current = true;
+              netSessionRef.current = {
+                storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext),
+              };
+              netSessionAtRef.current = Date.now();
+              console.log(`[Cart ${ts()}]`, 'network run: session answered early —',
+                'searching on it now, writes wait for the refined one');
+              netStartSearch();
+              return;
+            }
             console.log(`[Cart ${ts()}]`, 'network run: session answered early — waiting for the store to finish');
             return;
           }

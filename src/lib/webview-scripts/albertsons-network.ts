@@ -1797,6 +1797,14 @@ export const ALBERTSONS_RAIL: NetworkRail = {
   // coming -- the script returns after it -- and the run should fail fast on
   // session_no_store rather than sit out its whole 25s deadline.
   sessionUsable: (msg) => !msg.early || !msg.storeId,
+  // EVERYTHING THE RUN NEEDS TO START IS ALREADY IN THE EARLY ANSWER: the store,
+  // the shopping context, and the search key -- `hasSearchKey` is computed
+  // before the early post, not after it. What is missing is the cart read that
+  // PROVES the token, and the run takes its own baseline read on the quiet page
+  // regardless. See NetworkRail.earlyStartOk for the twelve seconds this is
+  // about; writes still wait for the refined answer, which is the property
+  // albertsons-early-session.test.tsx exists to hold.
+  earlyStartOk: (msg) => !!msg.hasSearchKey && !!msg.storeId && !!msg.shoppingContext,
   // No preference concept on this platform. Answering false rather than leaving
   // the engine to infer it from an empty array is the whole point of asking.
   needsPreference: () => false,
