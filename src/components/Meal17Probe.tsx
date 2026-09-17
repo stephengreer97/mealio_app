@@ -39,17 +39,12 @@ const OFFER = '96A97D940D5B4635B56E67DD3D8D829F'; // the offerId for SOUR_CREAM
 // Round two: the documented parameters this endpoint takes besides `items`,
 // and the question of whether anything here can take a SEARCH TERM.
 const MATRIX: Step[] = [
-  { label: 'baseline', url: CART },
-  { label: 'offers= (documented)', url: 'https://www.walmart.com/sc/cart/addToCart?offers=' + OFFER + '_1' },
-  { label: 'read', url: CART },
-  { label: 'items + storeId', url: sc(SOUR_CREAM + '_1') + '&storeId=2280' },
-  { label: 'read', url: CART },
-  { label: 'searchTerm= guess', url: 'https://www.walmart.com/sc/cart/addToCart?searchTerm=sour%20cream' },
-  { label: 'read', url: CART },
-  { label: 'q= guess', url: 'https://www.walmart.com/sc/cart/addToCart?q=sour%20cream' },
-  { label: 'read', url: CART },
-  { label: 'plain search page', url: 'https://www.walmart.com/search?q=sour%20cream' },
-  { label: 'read', url: CART },
+  // The cart TOTAL is not a clean instrument on a cart this size: it moves when
+  // Walmart re-prices or re-stocks anything in it, and this one is carrying
+  // items from earlier testing that are flagged unavailable. The product page
+  // says what is in the cart FOR THIS ITEM, which is the only number that
+  // answers "did the fresh search id land".
+  { label: 'PDP for the searched item', url: 'https://www.walmart.com/ip/10294761' },
 ];
 
 /**

@@ -636,7 +636,7 @@ describe('searching on the early answer', () => {
 
   it('never writes if the refined answer never comes', () => {
     // The store going quiet must not become a write on a session that never
-    // proved out. The session deadline is what ends this, not a fallback write.
+    // proved out.
     jest.useFakeTimers();
     try {
       const { post } = runToSessionPhase();
@@ -644,6 +644,33 @@ describe('searching on the early answer', () => {
       post({ type: 'SEARCH_RESULT', source: 'network', term: 'Sour Cream', candidates: [] });
       post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
       act(() => { jest.advanceTimersByTime(60_000); });
+      expect(writes()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('and does not sit on the spinner for ever waiting for it', () => {
+    // THIS IS WHAT THE TEST ABOVE DID NOT CATCH, and its old comment asserted
+    // the opposite: "the session deadline is what ends this". It did not end
+    // anything. netStartSearch had already replaced the session deadline with
+    // its own, SEARCH_BATCH_DONE clears that immediately before parking the
+    // writes, and parking scheduled nothing at all -- so a refined answer that
+    // never came left the run on "Still working" with no handover and no way
+    // out but the close button. A review advanced the clock six hundred seconds
+    // against the test above and the sheet was still spinning.
+    //
+    // Asserting on writes() alone could never have seen it: zero writes is also
+    // what a hung run produces. The observable has to be that the run ENDED.
+    jest.useFakeTimers();
+    try {
+      const { view, post } = runToSessionPhase();
+      post(EARLY_WITH_STORE);
+      post({ type: 'SEARCH_RESULT', source: 'network', term: 'Sour Cream', candidates: [] });
+      post({ type: 'SEARCH_BATCH_DONE', source: 'network', count: 1 });
+      // Past the store's own session budget, which is what the park now arms.
+      act(() => { jest.advanceTimersByTime(30_000); });
+      expect(view.queryByText(/Still working/i)).toBeNull();
       expect(writes()).toBe(0);
     } finally {
       jest.useRealTimers();

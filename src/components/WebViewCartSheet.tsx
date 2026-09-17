@@ -2454,6 +2454,13 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
    */
   // netStartSearch is defined above and can now finish the search phase itself,
   // when the prewarm already answered every term.
+  /** Clears the page's latched opinion about this store's search -- see
+   *  NetworkRail.resetSearchVerdict. A no-op for rails that keep none. */
+  const netResetSearchVerdictRef = useRef<() => void>(() => {});
+  netResetSearchVerdictRef.current = () => {
+    const js = getNetworkRail(lockedStoreIdRef.current)?.resetSearchVerdict?.();
+    if (js) webviewRef.current?.injectJavaScript(js);
+  };
   const netStartAddsRef = useRef<() => void>(() => {});
   const netStartAdds = useCallback(() => {
     const active = activeItemsRef.current;
@@ -2465,6 +2472,18 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
     // nothing at all, which is why only this half waits.
     if (netWritesHeldRef.current) {
       netAddsHeldRef.current = true;
+      // AND A DEADLINE ON THE PARK, because nothing else is holding one.
+      //
+      // I wrote "the session deadline stays ARMED, deliberately" above this
+      // feature and it was not true: netStartSearch had already replaced that
+      // timer with its own 'search_timeout', and the SEARCH_BATCH_DONE branch
+      // clears that immediately before calling in here. So parking scheduled
+      // NOTHING. A refined answer that never came -- the script dying, the page
+      // navigating, an ok:false after the early answer -- left the run on
+      // "Still working" with no handover and no way out but the close button.
+      // Reviewed and reproduced by advancing fake timers six hundred seconds
+      // against the very test that claimed to cover it.
+      netArm(netRail()?.budgets.sessionMs ?? 25_000, 'refined_session_timeout');
       console.log(`[Cart ${ts()}]`, 'network run: search done, holding the writes for the refined session');
       return;
     }
@@ -3104,6 +3123,16 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
     netPhaseRef.current = 'session';
     setStep('searching');
     setSearchingLabel('Connecting…');
+    // AND A FRESH VERDICT ABOUT THE STORE'S SEARCH.
+    //
+    // A.searchUnserved latches in the page when one term times out while the
+    // other request shape answers, and it cuts every later term to a 3s budget.
+    // Its reset lives in the session SCRIPT, on the reasoning that a session read
+    // marks the start of a run -- but the reuse path below returns without
+    // injecting one, so a latch set by the sheet's own search prewarm (same
+    // document, moments earlier) carried into the run and gave its very first
+    // term the short budget. Cleared here instead, where every run passes.
+    netResetSearchVerdictRef.current();
     // ALREADY ANSWERED? THEN DO NOT ASK AGAIN.
     //
     // The login check runs the SAME probe moments before this and keeps its
@@ -6647,7 +6676,6 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
             netEarlySearchRef.current = false;
             netWritesHeldRef.current = false;
             netSessionSettledRef.current = true;
-            if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
             if (msg.storeId && msg.shoppingContext) {
               netSessionRef.current = {
                 storeId: String(msg.storeId), shoppingContext: String(msg.shoppingContext),
@@ -6657,6 +6685,14 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
             console.log(`[Cart ${ts()}]`, 'network run: refined session in —',
               netAddsHeldRef.current ? 'releasing the writes it was holding' : 'writes were not waiting yet');
             if (netAddsHeldRef.current) {
+              // WHOSE DEADLINE IS THIS. Only here is the armed timer the park's
+              // own -- the search finished, and SEARCH_BATCH_DONE cleared the
+              // search deadline before parking. Clearing it unconditionally (as
+              // this did) threw away the SEARCH deadline whenever the refined
+              // answer arrived while the batch was still in flight, which is the
+              // ordinary case on a slow store or a stretched 14-term batch, and
+              // left the search unbounded: no SEARCH_BATCH_DONE, no handover.
+              if (netTimeoutRef.current) { clearTimeout(netTimeoutRef.current); netTimeoutRef.current = null; }
               netAddsHeldRef.current = false;
               netStartAddsRef.current();
             }

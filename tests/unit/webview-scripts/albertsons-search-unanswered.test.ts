@@ -32,7 +32,7 @@ import { ALB_SEARCH_UNSERVED_FN } from '../../../src/lib/webview-scripts/alberts
 import { getNetworkRail } from '../../../src/lib/webview-scripts/network-rail';
 
 /** The predicate exactly as it ships, evaluated. */
-function deadFn(): (firstWhy: unknown, got: Record<string, unknown>) => boolean {
+function deadFn(): (firstWhy: unknown, got: Record<string, unknown>, timeouts: number) => boolean {
   return new Function(ALB_SEARCH_UNSERVED_FN + '\nreturn __albSearchUnserved;')() as never;
 }
 
@@ -49,30 +49,42 @@ describe('the signal that says the endpoint is not serving us', () => {
 
   it('latches on the measured pair: one shape hung, the other answered', () => {
     // The Pixel run above, exactly.
-    expect(dead('no_response', { why: 'http', status: 401 })).toBe(true);
+    expect(dead('no_response', { why: 'http', status: 401 }, 2)).toBe(true);
   });
 
   it.each([500, 403, 404, 429, 200])('any real status counts, including %s', (status) => {
     // What matters is that the connection carried a reply, not which one.
-    expect(dead('no_response', { why: 'http', status })).toBe(true);
+    expect(dead('no_response', { why: 'http', status }, 2)).toBe(true);
   });
 
   it('does NOT latch when the fallback timed out too', () => {
     // Both shapes silent IS a bad minute, and the run should keep asking -- this
     // is the case the 40s cold budget was measured for.
-    expect(dead('no_response', { why: 'no_response' })).toBe(false);
+    expect(dead('no_response', { why: 'no_response' }, 2)).toBe(false);
   });
 
   it('does NOT latch when the first shape answered and was merely refused', () => {
     // A 400 ladder is the ordinary variant fallback, not a dead endpoint.
-    expect(dead('http', { why: 'http', status: 400 })).toBe(false);
-    expect(dead('search_error', { why: 'http', status: 401 })).toBe(false);
+    expect(dead('http', { why: 'http', status: 400 }, 2)).toBe(false);
+    expect(dead('search_error', { why: 'http', status: 401 }, 2)).toBe(false);
+  });
+
+  it('does NOT latch on the FIRST timeout, however the other shape answered', () => {
+    // THE 40-SECOND BUDGET IS WHY. searchFirstRequestMs exists because a cold
+    // first request can run the full 40s and still be healthy, and the alternate
+    // shape's 401 is routine -- each service has its own subscription key, so the
+    // wrong one is always a 401. One slow start would otherwise cut every
+    // remaining term to 3s and fail terms that were going to answer, trading a
+    // slow run for a wrong one. A store that is genuinely not serving search
+    // times out in a row; Stephen's 2026-09-13 run did it seven times.
+    expect(dead('no_response', { why: 'http', status: 401 }, 1)).toBe(false);
+    expect(dead('no_response', { why: 'http', status: 500 }, 1)).toBe(false);
   });
 
   it('does NOT latch on a status-less failure', () => {
     // `status: null` is how a dead connection reports, and that is a bad minute.
-    expect(dead('no_response', { why: 'http', status: null })).toBe(false);
-    expect(dead('no_response', { why: 'unparseable' })).toBe(false);
+    expect(dead('no_response', { why: 'http', status: null }, 2)).toBe(false);
+    expect(dead('no_response', { why: 'unparseable' }, 2)).toBe(false);
   });
 });
 
@@ -102,6 +114,22 @@ describe('the batch the rail emits', () => {
     const s = script();
     expect(s).toContain('A.searchedOnce ? 15000 : 40000');
     expect(s).toContain('? 3000');
+  });
+
+  it('gives every run a fresh verdict, even one that reuses a session', () => {
+    // The session script's reset only runs when a session script runs, and the
+    // reuse path in netStartRun does not inject one -- so a latch set by the
+    // search prewarm, in the same document moments earlier, reached the run's
+    // first term. The rail exposes a reset the sheet calls on every run.
+    const rail = getNetworkRail('albertsons')!;
+    const js = rail.resetSearchVerdict?.();
+    expect(js).toBeTruthy();
+    expect(js).toContain('searchUnserved=false');
+    expect(js).toContain('searchTimeouts=0');
+    // It must not reach for anything else on that object: the keys and the
+    // session live there too and are still this document's.
+    expect(js).not.toContain('searchKey');
+    expect(js).not.toContain('keyCandidates');
   });
 
   it('clears the latch when a new run reads the session', () => {

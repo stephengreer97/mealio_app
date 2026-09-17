@@ -223,6 +223,32 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   /** Stores whose signed-out answer came from the store itself. Cleared whenever
    *  a status is set, so it can never outlive the verdict it describes. */
   const measuredOutRef = useRef<Set<string>>(new Set());
+  /**
+   * THE ONLY WAY A STATUS IS WRITTEN, so `measured` cannot outlive the verdict
+   * it describes.
+   *
+   * It already had: the comment on signedOutIsMeasured claimed the flag was
+   * "cleared whenever a status is set", and it was cleared in exactly one of the
+   * eight places a status is set -- the native path that sets it. A review found
+   * the rest. The live case is ugly: a native check answers guest:true, the user
+   * signs in on the WebView, noteLiveVerdict flips the status to loggedIn and
+   * leaves the store marked measured-out, and the NEXT run reads a stale
+   * corroboration, skips the boot grace, and walls a signed-in user -- the exact
+   * fault that grace exists to prevent. forgetAll had the same hole, carrying one
+   * account's verdict into the next user's session.
+   *
+   * A second map kept in step by convention drifts. This one cannot.
+   */
+  const setStoreStatus = useCallback(
+    (storeId: string, status: LoginPrewarmStatus, measuredOut = false) => {
+      if (measuredOut) measuredOutRef.current.add(storeId);
+      else measuredOutRef.current.delete(storeId);
+      // The ONE direct write to the map. Everything else in this file goes
+      // through this function, which is what makes the pair inseparable.
+      statusRef.current.set(storeId, status);
+    },
+    [],
+  );
   const signedOutIsMeasured = useCallback(
     (storeId: string): boolean => measuredOutRef.current.has(storeId),
     [],
@@ -267,9 +293,8 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     if (v.state === 'needs-webview') return false;
     // Set together with the status, never separately: a stale `measured` beside
     // a fresh verdict is the one way this could wall a signed-in user.
-    if (v.state === 'out' && v.measured) measuredOutRef.current.add(storeId);
-    else measuredOutRef.current.delete(storeId);
-    statusRef.current.set(storeId, v.state === 'in' ? 'loggedIn' : 'loggedOut');
+    setStoreStatus(storeId, v.state === 'in' ? 'loggedIn' : 'loggedOut',
+      v.state === 'out' && !!v.measured);
     setStatusVersion((n) => n + 1);
     // A store that just resolved signed-in may have terms waiting on exactly
     // that answer, the same as after a probe settles.
@@ -289,7 +314,7 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     const next = queueRef.current.shift();
     if (!next) return;
     currentRef.current = next;
-    statusRef.current.set(next, 'checking');
+    setStoreStatus(next, 'checking');
     console.log('[Prewarm] starting silent login probe for', next);
     setCurrent(next);
   }, []);
@@ -320,7 +345,7 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
       //
       // Marked 'checking' before the await so a second call for the same store
       // inside that ~400ms does not start a duplicate: the guard above reads it.
-      statusRef.current.set(storeId, 'checking');
+      setStoreStatus(storeId, 'checking');
       void settleNatively(storeId).then((settled) => {
         if (settled || !userRef.current) return;
         // Only a store that cannot be asked over HTTP gets here -- and only when
@@ -330,7 +355,7 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
         // pure cost. Unmeasured stores are not in that category: they keep the
         // probe they have always had.
         if (!worthCheckingEagerly(storeId)) {
-          statusRef.current.set(storeId, 'unknown');
+          setStoreStatus(storeId, 'unknown');
           console.log('[Prewarm] checkStore deferring', storeId,
             '- its run needs a WebView anyway, so the check rides along in that one');
           return;
@@ -500,7 +525,9 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   const settle = useCallback(
     (storeId: string, status: LoginPrewarmStatus) => {
       console.log('[Prewarm] probe result', storeId, '→', status);
-      statusRef.current.set(storeId, status);
+      // A PROBE'S verdict, never a measured one: this is the hidden WebView's
+      // answer, which is the thing the sheet re-checks rather than trusts.
+      setStoreStatus(storeId, status);
       setStatusVersion((v) => v + 1);
       currentRef.current = null;
       setCurrent(null);
@@ -519,7 +546,7 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   // finishing the cart snapshot. Does NOT dequeue — the terminal handleResult does.
   const handleLogin = useCallback((storeId: string, isLoggedIn: boolean) => {
     console.log('[Prewarm] login published early', storeId, '→', isLoggedIn ? 'loggedIn' : 'loggedOut');
-    statusRef.current.set(storeId, isLoggedIn ? 'loggedIn' : 'loggedOut');
+    setStoreStatus(storeId, isLoggedIn ? 'loggedIn' : 'loggedOut');
     setStatusVersion((v) => v + 1);
   }, []);
 
@@ -531,7 +558,7 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     // less than the sheet's own check, which is about to run anyway. Left
     // 'unknown' rather than settled, so nothing downstream acts on a half
     // answer -- and so a later run can prewarm it properly.
-    statusRef.current.set(storeId, 'unknown');
+    setStoreStatus(storeId, 'unknown');
     currentRef.current = null;
     setCurrent(null);
     setStatusVersion((v) => v + 1);
@@ -543,7 +570,7 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
     if (statusRef.current.get(storeId) === next) return;
     console.log('[Prewarm] live verdict from the cart sheet', storeId, '→', next,
       '(was', statusRef.current.get(storeId) ?? 'unknown', ')');
-    statusRef.current.set(storeId, next);
+    setStoreStatus(storeId, next);
     setStatusVersion((v) => v + 1);
   }, []);
 
@@ -628,6 +655,7 @@ export function LoginPrewarmProvider({ children }: { children: React.ReactNode }
   const forgetAll = useCallback(() => {
     queueRef.current = [];
     statusRef.current.clear();
+    measuredOutRef.current.clear();
     cartRef.current.clear();
     currentRef.current = null;
     setCurrent(null);

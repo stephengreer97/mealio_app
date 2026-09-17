@@ -230,6 +230,16 @@ export interface NetworkRail {
    * Absent means no -- a rail that has not been measured keeps the wait.
    */
   earlyStartOk?(msg: Record<string, unknown>): boolean;
+  /**
+   * Forget what this document has concluded about the store's SEARCH.
+   *
+   * Only Albertsons has such a conclusion: one term timing out while the other
+   * request shape answers latches a short budget for every later term. That is
+   * a judgement about a moment, and a new run deserves its own -- especially as
+   * the search prewarm runs in the same document and can latch it before the
+   * run starts. Absent means the rail keeps no such state.
+   */
+  resetSearchVerdict?(): string;
 
   /**
    * DOES THIS STORE'S WRITE SET A LINE, OR ADD TO IT?

@@ -1057,8 +1057,22 @@ ${albPrelude()}
  * 22:04 and answered in 1025ms at 22:12 on the same device and the same day.
  */
 export const ALB_SEARCH_UNSERVED_FN = `
-  function __albSearchUnserved(firstWhy, got) {
-    return firstWhy === 'no_response' && got.why === 'http' && !!got.status;
+  function __albSearchUnserved(firstWhy, got, timeouts) {
+    // TWO TIMEOUTS, NOT ONE, and the reason is the 40s budget above it.
+    //
+    // The pair "this shape hung, the other answered" was meant to say the
+    // connection is fine and the endpoint is not serving us. It does not, on its
+    // own: the other shape is the PLAIN service, each service has its own
+    // subscription key, and sending the wrong one is a 401 (see __albKeyFor) --
+    // so a routine 401 was being read as evidence. Pair that with the cold first
+    // request, which searchFirstRequestMs exists precisely because it can run the
+    // full 40s and still be healthy, and one slow start would cut every
+    // remaining term to 3s and fail terms that were going to answer. That trades
+    // a slow run for a wrong one, which is the wrong direction.
+    //
+    // A store that is genuinely not serving search produces timeouts in a row --
+    // Stephen's 2026-09-13 run was seven of seven. A cold start produces one.
+    return timeouts >= 2 && firstWhy === 'no_response' && got.why === 'http' && !!got.status;
   }
 `;
 
@@ -1127,8 +1141,9 @@ ${ALB_SEARCH_UNSERVED_FN}
   // reverses. Same result shape either way.
   var VARIANTS = ['site', 'plain'];
   var winner = null;
-  /** One second opinion per batch after a timeout -- see worthRetryingElsewhere. */
-  var triedAlternate = false;
+  /** One second opinion per batch after a TIMEOUT -- see worthRetryingElsewhere.
+   *  The refusal ladder above it is not capped and does not consume this. */
+  var triedAfterTimeout = false;
 
   // ONE ATTEMPT. The retrying wrapper below is the thing everything calls; see
   // _retry.ts for which failures earn a second ask and why a timeout does not.
@@ -1265,9 +1280,15 @@ ${ALB_SEARCH_UNSERVED_FN}
     // original reasoning intact: if the other shape answers it becomes the
     // winner and every later term takes it, and if it does not, no other term
     // pays for the question.
-    var worthRetryingElsewhere = got.why === 'no_response' && !triedAlternate;
+    // SEPARATE BUDGETS, because they are separate questions. The refusal ladder is
+    // free to run for any term; the timeout probe is the one that
+    // is capped at one per batch. Sharing a flag meant a term that got a plain
+    // 4xx spent the timeout probe, and the later term that actually timed out
+    // never asked the other shape -- so the latch could never set and every
+    // remaining term paid the full 15s, which is the case this was written for.
+    var worthRetryingElsewhere = got.why === 'no_response' && !triedAfterTimeout;
     if (!got.ok && (refused || worthRetryingElsewhere) && !winner) {
-      triedAlternate = true;
+      if (worthRetryingElsewhere) triedAfterTimeout = true;
       for (var vi = 0; vi < VARIANTS.length; vi++) {
         if (VARIANTS[vi] === first) continue;
         var alt = await attempt(term, VARIANTS[vi]);
@@ -1309,7 +1330,8 @@ ${ALB_SEARCH_UNSERVED_FN}
     // DELIBERATELY NARROW. If the alternate ALSO times out, nothing is latched
     // and every term is still asked -- that shape genuinely is a bad minute, and
     // the 40s cold budget above exists because it has paid off before.
-    if (!got.ok && __albSearchUnserved(firstWhy, got)) {
+    if (firstWhy === 'no_response') A.searchTimeouts = (A.searchTimeouts || 0) + 1;
+    if (!got.ok && __albSearchUnserved(firstWhy, got, A.searchTimeouts || 0)) {
       A.searchUnserved = true;
     }
     var url = got.url;
@@ -1835,6 +1857,11 @@ export const ALBERTSONS_RAIL: NetworkRail = {
   // about; writes still wait for the refined answer, which is the property
   // albertsons-early-session.test.tsx exists to hold.
   earlyStartOk: (msg) => !!msg.hasSearchKey && !!msg.storeId && !!msg.shoppingContext,
+  // See NetworkRail.resetSearchVerdict. Deliberately touches only the two fields
+  // the verdict is made of -- the keys and the session on the same object are
+  // this document's and are still good.
+  resetSearchVerdict: () => '(function(){try{var A=window.__mealioAlb;'
+    + 'if(A){A.searchUnserved=false;A.searchTimeouts=0;}}catch(e){}})(); true;',
   // No preference concept on this platform. Answering false rather than leaving
   // the engine to infer it from an empty array is the whole point of asking.
   needsPreference: () => false,
