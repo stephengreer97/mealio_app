@@ -17,6 +17,7 @@ import { LoginPrewarmProvider } from './src/context/LoginPrewarmContext';
 import { CartJobProvider } from './src/context/CartJobContext';
 import { CreatorDraftsProvider } from './src/context/CreatorDraftsContext';
 import RootNavigator from './src/navigation/RootNavigator';
+import ErrorBoundary from './src/components/ErrorBoundary';
 import { navigationRef } from './src/navigation/navigationRef';
 import { installConsoleCapture } from './src/lib/logBuffer';
 import WebViewVersionProbe from './src/components/WebViewVersionProbe';
@@ -62,6 +63,11 @@ export default function App() {
   if (!fontsLoaded) return null;
 
   return (
+    // OUTSIDE EVERY PROVIDER, because a throw inside one takes the tree with it
+    // and there would be nothing left to render a message from. The cost is that
+    // a reset re-runs the providers; the alternative is a blank screen, which is
+    // what this replaces.
+    <ErrorBoundary label="app">
     <SafeAreaProvider>
       <WebViewVersionProbe />
       {/* Outside AuthProvider on purpose: GET /api/stores is public, and the
@@ -83,12 +89,20 @@ export default function App() {
             <NavigationContainer ref={navigationRef}>
               <StatusBar style="auto" />
               <PushRegistrar />
-              <RootNavigator />
+              {/* A SECOND ONE, INSIDE THE PROVIDERS. A screen that throws is the
+                  likely case by far, and catching it here keeps the session,
+                  the cart job and the navigator alive -- so "Try again" puts the
+                  user back where they were rather than through a cold start.
+                  The outer boundary only ever sees what this one cannot. */}
+              <ErrorBoundary label="navigator">
+                <RootNavigator />
+              </ErrorBoundary>
             </NavigationContainer>
           </CartJobProvider>
         </LoginPrewarmProvider>
         </CreatorDraftsProvider>
       </AuthProvider>
     </SafeAreaProvider>
+    </ErrorBoundary>
   );
 }
