@@ -321,11 +321,32 @@ ${RETRY_FN}
   }
 
   async function __albEnsureKeys(budgetMs) {
-    if (A.searchKey || (A.keyCandidates && A.keyCandidates.length)) return;
+    // WHERE THE KEYS CAME FROM, AND WHAT THAT COST. The four branches below are
+    // not remotely alike -- three return without touching the network and the
+    // fourth fetches the whole storefront document -- and the session probe's
+    // timing could not tell them apart. Recorded on A so the refined post can
+    // carry it; see the 12.3s in NetworkRail.earlyStartOk.
+    //
+    // WRITTEN OUT RATHER THAN THROUGH A HELPER, deliberately.
+    //
+    // every-fetch-is-accounted-for.test.ts names the owner of a request by
+    // walking BACKWARDS to the nearest declaration, so a local __done helper
+    // declared above the request would have taken its name and quietly emptied
+    // that guard. It caught that, and then it caught this comment too: the
+    // scan's pattern is a keyword followed by a word, and prose containing one
+    // reads as a declaration. Hence the plainer wording here.
+    A.keysFrom = 'pending'; A.keysMs = 0;
+    var __k0 = Date.now();
+    if (A.searchKey || (A.keyCandidates && A.keyCandidates.length)) {
+      A.keysFrom = 'already'; A.keysMs = Date.now() - __k0; return;
+    }
     var fromPage = __albCfg().sc.apimProgramSubscriptionKey;
-    if (fromPage) return;                       // the runtime has it; use it
+    if (fromPage) {                              // the runtime has it; use it
+      A.keysFrom = 'runtime'; A.keysMs = Date.now() - __k0; return;
+    }
     var cached = __albCachedKeys();
     if (cached) {
+      A.keysFrom = 'cache'; A.keysMs = Date.now() - __k0;
       A.searchKey = cached.search || null;
       A.plainKey = cached.plain || null;
       A.keyCandidates = cached.candidates || [];
@@ -337,9 +358,14 @@ ${RETRY_FN}
     try {
       var r = await fetch('/', { credentials: 'include', signal: ctl.signal });
       clearTimeout(to);
-      if (r.status !== 200) return;
+      if (r.status !== 200) {
+        A.keysFrom = 'fetch_http_' + r.status; A.keysMs = Date.now() - __k0; return;
+      }
       html = await r.text();
-    } catch (e) { clearTimeout(to); return; }
+    } catch (e) {
+      clearTimeout(to); A.keysFrom = 'fetch_failed'; A.keysMs = Date.now() - __k0; return;
+    }
+    A.keysFrom = 'fetch'; A.keysMs = Date.now() - __k0;
     // Found by INDEX then a class with nothing to escape. A backslash written
     // here is eaten by the template literal before the script is injected, so
     // \\s would have shipped as a literal 's' and matched nothing -- which is how
@@ -670,8 +696,12 @@ ${albPrelude()}
     // The refinement: does the token actually work? A read that succeeds proves
     // the add path; one that fails proves nothing about the user, only about us,
     // so it never downgrades the answer above -- it only labels it.
+    var __c0 = Date.now();
     var cart = await __albReadCart(6000);
+    var __cartWait = Date.now() - __c0;
     post({
+      keysFrom: A.keysFrom || null, keysMs: A.keysMs != null ? A.keysMs : null,
+      cartWaitMs: __cartWait,
       ok: true, loggedIn: true, verified: !!cart.ok, source: 'userinfo',
       storeId: storeId, zipCode: u.zipcode ? String(u.zipcode) : null,
       uuid: u.UUID || null, shoppingContext: __albPreference().context,
