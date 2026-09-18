@@ -1201,6 +1201,13 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
     if (raw > netPctRef.current) { netPctRef.current = raw; setNetPct(raw); }
   }, []);
   const resetNetPct = useCallback(() => { netPctRef.current = 0; setNetPct(null); }, []);
+  // Items the store CONFIRMED added this run, by item index. The count on the
+  // run screen ("3 of 12 added") reads this, not netProgress: netProgress counts
+  // items DECIDED, which includes failures and items that were never written,
+  // and "12 of 12 added" over a run that missed one would be a lie. By index so
+  // a top-up re-writing the same item cannot count it twice.
+  const netAddedIdxRef = useRef<Set<number>>(new Set());
+  const [netAdded, setNetAdded] = useState(0);
   // A run that is still going but has stopped counting looks broken. Stephen
   // watched one sit at 3/18 and had no way to tell it apart from a hang, so a
   // run that has not counted anything for a while says so out loud.
@@ -1229,6 +1236,9 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
   // producing its first number — the session probe, the before-cart snapshot,
   // the beat before the first search answers. The step alone decides, so there
   // is no window where the user sees a page they cannot use.
+  // Under the run heading: what is being shopped for. One meal by name, as in
+  // the launch video; several by count, since three names do not fit a line.
+  const runSubtitle = meals.length === 1 ? meals[0].name : meals.length > 1 ? `${meals.length} meals` : null;
   const netRunVisual =
     !!getNetworkRail(lockedStoreIdRef.current)
     && (step === 'login_check' || step === 'searching' || step === 'adding');
@@ -2794,6 +2804,8 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
     // second pass.
     if (!netTopUpRef.current) {
       const decided = Math.max(0, active.length - toWrite.length);
+      netAddedIdxRef.current = new Set();
+      setNetAdded(0);
       setNetProgress({ done: decided, total: active.length, label: 'Adding to your cart', phase: 'add' });
       advanceNetPct('add', decided, active.length);
       setSearchingLabel(`Adding ${active.length} ingredients…`);
@@ -7027,6 +7039,10 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
         }
         if (msg.type === 'NET_ADD_RESULT') {
           bumpNetProgress(typeof msg.name === 'string' ? msg.name : null);
+          if (msg.success === true && typeof msg.idx === 'number' && !netAddedIdxRef.current.has(msg.idx)) {
+            netAddedIdxRef.current.add(msg.idx);
+            setNetAdded(netAddedIdxRef.current.size);
+          }
           if (!netActiveRef.current || netPhaseRef.current !== 'add') return;
           const at = typeof msg.idx === 'number' ? msg.idx : -1;
           if (at < 0) return;
@@ -8051,8 +8067,23 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
               <View style={styles.runVisualLayer} pointerEvents="box-none">
                 <CartRunAnimation
                   progress={step === 'login_check' ? null : netPct}
-                  label={step === 'login_check' ? null : (netProgress?.label ?? null)}
-                  title={step === 'login_check' ? `Checking your ${storeName} account` : null}
+                  title={step === 'login_check'
+                    ? `Checking your ${storeName} account`
+                    : netProgress?.phase === 'search' ? 'Finding your ingredients' : 'Adding to your cart'}
+                  subtitle={runSubtitle}
+                  count={step === 'login_check' || !netProgress || netProgress.total <= 0
+                    ? null
+                    : netProgress.phase === 'search'
+                      ? { done: netProgress.done, total: netProgress.total, verb: 'looked up' }
+                      : { done: netAdded, total: netProgress.total, verb: 'added' }}
+                  label={step === 'login_check' ? null
+                    // The phase's own label repeats the heading; say what it is doing instead.
+                    : netProgress?.label === 'Adding to your cart' && netProgress.total > 0
+                      ? `Adding ${netProgress.total} ingredient${netProgress.total === 1 ? '' : 's'}…`
+                      : (netProgress?.label ?? null)}
+                  doneText={netProgress?.phase === 'add' && netProgress.total > 0 && netAdded >= netProgress.total
+                    ? `All ${netProgress.total} in your cart`
+                    : null}
                   note={netNote}
                 />
               </View>
