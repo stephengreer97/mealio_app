@@ -74,6 +74,7 @@ import { drainPrewarmRequests } from '../lib/prewarm-requests';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 import { nativeRunFor } from '../lib/native-rail';
 import { nativeStop, type NativeRunDriver, type PostToSheet } from '../lib/native-rail/run';
+import { isMessageFromStore } from '../lib/webview-message-origin';
 import { runNeedsWebView } from '../lib/store-capabilities';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -5491,6 +5492,14 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
 
   const onMessage = useCallback(
     (event: WebViewMessageEvent) => {
+      // ONLY THE STORE MAY STEER A RUN. The WebView can be navigated off the
+      // store and the bridge goes with it; a message from any other site is
+      // dropped before it is even parsed. See lib/webview-message-origin.
+      const fromUrl = event.nativeEvent?.url;
+      if (!isMessageFromStore(fromUrl, scriptsRef.current)) {
+        if (__DEV__) console.log(`[Cart ${ts()}]`, 'onMessage dropped: not from the store —', fromUrl);
+        return;
+      }
       try {
         const msg = JSON.parse(event.nativeEvent.data);
         console.log(`[Cart ${ts()}]`, 'onMessage type=', msg.type, msg);
