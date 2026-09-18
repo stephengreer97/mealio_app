@@ -179,3 +179,101 @@ export function polledSource(creator: {
   if (!source || source === 'none' || !isPlatformSource(source)) return null;
   return source;
 }
+
+// ── The sync picker (the web's `SyncSourceSection`) ─────────────────────────
+
+/** A source, or `none`: the state of a row nobody has chosen for, and the one Disconnect returns to. */
+export type PrimarySource = PlatformSource | 'none';
+
+/** The three sources connected with an OAuth grant rather than a link. */
+export const CONNECTED_PLATFORMS = ['youtube', 'instagram', 'tiktok'] as const;
+
+export interface CreatorSourceOption {
+  source: PlatformSource;
+  label: string;
+  /** Non-null means visible but not selectable, and this is why. None today. */
+  blockedReason: string | null;
+  /** Shown before the Connect button: what to expect from pressing it. */
+  note: string | null;
+}
+
+/**
+ * What the picker offers, in order. Copied from the server's
+ * `CREATOR_SOURCE_OPTIONS` (lib/creator-sources.ts), wording included.
+ */
+export const CREATOR_SOURCE_OPTIONS: readonly CreatorSourceOption[] = [
+  { source: 'website', label: 'Website or blog', blockedReason: null, note: null },
+  { source: 'youtube', label: 'YouTube', blockedReason: null, note: null },
+  {
+    source: 'instagram',
+    label: 'Instagram',
+    blockedReason: null,
+    note:
+      'Instagram is still reviewing Mealio. Until Meta approves it, only accounts Mealio has invited as ' +
+      'testers can connect, and anyone else will see Instagram refuse on its own screen.',
+  },
+  { source: 'tiktok', label: 'TikTok', blockedReason: null, note: null },
+];
+
+/** The most posts one import can take. The server enforces the same number. */
+export const CREATOR_SELECTION_MAX = 100;
+
+export function creatorSourceBlockedReason(source: PlatformSource): string | null {
+  return CREATOR_SOURCE_OPTIONS.find((option) => option.source === source)?.blockedReason ?? null;
+}
+
+/** Sites that host many people under one domain, where the first path segment is the owner. */
+const PATH_SCOPED_HOSTS = [
+  'medium.com',
+  'substack.com',
+  'patreon.com',
+  'tumblr.com',
+  'blogspot.com',
+  'sites.google.com',
+  'notion.site',
+  'beehiiv.com',
+  'linktr.ee',
+];
+
+function firstSegment(link: string): string | null {
+  const afterScheme = link.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  const slash = afterScheme.search(/[/?#]/);
+  if (slash === -1 || afterScheme[slash] !== '/') return null;
+  const segment = afterScheme.slice(slash + 1).split(/[/?#]/)[0];
+  if (!segment) return null;
+  try {
+    return decodeURIComponent(segment).toLowerCase();
+  } catch {
+    return segment.toLowerCase();
+  }
+}
+
+/**
+ * Is `candidateUrl` on the same site as `siteUrl`? The server's `isOnSameSite`,
+ * with the host read by hand (see `hostFromLink` for why not `new URL`).
+ */
+export function isOnSameSite(siteUrl: string, candidateUrl: string): boolean {
+  const site = hostFromLink(siteUrl);
+  const candidate = hostFromLink(candidateUrl);
+  if (!site || !candidate) return false;
+
+  if (PATH_SCOPED_HOSTS.includes(site.replace(/^www\./, ''))) {
+    const owner = firstSegment(siteUrl);
+    if (!owner) return false;
+    return candidate.replace(/^www\./, '') === site.replace(/^www\./, '') && firstSegment(candidateUrl) === owner;
+  }
+
+  return candidate === site || candidate.endsWith(`.${site}`) || site === `www.${candidate}`;
+}
+
+/**
+ * Can Mealio read the creator's website? Only once the site has been checked
+ * and a feed on that same site confirmed: the server's `isCreatorSourceReady`
+ * for `website`. The three connected platforms are ready when their grant is,
+ * which only their status route can say.
+ */
+export function isWebsiteReady(creator: { websiteUrl?: string | null; feedUrl?: string | null }): boolean {
+  const website = creator.websiteUrl ?? '';
+  const feed = creator.feedUrl ?? '';
+  return Boolean(website && feed) && isOnSameSite(website, feed);
+}

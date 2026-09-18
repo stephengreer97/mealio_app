@@ -101,5 +101,6 @@ export function mapCreator(c: any): Creator {
     tiktokUrl: pick(c, 'tiktok_url', 'tiktokUrl'),
     primarySource: pick(c, 'primary_source', 'primarySource'),
     importOptIn: pick(c, 'import_opt_in', 'importOptIn'),
+    feedUrl: pick(c, 'feed_url', 'feedUrl'),
   };
 }
