@@ -33,14 +33,42 @@ function parseDeepLink(url: string): DeepLink | null {
   return null;
 }
 
-function parseVerifiedToken(url: string): string | null {
-  // mealio://verified?token=xxx
-  const match = url.match(/verified[?&]token=([^&]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
+/**
+ * The token from an email-verification link, and ONLY from one.
+ *
+ * Exactly `mealio://verified?token=...`. This used to be a substring match on
+ * `verified[?&]token=`, which also matched any link that merely contained those
+ * characters, including an https://mealio.co/meal/... App Link (Android opens
+ * those in the app) with `?verified&token=` on the end. Whoever wrote such a
+ * link chose which account the app signed in as.
+ */
+export function parseVerifiedToken(url: string): string | null {
+  const match = url.match(/^mealio:\/\/verified\/?\?([^#]*)$/i);
+  if (!match) return null;
+  for (const pair of match[1].split('&')) {
+    const eq = pair.indexOf('=');
+    if (eq < 0 || pair.slice(0, eq) !== 'token') continue;
+    try {
+      const token = decodeURIComponent(pair.slice(eq + 1));
+      return token || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 export default function RootNavigator() {
   const { user, isLoading, loginWithToken } = useAuth();
+  // The link listener below is registered once, so it reads these through refs
+  // rather than the first render's values.
+  const userRef = useRef(user);
+  userRef.current = user;
+  const isLoadingRef = useRef(isLoading);
+  isLoadingRef.current = isLoading;
+  // A verification link that arrived before the stored session was restored.
+  // Whether anyone is signed in is not known yet, so it waits for that answer.
+  const [pendingVerifiedToken, setPendingVerifiedToken] = useState<string | null>(null);
   const [deepLink, setDeepLink] = useState<DeepLink | null>(null);
   const [showAuth, setShowAuth] = useState(false);
   const splashHidden = useRef(false);
@@ -95,15 +123,44 @@ export default function RootNavigator() {
     || storeSelectorVisible
     || deepLink !== null;
 
+  /**
+   * Sign in with an email-verification token, but never OVER someone.
+   *
+   * The link's job is to finish a new signup on a phone nobody is signed in on.
+   * With an account already signed in, adopting it would switch accounts with
+   * no transition the user could see, on the strength of a link anyone can
+   * send. So it is ignored, and the person is told how to use it.
+   */
+  async function redeemVerifiedToken(token: string) {
+    if (userRef.current) {
+      Alert.alert(
+        'Already signed in',
+        'You are already signed in to Mealio on this device. To use this link, sign out first and then open it again.',
+      );
+      return;
+    }
+    try {
+      await loginWithToken(token);
+    } catch {
+      // Token invalid; user will stay on auth screen
+    }
+  }
+
+  // A link that arrived during the launch-time session restore is decided once
+  // that restore has said whether someone is signed in.
+  useEffect(() => {
+    if (isLoading || !pendingVerifiedToken) return;
+    const token = pendingVerifiedToken;
+    setPendingVerifiedToken(null);
+    void redeemVerifiedToken(token);
+  }, [isLoading, pendingVerifiedToken]);
+
   async function handleDeepLink(url: string) {
-    // Email verification callback — mealio://verified?token=xxx
+    // Email verification callback: mealio://verified?token=xxx
     const verifiedToken = parseVerifiedToken(url);
     if (verifiedToken) {
-      try {
-        await loginWithToken(verifiedToken);
-      } catch {
-        // Token invalid — user will stay on auth screen
-      }
+      if (isLoadingRef.current) setPendingVerifiedToken(verifiedToken);
+      else await redeemVerifiedToken(verifiedToken);
       return;
     }
 
