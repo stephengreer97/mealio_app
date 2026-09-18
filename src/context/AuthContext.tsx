@@ -4,7 +4,7 @@ import Constants from 'expo-constants';
 import { User } from '../types';
 import * as tokenStorage from '../lib/tokenStorage';
 import { auth, creators, usage } from '../lib/api';
-import { isAuthRejection } from '../lib/authErrors';
+import { isAuthRejection, setSessionExpiredHandler } from '../lib/authErrors';
 import { initPurchases, identifyUser, resetUser } from '../lib/purchases';
 import { unregisterDevice } from '../lib/push';
 import { clearSessionLogs } from '../lib/logBuffer';
@@ -118,6 +118,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     initPurchases();
     initAuth();
+  }, []);
+
+  // lib/api cleared the keychain because the server refused a renew. Without
+  // this the UI stayed signed in over a session with no token behind it.
+  useEffect(() => {
+    setSessionExpiredHandler(() => {
+      if (userRef.current) endLocalSession();
+    });
+    return () => setSessionExpiredHandler(null);
   }, []);
 
   // Log an open when the app returns to the foreground after being idle a while

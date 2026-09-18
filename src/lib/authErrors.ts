@@ -24,3 +24,21 @@ export class ApiError extends Error {
 export function isAuthRejection(err: unknown): boolean {
   return err instanceof ApiError && (err.status === 401 || err.status === 403);
 }
+
+// ── Telling the app the session is gone ──────────────────────────────────────
+//
+// When a renew is REFUSED, lib/api clears the keychain. That alone left a
+// zombie: AuthContext still held the user, the UI stayed signed in, every
+// request went out with no token and 401'd, and nothing led back to the sign-in
+// screen until the app was restarted. AuthContext registers here so the clear
+// and the signed-out UI happen together.
+let sessionExpiredHandler: (() => void) | null = null;
+
+export function setSessionExpiredHandler(fn: (() => void) | null): void {
+  sessionExpiredHandler = fn;
+}
+
+/** Called by lib/api after it has cleared a refused session. Never throws. */
+export function notifySessionExpired(): void {
+  try { sessionExpiredHandler?.(); } catch { /* never mask the 401 */ }
+}

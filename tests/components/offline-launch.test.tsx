@@ -41,6 +41,7 @@ jest.mock('../../src/lib/push', () => ({
 }));
 
 import { AuthProvider, useAuth } from '../../src/context/AuthContext';
+import { meals } from '../../src/lib/api';
 
 const ACCESS_TOKEN_KEY = 'mealio_access_token';
 const USER_KEY = 'mealio_user';
@@ -49,6 +50,7 @@ const STORED_USER = { id: 'user-A', email: 'a@example.com' };
 type Answer = { status: number; body: unknown } | 'network';
 let onVerify: () => Answer = () => 'network';
 let onRenew: () => Answer = () => 'network';
+let onMeals: () => Answer = () => ({ status: 200, body: { meals: [] } });
 let paths: string[] = [];
 
 function res(status: number, body: unknown) {
@@ -64,6 +66,7 @@ function installFetch() {
     let answer: Answer = { status: 200, body: {} };
     if (path === '/api/auth/verify') answer = onVerify();
     if (path === '/api/auth/renew') answer = onRenew();
+    if (path === '/api/meals') answer = onMeals();
     if (answer === 'network') throw new TypeError('Network request failed');
     return res(answer.status, answer.body) as any;
   }) as any;
@@ -85,6 +88,7 @@ async function launch() {
 
 beforeEach(() => {
   paths = [];
+  onMeals = () => ({ status: 200, body: { meals: [] } });
   mockKeychain.clear();
   mockKeychain.set(ACCESS_TOKEN_KEY, 'token-A');
   mockKeychain.set(USER_KEY, JSON.stringify(STORED_USER));
@@ -114,6 +118,17 @@ describe('a launch the server cannot answer', () => {
     expect(utils.getByTestId('who')).toHaveTextContent('user-A');
     expect(mockKeychain.get(ACCESS_TOKEN_KEY)).toBe('token-A');
     expect(JSON.parse(mockKeychain.get(USER_KEY)!).id).toBe('user-A');
+  });
+
+  it('keeps it when verify says 401 but renew cannot be reached', async () => {
+    // The server refused the old token, and the renew that might have replaced
+    // it never got an answer. Nobody has said the SESSION is dead.
+    onVerify = () => expiredAnswer;
+    onRenew = () => 'network';
+    const utils = await launch();
+
+    expect(utils.getByTestId('who')).toHaveTextContent('user-A');
+    expect(mockKeychain.get(ACCESS_TOKEN_KEY)).toBe('token-A');
   });
 
   it('confirms the session when the app comes back with a network', async () => {
@@ -162,5 +177,43 @@ describe('a launch the server does answer', () => {
 
     await waitFor(() => expect(utils.getByTestId('who')).toHaveTextContent('user-A'));
     expect(mockKeychain.get(ACCESS_TOKEN_KEY)).toBe('token-A2');
+  });
+});
+
+// A SESSION THE SERVER REFUSES MID-USE MUST LOOK SIGNED OUT.
+//
+// lib/api renews on a 401 and, when the renew failed for ANY reason, cleared
+// the keychain without telling AuthContext. The UI stayed signed in over no
+// token, every request 401'd, and nothing led to the sign-in screen until a
+// restart. And a renew that merely could not be reached cleared it too.
+describe('a request that 401s while signed in', () => {
+  async function signedIn() {
+    onVerify = () => ok({ user: STORED_USER });
+    const utils = await launch();
+    expect(utils.getByTestId('who')).toHaveTextContent('user-A');
+    return utils;
+  }
+
+  it('signs the app out when the renew is refused', async () => {
+    const utils = await signedIn();
+    onMeals = () => expiredAnswer;
+    onRenew = () => expiredAnswer;
+    await act(async () => { await meals.list().catch(() => {}); });
+
+    await waitFor(() => expect(utils.getByTestId('who')).toHaveTextContent('signed-out'));
+    expect(mockKeychain.get(ACCESS_TOKEN_KEY)).toBeUndefined();
+  });
+
+  it.each([
+    ['cannot be reached', 'network' as Answer],
+    ['gets a 503', { status: 503, body: {} } as Answer],
+  ])('keeps the session when the renew %s', async (_label, renewAnswer) => {
+    const utils = await signedIn();
+    onMeals = () => expiredAnswer;
+    onRenew = () => renewAnswer;
+    await act(async () => { await meals.list().catch(() => {}); });
+
+    expect(utils.getByTestId('who')).toHaveTextContent('user-A');
+    expect(mockKeychain.get(ACCESS_TOKEN_KEY)).toBe('token-A');
   });
 });

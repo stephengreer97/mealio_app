@@ -7,7 +7,7 @@ export { normalizeIngredients };
 
 const BASE_URL = 'https://mealio.co';
 
-import { ApiError, isAuthRejection } from './authErrors';
+import { ApiError, isAuthRejection, notifySessionExpired } from './authErrors';
 
 export { isAuthRejection };
 
@@ -65,7 +65,11 @@ async function renewAccessToken(): Promise<void> {
   }, DEFAULT_TIMEOUT_MS);
 
   if (!refreshRes.ok) {
-    throw new ApiError(401, 'Session expired');
+    // The REAL status, so the caller can tell a refused token (401/403) from a
+    // server that is down (5xx). Only the first may end the session.
+    throw new ApiError(refreshRes.status, refreshRes.status === 401 || refreshRes.status === 403
+      ? 'Session expired'
+      : `HTTP ${refreshRes.status}`);
   }
 
   const { accessToken: newAccess, user } = await refreshRes.json();
@@ -129,8 +133,14 @@ async function request<T>(
     try {
       await renewOnce();
     } catch (err) {
-      await clear();
-      throw err instanceof ApiError ? err : new ApiError(401, 'Session expired');
+      // Only a refusal ends the session. A renew that could not be REACHED (no
+      // network, timeout, 5xx) says nothing about the token, and clearing on it
+      // signed people out for a dropped connection. Surface the failure and
+      // keep the credentials for the next attempt.
+      if (!isAuthRejection(err)) throw err;
+      try { await clear(); } catch { /* the handler below still signs out */ }
+      notifySessionExpired();
+      throw new ApiError(401, 'Session expired');
     }
 
     // Retry original request with new token
