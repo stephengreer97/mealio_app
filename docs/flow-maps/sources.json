@@ -150,9 +150,13 @@
       "sources": [
         "src/screens/creator",
         "src/components/YouTubeConnectCard.tsx",
-        "src/components/PlatformLinksCard.tsx"
+        "src/components/PlatformConnectCard.tsx",
+        "src/components/SyncSourceSection.tsx",
+        "src/components/CreatorProfileCard.tsx",
+        "src/lib/creatorConnect.ts",
+        "src/lib/creatorConnectUrl.ts"
       ],
-      "readAt": "fe25bf8"
+      "readAt": "3752c94"
     },
     "behavior-meal-lifecycle.html": {
       "title": "Meal lifecycle & ingredients",

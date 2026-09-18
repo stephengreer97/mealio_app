@@ -14,6 +14,7 @@ import { presetMeals as presetMealsApi } from '../lib/api';
 import { PresetMeal } from '../types';
 import DiscoverScreen from '../screens/discover/DiscoverScreen';
 import { DeepLinkBusyContext } from '../context/DeepLinkContext';
+import { isCreatorConnectRedirect } from '../lib/creatorConnectUrl';
 
 const GuestStack = createNativeStackNavigator();
 
@@ -156,6 +157,14 @@ export default function RootNavigator() {
   }, [isLoading, pendingVerifiedToken]);
 
   async function handleDeepLink(url: string) {
+    // The end of a YouTube / Instagram / TikTok connect round trip. It belongs
+    // to the `openAuthSessionAsync` call that is waiting for it (see
+    // lib/creatorConnect.ts), which reads the code out of it. On Android the
+    // same redirect can also reach this listener, as a custom-scheme URL or an
+    // app link; acting on it here would at best do nothing and at worst match
+    // a pattern below on something in its query string.
+    if (isCreatorConnectRedirect(url)) return;
+
     // Email verification callback: mealio://verified?token=xxx
     const verifiedToken = parseVerifiedToken(url);
     if (verifiedToken) {

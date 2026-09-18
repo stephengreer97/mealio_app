@@ -1,5 +1,9 @@
 import { getAccessToken, getRefreshToken, save, clear } from './tokenStorage';
-import { Meal, PresetMeal, Creator, CreatorStats, User, Ingredient, YouTubeConnection } from '../types';
+import {
+  Meal, PresetMeal, Creator, CreatorStats, User, Ingredient, YouTubeConnection,
+  PlatformConnection, ConnectedPlatform, ConnectCompleteResult, WebsiteCheckResult,
+  CatalogResult, SyncRun, SyncRunTotals, SyncSelection,
+} from '../types';
 import { normalizeIngredients } from './normalizeIngredients';
 import { mapMeal, mapPresetMeal, mapCreator } from './api-mappers';
 
@@ -149,14 +153,15 @@ async function request<T>(
 
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
+    let body: any;
     try {
-      const body = await response.json();
+      body = await response.json();
       message = body.error || body.message || message;
     } catch {}
     if (response.status >= 500) {
       console.error(`[api] unexpected error: ${path} → ${response.status} ${message}`);
     }
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, body);
   }
 
   // Handle empty responses
@@ -491,6 +496,132 @@ export const creators = {
       }),
 
     disconnect: () => request<{ ok: boolean }>('/api/creator/youtube', { method: 'DELETE' }),
+  },
+
+  /**
+   * The profile fields the portal's Edit Profile form writes.
+   *
+   * `handle` is permanent once set; the route refuses a change with its own
+   * sentence. Only keys present are sent, so a save that does not touch the
+   * photo does not clear it.
+   */
+  updateProfile: (data: { bio?: string | null; socialHandle?: string | null; handle?: string | null; photoUrl?: string }) =>
+    request<{ ok: boolean }>('/api/creator/me', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  /**
+   * Which one place Mealio syncs from (`primary_source`).
+   *
+   * `none` stops syncing. `clearWebsite` also removes the website link, which is
+   * what disconnecting a website means: it is the whole of what Mealio was given.
+   * The route refuses a source that is not ready (no grant, no confirmed feed)
+   * with a sentence that says what to do first.
+   */
+  setPrimarySource: (primarySource: string, options: { clearWebsite?: boolean } = {}) =>
+    request<{ ok: boolean; source?: { primarySource: string; importOptIn: boolean } }>('/api/creator/me', {
+      method: 'PATCH',
+      body: JSON.stringify(
+        options.clearWebsite ? { primarySource, links: { website: '' } } : { primarySource },
+      ),
+    }),
+
+  /**
+   * Save a website as the sync source: the server reads a few recent posts to
+   * check recipes can actually be pulled out of them, which takes up to 30s
+   * (the route allows 60). A refusal it could explain is a 200 with `ok: false`
+   * and the sentence; a malformed address is a 400, thrown as ApiError.
+   */
+  checkWebsite: (url: string) =>
+    request<WebsiteCheckResult>('/api/creator/website', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+      timeoutMs: 70_000,
+    }),
+
+  /**
+   * The OAuth grants behind YouTube, Instagram and TikTok.
+   *
+   * Connecting is a round trip through the platform's own consent screen in the
+   * system browser: `start` returns the URL to open (with `client: 'app'` so the
+   * server's callback hands the result back to `mealio://creator/connect`), and
+   * `complete` exchanges the code and state that came back. See
+   * `src/lib/creatorConnect.ts` for the whole flow.
+   */
+  connections: {
+    status: (platform: 'instagram' | 'tiktok') =>
+      request<PlatformConnection>(`/api/creator/${platform}`, { method: 'GET' }),
+
+    disconnect: (platform: ConnectedPlatform) =>
+      request<{ ok: boolean }>(`/api/creator/${platform}`, { method: 'DELETE' }),
+
+    /** `extra` carries YouTube's `appendOptIn` / `captions`; nothing for the others. */
+    start: (platform: ConnectedPlatform, extra: Record<string, unknown> = {}) =>
+      request<{ url: string }>(`/api/creator/${platform}/connect`, {
+        method: 'POST',
+        body: JSON.stringify({ ...extra, client: 'app' }),
+      }),
+
+    complete: (platform: ConnectedPlatform, code: string, state: string) =>
+      request<ConnectCompleteResult>(`/api/creator/${platform}/complete`, {
+        method: 'POST',
+        body: JSON.stringify({ code, state }),
+      }),
+  },
+
+  /**
+   * The back catalogue and the runs that import from it.
+   */
+  sync: {
+    /**
+     * One window of what the creator has already posted. A 422 still carries a
+     * catalogue, one that says why it could not be listed, so that is returned
+     * rather than thrown; only a response with no catalogue at all is an error.
+     */
+    catalog: async (source: string, pageToken: string | null = null): Promise<CatalogResult> => {
+      try {
+        const r = await request<{ catalog: CatalogResult }>('/api/creator/sync/catalog', {
+          method: 'POST',
+          body: JSON.stringify(pageToken === null ? { source } : { source, pageToken }),
+          timeoutMs: 40_000,
+        });
+        if (!r?.catalog) throw new ApiError(500, 'Could not read what you have published.');
+        return r.catalog;
+      } catch (err: any) {
+        if (err instanceof ApiError && err.body?.catalog) return err.body.catalog as CatalogResult;
+        throw err;
+      }
+    },
+
+    /**
+     * Start an import of the ticked posts. Refusals are thrown as ApiError with
+     * the body attached: a 409 carries the run already under way (and its
+     * totals), a 429 is the daily budget, both with the server's sentence.
+     */
+    start: (source: string, items: SyncSelection[]) =>
+      request<{ run: SyncRun }>('/api/creator/sync', {
+        method: 'POST',
+        body: JSON.stringify({ source, items }),
+      }),
+
+    /** Read a run without advancing it. For showing progress while a chunk works. */
+    read: (runId: string) =>
+      request<{ run: SyncRun; totals?: SyncRunTotals }>(
+        `/api/creator/sync?runId=${encodeURIComponent(runId)}`,
+        { method: 'GET' },
+      ),
+
+    /**
+     * Drive one chunk of the run. The route may work for several minutes
+     * (maxDuration 300), so the timeout here is longer than that.
+     */
+    advance: (runId: string) =>
+      request<{ run: SyncRun; totals: SyncRunTotals }>('/api/creator/sync/worker', {
+        method: 'POST',
+        body: JSON.stringify({ runId }),
+        timeoutMs: 310_000,
+      }),
   },
 
   apply: (data: { displayName: string; handle: string; phone: string; findUs: string; photoUrl?: string }) =>

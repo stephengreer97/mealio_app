@@ -23,8 +23,8 @@ import CreatorReviewQueueScreen from './CreatorReviewQueueScreen';
 import MealDetailSheet from '../../components/MealDetailSheet';
 import PushOptInCard from '../../components/PushOptInCard';
 import PublishedLinkSheet from '../../components/PublishedLinkSheet';
-import PlatformLinksCard from '../../components/PlatformLinksCard';
-import YouTubeConnectCard from '../../components/YouTubeConnectCard';
+import SyncSourceSection from '../../components/SyncSourceSection';
+import CreatorProfileCard from '../../components/CreatorProfileCard';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -43,6 +43,14 @@ import { servesChangeError } from '../../constants/serves';
  */
 type PortalRoute = { params?: { openQueue?: boolean; draftId?: string } };
 type PortalNav = { setParams?: (params: { openQueue?: boolean; draftId?: string }) => void };
+
+/**
+ * The portal's three sections, as on the web: Meals is what a creator came for
+ * and is first; Drafts is what is waiting on them and carries the count;
+ * Settings is everything set once and left alone (profile, and where Mealio
+ * syncs from).
+ */
+export type PortalTab = 'meals' | 'drafts' | 'settings';
 
 export default function CreatorPortalScreen({ route, navigation }: { route?: PortalRoute; navigation?: PortalNav }) {
   const [creator, setCreator] = useState<Creator | null>(null);
@@ -75,7 +83,16 @@ export default function CreatorPortalScreen({ route, navigation }: { route?: Por
 
   // Drafts waiting on this creator (MEAL-89).
   const { waiting, refresh: refreshDrafts } = useCreatorDrafts();
-  const [queueOpen, setQueueOpen] = useState(false);
+  const [tab, setTab] = useState<PortalTab>('meals');
+  /**
+   * Tabs that have been opened. Each stays mounted once opened and is hidden
+   * rather than unmounted, so a creator halfway through a draft edit, a website
+   * address or a catalogue selection does not lose it to a tab tap. Not mounted
+   * before first use, so the Drafts tab does not read the queue until asked.
+   */
+  const [opened, setOpened] = useState<Record<PortalTab, boolean>>({ meals: true, drafts: false, settings: false });
+  /** Bumped on every publish and delete, so the Settings catalogue re-reads. */
+  const [mealsVersion, setMealsVersion] = useState(0);
   // Held here rather than read straight off `route.params` in the queue,
   // because the params are cleared the moment they are consumed — see the
   // effect below for why they have to be.
@@ -95,10 +112,15 @@ export default function CreatorPortalScreen({ route, navigation }: { route?: Por
    * never taken somewhere they did not ask to go, and even from a tap the tab
    * bar stays on screen so leaving costs one touch.
    */
+  function goToTab(next: PortalTab) {
+    setOpened((current) => (current[next] ? current : { ...current, [next]: true }));
+    setTab(next);
+  }
+
   useEffect(() => {
     if (!route?.params?.openQueue) return;
     setQueueDraftId(route.params.draftId);
-    setQueueOpen(true);
+    goToTab('drafts');
     // Consumed, so the param cannot open the queue a second time on its own —
     // and so tapping the SAME notification again does reopen it. Without the
     // clear, a creator who opened the queue from a notification, closed it, and
@@ -218,6 +240,7 @@ export default function CreatorPortalScreen({ route, navigation }: { route?: Por
       }
       setFormVisible(false);
       await loadData();
+      setMealsVersion((v) => v + 1);
       // A newly published meal is the one moment the creator can still edit the
       // caption of the video it came from, so hand them the link right here.
       // Wait for the form sheet to finish dismissing before opening another modal.
@@ -251,6 +274,7 @@ export default function CreatorPortalScreen({ route, navigation }: { route?: Por
           try {
             await creatorsApi.creatorMeals.delete(meal.id);
             await loadData();
+            setMealsVersion((v) => v + 1);
           } catch (err: any) {
             Alert.alert('Error', err.message || 'Could not delete meal');
           }
@@ -259,214 +283,236 @@ export default function CreatorPortalScreen({ route, navigation }: { route?: Por
     ]);
   }
 
-  // Rendered in place of the portal rather than over it. A Modal would cover
-  // the tab bar, and a creator who came to do something else has to be able to
-  // leave with one tap at any moment — including one who arrived from a
-  // notification and changed their mind.
-  if (queueOpen) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <CreatorReviewQueueScreen
-          // The recipe the notification was about. Threaded from the push
-          // payload and then never read, so a tap that named one specific
-          // recipe landed on whatever the persisted cursor happened to point
-          // at — which on a queue of ten is nine times out of ten the wrong
-          // one, and looks right.
-          draftId={queueDraftId}
-          onClose={() => { setQueueOpen(false); setQueueDraftId(undefined); void refreshDrafts(); }}
-        />
-      </SafeAreaView>
-    );
-  }
+  const applyCreatorChanges = (changes: Partial<Creator>) =>
+    setCreator((current) => (current ? { ...current, ...changes } : current));
+
+  const mealsHeader = (
+    <>
+      {/*
+        Drafts waiting on this creator (MEAL-89). A pointer, not the queue: the
+        queue lives on its own tab, so "where do I review my drafts?" has one
+        answer. Not here at all when nothing is waiting.
+      */}
+      {waiting > 0 && (
+        <TouchableOpacity
+          style={styles.draftsCard}
+          onPress={() => goToTab('drafts')}
+          activeOpacity={0.85}
+          testID="open-draft-queue"
+        >
+          <Feather name="inbox" size={18} color={Colors.brand} style={{ marginRight: 10 }} />
+          <View style={{ flex: 1 }}>
+            {/* The count, never a dot: "10" and "1" are different sizes of job. */}
+            <Text style={styles.draftsTitle}>
+              {waiting === 1 ? 'A recipe is waiting for your review' : `${waiting} recipes are waiting for your review`}
+            </Text>
+            <Text style={styles.draftsBody}>
+              We read your posts and filled these in. Nothing is published under your name until you approve it.
+            </Text>
+          </View>
+          <Text style={styles.draftsAction}>Review drafts</Text>
+          <Feather name="chevron-right" size={18} color={Colors.brand} />
+        </TouchableOpacity>
+      )}
+
+      {/* Push opt-in soft ask. Self-hiding; see PushOptInCard. */}
+      <PushOptInCard />
+
+      {creator && stats && (
+        <>
+          <View style={styles.statsGrid}>
+            <Card style={styles.statCard}>
+              <Text style={styles.statValue}>{stats.followers ?? 0}</Text>
+              <Text style={styles.statLabel}>Followers</Text>
+            </Card>
+            <Card style={styles.statCard}>
+              <Text style={styles.statValue}>{stats.savesAnnual ?? 0}</Text>
+              <Text style={styles.statLabel}>Saves (12 mo)</Text>
+            </Card>
+            <Card style={styles.statCard}>
+              <Text style={styles.statValue}>{stats.savesAll ?? 0}</Text>
+              <Text style={styles.statLabel}>All-Time Saves</Text>
+            </Card>
+          </View>
+
+          {/* How earnings work */}
+          <TouchableOpacity
+            style={styles.earningsRow}
+            onPress={() => setEarningsOpen((v) => !v)}
+            activeOpacity={0.8}
+          >
+            <Feather name="dollar-sign" size={16} color={Colors.brand} style={{ marginRight: 6 }} />
+            <Text style={styles.earningsRowLabel}>How earnings work</Text>
+            <View style={styles.shareBadge}>
+              <Text style={styles.shareBadgeText}>{(stats.sharePercent ?? 0).toFixed(1)}% share</Text>
+            </View>
+            <Feather name={earningsOpen ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.text3} />
+          </TouchableOpacity>
+          {earningsOpen && (
+            <View style={styles.earningsBody}>
+              <Text style={styles.earningsText}>
+                Each quarter, 1/3 of subscription profit goes to the creator pool. Your share is based entirely on your meal saves over the last 12 months as a percentage of all creator meal saves over the same rolling window.
+              </Text>
+              <View style={styles.earningsFactorRow}>
+                <Feather name="trending-up" size={14} color={Colors.brand} />
+                <Text style={styles.earningsFactorText}>
+                  Saves (last 12 months): {(stats.savesAnnual ?? 0).toLocaleString()} of {(stats.totalCreatorAnnualSaves ?? 0).toLocaleString()}
+                </Text>
+              </View>
+              <Text style={[styles.earningsText, { marginTop: 8 }]}>
+                Your share: <Text style={styles.earningsShareEmphasis}>{(stats.sharePercent ?? 0).toFixed(2)}%</Text> of the creator pool
+              </Text>
+              <Text style={[styles.earningsText, { marginTop: 8 }]}>
+                Payouts above $25 are issued at quarter end via Tremendous.
+              </Text>
+            </View>
+          )}
+        </>
+      )}
+
+      <View style={styles.mealsHeader}>
+        <Text style={styles.mealsTitle}>Published Meals ({meals.length})</Text>
+      </View>
+    </>
+  );
+
+  const tabs: Array<{ key: PortalTab; label: string }> = [
+    { key: 'meals', label: 'Meals' },
+    { key: 'drafts', label: 'Drafts' },
+    { key: 'settings', label: 'Settings' },
+  ];
 
   return (
     <SafeAreaView style={styles.safe}>
-      <FlatList
-        data={meals}
-        keyExtractor={(m) => m.id}
-        contentContainerStyle={styles.list}
-        ListHeaderComponent={
-          <>
-            <Text style={styles.pageTitle}>Creator Portal</Text>
+      {/*
+        The portal header, as on the web: who this is, and the one action that
+        belongs to no section. Publishing is here rather than inside Meals so it
+        is never a tap further away than it was on the single-column screen.
+      */}
+      <View style={styles.header}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.pageEyebrow}>CREATOR PORTAL</Text>
+          <Text style={styles.pageTitle} numberOfLines={1}>{creator?.displayName || 'Creator Portal'}</Text>
+        </View>
+        <Button label="+ New Meal" size="sm" onPress={openCreate} testID="new-meal" />
+      </View>
 
-            {/*
-              Drafts waiting on this creator (MEAL-89). A card, not an
-              interruption: it is offered at the top of the portal and it is not
-              here at all when the queue is empty, so the portal never grows a
-              box to say there is nothing to do.
-            */}
-            {waiting > 0 && (
-              <TouchableOpacity
-                style={styles.draftsCard}
-                onPress={() => setQueueOpen(true)}
-                activeOpacity={0.85}
-                testID="open-draft-queue"
-              >
-                <Feather name="inbox" size={18} color={Colors.brand} style={{ marginRight: 10 }} />
-                <View style={{ flex: 1 }}>
-                  {/* The count, never a dot — "10" and "1" are different sizes
-                      of job and a creator deciding when to sit down needs to
-                      know which one this is. */}
-                  <Text style={styles.draftsTitle}>
-                    {waiting === 1 ? '1 recipe is ready for you' : `${waiting} recipes are ready for you`}
-                  </Text>
-                  <Text style={styles.draftsBody}>
-                    We read your posts and filled these in. Nothing is live until you approve it.
-                  </Text>
+      <View style={styles.segmented} accessibilityRole="tablist">
+        {tabs.map((t) => {
+          const on = tab === t.key;
+          return (
+            <TouchableOpacity
+              key={t.key}
+              onPress={() => goToTab(t.key)}
+              style={[styles.segment, on && styles.segmentOn]}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: on }}
+              testID={`tab-${t.key}`}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.segmentText, on && styles.segmentTextOn]}>{t.label}</Text>
+              {t.key === 'meals' && meals.length > 0 && (
+                <Text style={[styles.segmentCount, on && styles.segmentTextOn]}>{meals.length}</Text>
+              )}
+              {t.key === 'drafts' && waiting > 0 && (
+                <View style={styles.segmentBadge} testID="drafts-tab-badge">
+                  <Text style={styles.segmentBadgeText}>{waiting}</Text>
                 </View>
-                <Feather name="chevron-right" size={18} color={Colors.text3} />
-              </TouchableOpacity>
-            )}
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
 
-            {/* Push opt-in soft ask. Self-hiding — see PushOptInCard. */}
-            <PushOptInCard />
-
-            {creator && stats && (
-              <>
-                <View style={styles.statsGrid}>
-                  <Card style={styles.statCard}>
-                    <Text style={styles.statValue}>{stats.followers ?? 0}</Text>
-                    <Text style={styles.statLabel}>Followers</Text>
-                  </Card>
-                  <Card style={styles.statCard}>
-                    <Text style={styles.statValue}>{stats.savesAnnual ?? 0}</Text>
-                    <Text style={styles.statLabel}>Saves (12 mo)</Text>
-                  </Card>
-                  <Card style={styles.statCard}>
-                    <Text style={styles.statValue}>{stats.savesAll ?? 0}</Text>
-                    <Text style={styles.statLabel}>All-Time Saves</Text>
-                  </Card>
+      {/* ══ Meals ══ */}
+      <View style={[styles.panel, tab !== 'meals' && styles.hidden]} testID="panel-meals">
+        <FlatList
+          data={meals}
+          keyExtractor={(m) => m.id}
+          contentContainerStyle={styles.list}
+          ListHeaderComponent={mealsHeader}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={styles.mealRow}
+              onPress={() => { setViewingMeal(item); setMealDetailVisible(true); }}
+              activeOpacity={0.8}
+            >
+              {item.photoUrl ? (
+                <Image source={{ uri: item.photoUrl }} style={styles.mealThumb} contentFit="cover" />
+              ) : (
+                <View style={[styles.mealThumb, styles.mealThumbPlaceholder]}>
+                  <Feather name="image" size={20} color={Colors.text3} />
                 </View>
-
-                {/* Referral link */}
-                <Card style={styles.referralCard}>
-                  <Text style={styles.referralLabel}>YOUR REFERRAL LINK</Text>
-                  {creator.handle ? (
-                    <>
-                      <Text style={styles.referralLink}>mealio.co/{creator.handle}</Text>
-                      <TouchableOpacity
-                        style={styles.referralShareBtn}
-                        onPress={() =>
-                          Share.share({
-                            message: `https://mealio.co/${creator.handle}`,
-                            url: `https://mealio.co/${creator.handle}`,
-                          })
-                        }
-                        activeOpacity={0.85}
-                      >
-                        <Feather name="share-2" size={14} color="#fff" style={{ marginRight: 6 }} />
-                        <Text style={styles.referralShareText}>Share your link</Text>
-                      </TouchableOpacity>
-                      <Text style={styles.referralHint}>New signups from this link are credited to you.</Text>
-                    </>
-                  ) : (
-                    <Text style={styles.referralHint}>
-                      Set your handle at mealio.co/creator to get your referral link.
-                    </Text>
-                  )}
-                </Card>
-
-                {/* How earnings work */}
-                <TouchableOpacity
-                  style={styles.earningsRow}
-                  onPress={() => setEarningsOpen((v) => !v)}
-                  activeOpacity={0.8}
-                >
-                  <Feather name="dollar-sign" size={16} color={Colors.brand} style={{ marginRight: 6 }} />
-                  <Text style={styles.earningsRowLabel}>How earnings work</Text>
-                  <View style={styles.shareBadge}>
-                    <Text style={styles.shareBadgeText}>{(stats.sharePercent ?? 0).toFixed(1)}% share</Text>
-                  </View>
-                  <Feather name={earningsOpen ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.text3} />
-                </TouchableOpacity>
-                {earningsOpen && (
-                  <View style={styles.earningsBody}>
-                    <Text style={styles.earningsText}>
-                      Each quarter, 1/3 of subscription profit goes to the creator pool. Your share is based entirely on your meal saves over the last 12 months as a percentage of all creator meal saves over the same rolling window.
-                    </Text>
-                    <View style={styles.earningsFactorRow}>
-                      <Feather name="trending-up" size={14} color={Colors.brand} />
-                      <Text style={styles.earningsFactorText}>
-                        Saves (last 12 months): {(stats.savesAnnual ?? 0).toLocaleString()} of {(stats.totalCreatorAnnualSaves ?? 0).toLocaleString()}
-                      </Text>
-                    </View>
-                    <Text style={[styles.earningsText, { marginTop: 8 }]}>
-                      Your share: <Text style={styles.earningsShareEmphasis}>{(stats.sharePercent ?? 0).toFixed(2)}%</Text> of the creator pool
-                    </Text>
-                    <Text style={[styles.earningsText, { marginTop: 8 }]}>
-                      Payouts above $25 are issued at quarter end via Tremendous.
-                    </Text>
-                  </View>
-                )}
-              </>
-            )}
-
-            {/*
-              Where a creator publishes, and the one setting that lets Mealio
-              write back to it. Both are creator-owned decisions that had no
-              route at all in the app — an app-only creator could not move a link
-              that had changed, and could not say whether Mealio may edit their
-              YouTube descriptions.
-
-              Below the stats and above the meals: they are settings, not the
-              thing the screen is for. `onSaved` re-reads the row so the boxes
-              show the links as stored (normalised server-side) and the polled
-              sentence reflects an import the save may have just paused.
-
-              The YouTube card hides itself for a creator with no channel, so
-              nothing here decides that.
-            */}
-            {creator && (
-              <>
-                <PlatformLinksCard creator={creator} onSaved={loadData} />
-                <YouTubeConnectCard />
-              </>
-            )}
-
-            <View style={styles.mealsHeader}>
-              <Text style={styles.mealsTitle}>Your Meals ({meals.length})</Text>
-              <Button label="+ New Meal" size="sm" onPress={openCreate} />
-            </View>
-          </>
-        }
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.mealRow}
-            onPress={() => { setViewingMeal(item); setMealDetailVisible(true); }}
-            activeOpacity={0.8}
-          >
-            {item.photoUrl ? (
-              <Image source={{ uri: item.photoUrl }} style={styles.mealThumb} contentFit="cover" />
-            ) : (
-              <View style={[styles.mealThumb, styles.mealThumbPlaceholder]}>
-                <Feather name="image" size={20} color={Colors.text3} />
+              )}
+              <View style={styles.mealInfo}>
+                <Text style={styles.mealName} numberOfLines={1}>{item.name}</Text>
+                <Text style={styles.mealMeta}>
+                  Trending Score · {item.trendingScore ?? 0}
+                </Text>
               </View>
+              <TouchableOpacity onPress={() => handleShareMeal(item)} style={styles.actionIcon}>
+                <Ionicons name="share-outline" size={20} color={Colors.text3} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => openEdit(item)} style={styles.actionIcon}>
+                <Ionicons name="pencil-outline" size={20} color={Colors.brand} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => handleDeleteMeal(item)} style={styles.actionIcon}>
+                <Ionicons name="trash-outline" size={20} color={Colors.error} />
+              </TouchableOpacity>
+            </TouchableOpacity>
+          )}
+          ListEmptyComponent={
+            !loading ? (
+              <View style={styles.empty}>
+                <Text style={styles.emptyText}>No meals published yet. Tap + New Meal to get started!</Text>
+              </View>
+            ) : null
+          }
+        />
+      </View>
+
+      {/* ══ Drafts ══ The queue itself, with the tab bar as the way back. */}
+      {opened.drafts && (
+        <View style={[styles.panel, tab !== 'drafts' && styles.hidden]} testID="panel-drafts">
+          <View style={styles.draftsIntro}>
+            <Text style={styles.sectionTitle}>Drafts to review</Text>
+            <Text style={styles.sectionBody}>
+              Recipes Mealio read from the posts you publish wait here for you. Approving publishes to Discover under
+              your name; declining means we will not offer that one again.
+            </Text>
+          </View>
+          <View style={styles.panel}>
+            <CreatorReviewQueueScreen
+              embedded
+              active={tab === 'drafts'}
+              // The recipe the notification was about, so a tap that named one
+              // lands on it rather than on wherever the saved cursor points.
+              draftId={queueDraftId}
+              onClose={() => { goToTab('meals'); setQueueDraftId(undefined); void refreshDrafts(); }}
+            />
+          </View>
+        </View>
+      )}
+
+      {/* ══ Settings ══ Profile, and where Mealio syncs from. */}
+      {opened.settings && (
+        <View style={[styles.panel, tab !== 'settings' && styles.hidden]} testID="panel-settings">
+          <KeyboardAwareScrollView
+            contentContainerStyle={styles.list}
+            keyboardShouldPersistTaps="handled"
+            enableOnAndroid
+            extraScrollHeight={24}
+          >
+            {creator ? (
+              <SyncSourceSection creator={creator} onSaved={applyCreatorChanges} mealsVersion={mealsVersion}>
+                <CreatorProfileCard creator={creator} onSaved={applyCreatorChanges} />
+              </SyncSourceSection>
+            ) : (
+              !loading && <Text style={styles.emptyText}>We could not load your creator profile.</Text>
             )}
-            <View style={styles.mealInfo}>
-              <Text style={styles.mealName} numberOfLines={1}>{item.name}</Text>
-              <Text style={styles.mealMeta}>
-                Trending Score · {item.trendingScore ?? 0}
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => handleShareMeal(item)} style={styles.actionIcon}>
-              <Ionicons name="share-outline" size={20} color={Colors.text3} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => openEdit(item)} style={styles.actionIcon}>
-              <Ionicons name="pencil-outline" size={20} color={Colors.brand} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => handleDeleteMeal(item)} style={styles.actionIcon}>
-              <Ionicons name="trash-outline" size={20} color={Colors.error} />
-            </TouchableOpacity>
-          </TouchableOpacity>
-        )}
-        ListEmptyComponent={
-          !loading ? (
-            <View style={styles.empty}>
-              <Text style={styles.emptyText}>No meals yet. Create your first meal!</Text>
-            </View>
-          ) : null
-        }
-      />
+          </KeyboardAwareScrollView>
+        </View>
+      )}
 
       {/* View meal detail */}
       <MealDetailSheet
@@ -622,7 +668,55 @@ export default function CreatorPortalScreen({ route, navigation }: { route?: Por
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.bg },
   list: { padding: 16, paddingBottom: 40 },
-  pageTitle: { fontSize: 28, fontFamily: 'Inter_700Bold', color: Colors.text1, marginBottom: 16 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10 },
+  pageEyebrow: { fontSize: 11, fontFamily: 'Inter_600SemiBold', color: Colors.text3, letterSpacing: 1 },
+  pageTitle: { fontSize: 24, fontFamily: 'Inter_700Bold', color: Colors.text1 },
+  segmented: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginBottom: 4,
+    padding: 3,
+    borderRadius: Radius.button,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  segment: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    borderRadius: 9,
+  },
+  segmentOn: {
+    backgroundColor: Colors.surfaceRaised,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  segmentText: { fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text2 },
+  segmentTextOn: { fontFamily: 'Inter_700Bold', color: Colors.brand },
+  segmentCount: { fontSize: 12, fontFamily: 'Inter_500Medium', color: Colors.text3 },
+  segmentBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    backgroundColor: Colors.brand,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentBadgeText: { fontSize: 11, fontFamily: 'Inter_700Bold', color: '#fff' },
+  panel: { flex: 1 },
+  hidden: { display: 'none' },
+  draftsIntro: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 },
+  sectionTitle: { fontSize: 16, fontFamily: 'Inter_700Bold', color: Colors.text1 },
+  sectionBody: { fontSize: 13, fontFamily: 'Inter_400Regular', color: Colors.text2, lineHeight: 19, marginTop: 4 },
+  draftsAction: { fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.brand, marginLeft: 8, marginRight: 2 },
 
   // Offered, not imposed: brand-tinted enough to be seen on the way past, not
   // so loud it reads as an error a creator has to clear before doing anything.
@@ -638,19 +732,6 @@ const styles = StyleSheet.create({
   statCard: { flex: 1, minWidth: '45%', alignItems: 'center', padding: 16 },
   statValue: { fontSize: 28, fontFamily: 'Inter_700Bold', color: Colors.brand, marginBottom: 4 },
   statLabel: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, textAlign: 'center' },
-  referralCard: { padding: 14, marginBottom: 12 },
-  referralLabel: { fontSize: 11, fontFamily: 'Inter_700Bold', color: Colors.text3, letterSpacing: 0.5, marginBottom: 6 },
-  referralLink: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: Colors.brand, marginBottom: 12 },
-  referralShareBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.brand,
-    borderRadius: Radius.button,
-    paddingVertical: 10,
-  },
-  referralShareText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#fff' },
-  referralHint: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, marginTop: 8 },
   earningsRow: {
     flexDirection: 'row',
     alignItems: 'center',

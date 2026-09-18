@@ -123,8 +123,14 @@ export interface Creator {
   tiktokUrl?: string | null;
   /** One of the four sources, or 'none' — the off switch. Operator-set. */
   primarySource?: string | null;
-  /** Whether anything is polled at all. Operator-set; a creator can only ever clear it. */
+  /** Whether anything is polled at all. */
   importOptIn?: boolean | null;
+  /**
+   * The feed Mealio follows on the creator's website, set once `POST
+   * /api/creator/website` has read the site and found it importable. A website
+   * is only a source Mealio can read when this is set and on the same site.
+   */
+  feedUrl?: string | null;
 }
 
 /**
@@ -142,7 +148,128 @@ export interface YouTubeConnection {
   brokenReason: string | null;
   /** False on a grant made without the write scope — the append offer cannot be turned on. */
   canWriteDescriptions: boolean;
+  /**
+   * The grant carries `youtube.force-ssl`, so a video with a thin description
+   * can be read from its captions (MEAL-138). Absent on an older server.
+   */
+  canReadCaptions?: boolean;
   appendOptIn: boolean;
+}
+
+/**
+ * An Instagram or TikTok connection (`GET /api/creator/{instagram|tiktok}`).
+ */
+export interface PlatformConnection {
+  connected: boolean;
+  account: { id: string | null; name: string | null } | null;
+  /** Non-null means the creator has to reconnect before anything can be read. */
+  brokenReason: string | null;
+  /** When the grant lapses if it is not renewed. Instagram only, in practice. */
+  expiresAt: string | null;
+  /** False when this deployment has no app credentials for the platform. */
+  configured?: boolean;
+}
+
+/** The three sources that are connected with an OAuth grant rather than a link. */
+export type ConnectedPlatform = 'youtube' | 'instagram' | 'tiktok';
+
+/**
+ * What `POST /api/creator/{platform}/complete` says about a connect round trip.
+ *
+ * A handled failure is a 200 carrying `ok: false` and a sentence the creator
+ * can read; `message` is shown verbatim.
+ */
+export type ConnectCompleteResult =
+  | { ok: true; outcome: 'connected' }
+  | { ok: false; outcome: 'failed' | 'cancelled'; reason?: string | null; message?: string | null };
+
+/** `POST /api/creator/website`: the site was read, and either kept or refused. */
+export type WebsiteCheckResult =
+  | {
+      ok: true;
+      websiteUrl: string;
+      feedUrl: string;
+      outcome?: string;
+      checked?: number;
+      passed?: number;
+      /** The server's sentence about what it found, shown under the box. */
+      detail?: string | null;
+    }
+  | { ok: false; error: string; outcome?: string };
+
+/**
+ * One post in a creator's back catalogue (`POST /api/creator/sync/catalog`).
+ * Mirrors `CatalogEntry` in the server's `lib/admin-sync.ts`.
+ */
+export interface CatalogEntry {
+  itemId: string;
+  url: string;
+  title: string | null;
+  publishedAt: string | null;
+  /** What has happened to this post, when anything has. */
+  record: {
+    status: string;
+    detail: string | null;
+    at: string | null;
+    firstSeenAt: string | null;
+    draftId: string | null;
+    /** An import of this post is running right now. */
+    inFlight: boolean;
+  } | null;
+}
+
+export type CatalogResult =
+  | {
+      ok: true;
+      source: string;
+      entries: CatalogEntry[];
+      truncated?: boolean;
+      /** Where the next window starts, or null/absent when the list is complete. */
+      nextPageToken?: string | null;
+    }
+  | { ok: false; reason: string; detail: string };
+
+export type SyncItemStatus = 'pending' | 'drafted' | 'rejected' | 'failed' | 'skipped';
+
+export interface SyncItem {
+  itemId: string;
+  url: string;
+  title: string | null;
+  publishedAt: string | null;
+  status: SyncItemStatus;
+  detail: string | null;
+  draftId: string | null;
+  mealName: string | null;
+  needALook: number | null;
+}
+
+export interface SyncRun {
+  id: string;
+  source: string;
+  status: 'queued' | 'running' | 'done';
+  items: SyncItem[];
+  createdAt?: string | null;
+  finishedAt?: string | null;
+}
+
+export interface SyncRunTotals {
+  selected: number;
+  pending: number;
+  drafted: number;
+  rejected: number;
+  failed: number;
+  skipped: number;
+  needALook?: number;
+}
+
+/** What the app sends for one ticked post when starting an import. */
+export interface SyncSelection {
+  itemId: string;
+  url: string;
+  title: string | null;
+  publishedAt: string | null;
+  /** Read this post again even though it was refused or declined before. */
+  reselect?: true;
 }
 
 // Profit share is based entirely on the creator's meal saves over a rolling

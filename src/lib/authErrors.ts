@@ -8,7 +8,14 @@
  */
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /**
+   * `body` is the parsed JSON of the refusal, when there was one. Most callers
+   * want only the sentence in `message`; a few routes answer a refusal with
+   * something to act on as well (the creator sync route's 409 carries the run
+   * already under way, the catalogue's 422 carries the reason it could not be
+   * listed), and those callers read it here.
+   */
+  constructor(public status: number, message: string, public body?: any) {
     super(message);
   }
 }

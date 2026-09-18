@@ -7,9 +7,11 @@
   <span class="crumb">Behaviors &rsaquo; <b>Creator account</b></span></div>
 <header>
   <h1>Creator account &mdash; apply, publish, and the review queue</h1>
-  <div class="sub">Read off <code>screens/creator/</code>, <code>components/YouTubeConnectCard.tsx</code>,
-  <code>components/PlatformLinksCard.tsx</code> and the <code>creators</code> /
-  <code>creatorMeals</code> / <code>creatorDrafts</code> clients in <code>lib/api.ts</code>.</div>
+  <div class="sub">Read off <code>screens/creator/</code>, <code>components/SyncSourceSection.tsx</code>,
+  <code>components/YouTubeConnectCard.tsx</code>, <code>components/PlatformConnectCard.tsx</code>,
+  <code>components/CreatorProfileCard.tsx</code>, <code>lib/creatorConnect.ts</code> and the
+  <code>creators</code> / <code>creatorMeals</code> / <code>creatorDrafts</code> clients in
+  <code>lib/api.ts</code>.</div>
 </header>
 <div class="legend">
   <span class="chip"><span class="sw" style="background:#3b82f6"></span><b>Screen / state</b></span>
@@ -43,56 +45,92 @@ flowchart TD
     class PORTAL good
 </pre></div>
 
-<div class="wrap"><h3>Diagram 2 · The portal — profile, links, YouTube, meals</h3><pre class="mermaid">
+<div class="wrap"><h3>Diagram 2 · The portal: Meals, Drafts, Settings (the web portal's split)</h3><pre class="mermaid">
 flowchart TD
-    P["<b>CreatorPortalScreen</b><br/>GET /api/creator/me &rarr;<br/>creator · stats · meals"] --> P1["profile<br/>photo · bio · display name"]
-    P --> P2["<b>PlatformLinksCard</b>"]
-    P --> P3["<b>YouTubeConnectCard</b>"]
-    P --> P4["meals"]
-    P --> P5["earnings / stats"]
+    P["<b>CreatorPortalScreen</b><br/>GET /api/creator/me &rarr;<br/>creator · stats · meals"] --> HDR["header: name · <b>+ New Meal</b>"]
+    P --> TABS{"segmented control"}
+    TABS -->|"Meals (default)"| TM["drafts callout if waiting &gt; 0<br/>push opt-in · stats · earnings<br/>published meals"]
+    TABS -->|"Drafts · badge = waiting"| TD2["<b>CreatorReviewQueueScreen</b><br/>embedded: no back button,<br/>hardware Back only while on screen"]
+    TABS -->|"Settings"| TS["<b>CreatorProfileCard</b><br/>then <b>SyncSourceSection</b>"]
+    PUSH(["notification tap<br/>openQueue + draftId"]) --> TD2
+    TM -->|"Review drafts"| TD2
+    TABS -.-> KEEP["each tab mounts on first open,<br/>then stays mounted and hides<br/><i>a half-typed address or draft edit<br/>survives a tab switch</i>"]
 
-    P1 -->|"PATCH /api/creator/me"| SAVED1(["saved"])
-
-    subgraph LINKS ["Platform links — MEAL-94"]
-        P2 --> L1["send <b>all four</b> boxes<br/>as strings, every time"]
-        L1 --> L2{{"missing key = 'not touched'<br/>empty string = '<b>remove this</b>'<br/><i>different things — never send<br/>null/undefined for one you keep</i>"}}
-        L2 --> L3["PATCH /api/creator/me { links }"]
-        L3 --> L4["render <code>notices[]</code> <b>verbatim</b><br/><i>the server's own prose about<br/>what the save did</i>"]
-        L3 --> L5{"<code>importPaused</code>?"}
-        L5 -->|true| L6["stop claiming the link<br/>is being polled"]
-    end
-
-    subgraph YT ["YouTube — two different things on one card"]
-        P3 --> Y0{"creator has a<br/>YouTube channel?"}
-        Y0 -->|no| YHIDE(["<b>render nothing at all</b><br/>hidden, not disabled"])
-        Y0 -->|yes| Y1["<b>connection</b> = permission to READ<br/>titles, descriptions, captions"]
-        Y0 -->|yes| Y2["<b>append switch</b> = consent to WRITE<br/>add the Mealio link to a<br/>video's description"]
-        Y1 -->|"Connect"| YOPEN["opens the WEB portal<br/><i>Google refuses its consent screen<br/>in an embedded WebView, and the<br/>callback redirects to mealio.co/creator<br/>with no deep link back</i>"]
-        Y2 -->|"turn ON"| YON{"a live grant carrying<br/>the write scope?"}
-        YON -->|no| YREF(["refused by the route —<br/>surfaced verbatim,<br/>not pre-empted here"])
-        YON -->|yes| YOK(["appendOptIn = true"])
-        Y2 -->|"turn OFF"| YOFF(["works from <b>every</b> state,<br/>including a broken connection<br/><i>a switch that only flips one<br/>way is not revocation</i>"])
-        Y1 -->|"Disconnect"| YDEL(["DELETE /api/creator/youtube<br/><i>one authenticated call,<br/>no redirect — stays in-app</i>"])
-    end
+    TS --> PR1["Edit Profile: photo · bio ·<br/>website/social · handle"]
+    PR1 -->|"PATCH /api/creator/me"| PR2{"handle already set?"}
+    PR2 -->|yes| PR3(["handle locked:<br/>permanent, server refuses a change"])
+    PR2 -->|no| PR4(["saved, referral link appears"])
 
     subgraph MEALS ["Meals"]
-        P4 -->|"new"| M1["fill the form &rarr;<br/>upload the pending photo &rarr;<br/>POST /api/creator/meals"]
-        P4 -->|"edit"| M2["PUT /api/creator/meals/:id"]
-        P4 -->|"delete"| M3["DELETE /api/creator/meals/:id"]
+        HDR -->|"new"| M1["fill the form &rarr;<br/>upload the pending photo &rarr;<br/>POST /api/creator/meals"]
+        TM -->|"edit"| M2["PUT /api/creator/meals/:id"]
+        TM -->|"delete"| M3["DELETE /api/creator/meals/:id"]
         M1 --> M4(["<b>PublishedLinkSheet</b><br/>share the new meal"])
-        M1 -.-> INVAL["server revalidates<br/><code>trending-meals</code>"]
-        M2 -.-> INVAL
-        M3 -.-> INVAL
+        M1 --> MV["mealsVersion + 1<br/><i>Settings re-reads the catalogue:<br/>a deleted meal withdraws its post</i>"]
+        M3 --> MV
     end
+
+    classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef good fill:#14532d,stroke:#22c55e,color:#fff
+    classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
+    class P,TM,TD2,TS state
+    class M4,PR4 good
+    class PR3 spec
+</pre></div>
+
+<div class="wrap"><h3>Diagram 2b · Settings: where Mealio syncs from, connecting, and the back catalogue</h3><pre class="mermaid">
+flowchart TD
+    OPEN["open Settings"] --> SRC{"stored primary_source"}
+    SRC -->|"one of the four"| SHOW["picker shows it"]
+    SRC -->|"nothing chosen yet"| WEB["picker opens on Website<br/><i>claims nothing, writes nothing</i>"]
+    SHOW --> PICK
+    WEB --> PICK["creator picks a source<br/><b>chose = true</b>"]
+    PICK --> LIVE{"was another source<br/>being synced?"}
+    LIVE -->|yes| WARN(["'Mealio now syncs from X only.<br/>Anything new you post to Y<br/>will not be imported.'"])
+    PICK --> READY{"source ready?"}
+    READY -->|"Website: link + feed on same site"| WRITE
+    READY -->|"platform: its card says connected"| WRITE["PATCH /api/creator/me<br/>{ primarySource }"]
+    READY -->|"not yet"| BODY{"which source?"}
+    BODY -->|Website| WS["Save &rarr; POST /api/creator/website<br/><i>reads recent posts, up to 60s</i>"]
+    WS -->|"ok: false or 4xx"| WSE(["the server's sentence,<br/>shown verbatim"])
+    WS -->|"ok"| WRITE
+    BODY -->|"YouTube / Instagram / TikTok"| CON["Connect"]
+
+    subgraph CONNECT ["In-app connect: lib/creatorConnect.ts"]
+        CON --> C1["POST /api/creator/p/connect<br/>{ client: 'app', ... }"]
+        C1 --> C2["openAuthSessionAsync(url,<br/>mealio://creator/connect)"]
+        C2 -->|"cancel / dismiss"| C3(["nothing said"])
+        C2 -->|"outcome=cancelled"| C4(["'You cancelled on X's screen'"])
+        C2 -->|"outcome=failed, reason"| C5(["mirrored connect-copy sentence,<br/>generic for an unknown reason"])
+        C2 -->|"code + state"| C6["POST /api/creator/p/complete"]
+        C6 -->|"ok: true"| C7(["re-read status &rarr; Connected<br/>connecting counts as choosing"])
+        C6 -->|"ok: false, or 403"| C8(["server's message"])
+    end
+    C7 --> WRITE
+    RN["RootNavigator deep links"] -.->|"mealio://creator/connect<br/>or the https app link"| IGN(["ignored: the auth<br/>session owns it"])
+
+    WRITE --> CAT["POST /api/creator/sync/catalog<br/>a window at a time, Show more"]
+    CAT --> TICK["tick posts: cap 100 held at the tick<br/>'Tick the N newest' skips imported<br/>and refused posts"]
+    TICK --> IMP["POST /api/creator/sync<br/>items + <b>reselect</b> on refused/declined"]
+    IMP -->|"201 run"| DRIVE["loop POST /sync/worker<br/>GET /sync?runId= every 1.5s for progress"]
+    IMP -->|"409 + run"| CARRY(["run shown with <b>Carry on</b>"])
+    IMP -->|"429"| CAP(["daily cap, server's sentence"])
+    CARRY --> DRIVE
+    DRIVE -->|"done"| DONE(["Import finished &rarr; re-read catalogue<br/>and the drafts badge"])
+    DRIVE -->|"running elsewhere / error"| STOP(["say so; Carry on resumes"])
+
+    LIVEOFF["Disconnect"] --> D1["DELETE /api/creator/p<br/>(platforms only; a failure stops here)"]
+    D1 --> D2["PATCH { primarySource: 'none' }<br/>+ links.website = '' for a website"]
+    D2 --> D3(["'Mealio is not reading anything you publish'"])
 
     classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
     classDef good fill:#14532d,stroke:#22c55e,color:#fff
     classDef danger fill:#7f1d1d,stroke:#ef4444,color:#fff
     classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
-    class P,P2,P3,P4 state
-    class YOK,M4,SAVED1 good
-    class YREF,YOFF,YDEL,YHIDE danger
-    class L2,L4,YON spec
+    class PICK,CAT,TICK,DRIVE state
+    class C7,DONE good
+    class WSE,C8,C5,CAP,D3 danger
+    class WS,C6,IMP,WRITE spec
 </pre></div>
 
 <div class="wrap"><h3>Diagram 3 · The import review queue (MEAL-89)</h3><pre class="mermaid">
@@ -143,9 +181,9 @@ flowchart TD
   decided server-side in <code>lib/import/draft-form.ts</code> and arrive <i>already worded</i>. A
   second copy of those rules in the mobile repo would drift behind whatever version of the app a
   creator happens to have installed — and the two would then disagree about which fields we
-  verified. The same reasoning governs the links card's <code>notices</code> and
-  <code>importPaused</code>: <code>importPaused</code> is the fact stated as a fact, so the screen
-  can stop claiming a link is being polled without matching a string against prose.</p>
+  verified. The same reasoning governs the sync section: every refusal (a website
+  that cannot be read, a connect that failed, the daily import cap) is the server's sentence, shown
+  as it came.</p>
 
   <h2>Design rules the queue is built on</h2>
   <table class="src">
@@ -164,16 +202,15 @@ flowchart TD
   a video whose description is thin. The switch beside it is consent to <i>write</i>: to append the
   Mealio link to a video's description once a recipe from that video is live. MEAL-77 forbids
   conflating them, so the switch is separate, off unless turned on, and revocable in one tap.</p>
-  <p>For a creator with no channel the card renders <b>nothing</b> — hidden, not disabled. A
-  permission prompt about a channel that does not exist is one a creator learns to tap past, which
-  is exactly what makes the next one worthless. Adding a channel link in the links card above makes
-  the card appear.</p>
-  <p>Connecting leaves the app and disconnecting does not, and that asymmetry is forced: Google
-  refuses its consent screen in an embedded WebView, and
-  <code>/api/creator/youtube/callback</code> redirects to <code>mealio.co/creator</code> with no
-  deep link back. An in-app attempt would strand the creator on a web page half way through.
-  Disconnecting is one authenticated DELETE with no redirect — and it is revocation, which should
-  never be the harder direction.</p>
+  <p>Standalone, for a creator with no channel the card renders <b>nothing</b>: hidden, not disabled.
+  Inside the sync section it is always shown, because the creator has just picked YouTube from "Where
+  you publish", which says the same thing more directly.</p>
+  <p>Connecting happens in the app. The consent screen runs in the system browser through
+  <code>openAuthSessionAsync</code> (Google refuses it in an embedded WebView), the server's callback,
+  for a connect started with <code>client: 'app'</code>, redirects to
+  <code>mealio://creator/connect</code> with a one-time code, and <code>POST .../complete</code>
+  exchanges it. Captions are their own trip and carry no answer about editing; ticking the append box
+  over a read-only grant turns into the write-scope trip rather than being locked.</p>
   <p>The append consent is enforced by <code>assertAppendAllowed</code> on the server. Nothing on
   this card is the enforcement.</p>
 </div>
