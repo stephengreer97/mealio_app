@@ -157,6 +157,9 @@ async function runAdding(adds: string[], results: boolean[]) {
     post({ type: 'NET_ADD_RESULT', idx: i, name: adds[i], success: ok,
            productId: `p${i}`, skuId: `s${i}`, reason: ok ? null : 'status 500' });
   });
+  // The count ticks up to what was confirmed; each tick schedules the next from
+  // its own re-render, so the clock is walked in beats rather than jumped.
+  for (let i = 0; i < 30; i++) act(() => { jest.advanceTimersByTime(150); });
   return { view, post };
 }
 
@@ -175,6 +178,7 @@ describe('the count on the run screen', () => {
   it('does not count an item twice when it is written again', async () => {
     const { view, post } = await runAdding(['Sour cream', 'Limes'], [true, true]);
     post({ type: 'NET_ADD_RESULT', idx: 0, name: 'Sour cream', success: true });
+    for (let i = 0; i < 30; i++) act(() => { jest.advanceTimersByTime(150); });
     expect(countText(view)).toBe('2 of 2 added');
   });
 

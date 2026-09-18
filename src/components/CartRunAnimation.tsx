@@ -91,6 +91,21 @@ export default function CartRunAnimation({ progress, label, title, subtitle, cou
     return () => clearTimeout(step);
   }, [frame, target]);
 
+  // THE COUNT TICKS UP, as the video's does, rather than jumping. A store that
+  // takes the whole basket in one write confirms nine items in one message, and
+  // "0 of 10" becoming "9 of 10" in a single frame reads as a glitch. It steps
+  // at the bag's pace toward the confirmed number and never past it, so what it
+  // shows is always a number of items the store really confirmed.
+  const confirmed = count ? Math.min(count.done, count.total) : 0;
+  const [shown, setShown] = useState(confirmed);
+  useEffect(() => {
+    if (shown === confirmed) return;
+    // Down is a new run or a new phase, not progress to animate: go straight there.
+    if (confirmed < shown) { setShown(confirmed); return; }
+    const tick = setTimeout(() => setShown((n) => Math.min(n + 1, confirmed)), FRAME_STEP_MS);
+    return () => clearTimeout(tick);
+  }, [shown, confirmed]);
+
   // A slow idle float, so a bag waiting on the login check is not a still image.
   const bob = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -170,7 +185,7 @@ export default function CartRunAnimation({ progress, label, title, subtitle, cou
 
       {!!count && count.total > 0 && (
         <Text style={styles.count} testID="cart-run-count">
-          {Math.min(count.done, count.total)} of {count.total} {count.verb}
+          {shown} of {count.total} {count.verb}
         </Text>
       )}
 

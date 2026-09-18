@@ -37,6 +37,19 @@ describe('CartRunAnimation', () => {
     expect(v.getByTestId('cart-run-count').props.children.join('')).toBe('3 of 12 added');
   });
 
+  it('ticks the count up to a new number rather than jumping to it', () => {
+    const v = render(<CartRunAnimation progress={0.5} count={{ done: 0, total: 10, verb: 'added' }} />);
+    const text = () => (v.getByTestId('cart-run-count').props.children as unknown[]).join('');
+    // Nine confirmed in one message, as a batch write does.
+    v.rerender(<CartRunAnimation progress={0.95} count={{ done: 9, total: 10, verb: 'added' }} />);
+    expect(text()).toBe('0 of 10 added');
+    act(() => { jest.advanceTimersByTime(150); });
+    expect(text()).toBe('1 of 10 added');
+    settle();
+    // And it lands on the confirmed number, never past it.
+    expect(text()).toBe('9 of 10 added');
+  });
+
   it('never counts past the total', () => {
     const v = render(<CartRunAnimation progress={1} count={{ done: 14, total: 12, verb: 'added' }} />);
     expect(v.getByTestId('cart-run-count').props.children.join('')).toBe('12 of 12 added');
