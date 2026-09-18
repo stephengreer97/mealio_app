@@ -211,3 +211,37 @@ describe('a link that arrives while the pitch is up', () => {
     expect(await r.findByText(PITCH_HEADLINE)).toBeTruthy();
   });
 });
+
+describe('the end of a creator platform connect', () => {
+  // `mealio://creator/connect?...` belongs to the `openAuthSessionAsync` call
+  // waiting for it (lib/creatorConnect.ts). On Android it can reach this
+  // listener too, as the custom scheme or as an app link, and the navigator
+  // must not act on it. The state here is chosen to contain `/meal/p/p1`, so a
+  // navigator that did look at it would open a meal sheet off a connect.
+  const redirects = [
+    'mealio://creator/connect?platform=youtube&code=abc&state=/meal/p/p1',
+    'https://mealio.co/creator/connect?platform=tiktok&code=abc&state=/meal/p/p1',
+  ];
+
+  it.each(redirects)('ignores %s at launch', async (url) => {
+    mockInitialUrl = url;
+    const r = render(<RootNavigator />);
+    expect(await r.findByText(PITCH_HEADLINE)).toBeTruthy();
+    expect(mockGetPreset).not.toHaveBeenCalled();
+    expect(r.queryByText('PRESET SHEET')).toBeNull();
+  });
+
+  it.each(redirects)('ignores %s arriving while the app is open', async (url) => {
+    const r = render(<RootNavigator />);
+    await r.findByText(PITCH_HEADLINE);
+
+    const Linking = require('expo-linking');
+    const calls = (Linking.addEventListener as jest.Mock).mock.calls;
+    const onUrl = calls[calls.length - 1][1];
+    await act(async () => { onUrl({ url }); });
+
+    expect(mockGetPreset).not.toHaveBeenCalled();
+    expect(r.queryByText('PRESET SHEET')).toBeNull();
+    expect(r.getByText(PITCH_HEADLINE)).toBeTruthy();
+  });
+});
