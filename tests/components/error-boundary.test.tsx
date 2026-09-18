@@ -8,7 +8,7 @@ import { render, fireEvent, act } from '@testing-library/react-native';
 import React from 'react';
 import { Text } from 'react-native';
 
-const mockSubmit = jest.fn(async () => ({ ok: true as const }));
+const mockSubmit = jest.fn(async (..._args: unknown[]) => ({ ok: true as const }));
 jest.mock('../../src/lib/api', () => ({ bugReport: { submit: (...a: unknown[]) => mockSubmit(...a) } }));
 jest.mock('../../src/lib/logBuffer', () => ({ getSessionLogs: () => 'log line one\nlog line two' }));
 
