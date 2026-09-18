@@ -7,10 +7,10 @@
 //     said "2 recipes ready"; the intent is unambiguous.
 //   • **Every other entry → a card and a badge, and nothing else.** Opening the
 //     app, or the Creator tab, never takes anyone into a review flow.
-//   • **Nothing blocks.** The queue is rendered inside the tab rather than as a
-//     Modal over the app, so the tab bar stays and leaving costs one touch —
-//     including for a creator who arrived from a notification and changed their
-//     mind.
+//   • **Nothing blocks.** The queue is the portal's Drafts tab rather than a
+//     Modal over the app, so the tab bar and the portal's own Meals / Drafts /
+//     Settings control stay, and leaving costs one touch, including for a
+//     creator who arrived from a notification and changed their mind.
 
 import React from 'react';
 import { act, fireEvent, render } from '@testing-library/react-native';
@@ -130,7 +130,7 @@ describe('opening the app normally', () => {
     // The count, not a dot — "3" and "1" are different sizes of job.
     mockDraftsCtx.waiting = 3;
     const { getByText } = await mount();
-    expect(getByText('3 recipes are ready for you')).toBeTruthy();
+    expect(getByText('3 recipes are waiting for your review')).toBeTruthy();
   });
 
   it('says nothing at all when the queue is empty', async () => {
@@ -158,9 +158,10 @@ describe('arriving from a notification', () => {
     // it again is the version of this that wastes the tap.
     mockDraftsCtx.waiting = 2;
 
-    const { queryByTestId } = await mount({ openQueue: true, draftId: 'd1' });
+    const { queryByTestId, getByTestId } = await mount({ openQueue: true, draftId: 'd1' });
 
     expect(queryByTestId('open-draft-queue')).toBeNull();
+    expect(getByTestId('tab-drafts').props.accessibilityState).toEqual({ selected: true });
     expect(mockList).toHaveBeenCalled();
   });
 
@@ -234,10 +235,12 @@ describe('arriving from a notification', () => {
       totals: { waiting: 1, flagged: 0 },
     });
 
-    const { getByLabelText, queryByTestId } = await mount({ openQueue: true });
-    fireEvent.press(getByLabelText('Back to your portal'));
+    const { getByTestId, queryByTestId } = await mount({ openQueue: true });
+    expect(getByTestId('creator-review-queue')).toBeTruthy();
+    fireEvent.press(getByTestId('tab-meals'));
     await act(async () => {});
 
     expect(queryByTestId('open-draft-queue')).toBeTruthy();
+    expect(queryByTestId('creator-review-queue')).toBeNull();
   });
 });

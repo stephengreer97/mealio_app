@@ -101,7 +101,26 @@ function bareMeasurementOf(ing: { ingredientName: string; qty: number; unit: str
   return ing.measure ? `${ing.ingredientName}, ${ing.measure} ${ing.unit}` : `${ing.ingredientName}, ${ing.unit}`;
 }
 
-export default function CreatorReviewQueueScreen({ onClose, draftId }: { onClose: () => void; draftId?: string }) {
+export default function CreatorReviewQueueScreen({
+  onClose,
+  draftId,
+  embedded = false,
+  active = true,
+}: {
+  onClose: () => void;
+  draftId?: string;
+  /**
+   * Rendered as the portal's Drafts tab rather than in place of the portal.
+   * The tab bar above it is the way back, so the back chevron and the "Back to
+   * your portal" buttons are not drawn.
+   */
+  embedded?: boolean;
+  /**
+   * Whether the tab holding it is the one on screen. A kept-mounted tab that is
+   * hidden must not take the hardware Back button.
+   */
+  active?: boolean;
+}) {
   const { setWaiting } = useCreatorDrafts();
   const [drafts, setDrafts] = useState<CreatorDraft[] | null>(null);
   /**
@@ -139,6 +158,7 @@ export default function CreatorReviewQueueScreen({ onClose, draftId }: { onClose
    * for first.
    */
   useEffect(() => {
+    if (!active) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       // Back out of the editor before backing out of the queue: a creator
       // mid-edit pressing Back means "stop editing", and losing the whole screen
@@ -148,7 +168,7 @@ export default function CreatorReviewQueueScreen({ onClose, draftId }: { onClose
       return true;
     });
     return () => sub.remove();
-  }, [editing, onClose]);
+  }, [editing, onClose, active]);
 
   const load = useCallback(async () => {
     try {
@@ -298,7 +318,9 @@ export default function CreatorReviewQueueScreen({ onClose, draftId }: { onClose
           decided and nothing has been published.
         </Text>
         <Button label="Try again" size="sm" onPress={() => void load()} style={{ marginTop: 16 }} />
-        <Button label="Back to your portal" variant="secondary" size="sm" onPress={onClose} style={{ marginTop: 8 }} />
+        {!embedded && (
+          <Button label="Back to your portal" variant="secondary" size="sm" onPress={onClose} style={{ marginTop: 8 }} />
+        )}
       </View>
     );
   }
@@ -315,7 +337,9 @@ export default function CreatorReviewQueueScreen({ onClose, draftId }: { onClose
         <Text style={styles.emptyBody}>
           {message?.text ?? 'When we find a new recipe on your posts, it’ll show up here for you to approve.'}
         </Text>
-        <Button label="Back to your portal" variant="secondary" size="sm" onPress={onClose} style={{ marginTop: 16 }} />
+        {!embedded && (
+          <Button label="Back to your portal" variant="secondary" size="sm" onPress={onClose} style={{ marginTop: 16 }} />
+        )}
       </View>
     );
   }
@@ -326,9 +350,11 @@ export default function CreatorReviewQueueScreen({ onClose, draftId }: { onClose
   return (
     <View style={styles.root} testID="creator-review-queue">
       <View style={styles.header}>
-        <TouchableOpacity onPress={onClose} style={styles.headerBack} accessibilityLabel="Back to your portal">
-          <Feather name="chevron-left" size={22} color={Colors.text2} />
-        </TouchableOpacity>
+        {!embedded && (
+          <TouchableOpacity onPress={onClose} style={styles.headerBack} accessibilityLabel="Back to your portal">
+            <Feather name="chevron-left" size={22} color={Colors.text2} />
+          </TouchableOpacity>
+        )}
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Ready for you</Text>
           <Text style={styles.headerSub}>From {hostOf(current.sourceUrl)}</Text>
