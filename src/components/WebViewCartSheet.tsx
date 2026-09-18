@@ -1206,6 +1206,15 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
   // items DECIDED, which includes failures and items that were never written,
   // and "12 of 12 added" over a run that missed one would be a lie. By index so
   // a top-up re-writing the same item cannot count it twice.
+  // TRUE ONCE THE USER HAS CLOSED THE SHEET, and checked before any write.
+  //
+  // Closing stopped requests already in flight (nativeStop, __mealioStop) but
+  // told the run nothing, so the messages still arriving carried it on: on the
+  // Pixel (2026-09-18) a run closed 1.6s in went on to search and ATTEMPT the
+  // adds 2.8s later, and wrote nothing only because it happened to have no cart
+  // baseline. A cancelled run must never reach the user's cart, so the one
+  // place a write is dispatched refuses once this is set.
+  const sheetClosedRef = useRef(false);
   const netAddedIdxRef = useRef<Set<number>>(new Set());
   const [netAdded, setNetAdded] = useState(0);
   // A run that is still going but has stopped counting looks broken. Stephen
@@ -2484,6 +2493,11 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
   };
   const netStartAddsRef = useRef<() => void>(() => {});
   const netStartAdds = useCallback(() => {
+    if (sheetClosedRef.current) {
+      console.log(`[Cart ${ts()}]`, 'sheet closed: not starting the adds');
+      netActiveRef.current = false;
+      return;
+    }
     const active = activeItemsRef.current;
     const sess = netSessionRef.current;
     if (!sess) { netHandOverToUser('no_session_at_add'); return; }
@@ -2840,6 +2854,11 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
     // screen usually has its candidates. The user never sees a second search.
     netStartFallbackSearchRef.current();
     netArmFinalize(rail.budgets.addMs(toWrite.length));
+    if (sheetClosedRef.current) {
+      console.log(`[Cart ${ts()}]`, 'sheet closed: adds not sent');
+      netActiveRef.current = false;
+      return;
+    }
     sendAdds();
   }, [finishParallelAdd, netArm, netArmFinalize, netHandOverToUser, setStep, netPrepare]);
   // Lost in the DOM-removal merge, which took the branch's dependency list and
@@ -3952,6 +3971,7 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
       // plain fetches in this process, not the WebView's, so unmounting the
       // WebView does not end them. Without this a closed sheet kept writing to
       // the user's real cart.
+      sheetClosedRef.current = true;
       nativeStop();
     };
   }, []);
@@ -3964,7 +3984,9 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
   useEffect(() => {
     const was = wasVisibleRef.current;
     wasVisibleRef.current = visible;
+    if (!was && visible) sheetClosedRef.current = false;
     if (was && !visible) {
+      sheetClosedRef.current = true;
       webviewRef.current?.injectJavaScript(
         'try { window.__mealioStop && window.__mealioStop(); } catch (e) {} true;');
       nativeStop();
