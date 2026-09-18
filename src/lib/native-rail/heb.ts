@@ -221,7 +221,7 @@ import {
 import type { NetworkAddItem, NetworkSession } from '../webview-scripts/network-rail';
 import { getStoreWebViewUA } from '../webview-user-agent';
 import {
-  Attempt, NativeRunDriver, PostToSheet, guarded, nativeAttempt, nativeGen,
+  Attempt, NativeRunDriver, PostToSheet, guarded, nativeAttempt, nativeGen, nativeStopped,
   nativeRetry, parseJson,
 } from './run';
 
@@ -608,6 +608,19 @@ export const HEB_NATIVE_RUN: NativeRunDriver = {
     if (!usable.length) return null;
 
     return async (post) => guarded(async () => {
+      // STOP MEANS NO NEW WRITE. Captured before anything is asked, and checked
+      // before every write this batch could start: the batch mutation, each
+      // one-by-one fallback, and each retry of a write that did not land. The
+      // sheet stops us when it is closed or its add phase times out, and a write
+      // started after that lands in a cart the user has walked away from, or
+      // races the read that decides what still needs adding.
+      const myGen = nativeGen();
+      let wrote = 0;
+      const stopHere = (): boolean => {
+        if (!nativeStopped(myGen)) return false;
+        post({ type: 'NET_ADD_DONE', count: usable.length, wrote, stopped: true });
+        return true;
+      };
       const report = (it: typeof usable[number], ok: boolean, reason?: string, detail?: string) => {
         post({ type: 'NET_ADD_RESULT', idx: it.idx, name: it.name, productId: it.productId,
                skuId: it.skuId, asked: it.quantity, success: !!ok,
@@ -624,7 +637,6 @@ export const HEB_NATIVE_RUN: NativeRunDriver = {
       }
       void opts;
 
-      let wrote = 0;
       const accepted: Array<{ it: typeof usable[number]; want: number }> = [];
       const planned: Array<{
         it: typeof usable[number]; want: number; base: number;
@@ -711,6 +723,7 @@ export const HEB_NATIVE_RUN: NativeRunDriver = {
       };
 
       if (planned.length > 0) {
+        if (stopHere()) return;
         const vmap: Record<string, unknown> = {};
         planned.forEach((p, i) => {
           vmap[`p${i}`] = p.vars.productId;
@@ -725,6 +738,7 @@ export const HEB_NATIVE_RUN: NativeRunDriver = {
         if (!bres.ok) {
           post({ type: 'NET_ADD_BATCH_FELL_BACK', count: planned.length, why: bres.why || null });
           for (const p of planned) {
+            if (stopHere()) return;
             const r1 = await hebGql(post, 'cartItemV2', HEB_ADD_MUTATION, p.vars, 9000, 'add');
             applyOne(p, r1.ok ? r1.data : null, r1.ok ? null : (r1.why || 'network'), r1.detail);
           }
@@ -751,6 +765,7 @@ export const HEB_NATIVE_RUN: NativeRunDriver = {
           post({ type: 'NET_ADD_UNLANDED', source: 'network', count: missing.length,
                  names: missing.map((m) => m.it.name) });
           for (const m of missing) {
+            if (stopHere()) return;
             try {
               const vars2: Record<string, unknown> = {
                 productId: String(m.it.productId), skuId: String(m.it.skuId), quantity: m.want,

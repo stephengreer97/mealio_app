@@ -80,6 +80,18 @@ export function nativeTrack(ctl: AbortController): AbortController {
   return ctl;
 }
 
+/**
+ * Has a stop landed since `gen` was captured?
+ *
+ * What a WRITE loop asks before every write it is about to start. Aborting what
+ * is on the wire is not enough on its own: a cart write loop that carried on to
+ * its next item after the sheet closed kept putting things in the user's real
+ * cart that they had just cancelled.
+ */
+export function nativeStopped(gen: number): boolean {
+  return generation !== gen;
+}
+
 /** Bump the generation and abort what is on the wire. Returns how many. */
 export function nativeStop(): number {
   generation += 1;
@@ -144,9 +156,13 @@ export async function nativeRetry<T>(
   const attempts = opts.attempts ?? RETRY_ATTEMPTS;
   const budget = opts.extraBudgetMs ?? RETRY_EXTRA_BUDGET_MS;
   const startedAt = Date.now();
+  // A retry is a new request, and after a stop no new request starts. For a
+  // write that is the difference between cancelled and added anyway.
+  const gen = generation;
   let last: Attempt<T> = { ok: false, why: 'network' };
   let tries = 0;
   for (let i = 1; i <= attempts; i += 1) {
+    if (i > 1 && generation !== gen) break;
     tries = i;
     last = await attemptFn(i);
     if (last && last.ok) {

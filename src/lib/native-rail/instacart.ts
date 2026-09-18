@@ -385,7 +385,7 @@ import type { NetworkAddItem, NetworkSession } from '../webview-scripts/network-
 import { epochKey } from '../store-session-epoch';
 import { getStoreWebViewUA } from '../webview-user-agent';
 import {
-  Attempt, NativeRunDriver, PostToSheet, guarded, nativeAttempt, nativeGen,
+  Attempt, NativeRunDriver, PostToSheet, guarded, nativeAttempt, nativeGen, nativeStopped,
   nativeRetry, parseJson,
 } from './run';
 
@@ -536,12 +536,16 @@ function icGql(
 async function icGqlFresh(
   post: PostToSheet, origin: string, slug: string, name: string,
   variables: object, budgetMs: number, phase: string,
+  gen?: number,
 ): Promise<Attempt<any>> {
   const first = await icGql(post, origin, slug, name, variables, budgetMs, phase);
   if (first.ok || first.code !== 'PERSISTED_QUERY_NOT_FOUND') return first;
   const got = await runHarvestOps(origin, slug, 20_000);
   post({ type: 'IC_OPS_REFRESHED', source: 'network', harvested: got, op: name });
   if (!got) return first;
+  // `gen`: a write's caller. The second ask is a second write, and none starts
+  // after a stop.
+  if (gen != null && nativeStopped(gen)) return first;
   return icGql(post, origin, slug, name, variables, budgetMs, phase);
 }
 
@@ -806,6 +810,9 @@ export function instacartNativeRun(storeId: string): NativeRunDriver {
     const writable = (items as NetworkAddItem[]).filter((i) => !!i.productId);
     if (!writable.length) return null;
     return async (post) => guarded(async () => {
+      // STOP MEANS NO NEW WRITE (see the H-E-B driver): captured before anything
+      // is asked, checked before the write and before its one re-ask.
+      const myGen = nativeGen();
       const report = (
         it: NetworkAddItem, ok: boolean, reason?: string, detail?: string, asked?: number,
       ) => {
@@ -846,9 +853,13 @@ export function instacartNativeRun(storeId: string): NativeRunDriver {
         planned.push({ it, want, have, sent: have + want });
       }
       if (!updates.length) { post({ type: 'NET_ADD_DONE', count: writable.length, wrote: 0 }); return; }
+      if (nativeStopped(myGen)) {
+        post({ type: 'NET_ADD_DONE', count: writable.length, wrote: 0, stopped: true });
+        return;
+      }
 
       const res = await icGqlFresh(post, t.origin, t.slug, 'UpdateCartItemsMutation',
-        { cartItemUpdates: updates }, 25_000, 'add');
+        { cartItemUpdates: updates }, 25_000, 'add', myGen);
       if (!res.ok) {
         for (const p of planned) {
           report(p.it, false, 'write_refused', `${res.why}${res.detail ? `: ${res.detail}` : ''}`);
