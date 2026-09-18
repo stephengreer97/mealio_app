@@ -3972,7 +3972,8 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
       // WebView does not end them. Without this a closed sheet kept writing to
       // the user's real cart.
       sheetClosedRef.current = true;
-      nativeStop();
+      const abortedOnUnmount = nativeStop();
+      console.log(`[Cart ${ts()}]`, 'sheet unmounted: native stop, aborted', abortedOnUnmount, 'in flight');
     };
   }, []);
 
@@ -3989,7 +3990,8 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
       sheetClosedRef.current = true;
       webviewRef.current?.injectJavaScript(
         'try { window.__mealioStop && window.__mealioStop(); } catch (e) {} true;');
-      nativeStop();
+      const abortedOnHide = nativeStop();
+      console.log(`[Cart ${ts()}]`, 'sheet hidden: native stop, aborted', abortedOnHide, 'in flight');
     }
   }, [visible]);
 
