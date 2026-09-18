@@ -359,9 +359,30 @@ export default function KrogerCartReviewSheet({
   const [cartError, setCartError] = useState('');
   const [addedItems, setAddedItems] = useState<{ description: string; quantity: number }[]>([]);
 
+  // ── Re-entry guards ─────────────────────────────────────────────────────
+  //
+  // The Kroger cart write is ADDITIVE, so a second tap that lands before React
+  // re-renders (and before the button it hit has gone away) sends the same
+  // items twice and the user gets double. State cannot guard this: both taps
+  // read the same pre-render state. Refs are read and written synchronously.
+  //
+  //   searchStartedRef  one search per run; released only if it fails and the
+  //                     user is put back on the qty screen to try again.
+  //   decisionBusyRef   one decision per review item; released when the review
+  //                     moves to another item (including Back).
+  //   addStartedRef     one cart write per run, whichever path reaches it.
+  //
+  // All three reset when the sheet opens, which is what a genuine new run is.
+  const searchStartedRef = useRef(false);
+  const decisionBusyRef = useRef(false);
+  const addStartedRef = useRef(false);
+
   // Re-initialize when sheet opens
   useEffect(() => {
     if (visible) {
+      searchStartedRef.current = false;
+      decisionBusyRef.current = false;
+      addStartedRef.current = false;
       const consolidated = consolidateIngredients(meals, storeId);
       setItems(consolidated);
       setCheckedItems(consolidated.map(() => true));
@@ -385,6 +406,7 @@ export default function KrogerCartReviewSheet({
 
   // Reset selection when review item changes
   useEffect(() => {
+    decisionBusyRef.current = false;
     setSelectedSuggIdx(0);
     setCustomText('');
     setCustomSuggestions([]);
@@ -427,8 +449,10 @@ export default function KrogerCartReviewSheet({
   // ── Step handlers ────────────────────────────────────────────────────────
 
   const handleStartSearch = async () => {
+    if (searchStartedRef.current) return;
     const active = items.filter((it, i) => (checkedItems[i] ?? true) && !isZeroedOut(it));
     if (active.length === 0) return;
+    searchStartedRef.current = true;
     setStep('searching');
     resetPct();
     // Moving from the first frame. Stephen: "it does not move during the search
@@ -488,6 +512,8 @@ export default function KrogerCartReviewSheet({
       stopCreep();
       setError(err.message || 'Search failed');
       setStep('qty');
+      // Nothing was written; the user may try again from the qty screen.
+      searchStartedRef.current = false;
     }
   };
 
@@ -526,6 +552,8 @@ export default function KrogerCartReviewSheet({
   };
 
   const handleReviewDecision = async (action: 'skip' | 'add' | 'update') => {
+    if (decisionBusyRef.current) return;
+    decisionBusyRef.current = true;
     const newPicked = [...pickedItems];
     if (action === 'skip' && currentReview) {
       // The ingredient's own name, not the product the store suggested: what
@@ -585,6 +613,8 @@ export default function KrogerCartReviewSheet({
   };
 
   const doAddToCart = async (cartItems: { upc: string; quantity: number; description?: string }[]) => {
+    if (addStartedRef.current) return;
+    addStartedRef.current = true;
     setWritingCount(cartItems.length);
     setStep('adding');
     startCreep(0.5, 0.9);
