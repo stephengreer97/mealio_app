@@ -426,9 +426,11 @@ export default function AccountScreen() {
     if (deleteConfirmText !== 'Delete Account') return;
     setDeleteLoading(true);
     try {
-      await accountApi.deleteAccount();
+      const result = await accountApi.deleteAccount();
       setDeleteConfirmVisible(false);
       await logout();
+      const notice = result && typeof result === 'object' ? result.notice : undefined;
+      if (notice) Alert.alert('Your account is deleted', notice);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not delete account. Please try again.');
     } finally {
@@ -1234,6 +1236,11 @@ export default function AccountScreen() {
               <Text style={styles.deleteModalBody}>
                 This permanently deletes your account, saved meals, and follows. If you&apos;re a creator, your published meals are removed from Discover. This cannot be undone.
               </Text>
+              {user?.tier === 'paid' && (
+                <Text style={styles.deleteModalBody} testID="delete-store-subscription-warning">
+                  If you subscribed through the App Store or Google Play, cancel that subscription in your store settings too. Deleting your Mealio account does not stop store billing.
+                </Text>
+              )}
               <Text style={styles.deleteModalLabel}>Type "Delete Account" to confirm:</Text>
               <TextInput
                 value={deleteConfirmText}

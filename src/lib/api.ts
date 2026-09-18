@@ -260,8 +260,11 @@ export const account = {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
+  // `notice` is set when the account was paid with no Stripe subscription to
+  // cancel: an App Store / Google Play purchase keeps billing until the user
+  // cancels it with the store, and only they can.
   deleteAccount: () =>
-    request<void>('/api/account/delete', { method: 'DELETE' }),
+    request<{ success?: boolean; notice?: string } | void>('/api/account/delete', { method: 'DELETE' }),
 
   // MEAL-217. The CATALOGUE comes from the server alongside the values, so the
   // screen renders whatever Mealio currently sends rather than a list baked
