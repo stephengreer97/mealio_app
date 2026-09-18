@@ -178,6 +178,32 @@ describe('the count on the run screen', () => {
     expect(countText(view)).toBe('2 of 2 added');
   });
 
+  it('says it is finding ingredients before any search has answered', async () => {
+    // The heading used to follow netProgress, which is empty until the first
+    // search answers, so a run still finding products said "Adding to your
+    // cart" (seen on the Pixel, 2026-09-18).
+    const view = render(
+      <WebViewCartSheet visible
+        meals={[{ id: 'm1', name: 'Fish Tacos', ingredients: ['Sour cream'].map(chosen) }] as never}
+        storeId="heb" storeName="H-E-B" onClose={() => {}} />,
+    );
+    await act(async () => {});
+    const post = (payload: Record<string, unknown>) => act(() => {
+      view.queryAllByTestId('mock-webview')[0]?.props.onMessage({ nativeEvent: { data: JSON.stringify(payload) } });
+    });
+    act(() => { fireEvent.press(view.getByText(/add ingredients to/i)); });
+    act(() => { jest.advanceTimersByTime(2_000); });
+    enableRail();
+    const t = () => view.queryByTestId('cart-run-title')?.props.children ?? '(none)';
+    const seen: string[] = [t()];
+    post(SESSION_OK); seen.push(t());
+    post({ type: 'CART_COUNT', count: 0, items: [], url: 'https://www.heb.com/cart' }); seen.push(t());
+    act(() => { jest.advanceTimersByTime(2_000); }); seen.push(t());
+    post(SESSION_OK); seen.push(t());
+    // Every point from the tap to the first search: none of it is adding yet.
+    expect(seen).toEqual(Array(seen.length).fill('Finding your ingredients'));
+  });
+
   it('names the meal under the heading', async () => {
     const { view } = await runAdding(['Sour cream'], []);
     expect(view.getByTestId('cart-run-subtitle').props.children).toBe('Fish Tacos');

@@ -8069,7 +8069,10 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
                   progress={step === 'login_check' ? null : netPct}
                   title={step === 'login_check'
                     ? `Checking your ${storeName} account`
-                    : netProgress?.phase === 'search' ? 'Finding your ingredients' : 'Adding to your cart'}
+                    // From the step, not netProgress: before the first search answers
+                    // there is no phase yet, and "Adding to your cart" over a run that
+                    // is still finding products was the first thing it said.
+                    : step === 'adding' ? 'Adding to your cart' : 'Finding your ingredients'}
                   subtitle={runSubtitle}
                   count={step === 'login_check' || !netProgress || netProgress.total <= 0
                     ? null
