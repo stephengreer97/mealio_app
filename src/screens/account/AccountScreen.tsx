@@ -49,12 +49,11 @@ import Card from '../../components/ui/Card';
 import NotificationSettingsSheet from '../../components/NotificationSettingsSheet';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
-import CookieManager from '@react-native-cookies/cookies';
 import { clearBotCookiesFor } from '../../lib/bot-cookies';
 import { nativeRailOrigins } from '../../lib/native-rail';
 import { getStoreWebViewUA } from '../../lib/webview-user-agent';
 import { useLoginPrewarm } from '../../context/LoginPrewarmContext';
-import { bumpEpoch } from '../../lib/store-session-epoch-storage';
+import { signOutOfStoresOnDevice } from '../../lib/storeSignOut';
 
 /** e.g. "Jul 9, 2026" */
 function formatExpiry(iso: string): string {
@@ -554,28 +553,10 @@ export default function AccountScreen() {
           onPress: async () => {
             try {
               setStoreLogoutLoading(true);
-              // WebView stores (HEB, Albertsons, Walmart, etc.): clear the cookie
-              // jar (incl. HttpOnly store auth cookies). Pass both true/false to
-              // cover iOS WKWebView and the shared NSHTTPCookieStorage; the arg is
-              // ignored on Android.
-              await CookieManager.clearAll(true);
-              await CookieManager.clearAll(false);
-              // AND FORGET WHAT THOSE COOKIES USED TO SAY. The prewarm caches
-              // each store's login answer for the session, and clearing the
-              // jar does not clear the memory of it -- so the next run read
-              // "known logged in", skipped the login check, and went straight
-              // to searching for somebody who had just signed out. Measured on
-              // 2026-09-07, on a run immediately after this button.
-              prewarm.forgetAll();
-              // AND ORPHAN WHAT THE COOKIE JAR DOES NOT COVER. The rail caches
-              // the shop and the delivery zone in the store page's
-              // localStorage, which is a different store from the cookie jar
-              // and survives clearAll untouched -- so a run right after this
-              // button was still pointed at the branch the signed-in session
-              // had chosen (shopFrom "cache", same shop id, across a sign-out).
-              // Bumping the generation changes every rail cache key at once,
-              // with no WebView to open and no page to load.
-              await bumpEpoch();
+              // The cookie jar, the prewarm's memory of it, and the rail caches
+              // the jar does not cover. The same function signing out of Mealio
+              // runs; see lib/storeSignOut for what each step is for.
+              await signOutOfStoresOnDevice({ forgetPrewarm: prewarm.forgetAll });
               // Kroger is API/OAuth, not a WebView cookie — disconnect it
               // server-side too so "all stores" really means all.
               if (krogerConnected) {

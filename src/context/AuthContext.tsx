@@ -9,6 +9,7 @@ import { initPurchases, identifyUser, resetUser } from '../lib/purchases';
 import { unregisterDevice } from '../lib/push';
 import { clearSessionLogs } from '../lib/logBuffer';
 import { clearLastAutomationRun } from '../lib/lastAutomationRun';
+import { signOutOfStoresOnDevice } from '../lib/storeSignOut';
 
 interface AuthContextValue {
   user: User | null;
@@ -57,6 +58,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearLastAutomationRun();
   }
 
+  // Signing out of Mealio signs this device out of every grocery store too
+  // (Stephen's call), with the very function the Account button runs. Never
+  // awaited by anything that must finish: a cookie jar that will not clear is
+  // not a reason to keep someone signed in to Mealio. The prewarm's memory of
+  // those logins is forgotten by its own provider on the same boundary
+  // (useSessionEnd), so it is not passed here.
+  function signOutOfStores(): Promise<void> {
+    return signOutOfStoresOnDevice().catch((err) => {
+      console.warn('[auth] store sign-out failed:', err?.message ?? String(err));
+    });
+  }
+
   /**
    * Install `nextUser` as the signed-in user.
    *
@@ -90,6 +103,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const previous = userRef.current;
     if (previous && previous.id !== nextUser.id) {
       endSessionDiagnostics();
+      // A's store logins must not become B's. Not awaited: this runs before
+      // setUser for a reason (see above) and must not be delayed by a keychain.
+      void signOutOfStores();
       // As at logout. Otherwise A's creator status decides what B's tab bar
       // shows for the round trip checkCreatorStatus takes to answer for B.
       setIsCreator(false);
@@ -110,6 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function endLocalSession() {
     cancelRevalidation();
     endSessionDiagnostics();
+    void signOutOfStores();
     userRef.current = null;
     setUser(null);
     setIsCreator(false);
@@ -340,6 +357,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await auth.logout();
     } catch {}
+    // Out of every grocery store on this device, too. signOutOfStores swallows
+    // its own failure, so it cannot stop the Mealio sign-out below.
+    await signOutOfStores();
     try {
       await tokenStorage.clear();
       await resetUser();
