@@ -7,11 +7,9 @@ export { normalizeIngredients };
 
 const BASE_URL = 'https://mealio.co';
 
-class ApiError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-  }
-}
+import { ApiError, isAuthRejection } from './authErrors';
+
+export { isAuthRejection };
 
 // RN's fetch has no request timeout, so a stalled connection hangs forever —
 // which in flows like Kroger add-to-cart means a spinner that never resolves.
@@ -184,14 +182,23 @@ export const auth = {
       ? request<{ user: User }>('/api/auth/verify', { method: 'GET', authToken: accessToken }, false)
       : request<{ user: User }>('/api/auth/verify', { method: 'GET' }),
 
-  renew: (accessToken: string) =>
-    fetchWithTimeout(`${BASE_URL}/api/auth/renew`, {
+  /**
+   * Throws an ApiError carrying the real status on a non-2xx answer, so the
+   * caller can tell "the server refused this token" (401/403, see
+   * isAuthRejection) from "the server is down" (5xx). It used to parse whatever
+   * came back, which made an outage and an expired token look the same.
+   */
+  renew: async (accessToken: string): Promise<{ accessToken?: string; user?: User }> => {
+    const r = await fetchWithTimeout(`${BASE_URL}/api/auth/renew`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${accessToken}`,
       },
-    }, DEFAULT_TIMEOUT_MS).then((r) => r.json()),
+    }, DEFAULT_TIMEOUT_MS);
+    if (!r.ok) throw new ApiError(r.status, `HTTP ${r.status}`);
+    return r.json();
+  },
 
   logout: () =>
     request<void>('/api/auth/logout', { method: 'POST' }),
