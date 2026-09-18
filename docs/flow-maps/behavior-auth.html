@@ -26,9 +26,14 @@ flowchart TD
     HAVE -->|no| SIGNEDOUT
     HAVE -->|yes| VER["GET /api/auth/verify"]
     VER -->|ok| BEGIN
-    VER -->|"401 / expired"| RENEW["POST /api/auth/renew<br/><i>with the CURRENT access token</i>"]
+    VER -->|"401 / 403"| RENEW["POST /api/auth/renew<br/><i>with the CURRENT access token</i>"]
+    VER -->|"no network, timeout, 5xx"| OFFLINE
     RENEW -->|"returns a token"| SAVE1["save it &middot; keep the stored user<br/>if renew omitted one"] --> BEGIN
-    RENEW -->|"no token, or throws"| CLEAR["tokenStorage.clear()"] --> SIGNEDOUT
+    RENEW -->|"401 / 403, or no token"| CLEAR["tokenStorage.clear()"] --> SIGNEDOUT
+    RENEW -->|"no network, timeout, 5xx"| OFFLINE["<b>start from the STORED user</b><br/><i>nobody said the token is bad;<br/>keep it and ask again later</i>"]
+    OFFLINE --> BEGIN
+    OFFLINE -.->|"next foreground, or 60s timer"| RECHECK["verify again (same three answers)"]
+    RECHECK -.->|"refused"| EXPIRE
 
     LOGINS(["Login screen<br/>email + password"]) --> L1["POST /api/auth/login"]
     L1 --> L2{"what came back?"}
@@ -43,13 +48,17 @@ flowchart TD
     GT --> LWT
     AT --> LWT
 
-    DL(["deep link<br/><code>mealio://verified?token=…</code>"]) --> LWT
+    DL(["deep link<br/>EXACTLY <code>mealio://verified?token=…</code>"]) --> DLWAIT{"launch restore<br/>still running?"}
+    DLWAIT -->|yes| DLHOLD["hold it until it answers"] --> DLWHO
+    DLWAIT -->|no| DLWHO{"anyone<br/>signed in?"}
+    DLWHO -->|"yes"| DLNO(["ignored &middot; 'Already signed in'<br/><i>a link never switches accounts</i>"])
+    DLWHO -->|no| LWT
 
     LWT["<b>loginWithToken</b><br/><i>diagram 2</i>"] --> BEGIN
 
     BEGIN["<b>beginSession(nextUser)</b>"]
     BEGIN --> IDCHK{"a DIFFERENT user id<br/>was signed in?"}
-    IDCHK -->|yes| TEARDOWN["<b>endSessionDiagnostics()</b><br/>clearSessionLogs +<br/>clearLastAutomationRun,<br/>and isCreator &rarr; false"]
+    IDCHK -->|yes| TEARDOWN["<b>endSessionDiagnostics()</b><br/>clearSessionLogs +<br/>clearLastAutomationRun,<br/>isCreator &rarr; false,<br/>and <b>sign out of the stores</b><br/><i>lib/storeSignOut, not awaited</i>"]
     IDCHK -->|"no — same person,<br/>new User object"| KEEP["keep everything<br/><i>a renewal or a profile refresh<br/>is not an account switch</i>"]
     TEARDOWN --> SET
     KEEP --> SET
@@ -57,6 +66,7 @@ flowchart TD
     SET --> IN(["signed in ·<br/>checkCreatorStatus + identifyUser"])
 
     SIGNEDOUT(["signed out — AuthStack"])
+    EXPIRE["<b>endLocalSession()</b><br/>diagnostics, store sign-out,<br/>user &rarr; null"] --> SIGNEDOUT
 
     classDef state fill:#1e3a8a,stroke:#3b82f6,color:#fff
     classDef good fill:#14532d,stroke:#22c55e,color:#fff
@@ -64,7 +74,7 @@ flowchart TD
     classDef spec fill:#4c1d95,stroke:#a78bfa,color:#fff
     class LOGINS,OTP,CE,INIT state
     class IN good
-    class SIGNEDOUT,CLEAR danger
+    class SIGNEDOUT,CLEAR,DLNO,EXPIRE danger
     class BEGIN,TEARDOWN,SET spec
 </pre></div>
 
@@ -85,7 +95,8 @@ flowchart TD
         R2 -->|"an authToken was passed"| RTHROW(["<b>do not renew</b><br/><i>otherwise a stranger's expired<br/>token would renew the signed-in<br/>user's session to answer for it —<br/>and sign THEM out when it failed</i>"])
         R2 -->|yes| R3["<b>renewOnce()</b><br/>single-flight: concurrent 401s<br/>share one /renew"]
         R3 -->|ok| R4["retry the original request<br/>once, with retry=false"]
-        R3 -->|fails| R5["clear() &rarr; signed out"]
+        R3 -->|"401 / 403"| R5["clear() &rarr; <b>notifySessionExpired</b><br/>&rarr; AuthContext endLocalSession()<br/><i>the UI signs out with the keychain</i>"]
+        R3 -->|"no network, timeout, 5xx"| R6(["throw, keep the token<br/><i>not a verdict on the session</i>"])
     end
 
     classDef good fill:#14532d,stroke:#22c55e,color:#fff
@@ -98,7 +109,8 @@ flowchart TD
 flowchart TD
     O0(["Account &rsaquo; Sign out"]) --> O1["<b>unregisterDevice()</b> FIRST<br/><i>a shared phone must not keep getting<br/>the previous account's notifications —<br/>and once the token is gone this<br/>call cannot authenticate</i>"]
     O1 --> O2["POST /api/auth/logout"]
-    O2 --> O3["tokenStorage.clear() + resetUser()"]
+    O2 --> OS["<b>signOutOfStoresOnDevice()</b><br/>cookie jar (both), rail-cache epoch<br/><i>same function as Account's button;<br/>a failure is logged, never blocks</i>"]
+    OS --> O3["tokenStorage.clear() + resetUser()"]
     O3 --> O4["<b>finally</b> &rarr; endSessionDiagnostics()<br/><i>in a finally because clear() is three<br/>bare SecureStore deletes in a Promise.all;<br/>one keychain rejection used to skip both</i>"]
     O4 --> O5["<b>userRef.current = null</b>, then setUser(null)"]
     O5 --> OUT(["signed out"])

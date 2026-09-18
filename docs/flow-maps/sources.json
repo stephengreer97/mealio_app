@@ -133,7 +133,7 @@
         "src/screens/auth",
         "src/navigation/RootNavigator.tsx"
       ],
-      "readAt": "fe25bf8"
+      "readAt": "8409f8d"
     },
     "behavior-account.html": {
       "title": "Account, subscription & admin",

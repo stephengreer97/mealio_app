@@ -74,6 +74,7 @@ import { drainPrewarmRequests } from '../lib/prewarm-requests';
 import { rankChoiceCandidates } from '../lib/chooseRanking';
 import { nativeRunFor } from '../lib/native-rail';
 import { nativeStop, type NativeRunDriver, type PostToSheet } from '../lib/native-rail/run';
+import { isMessageFromStore } from '../lib/webview-message-origin';
 import { runNeedsWebView } from '../lib/store-capabilities';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -2419,6 +2420,16 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
       netActiveRef.current = false;
       netPhaseRef.current = 'idle';
       console.log(`[Cart ${ts()}]`, 'network run: add phase timed out — finalizing with what landed');
+      // AND NOTHING MORE IS WRITTEN. Finalizing moves on to the read that
+      // decides what still needs adding; a native write loop still going
+      // underneath it could land a write after that read and over-add. Both
+      // sides of the bridge, as netStopPrewarm does.
+      webviewRef.current?.injectJavaScript(
+        'try { window.__mealioStop && window.__mealioStop(); } catch (e) {} true;');
+      const stoppedNatively = nativeStop();
+      if (stoppedNatively > 0) {
+        console.log(`[Cart ${ts()}]`, 'network run: aborted', stoppedNatively, 'native requests in flight');
+      }
       tel().record('confirm', 'error', { detail: { phase: 'network_add_timeout' }, code: 'timeout' });
       // Items with no result at all are unresolved, not failed: a write may have
       // landed and simply not been reported, so claiming failure could send the
@@ -3925,8 +3936,28 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
       // the time it fires, and the run's also logs after the test has finished.
       if (netSessionRepairAskRef.current) clearTimeout(netSessionRepairAskRef.current);
       if (netRunSessionAskRef.current) clearTimeout(netRunSessionAskRef.current);
+      // A native run outlives the sheet unless it is told: its requests are
+      // plain fetches in this process, not the WebView's, so unmounting the
+      // WebView does not end them. Without this a closed sheet kept writing to
+      // the user's real cart.
+      nativeStop();
     };
   }, []);
+
+  // The inline mount (MyMealsScreen) closes by going invisible rather than
+  // unmounting, so the cleanup above never runs there. Same stop, on the
+  // visible -> hidden edge only: the first render of a hidden sheet has
+  // nothing to stop, and a stop is global.
+  const wasVisibleRef = useRef(visible);
+  useEffect(() => {
+    const was = wasVisibleRef.current;
+    wasVisibleRef.current = visible;
+    if (was && !visible) {
+      webviewRef.current?.injectJavaScript(
+        'try { window.__mealioStop && window.__mealioStop(); } catch (e) {} true;');
+      nativeStop();
+    }
+  }, [visible]);
 
   // ── Start flow ──────────────────────────────────────────────────────────
 
@@ -5461,6 +5492,14 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
 
   const onMessage = useCallback(
     (event: WebViewMessageEvent) => {
+      // ONLY THE STORE MAY STEER A RUN. The WebView can be navigated off the
+      // store and the bridge goes with it; a message from any other site is
+      // dropped before it is even parsed. See lib/webview-message-origin.
+      const fromUrl = event.nativeEvent?.url;
+      if (!isMessageFromStore(fromUrl, scriptsRef.current)) {
+        if (__DEV__) console.log(`[Cart ${ts()}]`, 'onMessage dropped: not from the store —', fromUrl);
+        return;
+      }
       try {
         const msg = JSON.parse(event.nativeEvent.data);
         console.log(`[Cart ${ts()}]`, 'onMessage type=', msg.type, msg);

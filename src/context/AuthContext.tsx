@@ -4,10 +4,12 @@ import Constants from 'expo-constants';
 import { User } from '../types';
 import * as tokenStorage from '../lib/tokenStorage';
 import { auth, creators, usage } from '../lib/api';
+import { isAuthRejection, setSessionExpiredHandler } from '../lib/authErrors';
 import { initPurchases, identifyUser, resetUser } from '../lib/purchases';
 import { unregisterDevice } from '../lib/push';
 import { clearSessionLogs } from '../lib/logBuffer';
 import { clearLastAutomationRun } from '../lib/lastAutomationRun';
+import { signOutOfStoresOnDevice } from '../lib/storeSignOut';
 
 interface AuthContextValue {
   user: User | null;
@@ -56,6 +58,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearLastAutomationRun();
   }
 
+  // Signing out of Mealio signs this device out of every grocery store too
+  // (Stephen's call), with the very function the Account button runs. Never
+  // awaited by anything that must finish: a cookie jar that will not clear is
+  // not a reason to keep someone signed in to Mealio. The prewarm's memory of
+  // those logins is forgotten by its own provider on the same boundary
+  // (useSessionEnd), so it is not passed here.
+  function signOutOfStores(): Promise<void> {
+    return signOutOfStoresOnDevice().catch((err) => {
+      console.warn('[auth] store sign-out failed:', err?.message ?? String(err));
+    });
+  }
+
   /**
    * Install `nextUser` as the signed-in user.
    *
@@ -89,6 +103,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const previous = userRef.current;
     if (previous && previous.id !== nextUser.id) {
       endSessionDiagnostics();
+      // A's store logins must not become B's. Not awaited: this runs before
+      // setUser for a reason (see above) and must not be delayed by a keychain.
+      void signOutOfStores();
       // As at logout. Otherwise A's creator status decides what B's tab bar
       // shows for the round trip checkCreatorStatus takes to answer for B.
       setIsCreator(false);
@@ -100,9 +117,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(nextUser);
   }
 
+  /**
+   * The server has refused this session and the keychain is already cleared:
+   * put the app back to signed out, with the same teardown logout does, so the
+   * navigator shows the sign-in screens instead of a signed-in UI whose every
+   * request fails.
+   */
+  function endLocalSession() {
+    cancelRevalidation();
+    endSessionDiagnostics();
+    void signOutOfStores();
+    userRef.current = null;
+    setUser(null);
+    setIsCreator(false);
+  }
+
   useEffect(() => {
     initPurchases();
     initAuth();
+  }, []);
+
+  // lib/api cleared the keychain because the server refused a renew. Without
+  // this the UI stayed signed in over a session with no token behind it.
+  useEffect(() => {
+    setSessionExpiredHandler(() => {
+      if (userRef.current) endLocalSession();
+    });
+    return () => setSessionExpiredHandler(null);
   }, []);
 
   // Log an open when the app returns to the foreground after being idle a while
@@ -116,11 +157,101 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => sub.remove();
   }, []);
 
+  // ── Is the stored session still good? ──────────────────────────────────────
+  //
+  // THREE ANSWERS, NOT TWO. "Yes", "the server says no" and "nobody answered".
+  // This used to fold the third into the second: any failure of verify, then
+  // any failure of renew, cleared the keychain. So opening the app on a plane,
+  // in a basement, or during a mealio.co outage signed the user out, and they
+  // came back to a sign-in screen for no reason they could see.
+  //
+  // Only a 401/403 from the server (isAuthRejection) is a verdict on the token.
+  // Everything else leaves the stored token and user exactly where they are.
+  type SessionCheck =
+    | { kind: 'ok'; user: User }
+    | { kind: 'rejected' }
+    | { kind: 'unreachable' };
+
+  async function checkStoredSession(accessToken: string, fallbackUser: User): Promise<SessionCheck> {
+    try {
+      const { user: verifiedUser } = await auth.verify();
+      return { kind: 'ok', user: verifiedUser };
+    } catch (err) {
+      if (!isAuthRejection(err)) return { kind: 'unreachable' };
+    }
+    // The server refused the token. Try renewing with it before giving up.
+    try {
+      const result = await auth.renew(accessToken);
+      if (!result.accessToken) return { kind: 'rejected' };
+      // Renew may omit the user; fall back to the already-stored one.
+      const renewedUser = result.user ?? fallbackUser;
+      await tokenStorage.save(result.accessToken, null, renewedUser);
+      return { kind: 'ok', user: renewedUser };
+    } catch (err) {
+      return isAuthRejection(err) ? { kind: 'rejected' } : { kind: 'unreachable' };
+    }
+  }
+
+  // A launch that could not reach the server starts the session from the
+  // stored user and asks again later: on the next return to the foreground, and
+  // on a timer while the app stays open.
+  const revalidatePending = useRef(false);
+  const revalidating = useRef(false);
+  const revalidateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const REVALIDATE_RETRY_MS = 60_000;
+
+  function scheduleRevalidation() {
+    revalidatePending.current = true;
+    if (revalidateTimer.current) clearTimeout(revalidateTimer.current);
+    revalidateTimer.current = setTimeout(() => {
+      revalidateTimer.current = null;
+      void revalidate();
+    }, REVALIDATE_RETRY_MS);
+  }
+
+  function cancelRevalidation() {
+    revalidatePending.current = false;
+    if (revalidateTimer.current) { clearTimeout(revalidateTimer.current); revalidateTimer.current = null; }
+  }
+
+  async function revalidate() {
+    if (!revalidatePending.current || revalidating.current) return;
+    const who = userRef.current;
+    const accessToken = await tokenStorage.getAccessToken();
+    if (!who || !accessToken) { cancelRevalidation(); return; }
+    revalidating.current = true;
+    try {
+      const outcome = await checkStoredSession(accessToken, who);
+      // Somebody signed out, or in as someone else, while we were asking.
+      // Whatever this answer says, it is about a session that is gone.
+      if (userRef.current?.id !== who.id) return;
+      if (outcome.kind === 'unreachable') { scheduleRevalidation(); return; }
+      cancelRevalidation();
+      if (outcome.kind === 'rejected') {
+        await tokenStorage.clear().catch(() => {});
+        endLocalSession();
+        return;
+      }
+      beginSession(outcome.user);
+      const current = await tokenStorage.getAccessToken();
+      if (current) await tokenStorage.save(current, null, outcome.user);
+      await Promise.all([checkCreatorStatus(), identifyUser(outcome.user.id)]);
+    } finally {
+      revalidating.current = false;
+    }
+  }
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void revalidate();
+    });
+    return () => { sub.remove(); cancelRevalidation(); };
+  }, []);
+
   async function initAuth() {
     try {
-      const [accessToken, refreshToken, storedUser] = await Promise.all([
+      const [accessToken, storedUser] = await Promise.all([
         tokenStorage.getAccessToken(),
-        tokenStorage.getRefreshToken(),
         tokenStorage.getUser(),
       ]);
 
@@ -129,29 +260,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Verify token is still valid
-      try {
-        const { user: verifiedUser } = await auth.verify();
-        beginSession(verifiedUser);
+      const outcome = await checkStoredSession(accessToken, storedUser);
+      if (outcome.kind === 'ok') {
+        beginSession(outcome.user);
         recordOpen();
-        await Promise.all([checkCreatorStatus(), identifyUser(verifiedUser.id)]);
-      } catch {
-        // Token expired — try renewing with the current access token
-        try {
-          const result = await auth.renew(accessToken);
-          if (result.accessToken) {
-            // Renew may omit the user; fall back to the already-stored one.
-            const renewedUser = result.user ?? storedUser;
-            await tokenStorage.save(result.accessToken, null, renewedUser);
-            beginSession(renewedUser);
-            recordOpen();
-            await Promise.all([checkCreatorStatus(), identifyUser(renewedUser.id)]);
-          } else {
-            await tokenStorage.clear();
-          }
-        } catch {
-          await tokenStorage.clear();
-        }
+        await Promise.all([checkCreatorStatus(), identifyUser(outcome.user.id)]);
+      } else if (outcome.kind === 'rejected') {
+        await tokenStorage.clear();
+      } else {
+        // Offline, timed out, or the server is failing: the stored user is still
+        // this person. Start with it and confirm once the server answers.
+        beginSession(storedUser);
+        scheduleRevalidation();
+        await Promise.all([checkCreatorStatus(), identifyUser(storedUser.id)]);
       }
     } finally {
       setIsLoading(false);
@@ -228,6 +349,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function logout() {
+    cancelRevalidation();
     // Retire this device's push token first: a shared phone must not keep
     // receiving the previous account's notifications, and once the access token
     // is gone the unregister call can no longer authenticate.
@@ -235,6 +357,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await auth.logout();
     } catch {}
+    // Out of every grocery store on this device, too. signOutOfStores swallows
+    // its own failure, so it cannot stop the Mealio sign-out below.
+    await signOutOfStores();
     try {
       await tokenStorage.clear();
       await resetUser();

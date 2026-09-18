@@ -30,10 +30,15 @@
 //             remounting there would discard a live user's work)
 //   null → B  an ordinary sign-in still lands on the new account's own content
 //
-// The harness enters at the deep link itself — the real `Linking` listener
-// RootNavigator registers, driving the real AuthProvider — because "the account
-// changed" has to be produced the way the app produces it, not simulated by
-// re-rendering with a different prop.
+// The harness drives the real AuthProvider's `loginWithToken`, the function the
+// link used to reach, because "the account changed" has to be produced the way
+// the app produces it, not simulated by re-rendering with a different prop.
+//
+// THE LINK ITSELF NO LONGER SWITCHES ACCOUNTS. RootNavigator now ignores a
+// verification link while anyone is signed in (see the last describe below), so
+// the route this file was written against is closed at the door. The keyed tab
+// tree stays as the structural guard for whatever path next changes `user`
+// A -> B without passing through null, and these tests keep it honest.
 
 import { act, render, waitFor } from '@testing-library/react-native';
 import React from 'react';
@@ -233,8 +238,15 @@ jest.mock('../../src/lib/purchases', () => ({
 jest.mock('../../src/lib/push', () => ({ unregisterDevice: jest.fn(async () => {}) }));
 
 import { Alert } from 'react-native';
-import { AuthProvider } from '../../src/context/AuthContext';
+import { AuthProvider, useAuth } from '../../src/context/AuthContext';
 import RootNavigator from '../../src/navigation/RootNavigator';
+
+/** The real provider's loginWithToken, captured for the tests to call. */
+let authLoginWithToken: ((token: string) => Promise<void>) | null = null;
+function AuthProbe() {
+  authLoginWithToken = useAuth().loginWithToken;
+  return null;
+}
 
 // ── The two accounts ────────────────────────────────────────────────────────
 
@@ -300,6 +312,7 @@ async function launchSignedInAsA() {
   const utils = render(
     <AuthProvider>
       <RootNavigator />
+      <AuthProbe />
     </AuthProvider>,
   );
   // Explicit timeout, not the RNTL default of 1s. The first test in this file pays
@@ -312,7 +325,7 @@ async function launchSignedInAsA() {
 }
 
 /**
- * B taps the verification link in their own email, on A's phone.
+ * The session is handed to `user` without passing through a sign-out.
  *
  * `auth.verify` is how `loginWithToken` finds out whose token it is, so
  * answering it as B is what makes this an account switch rather than a renewal.
@@ -324,7 +337,14 @@ async function tapVerificationLinkAs(
   mockVerify.mockResolvedValueOnce({ user });
   mockListMeals.mockResolvedValue(meals);
   await act(async () => {
-    deliverUrl!({ url: `mealio://verified?token=token-${user.id}` });
+    await authLoginWithToken!(`token-${user.id}`);
+  });
+}
+
+/** A URL arriving through the real Linking listener RootNavigator registers. */
+async function openUrl(url: string) {
+  await act(async () => {
+    deliverUrl!({ url });
     await Promise.resolve();
   });
 }
@@ -463,14 +483,94 @@ describe('signing in from signed out', () => {
     const utils = render(
       <AuthProvider>
         <RootNavigator />
+        <AuthProbe />
       </AuthProvider>,
     );
     await act(async () => { await Promise.resolve(); });
     expect(utils.queryByText(A_MEAL.name)).toBeNull();
 
-    await tapVerificationLinkAs(USER_B, [B_MEAL]);
+    // Through the real link listener: this is the link's ordinary purpose.
+    mockVerify.mockResolvedValueOnce({ user: USER_B });
+    mockListMeals.mockResolvedValue([B_MEAL]);
+    await openUrl(`mealio://verified?token=token-${USER_B.id}`);
 
     await waitFor(() => expect(utils.queryByText(B_MEAL.name)).not.toBeNull());
     expect(mounted()).toBe(1);
+  });
+});
+
+// ── The link cannot switch accounts ─────────────────────────────────────────
+//
+// The verification link used to be matched on the substring
+// `verified[?&]token=` and redeemed with no signed-in check, so any link with
+// those characters in it (an https://mealio.co/meal/... App Link included)
+// could sign A's phone into whatever account its author chose.
+describe('the verification link, with A signed in', () => {
+  it('is ignored, and A stays signed in', async () => {
+    const utils = await launchSignedInAsA();
+    const verifiesBefore = mockVerify.mock.calls.length;
+    mockVerify.mockResolvedValue({ user: USER_B });
+    mockListMeals.mockResolvedValue([B_MEAL]);
+
+    await openUrl(`mealio://verified?token=token-${USER_B.id}`);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(mockVerify.mock.calls.length).toBe(verifiesBefore);
+    expect(utils.queryByText(A_MEAL.name)).not.toBeNull();
+    expect(mockKeychain.get('mealio_access_token')).toBe('token-user-A');
+    expect(Alert.alert).toHaveBeenCalledWith('Already signed in', expect.any(String));
+  });
+
+  it('is ignored when it arrives at launch, before the stored session is restored', async () => {
+    // Cold start from the link: getInitialURL answers while initAuth is still
+    // restoring A, so `user` is null for a moment. That moment must not count
+    // as "nobody is signed in".
+    mockKeychain.set('mealio_access_token', 'token-user-A');
+    mockKeychain.set('mealio_user', JSON.stringify(USER_A));
+    let answerA: (v: unknown) => void = () => {};
+    mockVerify.mockImplementationOnce(() => new Promise((r) => { answerA = r; }));
+    mockVerify.mockResolvedValue({ user: USER_B });
+    mockListMeals.mockResolvedValue([A_MEAL]);
+    const Linking = jest.requireMock('expo-linking');
+    Linking.getInitialURL.mockResolvedValueOnce(`mealio://verified?token=token-${USER_B.id}`);
+
+    const utils = render(
+      <AuthProvider>
+        <RootNavigator />
+        <AuthProbe />
+      </AuthProvider>,
+    );
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { answerA({ user: USER_A }); });
+
+    await waitFor(() => expect(utils.queryByText(A_MEAL.name)).not.toBeNull(), { timeout: 15_000 });
+    expect(mockVerify).toHaveBeenCalledTimes(1);
+    expect(mockKeychain.get('mealio_access_token')).toBe('token-user-A');
+  });
+});
+
+describe('a link that only looks like the verification link', () => {
+  it.each([
+    'https://mealio.co/meal/abc?verified&token=token-user-B',
+    'https://mealio.co/meal/abc?x=verified&token=token-user-B',
+    'mealio://meal/abc?verified&token=token-user-B',
+    'mealio://notverified?token=token-user-B',
+  ])('does not sign anyone in: %s', async (url) => {
+    mockListMeals.mockResolvedValue([]);
+    const utils = render(
+      <AuthProvider>
+        <RootNavigator />
+        <AuthProbe />
+      </AuthProvider>,
+    );
+    await act(async () => { await Promise.resolve(); });
+    mockVerify.mockResolvedValue({ user: USER_B });
+
+    await openUrl(url);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(mockVerify).not.toHaveBeenCalled();
+    expect(utils.queryByText(B_MEAL.name)).toBeNull();
+    expect(mockKeychain.get('mealio_access_token')).toBeUndefined();
   });
 });

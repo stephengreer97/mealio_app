@@ -7,11 +7,9 @@ export { normalizeIngredients };
 
 const BASE_URL = 'https://mealio.co';
 
-class ApiError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-  }
-}
+import { ApiError, isAuthRejection, notifySessionExpired } from './authErrors';
+
+export { isAuthRejection };
 
 // RN's fetch has no request timeout, so a stalled connection hangs forever —
 // which in flows like Kroger add-to-cart means a spinner that never resolves.
@@ -67,7 +65,11 @@ async function renewAccessToken(): Promise<void> {
   }, DEFAULT_TIMEOUT_MS);
 
   if (!refreshRes.ok) {
-    throw new ApiError(401, 'Session expired');
+    // The REAL status, so the caller can tell a refused token (401/403) from a
+    // server that is down (5xx). Only the first may end the session.
+    throw new ApiError(refreshRes.status, refreshRes.status === 401 || refreshRes.status === 403
+      ? 'Session expired'
+      : `HTTP ${refreshRes.status}`);
   }
 
   const { accessToken: newAccess, user } = await refreshRes.json();
@@ -131,8 +133,14 @@ async function request<T>(
     try {
       await renewOnce();
     } catch (err) {
-      await clear();
-      throw err instanceof ApiError ? err : new ApiError(401, 'Session expired');
+      // Only a refusal ends the session. A renew that could not be REACHED (no
+      // network, timeout, 5xx) says nothing about the token, and clearing on it
+      // signed people out for a dropped connection. Surface the failure and
+      // keep the credentials for the next attempt.
+      if (!isAuthRejection(err)) throw err;
+      try { await clear(); } catch { /* the handler below still signs out */ }
+      notifySessionExpired();
+      throw new ApiError(401, 'Session expired');
     }
 
     // Retry original request with new token
@@ -184,14 +192,23 @@ export const auth = {
       ? request<{ user: User }>('/api/auth/verify', { method: 'GET', authToken: accessToken }, false)
       : request<{ user: User }>('/api/auth/verify', { method: 'GET' }),
 
-  renew: (accessToken: string) =>
-    fetchWithTimeout(`${BASE_URL}/api/auth/renew`, {
+  /**
+   * Throws an ApiError carrying the real status on a non-2xx answer, so the
+   * caller can tell "the server refused this token" (401/403, see
+   * isAuthRejection) from "the server is down" (5xx). It used to parse whatever
+   * came back, which made an outage and an expired token look the same.
+   */
+  renew: async (accessToken: string): Promise<{ accessToken?: string; user?: User }> => {
+    const r = await fetchWithTimeout(`${BASE_URL}/api/auth/renew`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${accessToken}`,
       },
-    }, DEFAULT_TIMEOUT_MS).then((r) => r.json()),
+    }, DEFAULT_TIMEOUT_MS);
+    if (!r.ok) throw new ApiError(r.status, `HTTP ${r.status}`);
+    return r.json();
+  },
 
   logout: () =>
     request<void>('/api/auth/logout', { method: 'POST' }),

@@ -279,3 +279,32 @@ describe('the stop reaches this side of the bridge', () => {
     expect(nativeGen()).toBe(1);
   });
 });
+
+describe('closing the sheet stops what it started natively', () => {
+  // A native run's requests are fetches in this process, not the WebView's, so
+  // taking the WebView away does not end them. Closing used to leave an add
+  // batch writing to the user's real cart after they had cancelled; the driver
+  // loops read the generation before every write, and this is what moves it.
+  it('on unmount, which is how the background engine closes it', () => {
+    const view = openNatively();
+    const before = nativeGen();
+    view.unmount();
+    expect(nativeGen()).toBeGreaterThan(before);
+  });
+
+  it('on going invisible, which is how the inline mount closes it', () => {
+    const view = openNatively();
+    const before = nativeGen();
+    view.rerender(
+      <WebViewCartSheet visible={false} meals={[meal] as never} storeId="aldi" storeName="ALDI" onClose={() => {}} />,
+    );
+    expect(nativeGen()).toBeGreaterThan(before);
+  });
+
+  it('but not merely for being rendered hidden', () => {
+    // A stop is global. The inline sheet renders hidden on every My Meals visit,
+    // and that must not stop anything.
+    render(<WebViewCartSheet visible={false} meals={[meal] as never} storeId="aldi" storeName="ALDI" onClose={() => {}} />);
+    expect(nativeGen()).toBe(0);
+  });
+});
