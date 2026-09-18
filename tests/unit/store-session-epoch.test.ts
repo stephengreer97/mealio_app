@@ -118,23 +118,33 @@ describe('the sign-out button keeps calling it', () => {
   // the bumpEpoch() call would leave every test green while the button silently
   // went back to clearing cookies and nothing else. That is exactly the failure
   // this whole change exists to fix, so it gets a tripwire even a coarse one.
+  //
+  // The calls moved into src/lib/storeSignOut.ts on 2026-09-18, when signing
+  // out of Mealio started signing the device out of the stores too: one
+  // function, called by the button and by logout, so the two cannot drift. The
+  // tripwire follows them there, and pins that the button still passes the
+  // prewarm, which is the one piece the shared function cannot reach itself.
   const fs = require('fs') as typeof import('fs');
   const path = require('path') as typeof import('path');
-  const src = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'src', 'screens', 'account', 'AccountScreen.tsx'), 'utf8');
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', '..', 'src', ...p), 'utf8');
+  const shared = read('lib', 'storeSignOut.ts');
+  const button = read('screens', 'account', 'AccountScreen.tsx');
 
   it.each([
     ['CookieManager.clearAll', 'the cookie jar, which carries the session itself'],
-    ['prewarm.forgetAll', 'the cached login answers, which outlive the cookies'],
     ['bumpEpoch', 'the rail caches in localStorage, which outlive both'],
   ])('still clears %s -- %s', (call) => {
-    expect(src).toContain(call);
+    expect(shared).toContain(call);
+  });
+
+  it('the button still forgets the prewarm -- the cached login answers, which outlive the cookies', () => {
+    expect(button).toContain('signOutOfStoresOnDevice({ forgetPrewarm: prewarm.forgetAll })');
   });
 
   it('imports bumpEpoch from the storage module, not the pure one', () => {
     // The pure module has no bumpEpoch. Importing from it would be a compile
     // error today, but the split is subtle enough to be worth pinning.
-    expect(src).toContain("from '../../lib/store-session-epoch-storage'");
+    expect(shared).toContain("from './store-session-epoch-storage'");
   });
 });
 
