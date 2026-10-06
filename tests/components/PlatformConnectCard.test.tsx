@@ -164,11 +164,20 @@ describe('PlatformConnectCard — the connect round trip', () => {
 });
 
 describe('PlatformConnectCard — what it says before the press', () => {
-  it('shows Instagram’s tester note above the button', async () => {
-    const note = CREATOR_SOURCE_OPTIONS.find((o) => o.source === 'instagram')!.note;
-    const r = await show({ platform: 'instagram', embedded: true, note });
+  it('shows a note above the button when the source has one to give', async () => {
+    const r = await show({ platform: 'instagram', embedded: true, note: 'Only some accounts can connect.' });
     expect(r.getByTestId('note-instagram')).toBeTruthy();
-    expect(r.getByText(/only accounts Mealio has invited as testers can connect/)).toBeTruthy();
+    expect(r.getByText('Only some accounts can connect.')).toBeTruthy();
+  });
+
+  it('has no note to show for Instagram, now Meta has approved it', async () => {
+    // Carried the tester caveat from 2026-09-17 until approval on 2026-10-06.
+    // The slot still works, as the test above holds; Instagram simply has
+    // nothing to put in it, and a stale warning would read as "do not bother".
+    const note = CREATOR_SOURCE_OPTIONS.find((o) => o.source === 'instagram')!.note;
+    expect(note).toBeNull();
+    const r = await show({ platform: 'instagram', embedded: true, note });
+    expect(r.queryByTestId('note-instagram')).toBeNull();
   });
 
   it('says syncing is not switched on instead of offering a button that cannot work', async () => {

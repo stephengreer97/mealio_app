@@ -204,14 +204,9 @@ export interface CreatorSourceOption {
 export const CREATOR_SOURCE_OPTIONS: readonly CreatorSourceOption[] = [
   { source: 'website', label: 'Website or blog', blockedReason: null, note: null },
   { source: 'youtube', label: 'YouTube', blockedReason: null, note: null },
-  {
-    source: 'instagram',
-    label: 'Instagram',
-    blockedReason: null,
-    note:
-      'Instagram is still reviewing Mealio. Until Meta approves it, only accounts Mealio has invited as ' +
-      'testers can connect, and anyone else will see Instagram refuse on its own screen.',
-  },
+  // Meta approved instagram_business_basic on 2026-10-06, so the tester-only
+  // warning that stood here is gone, as TikTok's was on its own approval.
+  { source: 'instagram', label: 'Instagram', blockedReason: null, note: null },
   { source: 'tiktok', label: 'TikTok', blockedReason: null, note: null },
 ];
 
