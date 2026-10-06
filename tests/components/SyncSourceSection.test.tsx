@@ -125,12 +125,12 @@ describe('the picker', () => {
     expect(api.setPrimarySource).not.toHaveBeenCalled();
   });
 
-  it('shows Instagram’s tester note once Instagram is picked', async () => {
+  it('offers Instagram with no caveat once Instagram is picked', async () => {
     const r = render(<SyncSourceSection creator={FRESH as any} />);
     fireEvent.press(r.getByTestId('source-option-instagram'));
-    expect(await r.findByTestId('note-instagram')).toBeTruthy();
-    expect(r.getByText(/Instagram is still reviewing Mealio/)).toBeTruthy();
-    expect(r.getByText('Connect Instagram')).toBeTruthy();
+    expect(await r.findByText('Connect Instagram')).toBeTruthy();
+    // Meta approved the app on 2026-10-06; the tester caveat went with it.
+    expect(r.queryByTestId('note-instagram')).toBeNull();
   });
 
   it('warns what stops when switching away from a source being synced', async () => {

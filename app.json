@@ -2,11 +2,17 @@
   "expo": {
     "name": "Mealio",
     "slug": "mealio",
-    "version": "1.4.1",
+    "version": "1.4.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "scheme": "mealio",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/de837933-902a-4e7b-ac42-6dafbdec0faa"
+    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "co.mealio.app",
