@@ -30,6 +30,7 @@ jest.mock('../../src/context/CreatorDraftsContext', () => ({
 jest.mock('../../src/lib/api', () => ({
   creators: {
     setPrimarySource: jest.fn(),
+    setAllowAdminReview: jest.fn(),
     checkWebsite: jest.fn(),
     youtube: { status: jest.fn(), setAppendOptIn: jest.fn(), disconnect: jest.fn() },
     connections: { status: jest.fn(), disconnect: jest.fn(), start: jest.fn(), complete: jest.fn() },
@@ -97,6 +98,7 @@ const DONE_RUN = (items: any[]) => ({
 beforeEach(() => {
   jest.clearAllMocks();
   api.setPrimarySource.mockResolvedValue({ ok: true });
+  api.setAllowAdminReview.mockResolvedValue({ ok: true });
   api.youtube.status.mockResolvedValue({ ...YT_CONNECTED, connected: false, channel: null });
   api.connections.status.mockResolvedValue({ connected: false, account: null, brokenReason: null, expiresAt: null, configured: true });
   api.connections.disconnect.mockResolvedValue({ ok: true });
@@ -286,6 +288,33 @@ describe('disconnecting', () => {
 });
 
 describe('the back catalogue', () => {
+  it('offers admin review, off by default, and shows the green line once ticked', async () => {
+    const onSaved = jest.fn();
+    const r = render(<SyncSourceSection creator={WEBSITE_LIVE as any} onSaved={onSaved} />);
+    await r.findByTestId('catalogue');
+
+    const box = r.getByTestId('allow-admin-review');
+    expect(box.props.accessibilityState.checked).toBe(false);
+    expect(r.queryByTestId('allow-admin-review-on')).toBeNull();
+
+    fireEvent.press(box);
+
+    expect(r.getByTestId('allow-admin-review-on')).toHaveTextContent('Mealio admins will import your posts for you');
+    await waitFor(() => expect(api.setAllowAdminReview).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith({ allowAdminReview: true }));
+  });
+
+  it('puts the box back if the save fails', async () => {
+    api.setAllowAdminReview.mockRejectedValue(new Error('offline'));
+    const r = render(<SyncSourceSection creator={WEBSITE_LIVE as any} />);
+    await r.findByTestId('catalogue');
+
+    fireEvent.press(r.getByTestId('allow-admin-review'));
+
+    await waitFor(() => expect(r.getByTestId('allow-admin-review').props.accessibilityState.checked).toBe(false));
+    expect(r.queryByTestId('allow-admin-review-on')).toBeNull();
+  });
+
   it('holds the cap at the tick', async () => {
     const many = Array.from({ length: CREATOR_SELECTION_MAX + 5 }, (_, i) => entry(`p${i}`));
     api.sync.catalog.mockResolvedValue(catalog(many));

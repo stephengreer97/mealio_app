@@ -48,7 +48,8 @@ import { Badge, Note, OutlineButton, ui } from './creatorUi';
 
 type SectionRow = Pick<
   Creator,
-  'websiteUrl' | 'youtubeUrl' | 'instagramUrl' | 'tiktokUrl' | 'feedUrl' | 'primarySource' | 'importOptIn'
+  | 'websiteUrl' | 'youtubeUrl' | 'instagramUrl' | 'tiktokUrl' | 'feedUrl' | 'primarySource' | 'importOptIn'
+  | 'allowAdminReview'
 >;
 
 interface Props {
@@ -115,6 +116,7 @@ function rowOf(creator: Creator): SectionRow {
     feedUrl: creator.feedUrl ?? null,
     primarySource: creator.primarySource ?? null,
     importOptIn: creator.importOptIn ?? null,
+    allowAdminReview: creator.allowAdminReview ?? null,
   };
 }
 
@@ -197,6 +199,25 @@ export default function SyncSourceSection({ creator, children, onSaved, mealsVer
       if (!mounted.current) return;
       setSwitching(false);
       setError(serverError(err, 'Could not change where Mealio syncs from.'));
+    }
+  };
+
+  /** The creator's permission for the admins to review their drafts. Optimistic, put back on failure. */
+  const [savingAdminReview, setSavingAdminReview] = useState(false);
+  const setAdminReview = async (next: boolean) => {
+    setSavingAdminReview(true);
+    setError('');
+    setRow((current) => ({ ...current, allowAdminReview: next }));
+    try {
+      await creatorsApi.setAllowAdminReview(next);
+      if (!mounted.current) return;
+      setSavingAdminReview(false);
+      onSaved?.({ allowAdminReview: next });
+    } catch (err: any) {
+      if (!mounted.current) return;
+      setSavingAdminReview(false);
+      setRow((current) => ({ ...current, allowAdminReview: !next }));
+      setError(serverError(err, 'Could not save that setting.'));
     }
   };
 
@@ -682,6 +703,28 @@ export default function SyncSourceSection({ creator, children, onSaved, mealsVer
                   {CREATOR_SELECTION_MAX} at a time.
                 </Text>
 
+                <TouchableOpacity
+                  onPress={() => setAdminReview(row.allowAdminReview !== true)}
+                  disabled={savingAdminReview}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: row.allowAdminReview === true, disabled: savingAdminReview }}
+                  testID="allow-admin-review"
+                  style={[styles.adminReview, styles.gapLg]}
+                  activeOpacity={0.8}
+                >
+                  <View style={[ui.checkbox, row.allowAdminReview === true && ui.checkboxOn]}>
+                    {row.allowAdminReview === true && <Feather name="check" size={14} color="#fff" />}
+                  </View>
+                  <View style={styles.flex}>
+                    <Text style={ui.body}>Allow Mealio admins to edit/approve/deny your imported posts for you</Text>
+                    {row.allowAdminReview === true && (
+                      <Text style={styles.adminReviewOn} testID="allow-admin-review-on">
+                        Mealio admins will import your posts for you
+                      </Text>
+                    )}
+                  </View>
+                </TouchableOpacity>
+
                 {loadingCatalog && <Text style={ui.hint}>Reading what you have published…</Text>}
 
                 {catalog && !catalog.ok && <Note testID="catalogue-unavailable">{catalog.detail}</Note>}
@@ -926,6 +969,8 @@ const styles = StyleSheet.create({
   top: { marginTop: 12 },
   small: { marginTop: 8 },
   flex: { flex: 1, minWidth: 0 },
+  adminReview: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  adminReviewOn: { marginTop: 4, fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.success },
   options: {
     borderWidth: 1,
     borderColor: Colors.border,

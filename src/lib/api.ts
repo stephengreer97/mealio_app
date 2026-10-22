@@ -527,6 +527,13 @@ export const creators = {
       ),
     }),
 
+  /** Let (or stop letting) Mealio admins edit, approve and delete imported drafts. */
+  setAllowAdminReview: (allowAdminReview: boolean) =>
+    request<{ ok: boolean }>('/api/creator/me', {
+      method: 'PATCH',
+      body: JSON.stringify({ allowAdminReview }),
+    }),
+
   /**
    * Save a website as the sync source: the server reads a few recent posts to
    * check recipes can actually be pulled out of them, which takes up to 30s
