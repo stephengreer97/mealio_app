@@ -202,14 +202,22 @@ export default function DiscoverScreen() {
     }
   }
 
+  // Cancelled by unmounting and nothing else. The check is spent the moment it
+  // starts, so letting a reload cancel it (a tag tapped while the keychain is
+  // still answering) lost the pitch for the rest of the session.
+  const unmounted = React.useRef(false);
+  // Set back on mount too: StrictMode mounts, unmounts and mounts again in dev.
+  useEffect(() => {
+    unmounted.current = false;
+    return () => { unmounted.current = true; };
+  }, []);
+
   useEffect(() => {
     if (loading || welcomeChecked.current) return;
     welcomeChecked.current = true;
-    let cancelled = false;
     (async () => {
-      if (!(await hasSeen(FIRST_RUN_WELCOME)) && !cancelled) setWelcomeDue(true);
+      if (!(await hasSeen(FIRST_RUN_WELCOME)) && !unmounted.current) setWelcomeDue(true);
     })();
-    return () => { cancelled = true; };
   }, [loading]);
 
   useEffect(() => {

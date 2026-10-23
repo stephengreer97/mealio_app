@@ -22,10 +22,13 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native';
 /** In-memory SecureStore. Deliberately shared: it is the "device". */
 const mockStore = new Map<string, string>();
 let mockGetFails = false;
+/** Set to hold every read open until the test calls it. */
+let mockHoldGets: Promise<void> | null = null;
 
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn(async (k: string) => {
     if (mockGetFails) throw new Error('keychain unavailable');
+    if (mockHoldGets) await mockHoldGets;
     return mockStore.get(k) ?? null;
   }),
   setItemAsync: jest.fn(async (k: string, v: string) => { mockStore.set(k, v); }),
@@ -101,6 +104,7 @@ import {
 beforeEach(() => {
   mockStore.clear();
   mockGetFails = false;
+  mockHoldGets = null;
   jest.clearAllMocks();
 });
 
@@ -217,6 +221,24 @@ describe('DiscoverScreen first run', () => {
     const second = render(<DiscoverScreen />);
     await second.findByText('Trending Meals');
     expect(second.queryByText(PITCH_HEADLINE)).toBeNull();
+  });
+
+  it('still opens if the feed reloads while the first-run flag is being read', async () => {
+    // The check runs once, after the first load. A reload in that window (a
+    // tag tapped while the keychain answers) used to cancel the answer, and
+    // with the check already spent the pitch was gone for the session.
+    let release!: () => void;
+    mockHoldGets = new Promise<void>((resolve) => { release = resolve; });
+    const api = require('../../src/lib/api');
+    const r = render(<DiscoverScreen />);
+    await r.findByText('Trending Meals');
+    await waitFor(() => expect(api.presetMeals.list).toHaveBeenCalledTimes(1));
+
+    fireEvent.press(r.getByTestId('tag-chip-Dinner'));
+    await waitFor(() => expect(api.presetMeals.list).toHaveBeenCalledTimes(2));
+
+    release();
+    expect(await r.findByText(PITCH_HEADLINE)).toBeTruthy();
   });
 
   it('leaves Discover usable behind it — the pitch gates nothing', async () => {
