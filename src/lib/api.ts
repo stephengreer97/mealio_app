@@ -321,6 +321,25 @@ export const bugReport = {
 };
 
 // Meals
+/** What a successful `meals.importRecipe` returns: the draft that fills the form. */
+export interface MealImportResult {
+  status: 'ok';
+  url: string;
+  freeImportsLeft: number | null;
+  draft: {
+    name: string;
+    ingredients: any[];
+    recipe: string | null;
+    source: string;
+    story: string | null;
+    photoUrl: string | null;
+    difficulty: number | null;
+    tags: string[];
+    serves: string | null;
+  };
+  confidence: Record<string, any>;
+}
+
 export const meals = {
   list: () =>
     request<{ meals: any[] }>('/api/meals', { method: 'GET' })
@@ -331,6 +350,23 @@ export const meals = {
       method: 'POST',
       body: JSON.stringify(meal),
     }).then((r) => mapMeal(r.meal)),
+
+  /**
+   * Fill the New Meal form from a recipe link or pasted text
+   * (`POST /api/meals/import`). Nothing is saved. A 200 carries the draft; the
+   * other answers (creator match, duplicate, upgrade, limit, rejected) arrive
+   * as an ApiError whose `body.status` says which. The server reads the page
+   * and two model calls in series, so this allows 70s rather than 30.
+   */
+  importRecipe: (
+    input: { url: string } | { text: string },
+    flags: { ignoreCreatorMatch?: boolean; ignoreDuplicate?: boolean } = {},
+  ) =>
+    request<MealImportResult>('/api/meals/import', {
+      method: 'POST',
+      body: JSON.stringify({ ...input, ...flags }),
+      timeoutMs: 70_000,
+    }),
 
   update: (id: string, data: Partial<Meal>) =>
     request<{ meal: any }>(`/api/meals/${id}`, {

@@ -20,7 +20,9 @@ import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import { Colors, Radius } from '../../constants/colors';
 import { Meal, Ingredient } from '../../types';
-import { meals as mealsApi, kroger as krogerApi } from '../../lib/api';
+import { meals as mealsApi, kroger as krogerApi, type MealImportResult } from '../../lib/api';
+import { normalizeIngredients } from '../../lib/normalizeIngredients';
+import MealImportPanel from '../../components/MealImportPanel';
 import { getOffering, purchasePackage } from '../../lib/purchases';
 import { mergeChosenProduct, mergeStoreProductOnly, createMealSaveQueue } from '../../lib/saveChosenIngredient';
 import { useAuth } from '../../context/AuthContext';
@@ -674,6 +676,40 @@ export default function MyMealsScreen() {
     setFormVisible(true);
   }
 
+  /**
+   * Fills New Meal from an import. The user tapped Import, so every field the
+   * import has a value for is written; the store is theirs to pick.
+   */
+  function applyImport(result: MealImportResult) {
+    const d = result.draft;
+    if (d.name?.trim()) setMealName(d.name.trim());
+    const rows = normalizeIngredients(d.ingredients);
+    if (rows.length > 0) setIngredients(rows);
+    if (d.recipe?.trim()) setMealRecipe(d.recipe.trim());
+    if (d.story?.trim()) setMealStory(d.story.trim());
+    if (d.difficulty != null) setDifficulty(d.difficulty);
+    if (d.tags?.length) setSelectedTags(d.tags);
+    if (d.source) setMealSource(d.source);
+    if (d.photoUrl) {
+      // Already on our storage (a stock photo), so it saves as a URL.
+      setPhotoPreview(d.photoUrl);
+      setPhotoUrl(d.photoUrl);
+      setPhotoIsUrl(true);
+      setPendingPhotoBase64(null);
+    }
+  }
+
+  /**
+   * A creator's published version of the recipe the user tried to import.
+   * Closes New Meal first: the preset sheet is a Modal of its own, and two
+   * stacked Modals block touches on iOS. The app's own link reuses the preset
+   * sheet and its save flow in RootNavigator.
+   */
+  function openCreatorMeal(presetMealId: string) {
+    setFormVisible(false);
+    setTimeout(() => { void Linking.openURL(`mealio://meal/p/${presetMealId}`); }, 400);
+  }
+
   async function handleCreate() {
     if (!mealName.trim()) {
       Alert.alert('Error', 'Meal name is required.');
@@ -1105,6 +1141,8 @@ export default function MyMealsScreen() {
             </View>
 
             <ScrollView contentContainerStyle={styles.modalScroll} keyboardShouldPersistTaps="handled">
+              <MealImportPanel onImported={applyImport} onUpgrade={handleUpgrade} onOpenCreatorMeal={openCreatorMeal} />
+
               {/* Store selector */}
               <Text style={styles.sectionLabel}>Store *</Text>
               <TouchableOpacity
