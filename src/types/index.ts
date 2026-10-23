@@ -125,7 +125,7 @@ export interface Creator {
   primarySource?: string | null;
   /** Whether anything is polled at all. */
   importOptIn?: boolean | null;
-  /** "Allow Mealio admins to edit/approve/deny your imported posts for you." Off by default. */
+  /** "Allow Mealio admins to edit, approve or deny your imported posts." Off by default. */
   allowAdminReview?: boolean | null;
   /**
    * The feed Mealio follows on the creator's website, set once `POST

@@ -716,10 +716,10 @@ export default function SyncSourceSection({ creator, children, onSaved, mealsVer
                     {row.allowAdminReview === true && <Feather name="check" size={14} color="#fff" />}
                   </View>
                   <View style={styles.flex}>
-                    <Text style={ui.body}>Allow Mealio admins to edit/approve/deny your imported posts for you</Text>
+                    <Text style={ui.body}>Allow Mealio admins to edit, approve or deny your imported posts</Text>
                     {row.allowAdminReview === true && (
                       <Text style={styles.adminReviewOn} testID="allow-admin-review-on">
-                        Mealio admins will import your posts for you
+                        Your drafts still come to you. Mealio admins can also review them, and you won't get emails about new drafts.
                       </Text>
                     )}
                   </View>

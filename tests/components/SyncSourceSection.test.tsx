@@ -299,7 +299,7 @@ describe('the back catalogue', () => {
 
     fireEvent.press(box);
 
-    expect(r.getByTestId('allow-admin-review-on')).toHaveTextContent('Mealio admins will import your posts for you');
+    expect(r.getByTestId('allow-admin-review-on')).toHaveTextContent(/Your drafts still come to you/);
     await waitFor(() => expect(api.setAllowAdminReview).toHaveBeenCalledWith(true));
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith({ allowAdminReview: true }));
   });
