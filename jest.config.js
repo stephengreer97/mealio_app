@@ -42,6 +42,8 @@ module.exports = {
       // Native modules that cannot exist under jest, stubbed once. See the file
       // for why this is central rather than per-suite.
       setupFiles: ['<rootDir>/tests/setup/native-modules.js'],
+      // findBy* / waitFor get 5s rather than 1s. See the file for the CI flake.
+      setupFilesAfterEnv: ['<rootDir>/tests/setup/async-timeout.js'],
       testMatch: ['<rootDir>/tests/components/**/*.test.tsx', '<rootDir>/tests/components/**/*.test.ts'],
       // jest-expo configures its own transformer for RN modules; we don't
       // need to widen transformIgnorePatterns further here unless we hit a
