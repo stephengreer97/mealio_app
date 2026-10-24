@@ -218,6 +218,8 @@ export default function MyMealsScreen() {
   const [photoUrl, setPhotoUrl] = useState('');
   const [pendingPhotoBase64, setPendingPhotoBase64] = useState<string | null>(null);
   const [photoIsUrl, setPhotoIsUrl] = useState(false);
+  /** An import filled the form. Until a store is picked, the store box is outlined in red. */
+  const [imported, setImported] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -673,6 +675,7 @@ export default function MyMealsScreen() {
     setPhotoUrl('');
     setPendingPhotoBase64(null);
     setPhotoIsUrl(false);
+    setImported(false);
     setFormVisible(true);
   }
 
@@ -682,6 +685,7 @@ export default function MyMealsScreen() {
    */
   function applyImport(result: MealImportResult) {
     const d = result.draft;
+    setImported(true);
     if (d.name?.trim()) setMealName(d.name.trim());
     const rows = normalizeIngredients(d.ingredients);
     if (rows.length > 0) setIngredients(rows);
@@ -1146,8 +1150,9 @@ export default function MyMealsScreen() {
               {/* Store selector */}
               <Text style={styles.sectionLabel}>Store *</Text>
               <TouchableOpacity
-                style={styles.dropdown}
+                style={[styles.dropdown, imported && !formStore && styles.dropdownNeedsStore]}
                 onPress={() => { setStoreSearch(''); setStorePickerVisible(true); }}
+                testID="new-meal-store"
               >
                 {formStore ? (
                   <View style={styles.dropdownSelected}>
@@ -1453,6 +1458,14 @@ const styles = StyleSheet.create({
     color: Colors.text2,
     marginBottom: 10,
     marginTop: 4,
+  },
+  // Two points wide, with a point less padding, so the box does not grow when
+  // the outline appears.
+  dropdownNeedsStore: {
+    borderWidth: 2,
+    borderColor: Colors.brand,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
   },
   dropdown: {
     flexDirection: 'row',

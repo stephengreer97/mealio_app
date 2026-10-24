@@ -68,6 +68,8 @@ jest.mock('../../src/lib/api', () => ({
   images: { upload: jest.fn() },
 }));
 
+import { StyleSheet } from 'react-native';
+import { Colors } from '../../src/constants/colors';
 import MyMealsScreen from '../../src/screens/mymeals/MyMealsScreen';
 import { meals as mealsApi } from '../../src/lib/api';
 
@@ -99,14 +101,20 @@ it('saves what the import filled in, at the store the user picked', async () => 
   const r = render(<MyMealsScreen />);
   fireEvent.press(await r.findByText('add'));
   await r.findByText('New Meal');
+  // Not outlined before any import.
+  expect(StyleSheet.flatten(r.getByTestId('new-meal-store').props.style).borderColor).toBe(Colors.border);
 
   fireEvent.changeText(r.getByTestId('meal-import-url'), URL_);
   fireEvent.press(r.getByTestId('meal-import-go'));
   await r.findByTestId('meal-import-done');
 
   expect(r.getByDisplayValue('Garlic Pasta')).toBeTruthy();
+  // The store is the one thing an import leaves for the user, so it is outlined.
+  const outlined = () => StyleSheet.flatten(r.getByTestId('new-meal-store').props.style).borderColor;
+  expect(outlined()).toBe(Colors.brand);
   fireEvent.press(r.getByText('Select a store…'));
   fireEvent.press(await r.findByText('ALDI'));
+  expect(outlined()).toBe(Colors.border);
   fireEvent.press(r.getByText('Create Meal'));
 
   await waitFor(() => expect(api.create).toHaveBeenCalled());
