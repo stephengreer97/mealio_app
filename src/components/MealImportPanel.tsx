@@ -28,6 +28,20 @@ interface Props {
   onOpenCreatorMeal: (presetMealId: string) => void;
 }
 
+/** How long each step of the "." → ".." → "..." cycle shows while an import runs. */
+export const DOTS_STEP_MS = 400;
+
+/** 1, 2, 3, 1, … while `active`, so a 10-second wait visibly keeps going. */
+function useCyclingDots(active: boolean): number {
+  const [count, setCount] = useState(1);
+  useEffect(() => {
+    if (!active) { setCount(1); return; }
+    const timer = setInterval(() => setCount((n) => (n % 3) + 1), DOTS_STEP_MS);
+    return () => clearInterval(timer);
+  }, [active]);
+  return count;
+}
+
 function withScheme(raw: string): string {
   const url = raw.trim();
   if (!url) return '';
@@ -70,6 +84,7 @@ export default function MealImportPanel({ onImported, onUpgrade, onOpenCreatorMe
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
 
+  const dots = useCyclingDots(busy);
   const tooLong = text.length > PASTED_TEXT_MAX;
   const canImport = !busy && (mode === 'link' ? Boolean(url.trim()) : text.trim().length >= PASTED_TEXT_MIN && !tooLong);
 
@@ -157,14 +172,18 @@ export default function MealImportPanel({ onImported, onUpgrade, onOpenCreatorMe
         </>
       )}
 
-      <Button
-        label={busy ? 'Reading the recipe… about 10 seconds' : 'Import'}
-        variant="secondary"
-        onPress={() => void run()}
-        disabled={!canImport}
-        loading={busy}
-        testID="meal-import-go"
-      />
+      {busy ? (
+        // Drawn in place of the button rather than through it: `Button` shows a
+        // spinner while loading, and this wants words that keep moving.
+        <View style={styles.thinking} accessibilityRole="progressbar" accessibilityLabel="Reading the recipe" testID="meal-import-thinking">
+          <Text style={styles.thinkingText}>Reading the recipe</Text>
+          {/* A fixed width, so the label does not shift as dots come and go. */}
+          <Text style={[styles.thinkingText, styles.dots]} testID="meal-import-dots">{'.'.repeat(dots)}</Text>
+        </View>
+      ) : (
+        <Button label="Import" variant="secondary" onPress={() => void run()} disabled={!canImport} testID="meal-import-go" />
+      )}
+      {busy && <Text style={[styles.hint, styles.center]}>This takes about 10 seconds.</Text>}
 
       {done && <Text style={styles.done} testID="meal-import-done">{done}</Text>}
 
@@ -243,6 +262,21 @@ const styles = StyleSheet.create({
   },
   textArea: { minHeight: 110, textAlignVertical: 'top' },
   hint: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3 },
+  center: { textAlign: 'center' },
+  // The secondary Button's own box, so nothing moves when it swaps in.
+  thinking: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: Radius.button,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+  },
+  thinkingText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: Colors.text1 },
+  dots: { width: 18, textAlign: 'left' },
   hintOver: { color: Colors.brand },
   done: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.success },
   prompt: { gap: 8 },

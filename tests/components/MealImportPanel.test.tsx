@@ -1,14 +1,14 @@
 // "Import a recipe" on New Meal: a link or pasted text fills the form, and
 // every answer that is not a draft leaves the user a next step.
 
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
 jest.mock('../../src/lib/api', () => ({
   meals: { importRecipe: jest.fn() },
 }));
 
 import { ApiError } from '../../src/lib/authErrors';
-import MealImportPanel, { fieldsToCheck } from '../../src/components/MealImportPanel';
+import MealImportPanel, { DOTS_STEP_MS, fieldsToCheck } from '../../src/components/MealImportPanel';
 import { meals as mealsApi } from '../../src/lib/api';
 
 const api = mealsApi as any;
@@ -65,6 +65,33 @@ describe('MealImportPanel', () => {
     expect(api.importRecipe).toHaveBeenCalledWith({ url: URL_ }, {});
     expect(done).toHaveTextContent(/blog\.example\.com/);
     expect(done).toHaveTextContent(/Check garlic before saving/);
+  });
+
+  it('cycles . .. ... while the import runs, then puts the button back', async () => {
+    jest.useFakeTimers();
+    try {
+      let release!: (v: unknown) => void;
+      api.importRecipe.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+      const { r, importLink } = setup();
+      importLink();
+
+      const dots = () => r.getByTestId('meal-import-dots').props.children;
+      expect(r.getByText('Reading the recipe')).toBeTruthy();
+      expect(r.getByText('This takes about 10 seconds.')).toBeTruthy();
+      expect(dots()).toBe('.');
+      act(() => { jest.advanceTimersByTime(DOTS_STEP_MS); });
+      expect(dots()).toBe('..');
+      act(() => { jest.advanceTimersByTime(DOTS_STEP_MS); });
+      expect(dots()).toBe('...');
+      act(() => { jest.advanceTimersByTime(DOTS_STEP_MS); });
+      expect(dots()).toBe('.');
+
+      await act(async () => { release(OK); });
+      expect(r.queryByTestId('meal-import-thinking')).toBeNull();
+      expect(r.getByTestId('meal-import-go')).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('says when that was the free import', async () => {
