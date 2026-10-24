@@ -25,9 +25,7 @@ import Input from './ui/Input';
 import IngredientEditor from './IngredientEditor';
 import PhotoPicker from './PhotoPicker';
 import TagPicker from './TagPicker';
-import { useStores } from '../lib/store-catalog/useStores';
 import { withoutStoreProducts } from '../lib/storeProducts';
-import { useBottomSheetLift } from '../lib/useKeyboardHeight';
 
 interface MealDetailSheetProps {
   visible: boolean;
@@ -95,7 +93,6 @@ export default function MealDetailSheet({
   hideShare = false,
   onCreatorPress,
 }: MealDetailSheetProps) {
-  const stores = useStores();
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -111,13 +108,6 @@ export default function MealDetailSheet({
 
   // Edit form fields
   const [name, setName] = useState('');
-  const [editStoreId, setEditStoreId] = useState('');
-  const [storePickerVisible, setStorePickerVisible] = useState(false);
-  const [storeSearch, setStoreSearch] = useState('');
-  // The picker is a bottom-anchored overlay, so the keyboard used to open
-  // straight over the results its own search box was filtering. See
-  // `useBottomSheetLift` for why this is two values and not just a lift.
-  const pickerLift = useBottomSheetLift();
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [author, setAuthor] = useState('');
   const [story, setStory] = useState('');
@@ -136,8 +126,6 @@ export default function MealDetailSheet({
     if (!meal) return;
     const m = meal as any;
     setName(meal.name);
-    setEditStoreId((m.storeId ?? m.store_id) ?? '');
-    setStoreSearch('');
     setIngredients([...meal.ingredients]);
     setAuthor(m.author ?? '');
     setStory(m.story ?? '');
@@ -204,7 +192,7 @@ export default function MealDetailSheet({
 
       const updatedMeal = await mealsApi.update(meal.id, {
         name: name.trim(),
-        storeId: editStoreId || undefined,
+        // No store: a meal lives at the account's store (lib/defaultStore.ts).
         ingredients: validIngredients,
         photoUrl: finalPhotoUrl,
         author: author.trim() || null,
@@ -309,20 +297,6 @@ export default function MealDetailSheet({
         {editing ? (
           <View style={{ flex: 1 }}>
           <KeyboardAwareScrollView contentContainerStyle={styles.editScroll} keyboardShouldPersistTaps="handled" enableOnAndroid extraScrollHeight={24}>
-              <Text style={styles.fieldLabel}>Store</Text>
-              <TouchableOpacity
-                style={styles.dropdown}
-                onPress={() => { setStoreSearch(''); setStorePickerVisible(true); }}
-              >
-                {editStoreId ? (
-                  <View style={styles.dropdownSelected}>
-                    <View style={[styles.storeDot, { backgroundColor: stores.find(s => s.id === editStoreId)?.color ?? Colors.border }]} />
-                    <Text style={styles.dropdownSelectedText}>{stores.find(s => s.id === editStoreId)?.name ?? editStoreId}</Text>
-                  </View>
-                ) : (
-                  <Text style={styles.dropdownPlaceholder}>Select a store…</Text>
-                )}
-              </TouchableOpacity>
 
               <Input
                 label="Meal Name"
@@ -513,39 +487,6 @@ export default function MealDetailSheet({
                 );
               })()}
 
-              {storePickerVisible && (
-                <View style={styles.pickerOverlay}>
-                  <TouchableOpacity style={styles.pickerBackdrop} onPress={() => setStorePickerVisible(false)} />
-                  <View style={[styles.pickerSheet, pickerLift]}>
-                    <View style={styles.pickerHeader}>
-                      <Text style={styles.pickerTitle}>Select Store</Text>
-                      <TouchableOpacity onPress={() => setStorePickerVisible(false)}>
-                        <Text style={{ fontSize: 20, color: Colors.text3 }}>✕</Text>
-                      </TouchableOpacity>
-                    </View>
-                    <TextInput
-                      style={styles.pickerSearch}
-                      placeholder="Search stores…"
-                      placeholderTextColor={Colors.text3}
-                      value={storeSearch}
-                      onChangeText={setStoreSearch}
-                    />
-                    <ScrollView keyboardShouldPersistTaps="handled">
-                      {stores.filter(s => !storeSearch.trim() || s.name.toLowerCase().includes(storeSearch.toLowerCase())).map(item => (
-                        <TouchableOpacity
-                          key={item.id}
-                          style={[styles.pickerRow, editStoreId === item.id && styles.pickerRowActive]}
-                          onPress={() => { setEditStoreId(item.id); setStorePickerVisible(false); }}
-                        >
-                          <View style={[styles.storeDot, { backgroundColor: item.color }]} />
-                          <Text style={[styles.pickerRowText, editStoreId === item.id && styles.pickerRowTextActive]}>{item.name}</Text>
-                          {editStoreId === item.id && <Text style={{ color: Colors.brand, fontSize: 16 }}>✓</Text>}
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                </View>
-              )}
             </KeyboardAwareScrollView>
             <View style={styles.footer}>
               <Button label="Cancel" variant="secondary" onPress={cancelEdit} style={{ flex: 1, marginRight: 8 }} />

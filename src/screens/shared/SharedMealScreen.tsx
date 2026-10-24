@@ -19,6 +19,7 @@ import { shared as sharedApi, normalizeIngredients } from '../../lib/api';
 import { ingredientAmount, withPrep } from '../../lib/formatMeasurement';
 import { useAuth } from '../../context/AuthContext';
 import { Store } from '../../constants/stores';
+import { getDefaultStore, rememberDefaultStore } from '../../lib/defaultStore';
 import { useStores } from '../../lib/store-catalog/useStores';
 import { Ingredient } from '../../types';
 import Button from '../../components/ui/Button';
@@ -109,12 +110,24 @@ export default function SharedMealScreen({ token, onClose }: Props) {
     }
   }
 
-  async function handleSave() {
-    if (!token || !selectedStore) return;
+  /**
+   * Save goes straight to the account's store. Only an account with none yet
+   * gets the picker, and that first choice becomes its store.
+   */
+  async function startSave() {
+    const store = await getDefaultStore();
+    if (store) void handleSave(store);
+    else setPickerVisible(true);
+  }
+
+  async function handleSave(accountStore?: string) {
+    const storeId = accountStore ?? selectedStore;
+    if (!token || !storeId) return;
     setSaving(true);
     try {
-      await sharedApi.saveMeal(token, selectedStore);
-      await recordRecentStore(selectedStore);
+      await sharedApi.saveMeal(token, accountStore ? null : storeId);
+      await recordRecentStore(storeId);
+      if (!accountStore) rememberDefaultStore(storeId);
       setPickerVisible(false);
       Alert.alert('Saved!', `"${meal?.name}" added to My Meals.`, [
         { text: 'OK', onPress: onClose },
@@ -245,7 +258,8 @@ export default function SharedMealScreen({ token, onClose }: Props) {
               ) : (
                 <Button
                   label="Save to My Meals"
-                  onPress={() => setPickerVisible(true)}
+                  onPress={() => void startSave()}
+                  loading={saving && !pickerVisible}
                 />
               )}
             </View>
@@ -260,7 +274,7 @@ export default function SharedMealScreen({ token, onClose }: Props) {
                 />
                 <View style={styles.pickerSheet}>
                   <View style={styles.pickerHeader}>
-                    <Text style={styles.pickerTitle}>Which store do you shop at?</Text>
+                    <Text style={styles.pickerTitle}>Choose your store</Text>
                     <TouchableOpacity onPress={() => setPickerVisible(false)}>
                       <Ionicons name="close" size={22} color={Colors.text2} />
                     </TouchableOpacity>
@@ -285,7 +299,7 @@ export default function SharedMealScreen({ token, onClose }: Props) {
                   <View style={styles.pickerFooter}>
                     <Button
                       label="Save Meal"
-                      onPress={handleSave}
+                      onPress={() => void handleSave()}
                       loading={saving}
                       disabled={!selectedStore}
                     />

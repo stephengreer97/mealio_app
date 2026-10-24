@@ -23,6 +23,9 @@ import { Meal, Ingredient } from '../../types';
 import { meals as mealsApi, kroger as krogerApi, type MealImportResult } from '../../lib/api';
 import { normalizeIngredients } from '../../lib/normalizeIngredients';
 import MealImportPanel from '../../components/MealImportPanel';
+import StoreSwitcherSheet from '../../components/StoreSwitcherSheet';
+import { account as accountApi } from '../../lib/api';
+import { refreshDefaultStore, rememberDefaultStore, useDefaultStore } from '../../lib/defaultStore';
 import { getOffering, purchasePackage } from '../../lib/purchases';
 import { mergeChosenProduct, mergeStoreProductOnly, createMealSaveQueue } from '../../lib/saveChosenIngredient';
 import { useAuth } from '../../context/AuthContext';
@@ -152,7 +155,13 @@ export default function MyMealsScreen() {
   const stores = useStores();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // The account's store: every meal lives there and every cart runs there.
+  // `selectedStore` is the same value under the name the cart code below uses;
+  // before an account has a store it falls back to where most meals are.
+  const accountStore = useDefaultStore();
   const [selectedStore, setSelectedStore] = useState<string>(stores[0].id);
+  const [switcherVisible, setSwitcherVisible] = useState(false);
+  const [switchingStore, setSwitchingStore] = useState(false);
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
   const [detailVisible, setDetailVisible] = useState(false);
   const [krogerConnected, setKrogerConnected] = useState(false);
@@ -610,14 +619,13 @@ export default function MyMealsScreen() {
         const c = counts[s.id] ?? 0;
         return c > 0 && (!best || c > best.count) ? { id: s.id, count: c } : best;
       }, null);
-      console.log('[Prewarm] MyMeals loaded — top store by meal count:', topStore?.id ?? '(none)');
-      if (topStore) loginPrewarm.checkStore(topStore.id);
-      // Auto-select the store with the most meals (if current selection has none)
-      setSelectedStore((prev) => {
-        const hasMealsAtCurrent = active.some((m) => m.storeId === prev);
-        if (hasMealsAtCurrent) return prev;
-        return topStore ? topStore.id : prev;
-      });
+      const store = await refreshDefaultStore();
+      const landing = store ?? topStore?.id ?? null;
+      console.log('[Prewarm] MyMeals loaded — account store:', store ?? '(none)', 'top by meal count:', topStore?.id ?? '(none)');
+      if (landing) {
+        loginPrewarm.checkStore(landing);
+        setSelectedStore(landing);
+      }
     } catch (err: any) {
       if (err.status !== 401) {
         Alert.alert('Error', err.message || 'Could not load meals');
@@ -719,8 +727,10 @@ export default function MyMealsScreen() {
       Alert.alert('Error', 'Meal name is required.');
       return;
     }
-    if (!formStore) {
-      Alert.alert('Error', 'Please select a store.');
+    // Asked only before the account has a store; after that every meal goes there.
+    const saveStore = accountStore ?? formStore;
+    if (!saveStore) {
+      Alert.alert('Error', 'Choose your store.');
       return;
     }
     const validIngredients = ingredients.filter((i) => i.ingredientName.trim());
@@ -740,7 +750,7 @@ export default function MyMealsScreen() {
       }
       await mealsApi.create({
         name: mealName.trim(),
-        storeId: formStore,
+        storeId: saveStore,
         ingredients: validIngredients,
         photoUrl: finalPhotoUrl,
         ...(selectedTags.length ? { tags: selectedTags } : {}),
@@ -751,7 +761,9 @@ export default function MyMealsScreen() {
         ...(mealSource.trim() ? { website: mealSource.trim() } : {}),
       } as any);
       setFormVisible(false);
-      setSelectedStore(formStore);
+      // A first save gives the account its store.
+      if (!accountStore) rememberDefaultStore(saveStore);
+      setSelectedStore(saveStore);
       await loadMeals();
     } catch (err: any) {
       if (err.status === 403) {
@@ -764,11 +776,8 @@ export default function MyMealsScreen() {
     }
   }
 
-  const storeMeals = allMeals.filter((m) => m.storeId === selectedStore);
-  const storesWithMeals = stores
-    .filter((s) => allMeals.some((m) => m.storeId === s.id))
-    .sort((a, b) => allMeals.filter((m) => m.storeId === b.id).length - allMeals.filter((m) => m.storeId === a.id).length);
-  const displayStores = loading ? [] : storesWithMeals;
+  // Every meal: they all live at the account's store.
+  const storeMeals = allMeals;
   const isKroger = isKrogerBrand(selectedStore);
   const isWebView = isWebViewStore(selectedStore);
   const isCartEnabled = isKroger || isWebView;
@@ -795,6 +804,39 @@ export default function MyMealsScreen() {
     // meals themselves (a save can change an ingredient's chosen product).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMealIds, selectedStore, allMeals, loginPrewarm]);
+
+  /**
+   * Moves the account, and every meal, to another store. What was chosen at the
+   * old store stays saved for it; at the new one each meal has what was chosen
+   * there before, or nothing, and goes through Choose Products.
+   */
+  function switchStore(next: string) {
+    setSwitcherVisible(false);
+    if (!next || next === accountStore) return;
+    const from = stores.find((s) => s.id === accountStore)?.name;
+    const to = stores.find((s) => s.id === next)?.name ?? next;
+    const go = async () => {
+      setSwitchingStore(true);
+      try {
+        await accountApi.setDefaultStore(next);
+        rememberDefaultStore(next);
+        setSelectedStore(next);
+        setSelectedMealIds(new Set());
+        loginPrewarm.checkStore(next);
+        await loadMeals();
+      } catch (err: any) {
+        Alert.alert('Could not change your store', err?.message || 'Try again. Nothing was lost.');
+      } finally {
+        setSwitchingStore(false);
+      }
+    };
+    if (!from) { void go(); return; }
+    Alert.alert(
+      `Switch to ${to}?`,
+      `Your meals come with you. Products you chose at ${from} stay saved for ${from}. At ${to}, you'll choose them again.`,
+      [{ text: 'Cancel', style: 'cancel' }, { text: `Switch to ${to}`, onPress: () => void go() }],
+    );
+  }
 
   function openMeal(meal: Meal) {
     setSelectedMeal(meal);
@@ -854,26 +896,24 @@ export default function MyMealsScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Store tabs */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.storeTabsScroll}
-        contentContainerStyle={styles.storeTabs}
-      >
-        {displayStores.map((store) => (
-          <TouchableOpacity
-            key={store.id}
-            style={[styles.storeTab, selectedStore === store.id && styles.storeTabActive]}
-            onPress={() => { console.log('[Prewarm] store tab tapped:', store.id); setSelectedStore(store.id); setSelectedMealIds(new Set()); loginPrewarm.checkStore(store.id); }}
-          >
-            <View style={[styles.storeDot, { backgroundColor: store.color }]} />
-            <Text style={[styles.storeTabText, selectedStore === store.id && styles.storeTabTextActive]}>
-              {store.name}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      {/* The account's store. Changing it moves every meal (switchStore). */}
+      {!loading && (accountStore || allMeals.length > 0) && (
+        <TouchableOpacity
+          style={styles.storeSwitch}
+          onPress={() => setSwitcherVisible(true)}
+          disabled={switchingStore}
+          testID="my-store"
+          accessibilityRole="button"
+          accessibilityLabel={`Your store: ${selectedStore_?.name ?? 'not chosen'}. Change store`}
+        >
+          <View style={[styles.storeDot, { backgroundColor: selectedStore_?.color ?? Colors.border }]} />
+          <Text style={styles.storeSwitchLabel}>Your store</Text>
+          <Text style={styles.storeSwitchName}>
+            {switchingStore ? 'Moving your meals…' : accountStore ? (selectedStore_?.name ?? accountStore) : 'Choose your store'}
+          </Text>
+          <Ionicons name="chevron-down" size={16} color={Colors.text3} />
+        </TouchableOpacity>
+      )}
 
       {!loading && !isCartEnabled && allMeals.length > 0 && (
         <View style={styles.krogerNotice}>
@@ -1025,7 +1065,7 @@ export default function MyMealsScreen() {
         meal={selectedMeal}
         mode="edit"
         onClose={() => setDetailVisible(false)}
-        onSave={(updated) => { loadMeals(); if (updated) { setSelectedMeal(updated); if (updated.storeId) setSelectedStore(updated.storeId); } }}
+        onSave={(updated) => { loadMeals(); if (updated) setSelectedMeal(updated); }}
         krogerLocationId={krogerLocations[selectedMeal?.storeId ?? '']?.locationId ?? null}
         onNeedKrogerStore={() => { setKrogerZip(''); setKrogerLocationsList([]); setKrogerPickerVisible(true); }}
         hideShare={isCreator}
@@ -1134,6 +1174,13 @@ export default function MyMealsScreen() {
       </Modal>
 
       {/* Create meal modal */}
+      <StoreSwitcherSheet
+        visible={switcherVisible}
+        current={accountStore ?? null}
+        onPick={switchStore}
+        onClose={() => setSwitcherVisible(false)}
+      />
+
       <Modal visible={formVisible} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView style={styles.safe}>
           <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -1147,8 +1194,11 @@ export default function MyMealsScreen() {
             <ScrollView contentContainerStyle={styles.modalScroll} keyboardShouldPersistTaps="handled">
               <MealImportPanel onImported={applyImport} onUpgrade={handleUpgrade} onOpenCreatorMeal={openCreatorMeal} />
 
-              {/* Store selector */}
-              <Text style={styles.sectionLabel}>Store *</Text>
+              {!accountStore && (
+              <>
+              {/* Store selector: only before the account has a store. */}
+              <Text style={styles.sectionLabel}>Your store *</Text>
+              <Text style={styles.formHint}>Every meal goes to this store. You can change it on My Meals.</Text>
               <TouchableOpacity
                 style={[styles.dropdown, imported && !formStore && styles.dropdownNeedsStore]}
                 onPress={() => { setStoreSearch(''); setStorePickerVisible(true); }}
@@ -1164,6 +1214,8 @@ export default function MyMealsScreen() {
                 )}
                 <Ionicons name="chevron-down" size={18} color={Colors.text3} />
               </TouchableOpacity>
+              </>
+              )}
 
               <Input
                 label="Meal Name"
@@ -1324,33 +1376,22 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 28, fontFamily: 'Inter_700Bold', color: Colors.text1 },
   addBtn: { padding: 4 },
-  storeTabsScroll: { flexGrow: 0, flexShrink: 0 },
-  storeTabs: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+  storeSwitch: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  storeTab: {
-    flexShrink: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
+    marginHorizontal: 16,
+    marginVertical: 10,
     paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingVertical: 10,
+    borderRadius: Radius.input,
     borderWidth: 1,
     borderColor: Colors.border,
     backgroundColor: Colors.surfaceRaised,
-    gap: 6,
   },
-  storeTabActive: {
-    borderColor: Colors.brand,
-    backgroundColor: Colors.brandLight,
-  },
+  storeSwitchLabel: { fontSize: 13, fontFamily: 'Inter_500Medium', color: Colors.text3 },
+  storeSwitchName: { flex: 1, fontSize: 15, fontFamily: 'Inter_600SemiBold', color: Colors.text1 },
   storeDot: { width: 8, height: 8, borderRadius: 4 },
-  storeTabText: { fontSize: 14, fontFamily: 'Inter_500Medium', color: Colors.text2 },
-  storeTabTextActive: { color: Colors.brand },
   krogerNotice: {
     marginHorizontal: 16,
     marginTop: 8,
@@ -1461,6 +1502,7 @@ const styles = StyleSheet.create({
   },
   // Two points wide, with a point less padding, so the box does not grow when
   // the outline appears.
+  formHint: { fontSize: 12, fontFamily: 'Inter_400Regular', color: Colors.text3, marginTop: -6, marginBottom: 8 },
   dropdownNeedsStore: {
     borderWidth: 2,
     borderColor: Colors.brand,

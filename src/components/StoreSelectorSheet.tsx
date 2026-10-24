@@ -19,6 +19,7 @@ import { filterStores } from '../lib/storeSearch';
 import { presetMeals, meals as mealsApi } from '../lib/api';
 import { PresetMeal } from '../types';
 import Button from './ui/Button';
+import { getDefaultStore, rememberDefaultStore } from '../lib/defaultStore';
 
 const RECENT_STORES_KEY = 'recentStores';
 
@@ -69,11 +70,31 @@ interface StoreSelectorSheetProps {
 }
 
 export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: StoreSelectorSheetProps) {
-  const [selectedStore, setSelectedStore] = useState<string | null>(null);
+  const [selectedStoreChoice, setSelectedStore] = useState<string | null>(null);
+  const selectedStore = selectedStoreChoice;
   const [loading, setLoading] = useState(false);
   const stores = useStores();
   const [query, setQuery] = useState('');
   const [recentIds, setRecentIds] = useState<string[]>([]);
+  /**
+   * The account's store, once known. A save goes straight there and this sheet
+   * never shows its list; only an account with no store yet is asked, and that
+   * first choice becomes its store. `null` = asked and there is none.
+   */
+  const [accountStore, setAccountStore] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!visible) { setAccountStore(undefined); return; }
+    let live = true;
+    getDefaultStore().then((store) => {
+      if (!live) return;
+      setAccountStore(store);
+      if (store) void handleSave(store);
+    });
+    return () => { live = false; };
+    // handleSave reads `meal`, which is what opening the sheet is about.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
 
   useEffect(() => {
     if (visible) getRecentStores().then(setRecentIds);
@@ -98,7 +119,8 @@ export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: 
     return buildListItems(recentIds, stores);
   }, [searching, query, stores, recentIds]);
 
-  async function handleSave() {
+  async function handleSave(storeOverride?: string) {
+    const selectedStore = storeOverride ?? selectedStoreChoice;
     if (!meal || !selectedStore) return;
     setLoading(true);
     try {
@@ -123,6 +145,8 @@ export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: 
       presetMeals.save(meal.id, selectedStore).catch(() => {});
 
       await recordRecentStore(selectedStore);
+      // A first save gives the account its store (the server adopted it).
+      if (!storeOverride) rememberDefaultStore(selectedStore);
       Alert.alert('Saved!', `"${meal.name}" added to My Meals.`);
       onSaved?.();
       onClose();
@@ -133,13 +157,17 @@ export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: 
       } else {
         Alert.alert('Error', err.message || 'Could not save meal');
       }
+      // A direct save has no sheet on screen to return to.
+      if (storeOverride) onClose();
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    // Shown only while the account has no store: with one, the save above has
+    // already gone straight there.
+    <Modal visible={visible && accountStore === null} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.safe}>
         <View style={styles.header}>
           <Text style={styles.title}>Save to My Meals</Text>
@@ -148,7 +176,7 @@ export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: 
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.subtitle}>Which store do you shop at?</Text>
+        <Text style={styles.subtitle}>Choose your store. Every meal goes there, and you can change it on My Meals.</Text>
 
         <View style={styles.searchRow}>
           <Ionicons name="search-outline" size={18} color={Colors.text3} style={styles.searchIcon} />
@@ -214,7 +242,7 @@ export default function StoreSelectorSheet({ visible, meal, onClose, onSaved }: 
         <View style={styles.footer}>
           <Button
             label="Save Meal"
-            onPress={handleSave}
+            onPress={() => void handleSave()}
             loading={loading}
             disabled={!selectedStore}
           />

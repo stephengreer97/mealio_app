@@ -50,6 +50,14 @@ jest.mock('../../src/lib/store-catalog/useStores', () => ({
   useStores: () => jest.requireActual('../../src/constants/stores').BUNDLED_STORES,
 }));
 
+// An account with no store yet: the only case in which this sheet shows its
+// list. With one, a save goes straight there (see store-selector-default.test).
+const mockGetDefaultStore = jest.fn(async (): Promise<string | null> => null);
+jest.mock('../../src/lib/defaultStore', () => ({
+  getDefaultStore: () => mockGetDefaultStore(),
+  rememberDefaultStore: jest.fn(),
+}));
+
 import StoreSelectorSheet from '../../src/components/StoreSelectorSheet';
 
 const meal = { id: 'p1', name: 'Garlic butter shrimp', ingredients: [] } as never;
@@ -97,7 +105,7 @@ describe('the store picker search box', () => {
 
   it('says so when nothing matches, rather than showing an empty sheet', async () => {
     const view = open();
-    fireEvent.changeText(view.getByTestId('store-search'), 'zzzz');
+    fireEvent.changeText(await view.findByTestId('store-search'), 'zzzz');
     await waitFor(() => expect(view.getByTestId('store-search-empty')).toBeTruthy());
   });
 
@@ -124,9 +132,23 @@ describe('the store picker search box', () => {
     // keyboardShouldPersistTaps is for: a first tap that only dismisses the
     // keyboard reads as the picker ignoring you.
     const view = open();
-    fireEvent.changeText(view.getByTestId('store-search'), 'ralphs');
+    fireEvent.changeText(await view.findByTestId('store-search'), 'ralphs');
     await waitFor(() => expect(view.getByText('Ralphs')).toBeTruthy());
     fireEvent.press(view.getByText('Ralphs'));
     await waitFor(() => expect(view.getByText('✓')).toBeTruthy());
+  });
+});
+
+describe('the sheet once the account has a store', () => {
+  it('saves straight there without showing the list, and closes', async () => {
+    mockGetDefaultStore.mockResolvedValueOnce('heb');
+    const onClose = jest.fn();
+    const { meals: mealsApi } = jest.requireMock('../../src/lib/api');
+    const view = render(<StoreSelectorSheet visible meal={meal} onClose={onClose} />);
+
+    await waitFor(() => expect(mealsApi.create).toHaveBeenCalled());
+    expect(mealsApi.create.mock.calls.at(-1)[0]).toMatchObject({ storeId: 'heb', presetMealId: 'p1' });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(view.queryByTestId('store-search')).toBeNull();
   });
 });

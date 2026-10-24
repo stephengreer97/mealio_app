@@ -6,6 +6,7 @@ import * as tokenStorage from '../lib/tokenStorage';
 import { auth, creators, usage } from '../lib/api';
 import { isAuthRejection, setSessionExpiredHandler } from '../lib/authErrors';
 import { initPurchases, identifyUser, resetUser } from '../lib/purchases';
+import { clearDefaultStore } from '../lib/defaultStore';
 import { unregisterDevice } from '../lib/push';
 import { clearSessionLogs } from '../lib/logBuffer';
 import { clearLastAutomationRun } from '../lib/lastAutomationRun';
@@ -56,6 +57,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function endSessionDiagnostics() {
     clearSessionLogs();
     clearLastAutomationRun();
+    // The account's store is per account: the next one reads its own.
+    clearDefaultStore();
   }
 
   // Signing out of Mealio signs this device out of every grocery store too

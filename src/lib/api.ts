@@ -260,6 +260,22 @@ export const auth = {
 
 // Account
 export const account = {
+  /** The one store this account shops at; null before its first save. */
+  getDefaultStore: () =>
+    request<{ defaultStoreId: string | null }>('/api/account/default-store', { method: 'GET' })
+      .then((r) => r.defaultStoreId ?? null),
+
+  /**
+   * Moves the account, and every meal, to `storeId`. Choices made at the old
+   * store stay saved for it; at the new one each meal has what was chosen there
+   * before, or nothing.
+   */
+  setDefaultStore: (storeId: string) =>
+    request<{ defaultStoreId: string; moved: number }>('/api/account/default-store', {
+      method: 'PATCH',
+      body: JSON.stringify({ storeId }),
+    }),
+
   changePassword: (currentPassword: string, newPassword: string) =>
     request<{ accessToken?: string }>('/api/account/change-password', {
       method: 'POST',
@@ -736,10 +752,11 @@ export const shared = {
   getMeal: (token: string) =>
     request<{ meal: any }>(`/api/shared/${token}`, { method: 'GET' }),
 
-  saveMeal: (token: string, storeId: string) =>
+  /** `storeId` only before the account has a store; the server saves at its default. */
+  saveMeal: (token: string, storeId?: string | null) =>
     request<{ meal: any }>(`/api/shared/${token}/save`, {
       method: 'POST',
-      body: JSON.stringify({ storeId }),
+      body: JSON.stringify(storeId ? { storeId } : {}),
     }),
 };
 
