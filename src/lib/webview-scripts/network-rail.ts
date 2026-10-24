@@ -99,7 +99,7 @@ export interface NetworkRail {
   cartRead(storeId?: string | null): string;
 
   /**
-   * Empty the cart. MEAL-7's canary cleanup.
+   * Empty the cart. Driven by the dev-only CartClearProbe on Account.
    *
    * OPTIONAL, AND A RAIL THAT CANNOT DO IT SAFELY MUST NOT DEFINE IT. Emptying a
    * cart means writing to a real basket, and the correct call differs by rail in
@@ -110,20 +110,9 @@ export interface NetworkRail {
    * variation of its add could have reached, and which was found by watching
    * the site's own bin icon.
    *
-   * Absent means the canary reports cleanup as unsupported for that store, which
+   * Absent means the probe reports clearing as unsupported for that store, which
    * is honest. A wrong guess writes to someone's groceries.
    */
-  /**
-   * Put lines BACK. The inverse of clearCart, and it exists because a cleanup
-   * once removed lines it should never have touched: a run with no cart
-   * baseline recorded the user's whole basket as its own, and the scoped clear
-   * believed it. Recording is fixed; this is the undo.
-   *
-   * Optional, and only implemented where the add call is already measured --
-   * putting a line back is an ADD, so a rail that cannot add cannot restore.
-   */
-  restoreLines?(items: Array<{ sku: string; quantity: number }>): string | null;
-
   clearCart?(storeId?: string | null, opts?: {
     /**
      * Touch at most this many lines. For MEASURING a rail whose removal
@@ -137,10 +126,9 @@ export interface NetworkRail {
      * uses for a line (sku on Wegmans, offerId on Walmart, itemId on Albertsons
      * and Instacart, product id on H-E-B).
      *
-     * The canary passes what it added. It runs against a real account whose cart
-     * holds real shopping, so "leave no state behind" has to mean "remove what
-     * this run added" rather than "empty the basket" -- the second would delete
-     * someone's groceries to tidy up after a test. Omitted, it still empties.
+     * Against a real account whose cart holds real shopping, removing named
+     * lines is the only safe way to tidy up after a test: emptying the basket
+     * would delete someone's groceries. Omitted, it empties.
      */
     only?: string[];
   }): string | null;

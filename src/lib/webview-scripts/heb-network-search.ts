@@ -93,9 +93,8 @@ const CART_READ_FN = `
       var w = (l.estimatedWeight != null) ? Number(l.estimatedWeight) : null;
       var row = { name: nm, qty: Number(l.quantity) || 0 };
       // THE PRODUCT ID TRAVELS WITH THE ROW. CartItem.itemId is optional and
-      // nothing may require it, but withholding one we already have costs the
-      // canary its cleanup: the run works out what it ADDED by diffing these
-      // rows, and a row with no id cannot be handed to a scoped clear. H-E-B's
+      // nothing may require it, and a row with no id cannot be handed to a
+      // scoped clear. H-E-B's
       // clear addresses lines by product id, and this query already selects it.
       if (l.product && l.product.id) row.itemId = String(l.product.id);
       // A weight line is reconciled by presence, not by count — same rule the
@@ -741,7 +740,7 @@ ${CANDIDATE_HELPERS}
  * breakdown wrong when the two spelled a product differently.
  */
 /**
- * MEAL-7. Empty the cart, for the canary's cleanup step.
+ * Empty the cart, for the dev-only cart-clear probe on Account.
  *
  * QUANTITY ZERO WORKS HERE, and that is a measured property of this store rather
  * than an assumption carried over from another. H-E-B's quantity is
@@ -751,8 +750,8 @@ ${CANDIDATE_HELPERS}
  *
  * DECLINES WEIGHT-PRICED LINES, for the same reason the add path does: a count
  * line can be set back to zero, a weight line cannot be undone at all
- * (MEAL-200). They are reported rather than silently left, so a canary that
- * cannot fully clean up says so instead of appearing to have.
+ * (MEAL-200). They are reported rather than silently left, so a clear that
+ * cannot fully empty the cart says so instead of appearing to have.
  */
 export function buildHebClearCartScript(opts: { only?: string[] } = {}): string {
   const only = Array.isArray(opts.only) ? opts.only.map(String) : [];
@@ -760,10 +759,9 @@ export function buildHebClearCartScript(opts: { only?: string[] } = {}): string 
 ${GQL_FN}
 ${CART_READ_FN}
   var ONLY = ${JSON.stringify(only)};
-  // SCOPED CLEANUP. The canary runs against a real account whose cart holds real
-  // shopping, so "leave no state behind" must mean "remove what THIS RUN added",
-  // never "empty the basket". With no list it still empties, which is what a
-  // measurement run wants; the canary always passes one.
+  // SCOPED CLEANUP. A test against a real account whose cart holds real
+  // shopping must remove only the lines it names, never empty the basket. With
+  // no list it empties, which is what a measurement run wants.
   var onlySet = null;
   if (ONLY && ONLY.length) { onlySet = {}; for (var oi = 0; oi < ONLY.length; oi++) onlySet[String(ONLY[oi])] = 1; }
   var keep = function (id) { return !onlySet || onlySet[String(id)] === 1; };

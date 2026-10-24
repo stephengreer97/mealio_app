@@ -1285,7 +1285,7 @@ function railTenantId(storeId: string | null | undefined): string {
 }
 
 /**
- * MEAL-7. Empty the cart, for the canary's cleanup step.
+ * Empty the cart, for the dev-only cart-clear probe on Account.
  *
  * SAFE HERE BECAUSE THE SEMANTICS ARE MEASURED. UpdateCartItemsMutation SETS a
  * line rather than adding to it -- measured against the real store 2026-09-03,
@@ -1294,9 +1294,8 @@ function railTenantId(storeId: string | null | undefined): string {
  * would be a silent no-op, which is why this exists on this rail and not as a
  * generic helper.
  *
- * Reads the cart first rather than trusting a caller's list: the canary clears
- * whatever is THERE, including anything a previous failed run left behind, which
- * is the entire point of cleaning up.
+ * Reads the cart first rather than trusting a caller's list: it clears whatever
+ * is THERE, including anything a previous failed run left behind.
  */
 export function buildInstacartClearCartScript(
   storeId: string,
@@ -1307,10 +1306,9 @@ export function buildInstacartClearCartScript(
   return `(async function () {
 ${icPrelude()}
   var ONLY = ${JSON.stringify(only)};
-  // SCOPED CLEANUP. The canary runs against a real account whose cart holds real
-  // shopping, so "leave no state behind" must mean "remove what THIS RUN added",
-  // never "empty the basket". With no list it still empties, which is what a
-  // measurement run wants; the canary always passes one.
+  // SCOPED CLEANUP. A test against a real account whose cart holds real
+  // shopping must remove only the lines it names, never empty the basket. With
+  // no list it empties, which is what a measurement run wants.
   var onlySet = null;
   if (ONLY && ONLY.length) { onlySet = {}; for (var oi = 0; oi < ONLY.length; oi++) onlySet[String(ONLY[oi])] = 1; }
   var keep = function (id) { return !onlySet || onlySet[String(id)] === 1; };
@@ -1377,7 +1375,7 @@ ${icPrelude()}
       }
     } catch (e) {}
     // WHAT WE ASKED TO REMOVE IS GONE -- not "the cart is empty". A scoped
-    // clear removes the canary's own lines from a cart that still holds the
+    // clear removes the named lines from a cart that still holds the
     // user's real shopping, so judging it by an empty cart fails every time it
     // succeeds. It was reported as a cleanup failure on a run that cleaned up
     // correctly.

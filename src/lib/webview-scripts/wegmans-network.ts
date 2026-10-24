@@ -1158,10 +1158,9 @@ export function buildWegmansClearCartScript(
 ${wegPrelude()}
   var LIMIT = ${JSON.stringify(limit)};
   var ONLY = ${JSON.stringify(only)};
-  // SCOPED CLEANUP. The canary runs against a real account whose cart holds real
-  // shopping, so "leave no state behind" must mean "remove what THIS RUN added",
-  // never "empty the basket". With no list it still empties, which is what a
-  // measurement run wants; the canary always passes one.
+  // SCOPED CLEANUP. A test against a real account whose cart holds real
+  // shopping must remove only the lines it names, never empty the basket. With
+  // no list it empties, which is what a measurement run wants.
   var onlySet = null;
   if (ONLY && ONLY.length) { onlySet = {}; for (var oi = 0; oi < ONLY.length; oi++) onlySet[String(ONLY[oi])] = 1; }
   var keep = function (id) { return !onlySet || onlySet[String(id)] === 1; };
@@ -1262,95 +1261,6 @@ ${wegPrelude()}
       asked: targets.length, stillThere: stillThere,
       before: lines.length, after: left, targets: targets,
     });
-  } catch (e) {
-    post({ ok: false, why: 'threw', detail: String(e).slice(0, 160) });
-  }
-})(); true;`;
-}
-
-// RECOVERY. Put lines back that should never have been taken out.
-//
-// Written on 2026-09-09 after the canary's cleanup deleted seven lines from a
-// real Wegmans cart, five of them the user's own groceries. The cause was a run
-// with NO cart baseline: diffCartItems then marks the entire existing cart as
-// "added by this run", and the scoped cleanup dutifully removed all of it. The
-// recording side is fixed; this is the undo for the damage already done.
-//
-// It INSERTS -- a line object built from the catalogue row with no line id --
-// which is the same call the add path makes, so nothing here is a new guess.
-export function buildWegmansRestoreScript(
-  items: Array<{ sku: string; quantity: number }>,
-): string {
-  return `(async function () {
-${wegPrelude()}
-  var ITEMS = ${JSON.stringify(items)};
-  var post = function (o) { o.type = 'CART_CLEARED'; WG.post(o); };
-  try {
-    var tok = await WG.token();
-    if (!tok) { post({ ok: false, why: 'no_token' }); return; }
-
-    var r = await WG.commerce('${CART_PATH}', tok, { method: 'GET' }, 15000);
-    if (!r.ok) { post({ ok: false, why: r.why || 'cart_unreadable' }); return; }
-    var cart = WG.groceryCart(r.data) || {};
-    if (cart.id == null || cart.version == null) { post({ ok: false, why: 'no_cart_version' }); return; }
-
-    var storeNo = null;
-    try { storeNo = WG.customField(cart, 'storeNumber'); } catch (e) {}
-    if (!storeNo) storeNo = WG.cachedStore();
-
-    var skus = [];
-    for (var i = 0; i < ITEMS.length; i++) skus.push(String(ITEMS[i].sku));
-    var rows = await WG.hitsBySku(skus, storeNo);
-
-    var lineItems = [], missing = [];
-    for (var t = 0; t < ITEMS.length; t++) {
-      var hit = rows[String(ITEMS[t].sku)];
-      if (!hit) { missing.push(ITEMS[t].sku); continue; }
-      lineItems.push(WG.lineItemFor(hit, Number(ITEMS[t].quantity) || 1));
-    }
-    if (!lineItems.length) { post({ ok: false, why: 'no_catalogue_rows', missing: missing }); return; }
-
-    var storeKey = await WG.storeKey(storeNo);
-    var who = await WG.customerRef(tok);
-    if (!storeKey || !who) { post({ ok: false, why: 'write_prereq' }); return; }
-
-    var body = {
-      StoreKey: storeKey,
-      cartData: [{
-        cartID: cart.id,
-        cartVersion: cart.version,
-        custom: [
-          { name: 'orderLevelAdjustments', value: '[]' },
-          { name: 'storeNumber', value: String(storeNo) },
-          { name: 'fulfillmentType', value: 'pickup' },
-        ],
-        isAlcoholic: false,
-        lineItems: lineItems,
-      }],
-      customerEmail: who.email,
-      customerID: who.id,
-    };
-    var w = await WG.commerce('${CART_WRITE_PATH}', tok,
-      { method: 'POST', body: JSON.stringify(body) }, 25000);
-
-    var after = await WG.commerce('${CART_PATH}', tok, { method: 'GET' }, 15000);
-    var back = 0, left = null;
-    if (after.ok) {
-      var c2 = WG.groceryCart(after.data) || {};
-      var l2 = c2.lineItems || c2.items || null;
-      if (l2) {
-        left = l2.length;
-        for (var a = 0; a < l2.length; a++) {
-          var s2 = WG.lineSku(l2[a] || {});
-          for (var t2 = 0; t2 < ITEMS.length; t2++) {
-            if (s2 && String(s2) === String(ITEMS[t2].sku)) back++;
-          }
-        }
-      }
-    }
-    post({ ok: !!w.ok && back === lineItems.length, wrote: !!w.ok,
-           status: w.status || null, detail: w.ok ? null : (w.detail || null),
-           restored: back, asked: lineItems.length, missing: missing, lines: left });
   } catch (e) {
     post({ ok: false, why: 'threw', detail: String(e).slice(0, 160) });
   }
@@ -1710,7 +1620,6 @@ export const WEGMANS_RAIL: NetworkRail = {
     }),
   cartRead: () => buildWegmansCartReadScript(),
   clearCart: (_storeId, opts) => buildWegmansClearCartScript({ limit: opts?.limit, only: opts?.only }),
-  restoreLines: (items) => buildWegmansRestoreScript(items),
   addBatch: (items, opts) =>
     buildWegmansNetworkAddBatchScript(
       items.map((i) => ({

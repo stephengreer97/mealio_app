@@ -60,7 +60,6 @@ import { getAutomationConfig, getConfigVersion } from '../lib/automation-config'
 import { setLastAutomationRun } from '../lib/lastAutomationRun';
 import { AutomationTelemetry, createNoopTelemetry, addFailureCode, blockFailureCode, requestFailureCode, type StepPhase } from '../lib/automation-telemetry';
 import { diffCartItems, isCountedCartSnapshot, decodeHtmlEntities, CartItem, CartRow } from '../lib/webview-scripts/cart-count';
-import { rememberAddedIds } from '../lib/canary-added-ids';
 import { AddConfirmation, confirmDetail } from '../lib/cart-confirmation';
 import { attemptedFailureNames, auditCartAfterRun, buildCartVerdict, dropExplainedOverAdds, dropRecoveredFailures, isWeightPriced, isZeroedOut, reconcileFromWorkerReports, reconcileParallelAdd, shouldProbeAfterRun, splitUnverifiableTopUps, summarizeConfirmations, toIntendedItem, unitsForNames, AttemptedAdd, IntendedItem, OverAdd } from '../lib/cart-reconcile';
 import { ConfirmedSource, RequestedCount, RunKind, RunSummaryFacts, correctConfirmedFromCart, countRequested, isRunComplete, runSummaryDetail, runSummaryFailureDetail } from '../lib/north-star';
@@ -3898,7 +3897,10 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
       weightRowUnverified,
       runComplete: isRunComplete(requested, totalAdded),
     };
-    if (outcome === 'failed') {
+    // A Choose Products pass adds nothing by design, so "nothing added" is not a
+    // failure there and must not ship a failure code: it read as confirm_failed
+    // on the health dashboard, a store that worked showing up as one that broke.
+    if (outcome === 'failed' && kind !== 'choose') {
       // The run has no failure of its own — it failed because its steps did, so
       // it reports the one that best EXPLAINS them: severity order, not the most
       // frequent, because a store that blocked us used to show up as a pile of
@@ -5646,50 +5648,6 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
             if (Array.isArray(msg.items)) {
               if (cartRowsTimeoutRef.current) { clearTimeout(cartRowsTimeoutRef.current); cartRowsTimeoutRef.current = null; }
               rows = diffCartItems(cartItemsBeforeRef.current, msg.items);
-              // MEAL-7. THE IDS THIS RUN PUT IN THE CART, so the canary's cleanup
-              // can remove what it added instead of emptying the basket.
-              //
-              // The canary runs against a real account. Its Wegmans cart was 18
-              // lines and $237 when this was written, so a cleanup that "empties
-              // the cart" deletes someone's groceries to tidy up after a test.
-              // The green rows are already the before/after delta; this pairs
-              // them back to the store's own line ids, which is what every
-              // rail's clearCart addresses lines by.
-              //
-              // Name-matched, because CartRow carries no id: a row is green
-              // BECAUSE its name grew against the baseline, so the name is the
-              // key the diff itself used. Rails whose cart read is name-only
-              // emit no itemId at all and simply contribute nothing here, which
-              // is why cleanup treats an empty list as "nothing to scope to"
-              // rather than as "remove everything".
-              try {
-                // ONLY WITH A REAL BASELINE. With no before-snapshot,
-                // cartItemsBeforeRef is [] and diffCartItems marks the user's
-                // ENTIRE EXISTING CART as newly added -- the same trap the
-                // north-star metric guards against a few lines below.
-                //
-                // Here it is not a metric, it is a DELETE LIST. On 2026-09-09
-                // that emptied seven lines out of a real Wegmans cart, five of
-                // which were Stephen's own groceries, because the run recorded
-                // them as things it had added and the cleanup believed it.
-                //
-                // No baseline means this run cannot know what it added, and the
-                // honest answer is to record nothing: cleanup then reports "the
-                // run added no line this rail gives an id for" and touches
-                // nothing at all.
-                if (!cartItemsBeforeRef.current.length) {
-                  console.log(`[Cart ${ts()}]`, 'canary: no baseline — recording no added ids');
-                  throw new Error('no baseline');
-                }
-                const addedNames = new Set(rows.filter((r) => r.added).map((r) => r.name));
-                const addedIds = (msg.items as CartItem[])
-                  .filter((it) => it.itemId && addedNames.has(decodeHtmlEntities(it.name)))
-                  .map((it) => String(it.itemId));
-                console.log(`[Cart ${ts()}]`, 'canary: added ids', JSON.stringify(addedIds));
-                // Written down, because the cleanup is driven by a TAP and a tap
-                // carries no arguments. See canary-added-ids.
-                if (storeId) void rememberAddedIds(storeId, addedIds);
-              } catch { /* diagnostics must never break a run */ }
             }
             const reconResults = parallelResultByIdxRef.current;
             const active = activeItemsRef.current;
@@ -5892,10 +5850,8 @@ const SESSION_SIGNED_OUT_REPAIR_WINDOW_MS = 6_000;
             // the log line are PRODUCT names while the plan is written in
             // INGREDIENT names, so even parsing the log could not answer it.
             //
-            // The canary's expectation table needs exactly this: one terminal
-            // outcome per item, named the way the plan names it. It is worth
-            // having regardless -- it is the per-item half of the funnel that
-            // MEAL-219 rebuilt the run-level half of.
+            // One terminal outcome per item: the per-item half of the funnel
+            // that MEAL-219 rebuilt the run-level half of.
             try {
               confirmed.forEach((c, i) => tel().record('confirm', 'ok', {
                 itemIndex: i, phase: 'add',

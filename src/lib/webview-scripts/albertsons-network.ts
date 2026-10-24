@@ -885,7 +885,7 @@ function albSearchUrlExpr(pageSize: number, storeId: number): string {
  * to the cart URL for its snapshots.
  */
 /**
- * MEAL-7. Empty the cart, for the canary's cleanup step.
+ * Empty the cart, for the dev-only cart-clear probe on Account.
  *
  * REUSES THE REMOVAL THIS RAIL ALREADY PROVED. The undo path measured every
  * shape against the live store on 2026-09-04 and only one of them worked:
@@ -901,18 +901,17 @@ function albSearchUrlExpr(pageSize: number, storeId: number): string {
  * measurement is why this rail can offer cleanup at all, and why the two rails
  * whose removal has never been measured do not.
  *
- * Reads the cart first: the canary clears whatever is there, including anything
- * a previous failed run left behind.
+ * Reads the cart first: it clears whatever is there, including anything a
+ * previous failed run left behind.
  */
 export function buildAlbertsonsClearCartScript(opts: { only?: string[] } = {}): string {
   const only = Array.isArray(opts.only) ? opts.only.map(String) : [];
   return `(async function () {
 ${albPrelude()}
   var ONLY = ${JSON.stringify(only)};
-  // SCOPED CLEANUP. The canary runs against a real account whose cart holds real
-  // shopping, so "leave no state behind" must mean "remove what THIS RUN added",
-  // never "empty the basket". With no list it still empties, which is what a
-  // measurement run wants; the canary always passes one.
+  // SCOPED CLEANUP. A test against a real account whose cart holds real
+  // shopping must remove only the lines it names, never empty the basket. With
+  // no list it empties, which is what a measurement run wants.
   var onlySet = null;
   if (ONLY && ONLY.length) { onlySet = {}; for (var oi = 0; oi < ONLY.length; oi++) onlySet[String(ONLY[oi])] = 1; }
   var keep = function (id) { return !onlySet || onlySet[String(id)] === 1; };

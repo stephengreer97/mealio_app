@@ -24,16 +24,6 @@ import Meal17Probe from '../../components/Meal17Probe';
 import NativeSessionProbe from '../../components/NativeSessionProbe';
 import NativeRailProbe from '../../components/NativeRailProbe';
 
-// The canary's stores, one per family with a signed-in session. Kept here rather
-// than read from canary_plans because this is a dev control list, not the plan:
-// the plan lives in the DB and can be toggled per store from the admin panel.
-const CANARY_STORES = [
-  { id: 'aldi', name: 'ALDI' },
-  { id: 'heb', name: 'H-E-B' },
-  { id: 'walmart', name: 'Walmart' },
-  { id: 'wegmans', name: 'Wegmans' },
-  { id: 'tom_thumb', name: 'Tom Thumb' },
-];
 import { useStores } from '../../lib/store-catalog/useStores';
 import { isKrogerBrand } from '../../constants/stores';
 import { useAuth } from '../../context/AuthContext';
@@ -113,8 +103,7 @@ export default function AccountScreen() {
 
   // Account deletion
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [clearProbe, setClearProbe] = useState<{ storeId: string; limit?: number; scoped?: boolean;
-    restore?: Array<{ sku: string; quantity: number }> } | null>(null);
+  const [clearProbe, setClearProbe] = useState<{ storeId: string; limit?: number } | null>(null);
   const [capture, setCapture] = useState<{ storeId: string; path?: string; honestUa?: boolean } | null>(null);
   const [meal17, setMeal17] = useState<'matrix' | 'burst' | null>(null);
   const [nativeSession, setNativeSession] = useState(false);
@@ -1082,7 +1071,7 @@ export default function AccountScreen() {
             </TouchableOpacity>
             {/* Wegmans is a TEST-ONLY account (Stephen, 2026-09-09: "wegans
                 clearing every time is okay. I don't shop there"), so an
-                unscoped clear is safe there and is what the canary wants. */}
+                unscoped clear is safe there. */}
             <TouchableOpacity
               testID="clear-all-wegmans"
               onPress={() => setClearProbe({ storeId: 'wegmans' })}
@@ -1148,41 +1137,6 @@ export default function AccountScreen() {
             <TouchableOpacity onPress={() => setMeal17('burst')} style={styles.devResetBtn}>
               <Text style={styles.devResetText}>MEAL-17: 6 calls back to back (dev)</Text>
             </TouchableOpacity>
-            {/* MEAL-7's cleanup, one control per canary store.
-                SCOPED: each removes only what that store's runs added, read from
-                the list the run wrote down. The canary taps these by testID --
-                it cannot pass the ids through a tap, which is the whole reason
-                the run persists them. */}
-            {/* ONE-OFF RECOVERY, 2026-09-09. The canary's cleanup removed five
-                of Stephen's own Wegmans lines because the run had no cart
-                baseline and recorded his whole basket as its own. Skus and
-                quantities are from the clear's own report. */}
-            <TouchableOpacity
-              testID="restore-wegmans"
-              onPress={() => setClearProbe({
-                storeId: 'wegmans',
-                restore: [
-                  { sku: '942808', quantity: 5 },
-                  { sku: '44752', quantity: 5 },
-                  { sku: '716689', quantity: 8 },
-                  { sku: '905535', quantity: 2 },
-                  { sku: '53292', quantity: 2 },
-                ],
-              })}
-              style={styles.devResetBtn}
-            >
-              <Text style={styles.devResetText}>Restore Wegmans lines (dev)</Text>
-            </TouchableOpacity>
-            {CANARY_STORES.map((s) => (
-              <TouchableOpacity
-                key={s.id}
-                testID={`clear-cart-${s.id}`}
-                onPress={() => setClearProbe({ storeId: s.id, scoped: true })}
-                style={styles.devResetBtn}
-              >
-                <Text style={styles.devResetText}>Clear canary items: {s.name} (dev)</Text>
-              </TouchableOpacity>
-            ))}
           </>
         )}
         {__DEV__ && nativeRail && (
@@ -1207,8 +1161,6 @@ export default function AccountScreen() {
             key={`${clearProbe.storeId}-${clearProbe.limit ?? 0}`}
             storeId={clearProbe.storeId}
             limit={clearProbe.limit}
-            scoped={clearProbe.scoped}
-            restore={clearProbe.restore}
             onDone={(r) => {
               setClearProbe(null);
               console.log('[CartClear]', clearProbe.storeId, JSON.stringify(r));

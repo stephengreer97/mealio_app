@@ -28,7 +28,7 @@ import { nativeRailFor } from '../lib/native-rail';
  * ADD IS NOT RUN BY DEFAULT, and that is not timidity. Everything else here is a
  * question; add changes a cart the user actually shops from. It writes ONE unit
  * of the first candidate the search returned, names what it wrote, and the
- * Account screen already carries a per-store canary clear to undo it.
+ * cart-clear probe on Account can undo it where a store's clear is measured.
  */
 
 /**

@@ -505,10 +505,9 @@ export function buildWalmartClearCartScript(
 ${wmPrelude()}
   var LIMIT = ${JSON.stringify(limit)};
   var ONLY = ${JSON.stringify(only)};
-  // SCOPED CLEANUP. The canary runs against a real account whose cart holds real
-  // shopping, so "leave no state behind" must mean "remove what THIS RUN added",
-  // never "empty the basket". With no list it still empties, which is what a
-  // measurement run wants; the canary always passes one.
+  // SCOPED CLEANUP. A test against a real account whose cart holds real
+  // shopping must remove only the lines it names, never empty the basket. With
+  // no list it empties, which is what a measurement run wants.
   var onlySet = null;
   if (ONLY && ONLY.length) { onlySet = {}; for (var oi = 0; oi < ONLY.length; oi++) onlySet[String(ONLY[oi])] = 1; }
   var keep = function (id) { return !onlySet || onlySet[String(id)] === 1; };
